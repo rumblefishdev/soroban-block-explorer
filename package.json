@@ -15,7 +15,9 @@
     "graph": "npx nx graph",
     "lint": "npx nx run-many -t lint",
     "test": "npx nx run-many -t test",
-    "typecheck": "npx nx run-many -t typecheck"
+    "typecheck": "npx nx run-many -t typecheck",
+    "format:staged": "node tools/scripts/format-staged.mjs",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@eslint/js": "^9.8.0",
@@ -32,6 +34,7 @@
     "@vitest/coverage-v8": "4.0.9",
     "@vitest/ui": "4.0.9",
     "eslint": "~8.57.0",
+    "husky": "^9.1.7",
     "jiti": "2.4.2",
     "jsonc-eslint-parser": "^2.1.0",
     "nx": "22.6.1",

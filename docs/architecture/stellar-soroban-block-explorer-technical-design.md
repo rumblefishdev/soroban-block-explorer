@@ -498,79 +498,79 @@ expanding to multi-AZ when SLA requirements demand it.
 
 **Hosted by Rumble Fish (AWS sub-account):**
 
-| Component | Service | Role |
-|-----------|---------|------|
-| Galexie process | ECS Fargate (1 task, continuous) | Streams live ledger data from Stellar network to S3 |
-| Historical backfill task | ECS Fargate (batch, one-time) | Processes history archives to backfill from Soroban mainnet activation |
-| S3 bucket `stellar-ledger-data` | AWS S3 | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor |
-| Lambda — Ledger Processor | AWS Lambda (S3 event-driven) | Parses XDR; writes ledgers, txs, ops, events, contracts to RDS |
-| Lambda — Event Interpreter | AWS Lambda (EventBridge, 5 min) | Post-processes recent events to generate human-readable summaries |
-| Lambda — NestJS API handlers | AWS Lambda (per API Gateway route) | Serves all public API requests |
-| RDS PostgreSQL | AWS RDS (db.r6g.large, Single-AZ) | Block explorer database |
-| API Gateway | AWS API Gateway | REST API, rate limiting, API keys, response caching |
-| CloudFront CDN | AWS CloudFront | Serves React frontend |
-| S3 bucket `api-docs` | AWS S3 + CloudFront | OpenAPI spec + documentation portal |
-| EventBridge Scheduler | AWS EventBridge | Cron triggers for background workers |
-| Secrets Manager | AWS Secrets Manager | DB credentials |
-| CloudWatch + X-Ray | AWS CloudWatch | Logs, metrics, alarms, distributed tracing |
-| CI/CD pipeline | GitHub Actions → AWS CDK | Infrastructure-as-code deploy |
+| Component                       | Service                            | Role                                                                   |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| Galexie process                 | ECS Fargate (1 task, continuous)   | Streams live ledger data from Stellar network to S3                    |
+| Historical backfill task        | ECS Fargate (batch, one-time)      | Processes history archives to backfill from Soroban mainnet activation |
+| S3 bucket `stellar-ledger-data` | AWS S3                             | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor        |
+| Lambda — Ledger Processor       | AWS Lambda (S3 event-driven)       | Parses XDR; writes ledgers, txs, ops, events, contracts to RDS         |
+| Lambda — Event Interpreter      | AWS Lambda (EventBridge, 5 min)    | Post-processes recent events to generate human-readable summaries      |
+| Lambda — NestJS API handlers    | AWS Lambda (per API Gateway route) | Serves all public API requests                                         |
+| RDS PostgreSQL                  | AWS RDS (db.r6g.large, Single-AZ)  | Block explorer database                                                |
+| API Gateway                     | AWS API Gateway                    | REST API, rate limiting, API keys, response caching                    |
+| CloudFront CDN                  | AWS CloudFront                     | Serves React frontend                                                  |
+| S3 bucket `api-docs`            | AWS S3 + CloudFront                | OpenAPI spec + documentation portal                                    |
+| EventBridge Scheduler           | AWS EventBridge                    | Cron triggers for background workers                                   |
+| Secrets Manager                 | AWS Secrets Manager                | DB credentials                                                         |
+| CloudWatch + X-Ray              | AWS CloudWatch                     | Logs, metrics, alarms, distributed tracing                             |
+| CI/CD pipeline                  | GitHub Actions → AWS CDK           | Infrastructure-as-code deploy                                          |
 
 **External services consumed (read-only):**
 
-| External service | Purpose | Failure impact |
-|-----------------|---------|----------------|
-| Stellar network peers (Galexie Captive Core) | Live ledger data source | Critical — mitigated by connecting to multiple peers |
-| Stellar public history archives | Historical backfill (one-time) | Non-critical after backfill completes |
+| External service                             | Purpose                        | Failure impact                                       |
+| -------------------------------------------- | ------------------------------ | ---------------------------------------------------- |
+| Stellar network peers (Galexie Captive Core) | Live ledger data source        | Critical — mitigated by connecting to multiple peers |
+| Stellar public history archives              | Historical backfill (one-time) | Non-critical after backfill completes                |
 
 No external APIs (Horizon, Soroswap, Aquarius, Soroban RPC) are required for core
 functionality. All data flows from the canonical ledger.
 
 ### 3.4 Tech Stack
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Ingestion | Galexie (ECS Fargate) | Streams `LedgerCloseMeta` XDR from Stellar network to S3 |
-| XDR parsing | `@stellar/stellar-sdk` (Node.js) | Deserializes all XDR types in Ledger Processor Lambda |
-| API Framework | NestJS / TypeScript | Modular REST API |
-| Compute | AWS Lambda (ARM/Graviton2) | Serverless; auto-scaling |
-| Gateway | AWS API Gateway | Rate limiting, API keys, request routing, response caching |
-| Database | RDS PostgreSQL 16 | Block explorer schema with native range partitioning |
-| CDN | CloudFront | Static asset delivery, response caching |
-| DNS | Route 53 | Domain management |
-| Monitoring | CloudWatch + X-Ray | Logging, distributed tracing, alarms |
-| Secrets | Secrets Manager | Database credentials, API keys |
-| IaC | AWS CDK (TypeScript) | All infrastructure defined as code |
-| CI/CD | GitHub Actions → `cdk deploy` | Automated deployment on merge to main |
+| Component     | Technology                       | Purpose                                                    |
+| ------------- | -------------------------------- | ---------------------------------------------------------- |
+| Ingestion     | Galexie (ECS Fargate)            | Streams `LedgerCloseMeta` XDR from Stellar network to S3   |
+| XDR parsing   | `@stellar/stellar-sdk` (Node.js) | Deserializes all XDR types in Ledger Processor Lambda      |
+| API Framework | NestJS / TypeScript              | Modular REST API                                           |
+| Compute       | AWS Lambda (ARM/Graviton2)       | Serverless; auto-scaling                                   |
+| Gateway       | AWS API Gateway                  | Rate limiting, API keys, request routing, response caching |
+| Database      | RDS PostgreSQL 16                | Block explorer schema with native range partitioning       |
+| CDN           | CloudFront                       | Static asset delivery, response caching                    |
+| DNS           | Route 53                         | Domain management                                          |
+| Monitoring    | CloudWatch + X-Ray               | Logging, distributed tracing, alarms                       |
+| Secrets       | Secrets Manager                  | Database credentials, API keys                             |
+| IaC           | AWS CDK (TypeScript)             | All infrastructure defined as code                         |
+| CI/CD         | GitHub Actions → `cdk deploy`    | Automated deployment on merge to main                      |
 
 ### 3.5 Environments
 
-| Environment | Purpose | Database |
-|-------------|---------|----------|
-| **Development** | Local and CI development | Local PostgreSQL |
-| **Staging** | Pre-production validation | Separate RDS (testnet data) |
-| **Production** | Live service | Mainnet RDS |
+| Environment     | Purpose                   | Database                    |
+| --------------- | ------------------------- | --------------------------- |
+| **Development** | Local and CI development  | Local PostgreSQL            |
+| **Staging**     | Pre-production validation | Separate RDS (testnet data) |
+| **Production**  | Live service              | Mainnet RDS                 |
 
 ### 3.6 Scalability
 
-| Component | Mechanism | Trigger |
-|-----------|-----------|---------|
-| **API** | Lambda auto-scale (up to 50 concurrent) | On-demand |
-| **Ledger Processor** | Lambda auto-scale (S3 event-driven) | Per ledger file |
-| **PostgreSQL** | RDS Proxy for connection pooling | Default |
-| | Materialized views for aggregated statistics | Default |
-| | Add read replica | Primary CPU > 60% |
-| **CDN** | CloudFront scales automatically | N/A |
-| **Multi-AZ** | Expand VPC + enable RDS Multi-AZ | SLA > 99.9% required |
+| Component            | Mechanism                                    | Trigger              |
+| -------------------- | -------------------------------------------- | -------------------- |
+| **API**              | Lambda auto-scale (up to 50 concurrent)      | On-demand            |
+| **Ledger Processor** | Lambda auto-scale (S3 event-driven)          | Per ledger file      |
+| **PostgreSQL**       | RDS Proxy for connection pooling             | Default              |
+|                      | Materialized views for aggregated statistics | Default              |
+|                      | Add read replica                             | Primary CPU > 60%    |
+| **CDN**              | CloudFront scales automatically              | N/A                  |
+| **Multi-AZ**         | Expand VPC + enable RDS Multi-AZ             | SLA > 99.9% required |
 
 ### 3.7 Monitoring and Alerting
 
-| Alarm | Threshold | Action |
-|-------|-----------|--------|
-| Galexie ingestion lag | S3 file timestamp >60 s behind ledger close time | SNS → Slack/email |
-| Ledger Processor error rate | >1% of Lambda invocations in error | SNS → Slack/email |
-| RDS CPU | >70% sustained for 5 min | SNS → on-call |
-| RDS free storage | <20% remaining | SNS → expand storage |
-| API Gateway 5xx rate | >0.5% of requests | SNS → Slack/email |
+| Alarm                       | Threshold                                        | Action               |
+| --------------------------- | ------------------------------------------------ | -------------------- |
+| Galexie ingestion lag       | S3 file timestamp >60 s behind ledger close time | SNS → Slack/email    |
+| Ledger Processor error rate | >1% of Lambda invocations in error               | SNS → Slack/email    |
+| RDS CPU                     | >70% sustained for 5 min                         | SNS → on-call        |
+| RDS free storage            | <20% remaining                                   | SNS → expand storage |
+| API Gateway 5xx rate        | >0.5% of requests                                | SNS → Slack/email    |
 
 CloudWatch dashboards expose: Galexie S3 file freshness, Ledger Processor duration and
 error rate, API latency (p50/p95/p99), RDS CPU/connections, and highest indexed ledger
@@ -633,16 +633,16 @@ Stellar Network (mainnet peers)
 The `LedgerCloseMeta` XDR produced by Galexie contains the complete ledger close.
 Everything a block explorer needs is present; no external API is required.
 
-| Data needed | Where it lives in LedgerCloseMeta |
-|-------------|-----------------------------------|
-| Ledger sequence, close time, protocol version | `LedgerHeader` |
-| Transaction hash, source account, fee, success | `TransactionEnvelope` + `TransactionResult` |
-| Operation type and details | `OperationMeta` per transaction |
+| Data needed                                       | Where it lives in LedgerCloseMeta                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------- |
+| Ledger sequence, close time, protocol version     | `LedgerHeader`                                                            |
+| Transaction hash, source account, fee, success    | `TransactionEnvelope` + `TransactionResult`                               |
+| Operation type and details                        | `OperationMeta` per transaction                                           |
 | Soroban invocation (function, args, return value) | `InvokeHostFunctionOp` in envelope + `SorobanTransactionMeta.returnValue` |
-| CAP-67 contract events (type, topics, data) | `SorobanTransactionMeta.events` |
-| Contract deployment (C-address, WASM hash) | `LedgerEntryChanges` (CONTRACT type) |
-| Account balance changes | `LedgerEntryChanges` (ACCOUNT type) |
-| Liquidity pool state | `LedgerEntryChanges` (LIQUIDITY_POOL type) |
+| CAP-67 contract events (type, topics, data)       | `SorobanTransactionMeta.events`                                           |
+| Contract deployment (C-address, WASM hash)        | `LedgerEntryChanges` (CONTRACT type)                                      |
+| Account balance changes                           | `LedgerEntryChanges` (ACCOUNT type)                                       |
+| Liquidity pool state                              | `LedgerEntryChanges` (LIQUIDITY_POOL type)                                |
 
 ### 4.3 Historical Backfill
 
@@ -658,14 +658,15 @@ Ledger Processor Lambda. No separate code path is required.
 
 ### 4.4 Background Workers
 
-| Worker | Trigger | Role |
-|--------|---------|------|
-| **Ledger Processor** | S3 PutObject (~every 5–6 s) | Primary ingestion — parses XDR, writes all chain data to RDS |
-| **Event Interpreter** | EventBridge rate(5 min) | Post-processes new events to generate human-readable summaries (swap, transfer, mint, burn patterns) |
+| Worker                | Trigger                     | Role                                                                                                 |
+| --------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Ledger Processor**  | S3 PutObject (~every 5–6 s) | Primary ingestion — parses XDR, writes all chain data to RDS                                         |
+| **Event Interpreter** | EventBridge rate(5 min)     | Post-processes new events to generate human-readable summaries (swap, transfer, mint, burn patterns) |
 
 ### 4.5 Operational Characteristics
 
 **Normal operation (live):**
+
 ```
 Galexie (ECS Fargate) → S3 (~5-6 s per ledger)
                       → Lambda Ledger Processor (~<10 s from ledger close to DB write)
@@ -709,23 +710,28 @@ XDR parsing happens in two places:
 ### 5.2 Data Extracted at Ingestion (Ledger Processor)
 
 **From `LedgerHeader`:**
+
 - `sequence`, `closeTime`, `protocolVersion`, `baseFee`, `txSetResultHash`
 
 **From `TransactionEnvelope` + `TransactionResult`:**
+
 - `hash` (computed by hashing the envelope XDR), `sourceAccount`, `feeCharged`,
   `successful`, `resultCode`
 - Raw `envelopeXdr` and `resultXdr` stored verbatim for advanced view
 
 **From `OperationMeta` per transaction:**
+
 - Operation `type`, structured `details` JSONB (type-specific fields)
 - For `INVOKE_HOST_FUNCTION`: `contractId`, `functionName`, `functionArgs` (decoded
   `ScVal`), `returnValue` (decoded `ScVal`)
 
 **From `SorobanTransactionMeta.events`:**
+
 - `eventType` (contract/system/diagnostic), `contractId`, `topics` (decoded `ScVal[]`),
   `data` (decoded `ScVal`)
 
 **From `LedgerEntryChanges`:**
+
 - Contract deployments: `contractId`, `wasmHash`, `deployerAccount`
 - Account changes (used for token holder counts)
 - Liquidity pool state changes
@@ -917,128 +923,128 @@ require it. Ledger and transaction tables are not partitioned and are kept indef
 
 #### B. AWS Architecture + Galexie Infrastructure
 
-| Task | Days |
-|------|------|
-| VPC, subnets, security groups, IAM roles (CDK) | 4 |
-| ECS Fargate cluster + Galexie task definition + S3 bucket | 5 |
-| Galexie configuration and testnet validation | 3 |
-| Lambda + API Gateway setup (NestJS deployment pipeline) | 4 |
-| CloudFront CDN + Route 53 + TLS | 1 |
-| Secrets Manager, CloudWatch dashboards, X-Ray | 2 |
-| Historical backfill ECS task + monitoring | 5 |
-| CI/CD pipeline (GitHub Actions → CDK) | 4 |
-| Staging + production environment parity | 4 |
-| **Subtotal** | **32** |
+| Task                                                      | Days   |
+| --------------------------------------------------------- | ------ |
+| VPC, subnets, security groups, IAM roles (CDK)            | 4      |
+| ECS Fargate cluster + Galexie task definition + S3 bucket | 5      |
+| Galexie configuration and testnet validation              | 3      |
+| Lambda + API Gateway setup (NestJS deployment pipeline)   | 4      |
+| CloudFront CDN + Route 53 + TLS                           | 1      |
+| Secrets Manager, CloudWatch dashboards, X-Ray             | 2      |
+| Historical backfill ECS task + monitoring                 | 5      |
+| CI/CD pipeline (GitHub Actions → CDK)                     | 4      |
+| Staging + production environment parity                   | 4      |
+| **Subtotal**                                              | **32** |
 
 #### C. Data Ingestion Pipeline
 
-| Task | Days |
-|------|------|
-| Ledger Processor Lambda — XDR parse + DB write (ledgers, txs, ops) | 6 |
-| Ledger Processor — Soroban invocations + CAP-67 events extraction | 5 |
-| Ledger Processor — contract deployments + token detection | 4 |
-| Event Interpreter Lambda — human-readable summaries | 5 |
-| Backfill validation — gap detection, idempotency checks | 3 |
-| Ingestion lag monitoring + alerting | 2 |
-| **Subtotal** | **25** |
+| Task                                                               | Days   |
+| ------------------------------------------------------------------ | ------ |
+| Ledger Processor Lambda — XDR parse + DB write (ledgers, txs, ops) | 6      |
+| Ledger Processor — Soroban invocations + CAP-67 events extraction  | 5      |
+| Ledger Processor — contract deployments + token detection          | 4      |
+| Event Interpreter Lambda — human-readable summaries                | 5      |
+| Backfill validation — gap detection, idempotency checks            | 3      |
+| Ingestion lag monitoring + alerting                                | 2      |
+| **Subtotal**                                                       | **25** |
 
 #### D. Core API Endpoints (NestJS)
 
-| Task | Days |
-|------|------|
-| NestJS project scaffolding, module structure, Drizzle ORM setup | 3 |
-| Network stats endpoint | 1 |
-| Transactions endpoints (list + detail + operation tree) | 9 |
-| Ledgers endpoints (list + detail) | 3 |
-| Tokens endpoints (list + detail + transactions) | 5 |
-| Contracts endpoints (detail + interface + invocations + events) | 9 |
-| NFTs endpoints (list + detail + transfers) | 5 |
-| Liquidity Pools endpoints (list + detail + transactions + chart) | 6 |
-| Search endpoint (full-text + prefix matching) | 4 |
-| XDR decoding service (raw XDR → structured for advanced view) | 4 |
-| Cursor-based pagination | 3 |
-| Rate limiting, API key auth, error handling, health checks | 3 |
-| Caching layer (in-memory + CloudFront TTL configuration) | 3 |
-| **Subtotal** | **58** |
+| Task                                                             | Days   |
+| ---------------------------------------------------------------- | ------ |
+| NestJS project scaffolding, module structure, Drizzle ORM setup  | 3      |
+| Network stats endpoint                                           | 1      |
+| Transactions endpoints (list + detail + operation tree)          | 9      |
+| Ledgers endpoints (list + detail)                                | 3      |
+| Tokens endpoints (list + detail + transactions)                  | 5      |
+| Contracts endpoints (detail + interface + invocations + events)  | 9      |
+| NFTs endpoints (list + detail + transfers)                       | 5      |
+| Liquidity Pools endpoints (list + detail + transactions + chart) | 6      |
+| Search endpoint (full-text + prefix matching)                    | 4      |
+| XDR decoding service (raw XDR → structured for advanced view)    | 4      |
+| Cursor-based pagination                                          | 3      |
+| Rate limiting, API key auth, error handling, health checks       | 3      |
+| Caching layer (in-memory + CloudFront TTL configuration)         | 3      |
+| **Subtotal**                                                     | **58** |
 
 #### E. Frontend Components + API Integration
 
-| Task | Days |
-|------|------|
-| React project scaffolding, routing, design system setup | 3 |
-| Shared components (header, nav, search bar, copy button, timestamps) | 3 |
-| Home page (chain overview, latest transactions + ledgers) | 2 |
-| Transactions page (paginated table, filters) | 2 |
-| Transaction detail page — normal mode (graph/tree view) | 5 |
-| Transaction detail page — advanced mode (raw data, XDR) | 4 |
-| Ledgers page (paginated table) | 1 |
-| Ledger detail page | 2 |
-| Tokens page (list, filters) | 2 |
-| Token detail page (summary + transactions) | 2 |
-| Contract detail page (summary + interface + invocations + events) | 7 |
-| NFTs page (list, filters) | 2 |
-| NFT detail page (media preview, metadata, transfers) | 5 |
-| Liquidity Pools page (list, filters) | 2 |
-| Liquidity Pool detail page (summary + charts) | 5 |
-| Search results page | 6 |
-| Error states, loading skeletons, empty states | 3 |
-| Polling, freshness indicators, responsive layout | 2 |
-| **Subtotal** | **60** |
+| Task                                                                 | Days   |
+| -------------------------------------------------------------------- | ------ |
+| React project scaffolding, routing, design system setup              | 3      |
+| Shared components (header, nav, search bar, copy button, timestamps) | 3      |
+| Home page (chain overview, latest transactions + ledgers)            | 2      |
+| Transactions page (paginated table, filters)                         | 2      |
+| Transaction detail page — normal mode (graph/tree view)              | 5      |
+| Transaction detail page — advanced mode (raw data, XDR)              | 4      |
+| Ledgers page (paginated table)                                       | 1      |
+| Ledger detail page                                                   | 2      |
+| Tokens page (list, filters)                                          | 2      |
+| Token detail page (summary + transactions)                           | 2      |
+| Contract detail page (summary + interface + invocations + events)    | 7      |
+| NFTs page (list, filters)                                            | 2      |
+| NFT detail page (media preview, metadata, transfers)                 | 5      |
+| Liquidity Pools page (list, filters)                                 | 2      |
+| Liquidity Pool detail page (summary + charts)                        | 5      |
+| Search results page                                                  | 6      |
+| Error states, loading skeletons, empty states                        | 3      |
+| Polling, freshness indicators, responsive layout                     | 2      |
+| **Subtotal**                                                         | **60** |
 
 #### F. Testing
 
-| Task | Days |
-|------|------|
-| Unit tests — API endpoints (NestJS) | 8 |
-| Unit tests — XDR parsing + ingestion correctness | 7 |
-| Integration tests — end-to-end (ingestion → API → frontend) | 5 |
-| Load testing (1M baseline scenario) | 4 |
-| Security audit (OWASP Top 10) | 3 |
-| Bug fixing + stabilization buffer | 15 |
-| **Subtotal** | **42** |
+| Task                                                        | Days   |
+| ----------------------------------------------------------- | ------ |
+| Unit tests — API endpoints (NestJS)                         | 8      |
+| Unit tests — XDR parsing + ingestion correctness            | 7      |
+| Integration tests — end-to-end (ingestion → API → frontend) | 5      |
+| Load testing (1M baseline scenario)                         | 4      |
+| Security audit (OWASP Top 10)                               | 3      |
+| Bug fixing + stabilization buffer                           | 15     |
+| **Subtotal**                                                | **42** |
 
 ### 7.2 Summary
 
-| Project Part | Days |
-|--------------|------|
-| A. Design | 35–40 |
-| B. AWS Architecture + Galexie Infrastructure | 32 |
-| C. Data Ingestion Pipeline | 25 |
-| D. Core API Endpoints | 58 |
-| E. Frontend Components + Integration | 60 |
-| F. Testing | 42 |
-| **Total (incl. design)** | **252–257** |
+| Project Part                                 | Days        |
+| -------------------------------------------- | ----------- |
+| A. Design                                    | 35–40       |
+| B. AWS Architecture + Galexie Infrastructure | 32          |
+| C. Data Ingestion Pipeline                   | 25          |
+| D. Core API Endpoints                        | 58          |
+| E. Frontend Components + Integration         | 60          |
+| F. Testing                                   | 42          |
+| **Total (incl. design)**                     | **252–257** |
 
 ### 7.3 Cost Estimation (AWS, monthly)
 
 #### Low Traffic (1M requests/month)
 
-| Service | Configuration | Monthly Cost |
-|---------|---------------|--------------|
-| ECS Fargate — Galexie | 1 vCPU / 2 GB RAM, continuous | ~$36 |
-| RDS PostgreSQL | db.r6g.large, Single-AZ | ~$175 |
-| RDS Storage | 1 TB gp3 (full chain data from 2023) | ~$115 |
-| API Gateway | 1M requests + 0.5 GB cache | ~$4 |
-| Lambda — API handlers | 800K invocations, 512 MB ARM | ~$5 |
-| Lambda — Ingestion workers | ~500K invocations (Ledger Processor) | ~$10 |
-| CloudFront | 10 GB transfer | ~$5 |
-| S3 | Ledger files (transient) + API docs | ~$5 |
-| NAT Gateway | 1x, ~100 GB data | ~$40 |
-| CloudWatch + X-Ray | Logs, metrics, tracing | ~$20 |
-| Secrets Manager + Route 53 | Credentials + DNS | ~$10 |
-| **Total** | | **~$425/month** |
+| Service                    | Configuration                        | Monthly Cost    |
+| -------------------------- | ------------------------------------ | --------------- |
+| ECS Fargate — Galexie      | 1 vCPU / 2 GB RAM, continuous        | ~$36            |
+| RDS PostgreSQL             | db.r6g.large, Single-AZ              | ~$175           |
+| RDS Storage                | 1 TB gp3 (full chain data from 2023) | ~$115           |
+| API Gateway                | 1M requests + 0.5 GB cache           | ~$4             |
+| Lambda — API handlers      | 800K invocations, 512 MB ARM         | ~$5             |
+| Lambda — Ingestion workers | ~500K invocations (Ledger Processor) | ~$10            |
+| CloudFront                 | 10 GB transfer                       | ~$5             |
+| S3                         | Ledger files (transient) + API docs  | ~$5             |
+| NAT Gateway                | 1x, ~100 GB data                     | ~$40            |
+| CloudWatch + X-Ray         | Logs, metrics, tracing               | ~$20            |
+| Secrets Manager + Route 53 | Credentials + DNS                    | ~$10            |
+| **Total**                  |                                      | **~$425/month** |
 
 #### Scaling Path to High Traffic (10M requests/month)
 
-| Change | Trigger | Added Cost |
-|--------|---------|-----------|
-| Add Lambda provisioned concurrency (5 instances) | >2 req/s avg | +$75 |
-| Add RDS read replica (db.r6g.large) | Primary CPU >60% | +$175 |
-| Enable RDS Multi-AZ | SLA >99.9% needed | +$175 |
-| Expand VPC to Multi-AZ | With Multi-AZ RDS | +$35 (NAT) |
-| API Gateway + Lambda growth | Proportional | +$30 |
-| CloudFront / data transfer growth | Proportional | +$20 |
-| **Estimated total at 10M requests/month** | | **~$935/month** |
+| Change                                           | Trigger           | Added Cost      |
+| ------------------------------------------------ | ----------------- | --------------- |
+| Add Lambda provisioned concurrency (5 instances) | >2 req/s avg      | +$75            |
+| Add RDS read replica (db.r6g.large)              | Primary CPU >60%  | +$175           |
+| Enable RDS Multi-AZ                              | SLA >99.9% needed | +$175           |
+| Expand VPC to Multi-AZ                           | With Multi-AZ RDS | +$35 (NAT)      |
+| API Gateway + Lambda growth                      | Proportional      | +$30            |
+| CloudFront / data transfer growth                | Proportional      | +$20            |
+| **Estimated total at 10M requests/month**        |                   | **~$935/month** |
 
 ### 7.4 Three-Milestone Delivery Plan
 
@@ -1052,6 +1058,7 @@ RDS PostgreSQL database. Historical backfill from Soroban mainnet activation led
 infrastructure-as-code. CI/CD pipeline. CloudWatch dashboards and ingestion lag alarms.
 
 **Acceptance criteria:**
+
 1. S3 bucket contains consecutive `LedgerCloseMeta` files with timestamps matching
    mainnet ledger close times
 2. RDS `ledgers` table contains all ledgers from backfill start through current tip with
@@ -1076,6 +1083,7 @@ pages. React SPA deployed via CloudFront with all pages. Rate limiting and respo
 caching configured on API Gateway.
 
 **Acceptance criteria:**
+
 1. All API endpoints return schema-valid responses for mainnet entity IDs provided by
    the reviewer
 2. Soroban invocations on Contract Detail page show function name, arguments, and return
@@ -1101,6 +1109,7 @@ repository made public. Professional user testing completed. 7-day post-launch m
 report.
 
 **Acceptance criteria:**
+
 1. Block explorer publicly accessible at production URL, showing live mainnet data with
    ledger sequences matching network tip within 30 seconds
 2. GitHub repository public; `cdk deploy` from README works in a fresh AWS account
