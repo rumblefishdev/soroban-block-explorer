@@ -5,9 +5,16 @@
         "source": "github",
         "repo": "nrwl/nx-ai-agents-config"
       }
+    },
+    "rf-claude-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "rumblefishdev/rf-claude-marketplace"
+      }
     }
   },
   "enabledPlugins": {
-    "nx@nx-claude-plugins": true
+    "nx@nx-claude-plugins": true,
+    "lore-framework@rf-claude-marketplace": true
   }
 }
