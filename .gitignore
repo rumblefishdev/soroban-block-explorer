@@ -40,3 +40,12 @@ Thumbs.db
 # generated timestamps
 vite.config.*.timestamp*
 vitest.config.*.timestamp*
+
+# Lore framework - session-local files
+lore/0-session/current-user.md
+lore/0-session/current-task.md
+lore/0-session/current-task.json
+lore/0-session/next-tasks.md
+lore/README.md
+
+.npmrc
