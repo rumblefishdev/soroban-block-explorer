@@ -300,11 +300,14 @@ The backend serves data from the block explorer's own database, adding:
   operation summaries and event interpretations)
 - **Soroban enrichment** — decorates contract invocations with metadata, function names,
   and structured interpretations stored at ingestion time
-- **Search** — unified search across transaction hashes, account IDs, contract IDs, and
-  contract metadata using PostgreSQL full-text indexes
-- **Raw XDR on demand** — the `envelope_xdr` and `result_xdr` fields are stored verbatim
-  and returned for the advanced transaction view; the backend decodes them on request using
-  `@stellar/stellar-sdk` to serve the collapsible advanced sections
+- **Search** — unified search across transaction hashes, account IDs, contract IDs, token
+  identifiers, NFT identifiers, pool IDs, and indexed metadata using PostgreSQL full-text
+  indexes
+- **Raw XDR on demand** — the `envelope_xdr`, `result_xdr`, and `result_meta_xdr` fields
+  are stored verbatim for advanced inspection; the backend returns the first two in the
+  advanced transaction view, decodes the raw payloads on request using
+  `@stellar/stellar-sdk`, and can serve a stored `operation_tree` for transaction-detail
+  debugging sections
 
 The backend does **not** call Horizon or any external chain API. All chain data lives in
 the block explorer's RDS.
@@ -411,15 +414,18 @@ Query params: `interval` (1h/1d/1w), `from`, `to`.
 
 **`GET /search?q=&type=transaction,contract,token,account,nft,pool`** — Generic search
 across all entity types. Uses prefix/exact matching on hashes, account IDs, contract IDs,
-and asset codes. Full-text search on metadata via `tsvector`/`tsquery` and GIN indexes.
+asset codes, pool IDs, and NFT identifiers. Full-text search on metadata via
+`tsvector`/`tsquery` and GIN indexes where entity metadata is indexed.
 
 ### 2.4 Caching Strategy
 
 Caching operates at two levels:
 
-- **CloudFront / API Gateway caching** — responses for immutable data (historical
-  transactions, closed ledgers) are cached with long TTLs at the CDN edge. Mutable data
-  (recent transactions, network stats) uses short TTLs (5–15 seconds).
+- **API Gateway response caching** — responses for immutable data (historical
+  transactions, closed ledgers) are cached with long TTLs at the API ingress layer. Mutable
+  data (recent transactions, network stats) uses short TTLs (5–15 seconds). CloudFront is
+  used for static frontend assets and is not assumed to be the primary cache layer for API
+  responses in the initial topology.
 - **Backend in-memory caching** — frequently accessed reference data (contract metadata,
   network stats) is cached in the Lambda execution environment with TTLs of 30–60 seconds
   to reduce database round-trips.
@@ -463,13 +469,13 @@ Caching operates at two levels:
 │  │ RDS PostgreSQL (block explorer's own schema)         │                     │
 │  │ ledgers · transactions · operations · accounts       │                     │
 │  │ contracts · soroban_invocations · events · tokens    │                     │
-│  │ nfts                                                 │                     │
+│  │ nfts · liquidity_pools · liquidity_pool_snapshots    │                     │
 │  └──────────────────────────┬───────────────────────────┘                     │
 │                             │                                                 │
 │  API LAYER                  │                                                 │
 │  ┌──────────────────────────▼──────────┐  ┌────────────────────────────────┐  │
 │  │ API Gateway → Lambda (NestJS)       │  │ CloudFront CDN                 │  │
-│  │ REST, rate limiting, API keys       │  │ React SPA + static assets      │  │
+│  │ REST, throttling, WAF               │  │ React SPA + static assets      │  │
 │  └─────────────────────────────────────┘  └────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────┘
 
@@ -519,22 +525,23 @@ expanding to multi-AZ when SLA requirements demand it.
 
 **Hosted by Rumble Fish (AWS sub-account):**
 
-| Component                       | Service                            | Role                                                                     |
-| ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------ |
-| Galexie process                 | ECS Fargate (1 task, continuous)   | Streams live ledger data from Stellar network to S3                      |
-| Historical backfill task        | ECS Fargate (batch, one-time)      | Processes history archives to backfill from Soroban mainnet activation   |
-| S3 bucket `stellar-ledger-data` | AWS S3                             | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor          |
-| Lambda — Ledger Processor       | AWS Lambda (S3 event-driven)       | Parses XDR; writes ledgers, txs, ops, accounts, events, contracts to RDS |
-| Lambda — Event Interpreter      | AWS Lambda (EventBridge, 5 min)    | Post-processes recent events to generate human-readable summaries        |
-| Lambda — NestJS API handlers    | AWS Lambda (per API Gateway route) | Serves all public API requests                                           |
-| RDS PostgreSQL                  | AWS RDS (db.r6g.large, Single-AZ)  | Block explorer database                                                  |
-| API Gateway                     | AWS API Gateway                    | REST API, rate limiting, API keys, response caching                      |
-| CloudFront CDN                  | AWS CloudFront                     | Serves React frontend                                                    |
-| S3 bucket `api-docs`            | AWS S3 + CloudFront                | OpenAPI spec + documentation portal                                      |
-| EventBridge Scheduler           | AWS EventBridge                    | Cron triggers for background workers                                     |
-| Secrets Manager                 | AWS Secrets Manager                | DB credentials                                                           |
-| CloudWatch + X-Ray              | AWS CloudWatch                     | Logs, metrics, alarms, distributed tracing                               |
-| CI/CD pipeline                  | GitHub Actions → AWS CDK           | Infrastructure-as-code deploy                                            |
+| Component                       | Service                            | Role                                                                   |
+| ------------------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| Galexie process                 | ECS Fargate (1 task, continuous)   | Streams live ledger data from Stellar network to S3                    |
+| Historical backfill task        | ECS Fargate (batch, one-time)      | Processes history archives to backfill from Soroban mainnet activation |
+| S3 bucket `stellar-ledger-data` | AWS S3                             | Receives `LedgerCloseMeta` XDR files; triggers Ledger Processor        |
+| Lambda — Ledger Processor       | AWS Lambda (S3 event-driven)       | Parses XDR; writes explorer records and derived state to RDS           |
+| Lambda — Event Interpreter      | AWS Lambda (EventBridge, 5 min)    | Post-processes recent events to generate human-readable summaries      |
+| Lambda — NestJS API handlers    | AWS Lambda (per API Gateway route) | Serves all public API requests                                         |
+| RDS PostgreSQL                  | AWS RDS (db.r6g.large, Single-AZ)  | Block explorer database                                                |
+| API Gateway                     | AWS API Gateway                    | REST API, throttling, request validation, response caching             |
+| AWS WAF                         | AWS WAF                            | Managed rules and abuse protection for public ingress                  |
+| CloudFront CDN                  | AWS CloudFront                     | Serves React frontend                                                  |
+| S3 bucket `api-docs`            | AWS S3 + CloudFront                | OpenAPI spec + documentation portal                                    |
+| EventBridge Scheduler           | AWS EventBridge                    | Cron triggers for background workers                                   |
+| Secrets Manager                 | AWS Secrets Manager                | DB credentials, non-browser integration keys                           |
+| CloudWatch + X-Ray              | AWS CloudWatch                     | Logs, metrics, alarms, distributed tracing                             |
+| CI/CD pipeline                  | GitHub Actions → AWS CDK           | Infrastructure-as-code deploy                                          |
 
 **External services consumed (read-only):**
 
@@ -546,22 +553,29 @@ expanding to multi-AZ when SLA requirements demand it.
 No external APIs (Horizon, Soroswap, Aquarius, Soroban RPC) are required for core
 functionality. All data flows from the canonical ledger.
 
+Public browser traffic is anonymous and read-only. The SPA must not embed API keys or
+shared secrets. Abuse control for public traffic is enforced at the ingress layer through
+API Gateway throttling/request validation and AWS WAF. If API keys are later enabled, they
+are reserved for trusted non-browser consumers and are not required for normal explorer
+browsing.
+
 ### 3.4 Tech Stack
 
-| Component     | Technology                       | Purpose                                                    |
-| ------------- | -------------------------------- | ---------------------------------------------------------- |
-| Ingestion     | Galexie (ECS Fargate)            | Streams `LedgerCloseMeta` XDR from Stellar network to S3   |
-| XDR parsing   | `@stellar/stellar-sdk` (Node.js) | Deserializes all XDR types in Ledger Processor Lambda      |
-| API Framework | NestJS / TypeScript              | Modular REST API                                           |
-| Compute       | AWS Lambda (ARM/Graviton2)       | Serverless; auto-scaling                                   |
-| Gateway       | AWS API Gateway                  | Rate limiting, API keys, request routing, response caching |
-| Database      | RDS PostgreSQL 16                | Block explorer schema with native range partitioning       |
-| CDN           | CloudFront                       | Static asset delivery, response caching                    |
-| DNS           | Route 53                         | Domain management                                          |
-| Monitoring    | CloudWatch + X-Ray               | Logging, distributed tracing, alarms                       |
-| Secrets       | Secrets Manager                  | Database credentials, API keys                             |
-| IaC           | AWS CDK (TypeScript)             | All infrastructure defined as code                         |
-| CI/CD         | GitHub Actions → `cdk deploy`    | Automated deployment on merge to main                      |
+| Component     | Technology                       | Purpose                                                   |
+| ------------- | -------------------------------- | --------------------------------------------------------- |
+| Ingestion     | Galexie (ECS Fargate)            | Streams `LedgerCloseMeta` XDR from Stellar network to S3  |
+| XDR parsing   | `@stellar/stellar-sdk` (Node.js) | Deserializes all XDR types in Ledger Processor Lambda     |
+| API Framework | NestJS / TypeScript              | Modular REST API                                          |
+| Compute       | AWS Lambda (ARM/Graviton2)       | Serverless; auto-scaling                                  |
+| Gateway       | AWS API Gateway                  | Request routing, throttling, validation, response caching |
+| Edge Security | AWS WAF                          | Managed rules, IP reputation, abuse protection            |
+| Database      | RDS PostgreSQL 16                | Block explorer schema with native range partitioning      |
+| CDN           | CloudFront                       | Static asset delivery for frontend and docs               |
+| DNS           | Route 53                         | Domain management                                         |
+| Monitoring    | CloudWatch + X-Ray               | Logging, distributed tracing, alarms                      |
+| Secrets       | Secrets Manager                  | Database credentials, non-browser integration keys        |
+| IaC           | AWS CDK (TypeScript)             | All infrastructure defined as code                        |
+| CI/CD         | GitHub Actions → `cdk deploy`    | Automated deployment on merge to main                     |
 
 ### 3.5 Environments
 
@@ -570,6 +584,15 @@ functionality. All data flows from the canonical ledger.
 | **Development** | Local and CI development  | Local PostgreSQL            |
 | **Staging**     | Pre-production validation | Separate RDS (testnet data) |
 | **Production**  | Live service              | Mainnet RDS                 |
+
+Production is the public traffic baseline. Staging preserves the same topology and failure
+model, but uses lower concurrency/throttling budgets, smaller caches, shorter operational
+retention, and tighter access controls so pre-production validation does not carry full
+production cost. The staging web frontend should not be publicly open; it is expected to be
+protected by password-based access at the edge layer. Production durability and security
+baselines explicitly include automated RDS backups with point-in-time recovery, deletion
+protection on the production database, KMS-backed encryption for RDS and S3, and TLS on
+public ingress.
 
 ### 3.6 Scalability
 
@@ -592,6 +615,10 @@ functionality. All data flows from the canonical ledger.
 | RDS CPU                     | >70% sustained for 5 min                         | SNS → on-call        |
 | RDS free storage            | <20% remaining                                   | SNS → expand storage |
 | API Gateway 5xx rate        | >0.5% of requests                                | SNS → Slack/email    |
+
+The thresholds above are the production baseline. Staging may use lower-volume alerting,
+tighter cost ceilings, and shorter retention so long as the same alarm categories remain
+represented before production rollout.
 
 CloudWatch dashboards expose: Galexie S3 file freshness, Ledger Processor duration and
 error rate, API latency (p50/p95/p99), RDS CPU/connections, and highest indexed ledger
@@ -640,8 +667,8 @@ Stellar Network (mainnet peers)
 │     .events): all contract events in one stream         │
 │  8. Extract contract deployments (new C-addresses,      │
 │     WASM hashes) from LedgerEntryChanges                │
-│  9. Extract account state snapshots (balances, signers, │
-│     thresholds) from LedgerEntryChanges                 │
+│  9. Extract account state snapshots (sequence, balances,│
+│     home_domain) from LedgerEntryChanges                │
 │ 10. Detect token contracts (SEP-41), NFT contracts,     │
 │     liquidity pools from deployment events              │
 │ 11. Write all above to RDS PostgreSQL                   │
@@ -675,9 +702,12 @@ archives** (the same archives that Horizon used for `db reingest`). It writes
 Ledger Processor Lambda. No separate code path is required.
 
 - **Scope:** from Soroban mainnet activation ledger (late 2023) to the present
-- **Parallelism:** backfill runs in configurable ledger-range batches, fully parallelisable
+- **Parallelism:** backfill runs in configurable ledger-range batches. Batches may execute
+  in parallel only when they own non-overlapping ledger ranges and preserve deterministic
+  replay semantics
 - **Timing:** runs as a one-time batch during Phase 1 (Deliverable 1); live ingestion
-  continues in parallel
+  continues in parallel, and live-derived state remains authoritative for the newest
+  ledgers
 
 ### 4.4 Background Workers
 
@@ -702,6 +732,19 @@ last exported ledger sequence and resumes from there. No manual intervention req
 by Lambda automatically. For permanent failures, the file remains in S3 and can be
 replayed by re-triggering the Lambda with the S3 key.
 
+**Replay artifact retention:** the `stellar-ledger-data` bucket is transient, but not
+ephemeral-to-zero. Production retains ledger artifacts for a minimum of 30 days to support
+replay and post-incident validation; staging may use a shorter window, but not less than 7
+days. Lifecycle expiration happens only after that minimum replay window.
+
+**Idempotency and ordering:** ledger sequence is the canonical ordering key. Processing is
+replay-safe: immutable ledger-scoped writes happen transactionally per ledger, and
+reprocessing the same ledger replaces or de-duplicates that ledger's immutable rows rather
+than creating duplicates. Derived-state upserts (`accounts`, `tokens`, `nfts`,
+`liquidity_pools`) apply only when the incoming ledger sequence is newer than or equal to
+the stored watermark (`last_seen_ledger` / `last_updated_ledger`), so an older backfill
+batch cannot overwrite fresher live state.
+
 **Schema migrations:** versioned, managed via AWS CDK and run as part of the CI/CD
 pipeline before deploying new Lambda code.
 
@@ -725,10 +768,11 @@ XDR parsing happens in two places:
   Structured results are written to RDS. The frontend receives pre-decoded data for all
   normal operations.
 
-- **NestJS API (on request):** the raw `envelope_xdr` and `result_xdr` strings are stored
-  verbatim in RDS and returned to the frontend for the advanced view. The API can also
-  decode them on request using `@stellar/stellar-sdk` to serve additional structured fields
-  not stored at ingestion time.
+- **NestJS API (on request):** the raw `envelope_xdr`, `result_xdr`, and `result_meta_xdr`
+  strings are stored verbatim in RDS. The API returns `envelope_xdr` and `result_xdr` to
+  the frontend for the advanced view, and can decode all three on request using
+  `@stellar/stellar-sdk` to serve additional structured fields or validate the stored
+  invocation tree when needed.
 
 ### 5.2 Data Extracted at Ingestion (Ledger Processor)
 
@@ -740,7 +784,8 @@ XDR parsing happens in two places:
 
 - `hash` (computed by hashing the envelope XDR), `sourceAccount`, `feeCharged`,
   `successful`, `resultCode`
-- Raw `envelopeXdr` and `resultXdr` stored verbatim for advanced view
+- Raw `envelopeXdr`, `resultXdr`, and `resultMetaXdr` stored verbatim for advanced view
+  and transaction-tree debugging
 
 **From `OperationMeta` per transaction:**
 
@@ -752,12 +797,13 @@ XDR parsing happens in two places:
 
 - `eventType` (contract/system/diagnostic), `contractId`, `topics` (decoded `ScVal[]`),
   `data` (decoded `ScVal`)
+- Known NFT contract patterns interpreted into derived NFT ownership and metadata updates
 
 **From `LedgerEntryChanges`:**
 
 - Contract deployments: `contractId`, `wasmHash`, `deployerAccount`
-- Account changes and account-state snapshots (balances, signers, thresholds)
-- Liquidity pool state changes
+- Account changes and account-state snapshots (`sequence_number`, `balances`, `home_domain`)
+- Liquidity pool state changes (`poolId`, asset pair, reserves, total shares)
 
 ### 5.3 Soroban-Specific Handling
 
@@ -768,10 +814,11 @@ XDR parsing happens in two places:
   to a typed value (integer, string, address, bytes, map, etc.) and stored in the
   `soroban_invocations` table.
 - **Invocation tree** — complex transactions with nested contract-to-contract calls have
-  their full invocation hierarchy decoded from `result_meta_xdr` and stored for the
-  transaction detail tree view.
+  their full invocation hierarchy decoded from `result_meta_xdr`, stored in
+  `transactions.operation_tree`, and served directly to the transaction detail tree view.
+  The raw `result_meta_xdr` is preserved for advanced decode/debug use.
 - **Contract interface** — function signatures (names, parameter types) are extracted from
-  the contract WASM at deployment time and stored in the `soroban_contracts` table.
+  the contract WASM at deployment time and stored inside `soroban_contracts.metadata`.
 
 ### 5.4 Error Handling
 
@@ -790,8 +837,10 @@ XDR parsing happens in two places:
 The block explorer owns its full PostgreSQL schema. All chain data is stored here;
 there is no dependency on an external database.
 
-Tables for operations, events, and invocations use **native range partitioning by month**
-for efficient time-range queries and instant partition drops.
+High-volume Soroban activity tables and liquidity-pool time series use **native range
+partitioning by month** for efficient time-range queries and instant partition drops. The
+`operations` table remains partitioned separately by `transaction_id` in the current
+schema.
 
 ### 6.1 Ledgers
 
@@ -820,10 +869,12 @@ CREATE TABLE transactions (
     result_code      VARCHAR(50),
     envelope_xdr     TEXT NOT NULL,
     result_xdr       TEXT NOT NULL,
+    result_meta_xdr  TEXT,
     memo_type        VARCHAR(20),
     memo             TEXT,
     created_at       TIMESTAMPTZ NOT NULL,
     parse_error      BOOLEAN DEFAULT FALSE,
+    operation_tree   JSONB,
     INDEX idx_hash (hash),
     INDEX idx_source (source_account, created_at DESC),
     INDEX idx_ledger (ledger_sequence)
@@ -853,7 +904,7 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger BIGINT REFERENCES ledgers(sequence),
     contract_type      VARCHAR(50),  -- 'token', 'dex', 'lending', 'nft', 'other'
     is_sac             BOOLEAN DEFAULT FALSE,
-    metadata           JSONB,
+    metadata           JSONB,        -- explorer metadata incl. optional interface signatures
     search_vector      TSVECTOR GENERATED ALWAYS AS (
                            to_tsvector('english', coalesce(metadata->>'name', ''))
                        ) STORED,
@@ -943,12 +994,68 @@ CREATE TABLE accounts (
 );
 ```
 
-### 6.10 Partitioning and Retention
+### 6.10 NFTs
 
-Tables `soroban_invocations` and `soroban_events` are partitioned by month using native
-PostgreSQL range partitioning. A cleanup Lambda (EventBridge daily) creates partitions
-2 months ahead and drops partitions older than the retention window if storage constraints
-require it. Ledger and transaction tables are not partitioned and are kept indefinitely.
+```sql
+CREATE TABLE nfts (
+    id                BIGSERIAL PRIMARY KEY,
+    contract_id       VARCHAR(56) REFERENCES soroban_contracts(contract_id),
+    token_id          VARCHAR(128) NOT NULL,
+    collection_name   VARCHAR(100),
+    owner_account     VARCHAR(56),
+    name              VARCHAR(100),
+    media_url         TEXT,
+    metadata          JSONB,
+    minted_at_ledger  BIGINT REFERENCES ledgers(sequence),
+    last_seen_ledger  BIGINT REFERENCES ledgers(sequence),
+    UNIQUE (contract_id, token_id),
+    INDEX idx_contract (contract_id),
+    INDEX idx_owner (owner_account)
+);
+```
+
+### 6.11 Liquidity Pools
+
+```sql
+CREATE TABLE liquidity_pools (
+    pool_id             VARCHAR(64) PRIMARY KEY,
+    asset_a             JSONB NOT NULL,
+    asset_b             JSONB NOT NULL,
+    fee_bps             INT,
+    reserves            JSONB NOT NULL,
+    total_shares        NUMERIC(28, 7),
+    tvl                 NUMERIC(28, 7),
+    created_at_ledger   BIGINT REFERENCES ledgers(sequence),
+    last_updated_ledger BIGINT REFERENCES ledgers(sequence),
+    INDEX idx_last_updated (last_updated_ledger DESC)
+);
+```
+
+### 6.12 Liquidity Pool Snapshots
+
+```sql
+CREATE TABLE liquidity_pool_snapshots (
+    id               BIGSERIAL PRIMARY KEY,
+    pool_id          VARCHAR(64) REFERENCES liquidity_pools(pool_id) ON DELETE CASCADE,
+    ledger_sequence  BIGINT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL,
+    reserves         JSONB NOT NULL,
+    total_shares     NUMERIC(28, 7),
+    tvl              NUMERIC(28, 7),
+    volume           NUMERIC(28, 7),
+    fee_revenue      NUMERIC(28, 7),
+    INDEX idx_pool_time (pool_id, created_at DESC)
+) PARTITION BY RANGE (created_at);
+```
+
+### 6.13 Partitioning and Retention
+
+Tables `soroban_invocations`, `soroban_events`, and `liquidity_pool_snapshots` are
+partitioned by month using native PostgreSQL range partitioning. The `operations` table is
+partitioned separately by `transaction_id` in the current schema. A cleanup Lambda
+(EventBridge daily) creates partitions 2 months ahead and drops partitions older than the
+retention window if storage constraints require it. Ledger and transaction tables are not
+partitioned and are kept indefinitely.
 
 ---
 
@@ -975,15 +1082,15 @@ require it. Ledger and transaction tables are not partitioned and are kept indef
 
 #### C. Data Ingestion Pipeline
 
-| Task                                                                         | Days   |
-| ---------------------------------------------------------------------------- | ------ |
-| Ledger Processor Lambda — XDR parse + DB write (ledgers, txs, ops, accounts) | 6      |
-| Ledger Processor — Soroban invocations + CAP-67 events extraction            | 5      |
-| Ledger Processor — contract deployments + token detection                    | 4      |
-| Event Interpreter Lambda — human-readable summaries                          | 5      |
-| Backfill validation — gap detection, idempotency checks                      | 3      |
-| Ingestion lag monitoring + alerting                                          | 2      |
-| **Subtotal**                                                                 | **25** |
+| Task                                                                                      | Days   |
+| ----------------------------------------------------------------------------------------- | ------ |
+| Ledger Processor Lambda — XDR parse + DB write (ledgers, txs, ops, accounts, NFTs, pools) | 6      |
+| Ledger Processor — Soroban invocations + CAP-67 events extraction                         | 5      |
+| Ledger Processor — contract deployments + token/NFT/pool detection                        | 4      |
+| Event Interpreter Lambda — human-readable summaries                                       | 5      |
+| Backfill validation — gap detection, idempotency checks                                   | 3      |
+| Ingestion lag monitoring + alerting                                                       | 2      |
+| **Subtotal**                                                                              | **25** |
 
 #### D. Core API Endpoints (NestJS)
 
@@ -1155,8 +1262,10 @@ report.
 3. CloudWatch dashboard accessible to Stellar team (read-only IAM role); all alarms OK;
    Galexie ingestion lag <30 s from network tip
 4. Load test report: p95 <200 ms at 1M requests/month equivalent; error rate <0.1%
-5. Security checklist signed off: no wildcard IAM, RDS has no public endpoint, all
-   secrets in Secrets Manager, all API inputs validated
+5. Security checklist signed off: no wildcard IAM, WAF/throttling active on public
+   ingress, RDS has no public endpoint, production RDS backups/PITR/deletion protection
+   enabled, RDS and S3 encrypted with KMS-backed keys, all secrets in Secrets Manager, all
+   API inputs validated
 6. 7-day post-launch monitoring report: uptime %, API error rate, p95 latency, Galexie
    ingestion lag per day
 

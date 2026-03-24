@@ -106,11 +106,14 @@ REST API with polling-based updates for new transactions and events.
 The intended implementation stack is:
 
 - **React** for route composition, page rendering, and component-based UI architecture
-- **Redux Toolkit** for predictable shared state, polling metadata, and cross-page UI state
-  that should not be duplicated across route modules
+- **TanStack Query** for server-state fetching, caching, polling, and consistent async data
+  handling across routes and shared sections
 - **MUI** as the base component library, theming foundation, and accessibility-oriented UI
   primitive layer
 - **React Router** for client-side routing
+
+The frontend is a public, anonymous browser client. It must not embed API keys or other
+shared secrets; API protection belongs at the API Gateway/WAF boundary, not in the bundle.
 
 ```
 ┌────────┐     ┌──────────────────────────────────────────────────┐
@@ -557,8 +560,12 @@ than trying to preload the entire explorer.
 Guidelines:
 
 - page routes own their top-level query lifecycle
-- Redux Toolkit should own shared UI state, polling metadata, and other cross-route state
-  that is not better expressed directly in the URL
+- TanStack Query should be the default data-fetching layer for API-backed server state
+  across the application
+- TanStack Query also serves as the in-browser cache for server state, including request
+  de-duplication, stale-state handling, and controlled background refetching
+- query keys should be structured consistently by resource type, identifier, filters, and
+  pagination cursor so cache behavior remains predictable across screens
 - independent sections may fetch independently when this improves perceived responsiveness
 - list filters, tabs, and display modes should not require hard page reloads
 - cursor tokens returned by the backend should be treated as opaque
@@ -578,8 +585,9 @@ Expected page-level data patterns:
 - **Loading states** - skeleton loaders for all data-dependent sections; spinner for search
 - **Error states** - clear error messages for network failures, 404s (unknown
   hash/account), and rate limit responses; retry affordances where appropriate
-- **Caching** - the frontend relies on backend-level caching (CloudFront, API Gateway)
-  rather than local state caching to ensure data freshness
+- **Caching** - the frontend uses TanStack Query for in-browser server-state caching and
+  relies on backend cache semantics at the API ingress layer to share freshness across
+  clients; it should not introduce a second manual global cache layer
 
 Expanded performance expectations:
 
