@@ -2,7 +2,8 @@
 id: '0007'
 title: 'Research: Drizzle ORM with PostgreSQL partitioning and advanced features'
 type: RESEARCH
-status: backlog
+status: active
+assignee: 'stkrolikiewicz'
 related_adr: []
 related_tasks: ['0008', '0009', '0010', '0011', '0012']
 tags: [priority-high, effort-small, layer-research]
@@ -12,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created from architecture docs decomposition'
+  - date: '2026-03-26'
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated for research.'
 ---
 
 # Research: Drizzle ORM with PostgreSQL partitioning and advanced features
@@ -20,7 +25,7 @@ history:
 
 Investigate Drizzle ORM compatibility with PostgreSQL features required by the block explorer schema: range partitioning, foreign keys with ON DELETE CASCADE on partitioned tables, tsvector generated columns, GIN indexes on JSONB and tsvector, CHECK constraints, and Drizzle Kit migration generation for these features. This research must produce a compatibility matrix and documented workarounds for any gaps.
 
-## Status: Backlog
+## Status: Active
 
 ## Context
 
