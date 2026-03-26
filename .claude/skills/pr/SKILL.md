@@ -51,17 +51,7 @@ Derive the summary bullets from `git diff {base}...HEAD --stat` and commit messa
 
 Check if `develop` branch exists (local or remote). If yes, use `develop`. Otherwise use `master`.
 
-### 5. Regenerate board (if tasks changed)
-
-If `git diff {base}...HEAD -- lore/1-tasks/` shows changes, regenerate the board:
-
-```bash
-npm run board
-```
-
-If `lore/BOARD.md` changed, stage and amend the last commit.
-
-### 6. Verify
+### 5. Verify
 
 Before pushing, run format and verify checks:
 
@@ -72,14 +62,14 @@ npm run -s verify:staged
 
 If checks fail, fix the issues and amend the commit before proceeding.
 
-### 7. Push and create PR
+### 6. Push and create PR
 
 ```bash
 git push -u origin {current-branch}
 gh pr create --base {base} --title "{title}" --body "{body}"
 ```
 
-### 8. Confirm
+### 7. Confirm
 
 Print the PR URL.
 
@@ -100,22 +90,26 @@ Print the PR URL.
 
 Tasks in **any status** can be committed — including `active`. This enables a two-phase workflow:
 
-### Phase 1: Status-only PR (pre-implementation)
+### Status-only updates (no PR needed)
 
-Pick a task, change its status (backlog → active), assign yourself. Create a `chore` branch and PR so the team sees the update in the board after merge.
+To activate a task (backlog → active), use `/promote-task` instead of a PR. It pushes directly to develop for board deployment.
 
-- Branch: `chore/{id}_{slug}` (via `/branch --status-only`)
-- PR title: `chore({id}): assign and activate task`
-- Changes: only task frontmatter (status, history) + regenerated BOARD.md
+### Implementation PR
 
-### Phase 2: Implementation PR
-
-After the status PR is merged, create the implementation branch and work on the task.
+Create the implementation branch and work on the task.
 
 - Branch: `feat/{id}_{slug}` (via `/branch`)
 - PR title: `feat({id}): description of implementation`
-- Changes: code + task moved to archive when done + BOARD.md
+- Changes: code + task moved to archive when completed
 
 ### Single-phase (small tasks)
 
 For small tasks, both phases can be combined in one PR — change status to active, implement, move to archive.
+
+## Task Status Updates
+
+**IMPORTANT:** All task status changes MUST go through the `/lore-framework-tasks` skill. Never update task frontmatter (status, history, `git mv` between directories) manually.
+
+- Use `/lore-framework-tasks` to mark task as `completed` and move to `archive/`
+- The canonical status value is `completed` (NOT `done`) — follow lore-framework conventions
+- After the PR is merged, the task status update is already committed as part of the branch

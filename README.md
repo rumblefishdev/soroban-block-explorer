@@ -1,6 +1,6 @@
 # Soroban Block Explorer
 
-[**Backlog Board**](https://rumblefishdev.github.io/soroban-block-explorer/) · [Board (Markdown)](lore/BOARD.md)
+[**Backlog Board**](https://rumblefishdev.github.io/soroban-block-explorer/)
 
 Nx + TypeScript monorepo bootstrap for a Soroban-first Stellar block explorer.
 

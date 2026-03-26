@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * Generates lore/BOARD.md (visual backlog board) and lore/board.json (data for HTML board).
+ * Generates lore/board.json (data for HTML board deployed to GitHub Pages).
  *
  * Usage: node tools/scripts/generate-lore-board.mjs
  *
  * Reads all tasks from lore/1-tasks/{backlog,active,blocked,archive}
- * and produces a rich Markdown board + JSON index.
+ * and produces a JSON index consumed by board.html.
  */
 
 import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
@@ -16,7 +16,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 const TASKS_DIR = join(ROOT, 'lore', '1-tasks');
-const OUT_MD = join(ROOT, 'lore', 'BOARD.md');
 const OUT_JSON = join(ROOT, 'lore', 'board.json');
 
 const STATUS_DIRS = ['backlog', 'active', 'blocked', 'archive'];
@@ -33,26 +32,6 @@ const LAYER_LABELS = {
 };
 
 const LAYER_ORDER = Object.keys(LAYER_LABELS);
-
-const LAYER_EMOJI = {
-  'layer-research': '🔬',
-  'layer-domain': '📦',
-  'layer-database': '🗄️',
-  'layer-backend': '⚙️',
-  'layer-indexing': '🔄',
-  'layer-frontend': '🖥️',
-  'layer-infra': '☁️',
-  'layer-tooling': '🔧',
-};
-
-const STATUS_EMOJI = {
-  backlog: '📋',
-  active: '🚧',
-  blocked: '🚫',
-  completed: '✅',
-  canceled: '❌',
-  superseded: '🔀',
-};
 
 function parseFrontmatter(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -210,160 +189,6 @@ function getAssignee(task) {
   return lastEntry?.who || null;
 }
 
-function generateMarkdown(tasks) {
-  const now = new Date().toISOString().slice(0, 10);
-
-  const byStatus = {};
-  for (const t of tasks) {
-    const s = t._dir;
-    if (!byStatus[s]) byStatus[s] = [];
-    byStatus[s].push(t);
-  }
-
-  const byLayer = {};
-  for (const t of tasks) {
-    const l = getLayer(t);
-    if (!byLayer[l]) byLayer[l] = [];
-    byLayer[l].push(t);
-  }
-
-  const total = tasks.length;
-  const backlogCount = (byStatus.backlog || []).length;
-  const activeCount = (byStatus.active || []).length;
-  const blockedCount = (byStatus.blocked || []).length;
-  const doneCount = (byStatus.archive || []).length;
-
-  let md = '';
-
-  // Header
-  md += `# Backlog Board\n\n`;
-  md += `> **Auto-generated** — do not edit manually.\n`;
-  md += `> Run \`node tools/scripts/generate-lore-board.mjs\` to regenerate.\n`;
-  md += `> Last updated: ${now}\n\n`;
-
-  // Stats
-  md += `## Overview\n\n`;
-  md += `| Total | ${STATUS_EMOJI.backlog} Backlog | ${STATUS_EMOJI.active} Active | ${STATUS_EMOJI.blocked} Blocked | ${STATUS_EMOJI.completed} Done |\n`;
-  md += `| :---: | :---: | :---: | :---: | :---: |\n`;
-  md += `| **${total}** | ${backlogCount} | ${activeCount} | ${blockedCount} | ${doneCount} |\n\n`;
-
-  // Progress bar
-  const pctDone = total > 0 ? Math.round((doneCount / total) * 100) : 0;
-  const pctActive = total > 0 ? Math.round((activeCount / total) * 100) : 0;
-  const pctBlocked = total > 0 ? Math.round((blockedCount / total) * 100) : 0;
-  md += `**Progress:** ${pctDone}% complete`;
-  if (activeCount > 0) md += ` · ${pctActive}% in progress`;
-  if (blockedCount > 0) md += ` · ${pctBlocked}% blocked`;
-  md += `\n\n`;
-
-  // Layer breakdown
-  md += `## By Layer\n\n`;
-  md += `| Layer | Total | Backlog | Active | Blocked | Done |\n`;
-  md += `| :--- | :---: | :---: | :---: | :---: | :---: |\n`;
-
-  for (const layerKey of LAYER_ORDER) {
-    const layerTasks = byLayer[layerKey] || [];
-    if (layerTasks.length === 0) continue;
-    const emoji = LAYER_EMOJI[layerKey] || '';
-    const label = LAYER_LABELS[layerKey] || layerKey;
-    const lb = layerTasks.filter((t) => t._dir === 'backlog').length;
-    const la = layerTasks.filter((t) => t._dir === 'active').length;
-    const lbl = layerTasks.filter((t) => t._dir === 'blocked').length;
-    const ld = layerTasks.filter((t) => t._dir === 'archive').length;
-    md += `| ${emoji} ${label} | ${layerTasks.length} | ${lb} | ${la} | ${lbl} | ${ld} |\n`;
-  }
-  md += `\n`;
-
-  // All tasks by layer
-  md += `## Tasks\n\n`;
-
-  for (const layerKey of LAYER_ORDER) {
-    const layerTasks = byLayer[layerKey] || [];
-    if (layerTasks.length === 0) continue;
-
-    const emoji = LAYER_EMOJI[layerKey] || '';
-    const label = LAYER_LABELS[layerKey] || layerKey;
-    md += `### ${emoji} ${label}\n\n`;
-    md += `| ID | Title | Status | Priority | Assignee | Type |\n`;
-    md += `| :--- | :--- | :---: | :---: | :---: | :---: |\n`;
-
-    for (const t of layerTasks) {
-      const priority = getPriority(t);
-      const priorityBadge =
-        priority === 'high' ? '🔴' : priority === 'low' ? '⚪' : '🟡';
-      const status = t.status || t._dir;
-      const statusEmoji = STATUS_EMOJI[status] || STATUS_EMOJI[t._dir] || '';
-      const assignee = getAssignee(t);
-      const assigneeStr = assignee ? `\`${assignee}\`` : '—';
-      md += `| [${t.id}](${t._relpath}) | ${t.title} | ${statusEmoji} ${status} | ${priorityBadge} ${priority} | ${assigneeStr} | ${t.type} |\n`;
-    }
-    md += `\n`;
-  }
-
-  // Dependency graph (Mermaid)
-  md += `## Dependency Graph\n\n`;
-  md += '```mermaid\ngraph LR\n';
-
-  // Style definitions
-  md += `  classDef research fill:#e1f5fe,stroke:#0288d1\n`;
-  md += `  classDef domain fill:#f3e5f5,stroke:#7b1fa2\n`;
-  md += `  classDef database fill:#fff3e0,stroke:#f57c00\n`;
-  md += `  classDef backend fill:#e8f5e9,stroke:#388e3c\n`;
-  md += `  classDef indexing fill:#fce4ec,stroke:#c62828\n`;
-  md += `  classDef frontend fill:#e0f2f1,stroke:#00695c\n`;
-  md += `  classDef infra fill:#efebe9,stroke:#4e342e\n`;
-
-  const layerToClass = {
-    'layer-research': 'research',
-    'layer-domain': 'domain',
-    'layer-database': 'database',
-    'layer-backend': 'backend',
-    'layer-indexing': 'indexing',
-    'layer-frontend': 'frontend',
-    'layer-infra': 'infra',
-  };
-
-  // Only show tasks that have dependencies or are depended upon
-  const hasDeps = new Set();
-  const isDep = new Set();
-  for (const t of tasks) {
-    const deps = Array.isArray(t.related_tasks) ? t.related_tasks : [];
-    if (deps.length > 0) {
-      hasDeps.add(t.id);
-      for (const d of deps) isDep.add(d);
-    }
-  }
-  const graphTasks = tasks.filter((t) => hasDeps.has(t.id) || isDep.has(t.id));
-
-  for (const t of graphTasks) {
-    const shortTitle =
-      t.title.length > 35 ? t.title.slice(0, 32) + '...' : t.title;
-    const cls = layerToClass[getLayer(t)] || '';
-    md += `  T${t.id}["${t.id}: ${shortTitle.replace(/"/g, "'")}"]\n`;
-    if (cls) md += `  class T${t.id} ${cls}\n`;
-  }
-
-  for (const t of tasks) {
-    const deps = Array.isArray(t.related_tasks) ? t.related_tasks : [];
-    for (const dep of deps) {
-      if (graphTasks.some((g) => g.id === dep)) {
-        md += `  T${dep} --> T${t.id}\n`;
-      }
-    }
-  }
-
-  md += '```\n\n';
-
-  // Legend
-  md += `**Legend:** `;
-  md += Object.entries(LAYER_EMOJI)
-    .map(([k, e]) => `${e} ${LAYER_LABELS[k]}`)
-    .join(' · ');
-  md += ` | 🔴 High · 🟡 Medium · ⚪ Low\n`;
-
-  return md;
-}
-
 function extractDescription(content) {
   // Extract text between "## Summary" and the next "##" heading
   const match = content.match(/## Summary\n\n([\s\S]*?)(?=\n## |\n---$)/);
@@ -396,14 +221,11 @@ function generateJSON(tasks) {
 
 // Main
 const tasks = loadTasks();
-const md = generateMarkdown(tasks);
 const json = generateJSON(tasks);
 
-writeFileSync(OUT_MD, md);
 writeFileSync(
   OUT_JSON,
   JSON.stringify({ generated: new Date().toISOString(), tasks: json }, null, 2)
 );
 
-console.log(`BOARD.md generated (${tasks.length} tasks)`);
-console.log(`board.json generated`);
+console.log(`board.json generated (${tasks.length} tasks)`);
