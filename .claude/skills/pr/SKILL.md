@@ -51,17 +51,7 @@ Derive the summary bullets from `git diff {base}...HEAD --stat` and commit messa
 
 Check if `develop` branch exists (local or remote). If yes, use `develop`. Otherwise use `master`.
 
-### 5. Regenerate board (if tasks changed)
-
-If `git diff {base}...HEAD -- lore/1-tasks/` shows changes, regenerate the board:
-
-```bash
-npm run board
-```
-
-If `lore/BOARD.md` changed, stage and amend the last commit.
-
-### 6. Verify
+### 5. Verify
 
 Before pushing, run format and verify checks:
 
@@ -72,14 +62,14 @@ npm run -s verify:staged
 
 If checks fail, fix the issues and amend the commit before proceeding.
 
-### 7. Push and create PR
+### 6. Push and create PR
 
 ```bash
 git push -u origin {current-branch}
 gh pr create --base {base} --title "{title}" --body "{body}"
 ```
 
-### 8. Confirm
+### 7. Confirm
 
 Print the PR URL.
 
@@ -106,7 +96,7 @@ Pick a task, change its status (backlog → active), assign yourself. Create a `
 
 - Branch: `chore/{id}_{slug}` (via `/branch --status-only`)
 - PR title: `chore({id}): assign and activate task`
-- Changes: only task frontmatter (status, history) + regenerated BOARD.md
+- Changes: only task frontmatter (status, history)
 
 ### Phase 2: Implementation PR
 
@@ -114,7 +104,7 @@ After the status PR is merged, create the implementation branch and work on the 
 
 - Branch: `feat/{id}_{slug}` (via `/branch`)
 - PR title: `feat({id}): description of implementation`
-- Changes: code + task moved to archive when done + BOARD.md
+- Changes: code + task moved to archive when done
 
 ### Single-phase (small tasks)
 
