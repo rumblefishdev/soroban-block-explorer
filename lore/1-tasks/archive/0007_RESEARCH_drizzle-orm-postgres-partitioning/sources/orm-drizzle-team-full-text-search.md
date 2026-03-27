@@ -16,6 +16,7 @@ task_id: '0007'
 ## GIN Index for Performance
 
 ```typescript
+import { sql } from 'drizzle-orm';
 import { index, pgTable, serial, text } from 'drizzle-orm/pg-core';
 
 export const posts = pgTable(
@@ -36,13 +37,15 @@ export const posts = pgTable(
 ## Multi-column Search with Weights
 
 ```typescript
-index('search_index').using(
-  'gin',
-  sql`(
+// Inside pgTable callback, e.g. (table) => [...]
+(table) =>
+  index('search_index').using(
+    'gin',
+    sql`(
   setweight(to_tsvector('english', ${table.title}), 'A') ||
   setweight(to_tsvector('english', ${table.description}), 'B')
 )`
-);
+  );
 ```
 
 ## Query Functions
