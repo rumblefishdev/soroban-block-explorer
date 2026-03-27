@@ -213,9 +213,9 @@ Staging web password:
 
 ```typescript
 if (config.frontendPasswordProtected && config.stagingPasswordSecretArn) {
-  // Password is fetched from Secrets Manager at synth/deploy time and injected
-  // into CloudFront Function / distribution config, or use Lambda@Edge with
-  // Secrets Manager access for runtime retrieval
+  // Recommended: fetch password from Secrets Manager at deploy time and inject it
+  // into CloudFront Function / distribution config, or use Lambda@Edge / CloudFront
+  // Function with Secrets Manager access for runtime retrieval (avoid synth-time embedding)
 }
 ```
 
@@ -259,7 +259,7 @@ const migrationHash = migrationFiles
     hash.update(file);
     hash.update(contents);
     return hash;
-  }, crypto.createHash('md5'))
+  }, crypto.createHash('sha256'))
   .digest('hex');
 
 // Custom Resource — runs BEFORE dependent resources
