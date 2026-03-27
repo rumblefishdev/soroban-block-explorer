@@ -2,7 +2,8 @@
 id: '0008'
 title: 'Research: Event Interpreter pattern matching and enrichment approach'
 type: RESEARCH
-status: backlog
+status: active
+assignee: fmazur
 related_adr: []
 related_tasks: ['0059']
 tags: [priority-medium, effort-medium, layer-research]
@@ -12,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created from architecture docs decomposition'
+  - date: 2026-03-27
+    status: active
+    who: fmazur
+    note: 'Activated for research'
 ---
 
 # Research: Event Interpreter pattern matching and enrichment approach
@@ -20,7 +25,7 @@ history:
 
 Investigate the Event Interpreter's pattern matching strategy, known Soroban event signatures for DEX and token operations, idempotent reprocessing semantics, watermark-based event windowing, and the extensibility model for adding new pattern types. This research must produce a concrete pattern registry design and confirmed event signatures for the initial set of known patterns (swap, transfer, mint, burn).
 
-## Status: Backlog
+## Status: Active
 
 ## Context
 
