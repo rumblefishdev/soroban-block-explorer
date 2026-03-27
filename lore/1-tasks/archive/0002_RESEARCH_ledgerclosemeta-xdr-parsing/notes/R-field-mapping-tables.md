@@ -25,7 +25,7 @@ history:
 
 ## Coverage
 
-This mapping covers all **12 tables** from the [database schema overview](../../../../docs/architecture/database-schema/database-schema-overview.md). Tables 1–8 are populated directly from LedgerCloseMeta XDR fields. Tables 9–12 are derived/enrichment tables populated from combinations of XDR data and event interpretation logic.
+This mapping covers all **12 tables** from the [database schema overview](../../../../docs/architecture/database-schema/database-schema-overview.md). Tables 1–6, 9, and 10 are populated directly from LedgerCloseMeta XDR fields (including `LedgerEntryChanges`), while tables 7, 8, 11, and 12 are derived/enrichment tables populated from combinations of XDR data and event interpretation logic.
 
 ## Table 1: ledgers
 
@@ -150,7 +150,7 @@ if let LedgerEntryData::ContractData(cd) = &entry.data {
 | `created_at`      | Same as ledger `closed_at`                                |
 
 V3: `meta.v3().soroban_meta.events`
-V4: `meta.v4().events` (top-level) + `meta.v4().operations[i].events` (per-op)
+V4: fee/system events: `meta.v4().events` (top-level); per-op contract events: `meta.v4().operations[i].events`
 
 ## Table 9: accounts
 
