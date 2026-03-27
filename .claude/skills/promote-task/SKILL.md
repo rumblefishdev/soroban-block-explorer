@@ -25,7 +25,6 @@ If task is already `active`, **STOP** — nothing to do.
 The update must:
 
 - Change `status: backlog` → `status: active`
-- Set `assignee` to current user (from `lore/0-session/current-user.md`)
 - `git mv` the task file from `backlog/` to `active/`
 - Add history entry with date, status `active`, who, and note
 
