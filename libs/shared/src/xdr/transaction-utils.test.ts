@@ -8,6 +8,7 @@ import {
   Operation,
   Asset,
   Memo,
+  Transaction,
 } from '@stellar/stellar-base';
 import { computeTransactionHash, extractMemo } from './transaction-utils.js';
 
@@ -40,6 +41,21 @@ function buildEnvelope(memo?: Memo): { envelopeXdr: string; hash: string } {
   };
 }
 
+function buildFeeBumpEnvelope(): { envelopeXdr: string; hash: string } {
+  const { envelopeXdr: innerXdr } = buildEnvelope(Memo.text('inner'));
+  const innerTx = new Transaction(innerXdr, Networks.TESTNET);
+  const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
+    Keypair.random().publicKey(),
+    '500',
+    innerTx,
+    Networks.TESTNET
+  );
+  return {
+    envelopeXdr: feeBumpTx.toEnvelope().toXDR('base64'),
+    hash: feeBumpTx.hash().toString('hex'),
+  };
+}
+
 describe('computeTransactionHash', () => {
   it('produces a 64-character hex string', () => {
     const { envelopeXdr } = buildEnvelope();
@@ -50,6 +66,13 @@ describe('computeTransactionHash', () => {
   it('matches the SDK-computed hash', () => {
     const { envelopeXdr, hash: expected } = buildEnvelope();
     const hash = computeTransactionHash(envelopeXdr, Networks.TESTNET);
+    expect(hash).toBe(expected);
+  });
+
+  it('handles fee-bump envelopes', () => {
+    const { envelopeXdr, hash: expected } = buildFeeBumpEnvelope();
+    const hash = computeTransactionHash(envelopeXdr, Networks.TESTNET);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(hash).toBe(expected);
   });
 });
@@ -64,7 +87,10 @@ describe('extractMemo', () => {
   it('extracts text memo', () => {
     const { envelopeXdr } = buildEnvelope(Memo.text('hello'));
     const envelope = xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
-    expect(extractMemo(envelope)).toEqual({ memoType: 'text', memo: 'hello' });
+    expect(extractMemo(envelope)).toEqual({
+      memoType: 'text',
+      memo: 'hello',
+    });
   });
 
   it('extracts id memo', () => {
@@ -91,5 +117,13 @@ describe('extractMemo', () => {
     const result = extractMemo(envelope);
     expect(result.memoType).toBe('return');
     expect(result.memo).toBe(retHash.toString('hex'));
+  });
+
+  it('extracts memo from fee-bump envelope', () => {
+    const { envelopeXdr } = buildFeeBumpEnvelope();
+    const envelope = xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
+    const result = extractMemo(envelope);
+    expect(result.memoType).toBe('text');
+    expect(result.memo).toBe('inner');
   });
 });

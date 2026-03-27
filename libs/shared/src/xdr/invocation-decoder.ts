@@ -3,7 +3,7 @@ import { decodeScVal } from './scval-decoder.js';
 import type { DecodedScVal } from './scval-decoder.js';
 
 export interface InvocationNode {
-  type: 'contract' | 'wasm' | 'sac';
+  type: 'contract' | 'wasm';
   contractId: string | null;
   functionName: string | null;
   args: readonly DecodedScVal[];
