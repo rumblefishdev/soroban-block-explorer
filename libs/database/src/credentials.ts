@@ -1,21 +1,30 @@
+import { resolveEnvironment } from './config.js';
+
 /**
  * Resolves the PostgreSQL connection string from the environment.
  *
  * - Dev: reads DATABASE_URL env var directly.
  * - Staging/Production: fetches from AWS Secrets Manager using DATABASE_SECRET_ARN.
+ *   DATABASE_URL is ignored in non-dev environments to prevent accidental
+ *   use of local credentials in staging/production.
  *   The SDK is dynamically imported so it is never loaded in dev.
  */
 export async function resolveConnectionString(): Promise<string> {
-  const databaseUrl = process.env['DATABASE_URL'];
-  if (databaseUrl) return databaseUrl;
+  const env = resolveEnvironment();
+
+  if (env === 'dev') {
+    const databaseUrl = process.env['DATABASE_URL'];
+    if (databaseUrl) return databaseUrl;
+    throw new Error('DATABASE_URL must be set in dev environment.');
+  }
 
   const secretArn = process.env['DATABASE_SECRET_ARN'];
   const region = process.env['AWS_REGION'] ?? 'us-east-1';
 
   if (!secretArn) {
     throw new Error(
-      'DATABASE_URL or DATABASE_SECRET_ARN must be set. ' +
-        'Set DATABASE_URL for local dev, or DATABASE_SECRET_ARN for staging/production.'
+      `DATABASE_SECRET_ARN must be set in ${env} environment. ` +
+        'DATABASE_URL is only allowed in dev.'
     );
   }
 
