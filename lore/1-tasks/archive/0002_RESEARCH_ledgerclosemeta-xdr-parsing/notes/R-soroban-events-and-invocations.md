@@ -279,6 +279,8 @@ if let TransactionMeta::V4(v4) = meta {
 
 Complete list of Stellar Asset Contract event topic symbols. Used for `event_interpretations` table population.
 
+### Pre-CAP-0067 (Protocol < 23)
+
 | Event            | First Topic (`Symbol`) | Additional Topics                      | Data                                     |
 | ---------------- | ---------------------- | -------------------------------------- | ---------------------------------------- |
 | `transfer`       | `"transfer"`           | `Address(from)`, `Address(to)`         | `I128(amount)`                           |
@@ -289,4 +291,18 @@ Complete list of Stellar Asset Contract event topic symbols. Used for `event_int
 | `set_admin`      | `"set_admin"`          | `Address(admin)`, `Address(new_admin)` | —                                        |
 | `set_authorized` | `"set_authorized"`     | `Address(admin)`, `Address(id)`        | `U32(authorize_flag)`                    |
 
-**Note:** CAP-0067 (Protocol 23) changed SAC event format — admin topics removed from mint/clawback/set_authorized. SAC now emits `mint`/`burn` instead of `transfer` when the issuer is involved. Implementation must handle both pre- and post-CAP-0067 formats for historical data.
+### Post-CAP-0067 (Protocol 23+)
+
+CAP-0067 removed admin topics from `mint`, `clawback`, and `set_authorized`. SAC now emits `mint`/`burn` instead of `transfer` when the issuer is involved. All SAC events now include an asset identifier topic (SEP-0011 format).
+
+| Event            | First Topic (`Symbol`) | Additional Topics                                    | Data                                     |
+| ---------------- | ---------------------- | ---------------------------------------------------- | ---------------------------------------- |
+| `transfer`       | `"transfer"`           | `Address(from)`, `Address(to)`, `Symbol(asset)`      | `I128(amount)`                           |
+| `mint`           | `"mint"`               | `Address(to)`, `Symbol(asset)`                       | `I128(amount)`                           |
+| `burn`           | `"burn"`               | `Address(from)`, `Symbol(asset)`                     | `I128(amount)`                           |
+| `clawback`       | `"clawback"`           | `Address(from)`, `Symbol(asset)`                     | `I128(amount)`                           |
+| `approve`        | `"approve"`            | `Address(from)`, `Address(spender)`, `Symbol(asset)` | `I128(amount)`, `U32(live_until_ledger)` |
+| `set_admin`      | `"set_admin"`          | `Address(admin)`                                     | `Address(new_admin)`                     |
+| `set_authorized` | `"set_authorized"`     | `Address(id)`                                        | `U32(authorize_flag)`                    |
+
+**Note:** Implementation must handle both pre- and post-CAP-0067 formats for historical data. Detect protocol version from the enclosing `LedgerCloseMeta`'s ledger header (for example `meta.v4.ledger_header.header.ledger_version`) to determine which format applies.
