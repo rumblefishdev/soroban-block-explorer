@@ -44,8 +44,8 @@ export interface SorobanContract {
   wasmHash: string | null;
   deployerAccount: string | null;
   deployedAtLedger: BigIntString | null;
-  contractType: ContractType;
-  isSac: boolean;
+  contractType: ContractType | null;
+  isSac: boolean | null;
   metadata: ContractMetadata | null;
 }
 
@@ -53,7 +53,7 @@ export type EventType = 'contract' | 'system' | 'diagnostic';
 
 export interface SorobanInvocation {
   id: BigIntString;
-  transactionId: BigIntString;
+  transactionId: BigIntString | null;
   contractId: string | null;
   callerAccount: string | null;
   functionName: string;
@@ -66,7 +66,7 @@ export interface SorobanInvocation {
 
 export interface SorobanEvent {
   id: BigIntString;
-  transactionId: BigIntString;
+  transactionId: BigIntString | null;
   contractId: string | null;
   eventType: EventType;
   topics: readonly ScVal[];
@@ -79,7 +79,7 @@ export type InterpretationType = 'swap' | 'transfer' | 'mint' | 'burn';
 
 export interface EventInterpretation {
   id: BigIntString;
-  eventId: BigIntString;
+  eventId: BigIntString | null;
   interpretationType: InterpretationType;
   humanReadable: string;
   structuredData: Readonly<Record<string, JsonValue>>;

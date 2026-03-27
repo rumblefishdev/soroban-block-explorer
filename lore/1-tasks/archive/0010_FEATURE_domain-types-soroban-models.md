@@ -21,7 +21,7 @@ history:
     status: completed
     who: fmazur
     note: >
-      Implemented all 6 steps. 10 types/interfaces added to libs/domain/src/index.ts.
+      Implemented all 6 steps. 14 exported types/interfaces added to libs/domain/src/index.ts.
       Key decisions: BigIntString for BIGINT columns, ScVal alias for decoded ScVal,
       JsonValue for JSONB, ContractMetadata with typed functions field,
       readonly arrays, strict DDL nullability alignment.
