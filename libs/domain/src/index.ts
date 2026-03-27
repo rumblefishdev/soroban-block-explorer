@@ -153,7 +153,8 @@ export interface NFT {
  * Single asset within a liquidity pool.
  *
  * Horizon format: `"CODE:ISSUER"` for classic assets or contract ID for
- * Soroban tokens. Amount is a stroops-scale string (`NUMERIC(28,7)`).
+ * Soroban tokens. Amount is a fixed-precision decimal string
+ * (`NUMERIC(28,7)` as stored in PostgreSQL).
  */
 export interface PoolAsset {
   asset: string;
@@ -163,8 +164,9 @@ export interface PoolAsset {
 /**
  * Explorer liquidity pool — current-state entity.
  *
- * Asset fields are JSONB because a pool can pair a classic Stellar asset
- * with a Soroban-native token, spanning two identity schemes.
+ * Asset fields are stored as JSONB in PostgreSQL (because a pool can pair
+ * a classic Stellar asset with a Soroban-native token) but represented as
+ * typed `PoolAsset` in the domain model.
  */
 export interface LiquidityPool {
   poolId: string;
