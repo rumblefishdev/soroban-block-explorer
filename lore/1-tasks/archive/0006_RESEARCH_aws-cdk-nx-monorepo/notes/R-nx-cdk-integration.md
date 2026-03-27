@@ -143,14 +143,16 @@ const processor = new lambda.Function(this, 'LedgerProcessor', {
 **Pros:** Full control over build. Nx can manage the Rust build target. No dependency on `@cdklabs/aws-lambda-rust`.
 **Cons:** Must set up cross-compilation for ARM64 Lambda manually. More CI config.
 
-#### Recommendation: Option B (pre-built binary)
+#### Recommendation: Option A (`cargo-lambda-cdk`)
+
+Updated 2026-03-27 based on team experience: `cargo-lambda-cdk` is proven and handles cross-compilation, bundling, and packaging automatically. The Docker fallback eliminates manual cross-compilation setup. Pre-built binary (Option B) adds unnecessary CI complexity for marginal control benefit.
 
 Reasons:
 
-1. `@cdklabs/aws-lambda-rust` is v0.0.10 — too early for production
-2. Nx should manage ALL builds, including Rust — consistent build graph
-3. Pre-built binary is simpler to debug and cache in CI
-4. CI can use `cargo lambda build --release --arm64` in a Docker container
+1. `cargo-lambda-cdk` handles ARM64 cross-compilation transparently (Docker or Zig)
+2. Single CDK construct replaces manual `Code.fromAsset()` + CI build steps
+3. Supports local bundling (cargo-lambda installed) with Docker fallback
+4. Already listed in recommended CDK dependencies
 
 ### Nx Rust Build Target
 
