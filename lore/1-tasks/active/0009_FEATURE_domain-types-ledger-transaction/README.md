@@ -14,7 +14,7 @@ history:
     note: 'Task created'
   - date: 2026-03-27
     status: active
-    who: skrolikiewicz
+    who: stkrolikiewicz
     note: 'Promoted to active'
 ---
 
