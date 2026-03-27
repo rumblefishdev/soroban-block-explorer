@@ -30,7 +30,7 @@ export type LedgerPointer = Pick<Ledger, 'sequence' | 'closedAt'>;
 export type LedgerSummary = Ledger;
 
 export interface LedgerDetail extends LedgerSummary {
-  transactions: TransactionSummary[];
+  transactions: readonly TransactionSummary[];
 }
 
 // --- Transaction domain types ---
@@ -59,7 +59,7 @@ export interface TransactionSummary {
   hash: string;
   ledgerSequence: BigIntString;
   sourceAccount: string;
-  operationType: string;
+  operationType: OperationType;
   successful: boolean;
   feeCharged: BigIntString;
   createdAt: string;
@@ -74,8 +74,8 @@ export interface TransactionDetail extends TransactionSummary {
   memo: string | null;
   parseError: boolean;
   operationTree: JsonValue | null;
-  operations: Operation[];
-  events: SorobanEvent[];
+  operations: readonly Operation[];
+  events: readonly SorobanEvent[];
 }
 
 // --- Operation domain types ---
@@ -120,7 +120,7 @@ export interface InvokeHostFunctionDetails {
 export interface Operation {
   id: BigIntString;
   transactionId: BigIntString;
-  type: string;
+  type: OperationType;
   details: Readonly<Record<string, JsonValue>>;
 }
 
@@ -132,7 +132,7 @@ export interface PaginationRequest {
 }
 
 export interface PaginatedResponse<T> {
-  data: T[];
+  data: readonly T[];
   nextCursor: string | null;
   hasMore: boolean;
 }
