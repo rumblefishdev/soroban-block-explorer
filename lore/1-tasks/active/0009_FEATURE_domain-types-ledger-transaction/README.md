@@ -2,7 +2,7 @@
 id: '0009'
 title: 'Domain types: ledger and transaction models'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0008']
 tags: [priority-high, effort-small, layer-domain]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-03-27
+    status: active
+    who: skrolikiewicz
+    note: 'Promoted to active'
 ---
 
 # Domain types: ledger and transaction models
@@ -20,9 +24,9 @@ history:
 
 Define the shared TypeScript domain types for ledgers, transactions, operations, pagination, and API response shapes. These types live in `libs/domain` and are consumed by both `apps/api` and `apps/indexer`. They mirror the PostgreSQL schema defined in task 0008 and the API response contracts from the backend overview.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started. Depends on DB schema task 0008 for final column-level decisions.
+**Current state:** Promoted to active. Depends on DB schema task 0008 for final column-level decisions.
 
 ## Context
 
