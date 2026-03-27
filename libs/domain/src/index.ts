@@ -107,6 +107,7 @@ export interface Token {
   contractId: string | null;
   name: string | null;
   totalSupply: NumericString | null;
+  /** DDL: INT DEFAULT 0. Semantically non-nullable — always initialized to 0. */
   holderCount: number;
   metadata: JsonValue | null;
 }
@@ -133,7 +134,7 @@ export interface Account {
  * Soroban events, not a separate table. Many fields are nullable because
  * NFT contract conventions are not standardized.
  */
-export interface Nft {
+export interface NFT {
   id: BigIntString;
   contractId: string;
   tokenId: string;
