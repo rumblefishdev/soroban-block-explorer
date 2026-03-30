@@ -31,7 +31,7 @@ Observability must provide operational signals to help maintain the product with
 
 ### Error Boundaries
 
-- Route-level error boundaries (from task 0047) must report:
+- Route-level error boundaries (from task 0067) must report:
   - Route path where the error occurred
   - Error message and stack trace
   - Component stack (React component hierarchy)
@@ -49,7 +49,7 @@ For every failed API request, log:
 | Error Type    | Classification: not_found, rate_limit, server_error, network_error |
 
 - Distinguish 404 (not found) from 5xx (server error) from network failures
-- Track at the TanStack Query error handler level (task 0046)
+- Track at the TanStack Query error handler level (task 0066)
 
 ### Performance Timing
 
@@ -116,7 +116,7 @@ Create `apps/web/src/observability/apiTracking.ts`:
 
 - TanStack Query global error handler integration
 - Logs: endpoint, status code, response time, error type classification
-- Uses error classification utility from task 0044
+- Uses error classification utility from task 0064
 
 ### Step 3: Performance timing
 
@@ -147,7 +147,7 @@ Add eslint-plugin-jsx-a11y to lint config:
 - Verify badge text contrast meets WCAG AA
 - Verify timestamp/secondary text contrast
 - Verify disabled state contrast
-- Document color contrast ratios in theme (task 0077)
+- Document color contrast ratios in theme (task 0058)
 
 ## Acceptance Criteria
 
@@ -166,4 +166,4 @@ Add eslint-plugin-jsx-a11y to lint config:
 
 - Observability is for operational signals only. It should help spot UI failures, slow routes, and degraded views. It must never substitute for backend correctness.
 - Accessibility is a baseline requirement, not a stretch goal. Semantic HTML and keyboard access are enforced from the start.
-- The MUI theme (task 0077) should encode contrast-compliant color choices so individual components inherit correct values.
+- The MUI theme (task 0058) should encode contrast-compliant color choices so individual components inherit correct values.

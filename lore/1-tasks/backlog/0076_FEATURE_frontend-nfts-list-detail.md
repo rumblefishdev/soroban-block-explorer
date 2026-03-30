@@ -4,7 +4,7 @@ title: 'Frontend: NFTs list and detail pages'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0005']
 tags: [priority-medium, effort-medium, layer-frontend-pages]
 milestone: 2
 links: []
@@ -43,8 +43,8 @@ NFTs on Stellar are Soroban-based. The NFT pages prioritize recognition and coll
 | ------------- | ------------------------------------- | ----------------------------------------- |
 | Name          | Text                                  | NFT name or identifier                    |
 | Collection    | Text                                  | Collection name                           |
-| Contract      | Truncated, linked to `/contracts/:id` | IdentifierDisplay (task 0042)             |
-| Owner         | Truncated, linked to `/accounts/:id`  | IdentifierDisplay (task 0042)             |
+| Contract      | Truncated, linked to `/contracts/:id` | IdentifierDisplay (task 0062)             |
+| Owner         | Truncated, linked to `/accounts/:id`  | IdentifierDisplay (task 0062)             |
 | Preview Image | Thumbnail                             | Lazy-loaded. Placeholder on load failure. |
 
 ### NFT List Filters
@@ -63,8 +63,8 @@ NFTs on Stellar are Soroban-based. The NFT pages prioritize recognition and coll
 | Name       | Prominent header                 | NFT name                           |
 | Token ID   | Text                             | NFT identifier within the contract |
 | Collection | Text                             | Collection name                    |
-| Contract   | Full, linked to `/contracts/:id` | IdentifierWithCopy (task 0042)     |
-| Owner      | Full, linked to `/accounts/:id`  | IdentifierWithCopy (task 0042)     |
+| Contract   | Full, linked to `/contracts/:id` | IdentifierWithCopy (task 0062)     |
+| Owner      | Full, linked to `/accounts/:id`  | IdentifierWithCopy (task 0062)     |
 
 ### Media Preview
 
@@ -84,11 +84,11 @@ NFTs on Stellar are Soroban-based. The NFT pages prioritize recognition and coll
 
 | Column           | Display                                    | Notes                         |
 | ---------------- | ------------------------------------------ | ----------------------------- |
-| From             | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0042) |
-| To               | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0042) |
-| Ledger           | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0042) |
-| Timestamp        | Relative                                   | RelativeTimestamp (task 0043) |
-| Transaction Hash | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0042) |
+| From             | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0062) |
+| To               | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0062) |
+| Ledger           | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0062) |
+| Timestamp        | Relative                                   | RelativeTimestamp (task 0063) |
+| Transaction Hash | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062) |
 
 - Paginated from `/nfts/:id/transfers` endpoint
 
@@ -137,7 +137,7 @@ Create `apps/web/src/pages/nft-detail/NFTTransfers.tsx`:
 Create `apps/web/src/pages/nft-detail/NFTDetailPage.tsx`:
 
 - Composes: NFTSummary, NFTMediaPreview, NFTMetadata, NFTTransfers
-- Each section in SectionErrorBoundary (task 0044)
+- Each section in SectionErrorBoundary (task 0064)
 - 404 state: "NFT not found"
 
 ## Acceptance Criteria

@@ -12,14 +12,14 @@ history:
   - date: 2026-03-30
     status: backlog
     who: fmazur
-    note: 'Task created — split from 0038 during milestone alignment (task 0085). D1 requires OpenAPI specification infrastructure; full endpoint documentation is M2 (task 0038).'
+    note: 'Task created — split from 0057 during milestone alignment (task 0085). D1 requires OpenAPI specification infrastructure; full endpoint documentation is M2 (task 0057).'
 ---
 
 # OpenAPI/Swagger infrastructure setup
 
 ## Summary
 
-Set up `@nestjs/swagger` integration, document builder configuration, Swagger UI dev endpoint, and spec export pipeline. This is the M1 infrastructure prerequisite for the full OpenAPI endpoint documentation (task 0038, M2). D1 design scope includes "OpenAPI specification" — this task delivers the tooling and empty spec skeleton; task 0038 fills it with all 20+ endpoint annotations.
+Set up `@nestjs/swagger` integration, document builder configuration, Swagger UI dev endpoint, and spec export pipeline. This is the M1 infrastructure prerequisite for the full OpenAPI endpoint documentation (task 0057, M2). D1 design scope includes "OpenAPI specification" — this task delivers the tooling and empty spec skeleton; task 0057 fills it with all 20+ endpoint annotations.
 
 ## Status: Backlog
 
@@ -27,7 +27,7 @@ Set up `@nestjs/swagger` integration, document builder configuration, Swagger UI
 
 ## Context
 
-The technical design (§7.4 D1) lists "OpenAPI specification" in the D1 scope. However, the full spec (task 0038) requires all API feature modules (M2) to exist. This task splits out the infrastructure part that can be delivered in M1: swagger setup, document builder, dev UI, and export pipeline.
+The technical design (§7.4 D1) lists "OpenAPI specification" in the D1 scope. However, the full spec (task 0057) requires all API feature modules (M2) to exist. This task splits out the infrastructure part that can be delivered in M1: swagger setup, document builder, dev UI, and export pipeline.
 
 ## Implementation Plan
 
@@ -37,7 +37,7 @@ Install `@nestjs/swagger` and `swagger-ui-express`. Configure `SwaggerModule.set
 
 ### Step 2: Define reusable schema components
 
-Create shared OpenAPI schema components for: error envelope, pagination envelope, standard query parameters. These components will be referenced by endpoint annotations in task 0038.
+Create shared OpenAPI schema components for: error envelope, pagination envelope, standard query parameters. These components will be referenced by endpoint annotations in task 0057.
 
 ### Step 3: Swagger UI dev endpoint
 
@@ -59,4 +59,4 @@ Set up `SwaggerModule.createDocument()` export as JSON at `/api-docs-json`. Conf
 ## Notes
 
 - This task delivers the "OpenAPI specification" infrastructure required by D1.
-- Task 0038 (M2) depends on this and adds full endpoint annotations after all API modules are built.
+- Task 0057 (M2) depends on this and adds full endpoint annotations after all API modules are built.

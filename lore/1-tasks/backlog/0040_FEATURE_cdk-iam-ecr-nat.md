@@ -4,7 +4,7 @@ title: 'CDK: IAM roles, ECR repository, NAT Gateway'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0031']
+related_tasks: ['0006', '0031']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define IAM execution roles with least-privilege permissions for all compute comp
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on VPC/networking (task 0068) for public subnet placement of the NAT Gateway.
+**Current state:** Not started. Depends on VPC/networking (task 0031) for public subnet placement of the NAT Gateway.
 
 ## Context
 
@@ -32,7 +32,7 @@ Security is enforced through least-privilege IAM roles. Each compute component g
 
 The NAT Gateway provides outbound internet access for ECS Fargate tasks running in the private subnet. This is required for Galexie to connect to Stellar network peers and for ECS to pull container images from ECR.
 
-The ECR repository hosts the Galexie container image, built and pushed by the CI/CD pipeline (task 0076).
+The ECR repository hosts the Galexie container image, built and pushed by the CI/CD pipeline (task 0039).
 
 ### Source Code Location
 
@@ -98,13 +98,13 @@ Define an ECR repository for the Galexie container image:
 - Lifecycle policy: retain last N images, expire untagged images after 7 days
 - Encryption: AES-256 (default) or KMS if required
 - Image scanning: enabled for vulnerability detection
-- The CI/CD pipeline (task 0076) pushes images tagged with git SHA
+- The CI/CD pipeline (task 0039) pushes images tagged with git SHA
 
 ### Step 7: NAT Gateway
 
 Define a NAT Gateway in the public subnet:
 
-- Placement: public subnet in us-east-1a (from task 0068)
+- Placement: public subnet in us-east-1a (from task 0031)
 - Elastic IP allocation for stable outbound address
 - Required for:
   - ECS Fargate outbound to Stellar network peers (Captive Core connections)
@@ -116,7 +116,7 @@ Define a NAT Gateway in the public subnet:
 
 ### Step 8: S3 VPC Endpoint Policy (Refinement)
 
-Refine the S3 VPC endpoint policy (endpoint created in task 0068) to restrict access to only the project's S3 buckets:
+Refine the S3 VPC endpoint policy (endpoint created in task 0031) to restrict access to only the project's S3 buckets:
 
 - Allow access to stellar-ledger-data bucket
 - Allow access to api-docs bucket

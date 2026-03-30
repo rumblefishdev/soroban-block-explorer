@@ -97,6 +97,6 @@ Export `GlobalSearchBar` from `libs/ui` barrel.
 
 ## Notes
 
-- The search results page is task 0058; this component handles the input and navigation trigger.
-- The layout shell (task 0039) provides the slot where this component is rendered.
-- API interaction should use TanStack Query setup from task 0046 for suggestion fetching.
+- The search results page is task 0086; this component handles the input and navigation trigger.
+- The layout shell (task 0059) provides the slot where this component is rendered.
+- API interaction should use TanStack Query setup from task 0066 for suggestion fetching.

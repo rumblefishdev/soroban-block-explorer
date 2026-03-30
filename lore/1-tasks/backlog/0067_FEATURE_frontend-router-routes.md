@@ -27,7 +27,7 @@ Set up React Router with all route definitions, parameter validation, lazy-loade
 
 ## Context
 
-The explorer has 14 routes serving collection pages, detail pages, and search. All routes live within the layout shell (task 0039). Page modules are lazy-loaded with React.lazy + Suspense to avoid loading all pages upfront. Route transitions must not cause white-screen reloads.
+The explorer has 14 routes serving collection pages, detail pages, and search. All routes live within the layout shell (task 0059). Page modules are lazy-loaded with React.lazy + Suspense to avoid loading all pages upfront. Route transitions must not cause white-screen reloads.
 
 ## Full Route Table
 
@@ -55,13 +55,13 @@ The explorer has 14 routes serving collection pages, detail pages, and search. A
 Create `apps/web/src/router.tsx`:
 
 - React Router `createBrowserRouter` with all routes defined
-- Layout route wrapping all pages in AppShell (task 0039) with `<Outlet>`
+- Layout route wrapping all pages in AppShell (task 0059) with `<Outlet>`
 - 404 catch-all route for unmatched paths
 
 ### Step 2: Lazy loading
 
 - Each page component loaded via `React.lazy(() => import('./pages/...'))`
-- Wrapped in `<Suspense>` with loading fallback (skeleton from task 0044)
+- Wrapped in `<Suspense>` with loading fallback (skeleton from task 0064)
 - Loading fallback renders within the shell -- no white-screen
 
 ### Step 3: Route parameter validation
@@ -73,7 +73,7 @@ Create `apps/web/src/router/paramValidation.ts`:
 - `validateAccountId(id)`: G... format (starts with 'G', valid Stellar public key length)
 - `validateContractId(id)`: C... format (starts with 'C', valid Stellar contract ID length)
 - `validateNonEmpty(value)`: non-empty string
-- Invalid params render the 404/not-found state (from task 0044)
+- Invalid params render the 404/not-found state (from task 0064)
 
 ### Step 4: Route-level error boundary
 
@@ -81,7 +81,7 @@ Create `apps/web/src/router/RouteErrorBoundary.tsx`:
 
 - Catches uncaught errors at the route level
 - Renders error state within the shell (header/nav remain visible)
-- Reports route path, error, and component stack for observability (task 0059)
+- Reports route path, error, and component stack for observability (task 0087)
 - Provides "Go Home" or "Retry" navigation options
 
 ### Step 5: Router provider integration
@@ -89,8 +89,8 @@ Create `apps/web/src/router/RouteErrorBoundary.tsx`:
 Wire router into `apps/web/src/main.tsx`:
 
 - `<RouterProvider router={router} />`
-- Wrapped inside TanStack Query provider (task 0046)
-- Wrapped inside MUI ThemeProvider (task 0077)
+- Wrapped inside TanStack Query provider (task 0066)
+- Wrapped inside MUI ThemeProvider (task 0058)
 
 ## Acceptance Criteria
 
@@ -105,6 +105,6 @@ Wire router into `apps/web/src/main.tsx`:
 
 ## Notes
 
-- Page components are implemented in tasks 0048-0058. This task sets up the routing skeleton with placeholder/empty page modules.
-- Param validation functions should be reusable by the identifier display components (task 0042) and `libs/domain`.
+- Page components are implemented in tasks 0068-0086. This task sets up the routing skeleton with placeholder/empty page modules.
+- Param validation functions should be reusable by the identifier display components (task 0062) and `libs/domain`.
 - The router must be compatible with static SPA hosting on CloudFront (all routes serve index.html, client-side routing handles path resolution).

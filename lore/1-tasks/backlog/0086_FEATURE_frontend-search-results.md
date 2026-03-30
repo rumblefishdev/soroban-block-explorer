@@ -27,7 +27,7 @@ Implement the Search results page (`/search?q=`) showing grouped results by enti
 
 ## Context
 
-The search results page handles queries that do not resolve to a single exact match. When the search bar (task 0040) submits a query and the API indicates a confident exact match, the user is redirected directly to the detail page. Otherwise, grouped results are shown here.
+The search results page handles queries that do not resolve to a single exact match. When the search bar (task 0060) submits a query and the API indicates a confident exact match, the user is redirected directly to the detail page. Otherwise, grouped results are shown here.
 
 ### API Endpoint Consumed
 
@@ -54,7 +54,7 @@ When API returns a redirect-type response:
 - Pool ID match: navigate to `/liquidity-pools/:id`
 - NFT match: navigate to `/nfts/:id`
 
-Coordinate with global search bar (task 0040) which handles the initial submit.
+Coordinate with global search bar (task 0060) which handles the initial submit.
 
 ### Grouped Results Display
 
@@ -121,7 +121,7 @@ Create `apps/web/src/pages/search/SearchResultRow.tsx`:
 
 - Entity-type-aware rendering
 - Identifier linked to appropriate detail page
-- Type badge from task 0043
+- Type badge from task 0063
 - Brief contextual info varies by entity type
 
 ### Step 5: Empty state
@@ -155,7 +155,7 @@ Create `apps/web/src/pages/search/SearchResultsPage.tsx`:
 
 ## Notes
 
-- This page coordinates closely with the global search bar (task 0040) which handles the initial search submission.
+- This page coordinates closely with the global search bar (task 0060) which handles the initial search submission.
 - Exact-match redirect should only fire when ambiguity is acceptably low.
 - The search API handles query classification server-side; the frontend just renders what comes back.
 - No caching for search results (they should always be fresh for the current query).

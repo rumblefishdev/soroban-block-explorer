@@ -71,8 +71,8 @@ Create `libs/ui/src/badges/TypeBadge.tsx`:
 Create `libs/ui/src/badges/NetworkBadge.tsx`:
 
 - Props: `network` ("mainnet" | "testnet")
-- Distinct palette per network (from MUI theme in task 0077)
-- Used in header network indicator (task 0039) and wherever network context is shown
+- Distinct palette per network (from MUI theme in task 0058)
+- Used in header network indicator (task 0059) and wherever network context is shown
 
 ### Step 4: Relative timestamp component
 
@@ -111,7 +111,7 @@ Export all badge and timestamp components from `libs/ui` barrel.
 
 ## Notes
 
-- Badge color palette comes from MUI theme configuration in task 0077.
-- Status badges are used heavily in transaction tables (tasks 0048, 0049, 0050).
-- Type badges are critical for the tokens list/detail (task 0054) and contract detail (task 0055).
+- Badge color palette comes from MUI theme configuration in task 0058.
+- Status badges are used heavily in transaction tables (tasks 0068, 0069, 0070).
+- Type badges are critical for the tokens list/detail (task 0074) and contract detail (task 0075).
 - Relative timestamps appear in every table that shows time data.

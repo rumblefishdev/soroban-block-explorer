@@ -46,8 +46,8 @@ Test ingestion → API → response pipeline with real database. Ingest known te
 
 ## Acceptance Criteria
 
-- [ ] XDR parsing tests cover all 4 parsing tasks (0060–0063)
-- [ ] API endpoint tests cover all feature modules (0026–0034)
+- [ ] XDR parsing tests cover all 4 parsing tasks (0024–0027)
+- [ ] API endpoint tests cover all feature modules (0045–0053)
 - [ ] Event interpretation tests verify human-readable summaries for known patterns
 - [ ] Integration tests verify ingestion → API data consistency
 - [ ] All tests pass in CI pipeline

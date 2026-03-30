@@ -146,6 +146,6 @@ Create NestJS validation pipes for `limit` and `cursor` parameters with proper e
 
 ## Notes
 
-- This module is consumed by tasks 0027-0034 (all collection endpoints).
+- This module is consumed by tasks 0046-0053 (all collection endpoints).
 - The cursor structure is an internal implementation detail and must never be documented as a public contract.
 - Filter keys vary per endpoint; the parser must be configurable per module.

@@ -40,9 +40,9 @@ Ledgers are the fundamental time-ordered unit of the Stellar blockchain. The lis
 
 | Column            | Display                                                | Notes                                                              |
 | ----------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
-| Sequence          | Dominant visual anchor, linked to `/ledgers/:sequence` | IdentifierDisplay (task 0042). Sequence is the primary identifier. |
-| Hash              | Truncated                                              | IdentifierDisplay (task 0042)                                      |
-| Closed At         | Relative timestamp                                     | RelativeTimestamp (task 0043)                                      |
+| Sequence          | Dominant visual anchor, linked to `/ledgers/:sequence` | IdentifierDisplay (task 0062). Sequence is the primary identifier. |
+| Hash              | Truncated                                              | IdentifierDisplay (task 0062)                                      |
+| Closed At         | Relative timestamp                                     | RelativeTimestamp (task 0063)                                      |
 | Protocol Version  | Integer                                                | e.g., "21"                                                         |
 | Transaction Count | Integer                                                | Number of transactions in the ledger                               |
 
@@ -54,8 +54,8 @@ Ledgers are the fundamental time-ordered unit of the Stellar blockchain. The lis
 | Field             | Display                  | Notes                                |
 | ----------------- | ------------------------ | ------------------------------------ |
 | Sequence          | Full, prominent          | Primary identifier                   |
-| Hash              | Full, copyable           | IdentifierWithCopy (task 0042)       |
-| Closed At         | Full datetime + relative | RelativeTimestamp (task 0043)        |
+| Hash              | Full, copyable           | IdentifierWithCopy (task 0062)       |
+| Closed At         | Full datetime + relative | RelativeTimestamp (task 0063)        |
 | Protocol Version  | Integer                  | e.g., "21"                           |
 | Transaction Count | Integer                  | Count of transactions in this ledger |
 | Base Fee          | Value                    | Base fee for this ledger             |
@@ -92,7 +92,7 @@ Create `apps/web/src/pages/ledger-detail/useLedgerDetail.ts`:
 
 - Fetches `GET /ledgers/:sequence`
 - Stale time: 5 minutes (immutable once closed)
-- Param validation: positive integer (from task 0047)
+- Param validation: positive integer (from task 0067)
 
 ### Step 3: Ledger detail summary
 
@@ -107,14 +107,14 @@ Create `apps/web/src/pages/ledger-detail/LedgerTransactions.tsx`:
 
 - Paginated transaction table (same columns as transactions list page)
 - SectionHeader: "Transactions in Ledger #[sequence]"
-- Uses ExplorerTable (task 0041) with transaction row conventions
+- Uses ExplorerTable (task 0061) with transaction row conventions
 
 ### Step 5: Ledger detail page composition
 
 Create `apps/web/src/pages/ledger-detail/LedgerDetailPage.tsx`:
 
 - Composes: LedgerSummary, LedgerTransactions
-- Each section in SectionErrorBoundary (task 0044)
+- Each section in SectionErrorBoundary (task 0064)
 - 404 state: "Ledger not found"
 - Loading skeleton during fetch
 

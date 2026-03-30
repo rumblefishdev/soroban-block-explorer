@@ -23,7 +23,7 @@ Implement the Search module providing unified search across all entity types wit
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0024 (pagination).
+**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0043 (pagination).
 
 ## Context
 

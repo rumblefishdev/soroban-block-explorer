@@ -20,11 +20,11 @@ history:
 
 ## Summary
 
-Implement the top-level Lambda handler for the Ledger Processor that receives S3 PutObject events, downloads and decompresses XDR files, orchestrates the four parsing stages (0060 -> 0061 -> 0062 -> 0063), and wraps all writes for a single ledger in one atomic database transaction. This is the entry point and orchestration layer for the entire indexing pipeline.
+Implement the top-level Lambda handler for the Ledger Processor that receives S3 PutObject events, downloads and decompresses XDR files, orchestrates the four parsing stages (0024 -> 0025 -> 0026 -> 0027), and wraps all writes for a single ledger in one atomic database transaction. This is the entry point and orchestration layer for the entire indexing pipeline.
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on all four parser tasks (0060-0063) and idempotent write logic (0065).
+**Current state:** Not started. Depends on all four parser tasks (0024-0027) and idempotent write logic (0028).
 
 ## Context
 
@@ -42,7 +42,7 @@ Less than 10 seconds from ledger close to database write.
 
 ### Retry Model
 
-The Lambda is auto-retried by S3 event notification on failure. Failed files remain in S3 for manual replay. A DLQ (SQS) captures exhausted retries (configured in CDK task 0070).
+The Lambda is auto-retried by S3 event notification on failure. Failed files remain in S3 for manual replay. A DLQ (SQS) captures exhausted retries (configured in CDK task 0033).
 
 ### Open-Source Redeployability
 
@@ -60,16 +60,16 @@ Parse the incoming Lambda event to extract the S3 bucket and key. Validate that 
 
 ### Step 2: Download and Decompress
 
-Download the XDR file from S3 and decompress using zstd. This step is shared with task 0060's implementation but owned by the handler as the entry point.
+Download the XDR file from S3 and decompress using zstd. This step is shared with task 0024's implementation but owned by the handler as the entry point.
 
 ### Step 3: Parser Orchestration
 
 Execute parsing stages in sequence:
 
-1. **Task 0060**: LedgerCloseMeta deserialization, ledger header extraction, transaction extraction
-2. **Task 0061**: Operation extraction per transaction
-3. **Task 0062**: Soroban event extraction, invocation tree decoding, contract interface extraction
-4. **Task 0063**: LedgerEntryChanges extraction (contracts, accounts, tokens, NFTs, pools)
+1. **Task 0024**: LedgerCloseMeta deserialization, ledger header extraction, transaction extraction
+2. **Task 0025**: Operation extraction per transaction
+3. **Task 0026**: Soroban event extraction, invocation tree decoding, contract interface extraction
+4. **Task 0027**: LedgerEntryChanges extraction (contracts, accounts, tokens, NFTs, pools)
 
 Each stage receives output from the previous stage. The orchestrator collects all resulting database operations.
 
@@ -99,14 +99,14 @@ On parse failure at any stage:
 
 ### Step 6: Schema Migration Awareness
 
-Schema migrations must be applied before deploying new Lambda code. This is enforced in the CI/CD pipeline (task 0076). The handler itself does not run migrations but should fail clearly if the schema is incompatible (e.g., missing table or column).
+Schema migrations must be applied before deploying new Lambda code. This is enforced in the CI/CD pipeline (task 0039). The handler itself does not run migrations but should fail clearly if the schema is incompatible (e.g., missing table or column).
 
 ## Acceptance Criteria
 
 - [ ] Lambda handler correctly parses S3 PutObject events and extracts bucket/key
 - [ ] S3 key pattern validation rejects non-matching keys without infinite retry
 - [ ] XDR download and zstd decompression work correctly
-- [ ] Parser stages are orchestrated in correct order: 0060 -> 0061 -> 0062 -> 0063
+- [ ] Parser stages are orchestrated in correct order: 0024 -> 0025 -> 0026 -> 0027
 - [ ] All writes for a single ledger are wrapped in one atomic database transaction
 - [ ] On ledger-level failure, the transaction is rolled back and Lambda retry handles it
 - [ ] On transaction-level failure, raw XDR is stored with parse_error=true, remaining transactions continue, and the ledger commits
@@ -122,4 +122,4 @@ Schema migrations must be applied before deploying new Lambda code. This is enfo
 - Protocol upgrades require updating @stellar/stellar-sdk. These are infrequent and announced in advance. The handler does not need runtime protocol detection beyond what the SDK provides.
 - The S3 event may contain multiple records (multiple files). Each should be processed independently. If one fails, others should still succeed.
 - Connection pooling via RDS Proxy is critical under burst Lambda execution. The handler should not hold connections longer than necessary.
-- The ordering of parser stages matters: operations (0061) need transaction surrogate ids from 0060, invocations/events (0062) need transaction ids, and entry changes (0063) need the full parsed context.
+- The ordering of parser stages matters: operations (0025) need transaction surrogate ids from 0024, invocations/events (0026) need transaction ids, and entry changes (0027) need the full parsed context.

@@ -4,7 +4,7 @@ title: 'CDK: environment-specific configuration (dev/staging/prod)'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0006']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define a centralized configuration module in CDK that provides environment-speci
 
 ## Status: Backlog
 
-**Current state:** Not started. This task is consumed by all other CDK tasks (0068-0074, 0076, 0078) for environment-specific values.
+**Current state:** Not started. This task is consumed by all other CDK tasks (0031-0037, 0039, 0040) for environment-specific values.
 
 ## Context
 
@@ -131,7 +131,7 @@ Production is the public-facing baseline:
 **Observability:**
 
 - Full paging alarms via SNS/PagerDuty
-- Strict alarm thresholds as documented in task 0073
+- Strict alarm thresholds as documented in task 0036
 - Longer log and trace retention
 
 ### Step 5: Parameterized AWS Values
@@ -155,7 +155,7 @@ Support profile selection via:
 - Environment variable: `CDK_ENVIRONMENT=production`
 - Default: development (safest default)
 
-The CI/CD pipeline (task 0076) passes the appropriate profile for each deployment target.
+The CI/CD pipeline (task 0039) passes the appropriate profile for each deployment target.
 
 ## Acceptance Criteria
 

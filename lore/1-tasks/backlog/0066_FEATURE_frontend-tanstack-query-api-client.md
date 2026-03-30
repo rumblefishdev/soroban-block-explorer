@@ -122,5 +122,5 @@ Create `apps/web/src/api/hooks/` with base hook patterns:
 
 - TanStack Query replaces any need for global state management for server data. Local UI state (modals, form inputs) can use React state.
 - The query key factory is critical for cache invalidation predictability across the app.
-- All page-specific query hooks will be implemented in their respective page tasks (0047-0059).
-- The API client should integrate with the error classification utility from task 0044 for consistent error handling.
+- All page-specific query hooks will be implemented in their respective page tasks (0067-0087).
+- The API client should integrate with the error classification utility from task 0064 for consistent error handling.

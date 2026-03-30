@@ -109,4 +109,4 @@ Export all table components and hooks from `libs/ui` barrel.
 
 - This is one of the most heavily reused components in the frontend. Every list page and most detail pages depend on it.
 - The backend pagination contract is defined in the backend overview: opaque cursors, no total counts, deterministic ordering.
-- MUI theme from task 0077 provides spacing and typography for dense table rows.
+- MUI theme from task 0058 provides spacing and typography for dense table rows.

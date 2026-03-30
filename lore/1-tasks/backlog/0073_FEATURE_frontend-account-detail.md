@@ -40,10 +40,10 @@ The account detail page provides a complete view of a Stellar account's state an
 
 | Field             | Display                        | Notes                                                     |
 | ----------------- | ------------------------------ | --------------------------------------------------------- |
-| Account ID        | Full, copyable                 | IdentifierWithCopy (task 0042). Prominent at top of page. |
+| Account ID        | Full, copyable                 | IdentifierWithCopy (task 0062). Prominent at top of page. |
 | Sequence Number   | Integer                        | Account sequence number                                   |
-| First Seen Ledger | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0042)                             |
-| Last Seen Ledger  | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0042)                             |
+| First Seen Ledger | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0062)                             |
+| Last Seen Ledger  | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0062)                             |
 
 ### Balances Section
 
@@ -59,13 +59,13 @@ The account detail page provides a complete view of a Stellar account's state an
 
 | Column          | Display                                    | Notes                             |
 | --------------- | ------------------------------------------ | --------------------------------- |
-| Hash            | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0042)     |
-| Ledger Sequence | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0042)     |
-| Source Account  | Truncated, linked                          | IdentifierDisplay (task 0042)     |
+| Hash            | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062)     |
+| Ledger Sequence | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0062)     |
+| Source Account  | Truncated, linked                          | IdentifierDisplay (task 0062)     |
 | Operation Type  | Human-readable label                       | Same as global transactions table |
-| Status          | Badge (success/failed)                     | StatusBadge (task 0043)           |
+| Status          | Badge (success/failed)                     | StatusBadge (task 0063)           |
 | Fee             | XLM amount                                 | Fee charged                       |
-| Timestamp       | Relative                                   | RelativeTimestamp (task 0043)     |
+| Timestamp       | Relative                                   | RelativeTimestamp (task 0063)     |
 
 - Paginated with cursor-based pagination
 - Reuses global transaction row conventions
@@ -102,7 +102,7 @@ Create `apps/web/src/pages/account-detail/AccountTransactions.tsx`:
 
 - Paginated transaction table with standard columns
 - SectionHeader: "Transactions"
-- Uses ExplorerTable (task 0041) with cursor pagination
+- Uses ExplorerTable (task 0061) with cursor pagination
 - Reuses global transaction row conventions
 
 ### Step 5: Page composition
@@ -110,8 +110,8 @@ Create `apps/web/src/pages/account-detail/AccountTransactions.tsx`:
 Create `apps/web/src/pages/account-detail/AccountDetailPage.tsx`:
 
 - Composes: AccountSummary, AccountBalances, AccountTransactions
-- Each section in SectionErrorBoundary (task 0044)
-- Param validation: G... format account ID (from task 0047)
+- Each section in SectionErrorBoundary (task 0064)
+- Param validation: G... format account ID (from task 0067)
 - 404 state: "Account not found"
 - Loading skeleton during fetch
 

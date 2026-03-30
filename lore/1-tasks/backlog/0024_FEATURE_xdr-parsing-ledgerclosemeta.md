@@ -4,7 +4,7 @@ title: 'XDR parsing: LedgerCloseMeta deserialization, ledger and transaction ext
 type: FEATURE
 status: backlog
 related_adr: ['0004']
-related_tasks: ['0002', '0016']
+related_tasks: ['0001', '0002', '0016']
 tags: [priority-high, effort-large, layer-indexing, rust]
 milestone: 1
 links:
@@ -35,7 +35,7 @@ Implement the primary XDR parsing entry point in the Ledger Processor that deser
 
 The block explorer treats LedgerCloseMeta as the canonical input artifact. Every ledger close produces one LedgerCloseMeta payload exported by Galexie to S3 as a zstd-compressed XDR file. The Ledger Processor Lambda must download, decompress, and fully deserialize this payload to populate the explorer's owned PostgreSQL schema.
 
-This task covers the first and most critical parsing stage: turning raw LedgerCloseMeta bytes into structured ledger and transaction rows. All other parsing tasks (0061 operations, 0062 Soroban events/invocations, 0063 entry changes) depend on the output of this stage.
+This task covers the first and most critical parsing stage: turning raw LedgerCloseMeta bytes into structured ledger and transaction rows. All other parsing tasks (0025 operations, 0026 Soroban events/invocations, 0027 entry changes) depend on the output of this stage.
 
 ### Design Rationale: Raw XDR Retention
 
@@ -51,8 +51,7 @@ Narrow, on-demand XDR decode in NestJS for advanced transaction views is NOT par
 
 ### Key Dependencies
 
-- `@stellar/stellar-sdk` for XDR deserialization
-- Shared XDR/ScVal parsing library (task 0013)
+- `stellar-xdr` Rust crate for XDR deserialization (per ADR 0004)
 - Database schema: ledgers table (task 0016), transactions table (task 0016)
 
 ## Implementation Plan
@@ -109,7 +108,7 @@ Derive `transactions.created_at` from the parent ledger's `closeTime`. All trans
 
 Persist transaction rows with surrogate `id` (BIGSERIAL) as the primary key. This surrogate key is used by child tables (operations, invocations, events) as their foreign key reference. The `hash` column remains the public lookup key.
 
-Write ledger row first, then all transaction rows for that ledger, within the same database transaction (atomicity handled by task 0064).
+Write ledger row first, then all transaction rows for that ledger, within the same database transaction (atomicity handled by task 0029).
 
 ### Step 8: Error Handling for Malformed XDR
 
@@ -133,14 +132,14 @@ When `fromXDR()` throws during deserialization:
 - [ ] Transactions use BIGSERIAL surrogate id for child FK references
 - [ ] Malformed XDR triggers error logging with context, raw XDR storage, parse_error=true flag, and the transaction remains visible
 - [ ] Unit tests cover ledger header extraction, transaction extraction, hash computation, and error handling paths
-- [ ] Parser output is consumable by downstream tasks (0061, 0062, 0063) without re-parsing the LedgerCloseMeta
+- [ ] Parser output is consumable by downstream tasks (0025, 0026, 0027) without re-parsing the LedgerCloseMeta
 - [ ] S3 object key pattern validated: stellar-ledger-data/ledgers/{seq_start}-{seq_end}.xdr.zstd
 - [ ] zstd decompression handles the documented file format
 - [ ] Verify whether txSetResultHash from LedgerHeader is needed; if so, add to ledger extraction
 
 ## Notes
 
-- The operations table is partitioned by transaction_id, so the surrogate id assigned here must be available before operation insertion (task 0061).
+- The operations table is partitioned by transaction_id, so the surrogate id assigned here must be available before operation insertion (task 0025).
 - Protocol upgrades that change LedgerCloseMeta structure are handled by updating @stellar/stellar-sdk. These are infrequent and announced in advance.
-- This parser must be deterministic: the same LedgerCloseMeta input must always produce the same output rows, supporting idempotent replay (task 0065).
-- The parser does NOT write to derived-state tables (accounts, tokens, nfts, pools). Those are handled by task 0063.
+- This parser must be deterministic: the same LedgerCloseMeta input must always produce the same output rows, supporting idempotent replay (task 0028).
+- The parser does NOT write to derived-state tables (accounts, tokens, nfts, pools). Those are handled by task 0027.

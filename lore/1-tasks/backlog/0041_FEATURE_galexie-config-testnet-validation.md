@@ -20,15 +20,15 @@ history:
 
 ## Summary
 
-Configure Galexie application (Captive Core settings, network passphrase, history archive URLs, S3 output path) and validate end-to-end on testnet before mainnet deployment. This covers the software configuration layer that sits on top of the ECS Fargate infrastructure defined in task 0071.
+Configure Galexie application (Captive Core settings, network passphrase, history archive URLs, S3 output path) and validate end-to-end on testnet before mainnet deployment. This covers the software configuration layer that sits on top of the ECS Fargate infrastructure defined in task 0034.
 
 ## Status: Backlog
 
-**Current state:** Not started. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge. CDK infrastructure (task 0071) must exist first.
+**Current state:** Not started. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge. CDK infrastructure (task 0034) must exist first.
 
 ## Context
 
-Task 0071 defines the ECS Fargate task definition, IAM roles, and S3 trigger via CDK. This task configures the actual Galexie application: Captive Core configuration file, network connection parameters, output format, and health checks. The effort breakdown (§7.1B) lists this as a separate 3-day work item: "Galexie configuration and testnet validation."
+Task 0034 defines the ECS Fargate task definition, IAM roles, and S3 trigger via CDK. This task configures the actual Galexie application: Captive Core configuration file, network connection parameters, output format, and health checks. The effort breakdown (§7.1B) lists this as a separate 3-day work item: "Galexie configuration and testnet validation."
 
 ## Implementation Plan
 
@@ -64,4 +64,4 @@ Switch configuration to mainnet (network passphrase, archive URLs, peer connecti
 ## Notes
 
 - This task is the "Galexie configuration and testnet validation — 3 days" line item from the effort breakdown (§7.1B).
-- Separated from 0071 (CDK infra) because infrastructure definition and application configuration are distinct concerns.
+- Separated from 0034 (CDK infra) because infrastructure definition and application configuration are distinct concerns.

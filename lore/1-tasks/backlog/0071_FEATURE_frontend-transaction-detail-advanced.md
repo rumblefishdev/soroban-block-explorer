@@ -27,13 +27,13 @@ Implement the advanced mode view for the Transaction detail page (`/transactions
 
 ## Context
 
-Advanced mode is the developer-facing view of a transaction. It uses the same `GET /transactions/:hash` API response as normal mode (task 0050) but presents operations and events with full technical detail. This is critical for debugging smart contract calls and verifying exact transaction parameters.
+Advanced mode is the developer-facing view of a transaction. It uses the same `GET /transactions/:hash` API response as normal mode (task 0070) but presents operations and events with full technical detail. This is critical for debugging smart contract calls and verifying exact transaction parameters.
 
 ### API Endpoint Consumed
 
 | Endpoint                  | Purpose                                  |
 | ------------------------- | ---------------------------------------- |
-| `GET /transactions/:hash` | Same response as normal mode (task 0050) |
+| `GET /transactions/:hash` | Same response as normal mode (task 0070) |
 
 ### Advanced Mode: Per-Operation Detail
 
@@ -106,8 +106,8 @@ Create `apps/web/src/pages/transaction-detail/XdrSection.tsx`:
 Create `apps/web/src/pages/transaction-detail/AdvancedModeView.tsx`:
 
 - Composes: AdvancedOperationList, EventsSection, XdrSection (envelope), XdrSection (result)
-- Each section wrapped in SectionErrorBoundary (task 0044)
-- Shown when mode toggle (from task 0050) is set to "Advanced"
+- Each section wrapped in SectionErrorBoundary (task 0064)
+- Shown when mode toggle (from task 0070) is set to "Advanced"
 
 ## Acceptance Criteria
 
@@ -123,6 +123,6 @@ Create `apps/web/src/pages/transaction-detail/AdvancedModeView.tsx`:
 
 ## Notes
 
-- This task depends on task 0050 for the base transaction detail page structure, mode toggle, and shared API response.
+- This task depends on task 0070 for the base transaction detail page structure, mode toggle, and shared API response.
 - The "never hide values" rule is the key differentiator from normal mode. Developers need to verify exact protocol-level data.
 - XDR sections can be very large. Horizontal scroll and collapse-by-default are essential for usability.

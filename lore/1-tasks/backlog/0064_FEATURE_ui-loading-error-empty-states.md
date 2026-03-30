@@ -100,5 +100,5 @@ Export all state components from `libs/ui` barrel.
 ## Notes
 
 - Section error boundaries are critical for detail pages that fetch multiple independent resources (account detail, contract detail, liquidity pool detail).
-- The error classification utility is consumed by TanStack Query error handlers (task 0046).
+- The error classification utility is consumed by TanStack Query error handlers (task 0066).
 - Skeleton dimensions should match the actual content layout to prevent layout shift on load.

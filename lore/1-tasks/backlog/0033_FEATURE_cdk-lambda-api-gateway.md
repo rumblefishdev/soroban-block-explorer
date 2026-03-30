@@ -4,7 +4,7 @@ title: 'CDK: Lambda functions + API Gateway'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0031', '0032']
+related_tasks: ['0006', '0031', '0032']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -20,11 +20,11 @@ history:
 
 ## Summary
 
-Define the three Lambda functions (API, Ledger Processor, Event Interpreter) and API Gateway using CDK. All Lambdas run on Node.js ARM64/Graviton2. The API Lambda has provisioned concurrency and is triggered by API Gateway. The Ledger Processor is triggered by S3 PutObject with a DLQ. The Event Interpreter is triggered by EventBridge (configured in task 0074). API Gateway provides REST API delivery with throttling, validation, and response caching.
+Define the three Lambda functions (API, Ledger Processor, Event Interpreter) and API Gateway using CDK. All Lambdas run on Node.js ARM64/Graviton2. The API Lambda has provisioned concurrency and is triggered by API Gateway. The Ledger Processor is triggered by S3 PutObject with a DLQ. The Event Interpreter is triggered by EventBridge (configured in task 0037). API Gateway provides REST API delivery with throttling, validation, and response caching.
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on VPC/networking (task 0068) and storage (task 0069) for subnet placement and trigger configuration.
+**Current state:** Not started. Depends on VPC/networking (task 0031) and storage (task 0032) for subnet placement and trigger configuration.
 
 ## Context
 
@@ -32,7 +32,7 @@ The block explorer uses three Lambda functions for its compute layer:
 
 1. **API Lambda (NestJS)**: Serves all public REST endpoints. Triggered by API Gateway. Provisioned concurrency to minimize cold starts for user-facing requests.
 2. **Ledger Processor Lambda**: Parses XDR files and writes explorer data. Triggered by S3 PutObject events. Auto-retried on failure with a DLQ for exhausted retries.
-3. **Event Interpreter Lambda**: Enriches stored events with human-readable interpretations. Triggered by EventBridge (task 0074).
+3. **Event Interpreter Lambda**: Enriches stored events with human-readable interpretations. Triggered by EventBridge (task 0037).
 
 All three run on ARM64 (Graviton2) for cost efficiency and are VPC-attached in the private subnet.
 
@@ -48,26 +48,26 @@ Define the NestJS API Lambda:
 
 - Runtime: Node.js (latest LTS) on ARM64/Graviton2
 - Handler: NestJS Lambda adapter entry point
-- VPC: private subnet (task 0068)
-- Security group: Lambda SG (task 0068)
+- VPC: private subnet (task 0031)
+- Security group: Lambda SG (task 0031)
 - Provisioned concurrency: environment-specific (higher for production, lower for staging)
 - Memory: sized for NestJS overhead + query processing
 - Timeout: appropriate for API response times (e.g., 30 seconds)
 - Environment variables: RDS Proxy endpoint, Secrets Manager ARN, environment name
-- IAM execution role: RDS Proxy via Secrets Manager, CloudWatch Logs, X-Ray (defined in task 0078)
+- IAM execution role: RDS Proxy via Secrets Manager, CloudWatch Logs, X-Ray (defined in task 0040)
 
 ### Step 2: Ledger Processor Lambda Definition
 
 Define the Ledger Processor Lambda:
 
 - Runtime: Node.js (latest LTS) on ARM64/Graviton2
-- Trigger: S3 PutObject event (configured on stellar-ledger-data bucket in task 0069)
+- Trigger: S3 PutObject event (configured on stellar-ledger-data bucket in task 0032)
 - VPC: private subnet
 - Security group: Lambda SG
 - Memory: sized for XDR parsing + database writes (higher than API Lambda)
 - Timeout: sufficient for <10s target latency with margin (e.g., 60 seconds)
 - Environment variables: RDS Proxy endpoint, Secrets Manager ARN, S3 bucket name
-- IAM execution role: S3 GetObject on stellar-ledger-data, RDS Proxy, CloudWatch Logs, X-Ray (task 0078)
+- IAM execution role: S3 GetObject on stellar-ledger-data, RDS Proxy, CloudWatch Logs, X-Ray (task 0040)
 - Auto-retry: configured by S3 event notification (default 2 retries)
 - DLQ: SQS queue for exhausted retries. Failed events land here for manual investigation and replay.
 
@@ -76,13 +76,13 @@ Define the Ledger Processor Lambda:
 Define the Event Interpreter Lambda:
 
 - Runtime: Node.js (latest LTS) on ARM64/Graviton2
-- Trigger: EventBridge rate(5 minutes) (configured in task 0074)
+- Trigger: EventBridge rate(5 minutes) (configured in task 0037)
 - VPC: private subnet
 - Security group: Lambda SG
 - Memory: moderate (reads from DB, writes interpretations)
 - Timeout: sufficient for batch processing (e.g., 300 seconds)
 - Environment variables: RDS Proxy endpoint, Secrets Manager ARN
-- IAM execution role: RDS Proxy, CloudWatch Logs, X-Ray (task 0078)
+- IAM execution role: RDS Proxy, CloudWatch Logs, X-Ray (task 0040)
 
 ### Step 4: API Gateway Definition
 
@@ -100,7 +100,7 @@ Define the REST API Gateway:
 
 ### Step 5: WAF Attachment
 
-Attach the WAF WebACL (resource defined in task 0072) to the API Gateway stage. This protects the API from abuse without requiring API keys for browser traffic.
+Attach the WAF WebACL (resource defined in task 0035) to the API Gateway stage. This protects the API from abuse without requiring API keys for browser traffic.
 
 ### Step 6: API Key Usage Plans
 
@@ -129,13 +129,13 @@ Define the SQS Dead Letter Queue for the Ledger Processor:
 - [ ] API Gateway throttling is configured (environment-specific)
 - [ ] API Gateway response caching is configured with long TTL for immutable and short TTL for mutable data
 - [ ] Cache keys include path + query parameters
-- [ ] WAF WebACL from task 0072 is attached to API Gateway
+- [ ] WAF WebACL from task 0035 is attached to API Gateway
 - [ ] API key usage plans are defined for non-browser consumers (optional)
 - [ ] SQS DLQ captures exhausted Ledger Processor retries
-- [ ] IAM execution roles reference task 0078 definitions
+- [ ] IAM execution roles reference task 0040 definitions
 - [ ] All environment variables are parameterized, no hard-coded values
 - [ ] All three Lambda functions configured with ARM64/Graviton2 runtime
-- [ ] API Lambda has provisioned concurrency configured (value from environment config task 0075)
+- [ ] API Lambda has provisioned concurrency configured (value from environment config task 0038)
 - [ ] API Gateway enforces HTTPS/TLS for all public traffic
 - [ ] Browser traffic is anonymous read-only; API keys not required for default usage
 - [ ] Single Ledger Processor Lambda processes both live Galexie and historical backfill XDR files (no separate pipeline)
@@ -150,4 +150,4 @@ Define the SQS Dead Letter Queue for the Ledger Processor:
 - The DLQ is critical for operational visibility. A non-empty DLQ means ledgers are not being processed and requires investigation.
 - API Gateway REST API mode (vs HTTP API) is chosen for response caching, request validation, and WAF integration. HTTP API is cheaper but lacks these features.
 - Lambda ARM64/Graviton2 provides ~20% cost savings over x86_64 with comparable or better performance.
-- The S3 event notification on the stellar-ledger-data bucket (task 0069) must be configured to target the Ledger Processor Lambda ARN defined here. This creates a cross-reference between tasks 0069 and 0070.
+- The S3 event notification on the stellar-ledger-data bucket (task 0032) must be configured to target the Ledger Processor Lambda ARN defined here. This creates a cross-reference between tasks 0032 and 0033.

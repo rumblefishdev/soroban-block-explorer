@@ -23,7 +23,7 @@ Implement the Tokens module providing paginated token listing with type/code fil
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0024 (pagination).
+**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0043 (pagination).
 
 ## Context
 

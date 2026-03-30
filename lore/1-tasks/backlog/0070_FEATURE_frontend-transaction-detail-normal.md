@@ -27,7 +27,7 @@ Implement the Transaction detail page (`/transactions/:hash`) with base transact
 
 ## Context
 
-The transaction detail page is the most complex page in the explorer. It has two display modes (normal and advanced) that are alternate presentations over the same backend resource. This task covers the base transaction information and the normal mode. Advanced mode is task 0051.
+The transaction detail page is the most complex page in the explorer. It has two display modes (normal and advanced) that are alternate presentations over the same backend resource. This task covers the base transaction information and the normal mode. Advanced mode is task 0071.
 
 ### API Endpoint Consumed
 
@@ -75,12 +75,12 @@ The transaction detail page is the most complex page in the explorer. It has two
 
 | Field           | Display                              | Notes                              |
 | --------------- | ------------------------------------ | ---------------------------------- |
-| Hash            | Full, copyable                       | IdentifierWithCopy (task 0042)     |
-| Status          | Badge (success/failed)               | StatusBadge (task 0043)            |
-| Ledger Sequence | Linked to `/ledgers/:sequence`       | IdentifierDisplay (task 0042)      |
-| Timestamp       | Full datetime + relative             | RelativeTimestamp (task 0043)      |
+| Hash            | Full, copyable                       | IdentifierWithCopy (task 0062)     |
+| Status          | Badge (success/failed)               | StatusBadge (task 0063)            |
+| Ledger Sequence | Linked to `/ledgers/:sequence`       | IdentifierDisplay (task 0062)      |
+| Timestamp       | Full datetime + relative             | RelativeTimestamp (task 0063)      |
 | Fee Charged     | XLM amount + stroops                 | e.g., "0.00001 XLM (100 stroops)"  |
-| Source Account  | Full, linked to `/accounts/:id`      | IdentifierWithCopy (task 0042)     |
+| Source Account  | Full, linked to `/accounts/:id`      | IdentifierWithCopy (task 0062)     |
 | Memo            | Type label + content                 | e.g., "Text: payment for services" |
 | Signatures      | Table: signer, weight, signature hex | Signer linked to `/accounts/:id`   |
 
@@ -111,14 +111,14 @@ Create `apps/web/src/pages/transaction-detail/useTransactionDetail.ts`:
 - Fetches `GET /transactions/:hash`
 - Stale time: 5 minutes (immutable once indexed)
 - Query key: `['transactions', hash]`
-- Param validation: 64-character hex (from task 0047)
+- Param validation: 64-character hex (from task 0067)
 
 ### Step 2: Base transaction info section
 
 Create `apps/web/src/pages/transaction-detail/TransactionInfo.tsx`:
 
 - Renders: hash (full, copyable), status badge, ledger sequence (linked), timestamp, fee (XLM + stroops), source account (linked), memo (type + content)
-- Uses identifier components (task 0042), badges (task 0043), timestamps (task 0043)
+- Uses identifier components (task 0062), badges (task 0063), timestamps (task 0063)
 
 ### Step 3: Signatures section
 
@@ -139,18 +139,18 @@ Create `apps/web/src/pages/transaction-detail/ModeToggle.tsx`:
 
 Create `apps/web/src/pages/transaction-detail/NormalModeView.tsx`:
 
-- Uses OperationFlowTree component (task 0045)
+- Uses OperationFlowTree component (task 0065)
 - Renders operation_tree data as graph/tree
 - Each node: human-readable summary with linked identifiers
-- Soroban invocations: uses InvocationCallTree (task 0045) for nested contract calls
+- Soroban invocations: uses InvocationCallTree (task 0065) for nested contract calls
 - Expandable/collapsible for complex transactions
 
 ### Step 6: Page composition
 
 Create `apps/web/src/pages/transaction-detail/TransactionDetailPage.tsx`:
 
-- Composes: TransactionInfo, ModeToggle, NormalModeView (or AdvancedModeView from task 0051)
-- Each section wrapped in SectionErrorBoundary (task 0044)
+- Composes: TransactionInfo, ModeToggle, NormalModeView (or AdvancedModeView from task 0071)
+- Each section wrapped in SectionErrorBoundary (task 0064)
 - Loading skeleton during fetch
 - 404 state: "Transaction not found"
 
@@ -170,7 +170,7 @@ Create `apps/web/src/pages/transaction-detail/TransactionDetailPage.tsx`:
 
 ## Notes
 
-- Advanced mode is task 0051 and shares the same base info and API response.
-- The operation flow tree and invocation call tree components come from task 0045.
+- Advanced mode is task 0071 and shares the same base info and API response.
+- The operation flow tree and invocation call tree components come from task 0065.
 - Human-readable summaries come from the backend `human_readable` field on operations.
 - Fee display should show both XLM and stroops for precision (e.g., "0.00001 XLM (100 stroops)").

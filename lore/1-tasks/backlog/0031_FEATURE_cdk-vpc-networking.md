@@ -55,7 +55,7 @@ Define public and private subnets:
 
 **Public subnet (us-east-1a):**
 
-- NAT Gateway placement (task 0078)
+- NAT Gateway placement (task 0040)
 - Internet Gateway attachment
 - Route table with 0.0.0.0/0 -> Internet Gateway
 
@@ -128,6 +128,6 @@ Document the expansion path in CDK comments.
 ## Notes
 
 - Lambda VPC attachment requires sufficient ENI capacity in the subnet. The subnet CIDR must accommodate ENI allocation for concurrent Lambda executions.
-- The NAT Gateway (defined in task 0078) is placed in the public subnet. This task defines the subnet and routing; task 0078 defines the NAT Gateway and ECR resources.
+- The NAT Gateway (defined in task 0040) is placed in the public subnet. This task defines the subnet and routing; task 0040 defines the NAT Gateway and ECR resources.
 - VPC Flow Logs may be added for debugging but are not required at launch.
 - The VPC endpoint for S3 is a Gateway type (free) not an Interface type (has hourly cost). Gateway endpoints work for S3 and DynamoDB only.

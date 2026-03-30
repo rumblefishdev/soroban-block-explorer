@@ -47,7 +47,7 @@ Create `libs/ui/src/layout/AppShell.tsx` providing the outer frame: header regio
 Create `libs/ui/src/layout/Header.tsx`:
 
 - Logo (left-aligned, links to `/`)
-- Global search bar slot -- renders the search bar component from task 0040 via a prop or composition slot
+- Global search bar slot -- renders the search bar component from task 0060 via a prop or composition slot
 - Network indicator (right-aligned) showing "Mainnet" or "Testnet" with distinct visual treatment (color, badge). Must be visible at all times.
 - Environment banner for non-production environments (e.g., "TESTNET" banner)
 
@@ -64,7 +64,7 @@ Create `libs/ui/src/layout/Navigation.tsx`:
 Create `libs/ui/src/layout/NetworkIndicator.tsx`:
 
 - Reads current network from app config/context
-- Renders mainnet/testnet badge using MUI theme palette from task 0077
+- Renders mainnet/testnet badge using MUI theme palette from task 0058
 - Always visible in header
 
 ### Step 5: Integration and exports
@@ -80,11 +80,11 @@ Export all layout components from `libs/ui` barrel. Ensure the shell works with 
 - [ ] Environment banner renders for non-production environments
 - [ ] Route transitions update only the content area; shell does not unmount/remount
 - [ ] Navigation is keyboard-accessible with proper tab order
-- [ ] Components use MUI theme from task 0077
+- [ ] Components use MUI theme from task 0058
 - [ ] All components exported from `libs/ui`
 
 ## Notes
 
-- The global search bar component itself is task 0040; this task provides the slot/composition point for it.
-- MUI theme configuration is task 0077; this task consumes that theme.
+- The global search bar component itself is task 0060; this task provides the slot/composition point for it.
+- MUI theme configuration is task 0058; this task consumes that theme.
 - Navigation link list should be easy to extend if new entity types are added later.

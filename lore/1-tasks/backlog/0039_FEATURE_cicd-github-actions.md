@@ -4,7 +4,7 @@ title: 'CI/CD pipeline: GitHub Actions workflows'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0021']
+related_tasks: ['0006', '0021']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -119,7 +119,7 @@ Define Galexie container image build and push:
 
 - Build the Docker image for the Galexie/backfill container
 - Tag with git SHA for traceability
-- Push to ECR repository (defined in task 0078)
+- Push to ECR repository (defined in task 0040)
 - Only build when relevant files change (Dockerfile, Galexie-related source)
 
 ### Step 7: Rollback Strategy

@@ -42,7 +42,7 @@ Liquidity pool pages combine factual current-state data with historical time-ser
 
 | Column       | Display                                     | Notes                                                     |
 | ------------ | ------------------------------------------- | --------------------------------------------------------- |
-| Pool ID      | Truncated, linked to `/liquidity-pools/:id` | IdentifierDisplay (task 0042)                             |
+| Pool ID      | Truncated, linked to `/liquidity-pools/:id` | IdentifierDisplay (task 0062)                             |
 | Asset Pair   | e.g., "XLM / USDC"                          | Both assets displayed, linked to token pages if available |
 | Total Shares | Formatted number                            | Total pool shares                                         |
 | Reserves     | Per-asset reserves                          | e.g., "1,250,000 XLM / 500,000 USDC"                      |
@@ -61,7 +61,7 @@ Liquidity pool pages combine factual current-state data with historical time-ser
 
 | Field          | Display            | Notes                                             |
 | -------------- | ------------------ | ------------------------------------------------- |
-| Pool ID        | Full, copyable     | IdentifierWithCopy (task 0042). Prominent at top. |
+| Pool ID        | Full, copyable     | IdentifierWithCopy (task 0062). Prominent at top. |
 | Asset Pair     | e.g., "XLM / USDC" | Both assets displayed and linked                  |
 | Fee Percentage | Percentage         | Pool fee                                          |
 | Total Shares   | Formatted number   | Total shares in pool                              |
@@ -78,24 +78,24 @@ Liquidity pool pages combine factual current-state data with historical time-ser
 - Interval selector: 1h, 1d, 1w (triggers re-fetch with new interval param)
 - Date range selector (optional)
 - Responsive: readable on small screens
-- Lazy-loaded: only fetch chart data when section is visible (task 0045)
+- Lazy-loaded: only fetch chart data when section is visible (task 0065)
 
 ### Pool Participants Table (if API supports)
 
 | Column   | Display                              | Notes                         |
 | -------- | ------------------------------------ | ----------------------------- |
-| Provider | Truncated, linked to `/accounts/:id` | IdentifierDisplay (task 0042) |
+| Provider | Truncated, linked to `/accounts/:id` | IdentifierDisplay (task 0062) |
 | Share    | Formatted number/percentage          | Provider's share of the pool  |
 
 ### Pool Transactions Table Columns
 
 | Column    | Display                                    | Notes                                                   |
 | --------- | ------------------------------------------ | ------------------------------------------------------- |
-| Hash      | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0042)                           |
+| Hash      | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062)                           |
 | Type      | Badge/label                                | Deposit, Withdrawal, or Trade -- visually distinguished |
 | Amount    | Formatted                                  | Transaction amount(s)                                   |
-| Account   | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0042)                           |
-| Timestamp | Relative                                   | RelativeTimestamp (task 0043)                           |
+| Account   | Truncated, linked to `/accounts/:id`       | IdentifierDisplay (task 0062)                           |
+| Timestamp | Relative                                   | RelativeTimestamp (task 0063)                           |
 
 - Deposits, withdrawals, and trades visually distinguished (different labels/badges)
 - Paginated with cursor-based pagination
@@ -129,10 +129,10 @@ Create `apps/web/src/pages/pool-detail/PoolSummary.tsx`:
 
 Create `apps/web/src/pages/pool-detail/PoolCharts.tsx`:
 
-- Uses TimeSeriesChart component (task 0045)
+- Uses TimeSeriesChart component (task 0065)
 - Three charts: TVL, volume, fee revenue
 - Interval selector: 1h, 1d, 1w
-- Lazy-loaded via LazySection (task 0045)
+- Lazy-loaded via LazySection (task 0065)
 
 ### Step 5: Pool participants section
 
@@ -154,7 +154,7 @@ Create `apps/web/src/pages/pool-detail/PoolTransactions.tsx`:
 Create `apps/web/src/pages/pool-detail/LiquidityPoolDetailPage.tsx`:
 
 - Composes: PoolSummary, PoolCharts, PoolParticipants, PoolTransactions
-- Each section in SectionErrorBoundary (task 0044)
+- Each section in SectionErrorBoundary (task 0064)
 - 404 state: "Liquidity pool not found"
 
 ## Acceptance Criteria
@@ -175,6 +175,6 @@ Create `apps/web/src/pages/pool-detail/LiquidityPoolDetailPage.tsx`:
 ## Notes
 
 - This is the largest effort page task due to the combination of summary data, charts, and transaction history.
-- Chart rendering depends on visualization primitives from task 0045.
+- Chart rendering depends on visualization primitives from task 0065.
 - The chart endpoint supports interval-based aggregation; the frontend should pass interval params and let the backend aggregate.
 - Pool participants section may not be available initially if the API does not support it. Handle gracefully.

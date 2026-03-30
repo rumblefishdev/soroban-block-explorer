@@ -4,7 +4,7 @@ title: 'XDR parsing: operation extraction and INVOKE_HOST_FUNCTION details'
 type: FEATURE
 status: backlog
 related_adr: ['0004']
-related_tasks: ['0024', '0017']
+related_tasks: ['0002', '0024', '0017']
 tags: [priority-high, effort-medium, layer-indexing, rust]
 milestone: 1
 links: []
@@ -27,7 +27,7 @@ Implement operation-level extraction from parsed transactions, handling all Stel
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on task 0060 (LedgerCloseMeta deserialization) for parsed transaction data and task 0017 (operations table schema).
+**Current state:** Not started. Depends on task 0024 (LedgerCloseMeta deserialization) for parsed transaction data and task 0017 (operations table schema).
 
 ## Context
 
@@ -35,11 +35,11 @@ Each transaction in a ledger contains one or more operations. The explorer needs
 
 The operations table uses JSONB for the `details` column because operation-specific fields vary heavily by operation type. For INVOKE_HOST_FUNCTION operations, richer extraction is needed to support Soroban contract interaction views.
 
-The operations table is partitioned by `transaction_id`. All inserts must be partition-aware, meaning the transaction's surrogate id (from task 0060) must be known before inserting operations.
+The operations table is partitioned by `transaction_id`. All inserts must be partition-aware, meaning the transaction's surrogate id (from task 0024) must be known before inserting operations.
 
 ### Important Boundary
 
-This task writes to `operations.details` JSONB only. The `soroban_invocations` rows (flat invocation records with full metadata) are owned by task 0062. This task extracts operation-level data; task 0062 extracts invocation-level data from result_meta_xdr.
+This task writes to `operations.details` JSONB only. The `soroban_invocations` rows (flat invocation records with full metadata) are owned by task 0026. This task extracts operation-level data; task 0026 extracts invocation-level data from result_meta_xdr.
 
 ### Source Code Location
 
@@ -49,7 +49,7 @@ This task writes to `operations.details` JSONB only. The `soroban_invocations` r
 
 ### Step 1: Operation Type Extraction
 
-For each transaction (from task 0060 output), iterate over all operations in the TransactionEnvelope. Extract:
+For each transaction (from task 0024 output), iterate over all operations in the TransactionEnvelope. Extract:
 
 - Operation `type` as a string (e.g., "CREATE_ACCOUNT", "PAYMENT", "INVOKE_HOST_FUNCTION", etc.)
 - Operation source account (if different from transaction source)
@@ -71,7 +71,7 @@ For INVOKE_HOST_FUNCTION operations, extract additional fields into the details 
 
 - `contractId`: the target contract address
 - `functionName`: the invoked function name
-- `functionArgs`: array of ScVal-decoded arguments. Each ScVal is decoded to its typed representation (integer, string, address, bytes, map, list) using the shared ScVal parsing library (task 0013).
+- `functionArgs`: array of ScVal-decoded arguments. Each ScVal is decoded to its typed representation (integer, string, address, bytes, map, list) using the Rust ScVal decoding in the Ledger Processor (per ADR 0004).
 - `returnValue`: the ScVal-decoded return value from SorobanTransactionMeta
 
 ### Step 4: Unknown Operation Type Handling
@@ -106,5 +106,5 @@ Write operation rows to the operations table. Since the table is partitioned by 
 ## Notes
 
 - The GIN index on `operations.details` supports JSONB queries but may need careful consideration for insert performance at scale.
-- Operation extraction runs as step 2 in the parser orchestration: 0060 (ledger+tx) -> 0061 (operations) -> 0062 (soroban events/invocations) -> 0063 (entry changes).
-- The soroban_invocations table (task 0062) provides a separate, richer view of contract calls with caller_account, successful status, and ledger_sequence. This task's INVOKE_HOST_FUNCTION details are the operation-level view only.
+- Operation extraction runs as step 2 in the parser orchestration: 0024 (ledger+tx) -> 0025 (operations) -> 0026 (soroban events/invocations) -> 0027 (entry changes).
+- The soroban_invocations table (task 0026) provides a separate, richer view of contract calls with caller_account, successful status, and ledger_sequence. This task's INVOKE_HOST_FUNCTION details are the operation-level view only.

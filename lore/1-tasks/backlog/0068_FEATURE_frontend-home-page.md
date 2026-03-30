@@ -50,18 +50,18 @@ The home page is the fastest way to understand whether the indexer is current an
 
 | Column         | Display                                    | Notes                                   |
 | -------------- | ------------------------------------------ | --------------------------------------- |
-| Hash           | Truncated, linked to `/transactions/:hash` | Identifier component (task 0042)        |
-| Source Account | Truncated, linked to `/accounts/:id`       | Identifier component (task 0042)        |
+| Hash           | Truncated, linked to `/transactions/:hash` | Identifier component (task 0062)        |
+| Source Account | Truncated, linked to `/accounts/:id`       | Identifier component (task 0062)        |
 | Operation Type | Human-readable label                       | e.g., "Payment", "Invoke Contract"      |
-| Status         | Badge (success/failed)                     | StatusBadge component (task 0043)       |
-| Timestamp      | Relative ("2 min ago")                     | RelativeTimestamp component (task 0043) |
+| Status         | Badge (success/failed)                     | StatusBadge component (task 0063)       |
+| Timestamp      | Relative ("2 min ago")                     | RelativeTimestamp component (task 0063) |
 
 ### Latest Ledgers Table Columns
 
 | Column            | Display                        | Notes                                   |
 | ----------------- | ------------------------------ | --------------------------------------- |
-| Sequence          | Linked to `/ledgers/:sequence` | Identifier component (task 0042)        |
-| Closed At         | Relative timestamp             | RelativeTimestamp component (task 0043) |
+| Sequence          | Linked to `/ledgers/:sequence` | Identifier component (task 0062)        |
+| Closed At         | Relative timestamp             | RelativeTimestamp component (task 0063) |
 | Transaction Count | Integer                        | Number of transactions in the ledger    |
 
 ## Implementation Plan
@@ -95,7 +95,7 @@ Create `apps/web/src/pages/home/ChainOverview.tsx`:
 Create `apps/web/src/pages/home/LatestTransactions.tsx`:
 
 - Table with columns: hash, source account, operation type, status badge, timestamp
-- Uses ExplorerTable component (task 0041)
+- Uses ExplorerTable component (task 0061)
 - SectionHeader: "Latest Transactions"
 - "View All" link to `/transactions`
 
@@ -104,7 +104,7 @@ Create `apps/web/src/pages/home/LatestTransactions.tsx`:
 Create `apps/web/src/pages/home/LatestLedgers.tsx`:
 
 - Table with columns: sequence, closed_at, tx count
-- Uses ExplorerTable component (task 0041)
+- Uses ExplorerTable component (task 0061)
 - SectionHeader: "Latest Ledgers"
 - "View All" link to `/ledgers`
 
@@ -113,8 +113,8 @@ Create `apps/web/src/pages/home/LatestLedgers.tsx`:
 Create `apps/web/src/pages/home/HomePage.tsx`:
 
 - Composes: ChainOverview, LatestTransactions, LatestLedgers
-- Each section wrapped in SectionErrorBoundary (task 0044)
-- Polling indicator visible showing last refresh time (task 0043)
+- Each section wrapped in SectionErrorBoundary (task 0064)
+- Polling indicator visible showing last refresh time (task 0063)
 - No layout jump on polling update (stable row heights, no reflow)
 
 ## Acceptance Criteria
@@ -134,4 +134,4 @@ Create `apps/web/src/pages/home/HomePage.tsx`:
 
 - The home page is the primary indicator of explorer health and indexer freshness.
 - Layout should feel like a dashboard summary, not a dense analytics page.
-- The global search bar is already present in the header via the layout shell (task 0039).
+- The global search bar is already present in the header via the layout shell (task 0059).

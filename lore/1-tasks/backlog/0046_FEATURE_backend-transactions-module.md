@@ -23,7 +23,7 @@ Implement the Transactions module providing paginated transaction listing with f
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0024 (pagination), 0025 (validation/serialization).
+**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0043 (pagination), 0044 (validation/serialization).
 
 ## Context
 

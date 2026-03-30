@@ -4,7 +4,7 @@ title: 'CDK: RDS PostgreSQL, RDS Proxy, S3 buckets, Secrets Manager'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0031']
+related_tasks: ['0006', '0031']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define the storage infrastructure using CDK: RDS PostgreSQL (Single-AZ at launch
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on VPC/networking (task 0068) for subnet and security group placement.
+**Current state:** Not started. Depends on VPC/networking (task 0031) for subnet and security group placement.
 
 ## Context
 
@@ -47,10 +47,10 @@ Define the RDS PostgreSQL instance:
 
 - Engine: PostgreSQL (latest stable version compatible with partitioning and JSONB features)
 - Deployment: Single-AZ at launch (us-east-1a)
-- Instance class: environment-specific (smaller for staging, production-sized for prod, defined in task 0075)
+- Instance class: environment-specific (smaller for staging, production-sized for prod, defined in task 0038)
 - Storage: GP3, auto-scaling enabled
-- VPC placement: private subnet (from task 0068)
-- Security group: RDS SG (from task 0068), allowing inbound from Lambda SG
+- VPC placement: private subnet (from task 0031)
+- Security group: RDS SG (from task 0031), allowing inbound from Lambda SG
 
 **Production hardening:**
 
@@ -61,7 +61,7 @@ Define the RDS PostgreSQL instance:
 - Deletion protection enabled
 - Backup retention: 7+ days
 
-**Design note:** A read replica is NOT provisioned at launch. Add one when CPU exceeds the monitoring threshold (defined in task 0073).
+**Design note:** A read replica is NOT provisioned at launch. Add one when CPU exceeds the monitoring threshold (defined in task 0036).
 
 ### Step 2: RDS Proxy
 
@@ -80,7 +80,7 @@ Define the XDR storage bucket:
 
 - Bucket name: environment-prefixed (e.g., `prod-stellar-ledger-data`)
 - Key prefix: `ledgers/` with pattern `{seq_start}-{seq_end}.xdr.zstd`
-- S3 event notification: PutObject with prefix filter (`ledgers/`) and suffix filter (`.xdr.zstd`) triggers the Ledger Processor Lambda (defined in task 0070)
+- S3 event notification: PutObject with prefix filter (`ledgers/`) and suffix filter (`.xdr.zstd`) triggers the Ledger Processor Lambda (defined in task 0033)
 - Lifecycle rules:
   - Production: 30-day retention, then transition to cheaper storage or delete
   - Staging: 7-day retention
@@ -95,7 +95,7 @@ Define the XDR storage bucket:
 Define the documentation portal bucket:
 
 - Hosts OpenAPI specification and documentation static files
-- Fronted by CloudFront (configured in task 0072)
+- Fronted by CloudFront (configured in task 0035)
 - Encryption:
   - Production: KMS-backed SSE
   - Staging: SSE-S3 acceptable

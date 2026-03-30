@@ -4,7 +4,7 @@ title: 'CDK: CloudFront, WAF, Route 53, S3 static hosting'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0006']
 tags: [priority-medium, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define the public delivery layer using CDK: two separate CloudFront distribution
 
 ## Status: Backlog
 
-**Current state:** Not started. No dependencies on other infrastructure tasks for the delivery layer definition, though WAF is attached to API Gateway in task 0070.
+**Current state:** Not started. No dependencies on other infrastructure tasks for the delivery layer definition, though WAF is attached to API Gateway in task 0033.
 
 ## Context
 
@@ -61,7 +61,7 @@ Define a CloudFront distribution for the React frontend:
 
 Define a separate CloudFront distribution for the API documentation:
 
-- Origin: api-docs S3 bucket (from task 0069)
+- Origin: api-docs S3 bucket (from task 0032)
 - Default root object: `index.html`
 - Cache behavior: moderate TTL (docs change less frequently than the SPA)
 - HTTPS only
@@ -90,7 +90,7 @@ Define a WAF WebACL with:
 
 - SPA CloudFront distribution (attached here)
 - API docs CloudFront distribution (attached here)
-- API Gateway (attached in task 0070)
+- API Gateway (attached in task 0033)
 
 ### Step 5: ACM TLS Certificates
 
@@ -116,7 +116,7 @@ For the staging environment:
 - [ ] API docs CloudFront distribution is defined separately with its own S3 origin
 - [ ] API Gateway traffic does NOT route through CloudFront
 - [ ] WAF WebACL is defined with managed rules, IP reputation, and rate-based abuse controls
-- [ ] WAF is attached to both CloudFront distributions and made available for API Gateway (task 0070)
+- [ ] WAF is attached to both CloudFront distributions and made available for API Gateway (task 0033)
 - [ ] Route 53 hosted zone has A/AAAA aliases for frontend, docs, and API domains
 - [ ] ACM certificates are provisioned: us-east-1 for CloudFront, stack region for API Gateway
 - [ ] DNS validation is automated via Route 53
@@ -131,6 +131,6 @@ For the staging environment:
 
 - The SPA CloudFront distribution must handle client-side routing by returning index.html for all paths that do not match a static file. This is achieved through custom error responses (403/404 -> index.html with 200).
 - WAF rules should be tuned after initial deployment based on observed traffic patterns. Start with AWS managed rules and adjust.
-- CloudFront invalidation will be needed on each SPA deployment. This can be triggered in the CI/CD pipeline (task 0076).
+- CloudFront invalidation will be needed on each SPA deployment. This can be triggered in the CI/CD pipeline (task 0039).
 - The staging password protection pattern (CloudFront Functions basic auth) is lightweight and does not require Lambda@Edge if the logic is simple enough.
 - All domain names and hosted zone IDs must be parameterized for redeployability across different AWS accounts and domains.

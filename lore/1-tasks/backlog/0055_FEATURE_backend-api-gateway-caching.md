@@ -161,4 +161,4 @@ Document the API Gateway stage-level cache configuration needed to respect the C
 
 - The distinction between "latest ledger" (short TTL) and "historical ledger" (long TTL) requires the backend to know the current highest ledger.
 - API Gateway cache configuration is an infrastructure concern but the NestJS headers drive the behavior.
-- Task 0062 is referenced as a related infrastructure task for API Gateway setup.
+- API Gateway infrastructure is defined in CDK task 0033.

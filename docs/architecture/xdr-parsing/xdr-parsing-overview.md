@@ -64,7 +64,7 @@ All XDR parsing happens exclusively in the Rust Ledger Processor Lambda at inges
 The NestJS API is pure CRUD — it reads pre-materialized data from PostgreSQL.
 
 Every ledger's `LedgerCloseMeta` is fully deserialized in the Ledger Processor Lambda using
-`rs-stellar-xdr` (Rust).
+`stellar-xdr` (Rust).
 
 This is the sole parsing path because it lets the system:
 
@@ -294,7 +294,7 @@ In that case, the documented behavior is:
 ### 7.3 Protocol Upgrades
 
 When Stellar introduces protocol changes that affect `LedgerCloseMeta` structure, the
-system updates `@stellar/stellar-sdk` XDR types.
+system updates the Rust `stellar-xdr` crate in the Ledger Processor (per ADR 0004).
 
 The parsing design assumes protocol upgrades are:
 

@@ -23,7 +23,7 @@ Implement the persistence layer that ensures all Ledger Processor writes are ide
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on the Ledger Processor handler (task 0064) for integration.
+**Current state:** Not started. Depends on the Ledger Processor handler (task 0029) for integration.
 
 ## Context
 
@@ -110,7 +110,7 @@ The soroban_contracts table has special upsert semantics:
 - Upsert on `contract_id`
 - Deployment fields (wasm_hash, deployer_account, deployed_at_ledger, contract_type, is_sac) are set on first insert
 - `metadata` is updated when interface extraction completes (may arrive in the same or a later ledger processing run)
-- The upsert must handle both task 0062 (interface extraction) and task 0063 (deployment extraction) writing to the same row, potentially in either order
+- The upsert must handle both task 0026 (interface extraction) and task 0027 (deployment extraction) writing to the same row, potentially in either order
 
 ### Step 4: Liquidity Pool Snapshots (Append-Only)
 

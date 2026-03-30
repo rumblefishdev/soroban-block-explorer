@@ -23,7 +23,7 @@ Implement the Liquidity Pools module providing pool listing with asset/TVL filte
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0024 (pagination).
+**Current state:** Not started. Depends on tasks 0023 (bootstrap), 0043 (pagination).
 
 ## Context
 

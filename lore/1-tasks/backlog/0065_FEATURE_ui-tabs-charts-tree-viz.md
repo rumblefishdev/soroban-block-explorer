@@ -71,7 +71,7 @@ Create `libs/ui/src/visualization/OperationFlowTree.tsx`:
 - Renders transaction operation flow as a graph/tree structure
 - Nodes: source account (root) -> operations -> affected accounts/contracts
 - Each node displays human-readable summary (e.g., "Sent 1,250 USDC to GD2M...K8J1", "Swapped 100 USDC for 95.2 XLM on Soroswap")
-- Identifiers in nodes are linked (using identifier components from task 0042)
+- Identifiers in nodes are linked (using identifier components from task 0062)
 - Expandable/collapsible for complex transactions
 - Supports both classic operations and Soroban invocations
 
@@ -118,6 +118,6 @@ Export all visualization components from `libs/ui` barrel.
 
 - This is the largest effort task in the frontend shared layer due to the variety of visualization types.
 - Chart library selection (e.g., Recharts, Nivo, Victory) should be decided during implementation. Prioritize lightweight bundle size and React compatibility.
-- The operation flow tree is consumed by transaction detail normal mode (task 0050).
-- The invocation call tree is consumed by both transaction detail (task 0050) and contract detail (task 0055).
-- Time-series charts are consumed by liquidity pool detail (task 0057).
+- The operation flow tree is consumed by transaction detail normal mode (task 0070).
+- The invocation call tree is consumed by both transaction detail (task 0070) and contract detail (task 0075).
+- Time-series charts are consumed by liquidity pool detail (task 0077).

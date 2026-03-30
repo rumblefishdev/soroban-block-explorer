@@ -24,7 +24,7 @@ Implement an ECS Fargate task that reads Stellar public history archives, export
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on the Ledger Processor (task 0064) and idempotent writes (task 0065) for downstream processing. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge.
+**Current state:** Not started. Depends on the Ledger Processor (task 0029) and idempotent writes (task 0028) for downstream processing. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge.
 
 ## Context
 
@@ -32,7 +32,7 @@ The block explorer needs historical chain data from Soroban mainnet activation (
 
 The architecture explicitly avoids a separate parse path for backfill. Instead, the backfill task writes the same XDR file format to the same S3 bucket, which triggers the same Ledger Processor Lambda. This keeps the ingestion contract uniform and eliminates divergence between historical and live processing logic.
 
-Live-derived state remains authoritative for the newest ledgers. Backfill data must not overwrite newer state, which is enforced by the watermark logic in task 0065.
+Live-derived state remains authoritative for the newest ledgers. Backfill data must not overwrite newer state, which is enforced by the watermark logic in task 0028.
 
 ### Source Code Location
 
@@ -56,7 +56,7 @@ For each retrieved LedgerCloseMeta, write to S3 using the same format as Galexie
 - Key pattern: `ledgers/{seq_start}-{seq_end}.xdr.zstd`
 - Compression: zstd
 
-The S3 PutObject triggers the same Ledger Processor Lambda (task 0064) via the S3 event notification configured in CDK task 0069.
+The S3 PutObject triggers the same Ledger Processor Lambda (task 0029) via the S3 event notification configured in CDK task 0032.
 
 ### Step 3: Configurable Batch Processing
 
@@ -77,7 +77,7 @@ Support running multiple backfill Fargate tasks in parallel:
 
 ### Step 5: Fargate Task Configuration
 
-Configure as an ECS Fargate task (infrastructure in CDK task 0071):
+Configure as an ECS Fargate task (infrastructure in CDK task 0034):
 
 - VPC placement: private subnet
 - Outbound: NAT Gateway for Stellar archive access, S3 via VPC endpoint
@@ -89,7 +89,7 @@ Configure as an ECS Fargate task (infrastructure in CDK task 0071):
 Ensure backfill cannot corrupt live data:
 
 - Output goes to S3, which triggers the standard Lambda -- no direct database writes
-- Watermark logic (task 0065) prevents backfill from overwriting newer live state
+- Watermark logic (task 0028) prevents backfill from overwriting newer live state
 - If a backfill file triggers Lambda processing for a ledger already processed by live ingestion, the immutable INSERT ON CONFLICT DO NOTHING handles it safely
 - Backfill can be stopped and resumed at any point by adjusting the start ledger
 
@@ -102,7 +102,7 @@ Ensure backfill cannot corrupt live data:
 - [ ] S3 PutObject triggers the same Ledger Processor Lambda used by live ingestion
 - [ ] Multiple parallel tasks with non-overlapping ranges work correctly
 - [ ] No separate parse path -- all processing goes through the standard Ledger Processor
-- [ ] Live-derived state is NOT overwritten by backfill (enforced by task 0065 watermarks)
+- [ ] Live-derived state is NOT overwritten by backfill (enforced by task 0028 watermarks)
 - [ ] Progress is logged with current ledger position
 - [ ] Task can be stopped and resumed from any ledger
 - [ ] Integration test verifies backfill output triggers Lambda and produces correct database state
@@ -113,5 +113,5 @@ Ensure backfill cannot corrupt live data:
 - This is a one-time Phase 1 process. Once historical data is backfilled, the task is not needed for ongoing operation.
 - The backfill rate should be tuned to avoid Lambda throttling. Start conservatively and increase based on observed Lambda concurrency and database load.
 - Stellar history archives are publicly accessible and do not require authentication.
-- The backfill task container image is built and pushed to ECR as part of the CI/CD pipeline (task 0076).
+- The backfill task container image is built and pushed to ECR as part of the CI/CD pipeline (task 0039).
 - Monitoring: track backfill progress via CloudWatch Logs. Compare highest backfilled ledger vs target range to estimate completion.

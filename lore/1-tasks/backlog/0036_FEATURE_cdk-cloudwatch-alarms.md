@@ -4,7 +4,7 @@ title: 'CDK: CloudWatch dashboards and alarms'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0006']
 tags: [priority-medium, effort-small, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define CloudWatch dashboards for operational visibility and alarms for critical 
 
 ## Status: Backlog
 
-**Current state:** Not started. Alarm thresholds are environment-configurable via task 0075.
+**Current state:** Not started. Alarm thresholds are environment-configurable via task 0038.
 
 ## Context
 
@@ -114,7 +114,7 @@ Define SNS topics for alarm notifications:
 
 ### Step 4: Environment-Configurable Thresholds
 
-All alarm thresholds are parameterized and configured via the environment config module (task 0075):
+All alarm thresholds are parameterized and configured via the environment config module (task 0038):
 
 - Production: strict thresholds as defined above
 - Staging: relaxed thresholds, non-paging notifications
@@ -136,7 +136,7 @@ All alarm thresholds are parameterized and configured via the environment config
 - [ ] API Gateway 5xx alarm fires above 0.5% of requests
 - [ ] Production: alarms trigger SNS for paging/PagerDuty
 - [ ] Staging: alarms trigger email/Slack only, non-paging
-- [ ] All thresholds are environment-configurable via task 0075
+- [ ] All thresholds are environment-configurable via task 0038
 - [ ] Alarm thresholds match architecture baseline: Galexie lag >60s, Processor error >1%, RDS CPU >70% sustained 5min, RDS storage <20%, API 5xx >0.5%
 - [ ] Staging defines the same five alarm categories as production, differing only in thresholds and notification targets
 - [ ] Production alarm thresholds documented as SLA-oriented baselines in CDK configuration
@@ -146,5 +146,5 @@ All alarm thresholds are parameterized and configured via the environment config
 
 - The "indexed vs network tip" metric requires a custom metric. The Ledger Processor can publish the highest processed ledger sequence to CloudWatch, and a separate check can compare it against the Stellar network tip (e.g., via Horizon or Galexie health).
 - Dashboard widgets should use STAT periods aligned with alarm evaluation periods for consistency.
-- Additional alarms can be added incrementally (e.g., DLQ depth from task 0070, Event Interpreter failure rate). The initial set covers the documented baseline.
+- Additional alarms can be added incrementally (e.g., DLQ depth from task 0033, Event Interpreter failure rate). The initial set covers the documented baseline.
 - CloudWatch Logs Insights queries may complement dashboards for ad-hoc investigation but are not defined as CDK resources.

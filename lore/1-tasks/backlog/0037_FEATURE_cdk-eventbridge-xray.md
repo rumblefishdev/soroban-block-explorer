@@ -4,7 +4,7 @@ title: 'CDK: EventBridge rules and X-Ray tracing'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0006']
 tags: [priority-medium, effort-small, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define EventBridge scheduling rules and X-Ray distributed tracing configuration 
 
 ## Status: Backlog
 
-**Current state:** Not started. No blocking dependencies, but coordinates with Lambda definitions in task 0070.
+**Current state:** Not started. No blocking dependencies, but coordinates with Lambda definitions in task 0033.
 
 ## Context
 
@@ -43,7 +43,7 @@ X-Ray provides distributed tracing across the API request path (API Gateway -> L
 Define an EventBridge rule:
 
 - Schedule expression: `rate(5 minutes)`
-- Target: Event Interpreter Lambda (from task 0070)
+- Target: Event Interpreter Lambda (from task 0033)
 - IAM permission: EventBridge to invoke the Lambda function
 
 **Retry policy:**
@@ -54,9 +54,9 @@ Define an EventBridge rule:
 **DLQ for EventBridge:**
 
 - SQS queue to capture failed EventBridge-to-Lambda invocations
-- Separate from the Ledger Processor DLQ (task 0070)
+- Separate from the Ledger Processor DLQ (task 0033)
 - Retention: 14 days
-- Alarm on queue depth > 0 (coordinates with task 0073)
+- Alarm on queue depth > 0 (coordinates with task 0036)
 
 ### Step 2: X-Ray Active Tracing - API Gateway
 
@@ -108,7 +108,7 @@ Sampling rules are configured as X-Ray sampling rule resources in CDK.
 - [ ] X-Ray tracing on RDS Proxy if supported (documented limitation if not)
 - [ ] Production sampling rule: lower rate for cost efficiency
 - [ ] Staging sampling rule: higher rate for debugging
-- [ ] DLQ alarm integrates with monitoring (task 0073)
+- [ ] DLQ alarm integrates with monitoring (task 0036)
 
 ## Notes
 

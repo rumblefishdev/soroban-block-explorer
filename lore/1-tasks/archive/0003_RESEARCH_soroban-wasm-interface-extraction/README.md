@@ -4,7 +4,7 @@ title: 'Research: Soroban contract WASM interface extraction'
 type: RESEARCH
 status: completed
 related_adr: []
-related_tasks: ['0074']
+related_tasks: ['0075']
 tags: [priority-high, effort-medium, layer-research]
 milestone: 1
 links: []
@@ -25,7 +25,7 @@ history:
       22 archived sources, all verified (md5sum + content match).
       Key findings: use @stellar/stellar-sdk Spec.fromWasm(), SAC detection
       via CONTRACT_EXECUTABLE_STELLAR_ASSET, heuristic classification,
-      contractmetav0 for search_vector. No blockers for task 0054.
+      contractmetav0 for search_vector. No blockers for task 0026.
 ---
 
 # Research: Soroban contract WASM interface extraction
@@ -96,7 +96,7 @@ The `soroban_contracts` table includes a `search_vector` column (tsvector GENERA
 
 - 5 research notes produced (3x R-, 1x G-, 1x S-)
 - 22 sources archived in `sources/` -- 12 raw GitHub files (10 byte-identical, 2 cosmetic diff), 10 web pages (all key data points verified)
-- Sources include: SEP-0048, SEP-0041, 4 Stellar XDR definitions, 3 SDK source files, 7 Stellar docs pages, Blend/Soroswap/Aquarius/FxDAO/Litemint/Oracle references
+- Sources include: SEP-0068, SEP-0061, 4 Stellar XDR definitions, 3 SDK source files, 7 Stellar docs pages, Blend/Soroswap/Aquarius/FxDAO/Litemint/Oracle references
 
 ## Design Decisions
 
@@ -126,7 +126,7 @@ The `soroban_contracts` table includes a `search_vector` column (tsvector GENERA
 
 ## Future Work
 
-- Implement extraction in Ledger Processor (task 0054)
+- Implement extraction in Ledger Processor (task 0026)
 - Known contract registry for exact classification of popular contracts
 - Event-based classification to strengthen heuristic confidence at runtime
 

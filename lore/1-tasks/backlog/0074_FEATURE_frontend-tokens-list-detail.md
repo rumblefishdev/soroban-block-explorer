@@ -43,7 +43,7 @@ The token pages must unify classic Stellar assets and Soroban token contracts in
 | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
 | Asset Code           | Text                        | Primary identifier text (e.g., "USDC", "XLM")                                               |
 | Issuer / Contract ID | Truncated, linked           | Classic: issuer linked to `/accounts/:id`. Soroban: contract ID linked to `/contracts/:id`. |
-| Type                 | Badge (classic/SAC/soroban) | TypeBadge (task 0043). Prevents confusion between similar names.                            |
+| Type                 | Badge (classic/SAC/soroban) | TypeBadge (task 0063). Prevents confusion between similar names.                            |
 | Total Supply         | Formatted number            | Total supply of the token                                                                   |
 | Holder Count         | Integer                     | Number of accounts holding this token                                                       |
 
@@ -62,12 +62,12 @@ The token pages must unify classic Stellar assets and Soroban token contracts in
 | Field                 | Display                                    | Notes                                                    |
 | --------------------- | ------------------------------------------ | -------------------------------------------------------- |
 | Asset Code            | Prominent header                           | Primary token name                                       |
-| Issuer (classic)      | Full, copyable, linked to `/accounts/:id`  | IdentifierWithCopy (task 0042). Only for classic tokens. |
-| Contract ID (soroban) | Full, copyable, linked to `/contracts/:id` | IdentifierWithCopy (task 0042). Only for Soroban tokens. |
-| Type Badge            | Prominent badge                            | TypeBadge (task 0043). Must be obvious at top of page.   |
+| Issuer (classic)      | Full, copyable, linked to `/accounts/:id`  | IdentifierWithCopy (task 0062). Only for classic tokens. |
+| Contract ID (soroban) | Full, copyable, linked to `/contracts/:id` | IdentifierWithCopy (task 0062). Only for Soroban tokens. |
+| Type Badge            | Prominent badge                            | TypeBadge (task 0063). Must be obvious at top of page.   |
 | Total Supply          | Formatted number                           | Total token supply                                       |
 | Holder Count          | Integer                                    | Number of holders                                        |
-| Deployed At Ledger    | Linked to `/ledgers/:sequence`             | Only for Soroban tokens. IdentifierDisplay (task 0042).  |
+| Deployed At Ledger    | Linked to `/ledgers/:sequence`             | Only for Soroban tokens. IdentifierDisplay (task 0062).  |
 
 ### Token Metadata (when available)
 
@@ -138,7 +138,7 @@ Create `apps/web/src/pages/token-detail/TokenTransactions.tsx`:
 Create `apps/web/src/pages/token-detail/TokenDetailPage.tsx`:
 
 - Composes: TokenSummary, TokenMetadata, TokenTransactions
-- Each section in SectionErrorBoundary (task 0044)
+- Each section in SectionErrorBoundary (task 0064)
 - 404 state: "Token not found"
 
 ## Acceptance Criteria

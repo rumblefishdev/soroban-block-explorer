@@ -39,13 +39,13 @@ This page is the primary browsing surface for all network transaction activity. 
 
 | Column          | Display                                    | Notes                                                |
 | --------------- | ------------------------------------------ | ---------------------------------------------------- |
-| Hash            | Truncated, linked to `/transactions/:hash` | Identifier component (task 0042)                     |
-| Ledger Sequence | Linked to `/ledgers/:sequence`             | Identifier component (task 0042)                     |
-| Source Account  | Truncated, linked to `/accounts/:id`       | Identifier component (task 0042)                     |
+| Hash            | Truncated, linked to `/transactions/:hash` | Identifier component (task 0062)                     |
+| Ledger Sequence | Linked to `/ledgers/:sequence`             | Identifier component (task 0062)                     |
+| Source Account  | Truncated, linked to `/accounts/:id`       | Identifier component (task 0062)                     |
 | Operation Type  | Human-readable label                       | e.g., "Payment", "Create Account", "Invoke Contract" |
-| Status          | Badge (success/failed)                     | StatusBadge component (task 0043)                    |
+| Status          | Badge (success/failed)                     | StatusBadge component (task 0063)                    |
 | Fee             | Display value                              | XLM amount                                           |
-| Timestamp       | Relative ("2 min ago")                     | RelativeTimestamp component (task 0043)              |
+| Timestamp       | Relative ("2 min ago")                     | RelativeTimestamp component (task 0063)              |
 
 ### Filters
 
@@ -83,18 +83,18 @@ Create `apps/web/src/pages/transactions/TransactionFilters.tsx`:
 - Source account text input
 - Contract ID text input
 - Operation type dropdown (values from domain types)
-- All values synced to URL query params via `useTableUrlState` (task 0041)
+- All values synced to URL query params via `useTableUrlState` (task 0061)
 - Filter change resets cursor
 
 ### Step 3: Transactions table
 
 Create `apps/web/src/pages/transactions/TransactionsTable.tsx`:
 
-- Uses ExplorerTable (task 0041) with column definitions
+- Uses ExplorerTable (task 0061) with column definitions
 - Columns: hash, ledger sequence, source account, operation type, status badge, fee, timestamp
-- Identifier columns use linked IdentifierDisplay (task 0042)
-- Status column uses StatusBadge (task 0043)
-- Timestamp column uses RelativeTimestamp (task 0043)
+- Identifier columns use linked IdentifierDisplay (task 0062)
+- Status column uses StatusBadge (task 0063)
+- Timestamp column uses RelativeTimestamp (task 0063)
 
 ### Step 4: Page composition
 
@@ -103,7 +103,7 @@ Create `apps/web/src/pages/transactions/TransactionsListPage.tsx`:
 - SectionHeader: "Transactions"
 - TransactionFilters above table
 - TransactionsTable with data
-- PaginationControls below table (task 0041)
+- PaginationControls below table (task 0061)
 - Loading skeleton during fetch
 - Empty state when no results match filters
 - Error state with retry for transient failures

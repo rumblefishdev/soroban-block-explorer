@@ -4,7 +4,7 @@ title: 'Backend: OpenAPI spec generation and docs portal'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0023', '0029', '0042']
+related_tasks: ['0023', '0042']
 tags: [layer-backend, openapi, documentation, swagger]
 milestone: 2
 links: []
@@ -147,6 +147,6 @@ Add a CI step that generates the spec and validates completeness (all endpoints 
 
 ## Notes
 
-- This task is best completed after all feature module tasks (0026-0035) are implemented, since it annotates existing controllers and DTOs.
+- This task is best completed after all feature module tasks (0045-0054) are implemented, since it annotates existing controllers and DTOs.
 - The spec doubles as a testing contract: frontend developers can mock API responses from the spec.
-- Task 0064 is referenced as a related infrastructure task for CloudFront/S3 configuration.
+- CloudFront/S3 infrastructure for spec hosting is defined in CDK task 0035.

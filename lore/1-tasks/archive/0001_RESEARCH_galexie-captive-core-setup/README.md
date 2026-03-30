@@ -4,7 +4,7 @@ title: 'Research: Galexie configuration, Captive Core setup, and output format'
 type: RESEARCH
 status: completed
 related_adr: []
-related_tasks: ['0086', '0027']
+related_tasks: ['0024', '0034']
 tags: [priority-high, effort-medium, layer-research]
 milestone: 1
 links:

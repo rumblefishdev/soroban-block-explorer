@@ -4,7 +4,7 @@ title: 'CDK: ECS Fargate for Galexie live + backfill'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0031', '0001']
+related_tasks: ['0006', '0031', '0001']
 tags: [priority-medium, effort-medium, layer-infra]
 milestone: 1
 links:
@@ -24,7 +24,7 @@ Define ECS Fargate infrastructure for two workloads: (1) a continuous Galexie se
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on VPC/networking (task 0068) for subnet placement. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge.
+**Current state:** Not started. Depends on VPC/networking (task 0031) for subnet placement. Research task 0001 (Galexie/Captive Core setup) provides foundational knowledge.
 
 ## Context
 
@@ -48,10 +48,10 @@ Define an ECS cluster for ingestion workloads. Both the Galexie service and back
 
 Define an ECS Fargate service for live Galexie:
 
-- Task definition: Galexie container image (from ECR, task 0078)
+- Task definition: Galexie container image (from ECR, task 0040)
 - CPU/memory: sized for Captive Core + Galexie export overhead
-- VPC placement: private subnet (task 0068)
-- Security group: ECS SG (task 0068)
+- VPC placement: private subnet (task 0031)
+- Security group: ECS SG (task 0031)
 - Desired count: 1 (single instance)
 - Restart policy: automatic restart on failure for continuous recovery
 - Network mode: awsvpc
@@ -111,15 +111,15 @@ Define an ECS Fargate task definition for historical backfill:
 
 Both workloads in the private subnet:
 
-- Outbound to Stellar network peers: via NAT Gateway (task 0078)
+- Outbound to Stellar network peers: via NAT Gateway (task 0040)
 - Outbound to Stellar history archives: via NAT Gateway
-- Outbound to S3: via VPC endpoint (task 0068) -- avoids NAT Gateway costs for S3 traffic
+- Outbound to S3: via VPC endpoint (task 0031) -- avoids NAT Gateway costs for S3 traffic
 - Outbound to ECR: via NAT Gateway for image pull
 - Outbound to CloudWatch Logs: via NAT Gateway
 
 ### Step 5: ECS Task Roles
 
-Define IAM roles for ECS tasks (detailed permissions in task 0078):
+Define IAM roles for ECS tasks (detailed permissions in task 0040):
 
 **Galexie task role:**
 
@@ -151,7 +151,7 @@ Define IAM roles for ECS tasks (detailed permissions in task 0078):
 
 ## Notes
 
-- The Galexie container image must be built and pushed to ECR as part of CI/CD (task 0076). The ECS task definition references the ECR repository (task 0078).
-- Captive Core within Galexie requires outbound connectivity to Stellar network peers on various ports. The NAT Gateway in the public subnet (task 0078) provides this.
+- The Galexie container image must be built and pushed to ECR as part of CI/CD (task 0039). The ECS task definition references the ECR repository (task 0040).
+- Captive Core within Galexie requires outbound connectivity to Stellar network peers on various ports. The NAT Gateway in the public subnet (task 0040) provides this.
 - The health check based on S3 object production cadence is an application-level health signal. If ledger closes slow down on the Stellar network itself, the health check window should account for this.
 - Backfill parallelism should be limited by database write throughput. Start with 2-3 parallel tasks and increase based on observed Ledger Processor Lambda and RDS performance.

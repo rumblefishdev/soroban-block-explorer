@@ -120,7 +120,7 @@ The backend implementation direction implied by the current design is:
   caching
 - **AWS WAF** for managed-rule abuse protection on public ingress
 - **PostgreSQL** as the only source of indexed chain data served by the API
-- **`@stellar/stellar-sdk`** for targeted XDR decoding when advanced transaction views need it
+- **No XDR dependencies** — API serves pre-materialized data; raw XDR is passthrough only (per ADR 0004)
 
 This document assumes the backend follows the implementation direction already
 reflected in the general overview, including NestJS and Drizzle ORM, while keeping the API

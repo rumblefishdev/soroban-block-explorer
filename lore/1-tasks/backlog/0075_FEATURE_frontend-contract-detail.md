@@ -4,7 +4,7 @@ title: 'Frontend: Contract detail page'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0003']
 tags: [priority-high, effort-large, layer-frontend-pages]
 milestone: 2
 links: []
@@ -42,10 +42,10 @@ The contract page must serve as a comprehensive developer tool for understanding
 
 | Field              | Display                         | Notes                                                                                 |
 | ------------------ | ------------------------------- | ------------------------------------------------------------------------------------- |
-| Contract ID        | Full, copyable                  | IdentifierWithCopy (task 0042). Prominent at page top.                                |
-| Deployer           | Full, linked to `/accounts/:id` | IdentifierWithCopy (task 0042)                                                        |
-| Deployed At Ledger | Linked to `/ledgers/:sequence`  | IdentifierDisplay (task 0042)                                                         |
-| WASM Hash          | Full, copyable                  | IdentifierWithCopy (task 0042)                                                        |
+| Contract ID        | Full, copyable                  | IdentifierWithCopy (task 0062). Prominent at page top.                                |
+| Deployer           | Full, linked to `/accounts/:id` | IdentifierWithCopy (task 0062)                                                        |
+| Deployed At Ledger | Linked to `/ledgers/:sequence`  | IdentifierDisplay (task 0062)                                                         |
+| WASM Hash          | Full, copyable                  | IdentifierWithCopy (task 0062)                                                        |
 | SAC Badge          | Badge if applicable             | "Stellar Asset Contract" badge. Visually clear, materially changes user expectations. |
 | Total Invocations  | Integer                         | Stats: total invocation count                                                         |
 | Unique Callers     | Integer                         | Stats: unique caller count                                                            |
@@ -69,10 +69,10 @@ For each public function:
 | Column        | Display                              | Notes                         |
 | ------------- | ------------------------------------ | ----------------------------- |
 | Function Name | Text                                 | Which function was called     |
-| Caller        | Truncated, linked to `/accounts/:id` | IdentifierDisplay (task 0042) |
-| Status        | Badge (success/failed)               | StatusBadge (task 0043)       |
-| Ledger        | Linked to `/ledgers/:sequence`       | IdentifierDisplay (task 0042) |
-| Timestamp     | Relative                             | RelativeTimestamp (task 0043) |
+| Caller        | Truncated, linked to `/accounts/:id` | IdentifierDisplay (task 0062) |
+| Status        | Badge (success/failed)               | StatusBadge (task 0063)       |
+| Ledger        | Linked to `/ledgers/:sequence`       | IdentifierDisplay (task 0062) |
+| Timestamp     | Relative                             | RelativeTimestamp (task 0063) |
 
 - Paginated with cursor-based pagination
 
@@ -83,7 +83,7 @@ For each public function:
 | Event Type | Label                          | e.g., "contract", "system"                      |
 | Topics     | Array display                  | Topic values                                    |
 | Data       | Expandable                     | Event data payload, expandable for large values |
-| Ledger     | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0042)                   |
+| Ledger     | Linked to `/ledgers/:sequence` | IdentifierDisplay (task 0062)                   |
 
 - Paginated with cursor-based pagination
 - Include interpretations when available from the backend
@@ -120,7 +120,7 @@ Create `apps/web/src/pages/contract-detail/ContractInterface.tsx`:
 Create `apps/web/src/pages/contract-detail/ContractInvocations.tsx`:
 
 - Paginated table: function name, caller (linked), status badge, ledger (linked), timestamp
-- Uses ExplorerTable (task 0041)
+- Uses ExplorerTable (task 0061)
 
 ### Step 5: Events tab
 
@@ -135,10 +135,10 @@ Create `apps/web/src/pages/contract-detail/ContractEvents.tsx`:
 Create `apps/web/src/pages/contract-detail/ContractDetailPage.tsx`:
 
 - ContractSummary at top (always visible)
-- Tabs (task 0045): Interface, Invocations, Events
+- Tabs (task 0065): Interface, Invocations, Events
 - Active tab in URL query param
-- Each section in SectionErrorBoundary (task 0044)
-- Param validation: C... format (from task 0047)
+- Each section in SectionErrorBoundary (task 0064)
+- Param validation: C... format (from task 0067)
 - 404 state: "Contract not found"
 
 ## Acceptance Criteria

@@ -100,11 +100,11 @@ Create `apps/api/src/common/cache/` with a simple in-memory cache service. The s
 
 ### Step 2: Network Stats Integration
 
-Integrate cache with the Network module (task 0026). Wrap the stats query so it checks cache first, falls through to DB on miss.
+Integrate cache with the Network module (task 0045). Wrap the stats query so it checks cache first, falls through to DB on miss.
 
 ### Step 3: Contract Metadata Integration
 
-Integrate cache with the Contracts module (task 0031). Cache contract metadata lookups for frequently accessed contract IDs.
+Integrate cache with the Contracts module (task 0050). Cache contract metadata lookups for frequently accessed contract IDs.
 
 ### Step 4: TTL Configuration
 

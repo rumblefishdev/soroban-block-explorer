@@ -177,6 +177,6 @@ Ensure no endpoint throws errors solely because ingestion is behind. Verify that
 
 ## Notes
 
-- This task provides shared infrastructure consumed by all feature module tasks (0026-0034).
+- This task provides shared infrastructure consumed by all feature module tasks (0045-0053).
 - The parse_error and unknown operation handling are critical for explorer resilience during protocol upgrades.
 - Graceful degradation is a fundamental architectural requirement, not an optional enhancement.
