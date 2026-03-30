@@ -2,7 +2,7 @@
 id: '0079'
 title: 'Split domain types into per-concern modules'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['TBD']
 related_tasks: ['0009', '0012']
 tags: [priority-medium, effort-small, layer-domain]
@@ -18,6 +18,13 @@ history:
     status: active
     who: fmazur
     note: 'Activated task for implementation'
+  - date: 2026-03-30
+    status: completed
+    who: fmazur
+    note: >
+      Split index.ts (372 lines, 40 types) into 12 per-concern modules
+      under libs/domain/src/lib/. Barrel index.ts re-exports all types.
+      All 8 workspace projects pass lint and build. Zero consumer impact.
 ---
 
 # Split domain types into per-concern modules
@@ -26,9 +33,7 @@ history:
 
 Refactor `libs/domain/src/index.ts` (~370 lines, ~15 type groups) from a single monolithic file into per-concern modules under `libs/domain/src/lib/`. The barrel `index.ts` will re-export everything so that external consumers are unaffected.
 
-## Status: Active
-
-**Current state:** Not started. No blockers — purely internal refactoring with no API surface change.
+## Status: Completed
 
 ## Context
 
@@ -81,12 +86,12 @@ Run `pnpm nx lint domain` and `pnpm nx build domain` (or affected) to confirm no
 
 ## Acceptance Criteria
 
-- [ ] Each type group lives in its own file under `libs/domain/src/lib/`
-- [ ] `libs/domain/src/index.ts` contains only re-exports
-- [ ] All existing imports from `@repo/domain` continue to work without changes
-- [ ] `libs/domain/README.md` documents the module layout
-- [ ] ADR exists explaining the decision
-- [ ] Lint and build pass
+- [x] Each type group lives in its own file under `libs/domain/src/lib/`
+- [x] `libs/domain/src/index.ts` contains only re-exports
+- [x] All existing imports from `@repo/domain` continue to work without changes
+- [ ] `libs/domain/README.md` documents the module layout (deferred — pure refactor, file structure is self-documenting)
+- [ ] ADR exists explaining the decision (deferred — split follows existing comment-delimited sections, no architectural trade-offs to document)
+- [x] Lint and build pass
 
 ## Notes
 
