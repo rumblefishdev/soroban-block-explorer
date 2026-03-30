@@ -199,8 +199,8 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 ## Issues Encountered
 
 - **Soroban RPC `getLedgers` returns `LedgerCloseMeta`** (not batch), while Galexie writes `LedgerCloseMetaBatch`. Parser must handle both formats.
-- **`meta.switch()` in JS SDK returns raw number** (e.g., `4`) with `undefined` name — required manual version dispatch instead of named enum matching. *(JS SDK finding from early research — this behavior motivated ADR-0002.)*
-- **Protocol 25 dual-phase TX set**: `phase.v0Components()` throws if phase is V1 (parallel). Must use try/catch to detect phase type in JS. Rust uses clean `match`. *(JS SDK weakness — Rust exhaustive `match` eliminates this class of issues.)*
+- **`meta.switch()` in JS SDK returns raw number** (e.g., `4`) with `undefined` name — required manual version dispatch instead of named enum matching. _(JS SDK finding from early research — this behavior motivated ADR-0002.)_
+- **Protocol 25 dual-phase TX set**: `phase.v0Components()` throws if phase is V1 (parallel). Must use try/catch to detect phase type in JS. Rust uses clean `match`. _(JS SDK weakness — Rust exhaustive `match` eliminates this class of issues.)_
 - **Public Galexie data lake not accessible**: GCS bucket `sdf-ledger-close-meta` returns 403. Used Soroban RPC `getLedgers` as alternative data source.
 
 ## Future Work

@@ -153,7 +153,7 @@ match meta {
 // If V5 is added in a new crate version → compile error here
 ```
 
-Contrast with JS SDK: `meta.switch()` returns raw `4` with `undefined` name. A new version would silently fall through without warning. *(This behavior motivated ADR-0002.)*
+Contrast with JS SDK: `meta.switch()` returns raw `4` with `undefined` name. A new version would silently fall through without warning. _(This behavior motivated ADR-0002.)_
 
 ## Raw Payload Retention Strategy
 
