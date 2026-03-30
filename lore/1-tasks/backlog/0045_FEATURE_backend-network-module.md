@@ -4,7 +4,7 @@ title: 'Backend: Network module (GET /network/stats)'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0023', '0043']
+related_tasks: ['0023']
 tags: [layer-backend, network, stats]
 milestone: 2
 links: []

@@ -27,7 +27,8 @@ Implement reusable cursor-based pagination helpers, query/filter parsing utiliti
 
 ## Status: Backlog
 
-**Current state:** Not started. Depends on task 0023 (NestJS API bootstrap) and task 0015 (Drizzle ORM connection factory).
+**Current state:** Not started.
+**Depends on:** task 0023 (NestJS API bootstrap), task 0015 (Drizzle ORM connection factory).
 
 ## Context
 
@@ -117,31 +118,31 @@ All collection endpoints in the explorer API use cursor-based pagination with a 
 
 ### Step 1: Cursor encode/decode utilities
 
-Location: `apps/api/src/common/pagination/cursor.ts`
+**Location:** `apps/api/src/common/pagination/cursor.ts`
 
 Implement base64 cursor encode/decode functions. Internal cursor structure includes sort key values and tie-breaking ID. Decode validates structure and returns clear errors for malformed cursors.
 
 ### Step 2: Pagination query builder
 
-Location: `apps/api/src/common/pagination/paginate.ts`
+**Location:** `apps/api/src/common/pagination/paginate.ts`
 
 Create a reusable pagination function that accepts a Drizzle query, applies cursor-based WHERE conditions, adds ORDER BY with tie-breaking, and fetches `limit + 1` to determine `has_more`. Returns standard response envelope.
 
 ### Step 3: Filter parser
 
-Location: `apps/api/src/common/filters/`
+**Location:** `apps/api/src/common/filters/`
 
 Implement a filter parsing utility that extracts `filter[key]` query parameters, validates them against allowed filter keys per endpoint, and returns typed filter objects for use in query construction.
 
 ### Step 4: NestJS validation pipes
 
-Location: `apps/api/src/common/pipes/`
+**Location:** `apps/api/src/common/pipes/`
 
 Create NestJS validation pipes for `limit` and `cursor` parameters with proper error mapping to 400 responses.
 
 ### Step 5: BaseCrudService
 
-Location: `apps/api/src/common/base-crud.service.ts`
+**Location:** `apps/api/src/common/base-crud.service.ts`
 
 Generic abstract class that composes cursor pagination + Drizzle query building:
 
@@ -155,7 +156,7 @@ Type-safe via Drizzle schema generics. Per-entity services extend and add custom
 
 ### Step 6: BaseCrudController
 
-Location: `apps/api/src/common/base-crud.controller.ts`
+**Location:** `apps/api/src/common/base-crud.controller.ts`
 
 Generic abstract NestJS controller with standard endpoints:
 
@@ -184,13 +185,14 @@ Uses validation pipes from Step 4. Per-entity controllers extend and add custom 
 - [ ] `BaseCrudService<T>` provides getOne, getList, create, update, delete
 - [ ] `BaseCrudController<T>` provides standard NestJS GET endpoints
 - [ ] Type safety via Drizzle `InferSelectModel<T>` / `InferInsertModel<T>`
-- [ ] Reusable across all collection endpoints (0045-0053)
+- [ ] Reusable across collection endpoints (BaseCrudService for 0046-0052, pagination utilities for 0045-0053)
 - [ ] Unit tests for cursor and filter utilities
 - [ ] Integration test for BaseCrudService against local PostgreSQL
 
 ## Notes
 
-- Consumed by tasks 0045-0053 (all collection endpoints).
+- Pagination utilities consumed by tasks 0045-0053 (all collection endpoints).
+- `BaseCrudService` consumed by tasks 0046-0052; task 0045 (network stats) has no pagination/CRUD needs.
 - The cursor structure is an internal implementation detail and must never be documented as a public contract.
 - Filter keys vary per endpoint; the parser must be configurable per module.
 - Search module (0053) uses cursor pagination but not BaseCrudService — it has cross-entity query patterns.
