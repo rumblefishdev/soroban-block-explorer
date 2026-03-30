@@ -16,14 +16,14 @@ export const DATABASE_CONNECTION = Symbol('DATABASE_CONNECTION');
           database: config.get<string>('DB_NAME', 'soroban_explorer'),
           user: config.get<string>('DB_USER', 'postgres'),
           password: config.get<string>('DB_PASSWORD', 'postgres'),
-          port: config.get<number>('DB_PORT', 5432),
+          port: Number(config.get('DB_PORT', '5432')),
           max: 1,
           min: 0,
           idleTimeoutMillis: 120_000,
           connectionTimeoutMillis: 10_000,
           ssl:
             config.get<string>('NODE_ENV') === 'production'
-              ? { rejectUnauthorized: false }
+              ? { rejectUnauthorized: true }
               : undefined,
         });
 

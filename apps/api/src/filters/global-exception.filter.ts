@@ -32,9 +32,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       ) {
         const resp = exceptionResponse as Record<string, unknown>;
         const raw = resp['message'];
-        message = Array.isArray(raw)
-          ? raw.join('; ')
-          : (raw as string) ?? message;
+        if (typeof raw === 'string') {
+          message = raw;
+        } else if (Array.isArray(raw)) {
+          message = raw.map((item) => String(item)).join('; ');
+        } else if (raw != null) {
+          message = String(raw);
+        }
       }
 
       code = this.statusToCode(status);
