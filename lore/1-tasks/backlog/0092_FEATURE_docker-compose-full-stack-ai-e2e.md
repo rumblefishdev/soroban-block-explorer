@@ -87,10 +87,11 @@ Add e2e testing section to root `CLAUDE.md`:
 ## E2E Testing
 
 Before creating a PR that changes frontend or API behavior:
-  npm run e2e
+npm run e2e
 ```
 
 Document:
+
 - When to run e2e (frontend changes, API changes, schema changes)
 - How to run locally (`npm run e2e` or `scripts/e2e.sh`)
 - How to debug failures (Playwright trace viewer, `--headed` mode)
@@ -124,6 +125,7 @@ Add convenience scripts to root `package.json`:
 ```
 
 `scripts/e2e.sh` handles the full lifecycle:
+
 1. `docker compose --profile full up -d --wait`
 2. `npx playwright test "$@"`
 3. `docker compose --profile full down`
@@ -133,11 +135,11 @@ Add convenience scripts to root `package.json`:
 
 Three layers ensure e2e tests are always run:
 
-| Layer | Mechanism | Scope | Hardness |
-|-------|-----------|-------|----------|
-| **CI gate** | GitHub Actions required check | All PRs | Hard — blocks merge |
-| **CLAUDE.md** | Convention documented for agents | Agent sessions | Soft — guidance |
-| **Hook** | `post-push` or pre-PR hook | Claude Code agents | Medium — automatic reminder/run |
+| Layer         | Mechanism                        | Scope              | Hardness                        |
+| ------------- | -------------------------------- | ------------------ | ------------------------------- |
+| **CI gate**   | GitHub Actions required check    | All PRs            | Hard — blocks merge             |
+| **CLAUDE.md** | Convention documented for agents | Agent sessions     | Soft — guidance                 |
+| **Hook**      | `post-push` or pre-PR hook       | Claude Code agents | Medium — automatic reminder/run |
 
 **CI is the hard gate** — even if an agent skips local e2e, CI catches it before merge. CLAUDE.md and hooks are acceleration layers that catch issues earlier.
 
