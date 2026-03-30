@@ -50,12 +50,18 @@ describe('resolveConnectionString', () => {
       vi.doMock('@aws-sdk/client-secrets-manager', () => {
         throw new Error('Cannot find module');
       });
-      // Re-import to pick up the mock
-      const { resolveConnectionString: fn } = await import('./credentials.js');
-      await expect(fn()).rejects.toThrow(
-        /Failed to load @aws-sdk\/client-secrets-manager/
-      );
-      vi.doUnmock('@aws-sdk/client-secrets-manager');
+      await vi.resetModules();
+      try {
+        const { resolveConnectionString: fn } = await import(
+          './credentials.js'
+        );
+        await expect(fn()).rejects.toThrow(
+          /Failed to load @aws-sdk\/client-secrets-manager/
+        );
+      } finally {
+        vi.doUnmock('@aws-sdk/client-secrets-manager');
+        await vi.resetModules();
+      }
     });
   });
 
