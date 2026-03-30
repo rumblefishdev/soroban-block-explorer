@@ -165,4 +165,4 @@ Document the process for Stellar protocol upgrades:
 - The `cdk diff` step for production is critical for change visibility. Reviewers should check the diff before approving.
 - ECR image builds should be cached (Docker layer caching) to reduce build times.
 - The pipeline should be fast enough that staging deployments complete within a few minutes of merge.
-- Protocol upgrades are infrequent. The integration test step with known ledger fixtures ensures the new SDK version correctly parses both old and new format ledgers.
+- Protocol upgrades are infrequent. The integration test step with known ledger fixtures ensures the new `stellar-xdr` crate version correctly parses both old and new format ledgers.

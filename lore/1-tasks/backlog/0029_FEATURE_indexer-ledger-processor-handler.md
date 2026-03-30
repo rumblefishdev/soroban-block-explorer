@@ -3,9 +3,9 @@ id: '0029'
 title: 'Indexer: Ledger Processor Lambda handler'
 type: FEATURE
 status: backlog
-related_adr: []
+related_adr: ['0004']
 related_tasks: ['0024', '0025', '0026', '0027', '0028']
-tags: [priority-high, effort-medium, layer-indexing]
+tags: [priority-high, effort-medium, layer-indexing, rust]
 milestone: 1
 links:
   - docs/architecture/indexing-pipeline/indexing-pipeline-overview.md

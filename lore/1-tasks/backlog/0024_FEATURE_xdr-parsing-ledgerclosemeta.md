@@ -112,7 +112,7 @@ Write ledger row first, then all transaction rows for that ledger, within the sa
 
 ### Step 8: Error Handling for Malformed XDR
 
-When `fromXDR()` throws during deserialization:
+When `from_xdr()` returns `Err` during deserialization:
 
 - Log the error with full transaction context (ledger sequence, transaction index, raw bytes length)
 - Store raw XDR verbatim in the transaction row

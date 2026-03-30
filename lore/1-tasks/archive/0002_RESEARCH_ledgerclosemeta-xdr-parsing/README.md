@@ -63,13 +63,13 @@ Investigate the internal structure of LedgerCloseMeta XDR and the concrete APIs 
 
 ## Research Notes
 
-| Note                                                                                 | Topic                                                                 |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| [R-sdk-types-and-deserialization.md](notes/R-sdk-types-and-deserialization.md)       | Rust `stellar_xdr::curr` types, deserialization, TX hash, performance |
-| [R-soroban-events-and-invocations.md](notes/R-soroban-events-and-invocations.md)     | Rust: Events (V3 vs V4), ScVal typed JSON, invocation tree            |
-| [R-field-mapping-tables.md](notes/R-field-mapping-tables.md)                         | Rust struct paths → DB column for all 12 tables                       |
-| [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md)     | Rust: Result<T,E> error handling, protocol upgrades, Lambda perf      |
-| [S-language-choice-ledger-processor.md](notes/S-language-choice-ledger-processor.md) | Rust vs Go vs TypeScript comparison for Ledger Processor (needs ADR)  |
+| Note                                                                                 | Topic                                                                        |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| [R-sdk-types-and-deserialization.md](notes/R-sdk-types-and-deserialization.md)       | Rust `stellar_xdr::curr` types, deserialization, TX hash, performance        |
+| [R-soroban-events-and-invocations.md](notes/R-soroban-events-and-invocations.md)     | Rust: Events (V3 vs V4), ScVal typed JSON, invocation tree                   |
+| [R-field-mapping-tables.md](notes/R-field-mapping-tables.md)                         | Rust struct paths → DB column for all 12 tables                              |
+| [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md)     | Rust: Result<T,E> error handling, protocol upgrades, Lambda perf             |
+| [S-language-choice-ledger-processor.md](notes/S-language-choice-ledger-processor.md) | Rust vs Go vs TypeScript comparison for Ledger Processor (ADR-0002 accepted) |
 
 ## Key Findings
 
@@ -153,8 +153,8 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 
 ### Error Handling
 
-- **Malformed XDR**: If `fromXDR()` throws during ingestion, the Ledger Processor logs the error with transaction context, stores raw XDR verbatim, marks the transaction record with `parse_error`, and keeps it visible with all non-XDR fields still available.
-- **Unknown operation types**: New protocol versions may introduce unsupported operation types. These are rendered as "unknown" in explorer responses, raw XDR shown in advanced view, and an operational alarm raised so SDK support can be updated.
+- **Malformed XDR**: If Rust `from_xdr()` returns `Err` during ingestion, the Ledger Processor logs the error with transaction context, stores raw XDR verbatim, marks the transaction record with `parse_error`, and keeps it visible with all non-XDR fields still available.
+- **Unknown operation types**: New protocol versions may introduce unsupported operation types. Rust exhaustive `match` catches these at compile time; at runtime, a catch-all arm renders them as "unknown" in explorer responses, raw XDR shown in advanced view, and an operational alarm raised so the crate can be updated.
 - **Protocol upgrades**: Handled by updating the `stellar-xdr` Rust crate version (see [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md#protocol-upgrade-handling)). Protocol upgrades are infrequent and announced in advance.
 
 ## Research Questions
