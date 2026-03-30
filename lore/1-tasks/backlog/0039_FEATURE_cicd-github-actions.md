@@ -3,7 +3,7 @@ id: '0039'
 title: 'CI/CD pipeline: GitHub Actions workflows'
 type: FEATURE
 status: backlog
-related_adr: []
+related_adr: ['0004']
 related_tasks: ['0006', '0021']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
