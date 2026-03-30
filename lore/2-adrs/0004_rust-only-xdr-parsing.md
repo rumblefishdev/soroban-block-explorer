@@ -1,7 +1,7 @@
 ---
 id: '0004'
 title: 'Rust-only XDR parsing — eliminate TS on-demand decode'
-status: proposed
+status: accepted
 deciders: [stkrolikiewicz, fmazur]
 related_tasks: ['0024', '0025', '0026', '0027']
 related_adrs: ['0002']
@@ -12,6 +12,10 @@ history:
     status: proposed
     who: fmazur
     note: 'ADR proposed. Extends ADR 0002 (Rust Ledger Processor). Eliminates TS on-demand decode path.'
+  - date: 2026-03-30
+    status: accepted
+    who: fmazur
+    note: 'Accepted and implemented. TS XDR code removed, @stellar/stellar-sdk removed, docs updated.'
 ---
 
 # ADR 0004: Rust-only XDR parsing — eliminate TS on-demand decode

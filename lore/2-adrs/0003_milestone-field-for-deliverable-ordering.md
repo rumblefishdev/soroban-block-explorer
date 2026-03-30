@@ -23,7 +23,7 @@ history:
 
 **Related:**
 
-- [Task 0085: Reindex backlog tasks by deliverable milestone](../1-tasks/active/0085_REFACTOR_backlog-milestone-ordering.md)
+- [Task 0085: Reindex backlog tasks by deliverable milestone](../1-tasks/archive/0085_REFACTOR_backlog-milestone-ordering.md)
 
 ---
 
