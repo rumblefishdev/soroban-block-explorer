@@ -65,7 +65,7 @@ CREATE TABLE ledgers (
 CREATE TABLE transactions (
     id               BIGSERIAL PRIMARY KEY,
     hash             VARCHAR(64) UNIQUE NOT NULL,
-    ledger_sequence  BIGINT REFERENCES ledgers(sequence),
+    ledger_sequence  BIGINT NOT NULL REFERENCES ledgers(sequence),
     source_account   VARCHAR(56) NOT NULL,
     fee_charged      BIGINT NOT NULL,
     successful       BOOLEAN NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE transactions (
     created_at       TIMESTAMPTZ NOT NULL,
     parse_error      BOOLEAN DEFAULT FALSE,
     operation_tree   JSONB,
-    INDEX idx_hash (hash),
+    -- hash is covered by UNIQUE constraint (implicit index)
     INDEX idx_source (source_account, created_at DESC),
     INDEX idx_ledger (ledger_sequence)
 );
