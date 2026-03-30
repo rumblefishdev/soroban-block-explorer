@@ -3,7 +3,7 @@ id: '0039'
 title: 'CI/CD pipeline: GitHub Actions workflows'
 type: FEATURE
 status: backlog
-related_adr: []
+related_adr: ['0004']
 related_tasks: ['0006', '0021']
 tags: [priority-high, effort-medium, layer-infra]
 milestone: 1
@@ -135,7 +135,7 @@ Define rollback procedure:
 
 Document the process for Stellar protocol upgrades:
 
-- Update `@stellar/stellar-sdk` dependency
+- Update `stellar-xdr` Rust crate dependency
 - Run integration tests with known ledger fixtures (sample XDR files from before and after the protocol change)
 - Deploy through normal staging -> production pipeline
 - No special CI/CD changes needed; the normal pipeline handles it
@@ -157,7 +157,7 @@ Document the process for Stellar protocol upgrades:
 - [ ] Staging and production deployments assume separate AWS IAM roles with environment-scoped permissions
 - [ ] CI/CD AWS IAM roles follow least-privilege principle; each role can only deploy to its target environment
 - [ ] GitHub Actions workflows reference secret names only; no secret values embedded in workflow YAML files
-- [ ] Protocol upgrade path documented: update @stellar/stellar-sdk, run integration tests with pre/post-upgrade XDR fixtures, deploy via normal pipeline
+- [ ] Protocol upgrade path documented: update `stellar-xdr` Rust crate, run integration tests with pre/post-upgrade XDR fixtures, deploy via normal pipeline
 
 ## Notes
 
@@ -165,4 +165,4 @@ Document the process for Stellar protocol upgrades:
 - The `cdk diff` step for production is critical for change visibility. Reviewers should check the diff before approving.
 - ECR image builds should be cached (Docker layer caching) to reduce build times.
 - The pipeline should be fast enough that staging deployments complete within a few minutes of merge.
-- Protocol upgrades are infrequent. The integration test step with known ledger fixtures ensures the new SDK version correctly parses both old and new format ledgers.
+- Protocol upgrades are infrequent. The integration test step with known ledger fixtures ensures the new `stellar-xdr` crate version correctly parses both old and new format ledgers.

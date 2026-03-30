@@ -1,16 +1,15 @@
 ---
 id: '0002'
-title: 'Research: LedgerCloseMeta structure and @stellar/stellar-sdk XDR parsing'
+title: 'Research: LedgerCloseMeta structure and Rust XDR parsing'
 type: RESEARCH
 status: completed
-related_adr: ['0002']
+related_adr: ['0002', '0004']
 related_tasks: ['0001', '0005', '0024', '0025', '0026', '0027']
 tags: [priority-high, effort-medium, layer-research]
 milestone: 1
 links:
-  - https://stellar.github.io/js-stellar-sdk/
-  - https://github.com/stellar/js-stellar-sdk
-  - https://github.com/stellar/js-stellar-base
+  - https://github.com/stellar/rs-stellar-xdr
+  - https://docs.rs/stellar-xdr/latest/stellar_xdr/
   - https://developers.stellar.org/docs/networks/software-versions
 history:
   - date: 2026-03-24
@@ -45,25 +44,32 @@ history:
       Audit revision finalized for PR. README, note set, and ADR-0002 were aligned on
       Protocol 23 attribution, V4 event layout, invocation tree source, and full 12-table
       field mapping coverage.
+  - date: 2026-03-30
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Post-factum alignment with ADR-0004 (Rust-only XDR parsing).
+      Updated title, links, and content to reflect accepted ADRs 0002/0004.
+      TS SDK references annotated as historical — research findings unchanged.
 ---
 
-# Research: LedgerCloseMeta structure and @stellar/stellar-sdk XDR parsing
+# Research: LedgerCloseMeta structure and Rust XDR parsing
 
 ## Summary
 
-Investigate the internal structure of LedgerCloseMeta XDR and the concrete APIs needed to extract all explorer data fields. Primary focus on **Rust** (`stellar_xdr::curr` crate) for the Ledger Processor Lambda, with secondary coverage of `@stellar/stellar-sdk` TypeScript for the NestJS API on-demand decode path. Produces a field-by-field extraction mapping for every database table.
+Investigate the internal structure of LedgerCloseMeta XDR and the concrete APIs needed to extract all explorer data fields. All XDR parsing uses **Rust** (`stellar_xdr::curr` crate) exclusively — the Ledger Processor materializes all fields at ingestion time, and the NestJS API is pure CRUD with no XDR dependencies (per ADR 0004). Produces a field-by-field extraction mapping for every database table.
 
 ## Status: Completed
 
 ## Research Notes
 
-| Note                                                                                 | Topic                                                                 |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| [R-sdk-types-and-deserialization.md](notes/R-sdk-types-and-deserialization.md)       | Rust `stellar_xdr::curr` types, deserialization, TX hash, performance |
-| [R-soroban-events-and-invocations.md](notes/R-soroban-events-and-invocations.md)     | Rust: Events (V3 vs V4), ScVal typed JSON, invocation tree            |
-| [R-field-mapping-tables.md](notes/R-field-mapping-tables.md)                         | Rust struct paths → DB column for all 12 tables                       |
-| [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md)     | Rust: Result<T,E> error handling, protocol upgrades, Lambda perf      |
-| [S-language-choice-ledger-processor.md](notes/S-language-choice-ledger-processor.md) | Rust vs Go vs TypeScript comparison for Ledger Processor (needs ADR)  |
+| Note                                                                                 | Topic                                                                        |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| [R-sdk-types-and-deserialization.md](notes/R-sdk-types-and-deserialization.md)       | Rust `stellar_xdr::curr` types, deserialization, TX hash, performance        |
+| [R-soroban-events-and-invocations.md](notes/R-soroban-events-and-invocations.md)     | Rust: Events (V3 vs V4), ScVal typed JSON, invocation tree                   |
+| [R-field-mapping-tables.md](notes/R-field-mapping-tables.md)                         | Rust struct paths → DB column for all 12 tables                              |
+| [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md)     | Rust: Result<T,E> error handling, protocol upgrades, Lambda perf             |
+| [S-language-choice-ledger-processor.md](notes/S-language-choice-ledger-processor.md) | Rust vs Go vs TypeScript comparison for Ledger Processor (ADR-0002 accepted) |
 
 ## Key Findings
 
@@ -111,7 +117,7 @@ There are two places where XDR parsing happens in the system:
 
 1. **Ingestion-time parsing (primary)** -- The Ledger Processor Lambda fully deserializes every ledger's LedgerCloseMeta. Research recommends Rust with `stellar_xdr::curr` crate (see ADR-0002). This is the default path that writes structured explorer records once, avoiding repeated reparsing.
 
-2. **API-time parsing (secondary)** -- The NestJS API retains a narrow, on-demand decode role for advanced transaction views and validation/debug paths that need fields not part of the standard stored read model. This path should remain narrow and must not become the primary materialization layer.
+2. **~~API-time parsing (secondary)~~** **[Eliminated by ADR 0004]** -- The NestJS API no longer performs any XDR parsing. Raw XDR is stored verbatim and returned as opaque base64 strings. All materialization happens at ingestion time in Rust. Client-side decode is the user's responsibility.
 
 ### LedgerHeader Fields
 
@@ -147,11 +153,13 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 
 ### Error Handling
 
-- **Malformed XDR**: If `fromXDR()` throws during ingestion, the Ledger Processor logs the error with transaction context, stores raw XDR verbatim, marks the transaction record with `parse_error`, and keeps it visible with all non-XDR fields still available.
-- **Unknown operation types**: New protocol versions may introduce unsupported operation types. These are rendered as "unknown" in explorer responses, raw XDR shown in advanced view, and an operational alarm raised so SDK support can be updated.
-- **Protocol upgrades**: Handled by updating `@stellar/stellar-sdk` XDR types. Protocol upgrades are infrequent and announced in advance.
+- **Malformed XDR**: If Rust `from_xdr()` returns `Err` during ingestion, the Ledger Processor logs the error with transaction context, stores raw XDR verbatim, marks the transaction record with `parse_error`, and keeps it visible with all non-XDR fields still available.
+- **Unknown operation types**: New protocol versions may introduce additional `OperationBody` variants in `stellar-xdr`. Default approach: fully exhaustive `match` (no wildcard arm) so bumping the crate causes a compile-time error until every new variant is explicitly handled. In select forward-compatibility call sites, an explicit `_` arm maps unexpected variants to "unknown", logs an operational alarm, and surfaces raw XDR in advanced views until the crate and decoding logic are updated.
+- **Protocol upgrades**: Handled by updating the `stellar-xdr` Rust crate version (see [R-error-handling-and-performance.md](notes/R-error-handling-and-performance.md#protocol-upgrade-handling)). Protocol upgrades are infrequent and announced in advance.
 
 ## Research Questions
+
+> **Note (ADR 0004 alignment):** These questions were the original research scope, framed around `@stellar/stellar-sdk` TypeScript. ADR 0002 (Rust for Ledger Processor) and ADR 0004 (Rust-only, eliminate TS decode) superseded the TypeScript path. All questions were answered using the Rust `stellar_xdr` crate — see [Research Questions Answer Location](#research-questions--answer-location) above.
 
 - Which specific `@stellar/stellar-sdk` TypeScript types and methods are used to deserialize LedgerCloseMeta from zstd-compressed XDR bytes?
 - What is the exact method for computing the transaction hash (SHA-256 of envelope XDR bytes) -- is there an SDK helper, or must it be done manually?
@@ -166,9 +174,9 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 ## Acceptance Criteria
 
 - [x] Complete field-by-field extraction mapping: LedgerCloseMeta field -> database column, for every table in the schema
-- [x] SDK type and method reference for each extraction step (LedgerHeader, TransactionEnvelope, TransactionResult, OperationMeta, SorobanTransactionMeta, LedgerEntryChanges)
+- [x] Rust crate type and method reference for each extraction step (LedgerHeader, TransactionEnvelope, TransactionResult, OperationMeta, SorobanTransactionMeta, LedgerEntryChanges)
 - [x] Transaction hash computation method documented with code example
-- [x] ScVal decode API documented with TypeScript type signatures for all variant types
+- [x] ScVal decode API documented with Rust type signatures for all variant types
 - [x] Invocation tree extraction method documented with hierarchy representation
 - [x] Error handling strategy validated: malformed XDR, unknown ops, protocol upgrades
 - [x] Performance estimate for full LedgerCloseMeta parse in Lambda context
@@ -178,7 +186,7 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 
 ### From Plan
 
-1. **TypeScript SDK as primary research target**: Task specified `@stellar/stellar-sdk` — researched as planned.
+1. **~~TypeScript SDK as primary research target~~** — superseded by ADR-0002 (Rust). Research pivoted to Rust `stellar_xdr` crate during execution.
 2. **Field-by-field mapping structure**: One table per DB entity, XDR path + SDK method for each column.
 
 ### Emerged
@@ -191,13 +199,13 @@ The return value of `invokeHostFunction` and event topics/data are XDR ScVal val
 ## Issues Encountered
 
 - **Soroban RPC `getLedgers` returns `LedgerCloseMeta`** (not batch), while Galexie writes `LedgerCloseMetaBatch`. Parser must handle both formats.
-- **`meta.switch()` in JS SDK returns raw number** (e.g., `4`) with `undefined` name — required manual version dispatch instead of named enum matching.
-- **Protocol 25 dual-phase TX set**: `phase.v0Components()` throws if phase is V1 (parallel). Must use try/catch to detect phase type in JS. Rust uses clean `match`.
+- **`meta.switch()` in JS SDK returns raw number** (e.g., `4`) with `undefined` name — required manual version dispatch instead of named enum matching. _(JS SDK finding from early research — this behavior motivated ADR-0002.)_
+- **Protocol 25 dual-phase TX set**: `phase.v0Components()` throws if phase is V1 (parallel). Must use try/catch to detect phase type in JS. Rust uses clean `match`. _(JS SDK weakness — Rust exhaustive `match` eliminates this class of issues.)_
 - **Public Galexie data lake not accessible**: GCS bucket `sdf-ledger-close-meta` returns 403. Used Soroban RPC `getLedgers` as alternative data source.
 
 ## Future Work
 
-- ADR-0002 acceptance (Rust for Ledger Processor) — needs team discussion
+- ~~ADR-0002 acceptance (Rust for Ledger Processor) — needs team discussion~~ Accepted (2026-03-26). See also ADR-0004.
 - Rust performance benchmarks with `stellar-indexer` against same ledger data
 - Classic operation JSONB details per type (payment, changeTrust, etc.) — deferred to implementation tasks 0024-0027
 

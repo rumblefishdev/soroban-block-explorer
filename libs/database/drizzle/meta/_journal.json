@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1774881217109,
+      "tag": "0000_create_ledgers_transactions",
+      "breakpoints": true
+    }
+  ]
+}
