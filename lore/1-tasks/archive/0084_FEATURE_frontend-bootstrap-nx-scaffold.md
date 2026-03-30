@@ -19,7 +19,7 @@ history:
     note: 'Activated — prerequisite for all frontend tasks'
   - date: 2026-03-27
     status: completed
-    who: claude
+    who: fmazur
     note: >
       Bootstrap complete. 5 new files, 7 modified files, 1 deleted.
       Installed 12 packages (react, react-dom, MUI, emotion, react-router-dom,
