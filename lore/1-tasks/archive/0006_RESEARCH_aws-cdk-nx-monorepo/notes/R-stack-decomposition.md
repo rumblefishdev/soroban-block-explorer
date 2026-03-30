@@ -16,9 +16,11 @@ history:
 
 # CDK stack decomposition and dependency ordering
 
-## Approach: Layer-Based Stacks
+## Approach: Hybrid Layer + Per-Service Stacks
 
-One stack per infrastructure layer, not per service. This matches the deployment ordering and minimizes cross-stack references while keeping each stack focused.
+> Updated 2026-03-27: Original approach was pure layer-based (one stack per infra layer). Revised to hybrid: shared layers (Network, Storage, Monitoring, CI) stay as layer stacks, compute is split per service for independent deploy/rollback.
+
+Shared infrastructure (networking, storage, monitoring, CI) uses layer-based stacks. Compute and delivery resources are grouped per service — each service owns its Lambda/ECS + its delivery layer (API Gateway, CloudFront).
 
 ## Recommended Stack Structure
 

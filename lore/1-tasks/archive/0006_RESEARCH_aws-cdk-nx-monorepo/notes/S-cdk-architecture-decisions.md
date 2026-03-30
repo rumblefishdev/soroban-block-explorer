@@ -78,21 +78,21 @@ history:
 
 **Decision:** `ledgerDataRetentionDays` in `EnvironmentConfig`. Values per architecture docs. `api-docs` bucket has no lifecycle rules.
 
-### 11. ECR repository in ComputeStack
+### 11. ECR repository in IngestionStack
 
-**Decision:** ECR repository for Galexie Docker images lives in ComputeStack alongside ECS Fargate task definitions.
+**Decision:** ECR repository for Galexie Docker images lives in IngestionStack alongside ECS Fargate task definitions.
 
 **Why:** ECR is a compute dependency — tightly coupled to ECS. Same deployment lifecycle.
 
-### 12. SQS DLQ for Ledger Processor in ComputeStack
+### 12. SQS DLQ for Ledger Processor in IndexerStack
 
-**Decision:** SQS Dead Letter Queue for failed S3-triggered Lambda invocations. After max retries, the original S3 event is sent to DLQ for manual replay.
+**Decision:** SQS Dead Letter Queue for failed S3-triggered Lambda invocations. After max retries, the original S3 event is sent to DLQ for manual replay. Lives in IndexerStack alongside the Rust Ledger Processor Lambda.
 
 **Why:** Per architecture docs (task 0070) — failed XDR files must remain replayable.
 
-### 13. ACM certificates in DeliveryStack
+### 13. ACM certificates in ApiStack and FrontendStack
 
-**Decision:** ACM certificates for CloudFront (us-east-1 required) and API Gateway (stack region). Managed in DeliveryStack.
+**Decision:** ACM certificate for CloudFront (us-east-1 required) in FrontendStack. ACM certificate for API Gateway (stack region) in ApiStack. Each service stack owns its certificates.
 
 ### 14. Cross-compilation: cargo-lambda via pip3 in CI
 
