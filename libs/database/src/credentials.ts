@@ -28,9 +28,20 @@ export async function resolveConnectionString(): Promise<string> {
     );
   }
 
-  const { SecretsManagerClient, GetSecretValueCommand } = await import(
-    '@aws-sdk/client-secrets-manager'
-  );
+  let SecretsManagerClient: typeof import('@aws-sdk/client-secrets-manager').SecretsManagerClient;
+  let GetSecretValueCommand: typeof import('@aws-sdk/client-secrets-manager').GetSecretValueCommand;
+
+  try {
+    const mod = await import('@aws-sdk/client-secrets-manager');
+    SecretsManagerClient = mod.SecretsManagerClient;
+    GetSecretValueCommand = mod.GetSecretValueCommand;
+  } catch {
+    throw new Error(
+      'Failed to load @aws-sdk/client-secrets-manager. ' +
+        'This dependency must be available when DATABASE_SECRET_ARN is set. ' +
+        'Ensure it is installed or bundled in non-dev environments.'
+    );
+  }
 
   const client = new SecretsManagerClient({ region });
   const response = await client.send(
@@ -41,7 +52,14 @@ export async function resolveConnectionString(): Promise<string> {
     throw new Error(`Secret ${secretArn} has no string value`);
   }
 
-  const secret: Record<string, unknown> = JSON.parse(response.SecretString);
+  let secret: Record<string, unknown>;
+  try {
+    secret = JSON.parse(response.SecretString) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(
+      `Secret ${secretArn} must contain valid JSON: ${(err as Error).message}`
+    );
+  }
 
   const host = secret['host'];
   const port = secret['port'];
@@ -63,5 +81,5 @@ export async function resolveConnectionString(): Promise<string> {
 
   return `postgres://${encodeURIComponent(username)}:${encodeURIComponent(
     password
-  )}@${host}:${port}/${dbname}`;
+  )}@${host}:${port}/${encodeURIComponent(dbname)}`;
 }

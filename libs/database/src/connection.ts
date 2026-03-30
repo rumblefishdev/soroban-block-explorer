@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
+import * as pg from 'pg';
 
 import { resolveEnvironment, type DatabaseConfig } from './config.js';
 import { resolveConnectionString } from './credentials.js';
