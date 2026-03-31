@@ -102,13 +102,13 @@ fn extract_single_transaction(
     let successful = is_successful(&info.result.result);
     let result_code = info.result.result.name().to_string();
 
-    let result_xdr = encode_xdr(info.result, limits);
-    let result_meta_xdr = encode_xdr_opt(info.meta, limits);
+    let result_xdr = encode_xdr(info.result, limits, ledger_sequence, tx_index);
+    let result_meta_xdr = encode_xdr_opt(info.meta, limits, ledger_sequence, tx_index);
 
     let (source_account, envelope_xdr, memo_type, memo_value) = match envelope {
         Some(env) => {
             let source = envelope::envelope_source(env);
-            let env_xdr = encode_xdr(env, limits);
+            let env_xdr = encode_xdr(env, limits, ledger_sequence, tx_index);
             let inner = inner_transaction(env);
             let (mt, mv) = memo::extract_memo(inner.memo());
             (source, env_xdr, mt, mv)
@@ -149,25 +149,21 @@ fn is_successful(result: &TransactionResultResult) -> bool {
     )
 }
 
-/// Encode an XDR value to base64. Returns empty string on serialization failure.
-/// Used for non-nullable fields where an empty string signals a serialization error.
-fn encode_xdr<T: WriteXdr>(value: &T, limits: &Limits) -> String {
+fn encode_xdr<T: WriteXdr>(value: &T, limits: &Limits, ledger: u32, tx_idx: usize) -> String {
     match value.to_xdr(limits.clone()) {
         Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(&bytes),
         Err(e) => {
-            warn!("XDR serialization failed for raw retention: {e}");
+            warn!(ledger, tx_idx, "XDR serialization failed: {e}");
             String::new()
         }
     }
 }
 
-/// Encode an XDR value to base64. Returns `None` on serialization failure.
-/// Used for nullable fields where absence is semantically distinct from an empty value.
-fn encode_xdr_opt<T: WriteXdr>(value: &T, limits: &Limits) -> Option<String> {
+fn encode_xdr_opt<T: WriteXdr>(value: &T, limits: &Limits, ledger: u32, tx_idx: usize) -> Option<String> {
     match value.to_xdr(limits.clone()) {
         Ok(bytes) => Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
         Err(e) => {
-            warn!("XDR serialization failed for raw retention: {e}");
+            warn!(ledger, tx_idx, "XDR serialization failed (nullable): {e}");
             None
         }
     }

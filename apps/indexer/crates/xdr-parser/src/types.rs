@@ -42,7 +42,7 @@ pub struct ExtractedTransaction {
     pub result_xdr: String,
     /// Transaction result metadata, base64-encoded. Nullable.
     pub result_meta_xdr: Option<String>,
-    /// Memo type: "none", "text", "id", "hash", "return".
+    /// Memo type: `None` when no memo, or "text", "id", "hash", "return".
     pub memo_type: Option<String>,
     /// Memo value as string. Nullable.
     pub memo: Option<String>,

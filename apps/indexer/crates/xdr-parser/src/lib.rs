@@ -23,13 +23,28 @@ pub use types::{ExtractedLedger, ExtractedTransaction};
 
 use stellar_xdr::curr::{LedgerCloseMetaBatch, ReadXdr};
 
-/// Decompress a zstd-compressed XDR payload.
+/// Maximum decompressed size (64 MiB). Galexie batches are typically 2-5 MiB.
+const MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;
+
+/// Decompress a zstd-compressed XDR payload with size limit.
 pub fn decompress_zstd(compressed: &[u8]) -> Result<Vec<u8>, ParseError> {
-    zstd::decode_all(compressed).map_err(|e| ParseError {
+    let decompressed = zstd::decode_all(compressed).map_err(|e| ParseError {
         kind: ParseErrorKind::DecompressionFailed,
         message: e.to_string(),
         context: None,
-    })
+    })?;
+    if decompressed.len() > MAX_DECOMPRESSED_SIZE {
+        return Err(ParseError {
+            kind: ParseErrorKind::DecompressionFailed,
+            message: format!(
+                "decompressed size {} exceeds limit {}",
+                decompressed.len(),
+                MAX_DECOMPRESSED_SIZE
+            ),
+            context: None,
+        });
+    }
+    Ok(decompressed)
 }
 
 /// Deserialize a `LedgerCloseMetaBatch` from raw XDR bytes.
@@ -42,9 +57,10 @@ pub fn deserialize_batch(xdr_bytes: &[u8]) -> Result<LedgerCloseMetaBatch, Parse
     })
 }
 
-/// Parse an S3 object key to extract the ledger sequence range.
+/// Parse the filename portion of an S3 object key to extract the ledger sequence range.
 ///
-/// Expected format: `stellar-ledger-data/ledgers/{seq_start}-{seq_end}.xdr.zstd`
+/// Validates that the filename ends with `.xdr.zstd` and contains `{start}-{end}`.
+/// Does not enforce a specific path prefix.
 pub fn parse_s3_key(key: &str) -> Result<(u32, u32), ParseError> {
     let filename = key
         .rsplit('/')
