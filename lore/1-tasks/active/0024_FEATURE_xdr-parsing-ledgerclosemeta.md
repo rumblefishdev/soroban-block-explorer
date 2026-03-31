@@ -2,7 +2,7 @@
 id: '0024'
 title: 'XDR parsing: LedgerCloseMeta deserialization, ledger and transaction extraction'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0004']
 related_tasks: ['0001', '0002', '0016']
 tags: [priority-high, effort-large, layer-indexing, rust]
@@ -19,6 +19,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Scope changed to Rust-only per ADR 0004. Removed dependency on shared TS XDR lib (0013).'
+  - date: 2026-03-31
+    status: active
+    who: FilipDz
+    note: 'Promoted to active'
 ---
 
 # XDR parsing: LedgerCloseMeta deserialization, ledger and transaction extraction
