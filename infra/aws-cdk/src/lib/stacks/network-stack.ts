@@ -2,7 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
 
-import type { EnvironmentConfig } from '../config/types.js';
+import type { EnvironmentConfig } from '../types.js';
 
 const POSTGRESQL_PORT = 5432;
 const HTTPS_PORT = 443;

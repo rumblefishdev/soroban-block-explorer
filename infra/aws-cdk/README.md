@@ -27,58 +27,62 @@ Currently implemented: **NetworkStack**.
 
 ## Commands
 
-From the **repository root**:
+From `infra/aws-cdk/`:
 
 ```bash
 # First-time setup (once per AWS account + region)
-npm run infra:bootstrap
+make bootstrap
 
-# Preview what will change
-npm run infra:diff -- --context env=staging
+# Staging
+make diff-staging              # Preview changes
+make deploy-staging            # Deploy all stacks
+make deploy-staging-network    # Deploy single stack
 
-# Deploy
-npm run infra:deploy -- --context env=staging
-
-# Generate CloudFormation template without deploying
-npm run infra:synth -- --context env=staging
+# Production
+make diff-production
+make deploy-production
+make deploy-production-network
 ```
 
-Or via Nx directly:
+Or from the repository root:
 
 ```bash
-npx nx deploy @rumblefish/soroban-block-explorer-aws-cdk -- --context env=staging
+npm run infra:diff:staging
+npm run infra:deploy:staging
 ```
 
 ## Environments
 
-| Environment | VPC CIDR    | Config file                    |
-| ----------- | ----------- | ------------------------------ |
-| staging     | 10.0.0.0/16 | `src/lib/config/staging.ts`    |
-| production  | 10.1.0.0/16 | `src/lib/config/production.ts` |
+Each environment has its own JSON config and CDK entry point:
 
-Environment is selected via `--context env=staging` or `--context env=production`.
+| Environment | Config                 | Entry point             | VPC CIDR    | NAT               |
+| ----------- | ---------------------- | ----------------------- | ----------- | ----------------- |
+| staging     | `envs/staging.json`    | `src/bin/staging.ts`    | 10.0.0.0/16 | t3.micro instance |
+| production  | `envs/production.json` | `src/bin/production.ts` | 10.1.0.0/16 | Managed gateway   |
 
 ## Project structure
 
 ```
+envs/
+  staging.json               # Staging environment config
+  production.json            # Production environment config
 src/
   bin/
-    app.ts                 # CDK app entry point
+    staging.ts               # CDK app entry point — staging
+    production.ts            # CDK app entry point — production
   lib/
     config/
-      types.ts             # EnvironmentConfig interface
-      staging.ts           # Staging values
-      production.ts        # Production values
-      index.ts             # Config resolver
+      types.ts               # EnvironmentConfig interface
     stacks/
-      network-stack.ts     # VPC, subnets, SGs, S3 VPC endpoint
+      network-stack.ts       # VPC, subnets, SGs, S3 VPC endpoint
+Makefile                     # Deploy/synth/diff targets per environment
 ```
 
 ## NetworkStack resources
 
 - VPC with /16 CIDR in us-east-1
 - Public subnet (/20) with Internet Gateway
-- Private subnet (/20) with NAT Gateway
+- Private subnet (/20) with NAT (instance on staging, gateway on production)
 - Lambda security group (outbound: RDS 5432, HTTPS 443)
 - RDS security group (inbound: Lambda + ECS on 5432)
 - ECS security group (outbound: HTTPS 443, RDS 5432, Stellar peers 11625)

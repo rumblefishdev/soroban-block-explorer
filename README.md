@@ -83,9 +83,17 @@ npm run infra:bootstrap
 ### Commands
 
 ```bash
-npm run infra:diff    -- --context env=staging     # Preview changes
-npm run infra:deploy  -- --context env=staging     # Deploy to AWS
-npm run infra:synth   -- --context env=staging     # Generate CloudFormation template
+npm run infra:diff:staging        # Preview changes
+npm run infra:deploy:staging      # Deploy to AWS
+npm run infra:synth:staging       # Generate CloudFormation template
 ```
 
 Replace `staging` with `production` for production deployments.
+
+Or use the Makefile directly from `infra/aws-cdk/`:
+
+```bash
+make diff-staging
+make deploy-staging
+make deploy-staging-network    # Deploy single stack
+```
