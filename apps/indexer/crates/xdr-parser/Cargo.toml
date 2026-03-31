@@ -1,0 +1,15 @@
+[package]
+name = "xdr-parser"
+version = "0.1.0"
+edition = "2021"
+description = "LedgerCloseMeta XDR parser for the Soroban block explorer indexer"
+
+[dependencies]
+stellar-xdr = { version = "25", default-features = true, features = ["curr"] }
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+zstd = "0.13"
+tracing = "0.1"
+
+[dev-dependencies]
