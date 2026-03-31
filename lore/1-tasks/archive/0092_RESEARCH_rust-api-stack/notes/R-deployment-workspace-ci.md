@@ -9,22 +9,28 @@ tags: [cargo-workspace, lambda-deployment, ci-cd, nx]
 
 ## 1. Cargo Workspace Layout
 
-Root `Cargo.toml` with `rust/crates/` members. Coexists with Nx TypeScript monorepo.
+Root `Cargo.toml` with `crates/` members. Coexists with Nx TypeScript monorepo.
+
+**Updated 2026-03-31:** Revised after reviewing develop branch. Task 0024 created `apps/indexer/crates/xdr-parser/` (standalone crate inside Nx app). This needs to be migrated to the workspace. Also `apps/web/` moves to `web/` (only frontend, no reason for `apps/` wrapper when backends are in `crates/`).
 
 ```
 soroban-block-explorer/
 ├── Cargo.toml              # Workspace root
 ├── Cargo.lock
-├── rust/crates/
+├── crates/
 │   ├── api/                # Binary: axum REST API Lambda
 │   ├── indexer/            # Binary: Ledger Processor Lambda
+│   ├── xdr-parser/         # Library: MIGRATE from apps/indexer/crates/xdr-parser/
 │   ├── db/                 # Library: sqlx pool, queries, migrations
 │   └── domain/             # Library: shared types, errors, config
-├── apps/web/               # React frontend (unchanged)
-├── infra/aws-cdk/          # CDK stacks (references Cargo output)
+├── web/                    # React frontend (move from apps/web/)
+├── infra/aws-cdk/          # CDK stacks (unchanged)
+├── libs/                   # TS libs for frontend (domain, shared, ui)
 ├── nx.json                 # Nx config (TS only)
 └── package.json            # npm workspace root
 ```
+
+**Removed after migration:** `apps/` directory entirely (api, indexer, workers — all replaced by `crates/`).
 
 Root `Cargo.toml`:
 
@@ -32,10 +38,11 @@ Root `Cargo.toml`:
 [workspace]
 resolver = "2"
 members = [
-    "rust/crates/api",
-    "rust/crates/indexer",
-    "rust/crates/db",
-    "rust/crates/domain",
+    "crates/api",
+    "crates/indexer",
+    "crates/xdr-parser",
+    "crates/db",
+    "crates/domain",
 ]
 
 [workspace.dependencies]
@@ -47,21 +54,31 @@ axum = "0.8"
 lambda_http = "1"
 utoipa = { version = "5", features = ["axum_extras"] }
 tracing = "0.1"
-stellar-xdr = { version = "25", default-features = true, features = ["curr"] }
+stellar-xdr = { version = "26", default-features = true, features = ["curr"] }
 ```
 
-### Why 4 crates
+Note: `stellar-xdr` version bumped to 26 (matching xdr-parser on develop).
 
-| Crate     | Type    | Purpose                                              | Key deps                                 |
-| --------- | ------- | ---------------------------------------------------- | ---------------------------------------- |
-| `api`     | binary  | axum REST API Lambda handler                         | axum, lambda_http, utoipa, db            |
-| `indexer` | binary  | XDR ingestion, DB writes                             | stellar-xdr, zstd, db                    |
-| `domain`  | library | Ledger/Transaction/Operation structs, errors, config | serde, chrono, thiserror (zero async/IO) |
-| `db`      | library | PgPool setup, query functions, migrations            | sqlx, domain                             |
+### Why 5 crates
 
-Dependency graph: `api → db → domain`, `indexer → db → domain`, `indexer → domain` (direct for XDR→domain conversion).
+| Crate        | Type    | Purpose                                                  | Key deps                                 |
+| ------------ | ------- | -------------------------------------------------------- | ---------------------------------------- |
+| `api`        | binary  | axum REST API Lambda handler                             | axum, lambda_http, utoipa, db            |
+| `indexer`    | binary  | XDR ingestion, DB writes                                 | xdr-parser, db                           |
+| `xdr-parser` | library | LedgerCloseMeta deserialization, ScVal conversion        | stellar-xdr, serde_json, sha2            |
+| `domain`     | library | Shared types (Ledger, Transaction, etc.), errors, config | serde, chrono, thiserror (zero async/IO) |
+| `db`         | library | PgPool setup, query functions, migrations                | sqlx, domain                             |
 
-`domain` has zero async/IO deps → fast compile, pure data types. `db` handles sqlx mapping (FromRow), keeping domain types ORM-agnostic.
+Dependency graph:
+
+```
+api → db → domain
+indexer → xdr-parser → (stellar-xdr)
+indexer → db → domain
+xdr-parser → domain (for shared output types)
+```
+
+`domain` has zero async/IO deps → fast compile, pure data types. `db` handles sqlx mapping (FromRow), keeping domain types ORM-agnostic. `xdr-parser` is the existing crate from task 0024 (currently at `apps/indexer/crates/xdr-parser/`, needs migration to `crates/xdr-parser/`).
 
 ### Nx + Cargo Coexistence
 
