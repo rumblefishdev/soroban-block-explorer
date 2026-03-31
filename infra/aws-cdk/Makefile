@@ -16,7 +16,7 @@ deploy-staging: build
 	npx cdk --app "$(STAGING_APP)" deploy --all --require-approval broadening
 
 deploy-staging-network: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Network
+	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Network --require-approval broadening
 
 # --- Production ---
 
@@ -30,7 +30,7 @@ deploy-production: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
 
 deploy-production-network: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Network
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Network --require-approval broadening
 
 # --- Shared ---
 

@@ -38,8 +38,7 @@ export class NetworkStack extends cdk.Stack {
     // Single-AZ at launch (us-east-1a). NAT provides outbound internet
     // for the private subnet.
     //
-    // Staging uses a t3.micro NAT instance (~$3.50/mo vs $32/mo for NAT Gateway).
-    // Production uses a managed NAT Gateway for throughput and availability.
+    // Both environments use managed NAT Gateway for throughput and availability.
     //
     // Multi-AZ expansion trigger: when SLA requirement exceeds 99.9%.
     // To expand: add AZ entries to config. CDK creates new subnets, route tables,
@@ -107,8 +106,10 @@ export class NetworkStack extends cdk.Stack {
       ec2.Port.tcp(POSTGRESQL_PORT),
       'Allow Lambda → RDS on PostgreSQL port'
     );
-    // Outbound HTTPS — covers AWS service API calls (Secrets Manager,
-    // CloudWatch, X-Ray) and S3 via VPC endpoint (routed at route-table level)
+    // Outbound HTTPS to 0.0.0.0/0 — intentionally broad. Lambda needs access to
+    // multiple AWS APIs (Secrets Manager, CloudWatch, X-Ray, STS). VPC Interface
+    // Endpoints (~$7/mo each) are not cost-justified at launch. S3 traffic is
+    // routed via the free Gateway endpoint at route-table level.
     lambdaSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(HTTPS_PORT),
@@ -134,7 +135,9 @@ export class NetworkStack extends cdk.Stack {
     // ---------------------
     // ECS SG rules
     // ---------------------
-    // Outbound HTTPS — ECR image pull, CloudWatch Logs, S3 via VPC endpoint
+    // Outbound HTTPS to 0.0.0.0/0 — intentionally broad. ECS needs ECR image
+    // pull, CloudWatch Logs, and Stellar history archive access. VPC Interface
+    // Endpoints are not cost-justified at launch. S3 via free Gateway endpoint.
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(HTTPS_PORT),

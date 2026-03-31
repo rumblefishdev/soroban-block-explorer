@@ -55,10 +55,10 @@ npm run infra:deploy:staging
 
 Each environment has its own JSON config and CDK entry point:
 
-| Environment | Config                 | Entry point             | VPC CIDR    | NAT               |
-| ----------- | ---------------------- | ----------------------- | ----------- | ----------------- |
-| staging     | `envs/staging.json`    | `src/bin/staging.ts`    | 10.0.0.0/16 | t3.micro instance |
-| production  | `envs/production.json` | `src/bin/production.ts` | 10.1.0.0/16 | Managed gateway   |
+| Environment | Config                 | Entry point             | VPC CIDR    | NAT             |
+| ----------- | ---------------------- | ----------------------- | ----------- | --------------- |
+| staging     | `envs/staging.json`    | `src/bin/staging.ts`    | 10.0.0.0/16 | Managed gateway |
+| production  | `envs/production.json` | `src/bin/production.ts` | 10.1.0.0/16 | Managed gateway |
 
 ## Project structure
 
@@ -71,10 +71,10 @@ src/
     staging.ts               # CDK app entry point — staging
     production.ts            # CDK app entry point — production
   lib/
-    config/
-      types.ts               # EnvironmentConfig interface
+    types.ts               # EnvironmentConfig interface
+    app.ts                 # Shared stack wiring (createApp)
     stacks/
-      network-stack.ts       # VPC, subnets, SGs, S3 VPC endpoint
+      network-stack.ts     # VPC, subnets, SGs, S3 VPC endpoint
 Makefile                     # Deploy/synth/diff targets per environment
 ```
 
@@ -82,7 +82,7 @@ Makefile                     # Deploy/synth/diff targets per environment
 
 - VPC with /16 CIDR in us-east-1
 - Public subnet (/20) with Internet Gateway
-- Private subnet (/20) with NAT (instance on staging, gateway on production)
+- Private subnet (/20) with NAT Gateway
 - Lambda security group (outbound: RDS 5432, HTTPS 443)
 - RDS security group (inbound: Lambda + ECS on 5432)
 - ECS security group (outbound: HTTPS 443, RDS 5432, Stellar peers 11625)
