@@ -104,7 +104,7 @@ export class NetworkStack extends cdk.Stack {
     lambdaSg.addEgressRule(
       rdsSg,
       ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow Lambda → RDS on PostgreSQL port'
+      'Allow Lambda to RDS on PostgreSQL port'
     );
     // Outbound HTTPS to 0.0.0.0/0 — intentionally broad. Lambda needs access to
     // multiple AWS APIs (Secrets Manager, CloudWatch, X-Ray, STS). VPC Interface
@@ -113,7 +113,7 @@ export class NetworkStack extends cdk.Stack {
     lambdaSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(HTTPS_PORT),
-      'Allow Lambda → HTTPS (AWS APIs, S3 via VPC endpoint)'
+      'Allow Lambda to HTTPS (AWS APIs, S3 via VPC endpoint)'
     );
 
     // ---------------------
@@ -123,13 +123,13 @@ export class NetworkStack extends cdk.Stack {
     rdsSg.addIngressRule(
       lambdaSg,
       ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow Lambda → RDS on PostgreSQL port'
+      'Allow Lambda to RDS on PostgreSQL port'
     );
     // Inbound from ECS (Galexie may need direct DB access for health checks)
     rdsSg.addIngressRule(
       ecsSg,
       ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow ECS → RDS on PostgreSQL port'
+      'Allow ECS to RDS on PostgreSQL port'
     );
 
     // ---------------------
@@ -141,13 +141,13 @@ export class NetworkStack extends cdk.Stack {
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(HTTPS_PORT),
-      'Allow ECS → HTTPS (ECR, CloudWatch, S3 via VPC endpoint)'
+      'Allow ECS to HTTPS (ECR, CloudWatch, S3 via VPC endpoint)'
     );
     // Outbound to RDS on PostgreSQL port
     ecsSg.addEgressRule(
       rdsSg,
       ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow ECS → RDS on PostgreSQL port'
+      'Allow ECS to RDS on PostgreSQL port'
     );
     // Outbound for Stellar network peer connections and history archive access.
     // Galexie connects to Stellar peers on port 11625 (overlay protocol)
@@ -155,7 +155,7 @@ export class NetworkStack extends cdk.Stack {
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(STELLAR_OVERLAY_PORT),
-      'Allow ECS → Stellar peer network (overlay protocol)'
+      'Allow ECS to Stellar peer network (overlay protocol)'
     );
 
     this.lambdaSecurityGroup = lambdaSg;
