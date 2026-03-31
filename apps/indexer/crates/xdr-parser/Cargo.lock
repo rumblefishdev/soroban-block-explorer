@@ -279,9 +279,9 @@ dependencies = [
 
 [[package]]
 name = "stellar-xdr"
-version = "25.0.1"
+version = "26.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f8116e81c7b5c1313a21396581aa9c2ff0f4033cc29a695f3f816ee882dd66b"
+checksum = "fea3195594b044ea3a5b05906f81d945480825f00db4e3ae7d77526bf546ff3a"
 dependencies = [
  "cfg_eval",
  "crate-git-revision",
@@ -373,6 +373,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "hex",
+ "serde_json",
  "sha2",
  "stellar-xdr",
  "tracing",
