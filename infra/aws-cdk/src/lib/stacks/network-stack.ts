@@ -4,6 +4,10 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../config/types.js';
 
+const POSTGRESQL_PORT = 5432;
+const HTTPS_PORT = 443;
+const STELLAR_OVERLAY_PORT = 11625;
+
 export interface NetworkStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
 }
@@ -89,14 +93,14 @@ export class NetworkStack extends cdk.Stack {
     // Outbound to RDS on PostgreSQL port (will also cover RDS Proxy when added)
     lambdaSg.addEgressRule(
       rdsSg,
-      ec2.Port.tcp(5432),
+      ec2.Port.tcp(POSTGRESQL_PORT),
       'Allow Lambda → RDS on PostgreSQL port'
     );
     // Outbound HTTPS — covers AWS service API calls (Secrets Manager,
     // CloudWatch, X-Ray) and S3 via VPC endpoint (routed at route-table level)
     lambdaSg.addEgressRule(
       ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(443),
+      ec2.Port.tcp(HTTPS_PORT),
       'Allow Lambda → HTTPS (AWS APIs, S3 via VPC endpoint)'
     );
 
@@ -106,13 +110,13 @@ export class NetworkStack extends cdk.Stack {
     // Inbound from Lambda
     rdsSg.addIngressRule(
       lambdaSg,
-      ec2.Port.tcp(5432),
+      ec2.Port.tcp(POSTGRESQL_PORT),
       'Allow Lambda → RDS on PostgreSQL port'
     );
     // Inbound from ECS (Galexie may need direct DB access for health checks)
     rdsSg.addIngressRule(
       ecsSg,
-      ec2.Port.tcp(5432),
+      ec2.Port.tcp(POSTGRESQL_PORT),
       'Allow ECS → RDS on PostgreSQL port'
     );
 
@@ -122,13 +126,13 @@ export class NetworkStack extends cdk.Stack {
     // Outbound HTTPS — ECR image pull, CloudWatch Logs, S3 via VPC endpoint
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(443),
+      ec2.Port.tcp(HTTPS_PORT),
       'Allow ECS → HTTPS (ECR, CloudWatch, S3 via VPC endpoint)'
     );
     // Outbound to RDS on PostgreSQL port
     ecsSg.addEgressRule(
       rdsSg,
-      ec2.Port.tcp(5432),
+      ec2.Port.tcp(POSTGRESQL_PORT),
       'Allow ECS → RDS on PostgreSQL port'
     );
     // Outbound for Stellar network peer connections and history archive access.
@@ -136,7 +140,7 @@ export class NetworkStack extends cdk.Stack {
     // and history archives via HTTPS (covered by the 443 rule above).
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(11625),
+      ec2.Port.tcp(STELLAR_OVERLAY_PORT),
       'Allow ECS → Stellar peer network (overlay protocol)'
     );
 
