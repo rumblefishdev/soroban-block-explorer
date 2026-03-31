@@ -1,0 +1,37 @@
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+
+/// Cursor-based pagination query parameters.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PaginationParams {
+    /// Opaque base64-encoded cursor from a previous response. Omit for first page.
+    #[param(example = "eyJhZnRlcl9pZCI6MTAwfQ")]
+    pub cursor: Option<String>,
+
+    /// Maximum number of items to return (1-100, default 20).
+    #[param(example = 20, minimum = 1, maximum = 100)]
+    pub limit: Option<i64>,
+}
+
+impl PaginationParams {
+    pub fn limit(&self) -> i64 {
+        self.limit.unwrap_or(20).clamp(1, 100)
+    }
+}
+
+/// Generic paginated response envelope.
+/// utoipa 5.x: register concrete types via turbofish in schemas(),
+/// e.g. `PaginatedResponse::<Ledger>`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaginatedResponse<T: ToSchema> {
+    /// The page of results.
+    pub data: Vec<T>,
+
+    /// Opaque cursor for the next page. Null if this is the last page.
+    #[schema(example = "eyJhZnRlcl9pZCI6MjAwfQ", nullable)]
+    pub next_cursor: Option<String>,
+
+    /// Whether more results exist beyond this page.
+    pub has_more: bool,
+}
