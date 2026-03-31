@@ -53,16 +53,16 @@ async fn main() -> Result<(), Error> {
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/explorer".into());
 
-    // Lambda-optimized pool (Q12)
+    // Lambda-optimized pool: lazy connect defers DB handshake until first query,
+    // avoiding a roundtrip during cold start if the invocation doesn't need DB.
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Some(Duration::from_secs(600)))
         .test_before_acquire(true)
-        .connect(&database_url)
-        .await
-        .expect("DB connection failed");
+        .connect_lazy(&database_url)
+        .expect("DB pool creation failed");
 
     let state = AppState { db: pool };
 
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Error> {
             SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", ApiDoc::openapi()),
         )
-        .layer(CorsLayer::permissive())
+        .layer(CorsLayer::permissive()) // PoC only — production should scope to known origins
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

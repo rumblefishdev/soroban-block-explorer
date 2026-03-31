@@ -52,7 +52,7 @@ pub struct Ledger {
     params(PaginationParams),
     responses(
         (status = 200, description = "Paginated list of ledgers", body = inline(PaginatedLedgers)),
-        (status = 400, description = "Invalid cursor or limit"),
+        (status = 400, description = "Invalid cursor"),
     )
 )]
 pub async fn list_ledgers(

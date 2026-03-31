@@ -9,12 +9,14 @@ pub struct PaginationParams {
     #[param(example = "eyJhZnRlcl9pZCI6MTAwfQ")]
     pub cursor: Option<String>,
 
-    /// Maximum number of items to return (1-100, default 20).
+    /// Maximum number of items to return (default 20).
+    /// Values outside [1, 100] are clamped (e.g., 0 → 1, 1000 → 100).
     #[param(example = 20, minimum = 1, maximum = 100)]
     pub limit: Option<i64>,
 }
 
 impl PaginationParams {
+    /// Returns the effective page size, clamping to [1, 100], default 20.
     pub fn limit(&self) -> i64 {
         self.limit.unwrap_or(20).clamp(1, 100)
     }
