@@ -2,7 +2,7 @@
 id: '0033'
 title: 'CDK: Lambda functions + API Gateway'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0005']
 related_tasks: ['0006', '0031', '0032', '0092']
 tags: [priority-high, effort-medium, layer-infra]
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Updated per ADR 0005: Node.js Lambda → Rust Lambda (cargo-lambda-cdk RustFunction)'
+  - date: 2026-04-01
+    status: active
+    who: fmazur
+    note: 'Task activated'
 ---
 
 # CDK: Lambda functions + API Gateway
@@ -26,7 +30,7 @@ history:
 
 Define the three Lambda functions (API, Ledger Processor, Event Interpreter) and API Gateway using CDK. All Lambdas run as Rust binaries on ARM64/Graviton2 via cargo-lambda-cdk RustFunction. The API Lambda has provisioned concurrency and is triggered by API Gateway. The Ledger Processor is triggered by S3 PutObject with a DLQ. The Event Interpreter is triggered by EventBridge (configured in task 0037). API Gateway provides REST API delivery with throttling, validation, and response caching.
 
-## Status: Backlog
+## Status: Active
 
 **Current state:** Not started. Depends on VPC/networking (task 0031) and storage (task 0032) for subnet placement and trigger configuration.
 
