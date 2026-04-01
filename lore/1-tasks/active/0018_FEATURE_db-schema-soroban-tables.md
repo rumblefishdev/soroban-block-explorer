@@ -2,7 +2,7 @@
 id: '0018'
 title: 'DB schema: Soroban tables (contracts, invocations, events, interpretations)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0005']
 related_tasks: ['0016', '0010', '0092']
 tags: [priority-high, effort-medium, layer-database]
@@ -17,6 +17,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Updated per ADR 0005 + research 0092: plain SQL migrations instead of Drizzle ORM'
+  - date: 2026-04-01
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated — ready to implement Soroban tables'
 ---
 
 # DB schema: Soroban tables (contracts, invocations, events, interpretations)
