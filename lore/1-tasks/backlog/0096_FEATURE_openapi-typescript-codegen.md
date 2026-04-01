@@ -3,6 +3,8 @@ id: '0096'
 title: 'OpenAPI → TypeScript codegen: shared types between Rust API and React frontend'
 type: FEATURE
 status: backlog
+layer: frontend
+milestone: 2
 related_adr: ['0005']
 related_tasks: ['0092', '0094']
 tags:
