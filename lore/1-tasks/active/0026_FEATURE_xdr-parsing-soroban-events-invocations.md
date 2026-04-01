@@ -2,9 +2,9 @@
 id: '0026'
 title: 'XDR parsing: Soroban events, invocation tree, contract interface extraction'
 type: FEATURE
-status: backlog
-related_adr: ['0004']
-related_tasks: ['0002', '0024', '0018', '0003']
+status: active
+related_adr: ['0004', '0005']
+related_tasks: ['0002', '0024', '0025', '0018', '0003']
 tags: [priority-high, effort-large, layer-indexing, rust]
 milestone: 1
 links:
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Scope changed to Rust-only per ADR 0004.'
+  - date: 2026-04-01
+    status: active
+    who: FilipDz
+    note: 'Activated for implementation'
 ---
 
 # XDR parsing: Soroban events, invocation tree, contract interface extraction
