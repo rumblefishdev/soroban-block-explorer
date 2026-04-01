@@ -63,5 +63,4 @@ cdk.out
 cdk.context.json
 
 # Rust build artifacts
-tools/scripts/explore-xdr-rs/target/
-tools/scripts/api-stack-test/target/
+target/

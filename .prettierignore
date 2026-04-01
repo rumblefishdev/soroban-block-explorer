@@ -2,6 +2,8 @@
 dist
 coverage
 target
+Cargo.lock
+crates/
 .nx
 AGENTS.md
 CLAUDE.md
