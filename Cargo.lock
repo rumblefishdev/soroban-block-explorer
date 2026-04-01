@@ -36,7 +36,6 @@ dependencies = [
  "lambda_http",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "tower",
  "tower-http",
@@ -387,7 +386,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
- "serde_json",
 ]
 
 [[package]]
