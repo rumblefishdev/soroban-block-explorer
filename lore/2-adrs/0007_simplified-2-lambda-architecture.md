@@ -2,7 +2,7 @@
 id: '0007'
 title: 'Simplified 2-Lambda architecture — no Event Interpreter'
 status: accepted
-deciders: [fmazur, stkrolikiewicz]
+deciders: [fmazur]
 related_tasks: ['0033', '0098']
 related_adrs: ['0005']
 tags: [architecture, infra, simplicity]
@@ -75,43 +75,6 @@ The approach is: **keep infrastructure simple, deliver core value first.**
    - As a separate Lambda (if the use case justifies the complexity then)
 
 4. **Reduces scope for milestone 1.** Every table, endpoint, and test that referenced `event_interpretations` was unnecessary work. Removing it shrinks the implementation surface across DB schema, API modules, frontend, and testing.
-
----
-
-## Alternatives Considered
-
-### Alternative 1: Keep Event Interpreter as deferred/optional
-
-**Description:** Keep the table and LEFT JOINs but mark enrichment as "deferred to milestone 2." Event Interpreter Lambda not deployed, table stays empty.
-
-**Pros:**
-
-- Schema is ready if we need it later
-
-**Cons:**
-
-- Every API endpoint carries dead JOINs and NULL handling for a feature that may never ship
-- Backlog tasks accumulate stale references and misleading specs
-- "Deferred" features tend to persist as permanent dead code
-
-**Decision:** REJECTED — dead schema and dead JOINs add maintenance cost with no value. Easier to add a table later than to maintain an unused one now.
-
-### Alternative 2: Inline enrichment in Indexer
-
-**Description:** Compute human-readable summaries during ingestion and store them directly on `soroban_events` or `soroban_invocations`.
-
-**Pros:**
-
-- No extra Lambda
-- Enrichment available immediately
-
-**Cons:**
-
-- Increases Indexer Lambda complexity and execution time
-- Pattern matching for known events (swap, transfer, mint, burn) is not trivial
-- Not needed for milestone 1
-
-**Decision:** DEFERRED — viable approach for milestone 2 if enrichment is needed.
 
 ---
 
