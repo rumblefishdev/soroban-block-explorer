@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/api",
+    "crates/indexer",
+    "crates/xdr-parser",
+    "crates/db",
+    "crates/domain",
+]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Web framework + Lambda
+axum = "0.8"
+lambda_http = "1"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-axum = "0.2"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json", "chrono", "migrate"] }
+
+# Stellar XDR
+stellar-xdr = { version = "26", default-features = true, features = ["curr"] }
+
+# Encoding
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
+
+# Compression
+zstd = "0.13"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"

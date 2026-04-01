@@ -2,9 +2,9 @@
 id: '0094'
 title: 'Scaffold Cargo workspace with 5 crates'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0005']
-related_tasks: ['0092', '0024']
+related_tasks: ['0092', '0024', '0025']
 tags: [priority-high, effort-medium, layer-backend, rust, milestone-1]
 links: []
 history:
@@ -16,6 +16,14 @@ history:
     status: active
     who: FilipDz
     note: 'Activated for implementation'
+  - date: 2026-04-01
+    status: completed
+    who: FilipDz
+    note: >
+      Cargo workspace with 5 crates scaffolded. xdr-parser migrated from
+      apps/indexer/crates/ (40 tests pass). api crate with axum health endpoint
+      (1 test). domain with Ledger + Transaction. db with sqlx pool + 2 migrations.
+      indexer placeholder. Nx rust project targets working. 41 tests total.
 ---
 
 # Scaffold Cargo workspace with 5 crates
@@ -46,11 +54,11 @@ Research task 0092 recommended 5 crates. Task 0024 already created `apps/indexer
 
 ## Acceptance Criteria
 
-- [ ] Root `Cargo.toml` with workspace members for all 5 crates
-- [ ] `crates/xdr-parser/` migrated from `apps/indexer/crates/xdr-parser/` (code unchanged, tests pass)
-- [ ] `crates/api/` scaffolded with axum + lambda_http + utoipa (minimal health endpoint)
-- [ ] `crates/db/` with sqlx pool config + migrated Drizzle SQL
-- [ ] `crates/domain/` with Ledger and Transaction structs (matching DB schema)
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes
-- [ ] Nx `rust` project with build/test/lint targets works
+- [x] Root `Cargo.toml` with workspace members for all 5 crates
+- [x] `crates/xdr-parser/` migrated from `apps/indexer/crates/xdr-parser/` (code unchanged, tests pass)
+- [x] `crates/api/` scaffolded with axum + lambda_http + utoipa (minimal health endpoint)
+- [x] `crates/db/` with sqlx pool config + migrated Drizzle SQL
+- [x] `crates/domain/` with Ledger and Transaction structs (matching DB schema)
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] Nx `rust` project with build/test/lint targets works

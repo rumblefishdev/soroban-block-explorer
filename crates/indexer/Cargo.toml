@@ -1,0 +1,17 @@
+[package]
+name = "indexer"
+version = "0.1.0"
+edition = "2021"
+description = "Ledger Processor Lambda for the Soroban block explorer"
+
+[[bin]]
+name = "indexer"
+path = "src/main.rs"
+
+[dependencies]
+xdr-parser = { path = "../xdr-parser" }
+domain = { path = "../domain" }
+db = { path = "../db" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

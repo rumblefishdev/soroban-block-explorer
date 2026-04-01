@@ -1,0 +1,10 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition = "2021"
+description = "Database access layer for the Soroban block explorer"
+
+[dependencies]
+domain = { path = "../domain" }
+sqlx = { workspace = true }
+tracing = { workspace = true }

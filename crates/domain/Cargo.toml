@@ -1,0 +1,9 @@
+[package]
+name = "domain"
+version = "0.1.0"
+edition = "2021"
+description = "Shared domain types for the Soroban block explorer"
+
+[dependencies]
+serde = { workspace = true }
+chrono = { workspace = true }
