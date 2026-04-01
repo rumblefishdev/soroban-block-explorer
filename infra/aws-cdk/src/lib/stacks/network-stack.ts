@@ -36,14 +36,8 @@ export class NetworkStack extends cdk.Stack {
     // ---------------------
     // VPC
     // ---------------------
-    // Single-AZ at launch (us-east-1a). NAT provides outbound internet
-    // for the private subnet.
-    //
-    // Both environments use managed NAT Gateway for throughput and availability.
-    //
-    // Multi-AZ expansion trigger: when SLA requirement exceeds 99.9%.
-    // To expand: add AZ entries to config. CDK creates new subnets, route tables,
-    // and NAT resources (one per AZ) automatically. No VPC replacement needed.
+    // Two AZs required by RDS subnet group (AWS minimum).
+    // NAT Gateway count configurable — increase to one per AZ for HA when SLA > 99.9%.
     const natProvider =
       config.natType === 'instance'
         ? ec2.NatProvider.instanceV2({
@@ -54,7 +48,7 @@ export class NetworkStack extends cdk.Stack {
     const vpc = new ec2.Vpc(this, 'Vpc', {
       ipAddresses: ec2.IpAddresses.cidr(config.vpcCidr),
       availabilityZones: [...config.availabilityZones],
-      natGateways: config.availabilityZones.length,
+      natGateways: config.natGatewayCount,
       natGatewayProvider: natProvider,
       restrictDefaultSecurityGroup: true,
       subnetConfiguration: [

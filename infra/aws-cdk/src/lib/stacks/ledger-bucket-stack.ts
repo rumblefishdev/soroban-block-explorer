@@ -27,7 +27,7 @@ export class LedgerBucketStack extends cdk.Stack {
     const prefix = config.envName;
 
     this.bucket = new s3.Bucket(this, 'LedgerData', {
-      bucketName: `${prefix}-soroban-ledger-data`,
+      bucketName: `${prefix}-stellar-ledger-data`,
       encryption: config.kmsEncryption
         ? s3.BucketEncryption.KMS_MANAGED
         : s3.BucketEncryption.S3_MANAGED,
