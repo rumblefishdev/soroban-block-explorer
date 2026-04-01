@@ -5,6 +5,7 @@ import { NetworkStack } from './stacks/network-stack.js';
 import { RdsStack } from './stacks/rds-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
+import { MigrationStack } from './stacks/migration-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -40,15 +41,34 @@ export function createApp({
     config,
   });
 
+  const dbProxyEndpoint = rds.dbProxy
+    ? rds.dbProxy.endpoint
+    : rds.dbInstance.instanceEndpoint.hostname;
+
+  const migration = new MigrationStack(app, `${prefix}-Migration`, {
+    env,
+    config,
+    vpc: network.vpc,
+    lambdaSecurityGroup: network.lambdaSecurityGroup,
+    dbSecret: rds.dbSecret,
+    dbProxyEndpoint,
+    cargoWorkspacePath,
+  });
+  migration.addDependency(rds);
+
+  // NOTE: ComputeStack cannot use addDependency(migration) because
+  // ledgerBucket.addEventNotification() in ComputeStack creates an implicit
+  // LedgerBucket → Compute dependency, and adding Compute → Migration would
+  // form a cycle. Migration ordering is enforced via deploy sequence in
+  // the Makefile and CI/CD pipeline (task 0039): deploy MigrationStack
+  // before ComputeStack.
   new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
     vpc: network.vpc,
     lambdaSecurityGroup: network.lambdaSecurityGroup,
     dbSecret: rds.dbSecret,
-    dbProxyEndpoint: rds.dbProxy
-      ? rds.dbProxy.endpoint
-      : rds.dbInstance.instanceEndpoint.hostname,
+    dbProxyEndpoint,
     ledgerBucketArn: ledgerBucket.bucket.bucketArn,
     ledgerBucketName: ledgerBucket.bucket.bucketName,
     cargoWorkspacePath,
