@@ -19,7 +19,7 @@ history:
 **Related:**
 
 - [Task 0033: CDK Lambda functions + SQS DLQ](../1-tasks/active/0033_FEATURE_cdk-lambda-api-gateway.md)
-- [Task 0098: Cleanup Event Interpreter references](../1-tasks/active/0098_REFACTOR_remove-event-interpreter-refs.md)
+- [Task 0098: Cleanup Event Interpreter references](../1-tasks/archive/0098_REFACTOR_remove-event-interpreter-refs.md)
 - [ADR 0005: Rust-only backend API](0005_rust-only-backend-api.md)
 
 ---

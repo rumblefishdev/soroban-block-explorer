@@ -308,7 +308,7 @@ Implement Lambda in-memory cache for contract metadata with 30-60s TTL.
 - [ ] `GET /v1/contracts/:contract_id` returns contract detail with stats
 - [ ] `GET /v1/contracts/:contract_id/interface` returns function signatures
 - [ ] `GET /v1/contracts/:contract_id/invocations` returns paginated invocation history
-- [ ] `GET /v1/contracts/:contract_id/events` returns paginated events with interpretations
+- [ ] `GET /v1/contracts/:contract_id/events` returns paginated events
 - [ ] Stats include invocation_count and event_count
 - [ ] Interface data sourced from soroban_contracts.metadata
 - [ ] Events queried from soroban_events table

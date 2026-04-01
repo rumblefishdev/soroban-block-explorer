@@ -41,7 +41,7 @@ Implement the Transactions module providing paginated transaction listing with f
 
 ## Context
 
-Transactions are the primary explorer entity for activity browsing. The list endpoint supports table-style browsing with slim response types. The detail endpoint supports both human-readable summaries and advanced/debugging views over the same resource, controlled by a query parameter.
+Transactions are the primary explorer entity for activity browsing. The list endpoint supports table-style browsing with slim response types. The detail endpoint supports both normal and advanced/debugging views over the same resource, controlled by a query parameter.
 
 ### API Specification
 
@@ -187,23 +187,23 @@ Transactions are the primary explorer entity for activity browsing. The list end
 
 **Detail fields:**
 
-| Field             | Type           | Normal | Advanced | Description                              |
-| ----------------- | -------------- | ------ | -------- | ---------------------------------------- |
-| `hash`            | string         | yes    | yes      | Transaction hash                         |
-| `ledger_sequence` | number         | yes    | yes      | Ledger sequence                          |
-| `source_account`  | string         | yes    | yes      | Source account                           |
-| `successful`      | boolean        | yes    | yes      | Success status                           |
-| `fee_charged`     | number         | yes    | yes      | Fee in stroops                           |
-| `result_code`     | string or null | yes    | yes      | Result code for failed txs               |
-| `memo_type`       | string         | yes    | yes      | Memo type                                |
-| `memo`            | string or null | yes    | yes      | Memo value                               |
-| `created_at`      | string         | yes    | yes      | ISO timestamp                            |
-| `operations`      | array          | yes    | yes      | Operations with human-readable summaries |
-| `operation_tree`  | array          | yes    | yes      | Decoded invocation hierarchy             |
-| `events`          | array          | yes    | yes      | Events                                   |
-| `envelope_xdr`    | string         | no     | yes      | Raw envelope XDR                         |
-| `result_xdr`      | string         | no     | yes      | Raw result XDR                           |
-| `parse_error`     | boolean        | yes    | yes      | Whether parse error occurred             |
+| Field             | Type           | Normal | Advanced | Description                   |
+| ----------------- | -------------- | ------ | -------- | ----------------------------- |
+| `hash`            | string         | yes    | yes      | Transaction hash              |
+| `ledger_sequence` | number         | yes    | yes      | Ledger sequence               |
+| `source_account`  | string         | yes    | yes      | Source account                |
+| `successful`      | boolean        | yes    | yes      | Success status                |
+| `fee_charged`     | number         | yes    | yes      | Fee in stroops                |
+| `result_code`     | string or null | yes    | yes      | Result code for failed txs    |
+| `memo_type`       | string         | yes    | yes      | Memo type                     |
+| `memo`            | string or null | yes    | yes      | Memo value                    |
+| `created_at`      | string         | yes    | yes      | ISO timestamp                 |
+| `operations`      | array          | yes    | yes      | Decoded/normalized operations |
+| `operation_tree`  | array          | yes    | yes      | Decoded invocation hierarchy  |
+| `events`          | array          | yes    | yes      | Events                        |
+| `envelope_xdr`    | string         | no     | yes      | Raw envelope XDR              |
+| `result_xdr`      | string         | no     | yes      | Raw result XDR                |
+| `parse_error`     | boolean        | yes    | yes      | Whether parse error occurred  |
 
 **Important:** `result_meta_xdr` is NOT returned to the frontend. It is used server-side only for decode/validation. The `operation_tree` (decoded from `result_meta_xdr` at ingestion) is returned instead.
 
