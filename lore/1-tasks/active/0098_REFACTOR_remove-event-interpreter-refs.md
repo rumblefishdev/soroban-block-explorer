@@ -2,7 +2,7 @@
 id: '0098'
 title: 'Cleanup: remove Event Interpreter references from backlog and docs'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0005']
 related_tasks: ['0028', '0046', '0050', '0070', '0088']
 tags: [priority-medium, effort-small, layer-docs]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Task created — Event Interpreter removed from architecture (2 Lambdas only). Cleanup remaining references in backlog tasks and docs.'
+  - date: 2026-04-01
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated — cleanup Event Interpreter refs from backlog and docs'
 ---
 
 # Cleanup: remove Event Interpreter references from backlog and docs
