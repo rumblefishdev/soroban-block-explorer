@@ -77,8 +77,8 @@ Deleting a contract does NOT cascade (contracts are long-lived entities).
 
 **Files created:**
 
-- `crates/db/migrations/0003_create_soroban_contracts.sql` (15 lines)
-- `crates/db/migrations/0004_create_soroban_activity_tables.sql` (60 lines)
+- `crates/db/migrations/0003_create_soroban_contracts.sql`
+- `crates/db/migrations/0004_create_soroban_activity_tables.sql`
 
 **Verification:** All AC tested against fresh PostgreSQL 16 via docker-compose. Cascade chain, search_vector auto-population, full-text search, and partition existence all verified with test SQL.
 
