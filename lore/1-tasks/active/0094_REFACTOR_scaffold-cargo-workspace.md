@@ -2,7 +2,7 @@
 id: '0094'
 title: 'Scaffold Cargo workspace with 5 crates'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0005']
 related_tasks: ['0092', '0024']
 tags: [priority-high, effort-medium, layer-backend, rust, milestone-1]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from 0092 research. Blocks all Rust API/indexer implementation tasks.'
+  - date: 2026-04-01
+    status: active
+    who: FilipDz
+    note: 'Activated for implementation'
 ---
 
 # Scaffold Cargo workspace with 5 crates
