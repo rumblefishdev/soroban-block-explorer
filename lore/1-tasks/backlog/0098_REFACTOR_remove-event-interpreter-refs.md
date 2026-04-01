@@ -66,4 +66,5 @@ The simplified architecture has 2 Lambdas (API + Indexer), no Event Interpreter.
 - [ ] Backlog tasks 0028, 0046, 0050, 0070, 0088 updated — no references to `event_interpretations`, `Event Interpreter`, or task 0056
 - [ ] Architecture docs updated — no `event_interpretations` DDL, no Event Interpreter mentions
 - [ ] `lore/README.md` regenerated without 0056
+- [ ] Wiki snapshot updated to reflect simplified architecture (no Event Interpreter, no `event_interpretations` table)
 - [ ] Verification: grep for `event_interpretations`, `Event Interpreter`, `0056` across non-archive files returns zero hits
