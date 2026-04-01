@@ -76,20 +76,26 @@ GET /api-docs          -> utoipa-swagger-ui (interactive docs)
 GET /api-docs-json     -> OpenAPI spec as JSON
 ```
 
-### Example OpenAPI Decorators
+### Example utoipa Annotations
 
-```typescript
-@ApiOperation({ summary: 'List transactions' })
-@ApiQuery({ name: 'limit', type: Number, required: false, description: 'Items per page (default 20, max 100)' })
-@ApiQuery({ name: 'cursor', type: String, required: false, description: 'Opaque pagination cursor' })
-@ApiQuery({ name: 'filter[source_account]', type: String, required: false })
-@ApiResponse({ status: 200, type: TransactionListResponseDto })
-@ApiResponse({ status: 400, type: ErrorResponseDto })
+```rust
+#[utoipa::path(
+    get,
+    path = "/transactions",
+    tag = "Transactions",
+    summary = "List transactions",
+    params(PaginationParams),
+    responses(
+        (status = 200, description = "Paginated list", body = PaginatedTransactions),
+        (status = 400, description = "Invalid cursor", body = ErrorBody),
+    )
+)]
+async fn list_transactions(...) -> Result<Json<PaginatedTransactions>, AppError> { ... }
 ```
 
 ### Behavioral Requirements
 
-- Spec auto-generated from axum decorators (not manually maintained)
+- Spec auto-generated from `#[utoipa::path]` and `#[derive(ToSchema)]` annotations (not manually maintained)
 - All request/response types derive `ToSchema` with field-level `#[schema(...)]` annotations
 - Error envelope documented as reusable schema component
 - Pagination envelope documented as reusable schema component
