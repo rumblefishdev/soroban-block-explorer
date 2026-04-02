@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v aws >/dev/null 2>&1; then
+  echo "Error: 'aws' CLI not found in PATH." >&2
+  exit 1
+fi
+
+if ! command -v session-manager-plugin >/dev/null 2>&1; then
+  echo "Error: 'session-manager-plugin' not found. Install: brew install session-manager-plugin" >&2
+  exit 1
+fi
+
 ENV=${1:-staging}
 LOCAL_PORT=${2:-15432}
 
@@ -15,7 +25,11 @@ RDS_ENDPOINT=$(aws ssm get-parameter --name "/soroban-explorer/$ENV/rds-endpoint
   exit 1
 }
 
-STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
+STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null) || {
+  echo "Error: Failed to describe bastion instance '$INSTANCE_ID'." >&2
+  echo "  Check AWS_REGION, AWS_PROFILE, and ec2:DescribeInstances permission." >&2
+  exit 1
+}
 if [ "$STATE" != "running" ]; then
   echo "Error: Bastion instance $INSTANCE_ID is '$STATE', expected 'running'." >&2
   echo "  Start it: aws ec2 start-instances --instance-ids $INSTANCE_ID" >&2
