@@ -42,16 +42,23 @@ Post-0094 (Cargo workspace scaffold), the Rust backend lives in `crates/`. The r
 10. Update CI workflow paths (`.github/workflows/`)
 11. Update any docs referencing old paths
 
+12. Remove `libs/database/` (Drizzle ORM, replaced by Rust sqlx in `crates/`)
+13. Remove `libs/domain/` (TS domain types, replaced by `crates/domain/`)
+14. Remove `libs/shared/` (TS error types, replaced by Rust error handling)
+15. Update `tsconfig.json`, `package.json` workspaces after libs cleanup
+16. Remove Drizzle scripts from root `package.json` (db:generate, db:migrate, db:studio)
+
 ## Acceptance Criteria
 
-- [ ] `web/` at top-level, `nx build web` works
-- [ ] `infra/` contains CDK directly (no `aws-cdk/` subdirectory), `npx cdk synth` works
-- [ ] `apps/` directory removed entirely
-- [ ] All Nx targets pass (`nx run-many -t lint build typecheck test`)
+- [x] `web/` at top-level, `nx build web` works
+- [x] `infra/` contains CDK directly (no `aws-cdk/` subdirectory)
+- [x] `apps/` directory removed entirely
+- [x] `libs/` contains only `ui/`
+- [x] All Nx targets pass (`nx run-many -t lint build typecheck test`)
 - [ ] CI pipeline passes
 
 ## Notes
 
 - This is independent of Rust implementation — can be done before or after API is built
 - Should be done AFTER task 0094 (scaffold Cargo workspace) to avoid moving files twice
-- `libs/` stays as-is (domain, shared, ui used by web frontend)
+- After ADR 0005 (Rust-only backend), `libs/database`, `libs/domain`, `libs/shared` are obsolete — no active imports

@@ -36,7 +36,7 @@ except where those affect frontend behavior.
 
 The current Nx workspace already reserves the frontend boundary as:
 
-- `apps/web` - application entrypoint for the explorer web app
+- `web` - application entrypoint for the explorer web app
 - `libs/ui` - reusable presentation components and frontend-only view primitives
 - `libs/domain` - shared explorer concepts that may be reused by both frontend and backend
 - `libs/shared` - generic non-domain utilities used across the workspace
@@ -185,7 +185,7 @@ The frontend should be structured into four logical layers:
 
 The intended code placement aligns with the workspace:
 
-- `apps/web` should contain app bootstrap, route composition, and page orchestration
+- `web` should contain app bootstrap, route composition, and page orchestration
 - `libs/ui` should hold reusable frontend-oriented components and display models
 - `libs/domain` should hold cross-app explorer concepts such as identifiers, cursor types,
   filters, and entity enums where those represent shared business concepts

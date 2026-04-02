@@ -160,9 +160,9 @@ All chain data lives in the block explorer's RDS.
 
 Responsibility split across the workspace should remain clear:
 
-- `apps/indexer` and related workers own ingestion and persistence into the explorer DB
-- `apps/api` owns query APIs, response shaping, search, and transport concerns
-- `apps/web` consumes the REST API and should not reconstruct backend behavior client-side
+- `crates/indexer` and related workers own ingestion and persistence into the explorer DB
+- `crates/api` owns query APIs, response shaping, search, and transport concerns
+- `web` consumes the REST API and should not reconstruct backend behavior client-side
 - `libs/domain` may hold reusable explorer-domain types shared across the boundary
 - `libs/shared` may hold generic helpers that are not explorer-specific
 
