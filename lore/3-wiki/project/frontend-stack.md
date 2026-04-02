@@ -2,7 +2,7 @@
 
 > Current state of the frontend environment in the workspace.
 
-## apps/web
+## web/
 
 React 19 SPA served by Vite. Entry point: `index.html` → `src/main.tsx` → `src/app.tsx`.
 
