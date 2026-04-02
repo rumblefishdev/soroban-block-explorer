@@ -146,6 +146,7 @@ function loadTasks() {
       if (!meta || !meta.id) continue;
 
       meta._description = extractDescription(content);
+      meta._body = extractBody(content);
       meta._dir = statusDir;
       meta._path = stat.isDirectory()
         ? `lore/1-tasks/${statusDir}/${entry}/README.md`
@@ -204,6 +205,14 @@ function extractDescription(content) {
   return para ? para[1].trim() : '';
 }
 
+function extractBody(content) {
+  // Full markdown body after frontmatter and title heading
+  return content
+    .replace(/^---[\s\S]*?---\n*/, '')
+    .replace(/^#[^\n]*\n*/, '')
+    .trim();
+}
+
 function generateJSON(tasks) {
   return tasks.map((t) => ({
     id: t.id,
@@ -220,6 +229,7 @@ function generateJSON(tasks) {
     path: t._path,
     history: t.history || [],
     description: t._description || '',
+    body: t._body || '',
   }));
 }
 
