@@ -463,8 +463,8 @@ The documented infrastructure direction is AWS CDK written in TypeScript.
 
 Within the current workspace structure, that boundary maps to:
 
-- `infra/aws-cdk` for infrastructure definitions
-- application packages under `apps/*` as runtime artifacts deployed by the infrastructure
+- `infra` for infrastructure definitions
+- application packages under `crates/*` and `web` as runtime artifacts deployed by the infrastructure
 
 The infrastructure doc should therefore be read as the target design input for the future
 CDK stack, not as a claim that the full stack already exists in the repository.
@@ -502,7 +502,7 @@ The repository should not contain:
 
 Expected secure configuration model:
 
-- non-secret environment config lives in `infra/aws-cdk/config/*`
+- non-secret environment config lives in `infra/config/*`
 - real secret values live in AWS Secrets Manager or SSM Parameter Store SecureString
 - CDK consumes secret references, not hard-coded secret values
 - runtime workloads (Lambda, ECS) read only the specific secrets they need through IAM
@@ -537,7 +537,7 @@ That means the infrastructure design should remain:
 ### 9.6 Current Workspace State
 
 The repository currently documents the intended infrastructure shape and reserves
-`infra/aws-cdk` as the infrastructure boundary, but does not yet contain the final deployed
+`infra` as the infrastructure boundary, but does not yet contain the final deployed
 runtime implementation.
 
 That is expected. This document should serve as the detailed reference for future

@@ -7,12 +7,11 @@ Nx + TypeScript monorepo bootstrap for a Soroban-first Stellar block explorer.
 This repository starts from the official `nrwl/typescript-template` foundation and adapts
 it to the planned product architecture:
 
-- `apps/web` for the frontend explorer UI
-- `apps/api` for the public REST API
-- `apps/indexer` for ledger ingestion entrypoints
-- `apps/workers` for background processing and interpretation jobs
-- `infra/aws-cdk` for infrastructure as code
-- `libs/domain`, `libs/shared`, `libs/ui` for reusable internal code
+- `web` for the frontend explorer UI
+- `crates/api` for the public REST API (Rust/axum)
+- `crates/indexer` for ledger ingestion entrypoints (Rust)
+- `infra` for infrastructure as code (AWS CDK)
+- `libs/ui` for shared frontend components
 
 ## Quick Start
 
@@ -27,16 +26,13 @@ npm run typecheck
 ## Workspace Layout
 
 ```text
-apps/
+web/
+crates/
   api/
   indexer/
-  web/
-  workers/
+  xdr-parser/
 infra/
-  aws-cdk/
 libs/
-  domain/
-  shared/
   ui/
 docs/
   architecture/
@@ -47,11 +43,10 @@ docs/
 The workspace contains:
 
 - root Nx / TypeScript / ESLint / Prettier bootstrap
-- `apps/web` — React 19 + Vite SPA with MUI, React Router, and TanStack Query
+- `web` — React 19 + Vite SPA with MUI, React Router, and TanStack Query
 - `libs/ui` — shared React component library (Vite lib mode)
-- `libs/domain` — domain types for all explorer entities
-- `libs/shared` — cross-cutting error types and handlers
-- `apps/api`, `apps/indexer`, `apps/workers`, `infra/aws-cdk` — project skeletons
+- `infra` — AWS CDK infrastructure stacks
+- `crates/` — Rust backend (api, indexer, xdr-parser)
 - architecture docs aligned with the reviewed technical design
 
 Backend: Rust (axum + utoipa + sqlx), deployed as Lambda via cargo-lambda (per ADR 0005).
@@ -59,7 +54,7 @@ They will be introduced as dedicated follow-up steps.
 
 ## Infrastructure
 
-AWS infrastructure is managed with CDK (TypeScript) in `infra/aws-cdk/`.
+AWS infrastructure is managed with CDK (TypeScript) in `infra/`.
 
 ### Prerequisites
 
@@ -90,7 +85,7 @@ npm run infra:synth:staging       # Generate CloudFormation template
 
 Replace `staging` with `production` for production deployments.
 
-Or use the Makefile directly from `infra/aws-cdk/`:
+Or use the Makefile directly from `infra/`:
 
 ```bash
 make diff-staging

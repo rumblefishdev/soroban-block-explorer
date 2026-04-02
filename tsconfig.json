@@ -4,28 +4,10 @@
   "files": [],
   "references": [
     {
-      "path": "./apps/api"
+      "path": "./web"
     },
     {
-      "path": "./apps/indexer"
-    },
-    {
-      "path": "./apps/web"
-    },
-    {
-      "path": "./apps/workers"
-    },
-    {
-      "path": "./infra/aws-cdk"
-    },
-    {
-      "path": "./libs/database"
-    },
-    {
-      "path": "./libs/domain"
-    },
-    {
-      "path": "./libs/shared"
+      "path": "./infra"
     },
     {
       "path": "./libs/ui"

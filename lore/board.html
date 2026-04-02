@@ -421,7 +421,7 @@
         border: 1px solid var(--border);
         border-radius: 10px;
         width: 90%;
-        max-width: 620px;
+        max-width: 900px;
         max-height: 85vh;
         overflow-y: auto;
         position: relative;
@@ -482,9 +482,101 @@
         font-weight: 600;
       }
       .modal-description {
+        font-size: 14px;
+        line-height: 1.7;
+        color: var(--text);
+      }
+      .modal-description h2 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 20px 0 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text);
+      }
+      .modal-description h2:first-child {
+        margin-top: 0;
+      }
+      .modal-description h3 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 16px 0 6px;
+        color: var(--text);
+      }
+      .modal-description h4 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 12px 0 4px;
+        color: var(--text);
+      }
+      .modal-description p {
+        margin: 0 0 10px;
+      }
+      .modal-description ul,
+      .modal-description ol {
+        margin: 0 0 10px;
+        padding-left: 20px;
+      }
+      .modal-description li {
+        margin-bottom: 4px;
+      }
+      .modal-description code {
+        background: #262c36;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 13px;
+        font-family: monospace;
+        color: #e6edf3;
+      }
+      .modal-description pre {
+        background: #1a1f2b;
+        border: 1px solid var(--border);
+        padding: 14px;
+        border-radius: 6px;
+        overflow-x: auto;
+        margin: 0 0 12px;
+      }
+      .modal-description pre code {
+        padding: 0;
+        background: none;
+        border: none;
         font-size: 13px;
         line-height: 1.6;
+        color: #e6edf3;
+      }
+      .modal-description table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0 0 12px;
+        font-size: 13px;
+      }
+      .modal-description th,
+      .modal-description td {
+        border: 1px solid var(--border);
+        padding: 8px 12px;
+        text-align: left;
+      }
+      .modal-description th {
+        background: #1a1f2b;
+        font-weight: 600;
         color: var(--text);
+      }
+      .modal-description strong {
+        font-weight: 600;
+      }
+      .modal-description blockquote {
+        border-left: 3px solid var(--border);
+        margin: 0 0 10px;
+        padding: 4px 12px;
+        color: var(--text-muted);
+      }
+      .modal-description hr {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 16px 0;
+      }
+      .modal-description input[type='checkbox'] {
+        margin-right: 6px;
       }
       .modal-status-badge {
         display: inline-block;
@@ -999,10 +1091,10 @@
         // Body sections
         let body = '';
 
-        if (t.description) {
+        const mdContent = t.body || t.description || '';
+        if (mdContent) {
           body += `<div class="modal-section">
-            <div class="modal-section-title">Description</div>
-            <div class="modal-description">${escapeHtml(t.description)}</div>
+            <div class="modal-description">${renderMarkdown(mdContent)}</div>
           </div>`;
         }
 
@@ -1064,6 +1156,87 @@
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+      }
+
+      function renderMarkdown(md) {
+        let html = escapeHtml(md);
+
+        // Code blocks
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+          return `<pre><code>${code.replace(/\n$/, '')}</code></pre>`;
+        });
+
+        // Tables
+        html = html.replace(/((?:^\|.+\|\s*\n)+)/gm, (tableBlock) => {
+          const rows = tableBlock.trim().split('\n');
+          if (rows.length < 2) return tableBlock;
+          const parseRow = (r) =>
+            r
+              .split('|')
+              .slice(1, -1)
+              .map((c) => c.trim());
+          const headers = parseRow(rows[0]);
+          const startIdx = /^\|[\s:-]+\|/.test(rows[1]) ? 2 : 1;
+          let t = '<table><thead><tr>';
+          headers.forEach((h) => (t += `<th>${h}</th>`));
+          t += '</tr></thead><tbody>';
+          for (let i = startIdx; i < rows.length; i++) {
+            const cells = parseRow(rows[i]);
+            t += '<tr>';
+            cells.forEach((c) => (t += `<td>${c}</td>`));
+            t += '</tr>';
+          }
+          t += '</tbody></table>';
+          return t;
+        });
+
+        // Headings
+        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+
+        // Horizontal rules
+        html = html.replace(/^---$/gm, '<hr>');
+
+        // Checkboxes
+        html = html.replace(
+          /^- \[x\] (.+)$/gm,
+          '<li><input type="checkbox" checked disabled> $1</li>'
+        );
+        html = html.replace(
+          /^- \[ \] (.+)$/gm,
+          '<li><input type="checkbox" disabled> $1</li>'
+        );
+
+        // Unordered lists
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+
+        // Wrap consecutive <li> in <ul>
+        html = html.replace(/((?:<li>[\s\S]*?<\/li>\s*)+)/g, '<ul>$1</ul>');
+
+        // Bold and italic
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+        // Inline code
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // Blockquotes
+        html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+        // Paragraphs
+        html = html
+          .split('\n\n')
+          .map((block) => {
+            block = block.trim();
+            if (!block) return '';
+            if (/^<(h[234]|ul|ol|pre|table|blockquote|hr|li)/.test(block))
+              return block;
+            return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+          })
+          .join('\n');
+
+        return html;
       }
 
       document
