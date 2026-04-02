@@ -2,7 +2,7 @@
 id: '0027'
 title: 'XDR parsing: LedgerEntryChanges extraction'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0004']
 related_tasks: ['0002', '0024', '0019', '0020']
 tags: [priority-medium, effort-medium, layer-indexing, rust]
@@ -17,6 +17,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Scope changed to Rust-only per ADR 0004.'
+  - date: 2026-04-02
+    status: active
+    who: fdziubek
+    note: 'Activated for implementation'
 ---
 
 # XDR parsing: LedgerEntryChanges extraction

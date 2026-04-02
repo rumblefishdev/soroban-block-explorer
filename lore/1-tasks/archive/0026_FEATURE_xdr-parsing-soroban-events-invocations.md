@@ -2,7 +2,7 @@
 id: '0026'
 title: 'XDR parsing: Soroban events, invocation tree, contract interface extraction'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0004', '0005']
 related_tasks: ['0002', '0024', '0025', '0018', '0003']
 tags: [priority-high, effort-large, layer-indexing, rust]
@@ -22,6 +22,14 @@ history:
     status: active
     who: FilipDz
     note: 'Activated for implementation'
+  - date: 2026-04-02
+    status: completed
+    who: fdziubek
+    note: >
+      Implemented all 4 steps: CAP-67 event extraction, invocation tree
+      decoding, contract interface extraction from WASM, NFT event detection.
+      74 tests passing. Copilot review fixes: JSONB merge on upsert,
+      Option<String> for NFT address validation, sym type check.
 ---
 
 # XDR parsing: Soroban events, invocation tree, contract interface extraction
