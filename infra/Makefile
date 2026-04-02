@@ -1,5 +1,7 @@
 STAGING_APP := node dist/bin/staging.js
 PRODUCTION_APP := node dist/bin/production.js
+BASTION_STAGING_APP := node dist/bin/bastion-staging.js
+BASTION_PRODUCTION_APP := node dist/bin/bastion-production.js
 
 build:
 	cd .. && npx nx build @rumblefish/soroban-block-explorer-aws-cdk
@@ -27,6 +29,12 @@ deploy-staging-ledger-bucket: build
 deploy-staging-migration: build
 	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Migration --require-approval broadening
 
+deploy-staging-bastion: build
+	npx cdk --app "$(BASTION_STAGING_APP)" deploy --require-approval broadening
+
+destroy-staging-bastion: build
+	npx cdk --app "$(BASTION_STAGING_APP)" destroy --force
+
 # --- Production ---
 
 synth-production: build
@@ -49,6 +57,12 @@ deploy-production-ledger-bucket: build
 
 deploy-production-migration: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Migration --require-approval broadening
+
+deploy-production-bastion: build
+	npx cdk --app "$(BASTION_PRODUCTION_APP)" deploy --require-approval broadening
+
+destroy-production-bastion: build
+	npx cdk --app "$(BASTION_PRODUCTION_APP)" destroy --force
 
 # --- Shared ---
 

@@ -27,6 +27,7 @@
     "db:status": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer sqlx migrate info --source crates/db/migrations",
     "db:prepare": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer cargo sqlx prepare --workspace",
     "db:reset": "docker compose down -v && docker compose up -d && sleep 2 && npm run db:migrate",
+    "db:tunnel": "./tools/scripts/db-tunnel.sh",
     "infra:bootstrap": "make -C infra bootstrap",
     "infra:diff:staging": "make -C infra diff-staging",
     "infra:diff:production": "make -C infra diff-production",

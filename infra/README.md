@@ -42,6 +42,10 @@ make deploy-staging-network    # Deploy single stack
 make diff-production
 make deploy-production
 make deploy-production-network
+
+# Bastion (separate CDK app, not included in deploy --all)
+make deploy-staging-bastion    # Deploy bastion host
+make destroy-staging-bastion   # Destroy bastion host
 ```
 
 Or from the repository root:
@@ -50,6 +54,68 @@ Or from the repository root:
 npm run infra:diff:staging
 npm run infra:deploy:staging
 ```
+
+## Connecting to RDS
+
+RDS is in a private subnet with no public access. Use SSM Session Manager port forwarding through a bastion host.
+
+### Prerequisites
+
+```bash
+brew install session-manager-plugin
+```
+
+### Setup (one-time)
+
+1. Deploy the main infrastructure (if not already done):
+
+   ```bash
+   make deploy-staging
+   ```
+
+2. Deploy the bastion host:
+
+   ```bash
+   make deploy-staging-bastion
+   ```
+
+### Open tunnel
+
+```bash
+npm run db:tunnel              # staging, localhost:15432
+npm run db:tunnel -- staging 5433  # custom local port
+```
+
+### Connect with DBeaver / psql
+
+| Field    | Value                                                            |
+| -------- | ---------------------------------------------------------------- |
+| Host     | `localhost`                                                      |
+| Port     | `15432`                                                          |
+| Database | `soroban_explorer`                                               |
+| User     | From Secrets Manager: `soroban-explorer/staging/rds-credentials` |
+| Password | From Secrets Manager: `soroban-explorer/staging/rds-credentials` |
+
+To retrieve credentials: AWS Console → Secrets Manager → `soroban-explorer/staging/rds-credentials` → "Retrieve secret value".
+
+### Teardown
+
+Destroy the bastion when not needed ($0 when stack is destroyed):
+
+```bash
+make destroy-staging-bastion
+```
+
+### How it works
+
+```
+Your laptop (localhost:15432)
+  → HTTPS (443) → AWS SSM Service
+    → SSM Agent on bastion EC2
+      → RDS (port 5432)
+```
+
+No SSH, no open ports, no VPN, no IP whitelisting required. Only valid AWS credentials with `ssm:StartSession` permission.
 
 ## Environments
 
@@ -68,13 +134,22 @@ envs/
   production.json            # Production environment config
 src/
   bin/
-    staging.ts               # CDK app entry point — staging
-    production.ts            # CDK app entry point — production
+    staging.ts               # Main CDK app entry point — staging
+    production.ts            # Main CDK app entry point — production
+    bastion-staging.ts       # Bastion CDK app entry point — staging
+    bastion-production.ts    # Bastion CDK app entry point — production
   lib/
     types.ts               # EnvironmentConfig interface
-    app.ts                 # Shared stack wiring (createApp)
+    app.ts                 # Main app stack wiring (createApp)
+    bastion-app.ts         # Bastion app (createBastionApp)
+    ports.ts               # Shared port constants
     stacks/
       network-stack.ts     # VPC, subnets, SGs, S3 VPC endpoint
+      rds-stack.ts         # RDS PostgreSQL, RDS Proxy, Secrets Manager
+      ledger-bucket-stack.ts # S3 bucket for ledger XDR files
+      migration-stack.ts   # DB migration Lambda (custom resource)
+      compute-stack.ts     # API + Indexer Lambdas
+      bastion-stack.ts     # Bastion host for SSM port forwarding
 Makefile                     # Deploy/synth/diff targets per environment
 ```
 

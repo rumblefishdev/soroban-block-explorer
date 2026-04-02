@@ -3,6 +3,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
@@ -168,6 +169,27 @@ export class RdsStack extends cdk.Stack {
     cdk.Tags.of(this).add('Project', 'soroban-block-explorer');
     cdk.Tags.of(this).add('Environment', config.envName);
     cdk.Tags.of(this).add('ManagedBy', 'cdk');
+
+    // ---------------------
+    // SSM Parameters
+    // ---------------------
+    // RDS endpoint stored in SSM so tooling (e.g. bastion tunnel script)
+    // can resolve it without cross-stack coupling.
+    const rdsEndpoint = this.dbProxy
+      ? this.dbProxy.endpoint
+      : dbInstance.instanceEndpoint.hostname;
+
+    new ssm.StringParameter(this, 'RdsEndpointParam', {
+      parameterName: `/soroban-explorer/${prefix}/rds-endpoint`,
+      stringValue: rdsEndpoint,
+      description: 'RDS (or RDS Proxy) endpoint for the Soroban Block Explorer',
+    });
+
+    new ssm.StringParameter(this, 'RdsSecurityGroupIdParam', {
+      parameterName: `/soroban-explorer/${prefix}/rds-security-group-id`,
+      stringValue: rdsSg.securityGroupId,
+      description: 'RDS security group ID (used by bastion app for ingress)',
+    });
 
     // ---------------------
     // Outputs
