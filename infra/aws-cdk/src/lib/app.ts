@@ -56,13 +56,7 @@ export function createApp({
   });
   migration.addDependency(rds);
 
-  // NOTE: ComputeStack cannot use addDependency(migration) because
-  // ledgerBucket.addEventNotification() in ComputeStack creates an implicit
-  // LedgerBucket → Compute dependency, and adding Compute → Migration would
-  // form a cycle. Migration ordering is enforced via deploy sequence in
-  // the Makefile and CI/CD pipeline (task 0039): deploy MigrationStack
-  // before ComputeStack.
-  new ComputeStack(app, `${prefix}-Compute`, {
+  const compute = new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
     vpc: network.vpc,
@@ -73,6 +67,7 @@ export function createApp({
     ledgerBucketName: ledgerBucket.bucket.bucketName,
     cargoWorkspacePath,
   });
+  compute.addDependency(migration);
 
   app.synth();
 }
