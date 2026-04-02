@@ -6,6 +6,7 @@ import { RdsStack } from './stacks/rds-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
 import { MigrationStack } from './stacks/migration-stack.js';
+import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -68,6 +69,14 @@ export function createApp({
     cargoWorkspacePath,
   });
   compute.addDependency(migration);
+
+  const apiGateway = new ApiGatewayStack(app, `${prefix}-ApiGateway`, {
+    env,
+    config,
+    apiFunction: compute.apiFunction,
+    // wafWebAclArn: delivery.wafWebAclArn,  // task 0035
+  });
+  apiGateway.addDependency(compute);
 
   app.synth();
 }
