@@ -1,7 +1,7 @@
 //! Persistence functions for Soroban events, invocations, and contracts.
 //!
-//! All inserts use parameterized queries via sqlx. Batch inserts are grouped
-//! within a single transaction for atomicity and performance.
+//! All inserts use parameterized queries via sqlx. Inserts currently
+//! execute one INSERT per row directly on the connection pool.
 
 use chrono::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
@@ -18,7 +18,7 @@ pub async fn insert_events(
     transaction_id: i64,
 ) -> Result<(), sqlx::Error> {
     for event in events {
-        let created_at = unix_to_datetime(event.created_at);
+        let created_at = unix_to_datetime(event.created_at)?;
         sqlx::query(
             r#"INSERT INTO soroban_events
                (transaction_id, contract_id, event_type, topics, data, ledger_sequence, created_at)
@@ -46,7 +46,7 @@ pub async fn insert_invocations(
     transaction_id: i64,
 ) -> Result<(), sqlx::Error> {
     for inv in invocations {
-        let created_at = unix_to_datetime(inv.created_at);
+        let created_at = unix_to_datetime(inv.created_at)?;
         sqlx::query(
             r#"INSERT INTO soroban_invocations
                (transaction_id, contract_id, caller_account, function_name,
@@ -123,8 +123,12 @@ pub async fn update_operation_tree(
     Ok(())
 }
 
-fn unix_to_datetime(unix_secs: i64) -> DateTime<Utc> {
+fn unix_to_datetime(unix_secs: i64) -> Result<DateTime<Utc>, sqlx::Error> {
     Utc.timestamp_opt(unix_secs, 0)
         .single()
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "invalid unix timestamp {unix_secs} — cannot resolve to partition"
+            ))
+        })
 }

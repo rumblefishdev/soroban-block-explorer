@@ -184,12 +184,18 @@ fn topic_symbol_value(topic: &Value) -> String {
 }
 
 /// Extract an address string from a tagged ScVal JSON topic.
+///
+/// Only accepts topics typed as "address" with a string value.
+/// Returns empty string for non-address topics to avoid misattributing
+/// arbitrary JSON as an address.
 fn topic_address_value(topic: &Value) -> String {
-    if let Some(s) = topic.get("value").and_then(|v| v.as_str()) {
-        s.to_string()
-    } else {
-        format!("{}", topic.get("value").unwrap_or(&Value::Null))
+    let type_str = topic.get("type").and_then(|v| v.as_str());
+    if type_str == Some("address")
+        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
+    {
+        return s.to_string();
     }
+    String::new()
 }
 
 #[cfg(test)]

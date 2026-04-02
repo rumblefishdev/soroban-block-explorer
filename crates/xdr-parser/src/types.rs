@@ -92,7 +92,8 @@ pub struct ExtractedInvocation {
     pub caller_account: Option<String>,
     /// Function name invoked. `None` for contract creation invocations.
     pub function_name: Option<String>,
-    /// ScVal-decoded function arguments as JSON array.
+    /// ScVal-decoded function arguments as JSON value (typically an array; may be an object for
+    /// create-contract invocations).
     pub function_args: serde_json::Value,
     /// ScVal-decoded return value. Populated for root invocations from `SorobanTransactionMeta`;
     /// `null` for sub-invocations (not available from auth entries).
@@ -154,7 +155,7 @@ pub struct NftEvent {
     pub contract_id: String,
     /// NFT event kind: "mint", "transfer", or "burn".
     pub event_kind: String,
-    /// Token ID (ScVal-decoded, as string).
+    /// Token ID as ScVal-decoded JSON (e.g. `{ "type": ..., "value": ... }`).
     pub token_id: serde_json::Value,
     /// Sender address. `None` for mint events.
     pub from: Option<String>,

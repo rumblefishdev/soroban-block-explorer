@@ -101,38 +101,42 @@ fn extract_custom_section(wasm: &[u8], section_name: &str) -> Option<Vec<u8>> {
 
     while pos < wasm.len() {
         let section_id = wasm[pos];
-        pos += 1;
+        pos = pos.checked_add(1)?;
 
-        let (section_size, bytes_read) = read_leb128(&wasm[pos..])?;
-        pos += bytes_read;
+        let (section_size, bytes_read) = read_leb128(wasm.get(pos..)?)?;
+        pos = pos.checked_add(bytes_read)?;
+        let section_size = section_size as usize;
 
         if section_id == 0 {
             // Custom section — read the name
             let section_start = pos;
-            let (name_len, name_bytes_read) = read_leb128(&wasm[pos..])?;
-            pos += name_bytes_read;
+            let (name_len, name_bytes_read) = read_leb128(wasm.get(pos..)?)?;
+            pos = pos.checked_add(name_bytes_read)?;
 
             let name_len = name_len as usize;
-            if pos + name_len > wasm.len() {
+            let name_end = pos.checked_add(name_len)?;
+            if name_end > wasm.len() {
                 return None;
             }
-            let name = std::str::from_utf8(&wasm[pos..pos + name_len]).ok()?;
-            pos += name_len;
+            let name = std::str::from_utf8(&wasm[pos..name_end]).ok()?;
+            pos = name_end;
 
+            let header_bytes = pos.checked_sub(section_start)?;
             if name == section_name {
-                let content_len = section_size as usize - (pos - section_start);
-                if pos + content_len > wasm.len() {
+                let content_len = section_size.checked_sub(header_bytes)?;
+                let end = pos.checked_add(content_len)?;
+                if end > wasm.len() {
                     return None;
                 }
-                return Some(wasm[pos..pos + content_len].to_vec());
+                return Some(wasm[pos..end].to_vec());
             }
 
             // Skip rest of this custom section
-            let remaining = section_size as usize - (pos - section_start);
-            pos += remaining;
+            let remaining = section_size.checked_sub(header_bytes)?;
+            pos = pos.checked_add(remaining)?;
         } else {
             // Skip non-custom section
-            pos += section_size as usize;
+            pos = pos.checked_add(section_size)?;
         }
     }
 
@@ -164,7 +168,11 @@ fn parse_spec_entries(spec_bytes: &[u8]) -> Vec<ContractFunction> {
     while pos < spec_bytes.len() {
         let remaining = &spec_bytes[pos..];
         let mut cursor = std::io::Cursor::new(remaining);
-        let mut limited = Limited::new(&mut cursor, Limits::none());
+        let limits = Limits {
+            len: remaining.len(),
+            depth: 512,
+        };
+        let mut limited = Limited::new(&mut cursor, limits);
 
         match ScSpecEntry::read_xdr(&mut limited) {
             Ok(entry) => {

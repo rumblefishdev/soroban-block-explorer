@@ -24,28 +24,55 @@ pub fn extract_events(
             let Some(ref meta) = v3.soroban_meta else {
                 return Vec::new();
             };
-            meta.events
+            let mut extracted: Vec<ExtractedEvent> = meta
+                .events
                 .iter()
                 .enumerate()
                 .map(|(i, event)| {
                     extract_single_event(event, transaction_hash, ledger_sequence, created_at, i)
                 })
-                .collect()
-        }
-        TransactionMeta::V4(v4) => v4
-            .events
-            .iter()
-            .enumerate()
-            .map(|(i, tx_event)| {
-                extract_single_event(
-                    &tx_event.event,
+                .collect();
+            // Include diagnostic_events (separate field in SorobanTransactionMeta)
+            let base = extracted.len();
+            for (j, diag) in meta.diagnostic_events.iter().enumerate() {
+                extracted.push(extract_single_event(
+                    &diag.event,
                     transaction_hash,
                     ledger_sequence,
                     created_at,
-                    i,
-                )
-            })
-            .collect(),
+                    base + j,
+                ));
+            }
+            extracted
+        }
+        TransactionMeta::V4(v4) => {
+            let mut extracted: Vec<ExtractedEvent> = v4
+                .events
+                .iter()
+                .enumerate()
+                .map(|(i, tx_event)| {
+                    extract_single_event(
+                        &tx_event.event,
+                        transaction_hash,
+                        ledger_sequence,
+                        created_at,
+                        i,
+                    )
+                })
+                .collect();
+            // Include diagnostic_events
+            let base = extracted.len();
+            for (j, diag) in v4.diagnostic_events.iter().enumerate() {
+                extracted.push(extract_single_event(
+                    &diag.event,
+                    transaction_hash,
+                    ledger_sequence,
+                    created_at,
+                    base + j,
+                ));
+            }
+            extracted
+        }
         _ => Vec::new(),
     }
 }

@@ -18,7 +18,7 @@
 //! `fn_return`) when available, but diagnostic events depend on protocol configuration
 //! and are not guaranteed in production.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use stellar_xdr::curr::*;
 
 use crate::envelope::InnerTxRef;
@@ -41,17 +41,8 @@ pub struct InvocationResult {
 /// and a nested JSON tree.
 ///
 /// `successful` is derived from the parent transaction's success status.
-/// `tx_meta` is used to populate root invocations' `return_value` from
-/// `SorobanTransactionMeta.return_value`; pass `None` if not available.
-///
-/// **Return-value semantics for multiple auth entries:** when a single
-/// `InvokeHostFunction` operation has more than one auth entry, all root
-/// invocation rows receive the same `SorobanTransactionMeta.return_value`.
-/// This is a known approximation — the meta return value belongs to the
-/// overall host-function execution, not to any individual auth-entry root.
-/// For the common single-auth-entry case the value is exact. A future
-/// improvement could match auth-entry roots against `host_function` by
-/// contract address and function name to identify the canonical root.
+/// `tx_meta` is used to populate the root invocation's `return_value` from
+/// `SorobanTransactionMeta`; pass `None` if not available.
 pub fn extract_invocations(
     envelope: &InnerTxRef<'_>,
     tx_meta: Option<&TransactionMeta>,
@@ -66,8 +57,6 @@ pub fn extract_invocations(
         InnerTxRef::V1(tx) => tx.operations.as_slice(),
     };
 
-    // SorobanTransactionMeta.return_value is the tx-level return value, not
-    // per-auth-entry. All roots get the same value; see function-level doc.
     let root_return_value = tx_meta
         .and_then(soroban_return_value)
         .map(|v| scval_to_typed_json(&v))
@@ -79,12 +68,19 @@ pub fn extract_invocations(
         created_at,
         successful,
         index: 0,
-        out: Vec::new(),
     };
+    let mut all_invocations = Vec::new();
     let mut trees = Vec::new();
 
     for op in ops {
         if let OperationBody::InvokeHostFunction(ref invoke_op) = op.body {
+            // Per-op source_account overrides the tx source (same as extract_operations)
+            let caller = op
+                .source_account
+                .as_ref()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| tx_source_account.to_string());
+
             for auth_entry in invoke_op.auth.iter() {
                 let root = &auth_entry.root_invocation;
                 let tree_json = invocation_to_json(root, root_return_value.clone(), successful);
@@ -92,9 +88,9 @@ pub fn extract_invocations(
                 flatten_invocation(
                     &mut ctx,
                     root,
-                    0,
-                    Some(tx_source_account.to_string()),
+                    Some(caller.clone()),
                     root_return_value.clone(),
+                    &mut all_invocations,
                 );
             }
         }
@@ -107,73 +103,134 @@ pub fn extract_invocations(
     };
 
     InvocationResult {
-        invocations: ctx.out,
+        invocations: all_invocations,
         operation_tree,
     }
 }
 
-/// Shared context for recursive invocation flattening to avoid too many function arguments.
+/// Shared context for invocation flattening.
 struct FlattenCtx<'a> {
     transaction_hash: &'a str,
     ledger_sequence: u32,
     created_at: i64,
     successful: bool,
     index: u32,
-    out: Vec<ExtractedInvocation>,
 }
 
-/// Recursively flatten an invocation node into `ExtractedInvocation` rows (depth-first).
+/// Flatten an invocation tree into `ExtractedInvocation` rows using iterative DFS.
+///
+/// Uses an explicit stack to avoid stack overflow on deep auth trees
+/// (XDR depth limit allows up to ~1000 levels).
 fn flatten_invocation(
     ctx: &mut FlattenCtx<'_>,
-    node: &SorobanAuthorizedInvocation,
-    depth: u32,
-    caller_account: Option<String>,
-    return_value: Value,
+    root: &SorobanAuthorizedInvocation,
+    root_caller: Option<String>,
+    root_return_value: Value,
+    out: &mut Vec<ExtractedInvocation>,
 ) {
-    let (contract_id, function_name, function_args) = decode_authorized_function(&node.function);
+    struct Frame<'a> {
+        node: &'a SorobanAuthorizedInvocation,
+        depth: u32,
+        caller_account: Option<String>,
+        return_value: Value,
+    }
 
-    ctx.out.push(ExtractedInvocation {
-        transaction_hash: ctx.transaction_hash.to_string(),
-        contract_id: contract_id.clone(),
-        caller_account,
-        function_name,
-        function_args,
-        return_value,
-        successful: ctx.successful,
-        invocation_index: ctx.index,
-        depth,
-        ledger_sequence: ctx.ledger_sequence,
-        created_at: ctx.created_at,
-    });
+    let mut stack = vec![Frame {
+        node: root,
+        depth: 0,
+        caller_account: root_caller,
+        return_value: root_return_value,
+    }];
 
-    ctx.index += 1;
+    while let Some(frame) = stack.pop() {
+        let (contract_id, function_name, function_args) =
+            decode_authorized_function(&frame.node.function);
 
-    for child in node.sub_invocations.iter() {
-        flatten_invocation(ctx, child, depth + 1, contract_id.clone(), Value::Null);
+        out.push(ExtractedInvocation {
+            transaction_hash: ctx.transaction_hash.to_string(),
+            contract_id: contract_id.clone(),
+            caller_account: frame.caller_account,
+            function_name,
+            function_args,
+            return_value: frame.return_value,
+            successful: ctx.successful,
+            invocation_index: ctx.index,
+            depth: frame.depth,
+            ledger_sequence: ctx.ledger_sequence,
+            created_at: ctx.created_at,
+        });
+
+        ctx.index += 1;
+
+        // Push children in reverse so left-to-right DFS order is preserved on pop.
+        for child in frame.node.sub_invocations.iter().rev() {
+            stack.push(Frame {
+                node: child,
+                depth: frame.depth + 1,
+                caller_account: contract_id.clone(),
+                return_value: Value::Null,
+            });
+        }
     }
 }
 
-/// Recursively build a nested JSON tree from an invocation node.
+/// Build a nested JSON tree from an invocation node using iterative post-order traversal.
+///
+/// Uses an explicit stack to avoid stack overflow on deep auth trees.
 fn invocation_to_json(
-    node: &SorobanAuthorizedInvocation,
-    return_value: Value,
+    root: &SorobanAuthorizedInvocation,
+    root_return_value: Value,
     successful: bool,
 ) -> Value {
-    let (contract_id, function_name, function_args) = decode_authorized_function(&node.function);
-    let children: Vec<Value> = node
-        .sub_invocations
-        .iter()
-        .map(|child| invocation_to_json(child, Value::Null, successful))
-        .collect();
+    // Post-order: process children before parents. Use two passes:
+    // 1. DFS to collect nodes in visit order
+    // 2. Process in reverse, building children arrays bottom-up
 
-    json!({
-        "contractId": contract_id,
-        "functionName": function_name,
-        "args": function_args,
-        "returnValue": return_value,
-        "successful": successful,
-        "children": children,
-    })
+    struct Visit<'a> {
+        node: &'a SorobanAuthorizedInvocation,
+        return_value: Value,
+        child_count: usize,
+    }
+
+    let mut visits = Vec::new();
+    let mut dfs_stack: Vec<(&SorobanAuthorizedInvocation, Value)> =
+        vec![(root, root_return_value)];
+
+    while let Some((node, ret_val)) = dfs_stack.pop() {
+        let child_count = node.sub_invocations.len();
+        visits.push(Visit {
+            node,
+            return_value: ret_val,
+            child_count,
+        });
+        // Push children in reverse for left-to-right order
+        for child in node.sub_invocations.iter().rev() {
+            dfs_stack.push((child, Value::Null));
+        }
+    }
+
+    // Build JSON bottom-up: process visits in reverse
+    let mut result_stack: Vec<Value> = Vec::new();
+    for visit in visits.into_iter().rev() {
+        let (contract_id, function_name, function_args) =
+            decode_authorized_function(&visit.node.function);
+
+        // Pop this node's children from the result stack
+        let children: Vec<Value> = result_stack
+            .split_off(result_stack.len() - visit.child_count);
+
+        let node_json = json!({
+            "contractId": contract_id,
+            "functionName": function_name,
+            "args": function_args,
+            "returnValue": visit.return_value,
+            "successful": successful,
+            "children": children,
+        });
+        result_stack.push(node_json);
+    }
+
+    result_stack.pop().unwrap_or(Value::Null)
 }
 
 /// Decode a `SorobanAuthorizedFunction` into (contract_id, function_name, args_json).
@@ -193,7 +250,7 @@ fn decode_authorized_function(
             let executable = format_contract_executable(&args.executable);
             (
                 None,
-                None,
+                Some("createContract".to_string()),
                 json!({
                     "type": "createContract",
                     "executable": executable,
@@ -209,7 +266,7 @@ fn decode_authorized_function(
                 .collect();
             (
                 None,
-                None,
+                Some("createContractV2".to_string()),
                 json!({
                     "type": "createContractV2",
                     "executable": executable,
@@ -541,7 +598,7 @@ mod tests {
         assert_eq!(result.invocations.len(), 1);
         let inv = &result.invocations[0];
         assert!(inv.contract_id.is_none());
-        assert!(inv.function_name.is_none());
+        assert_eq!(inv.function_name.as_deref(), Some("createContract"));
         // caller is still the tx source for root
         assert_eq!(inv.caller_account.as_deref(), Some(source_account_str()));
         assert_eq!(inv.function_args["type"], "createContract");
