@@ -29,9 +29,9 @@ history:
 
 Implement the SQL DDL for the `tokens` and `accounts` tables. These are derived, query-oriented explorer entities that unify classic Stellar assets with Soroban token contracts and provide account summary data for explorer views.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** DDL aligned with implementation. Migration 0005 updated.
 
 ## Context
 
@@ -44,32 +44,39 @@ Tokens and accounts are derived-state tables. They are not populated directly fr
 ```sql
 CREATE TABLE tokens (
     id               SERIAL PRIMARY KEY,
-    asset_type       VARCHAR(10) NOT NULL CHECK (asset_type IN ('classic', 'sac', 'soroban')),
+    asset_type       VARCHAR(20) NOT NULL CHECK (asset_type IN ('classic', 'sac', 'soroban')),
     asset_code       VARCHAR(12),
     issuer_address   VARCHAR(56),
     contract_id      VARCHAR(56) REFERENCES soroban_contracts(contract_id),
-    name             VARCHAR(100),
+    name             VARCHAR(256),
     total_supply     NUMERIC(28, 7),
-    holder_count     INT DEFAULT 0,
-    metadata         JSONB,
-    UNIQUE (asset_code, issuer_address),
-    UNIQUE (contract_id)
+    holder_count     INTEGER DEFAULT 0,
+    metadata         JSONB
 );
+
+-- Partial unique indexes (superior to simple UNIQUE constraints -- handle NULL correctly per asset_type)
+CREATE UNIQUE INDEX idx_tokens_classic ON tokens (asset_code, issuer_address) WHERE asset_type IN ('classic', 'sac');
+CREATE UNIQUE INDEX idx_tokens_soroban ON tokens (contract_id) WHERE asset_type = 'soroban';
+CREATE UNIQUE INDEX idx_tokens_sac ON tokens (contract_id) WHERE asset_type = 'sac';
+CREATE INDEX idx_tokens_type ON tokens (asset_type);
 ```
 
 #### accounts
 
 ```sql
 CREATE TABLE accounts (
-    account_id        VARCHAR(56) PRIMARY KEY,
-    first_seen_ledger BIGINT REFERENCES ledgers(sequence),
-    last_seen_ledger  BIGINT REFERENCES ledgers(sequence),
-    sequence_number   BIGINT,
-    balances          JSONB NOT NULL DEFAULT '[]'::jsonb,
-    home_domain       VARCHAR(255),
-    INDEX idx_last_seen (last_seen_ledger DESC)
+    account_id         VARCHAR(56) PRIMARY KEY,
+    first_seen_ledger  BIGINT NOT NULL,
+    last_seen_ledger   BIGINT NOT NULL,
+    sequence_number    BIGINT NOT NULL,
+    balances           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    home_domain        VARCHAR(256)
 );
+
+CREATE INDEX idx_accounts_last_seen ON accounts (last_seen_ledger DESC);
 ```
+
+> **No FK to ledgers** -- intentional. During concurrent backfill + live ingestion, an account row may reference a ledger not yet ingested. All derived-state tables (nfts, liquidity_pools) follow this same pattern.
 
 ### Design Notes
 
@@ -79,16 +86,18 @@ CREATE TABLE accounts (
   - `classic` -- traditional Stellar asset identified by asset_code + issuer_address
   - `sac` -- Stellar Asset Contract (classic asset wrapped in a Soroban contract)
   - `soroban` -- native Soroban token contract
-- **Two unique constraints** serving different token identification patterns:
-  - `UNIQUE(asset_code, issuer_address)` -- for classic assets, the canonical identity pair
-  - `UNIQUE(contract_id)` -- for Soroban-backed tokens, the contract address is the identity
+- **Partial unique indexes** scoped by `asset_type` (superior to simple UNIQUE constraints):
+  - `idx_tokens_classic` on `(asset_code, issuer_address) WHERE asset_type IN ('classic', 'sac')` -- classic identity pair
+  - `idx_tokens_soroban` on `(contract_id) WHERE asset_type = 'soroban'` -- Soroban contract identity
+  - `idx_tokens_sac` on `(contract_id) WHERE asset_type = 'sac'` -- SAC contract identity
+  - Partial indexes handle NULL correctly: two classic tokens with NULL contract_id don't conflict on the soroban index
 - **FK: contract_id -> soroban_contracts(contract_id)** -- links Soroban-backed tokens to their contract entity for metadata, interface, and activity lookups.
 - **total_supply** uses NUMERIC(28, 7) for precision with Stellar's 7-decimal-place amounts.
 - **metadata** is JSONB for flexible token metadata that varies by token type and issuer.
 
 #### accounts
 
-- **Two FKs to ledgers**: `first_seen_ledger` and `last_seen_ledger` both reference `ledgers(sequence)`. These track when the account was first observed and most recently active.
+- **No FK to ledgers**: `first_seen_ledger` and `last_seen_ledger` are `BIGINT NOT NULL` without foreign keys. This is intentional -- during concurrent backfill + live ingestion, an account may reference a ledger not yet ingested. All derived-state tables follow this pattern.
 - **balances** is `JSONB NOT NULL DEFAULT '[]'::jsonb` -- an array of balance objects. JSONB is used because an account may hold multiple assets of different types (classic, SAC, Soroban).
 - **idx_last_seen** (last_seen_ledger DESC) supports queries for recently active accounts.
 - **sequence_number** tracks the account's transaction sequence for display purposes.
@@ -110,15 +119,15 @@ This pattern is critical for correctness when live ingestion and historical back
 
 ### Step 1: SQL DDL for tokens
 
-Define the table with all columns, CHECK constraint on asset_type, FK to soroban_contracts, and both UNIQUE constraints.
+Define the table with CHECK constraint on asset_type, FK to soroban_contracts, and partial unique indexes scoped by asset_type.
 
 ### Step 2: SQL DDL for accounts
 
-Define the table with all columns, two FKs to ledgers(sequence), JSONB default for balances, and the last_seen_ledger DESC index.
+Define the table with BIGINT NOT NULL ledger columns (no FK to ledgers -- backfill safety), JSONB default for balances, and last_seen_ledger DESC index.
 
-### Step 3: Generate migration
+### Step 3: Migration file
 
-Write plain SQL migration file. Apply via `psql` or `sqlx migrate run`. Verify CHECK constraint and UNIQUE constraints are correctly represented.
+Migration 0005 updated in place (not yet deployed). Verify with `cargo check -p db`.
 
 ### Step 4: Validate unique constraints
 
@@ -128,20 +137,23 @@ Test that:
 - Two Soroban tokens with the same contract_id are rejected.
 - A classic token with NULL contract_id and a Soroban token with NULL asset_code/issuer can coexist.
 
-### Step 5: Validate watermark upsert pattern
+### Step 5: Watermark upsert pattern
 
-Implement and test the upsert logic that respects ledger-sequence watermarks, ensuring older writes do not overwrite newer state.
+Already implemented in `soroban.rs` (`upsert_account_state`, `upsert_token`). Formally owned by task 0028.
 
 ## Acceptance Criteria
 
-- [ ] SQL DDL for tokens matches DDL with CHECK constraint on asset_type
-- [ ] Both UNIQUE constraints (asset_code+issuer_address and contract_id) are enforced
-- [ ] FK from tokens.contract_id to soroban_contracts.contract_id is defined
-- [ ] SQL DDL for accounts matches DDL with two FKs to ledgers
-- [ ] balances column defaults to '[]'::jsonb
-- [ ] idx_last_seen index is created on accounts.last_seen_ledger DESC
-- [ ] Watermark-guarded upsert logic prevents older data from overwriting newer state
-- [ ] Migration applies cleanly to a fresh PostgreSQL instance
+- [x] SQL DDL for tokens with CHECK constraint on asset_type
+- [x] Partial unique indexes enforced per asset_type (classic/sac, soroban, sac)
+- [x] FK from tokens.contract_id to soroban_contracts.contract_id
+- [x] SQL DDL for accounts with BIGINT NOT NULL ledger columns (no FK -- intentional for backfill safety)
+- [x] balances column defaults to '[]'::jsonb
+- [x] idx_accounts_last_seen index on accounts.last_seen_ledger DESC
+- [x] total_supply uses NUMERIC(28, 7) for Stellar precision
+- [x] holder_count defaults to 0
+- [x] Migration applies cleanly to a fresh PostgreSQL instance
+
+> **Note:** Watermark-guarded upsert logic is already implemented in `soroban.rs` (`upsert_account_state`, `upsert_token`). Testing is scope of task 0028.
 
 ## Notes
 

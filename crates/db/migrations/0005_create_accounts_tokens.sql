@@ -16,8 +16,8 @@ CREATE TABLE tokens (
     issuer_address   VARCHAR(56),
     contract_id      VARCHAR(56) REFERENCES soroban_contracts(contract_id),
     name             VARCHAR(256),
-    total_supply     NUMERIC,
-    holder_count     INTEGER,
+    total_supply     NUMERIC(28, 7),
+    holder_count     INTEGER DEFAULT 0,
     metadata         JSONB
 );
 
