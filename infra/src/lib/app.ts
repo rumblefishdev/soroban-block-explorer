@@ -6,6 +6,7 @@ import { RdsStack } from './stacks/rds-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
 import { MigrationStack } from './stacks/migration-stack.js';
+import { PartitionStack } from './stacks/partition-stack.js';
 import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 
@@ -58,6 +59,17 @@ export function createApp({
   });
   migration.addDependency(rds);
 
+  const partition = new PartitionStack(app, `${prefix}-Partition`, {
+    env,
+    config,
+    vpc: network.vpc,
+    lambdaSecurityGroup: network.lambdaSecurityGroup,
+    dbSecret: rds.dbSecret,
+    dbProxyEndpoint,
+    cargoWorkspacePath,
+  });
+  partition.addDependency(migration);
+
   const compute = new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
@@ -69,7 +81,7 @@ export function createApp({
     ledgerBucketName: ledgerBucket.bucket.bucketName,
     cargoWorkspacePath,
   });
-  compute.addDependency(migration);
+  compute.addDependency(partition);
 
   new IngestionStack(app, `${prefix}-Ingestion`, {
     env,
