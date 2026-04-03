@@ -2,7 +2,7 @@
 id: '0102'
 title: 'Rewrite SQL migrations 0002-0006 to derive from domain types'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0005']
 related_tasks: ['0101', '0018', '0019', '0020']
 tags: [priority-high, effort-medium, layer-database, rust]
@@ -18,6 +18,10 @@ history:
       Now that domain types are the source of truth (task 0101), migrations
       should be rewritten to derive from them. Also fixes divergence between
       task 0020 spec and actual migration 0006.
+  - date: 2026-04-03
+    status: active
+    who: stkrolikiewicz
+    note: Activated task for implementation.
 ---
 
 # Rewrite SQL migrations 0002-0006 to derive from domain types
@@ -26,9 +30,9 @@ history:
 
 Delete migrations 0002-0006 and rewrite them with domain types (`crates/domain/`) as source of truth. The DB is empty — no data risk. This establishes the correct workflow going forward: types define the contract, migrations implement it.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** Ready for implementation.
 
 ## Context
 
