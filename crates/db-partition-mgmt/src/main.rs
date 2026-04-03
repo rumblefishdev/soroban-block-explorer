@@ -210,16 +210,31 @@ async fn ensure_time_partitions(
 
     let mut created = 0u32;
     for (name, month_start) in &missing {
-        let next = add_months(*month_start, 1);
-        let ddl = format!(
-            "CREATE TABLE IF NOT EXISTS {name} PARTITION OF {table} \
-             FOR VALUES FROM ('{from}') TO ('{to}')",
-            from = month_start.format("%Y-%m-%d 00:00:00+00"),
-            to = next.format("%Y-%m-%d 00:00:00+00"),
+        let from = month_start.format("%Y-%m-%d 00:00:00+00");
+        let to = add_months(*month_start, 1).format("%Y-%m-%d 00:00:00+00");
+
+        let create_ddl = format!(
+            "CREATE TABLE {name} PARTITION OF {table} \
+             FOR VALUES FROM ('{from}') TO ('{to}')"
         );
-        sqlx::query(&ddl).execute(pool).await?;
-        tracing::info!(partition = %name, "created");
-        created += 1;
+
+        match sqlx::query(&create_ddl).execute(pool).await {
+            Ok(_) => {
+                tracing::info!(partition = %name, "created");
+                created += 1;
+            }
+            // 42P07 = duplicate_table — table exists but may be detached; reattach it.
+            Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("42P07") => {
+                let attach_ddl = format!(
+                    "ALTER TABLE {table} ATTACH PARTITION {name} \
+                     FOR VALUES FROM ('{from}') TO ('{to}')"
+                );
+                sqlx::query(&attach_ddl).execute(pool).await?;
+                tracing::info!(partition = %name, "reattached");
+                created += 1;
+            }
+            Err(err) => return Err(err.into()),
+        }
     }
 
     Ok(created)
@@ -299,13 +314,27 @@ async fn ensure_operations_partitions(pool: &PgPool) -> Result<OperationsResult,
 
     let mut created = 0u32;
     for (name, range_start, range_end) in &to_create {
-        let ddl = format!(
-            "CREATE TABLE IF NOT EXISTS {name} PARTITION OF operations \
+        let create_ddl = format!(
+            "CREATE TABLE {name} PARTITION OF operations \
              FOR VALUES FROM ({range_start}) TO ({range_end})"
         );
-        sqlx::query(&ddl).execute(pool).await?;
-        tracing::info!(partition = %name, range_start, range_end, "created");
-        created += 1;
+
+        match sqlx::query(&create_ddl).execute(pool).await {
+            Ok(_) => {
+                tracing::info!(partition = %name, range_start, range_end, "created");
+                created += 1;
+            }
+            Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("42P07") => {
+                let attach_ddl = format!(
+                    "ALTER TABLE operations ATTACH PARTITION {name} \
+                     FOR VALUES FROM ({range_start}) TO ({range_end})"
+                );
+                sqlx::query(&attach_ddl).execute(pool).await?;
+                tracing::info!(partition = %name, range_start, range_end, "reattached");
+                created += 1;
+            }
+            Err(err) => return Err(err.into()),
+        }
     }
 
     Ok(OperationsResult {
@@ -421,14 +450,25 @@ mod tests {
 
     #[test]
     fn months_to_create_all_exist() {
-        // If all partitions exist, nothing to create
+        // today=2024-03-01, future=3 → need 2024-02 through 2024-06
         let today = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
         let existing: Vec<String> = (2..=6)
             .map(|m| format!("soroban_events_y2024m{m:02}"))
             .collect();
         let missing = months_to_create("soroban_events", &existing, today);
-        // Only 2024-07 should be missing (month 6 = Jun exists, need through Jun = today+3)
-        assert!(missing.iter().all(|(n, _)| n != "soroban_events_y2024m02"));
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn months_to_create_upper_bound() {
+        // today=2024-03-01, existing covers 02-05 → missing only 2024-06
+        let today = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        let existing: Vec<String> = (2..=5)
+            .map(|m| format!("soroban_events_y2024m{m:02}"))
+            .collect();
+        let missing = months_to_create("soroban_events", &existing, today);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0, "soroban_events_y2024m06");
     }
 
     // ── Decision logic tests: operations_ranges_to_create ──
