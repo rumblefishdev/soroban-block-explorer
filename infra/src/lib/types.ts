@@ -39,8 +39,10 @@ export interface EnvironmentConfig {
   readonly apiGatewayCacheEnabled: boolean;
   /** Cache cluster size in GB. String because AWS API accepts '0.5', '1.6', '6.1', etc. */
   readonly apiGatewayCacheSize: string;
-  /** Cache TTL (seconds) for immutable endpoints (e.g. /transactions/{hash}).  */
+  /** Cache TTL (seconds) for immutable endpoints (e.g. /transactions/{hash}). Not yet wired per-method — awaits route patterns from task 0033. */
   readonly apiGatewayCacheTtlImmutable: number;
   /** Cache TTL (seconds) for mutable endpoints (e.g. /transactions?limit=20). Used as the stage-level default. */
   readonly apiGatewayCacheTtlMutable: number;
+  /** Daily request quota for partner API key usage plans. */
+  readonly apiGatewayPartnerDailyQuota: number;
 }

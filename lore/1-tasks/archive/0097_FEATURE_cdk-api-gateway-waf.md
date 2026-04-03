@@ -45,7 +45,7 @@ The WAF WebACL (defined in task 0035) protects the API from abuse without requir
 
 ### Source Code Location
 
-- `infra/aws-cdk/lib/stacks/` (new `api-gateway-stack.ts`)
+- `infra/src/lib/stacks/api-gateway-stack.ts`
 
 ## Implementation Plan
 
@@ -121,7 +121,7 @@ Update `envs/staging.json` and `envs/production.json`.
 - [x] EnvironmentConfig extended with API Gateway fields, both env JSONs updated
 - [x] ApiGatewayStack wired in app.ts
 - [x] API endpoint URL exported as stack output
-- [x] Cache cluster disabled on staging (`apiGatewayCacheEnabled: false`), enabled on production — both envs disabled during development
+- [x] Cache cluster configurable per environment (`apiGatewayCacheEnabled`) — disabled on both envs during development, production to be enabled before launch
 
 ## Implementation Notes
 

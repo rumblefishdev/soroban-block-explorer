@@ -78,6 +78,12 @@ export class ApiGatewayStack extends cdk.Stack {
     // Optional API key access for non-browser consumers (automation,
     // partner integrations). Browser traffic does not require an API
     // key — the SPA calls the API anonymously.
+    //
+    // NOTE: In proxy mode, LambdaRestApi creates a greedy {proxy+}
+    // resource with apiKeyRequired=false. The usage plan tracks and
+    // throttles requests that voluntarily include an x-api-key header,
+    // but does not gate access. To enforce API key requirement on
+    // specific routes, add non-proxy resources with apiKeyRequired=true.
     const usagePlan = api.addUsagePlan('UsagePlan', {
       name: `${config.envName}-partner-plan`,
       throttle: {
@@ -85,7 +91,7 @@ export class ApiGatewayStack extends cdk.Stack {
         burstLimit: config.apiGatewayThrottleBurst,
       },
       quota: {
-        limit: 10_000,
+        limit: config.apiGatewayPartnerDailyQuota,
         period: apigateway.Period.DAY,
       },
     });
