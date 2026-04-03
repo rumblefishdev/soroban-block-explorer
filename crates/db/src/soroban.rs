@@ -1,7 +1,9 @@
-//! Persistence functions for Soroban derived-state upserts.
+//! Persistence functions for Soroban derived-state tables.
 //!
-//! Contracts, accounts, tokens, NFTs, liquidity pools, and snapshots.
-//! All upserts use watermark guards to prevent stale backfill overwrites.
+//! - `accounts`, `nfts`, `liquidity_pools`: watermark-guarded upserts (last_seen/last_updated_ledger)
+//! - `soroban_contracts`: COALESCE-merge upserts (no watermark; deployment fields are immutable once set)
+//! - `tokens`: insert-or-ignore (effectively immutable once discovered)
+//! - `liquidity_pool_snapshots`: append-only inserts (ON CONFLICT DO NOTHING)
 //!
 //! For immutable-table inserts (ledgers, transactions, operations, events,
 //! invocations), see the `persistence` module.
@@ -236,8 +238,17 @@ mod tests {
     use serde_json::json;
 
     async fn test_pool() -> Option<sqlx::PgPool> {
-        let url = std::env::var("DATABASE_URL").ok()?;
-        sqlx::PgPool::connect(&url).await.ok()
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!(
+                "SKIP: DATABASE_URL not set — integration tests require a running PostgreSQL instance"
+            );
+            return None;
+        };
+        Some(
+            sqlx::PgPool::connect(&url)
+                .await
+                .expect("failed to connect to DATABASE_URL"),
+        )
     }
 
     fn test_account(id: &str, last_seen: i64) -> Account {

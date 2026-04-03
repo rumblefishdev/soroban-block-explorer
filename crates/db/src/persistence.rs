@@ -1,9 +1,9 @@
 //! Idempotent persistence layer for the indexing pipeline.
 //!
 //! All writes are replay-safe:
-//! - Immutable tables use INSERT ON CONFLICT DO NOTHING
+//! - Immutable tables use INSERT ON CONFLICT DO NOTHING (or DO UPDATE ... RETURNING for id recovery)
 //! - Derived-state tables use watermark-guarded upserts (in soroban.rs)
-//! - Batch insertion reduces round trips to RDS Proxy
+//! - Inserts are grouped per ledger; each row is one round trip (UNNEST batching is a future optimisation)
 //! - No delete-then-reinsert patterns (preserves ON DELETE CASCADE children)
 
 use domain::{
@@ -41,10 +41,12 @@ pub async fn insert_ledger(pool: &PgPool, ledger: &Ledger) -> Result<bool, sqlx:
 // Transactions (immutable, batch)
 // ---------------------------------------------------------------------------
 
-/// Batch insert transactions for a ledger. Skips duplicates via ON CONFLICT DO NOTHING.
+/// Batch insert transactions for a ledger. Idempotent — replays are safe.
 ///
-/// Returns the list of (hash, id) pairs for inserted transactions.
-/// Transactions that already existed are not returned.
+/// Returns the list of (hash, id) pairs for ALL input transactions,
+/// whether freshly inserted or already existing. This ensures child rows
+/// (operations, events, invocations) can always be linked by transaction_id
+/// even when replaying a previously partially-processed ledger.
 pub async fn insert_transactions_batch(
     pool: &PgPool,
     transactions: &[Transaction],
@@ -53,16 +55,16 @@ pub async fn insert_transactions_batch(
         return Ok(Vec::new());
     }
 
-    let mut inserted = Vec::with_capacity(transactions.len());
+    let mut result = Vec::with_capacity(transactions.len());
 
     for tx in transactions {
-        let row = sqlx::query_as::<_, (i64,)>(
+        let (id,) = sqlx::query_as::<_, (i64,)>(
             r#"INSERT INTO transactions
                    (hash, ledger_sequence, source_account, fee_charged, successful,
                     result_code, envelope_xdr, result_xdr, result_meta_xdr,
                     memo_type, memo, created_at, parse_error, operation_tree)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-               ON CONFLICT ON CONSTRAINT transactions_hash_unique DO NOTHING
+               ON CONFLICT ON CONSTRAINT transactions_hash_unique DO UPDATE SET hash = EXCLUDED.hash
                RETURNING id"#,
         )
         .bind(&tx.hash)
@@ -79,15 +81,13 @@ pub async fn insert_transactions_batch(
         .bind(tx.created_at)
         .bind(tx.parse_error)
         .bind(&tx.operation_tree)
-        .fetch_optional(pool)
+        .fetch_one(pool)
         .await?;
 
-        if let Some((id,)) = row {
-            inserted.push((tx.hash.clone(), id));
-        }
+        result.push((tx.hash.clone(), id));
     }
 
-    Ok(inserted)
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -203,8 +203,17 @@ mod tests {
     use chrono::Utc;
 
     async fn test_pool() -> Option<sqlx::PgPool> {
-        let url = std::env::var("DATABASE_URL").ok()?;
-        sqlx::PgPool::connect(&url).await.ok()
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!(
+                "SKIP: DATABASE_URL not set — integration tests require a running PostgreSQL instance"
+            );
+            return None;
+        };
+        Some(
+            sqlx::PgPool::connect(&url)
+                .await
+                .expect("failed to connect to DATABASE_URL"),
+        )
     }
 
     fn test_ledger(seq: i64) -> Ledger {
@@ -297,14 +306,19 @@ mod tests {
         let r1 = insert_transactions_batch(&pool, &txs).await.unwrap();
         let r2 = insert_transactions_batch(&pool, &txs).await.unwrap();
 
-        assert_eq!(r1.len(), 1, "first batch returns inserted id");
-        assert_eq!(r2.len(), 0, "duplicate batch returns nothing");
+        assert_eq!(r1.len(), 1, "first batch returns id");
+        assert_eq!(
+            r2.len(),
+            1,
+            "replay also returns id (needed for child inserts)"
+        );
+        assert_eq!(r1[0].1, r2[0].1, "same id on both calls");
         let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE hash = $1")
             .bind(&hash)
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 1, "still exactly one row after replay");
 
         sqlx::query("DELETE FROM transactions WHERE hash = $1")
             .bind(&hash)
