@@ -17,5 +17,13 @@
   "apiLambdaMemory": 256,
   "apiLambdaTimeout": 30,
   "indexerLambdaMemory": 512,
-  "indexerLambdaTimeout": 60
+  "indexerLambdaTimeout": 60,
+
+  "apiGatewayThrottleRate": 50,
+  "apiGatewayThrottleBurst": 100,
+  "apiGatewayCacheEnabled": false,
+  "apiGatewayCacheSize": "0.5",
+  "apiGatewayCacheTtlImmutable": 3600,
+  "apiGatewayCacheTtlMutable": 10,
+  "apiGatewayPartnerDailyQuota": 10000
 }
