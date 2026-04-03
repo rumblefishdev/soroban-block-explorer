@@ -100,13 +100,13 @@ Update status of DDL tasks to reflect the rewrite.
 
 - [x] ALL migrations 0001-0006 rewritten — every column matches domain struct field
 - [x] Domain types are the documented source of truth for schema (inline comments)
-- [ ] `sqlx migrate run` applies cleanly to fresh PostgreSQL
+- [x] `sqlx migrate run` applies cleanly to fresh PostgreSQL (verified on staging)
 - [x] Indexes, FKs, constraints, partitioning preserved
 - [x] DB-only columns (search_vector) documented as exceptions
 - [x] `operation_tree` added to Transaction domain struct
 - [x] Stale DEFAULTs removed (parse_error, holder_count); is_sac DEFAULT kept for upsert safety
 - [x] Consistent SQL style across all migrations
-- [ ] Tasks 0018, 0019, 0020 updated/closed
+- [x] Tasks 0018, 0019 already archived; 0020 completed and archived
 
 ## Notes
 
