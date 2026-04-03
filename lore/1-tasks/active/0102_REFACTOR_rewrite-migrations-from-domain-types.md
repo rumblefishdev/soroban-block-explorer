@@ -118,7 +118,9 @@ Update status of DDL tasks to reflect the rewrite.
 ## Deploy: reset DB before running new migrations
 
 Migration file checksums changed — sqlx will reject them on any DB that ran the old versions.
-Full schema wipe required (migrations use `CREATE TABLE` without `IF NOT EXISTS`):
+Full schema wipe required (migrations use `CREATE TABLE` without `IF NOT EXISTS`).
+
+Connect via SSM tunnel + psql:
 
 ```sql
 DROP SCHEMA public CASCADE;
