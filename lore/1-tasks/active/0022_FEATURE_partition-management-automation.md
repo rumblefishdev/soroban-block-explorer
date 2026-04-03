@@ -2,7 +2,7 @@
 id: '0022'
 title: 'Partition management automation'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0017', '0018', '0020']
 tags: [priority-medium, effort-medium, layer-database]
@@ -14,6 +14,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-04-03
+    status: active
+    who: stkrolikiewicz
+    note: Activated task for implementation.
 ---
 
 # Partition management automation
