@@ -2,7 +2,7 @@
 id: '0102'
 title: 'Rewrite ALL SQL migrations to derive from domain types'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0005']
 related_tasks: ['0101', '0018', '0019', '0020']
 tags: [priority-high, effort-medium, layer-database, rust]
@@ -22,6 +22,14 @@ history:
     status: active
     who: stkrolikiewicz
     note: Activated task for implementation.
+  - date: 2026-04-03
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Rewrote all 6 migrations (0001-0006) from domain types.
+      Added operation_tree to Transaction struct. Dropped stale DEFAULTs
+      (parse_error, holder_count); kept is_sac DEFAULT for upsert safety.
+      Verified on staging. Closed task 0020. PR #63 merged.
 ---
 
 # Rewrite ALL SQL migrations to derive from domain types
@@ -32,9 +40,9 @@ Rewrite all migrations (0001-0006) with domain types (`crates/domain/`) as sourc
 
 Scope expanded from original plan: migration 0001 included for consistent style, and `operation_tree` field added to `Transaction` domain struct.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** Implementation complete, pending commit.
+**Current state:** Merged to develop (PR #63). Verified on staging.
 
 ## Context
 
