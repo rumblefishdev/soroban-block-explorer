@@ -71,7 +71,7 @@ export function createApp({
   });
   compute.addDependency(migration);
 
-  const ingestion = new IngestionStack(app, `${prefix}-Ingestion`, {
+  new IngestionStack(app, `${prefix}-Ingestion`, {
     env,
     config,
     vpc: network.vpc,
@@ -79,8 +79,8 @@ export function createApp({
     ledgerBucketArn: ledgerBucket.bucket.bucketArn,
     ledgerBucketName: ledgerBucket.bucket.bucketName,
   });
-  ingestion.addDependency(network);
-  ingestion.addDependency(ledgerBucket);
+  // CDK auto-detects dependencies from cross-stack references
+  // (vpc, ecsSecurityGroup, bucket ARN/name).
 
   const apiGateway = new ApiGatewayStack(app, `${prefix}-ApiGateway`, {
     env,

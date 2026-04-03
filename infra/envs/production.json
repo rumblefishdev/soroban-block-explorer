@@ -27,6 +27,8 @@
   "ecsLogRetentionDays": 90,
   "galexieStopTimeout": 120,
   "ecsExecEnabled": false,
+  "galexieImageTag": "latest",
+  "galexieBackfillEnabled": true,
 
   "apiGatewayThrottleRate": 50,
   "apiGatewayThrottleBurst": 100,

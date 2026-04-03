@@ -47,6 +47,14 @@ export interface EnvironmentConfig {
   readonly galexieStopTimeout: number;
   /** Enable ECS Exec (shell access into containers via SSM). Adds ssmmessages IAM permissions. */
   readonly ecsExecEnabled: boolean;
+  /**
+   * ECR image tag for Galexie container. Defaults to "latest" until CI/CD
+   * pipeline (task 0039) is implemented — once available, each deploy will
+   * set this to a git SHA for immutable, reproducible deployments.
+   */
+  readonly galexieImageTag: string;
+  /** Whether to create the backfill task definition. Not every environment needs backfill. */
+  readonly galexieBackfillEnabled: boolean;
 
   // API Gateway (consumed by ApiGatewayStack)
 

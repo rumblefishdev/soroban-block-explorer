@@ -5,6 +5,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
@@ -73,7 +74,7 @@ export class IngestionStack extends cdk.Stack {
   readonly cluster: ecs.ICluster;
   readonly repository: ecr.IRepository;
   readonly liveService: ecs.FargateService;
-  readonly backfillTaskDefinition: ecs.FargateTaskDefinition;
+  readonly backfillTaskDefinition?: ecs.FargateTaskDefinition;
 
   constructor(scope: Construct, id: string, props: IngestionStackProps) {
     super(scope, id, props);
@@ -121,6 +122,13 @@ export class IngestionStack extends cdk.Stack {
     });
     this.repository = repository;
 
+    // Publish ECR repository URI to SSM so CI/CD (GitHub Actions) can
+    // discover it without hardcoding the repository name.
+    new ssm.StringParameter(this, 'EcrRepoUriParam', {
+      parameterName: `/soroban-explorer/${config.envName}/ecr-galexie-repo-uri`,
+      stringValue: repository.repositoryUri,
+    });
+
     // ---------------------
     // ECS Cluster
     // ---------------------
@@ -155,6 +163,9 @@ export class IngestionStack extends cdk.Stack {
       STELLAR_CORE_BINARY_PATH: '/usr/bin/stellar-core',
     };
 
+    // Collect task definitions for shared IAM grants below.
+    const taskDefs: ecs.FargateTaskDefinition[] = [];
+
     // ---------------------
     // Galexie Live — Task Definition
     // ---------------------
@@ -176,7 +187,10 @@ export class IngestionStack extends cdk.Stack {
     liveTaskDef.addVolume({ name: 'tmp' });
 
     const liveContainer = liveTaskDef.addContainer('Galexie', {
-      image: ecs.ContainerImage.fromEcrRepository(repository),
+      image: ecs.ContainerImage.fromEcrRepository(
+        repository,
+        config.galexieImageTag
+      ),
       logging: ecs.LogDrivers.awsLogs({
         logGroup: liveLogGroup,
         streamPrefix: 'galexie',
@@ -186,13 +200,11 @@ export class IngestionStack extends cdk.Stack {
         // Append mode — Galexie auto-detects last exported ledger from S3.
         START: '',
       },
-      healthCheck: {
-        command: ['CMD-SHELL', 'pgrep stellar-core || exit 1'],
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(5),
-        retries: 3,
-        startPeriod: cdk.Duration.seconds(120),
-      },
+      // TODO: Add container health check once the image is running on staging.
+      // Needs investigation into what's available inside stellar/stellar-galexie
+      // (e.g. process liveness, last-file-age, HTTP endpoint). A naive pgrep
+      // check only detects crashes, not hangs — a meaningful check should
+      // verify that Galexie is actually producing data.
       readonlyRootFilesystem: true,
       stopTimeout: cdk.Duration.seconds(config.galexieStopTimeout),
     });
@@ -200,6 +212,7 @@ export class IngestionStack extends cdk.Stack {
       { containerPath: '/data', sourceVolume: 'data', readOnly: false },
       { containerPath: '/tmp', sourceVolume: 'tmp', readOnly: false }
     );
+    taskDefs.push(liveTaskDef);
 
     // ---------------------
     // Galexie Live — Fargate Service
@@ -226,56 +239,64 @@ export class IngestionStack extends cdk.Stack {
     this.liveService = liveService;
 
     // ---------------------
-    // Galexie Backfill — Task Definition
+    // Galexie Backfill — Task Definition (optional)
     // ---------------------
-    const backfillTaskDef = new ecs.FargateTaskDefinition(
-      this,
-      'BackfillTaskDef',
-      {
-        family: `${config.envName}-galexie-backfill`,
-        cpu: config.galexieCpu,
-        memoryLimitMiB: config.galexieMemory,
-        ephemeralStorageGiB: config.galexieEphemeralStorage,
-        runtimePlatform: {
-          cpuArchitecture: ecs.CpuArchitecture.X86_64,
-          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+    // Uses the same Galexie image as the live service — Galexie handles
+    // both append (live) and bounded-range (backfill) modes in the same
+    // binary. The difference is the START/END environment variables.
+    if (config.galexieBackfillEnabled) {
+      const backfillTaskDef = new ecs.FargateTaskDefinition(
+        this,
+        'BackfillTaskDef',
+        {
+          family: `${config.envName}-galexie-backfill`,
+          cpu: config.galexieCpu,
+          memoryLimitMiB: config.galexieMemory,
+          ephemeralStorageGiB: config.galexieEphemeralStorage,
+          runtimePlatform: {
+            cpuArchitecture: ecs.CpuArchitecture.X86_64,
+            operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+          },
+        }
+      );
+
+      backfillTaskDef.addVolume({ name: 'data' });
+      backfillTaskDef.addVolume({ name: 'tmp' });
+
+      const backfillContainer = backfillTaskDef.addContainer('Galexie', {
+        image: ecs.ContainerImage.fromEcrRepository(
+          repository,
+          config.galexieImageTag
+        ),
+        logging: ecs.LogDrivers.awsLogs({
+          logGroup: backfillLogGroup,
+          streamPrefix: 'galexie',
+        }),
+        environment: {
+          ...sharedEnvironment,
+          // START and END are overridden per RunTask invocation.
+          // Defaults here serve as documentation; actual values are
+          // passed via container overrides when running the task.
+          // Soroban mainnet activation ledger (Protocol 20, Feb 20 2024).
+          START: '50457424',
+          END: '',
         },
-      }
-    );
-
-    backfillTaskDef.addVolume({ name: 'data' });
-    backfillTaskDef.addVolume({ name: 'tmp' });
-
-    const backfillContainer = backfillTaskDef.addContainer('Galexie', {
-      image: ecs.ContainerImage.fromEcrRepository(repository),
-      logging: ecs.LogDrivers.awsLogs({
-        logGroup: backfillLogGroup,
-        streamPrefix: 'galexie',
-      }),
-      environment: {
-        ...sharedEnvironment,
-        // START and END are overridden per RunTask invocation.
-        // Defaults here serve as documentation; actual values are
-        // passed via container overrides when running the task.
-        // Soroban mainnet activation ledger (Protocol 20, Feb 20 2024).
-        START: '50457424',
-        END: '',
-      },
-      readonlyRootFilesystem: true,
-      stopTimeout: cdk.Duration.seconds(config.galexieStopTimeout),
-    });
-    backfillContainer.addMountPoints(
-      { containerPath: '/data', sourceVolume: 'data', readOnly: false },
-      { containerPath: '/tmp', sourceVolume: 'tmp', readOnly: false }
-    );
-    this.backfillTaskDefinition = backfillTaskDef;
+        readonlyRootFilesystem: true,
+        stopTimeout: cdk.Duration.seconds(config.galexieStopTimeout),
+      });
+      backfillContainer.addMountPoints(
+        { containerPath: '/data', sourceVolume: 'data', readOnly: false },
+        { containerPath: '/tmp', sourceVolume: 'tmp', readOnly: false }
+      );
+      this.backfillTaskDefinition = backfillTaskDef;
+      taskDefs.push(backfillTaskDef);
+    }
 
     // ---------------------
     // IAM Grants
     // ---------------------
     // Task role — application permissions (S3 write + list for checkpoint resume).
-    // Both live and backfill task roles need the same S3 permissions.
-    for (const taskDef of [liveTaskDef, backfillTaskDef]) {
+    for (const taskDef of taskDefs) {
       ledgerBucket.grantWrite(taskDef.taskRole);
       // ListBucket is needed for Galexie checkpoint resume (scans S3 for
       // last exported ledger). IBucket.grant() is not available on imported
@@ -292,15 +313,15 @@ export class IngestionStack extends cdk.Stack {
     // but explicit grantPull ensures GetAuthorizationToken is also granted).
     // FargateTaskDefinition always creates an execution role, so the non-null
     // assertion is safe here.
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    repository.grantPull(liveTaskDef.executionRole!);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    repository.grantPull(backfillTaskDef.executionRole!);
+    for (const taskDef of taskDefs) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      repository.grantPull(taskDef.executionRole!);
+    }
 
     // ECS Exec requires SSM permissions on the task role.
     // ssmmessages actions do not support resource-level restrictions (AWS limitation).
     if (config.ecsExecEnabled) {
-      for (const taskDef of [liveTaskDef, backfillTaskDef]) {
+      for (const taskDef of taskDefs) {
         taskDef.taskRole.addToPrincipalPolicy(
           new iam.PolicyStatement({
             actions: [
@@ -337,8 +358,10 @@ export class IngestionStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'LiveServiceName', {
       value: liveService.serviceName,
     });
-    new cdk.CfnOutput(this, 'BackfillTaskDefArn', {
-      value: backfillTaskDef.taskDefinitionArn,
-    });
+    if (this.backfillTaskDefinition) {
+      new cdk.CfnOutput(this, 'BackfillTaskDefArn', {
+        value: this.backfillTaskDefinition.taskDefinitionArn,
+      });
+    }
   }
 }
