@@ -9,6 +9,18 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 
+const STOP_TIMEOUT_MIN = 2;
+const STOP_TIMEOUT_MAX = 120;
+
+/** Validate stopTimeout is within ECS allowed range (2–120 seconds). */
+function validateStopTimeout(seconds: number): void {
+  if (seconds < STOP_TIMEOUT_MIN || seconds > STOP_TIMEOUT_MAX) {
+    throw new Error(
+      `galexieStopTimeout must be between ${STOP_TIMEOUT_MIN} and ${STOP_TIMEOUT_MAX} seconds, got ${seconds}`
+    );
+  }
+}
+
 /** Map numeric retention days to the CDK enum. */
 function toRetentionDays(days: number): logs.RetentionDays {
   const mapping: Record<number, logs.RetentionDays> = {
@@ -70,6 +82,7 @@ export class IngestionStack extends cdk.Stack {
       props;
 
     const logRetention = toRetentionDays(config.ecsLogRetentionDays);
+    validateStopTimeout(config.galexieStopTimeout);
 
     // Import the ledger bucket by ARN/name to avoid cross-stack
     // cyclic dependency (same pattern as ComputeStack).
@@ -277,8 +290,12 @@ export class IngestionStack extends cdk.Stack {
 
     // Execution role — ECR pull (auto-granted by fromEcrRepository for image pull,
     // but explicit grantPull ensures GetAuthorizationToken is also granted).
-    repository.grantPull(liveTaskDef.executionRole as iam.IRole);
-    repository.grantPull(backfillTaskDef.executionRole as iam.IRole);
+    // FargateTaskDefinition always creates an execution role, so the non-null
+    // assertion is safe here.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    repository.grantPull(liveTaskDef.executionRole!);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    repository.grantPull(backfillTaskDef.executionRole!);
 
     // ECS Exec requires SSM permissions on the task role.
     // ssmmessages actions do not support resource-level restrictions (AWS limitation).

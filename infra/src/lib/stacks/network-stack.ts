@@ -157,13 +157,19 @@ export class NetworkStack extends cdk.Stack {
         ],
       })
     );
-    // Allow CDK asset staging and bootstrap buckets — required for
-    // cdk deploy to upload Lambda bundles and CloudFormation templates.
+    // Allow CDK bootstrap bucket — required for cdk deploy to upload
+    // Lambda bundles and CloudFormation templates. The CDK bootstrap
+    // bucket follows the pattern: cdk-hnb659fds-assets-{ACCOUNT}-{REGION}.
+    // Scoped to this fixed prefix to avoid matching arbitrary third-party
+    // buckets that happen to start with "cdk-".
     s3Endpoint.addToPolicy(
       new iam.PolicyStatement({
         principals: [new iam.AnyPrincipal()],
         actions: ['s3:*'],
-        resources: ['arn:aws:s3:::cdk-*', 'arn:aws:s3:::cdk-*/*'],
+        resources: [
+          'arn:aws:s3:::cdk-hnb659fds-*',
+          'arn:aws:s3:::cdk-hnb659fds-*/*',
+        ],
       })
     );
 
