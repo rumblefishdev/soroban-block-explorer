@@ -2,7 +2,7 @@
 id: '0034'
 title: 'CDK: ECS Fargate for Galexie live + backfill'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0006', '0031', '0001']
 tags: [priority-medium, effort-medium, layer-infra]
@@ -14,6 +14,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-04-03
+    status: active
+    who: fmazur
+    note: 'Activated task'
 ---
 
 # CDK: ECS Fargate for Galexie live + backfill
