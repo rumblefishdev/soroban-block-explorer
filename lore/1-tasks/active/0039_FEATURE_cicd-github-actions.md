@@ -2,7 +2,7 @@
 id: '0039'
 title: 'CI/CD pipeline: GitHub Actions workflows'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0004', '0005']
 related_tasks: ['0006', '0021', '0092']
 tags: [priority-high, effort-medium, layer-infra]
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Updated per ADR 0005: added Rust CI job (dtolnay/rust-toolchain, cargo-lambda, SQLX_OFFLINE)'
+  - date: 2026-04-03
+    status: active
+    who: fmazur
+    note: 'Activated task'
 ---
 
 # CI/CD pipeline: GitHub Actions workflows
