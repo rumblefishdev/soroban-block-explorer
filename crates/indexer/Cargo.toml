@@ -11,7 +11,16 @@ path = "src/main.rs"
 [dependencies]
 xdr-parser = { path = "../xdr-parser" }
 domain = { path = "../domain" }
-db = { path = "../db" }
+db = { path = "../db", features = ["aws-secrets"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+lambda_runtime = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+sqlx = { workspace = true }
+stellar-xdr = { workspace = true }

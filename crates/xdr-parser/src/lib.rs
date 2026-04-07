@@ -19,7 +19,7 @@ pub mod state;
 pub mod transaction;
 pub mod types;
 
-pub(crate) mod envelope;
+pub mod envelope;
 mod xdr_limits;
 
 pub use contract::extract_contract_interfaces;

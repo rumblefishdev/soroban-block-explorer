@@ -12,14 +12,18 @@ use domain::{
     soroban::{SorobanEvent, SorobanInvocation},
     transaction::Transaction,
 };
-use sqlx::PgPool;
+use sqlx::Acquire;
 
 // ---------------------------------------------------------------------------
 // Ledger (immutable)
 // ---------------------------------------------------------------------------
 
 /// Insert a ledger row. Returns `true` if inserted, `false` if already existed.
-pub async fn insert_ledger(pool: &PgPool, ledger: &Ledger) -> Result<bool, sqlx::Error> {
+pub async fn insert_ledger(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    ledger: &Ledger,
+) -> Result<bool, sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     let result = sqlx::query(
         r#"INSERT INTO ledgers (sequence, hash, closed_at, protocol_version, transaction_count, base_fee)
            VALUES ($1, $2, $3, $4, $5, $6)
@@ -31,7 +35,7 @@ pub async fn insert_ledger(pool: &PgPool, ledger: &Ledger) -> Result<bool, sqlx:
     .bind(ledger.protocol_version)
     .bind(ledger.transaction_count)
     .bind(ledger.base_fee)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(result.rows_affected() > 0)
@@ -48,13 +52,14 @@ pub async fn insert_ledger(pool: &PgPool, ledger: &Ledger) -> Result<bool, sqlx:
 /// (operations, events, invocations) can always be linked by transaction_id
 /// even when replaying a previously partially-processed ledger.
 pub async fn insert_transactions_batch(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     transactions: &[Transaction],
 ) -> Result<Vec<(String, i64)>, sqlx::Error> {
     if transactions.is_empty() {
         return Ok(Vec::new());
     }
 
+    let mut conn = executor.acquire().await?;
     let mut result = Vec::with_capacity(transactions.len());
 
     for tx in transactions {
@@ -81,7 +86,7 @@ pub async fn insert_transactions_batch(
         .bind(tx.created_at)
         .bind(tx.parse_error)
         .bind(&tx.operation_tree)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
 
         result.push((tx.hash.clone(), id));
@@ -96,12 +101,14 @@ pub async fn insert_transactions_batch(
 
 /// Batch insert operations for a transaction. Skips duplicates.
 pub async fn insert_operations_batch(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     operations: &[Operation],
 ) -> Result<(), sqlx::Error> {
     if operations.is_empty() {
         return Ok(());
     }
+
+    let mut conn = executor.acquire().await?;
 
     for op in operations {
         sqlx::query(
@@ -115,7 +122,7 @@ pub async fn insert_operations_batch(
         .bind(&op.source_account)
         .bind(&op.op_type)
         .bind(&op.details)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
 
@@ -128,12 +135,14 @@ pub async fn insert_operations_batch(
 
 /// Batch insert events for a transaction. Skips duplicates.
 pub async fn insert_events_batch(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     events: &[SorobanEvent],
 ) -> Result<(), sqlx::Error> {
     if events.is_empty() {
         return Ok(());
     }
+
+    let mut conn = executor.acquire().await?;
 
     for event in events {
         sqlx::query(
@@ -151,7 +160,7 @@ pub async fn insert_events_batch(
         .bind(event.event_index)
         .bind(event.ledger_sequence)
         .bind(event.created_at)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
 
@@ -164,12 +173,14 @@ pub async fn insert_events_batch(
 
 /// Batch insert invocations for a transaction. Skips duplicates.
 pub async fn insert_invocations_batch(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     invocations: &[SorobanInvocation],
 ) -> Result<(), sqlx::Error> {
     if invocations.is_empty() {
         return Ok(());
     }
+
+    let mut conn = executor.acquire().await?;
 
     for inv in invocations {
         sqlx::query(
@@ -190,7 +201,7 @@ pub async fn insert_invocations_batch(
         .bind(inv.invocation_index)
         .bind(inv.ledger_sequence)
         .bind(inv.created_at)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     }
 
