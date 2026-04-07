@@ -2,7 +2,7 @@
 id: '0022'
 title: 'Partition management automation'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0017', '0018', '0020']
 tags: [priority-medium, effort-medium, layer-database]
@@ -18,6 +18,13 @@ history:
     status: active
     who: stkrolikiewicz
     note: Activated task for implementation.
+  - date: 2026-04-03
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Implemented partition management Lambda (crates/db-partition-mgmt),
+      CDK PartitionStack with EventBridge monthly schedule and CloudWatch
+      alarms, operator pruning runbook. 6 unit tests, all passing.
 ---
 
 # Partition management automation
@@ -26,9 +33,9 @@ history:
 
 Implement automated partition creation and management for all four partitioned tables in the block explorer schema. Three tables use monthly time-based partitioning and one uses transaction_id range-based partitioning. Partitions must be created ahead of time; application code must never create or drop partitions ad hoc.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Not started.
+**Current state:** Implemented.
 
 ## Context
 
