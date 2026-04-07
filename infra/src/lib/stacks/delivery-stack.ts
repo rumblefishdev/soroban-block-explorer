@@ -170,17 +170,23 @@ export class DeliveryStack extends cdk.Stack {
     // ---------------------
     // Cache policies
     // ---------------------
-    // index.html must NOT be cached for long: it references hashed asset
-    // bundles whose names change every deploy. A long TTL on index.html
-    // means users with a cache hit get an old document pointing at new
-    // (or missing) bundle paths. Hashed assets in the default behavior
-    // are content-addressed and safe to cache for a long time.
-    const indexHtmlCachePolicy = new cloudfront.CachePolicy(
+    // SPA cache strategy is "safe by default": short TTL on the default
+    // behavior (covers index.html, the apex, any unknown path) and long
+    // TTL only for explicitly known asset directories. This avoids the
+    // pitfall of caching index.html for 24h via CACHING_OPTIMIZED — see
+    // task 0106 for the original bug.
+    //
+    // Asset path patterns assume Vite (`/assets/*`) and Create React App
+    // (`/static/*`). If the SPA build uses a different layout, the new
+    // pattern needs to be added here OR it falls back to the safe short
+    // TTL (acceptable degradation, not breakage).
+    const shortTtlCachePolicy = new cloudfront.CachePolicy(
       this,
-      'IndexHtmlCachePolicy',
+      'ShortTtlCachePolicy',
       {
-        cachePolicyName: `${config.envName}-soroban-explorer-index-html`,
-        comment: 'Short TTL for SPA index.html — see task 0106',
+        cachePolicyName: `${config.envName}-soroban-explorer-short-ttl`,
+        comment:
+          'Short TTL for SPA index.html and unknown paths — see task 0106',
         minTtl: cdk.Duration.seconds(0),
         defaultTtl: cdk.Duration.seconds(60),
         maxTtl: cdk.Duration.minutes(5),
@@ -218,15 +224,20 @@ export class DeliveryStack extends cdk.Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       defaultBehavior: {
         ...sharedBehaviorProps,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        cachePolicy: shortTtlCachePolicy,
       },
       additionalBehaviors: {
-        // CloudFront `defaultRootObject` rewrites `/` → `/index.html`
-        // before behavior matching, so this pattern covers both apex
-        // requests and explicit /index.html requests.
-        '/index.html': {
+        // Long TTL only for hashed asset directories. CACHING_OPTIMIZED
+        // is the AWS-managed policy with min/default/max = 1s/1d/1y.
+        // Vite default output:
+        '/assets/*': {
           ...sharedBehaviorProps,
-          cachePolicy: indexHtmlCachePolicy,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        },
+        // Create React App default output:
+        '/static/*': {
+          ...sharedBehaviorProps,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
       },
       errorResponses: [
