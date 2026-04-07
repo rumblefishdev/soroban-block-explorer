@@ -1,10 +1,9 @@
 name: Deploy Staging
 
 on:
-  workflow_run:
-    workflows: ['CI']
-    types: [completed]
-    branches: [develop]
+  push:
+    branches:
+      - develop
 
 concurrency:
   group: deploy-staging
@@ -15,42 +14,18 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
-    name: Deploy to staging
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+  mirror-image:
+    name: Mirror Galexie image to ECR
     runs-on: ubuntu-latest
     environment: staging
-    env:
-      # workflow_run events set GITHUB_SHA to default branch HEAD, not the
-      # commit that triggered CI. Use head_sha to deploy exactly what CI validated.
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-lambda
-        run: pip3 install cargo-lambda
-
-      - run: npm ci
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Mirror Galexie image to ECR
+      - name: Mirror Galexie image
         run: |
           REPO_URI=$(aws ssm get-parameter \
             --name /soroban-explorer/staging/ecr-galexie-repo-uri \
@@ -79,7 +54,7 @@ jobs:
               --image-ids imageTag=latest --query 'images[0].imageManifest' --output text)
             # ImageAlreadyExistsException is expected if this SHA was already tagged.
             OUTPUT=$(aws ecr put-image --repository-name staging-galexie \
-              --image-tag ${DEPLOY_SHA} --image-manifest "$MANIFEST" 2>&1) || {
+              --image-tag ${GITHUB_SHA} --image-manifest "$MANIFEST" 2>&1) || {
               if echo "$OUTPUT" | grep -q "ImageAlreadyExistsException"; then
                 echo "Tag already exists, skipping."
               else
@@ -89,11 +64,41 @@ jobs:
             }
           else
             docker pull stellar/stellar-galexie@${GALEXIE_DIGEST}
-            docker tag stellar/stellar-galexie@${GALEXIE_DIGEST} ${REPO_URI}:${DEPLOY_SHA}
+            docker tag stellar/stellar-galexie@${GALEXIE_DIGEST} ${REPO_URI}:${GITHUB_SHA}
             docker tag stellar/stellar-galexie@${GALEXIE_DIGEST} ${REPO_URI}:latest
-            docker push ${REPO_URI}:${DEPLOY_SHA}
+            docker push ${REPO_URI}:${GITHUB_SHA}
             docker push ${REPO_URI}:latest
           fi
+
+  deploy:
+    name: CDK deploy
+    needs: mirror-image
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+
+      - run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
 
       - name: Build CDK
         run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
@@ -102,7 +107,7 @@ jobs:
         run: |
           cd infra && npx cdk --app "node dist/bin/staging.js" deploy --all \
             --require-approval never \
-            -c galexieImageTag=${DEPLOY_SHA}
+            -c galexieImageTag=${GITHUB_SHA}
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
 
