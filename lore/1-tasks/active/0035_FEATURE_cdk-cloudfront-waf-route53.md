@@ -103,18 +103,74 @@ For the staging environment:
 
 ## Acceptance Criteria
 
-- [ ] SPA CloudFront distribution is defined with S3 origin and index.html fallback for client routes
-- [ ] API Gateway traffic does NOT route through CloudFront
-- [ ] WAF WebACL is defined with managed rules, IP reputation, and rate-based abuse controls
-- [ ] WAF is attached to CloudFront distribution and made available for API Gateway (task 0097)
-- [ ] Route 53 hosted zone has A/AAAA aliases for frontend and API domains
-- [ ] ACM certificates are provisioned: us-east-1 for CloudFront, stack region for API Gateway
-- [ ] DNS validation is automated via Route 53
-- [ ] Staging: CloudFront password protection is implemented via CloudFront Functions or Lambda@Edge
-- [ ] Production: no password protection on CloudFront distribution
-- [ ] HTTP to HTTPS redirect is enabled
-- [ ] Staging web password stored in AWS Secrets Manager or SSM Parameter Store SecureString; not committed to repository
-- [ ] SPA build pipeline does not embed API keys, secrets, or credentials into the frontend bundle
+- [x] SPA CloudFront distribution is defined with S3 origin and index.html fallback for client routes
+- [x] API Gateway traffic does NOT route through CloudFront
+- [x] WAF WebACLs are defined with managed rules, IP reputation, and rate-based abuse controls (one per scope — see Deviation)
+- [x] WAF is attached to CloudFront distribution (CLOUDFRONT scope) and to API Gateway (REGIONAL scope, defined in `ApiGatewayStack`)
+- [x] Route 53 hosted zone has A/AAAA aliases for frontend (DeliveryStack) and API domains (ApiGatewayStack)
+- [x] ACM certificate consumed for CloudFront and API Gateway (single us-east-1 cert; see Deviation)
+- [ ] DNS validation is automated via Route 53 — N/A, certificate is imported by ARN, not provisioned by CDK
+- [x] Staging: CloudFront password protection is implemented via CloudFront Functions backed by KeyValueStore
+- [x] Production: no password protection on CloudFront distribution
+- [x] HTTP to HTTPS redirect is enabled
+- [x] Staging web credentials stored outside repository in CloudFront KeyValueStore (see Deviation — chosen over Secrets Manager/SSM SecureString)
+- [x] SPA build pipeline does not embed API keys, secrets, or credentials into the frontend bundle (no SPA build wired in this task)
+
+## Deviations from Original Spec
+
+### 1. Two WAF WebACLs instead of one shared
+
+**Original AC**: "WAF is attached to CloudFront distribution and made available for API Gateway"
+
+**Implemented**: Two distinct WebACLs with identical rule sets — one in `DeliveryStack` (`scope: CLOUDFRONT`) attached to the CloudFront distribution, one in `ApiGatewayStack` (`scope: REGIONAL`) attached to the API Gateway stage.
+
+**Why**: AWS WAF design forbids attaching a `CLOUDFRONT`-scoped WebACL to a regional resource (API Gateway, ALB, AppSync) and vice versa. The "shared WebACL" assumption in the original AC is technically impossible. Two ACLs are the only valid configuration. Both ACLs carry the same managed rule groups (Common, KnownBadInputs, IpReputation) and a 2000-req/5min IP rate limit, plus dedicated CloudWatch log groups with resource policies for `delivery.logs.amazonaws.com`.
+
+### 2. Staging credentials in CloudFront KeyValueStore, not Secrets Manager / SSM SecureString
+
+**Original AC**: "Staging web password stored in AWS Secrets Manager or SSM Parameter Store SecureString"
+
+**Implemented**: CloudFront KeyValueStore (`cloudfront.KeyValueStore` construct), one key `auth-token` containing pre-encoded `base64(user:password)`. The CloudFront Function reads it per-request via `cloudfront.kvs().get('auth-token')`.
+
+**Why**: CloudFront Functions cannot make network calls — they cannot read from Secrets Manager, SSM, or any AWS API in runtime. Both Secrets Manager and SSM SecureString require either:
+
+- (a) `valueFromLookup` at synth time → value gets baked into CFN template / Function code in plain text, defeating "stored in SecureString" intent
+- (b) Lambda@Edge instead of CloudFront Function → cold start penalty, replication delay, blocked distribution deletion, ~$0.60/M requests for staging gating — overkill
+
+CloudFront KeyValueStore is the AWS-native pattern for runtime configuration in CloudFront Functions: credentials live in a dedicated IAM-gated store, never enter git, never enter the Function code or CFN template, and rotate in seconds via `aws cloudfront-keyvaluestore put-key` without redeploy. Threat model for staging gating (shared static password protecting non-sensitive UI from indexing/casual access) does not justify Lambda@Edge complexity.
+
+**Bootstrap requirement**: KVS is empty after first deploy. Until populated, the Function returns `503 Service Unavailable` (closed-by-default — safer than open). Populate once after first deploy:
+
+```bash
+KVS_ARN=$(aws cloudfront list-key-value-stores \
+  --query "KeyValueStoreList.Items[?Name=='staging-soroban-explorer-basic-auth'].ARN" \
+  --output text)
+ETAG=$(aws cloudfront-keyvaluestore describe-key-value-store \
+  --kvs-arn "$KVS_ARN" --query "ETag" --output text)
+TOKEN=$(printf 'staging:<password>' | base64)
+aws cloudfront-keyvaluestore put-key \
+  --kvs-arn "$KVS_ARN" --key auth-token --value "$TOKEN" --if-match "$ETAG"
+```
+
+### 3. Single ACM certificate covers both CloudFront and API Gateway
+
+**Original AC**: "ACM certificates are provisioned: us-east-1 for CloudFront, stack region for API Gateway"
+
+**Implemented**: One certificate ARN in `EnvironmentConfig.certificateArn`, consumed by both `DeliveryStack` (CloudFront) and `ApiGatewayStack` (API Gateway custom domain).
+
+**Why**: Stack region is `us-east-1` (per `envs/staging.json`), which happens to be the required region for CloudFront certs. A single wildcard cert in us-east-1 satisfies both. If the project ever moves to another region, `EnvironmentConfig` will need separate `cloudfrontCertificateArn` and `apiCertificateArn` fields, and the API cert must be re-issued in the new stack region.
+
+### 4. Certificate is imported, not provisioned
+
+**Original AC**: "DNS validation is automated via Route 53"
+
+**Implemented**: Certificate already exists in ACM (managed outside CDK), imported by ARN via `acm.Certificate.fromCertificateArn`. No CDK-managed validation.
+
+**Why**: The certificate is a pre-existing wildcard for `*.sorobanscan.rumblefish.dev`, shared across environments and managed manually. Provisioning via CDK would compete for the same DNS validation records and create lifecycle coupling between this stack and certificate renewal. Outside scope of 0035.
+
+### 5. Relationship to research task 0006 / PR #32
+
+PR #32 corrected research 0006 to recommend per-service stack decomposition (`ApiStack`, `IndexerStack`, `IngestionStack`, `FrontendStack`) and elimination of `DeliveryStack`. This task implements the **monolithic `DeliveryStack` + separate `ApiGatewayStack`** pattern instead, consistent with the architecture already established by tasks 0099/0033/0097 (monolithic `ComputeStack`). Per-service refactor is deferred — would require touching 4 archived tasks and ~12 backlog tasks. Tracked as future work, not in scope of 0035.
 
 ## Notes
 

@@ -72,4 +72,43 @@ export interface EnvironmentConfig {
   readonly apiGatewayCacheTtlMutable: number;
   /** Daily request quota for partner API key usage plans. */
   readonly apiGatewayPartnerDailyQuota: number;
+
+  // Delivery (consumed by DeliveryStack + ApiGatewayStack)
+
+  /** Frontend SPA domain, e.g. "staging.sorobanscan.rumblefish.dev". */
+  readonly domainName: string;
+  /** API custom domain, e.g. "api.staging.sorobanscan.rumblefish.dev". */
+  readonly apiDomainName: string;
+  /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev. */
+  readonly hostedZoneId: string;
+  /** Hosted zone name, e.g. "sorobanscan.rumblefish.dev". */
+  readonly hostedZoneName: string;
+  /** ACM wildcard certificate ARN in us-east-1 covering *.sorobanscan.rumblefish.dev. */
+  readonly certificateArn: string;
+  /**
+   * Provision WAF WebACLs (one CLOUDFRONT-scoped on the distribution,
+   * one REGIONAL-scoped on the API Gateway stage). Disable on staging
+   * to save the ~$15-20/month fixed cost when basic auth gating is
+   * the primary access control.
+   */
+  readonly enableWaf: boolean;
+  /**
+   * Enable CloudFront Function basic auth on the SPA distribution.
+   * Credentials live in CloudFront KeyValueStore — see DeliveryStack
+   * for the bootstrap procedure. Production should leave this false.
+   */
+  readonly enableBasicAuth: boolean;
+  /**
+   * Per-IP request limit over a 5-minute window for the CloudFront WAF.
+   * Browser-facing — needs to be high enough to accommodate normal SPA
+   * page loads (50-100 asset requests). Suggested: 5000+ for production,
+   * lower for staging.
+   */
+  readonly cloudFrontWafRateLimit: number;
+  /**
+   * Per-IP request limit over a 5-minute window for the API Gateway WAF.
+   * Should reflect realistic API usage; lower than the CloudFront limit.
+   * Suggested: 1000-2000.
+   */
+  readonly apiWafRateLimit: number;
 }
