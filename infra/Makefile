@@ -35,6 +35,9 @@ deploy-staging-partition: build
 deploy-staging-ingestion: build
 	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Ingestion --require-approval broadening
 
+deploy-staging-delivery: build
+	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Delivery --require-approval broadening
+
 deploy-staging-bastion: build
 	npx cdk --app "$(BASTION_STAGING_APP)" deploy --require-approval broadening
 
@@ -69,6 +72,9 @@ deploy-production-partition: build
 
 deploy-production-ingestion: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Ingestion --require-approval broadening
+
+deploy-production-delivery: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Delivery --require-approval broadening
 
 deploy-production-bastion: build
 	npx cdk --app "$(BASTION_PRODUCTION_APP)" deploy --require-approval broadening
