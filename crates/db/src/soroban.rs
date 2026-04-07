@@ -15,33 +15,25 @@ use domain::{
     soroban::SorobanContract,
     token::Token,
 };
-use sqlx::PgPool;
+use sqlx::Acquire;
 
-/// Upsert contract interface metadata into `soroban_contracts`.
+/// Ensure a minimal `soroban_contracts` row exists for the given contract_id.
 ///
-/// If the contract row already exists (created by task 0027), this updates
-/// only the `metadata` column. If it doesn't exist yet, inserts a minimal
-/// row with just `wasm_hash` and `metadata` — task 0027 will fill the rest.
-///
-/// The caller is responsible for building the metadata JSON from
-/// `ExtractedContractInterface` (see xdr-parser crate).
-pub async fn upsert_contract_metadata(
-    pool: &PgPool,
+/// Inserts a stub row with only the contract_id if it doesn't exist yet.
+/// This satisfies FK constraints when events/invocations reference contracts
+/// that were deployed in earlier ledgers (not yet in the database).
+pub async fn ensure_contract_exists(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     contract_id: &str,
-    wasm_hash: &str,
-    metadata: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
-        r#"INSERT INTO soroban_contracts (contract_id, wasm_hash, metadata)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (contract_id) DO UPDATE SET
-               metadata = COALESCE(soroban_contracts.metadata, '{}'::jsonb) || EXCLUDED.metadata,
-               wasm_hash = COALESCE(soroban_contracts.wasm_hash, EXCLUDED.wasm_hash)"#,
+        r#"INSERT INTO soroban_contracts (contract_id)
+           VALUES ($1)
+           ON CONFLICT (contract_id) DO NOTHING"#,
     )
     .bind(contract_id)
-    .bind(wasm_hash)
-    .bind(metadata)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -49,14 +41,15 @@ pub async fn upsert_contract_metadata(
 
 /// Update `transactions.operation_tree` for a given transaction.
 pub async fn update_operation_tree(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     transaction_id: i64,
     operation_tree: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(r#"UPDATE transactions SET operation_tree = $1 WHERE id = $2"#)
         .bind(operation_tree)
         .bind(transaction_id)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
 
     Ok(())
@@ -67,9 +60,10 @@ pub async fn update_operation_tree(
 /// Fills deployment fields (deployer_account, deployed_at_ledger, contract_type, is_sac).
 /// Merges metadata with any existing data from interface extraction (task 0026).
 pub async fn upsert_contract_deployment(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     contract: &SorobanContract,
 ) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO soroban_contracts
                (contract_id, wasm_hash, deployer_account, deployed_at_ledger, contract_type, is_sac, metadata)
@@ -89,7 +83,7 @@ pub async fn upsert_contract_deployment(
     .bind(&contract.contract_type)
     .bind(contract.is_sac.unwrap_or(false))
     .bind(&contract.metadata)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -99,7 +93,11 @@ pub async fn upsert_contract_deployment(
 ///
 /// Uses watermark on `last_seen_ledger` to prevent stale backfill overwrites.
 /// Sets `first_seen_ledger` only on first insert.
-pub async fn upsert_account_state(pool: &PgPool, account: &Account) -> Result<(), sqlx::Error> {
+pub async fn upsert_account_state(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    account: &Account,
+) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO accounts
                (account_id, first_seen_ledger, last_seen_ledger, sequence_number, balances, home_domain)
@@ -117,7 +115,7 @@ pub async fn upsert_account_state(pool: &PgPool, account: &Account) -> Result<()
     .bind(account.sequence_number)
     .bind(&account.balances)
     .bind(&account.home_domain)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -126,7 +124,11 @@ pub async fn upsert_account_state(pool: &PgPool, account: &Account) -> Result<()
 /// Upsert liquidity pool state into `liquidity_pools`.
 ///
 /// Uses watermark on `last_updated_ledger` to prevent stale backfill overwrites.
-pub async fn upsert_liquidity_pool(pool: &PgPool, lp: &LiquidityPool) -> Result<(), sqlx::Error> {
+pub async fn upsert_liquidity_pool(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    lp: &LiquidityPool,
+) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO liquidity_pools
                (pool_id, asset_a, asset_b, fee_bps, reserves, total_shares, tvl, created_at_ledger, last_updated_ledger)
@@ -147,7 +149,7 @@ pub async fn upsert_liquidity_pool(pool: &PgPool, lp: &LiquidityPool) -> Result<
     .bind(lp.tvl.as_deref())
     .bind(lp.created_at_ledger)
     .bind(lp.last_updated_ledger)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -155,9 +157,10 @@ pub async fn upsert_liquidity_pool(pool: &PgPool, lp: &LiquidityPool) -> Result<
 
 /// Append a liquidity pool snapshot (idempotent — replays are ignored).
 pub async fn insert_liquidity_pool_snapshot(
-    pool: &PgPool,
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
     snapshot: &LiquidityPoolSnapshot,
 ) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO liquidity_pool_snapshots
                (pool_id, ledger_sequence, created_at, reserves, total_shares, tvl, volume, fee_revenue)
@@ -172,14 +175,18 @@ pub async fn insert_liquidity_pool_snapshot(
     .bind(snapshot.tvl.as_deref())
     .bind(snapshot.volume.as_deref())
     .bind(snapshot.fee_revenue.as_deref())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
 }
 
 /// Upsert a detected token into `tokens`.
-pub async fn upsert_token(pool: &PgPool, token: &Token) -> Result<(), sqlx::Error> {
+pub async fn upsert_token(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    token: &Token,
+) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO tokens
                (asset_type, asset_code, issuer_address, contract_id, name, total_supply, holder_count)
@@ -193,7 +200,7 @@ pub async fn upsert_token(pool: &PgPool, token: &Token) -> Result<(), sqlx::Erro
     .bind(&token.name)
     .bind(token.total_supply.as_deref())
     .bind(token.holder_count)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -203,7 +210,11 @@ pub async fn upsert_token(pool: &PgPool, token: &Token) -> Result<(), sqlx::Erro
 ///
 /// Uses watermark on `last_seen_ledger` to prevent stale overwrites.
 /// Sets `minted_at_ledger` only on first insert.
-pub async fn upsert_nft(pool: &PgPool, nft: &Nft) -> Result<(), sqlx::Error> {
+pub async fn upsert_nft(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    nft: &Nft,
+) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
     sqlx::query(
         r#"INSERT INTO nfts
                (contract_id, token_id, collection_name, owner_account, name, media_url, metadata, minted_at_ledger, last_seen_ledger)
@@ -225,7 +236,7 @@ pub async fn upsert_nft(pool: &PgPool, nft: &Nft) -> Result<(), sqlx::Error> {
     .bind(&nft.metadata)
     .bind(nft.minted_at_ledger)
     .bind(nft.last_seen_ledger)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
