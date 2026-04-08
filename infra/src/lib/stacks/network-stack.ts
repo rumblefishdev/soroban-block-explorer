@@ -172,6 +172,20 @@ export class NetworkStack extends cdk.Stack {
         ],
       })
     );
+    // Allow ECR image layer pulls — ECR stores Docker image layers in
+    // regional S3 buckets (prod-<region>-starport-layer-bucket). Without
+    // this, ECS Fargate tasks in private subnets fail with
+    // CannotPullContainerError because the S3 Gateway endpoint blocks
+    // access to the ECR layer bucket.
+    s3Endpoint.addToPolicy(
+      new iam.PolicyStatement({
+        principals: [new iam.AnyPrincipal()],
+        actions: ['s3:GetObject'],
+        resources: [
+          `arn:aws:s3:::prod-${config.awsRegion}-starport-layer-bucket/*`,
+        ],
+      })
+    );
 
     // ---------------------
     // Tags
