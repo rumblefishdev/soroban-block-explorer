@@ -24,6 +24,8 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Must match infra/envs/staging.json -> awsRegion (single source of truth).
+          # Region is locked to us-east-1 by ACM cert requirement for CloudFront.
           aws-region: us-east-1
 
       - name: Mirror Galexie image
@@ -40,6 +42,7 @@ jobs:
             exit 1
           fi
 
+          # Region must match infra/envs/staging.json -> awsRegion.
           aws ecr get-login-password --region us-east-1 | \
             docker login --username AWS --password-stdin \
             $(echo $REPO_URI | cut -d/ -f1)
@@ -99,6 +102,8 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Must match infra/envs/staging.json -> awsRegion (single source of truth).
+          # Region is locked to us-east-1 by ACM cert requirement for CloudFront.
           aws-region: us-east-1
 
       - name: Build CDK
