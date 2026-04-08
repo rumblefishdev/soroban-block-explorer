@@ -8,6 +8,15 @@ description = "REST API Lambda handler for the Soroban block explorer"
 name = "api"
 path = "src/main.rs"
 
+[features]
+# Swagger UI is a ~12 MB embedded asset bundle. Gated behind an opt-in
+# feature so production Lambda builds (`--no-default-features`) stay
+# lean (~4 MB) while local/staging builds can enable the browser UI.
+# The OpenAPI JSON (/api-docs-json) is always available — it only
+# costs ~310 KB and is useful for external consumers.
+default = []
+swagger-ui = ["dep:utoipa-swagger-ui"]
+
 [dependencies]
 domain = { path = "../domain" }
 db = { path = "../db" }
@@ -16,6 +25,7 @@ lambda_http = { workspace = true }
 tower-http = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+utoipa-swagger-ui = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
