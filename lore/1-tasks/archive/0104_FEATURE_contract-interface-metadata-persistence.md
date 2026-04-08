@@ -18,8 +18,9 @@ history:
     who: FilipDz
     note: >
       Implemented wasm_hash→contract_id join for interface metadata persistence.
-      3 files changed. 2 new integration tests passing (9 total in db crate).
-      Migration 0008 adds partial index on wasm_hash. PR #78.
+      4 files changed (+migration 0009 staging table). 2 new integration tests.
+      Migration 0008: partial index on wasm_hash. Migration 0009: wasm_interface_metadata
+      staging table for 2-ledger install+deploy pattern. PR #78.
 ---
 
 # Persist contract interface metadata via wasm_hash→contract_id join
@@ -43,7 +44,7 @@ During ledger processing (task 0029), step 7 (contract interface metadata) is cu
 1. In `persist_ledger()`, process contract interfaces **after** contract deployments (step 8) so that `soroban_contracts` rows already exist
 2. For each `ExtractedContractInterface`, query `soroban_contracts` within the transaction to find all rows where `wasm_hash` matches
 3. Update `metadata` JSONB on each matching contract with the extracted function signatures
-4. If no matching contracts exist yet (edge case: WASM uploaded but no contract deployed in this ledger), store the interface keyed by `wasm_hash` in a staging table or skip (TBD)
+4. If no matching contracts exist yet (WASM uploaded before contract deployed), store the interface keyed by `wasm_hash` in a `wasm_interface_metadata` staging table and apply it when the contract deployment is upserted in a later ledger
 
 ## Acceptance Criteria
 
@@ -55,9 +56,11 @@ During ledger processing (task 0029), step 7 (contract interface metadata) is cu
 ## Implementation Notes
 
 - **Migration 0008**: partial index `idx_contracts_wasm_hash` on `soroban_contracts(wasm_hash) WHERE wasm_hash IS NOT NULL`
-- **`update_contract_interfaces_by_wasm_hash()`** in `crates/db/src/soroban.rs`: UPDATE with JSONB `||` merge, returns rows_affected count
-- **`persist_ledger()` step reorder**: contract deployments (old step 8) moved to step 7; interface metadata now step 8, runs after deployments so `wasm_hash` is populated
-- Warns (no error) when WASM uploaded without deployment in same ledger — metadata will be applied when the contract is eventually deployed and re-indexed
+- **Migration 0009**: `wasm_interface_metadata(wasm_hash PK, metadata JSONB)` — staging table for the 2-ledger deploy pattern
+- **`update_contract_interfaces_by_wasm_hash()`** in `crates/db/src/soroban.rs`: UPDATE with JSONB `||` merge
+- **`upsert_wasm_interface_metadata()`** in `crates/db/src/soroban.rs`: upsert into staging table, ON CONFLICT overwrites (WASM bytecode is immutable)
+- **`upsert_contract_deployment()`**: after the main upsert, applies any staged interface metadata via a JOIN on `wasm_interface_metadata` — handles contracts deployed in a later ledger than their WASM upload
+- **`persist_ledger()` step 8**: dual-path — always upserts to staging AND applies directly if contracts exist; `upsert_contract_deployment()` picks up the staging data for cross-ledger flows
 
 ## Design Decisions
 
@@ -67,5 +70,6 @@ During ledger processing (task 0029), step 7 (contract interface metadata) is cu
 
 ### Emerged
 
-2. **Step reorder (7↔8) instead of two-pass**: rather than a separate pass, swapped the deployment and interface steps so the existing single-pass flow works. Simpler than the task spec's suggestion of a staging table.
-3. **Warn-and-skip for orphan WASM**: task spec suggested a staging table (TBD). Chose to warn and skip — the metadata will be applied on re-index after the contract is deployed. Avoids new table complexity for a rare edge case.
+2. **Step reorder (7↔8) instead of two-pass**: rather than a separate pass, swapped the deployment and interface steps so the existing single-pass flow works.
+3. **Staging table for 2-ledger install+deploy** (supersedes original warn-and-skip): Soroban's `InvokeHostFunction(UploadContractWasm)` and `InvokeHostFunction(CreateContract)` happen in separate ledgers. `ExtractedContractInterface` is only emitted from `ContractCodeEntry` (WASM upload ledger), so by the time the contract row exists the interface data has already been processed. For a historical backfill processing 50M+ ledgers sequentially, warn-and-skip means any 2-step deployed contract permanently loses its metadata. The staging table (`wasm_interface_metadata`) persists interface data by `wasm_hash` so `upsert_contract_deployment()` can apply it retroactively in the deployment ledger without a re-index.
+4. **`wasm_interface_metadata` rows are permanent**: WASM bytecode is immutable on-chain; a given `wasm_hash` always has the same interface. Staging rows can be left indefinitely and serve any future contract deployments reusing the same WASM.

@@ -86,6 +86,46 @@ pub async fn upsert_contract_deployment(
     .execute(&mut *conn)
     .await?;
 
+    // Apply any pre-staged interface metadata for this contract's wasm_hash.
+    // This handles the 2-ledger deploy pattern: WASM uploaded in ledger A (interface
+    // extracted and staged), contract deployed in ledger B (metadata applied here).
+    if contract.wasm_hash.is_some() {
+        sqlx::query(
+            r#"UPDATE soroban_contracts sc
+               SET metadata = COALESCE(sc.metadata, '{}'::jsonb) || wim.metadata
+               FROM wasm_interface_metadata wim
+               WHERE sc.contract_id = $1
+                 AND sc.wasm_hash = wim.wasm_hash"#,
+        )
+        .bind(&contract.contract_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Upsert WASM interface metadata into the staging table, keyed by `wasm_hash`.
+///
+/// This persists function signatures so they can be applied to contracts that are
+/// deployed in a later ledger (2-ledger install-then-deploy pattern). Idempotent:
+/// re-processing the same WASM overwrites with the same data.
+pub async fn upsert_wasm_interface_metadata(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    wasm_hash: &str,
+    metadata: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let mut conn = executor.acquire().await?;
+    sqlx::query(
+        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata)
+           VALUES ($1, $2)
+           ON CONFLICT (wasm_hash) DO UPDATE SET metadata = EXCLUDED.metadata"#,
+    )
+    .bind(wasm_hash)
+    .bind(metadata)
+    .execute(&mut *conn)
+    .await?;
+
     Ok(())
 }
 
@@ -552,8 +592,8 @@ mod tests {
             return;
         };
         let wasm = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
-        let cid_a = "CIFACE_TEST_0104_A_CONTRACT_ID_PLACEHOLDER_00000000000000000000";
-        let cid_b = "CIFACE_TEST_0104_B_CONTRACT_ID_PLACEHOLDER_00000000000000000000";
+        let cid_a = "CIFACE_TEST_0104_A_CONTRACT_ID_PLACEHOLDER_0000000000000";
+        let cid_b = "CIFACE_TEST_0104_B_CONTRACT_ID_PLACEHOLDER_0000000000000";
 
         // Clean up
         for cid in &[cid_a, cid_b] {
@@ -616,7 +656,7 @@ mod tests {
             return;
         };
         let wasm = "beef5678beef5678beef5678beef5678beef5678beef5678beef5678beef5678";
-        let cid = "CIFACE_TEST_0104_REPLAY_CONTRACT_ID_PLACEHOLDER_000000000000000";
+        let cid = "CIFACE_TEST_0104_REPLAY_CONTRACT_ID_PLACEHOLDER_00000000";
 
         sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
             .bind(cid)

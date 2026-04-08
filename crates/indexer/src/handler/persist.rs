@@ -123,25 +123,32 @@ pub async fn persist_ledger(
         db::soroban::upsert_contract_deployment(&mut **db_tx, &domain_contract).await?;
     }
 
-    // 8. Contract interface metadata — join wasm_hash → contract_id via DB index.
-    // Runs after step 7 so that contract rows already have wasm_hash populated.
+    // 8. Contract interface metadata — dual-path persistence for the 2-ledger deploy pattern.
+    //
+    // Soroban separates WASM upload (ContractCodeEntry, ledger A) from contract deployment
+    // (ContractDataEntry, ledger B). ExtractedContractInterface is only produced from
+    // ContractCodeEntry, so by ledger B there is no interface data to apply directly.
+    //
+    // Strategy:
+    //   a) Always upsert into wasm_interface_metadata (staging by wasm_hash) — covers ledger B.
+    //   b) Also apply directly to any soroban_contracts rows that already exist — covers
+    //      same-ledger deploys and re-index flows.
+    //
+    // upsert_contract_deployment() reads wasm_interface_metadata after each deployment upsert,
+    // so any contract deployed in a later ledger automatically picks up the staged metadata.
     for iface in contract_interfaces {
         let metadata = serde_json::json!({
             "functions": iface.functions,
             "wasm_byte_len": iface.wasm_byte_len,
         });
-        let updated = db::soroban::update_contract_interfaces_by_wasm_hash(
+        db::soroban::upsert_wasm_interface_metadata(&mut **db_tx, &iface.wasm_hash, &metadata)
+            .await?;
+        db::soroban::update_contract_interfaces_by_wasm_hash(
             &mut **db_tx,
             &iface.wasm_hash,
             &metadata,
         )
         .await?;
-        if updated == 0 {
-            warn!(
-                wasm_hash = %iface.wasm_hash,
-                "no contracts found for wasm_hash — WASM uploaded without deployment in this ledger"
-            );
-        }
     }
 
     // 9. Upsert account states
