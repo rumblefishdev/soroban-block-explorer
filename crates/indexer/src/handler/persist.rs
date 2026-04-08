@@ -117,16 +117,31 @@ pub async fn persist_ledger(
         db::soroban::update_operation_tree(&mut **db_tx, tx_id, tree).await?;
     }
 
-    // 7. Contract interface metadata (function signatures from WASM analysis).
-    // TODO: ExtractedContractInterface only has wasm_hash, not contract_id.
-    // We cannot store these rows correctly until we can join wasm_hash → contract_id
-    // (e.g. via a wasm_hash index on soroban_contracts). Deferred to a follow-up task.
-    let _ = contract_interfaces;
-
-    // 8. Upsert contract deployments
+    // 7. Upsert contract deployments (before interface metadata so wasm_hash is populated)
     for deployment in contract_deployments {
         let domain_contract = convert::to_contract(deployment);
         db::soroban::upsert_contract_deployment(&mut **db_tx, &domain_contract).await?;
+    }
+
+    // 8. Contract interface metadata — join wasm_hash → contract_id via DB index.
+    // Runs after step 7 so that contract rows already have wasm_hash populated.
+    for iface in contract_interfaces {
+        let metadata = serde_json::json!({
+            "functions": iface.functions,
+            "wasm_byte_len": iface.wasm_byte_len,
+        });
+        let updated = db::soroban::update_contract_interfaces_by_wasm_hash(
+            &mut **db_tx,
+            &iface.wasm_hash,
+            &metadata,
+        )
+        .await?;
+        if updated == 0 {
+            warn!(
+                wasm_hash = %iface.wasm_hash,
+                "no contracts found for wasm_hash — WASM uploaded without deployment in this ledger"
+            );
+        }
     }
 
     // 9. Upsert account states

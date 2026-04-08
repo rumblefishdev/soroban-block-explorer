@@ -89,6 +89,32 @@ pub async fn upsert_contract_deployment(
     Ok(())
 }
 
+/// Update `metadata` JSONB on all contracts matching the given `wasm_hash`.
+///
+/// Merges interface data (function signatures, wasm byte length) into any existing
+/// metadata. Must run **after** `upsert_contract_deployment` so that `wasm_hash`
+/// is populated on contract rows.
+///
+/// Returns the number of rows updated (0 if no contracts have this wasm_hash yet).
+pub async fn update_contract_interfaces_by_wasm_hash(
+    executor: impl Acquire<'_, Database = sqlx::Postgres>,
+    wasm_hash: &str,
+    interface_metadata: &serde_json::Value,
+) -> Result<u64, sqlx::Error> {
+    let mut conn = executor.acquire().await?;
+    let result = sqlx::query(
+        r#"UPDATE soroban_contracts
+           SET metadata = COALESCE(metadata, '{}'::jsonb) || $1
+           WHERE wasm_hash = $2"#,
+    )
+    .bind(interface_metadata)
+    .bind(wasm_hash)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// Upsert account state into `accounts`.
 ///
 /// Uses watermark on `last_seen_ledger` to prevent stale backfill overwrites.
@@ -514,6 +540,126 @@ mod tests {
 
         sqlx::query("DELETE FROM liquidity_pools WHERE pool_id = $1")
             .bind(pid)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// AC: contract interface metadata propagates to all contracts sharing the same wasm_hash.
+    #[tokio::test]
+    async fn contract_interface_metadata_propagates_to_all_matching_contracts() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let wasm = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+        let cid_a = "CIFACE_TEST_0104_A_CONTRACT_ID_PLACEHOLDER_00000000000000000000";
+        let cid_b = "CIFACE_TEST_0104_B_CONTRACT_ID_PLACEHOLDER_00000000000000000000";
+
+        // Clean up
+        for cid in &[cid_a, cid_b] {
+            sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+                .bind(cid)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Insert two contracts sharing the same wasm_hash
+        for cid in &[cid_a, cid_b] {
+            sqlx::query("INSERT INTO soroban_contracts (contract_id, wasm_hash) VALUES ($1, $2)")
+                .bind(cid)
+                .bind(wasm)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let metadata = serde_json::json!({
+            "functions": [{"name": "transfer", "doc": "", "inputs": [], "outputs": []}],
+            "wasm_byte_len": 4096,
+        });
+        let updated = update_contract_interfaces_by_wasm_hash(&pool, wasm, &metadata)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated, 2,
+            "both contracts sharing wasm_hash should be updated"
+        );
+
+        for cid in &[cid_a, cid_b] {
+            let (meta,): (serde_json::Value,) =
+                sqlx::query_as("SELECT metadata FROM soroban_contracts WHERE contract_id = $1")
+                    .bind(cid)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                meta["functions"][0]["name"], "transfer",
+                "contract {cid} should have interface metadata"
+            );
+            assert_eq!(meta["wasm_byte_len"], 4096);
+        }
+
+        for cid in &[cid_a, cid_b] {
+            sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+                .bind(cid)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// AC: re-processing the same wasm_hash does not corrupt metadata (idempotent).
+    #[tokio::test]
+    async fn contract_interface_metadata_replay_idempotent() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let wasm = "beef5678beef5678beef5678beef5678beef5678beef5678beef5678beef5678";
+        let cid = "CIFACE_TEST_0104_REPLAY_CONTRACT_ID_PLACEHOLDER_000000000000000";
+
+        sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+            .bind(cid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO soroban_contracts (contract_id, wasm_hash) VALUES ($1, $2)")
+            .bind(cid)
+            .bind(wasm)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let metadata = serde_json::json!({
+            "functions": [{"name": "mint", "doc": "", "inputs": [], "outputs": []}],
+            "wasm_byte_len": 2048,
+        });
+
+        // Apply twice (simulating ledger replay)
+        update_contract_interfaces_by_wasm_hash(&pool, wasm, &metadata)
+            .await
+            .unwrap();
+        update_contract_interfaces_by_wasm_hash(&pool, wasm, &metadata)
+            .await
+            .unwrap();
+
+        let (meta,): (serde_json::Value,) =
+            sqlx::query_as("SELECT metadata FROM soroban_contracts WHERE contract_id = $1")
+                .bind(cid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            meta["functions"][0]["name"], "mint",
+            "metadata should not be corrupted after replay"
+        );
+        assert_eq!(
+            meta["wasm_byte_len"], 2048,
+            "wasm_byte_len should not be duplicated or corrupted"
+        );
+
+        sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+            .bind(cid)
             .execute(&pool)
             .await
             .unwrap();
