@@ -161,13 +161,46 @@ export class IngestionStack extends cdk.Stack {
     });
 
     // ---------------------
-    // Shared container environment
+    // Galexie config
     // ---------------------
-    const sharedEnvironment: Record<string, string> = {
-      NETWORK_PASSPHRASE: config.stellarNetworkPassphrase,
-      DESTINATION: `s3://${ledgerBucket.bucketName}`,
-      STELLAR_CORE_BINARY_PATH: '/usr/bin/stellar-core',
+    // Galexie reads configuration from a TOML file, not env vars.
+    // We generate config.toml at container startup via entrypoint script,
+    // writing to /tmp (writable mount on ephemeral storage).
+    const galexieNetworkByPassphrase: Record<string, string> = {
+      'Public Global Stellar Network ; September 2015': 'pubnet',
+      'Test SDF Network ; September 2015': 'testnet',
     };
+    const galexieNetwork =
+      galexieNetworkByPassphrase[config.stellarNetworkPassphrase];
+    if (!galexieNetwork) {
+      throw new Error(
+        `Unsupported stellarNetworkPassphrase for Galexie: "${config.stellarNetworkPassphrase}". ` +
+          `Supported: ${Object.keys(galexieNetworkByPassphrase).join(', ')}`
+      );
+    }
+
+    const galexieConfigToml = [
+      '[datastore_config]',
+      'type = "S3"',
+      '',
+      '[datastore_config.params]',
+      `destination_bucket_path = "${ledgerBucket.bucketName}/"`,
+      `region = "${config.awsRegion}"`,
+      '',
+      '[datastore_config.schema]',
+      'ledgers_per_file = 1',
+      'files_per_partition = 64000',
+      '',
+      '[stellar_core_config]',
+      `network = "${galexieNetwork}"`,
+    ].join('\n');
+
+    /** Build a shell command that writes config.toml and execs Galexie. */
+    const galexieCommand = (subcommand: string): string[] => [
+      `/bin/bash`,
+      `-c`,
+      `cat > /tmp/config.toml <<'TOMLEOF'\n${galexieConfigToml}\nTOMLEOF\nexec stellar-galexie ${subcommand} --config-file /tmp/config.toml`,
+    ];
 
     // Collect task definitions for shared IAM grants below.
     const taskDefs: ecs.FargateTaskDefinition[] = [];
@@ -198,10 +231,13 @@ export class IngestionStack extends cdk.Stack {
         logGroup: liveLogGroup,
         streamPrefix: 'galexie',
       }),
+      entryPoint: galexieCommand('append'),
+      workingDirectory: '/data',
       environment: {
-        ...sharedEnvironment,
-        // Append mode — Galexie auto-detects last exported ledger from S3.
-        START: '',
+        // Start ledger for append mode. Galexie resumes from the first
+        // missing ledger at or after this value. Set to a recent ledger
+        // on first deploy to avoid replaying the entire mainnet history.
+        START: '62024874',
       },
       healthCheck: {
         command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
@@ -277,8 +313,9 @@ export class IngestionStack extends cdk.Stack {
           logGroup: backfillLogGroup,
           streamPrefix: 'galexie',
         }),
+        entryPoint: galexieCommand('scan-and-fill'),
+        workingDirectory: '/data',
         environment: {
-          ...sharedEnvironment,
           // START and END are overridden per RunTask invocation.
           // Defaults here serve as documentation; actual values are
           // passed via container overrides when running the task.
@@ -307,9 +344,11 @@ export class IngestionStack extends cdk.Stack {
     // ---------------------
     // IAM Grants
     // ---------------------
-    // Task role — application permissions (S3 write + list for checkpoint resume).
+    // Task role — application permissions (S3 read + write + list).
+    // Galexie needs read for manifest (.config.json) and checkpoint resume,
+    // write for exporting ledger data, and list for scanning existing files.
     for (const taskDef of taskDefs) {
-      ledgerBucket.grantWrite(taskDef.taskRole);
+      ledgerBucket.grantReadWrite(taskDef.taskRole);
       // ListBucket is needed for Galexie checkpoint resume (scans S3 for
       // last exported ledger). IBucket.grant() is not available on imported
       // buckets, so we add the permission via inline policy.
