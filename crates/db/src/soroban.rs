@@ -704,4 +704,85 @@ mod tests {
             .await
             .unwrap();
     }
+
+    /// AC: 2-ledger deploy pattern — interface staged before contract exists, applied on deployment.
+    ///
+    /// Simulates:
+    ///   Ledger A: WASM uploaded → upsert_wasm_interface_metadata (no contract row yet)
+    ///   Ledger B: contract deployed → upsert_contract_deployment picks up staged metadata
+    #[tokio::test]
+    async fn staged_interface_metadata_applied_on_contract_deployment() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let wasm = "cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000cafe0000";
+        let cid = "CIFACE_TEST_0104_STAGED_CONTRACT_ID_PLACEHOLDER_00000000";
+
+        // Clean up both tables before test
+        sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+            .bind(cid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = $1")
+            .bind(wasm)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Ledger A: WASM uploaded, no contract row exists yet
+        let interface_meta = serde_json::json!({
+            "functions": [{"name": "swap", "doc": "", "inputs": [], "outputs": []}],
+            "wasm_byte_len": 8192,
+        });
+        upsert_wasm_interface_metadata(&pool, wasm, &interface_meta)
+            .await
+            .unwrap();
+
+        // Confirm no contract row yet
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM soroban_contracts WHERE contract_id = $1")
+                .bind(cid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "contract should not exist before deployment");
+
+        // Ledger B: contract deployed with matching wasm_hash
+        let contract = domain::soroban::SorobanContract {
+            contract_id: cid.to_string(),
+            wasm_hash: Some(wasm.to_string()),
+            deployer_account: None,
+            deployed_at_ledger: None,
+            contract_type: None,
+            is_sac: None,
+            metadata: None,
+        };
+        upsert_contract_deployment(&pool, &contract).await.unwrap();
+
+        // Staged interface metadata should have been applied automatically
+        let (meta,): (serde_json::Value,) =
+            sqlx::query_as("SELECT metadata FROM soroban_contracts WHERE contract_id = $1")
+                .bind(cid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            meta["functions"][0]["name"], "swap",
+            "staged interface metadata should be applied at deployment time"
+        );
+        assert_eq!(meta["wasm_byte_len"], 8192);
+
+        // Cleanup
+        sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+            .bind(cid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = $1")
+            .bind(wasm)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

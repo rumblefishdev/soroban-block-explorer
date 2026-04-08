@@ -18,7 +18,7 @@ history:
     who: FilipDz
     note: >
       Implemented wasm_hash→contract_id join for interface metadata persistence.
-      4 files changed (+migration 0009 staging table). 2 new integration tests.
+      5 files changed (+migration 0009 staging table). 3 new integration tests.
       Migration 0008: partial index on wasm_hash. Migration 0009: wasm_interface_metadata
       staging table for 2-ledger install+deploy pattern. PR #78.
 ---
