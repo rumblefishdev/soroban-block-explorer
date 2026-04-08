@@ -203,11 +203,13 @@ export class IngestionStack extends cdk.Stack {
         // Append mode — Galexie auto-detects last exported ledger from S3.
         START: '',
       },
-      // TODO: Add container health check once the image is running on staging.
-      // Needs investigation into what's available inside stellar/stellar-galexie
-      // (e.g. process liveness, last-file-age, HTTP endpoint). A naive pgrep
-      // check only detects crashes, not hangs — a meaningful check should
-      // verify that Galexie is actually producing data.
+      healthCheck: {
+        command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(120),
+      },
       readonlyRootFilesystem: true,
       stopTimeout: cdk.Duration.seconds(config.galexieStopTimeout),
     });
@@ -283,6 +285,13 @@ export class IngestionStack extends cdk.Stack {
           // Soroban mainnet activation ledger (Protocol 20, Feb 20 2024).
           START: '50457424',
           END: '',
+        },
+        healthCheck: {
+          command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
+          interval: cdk.Duration.seconds(30),
+          timeout: cdk.Duration.seconds(5),
+          retries: 3,
+          startPeriod: cdk.Duration.seconds(120),
         },
         readonlyRootFilesystem: true,
         stopTimeout: cdk.Duration.seconds(config.galexieStopTimeout),
