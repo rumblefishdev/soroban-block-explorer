@@ -3,7 +3,7 @@ id: '0042'
 title: 'OpenAPI/Swagger infrastructure setup'
 type: FEATURE
 status: active
-related_adr: ['0005']
+related_adr: ['0005', '0008']
 related_tasks: ['0023', '0057', '0092']
 tags: [priority-medium, effort-small, layer-backend]
 milestone: 1
