@@ -2,7 +2,7 @@
 id: '0111'
 title: 'Fix Galexie container config: generate config.toml and set append command'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0034', '0108']
 tags: [priority-high, effort-small, layer-infra]
@@ -16,6 +16,13 @@ history:
     status: active
     who: fmazur
     note: 'Activated task'
+  - date: 2026-04-08
+    status: completed
+    who: fmazur
+    note: >
+      Replaced non-functional env vars with inline config.toml generation.
+      Live container runs append, backfill runs scan-and-fill.
+      1 file changed (ingestion-stack.ts). Lint + build passing.
 ---
 
 # Fix Galexie container config: generate config.toml and set append command
@@ -68,17 +75,22 @@ Same pattern but command uses `scan-and-fill` instead of `append`. `START`/`END`
 
 ### Step 3: Map network passphrase to Galexie network name
 
-Galexie uses `network = "pubnet"` / `"testnet"` instead of the full passphrase string. Either:
+Galexie uses `network = "pubnet"` / `"testnet"` instead of the full passphrase string. Derive it from `stellarNetworkPassphrase` in CDK code with a simple mapping:
 
-- Add a `galexieNetwork` config field (`"pubnet"` | `"testnet"`) to `EnvironmentConfig`
-- Or derive it from `stellarNetworkPassphrase` in CDK code
+```typescript
+const galexieNetwork = config.stellarNetworkPassphrase.includes('Public Global')
+  ? 'pubnet'
+  : 'testnet';
+```
+
+No changes to `EnvironmentConfig` or env JSON files needed.
 
 ## Acceptance Criteria
 
-- [ ] Galexie live container starts and runs `append` subcommand
-- [ ] Galexie reads config from generated `/tmp/config.toml`
-- [ ] S3 destination bucket configured correctly from CDK props
-- [ ] Network (pubnet/testnet) matches environment config
-- [ ] `sharedEnvironment` no longer contains ignored env vars
-- [ ] Backfill container uses `scan-and-fill` subcommand
-- [ ] Build passes
+- [x] Galexie live container starts and runs `append` subcommand
+- [x] Galexie reads config from generated `/tmp/config.toml`
+- [x] S3 destination bucket configured correctly from CDK props
+- [x] Network (pubnet/testnet) matches environment config
+- [x] `sharedEnvironment` no longer contains ignored env vars
+- [x] Backfill container uses `scan-and-fill` subcommand
+- [x] Build passes

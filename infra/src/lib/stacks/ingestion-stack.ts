@@ -161,13 +161,39 @@ export class IngestionStack extends cdk.Stack {
     });
 
     // ---------------------
-    // Shared container environment
+    // Galexie config
     // ---------------------
-    const sharedEnvironment: Record<string, string> = {
-      NETWORK_PASSPHRASE: config.stellarNetworkPassphrase,
-      DESTINATION: `s3://${ledgerBucket.bucketName}`,
-      STELLAR_CORE_BINARY_PATH: '/usr/bin/stellar-core',
-    };
+    // Galexie reads configuration from a TOML file, not env vars.
+    // We generate config.toml at container startup via entrypoint script,
+    // writing to /tmp (writable mount on ephemeral storage).
+    const galexieNetwork = config.stellarNetworkPassphrase.includes(
+      'Public Global'
+    )
+      ? 'pubnet'
+      : 'testnet';
+
+    const galexieConfigToml = [
+      '[datastore_config]',
+      'type = "S3"',
+      '',
+      '[datastore_config.params]',
+      `destination_bucket_path = "${ledgerBucket.bucketName}/"`,
+      `region = "${config.awsRegion}"`,
+      '',
+      '[datastore_config.schema]',
+      'ledgers_per_file = 1',
+      'files_per_partition = 64000',
+      '',
+      '[stellar_core_config]',
+      `network = "${galexieNetwork}"`,
+    ].join('\n');
+
+    /** Build a shell command that writes config.toml and execs Galexie. */
+    const galexieCommand = (subcommand: string): string[] => [
+      `/bin/bash`,
+      `-c`,
+      `cat > /tmp/config.toml <<'TOMLEOF'\n${galexieConfigToml}\nTOMLEOF\nexec stellar-galexie ${subcommand} --config-file /tmp/config.toml`,
+    ];
 
     // Collect task definitions for shared IAM grants below.
     const taskDefs: ecs.FargateTaskDefinition[] = [];
@@ -198,11 +224,7 @@ export class IngestionStack extends cdk.Stack {
         logGroup: liveLogGroup,
         streamPrefix: 'galexie',
       }),
-      environment: {
-        ...sharedEnvironment,
-        // Append mode — Galexie auto-detects last exported ledger from S3.
-        START: '',
-      },
+      entryPoint: galexieCommand('append'),
       healthCheck: {
         command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
         interval: cdk.Duration.seconds(30),
@@ -277,8 +299,8 @@ export class IngestionStack extends cdk.Stack {
           logGroup: backfillLogGroup,
           streamPrefix: 'galexie',
         }),
+        entryPoint: galexieCommand('scan-and-fill'),
         environment: {
-          ...sharedEnvironment,
           // START and END are overridden per RunTask invocation.
           // Defaults here serve as documentation; actual values are
           // passed via container overrides when running the task.
