@@ -2,7 +2,7 @@
 id: '0113'
 title: 'BUG: indexer parse_s3_key rejects all Galexie files — staging DB empty'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0034', '0108']
 tags: [bug, indexer, xdr-parser, staging, priority-high, effort-small]
@@ -15,6 +15,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Bug discovered while debugging "files in bucket but no DB records" on staging. Two interacting issues: parse_s3_key expects wrong file extension and format, and tracing is silently filtering all output.'
+  - date: '2026-04-08'
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated — priority-high, blocks staging indexer functionality.'
 ---
 
 # BUG: indexer parse_s3_key rejects all Galexie files
