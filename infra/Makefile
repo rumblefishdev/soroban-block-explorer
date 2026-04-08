@@ -80,3 +80,14 @@ destroy-production-bastion: build
 
 bootstrap:
 	npx cdk bootstrap
+
+CICD_APP := node dist/bin/cicd.js
+
+synth-cicd: build
+	npx cdk --app "$(CICD_APP)" synth
+
+deploy-cicd: build
+	npx cdk --app "$(CICD_APP)" deploy --require-approval broadening
+
+destroy-cicd: build
+	npx cdk --app "$(CICD_APP)" destroy --force

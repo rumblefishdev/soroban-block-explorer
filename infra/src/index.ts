@@ -14,3 +14,5 @@ export { MigrationStack } from './lib/stacks/migration-stack.js';
 export type { MigrationStackProps } from './lib/stacks/migration-stack.js';
 export { IngestionStack } from './lib/stacks/ingestion-stack.js';
 export type { IngestionStackProps } from './lib/stacks/ingestion-stack.js';
+export { CiCdStack } from './lib/stacks/cicd-stack.js';
+export type { CiCdStackProps } from './lib/stacks/cicd-stack.js';
