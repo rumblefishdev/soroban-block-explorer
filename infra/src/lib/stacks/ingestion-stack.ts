@@ -166,11 +166,18 @@ export class IngestionStack extends cdk.Stack {
     // Galexie reads configuration from a TOML file, not env vars.
     // We generate config.toml at container startup via entrypoint script,
     // writing to /tmp (writable mount on ephemeral storage).
-    const galexieNetwork = config.stellarNetworkPassphrase.includes(
-      'Public Global'
-    )
-      ? 'pubnet'
-      : 'testnet';
+    const galexieNetworkByPassphrase: Record<string, string> = {
+      'Public Global Stellar Network ; September 2015': 'pubnet',
+      'Test SDF Network ; September 2015': 'testnet',
+    };
+    const galexieNetwork =
+      galexieNetworkByPassphrase[config.stellarNetworkPassphrase];
+    if (!galexieNetwork) {
+      throw new Error(
+        `Unsupported stellarNetworkPassphrase for Galexie: "${config.stellarNetworkPassphrase}". ` +
+          `Supported: ${Object.keys(galexieNetworkByPassphrase).join(', ')}`
+      );
+    }
 
     const galexieConfigToml = [
       '[datastore_config]',
