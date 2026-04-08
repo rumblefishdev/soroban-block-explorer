@@ -22,31 +22,23 @@ history:
 
 ## Summary
 
-Add a container-level health check to the Galexie live ECS service so that ECS can detect hangs and crashes and automatically restart the task. Currently there is a TODO at `infra/src/lib/stacks/ingestion-stack.ts:206` — without a health check, ECS only detects full process exits, not silent hangs where Galexie stops producing data.
+Add container-level health checks to Galexie ECS task definitions (live + backfill) so that ECS detects process crashes and restarts the task automatically. Without a health check, the existing `circuitBreaker: { rollback: true }` on the live service cannot act on container failures.
 
 ## Context
 
-Task 0034 deployed the Galexie ECS/Fargate service but deferred the health check until the image is running on staging and we can investigate what's available inside `stellar/stellar-galexie`.
+TODO at `infra/src/lib/stacks/ingestion-stack.ts:206`. Task 0034 deferred this until the image runs on staging.
 
-A naive `pgrep` check only detects crashes, not hangs. A meaningful check should verify that Galexie is actually producing data (e.g. checking the age of the last exported file on the local data volume or an HTTP endpoint if one exists).
+Galexie runs `stellar-core` as a child process. A `pgrep stellar-core` check covers the main failure mode — core crash or exit. Hang detection (data freshness) is out of scope here and belongs in CloudWatch alarms (task 0036).
 
 ## Implementation Plan
 
-### Step 1: Investigate stellar/stellar-galexie image
+### Step 1: Add health check to live container (ingestion-stack.ts)
 
-Run the image locally or via ECS Exec on staging to determine:
-
-- Whether it exposes an HTTP health endpoint
-- What processes run inside the container
-- Whether last-exported-file age on `/data` can be checked via a shell command
-
-### Step 2: Implement health check in CDK
-
-Add `healthCheck` property to the container definition in `ingestion-stack.ts`:
+Add `healthCheck` to the `liveContainer` definition at line 195:
 
 ```typescript
 healthCheck: {
-  command: [/* determined in Step 1 */],
+  command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
   interval: cdk.Duration.seconds(30),
   timeout: cdk.Duration.seconds(5),
   retries: 3,
@@ -54,14 +46,22 @@ healthCheck: {
 },
 ```
 
-### Step 3: Validate on staging
+- `CMD-SHELL` — runs via container shell, no extra binary needed
+- `pgrep -x` — exact match, avoids false positives
+- `startPeriod: 120s` — Captive Core needs time to catch up on startup
+- `retries: 3` — tolerates transient process restarts during catchup
 
-Deploy to staging, confirm health check passes during normal operation and correctly marks the task unhealthy when Galexie stalls.
+### Step 2: Add health check to backfill container
+
+Same health check on the `backfillContainer` (line 269). Backfill is one-shot but still benefits from crash detection during long-running historical imports.
+
+### Step 3: Remove the TODO comment
+
+Delete the TODO block at lines 206–210.
 
 ## Acceptance Criteria
 
-- [ ] Health check added to Galexie live container definition
-- [ ] Health check detects actual data production stall (not just process liveness)
-- [ ] `startPeriod` accounts for Galexie cold-start time
-- [ ] Validated on staging — task restarts on simulated hang
-- [ ] TODO at ingestion-stack.ts:206 removed
+- [ ] Health check added to live container definition
+- [ ] Health check added to backfill container definition
+- [ ] TODO comment at ingestion-stack.ts:206 removed
+- [ ] `pnpm nx run @rumblefish/soroban-block-explorer-infra:build` passes
