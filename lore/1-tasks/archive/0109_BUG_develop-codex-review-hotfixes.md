@@ -85,7 +85,7 @@ All three fixes target root cause — no workarounds, no new dependencies, no ne
 
 2. **Rename indexer env vars, not CDK**: Bug 2 fixed in the indexer crate (the lone dissenter) rather than in compute-stack, because `db-migrate` and `db-partition-mgmt` already use `SECRET_ARN`/`RDS_PROXY_ENDPOINT` — task 0029 introduced the mismatched names in isolation and missed the convention.
 
-3. **Drop `envs/**/\*.json`from tsconfig, not move rootDir**: Bug 3 resolved by removing the glob, not by widening`rootDir`to the infra root. Bin scripts load envs via runtime`createRequire(import.meta.url)`, so tsc never needs to see them — the glob was leftover from an earlier direct-import approach.
+3. **Drop the envs glob from tsconfig, not move rootDir**: Bug 3 resolved by removing the `envs` glob from `infra/tsconfig.lib.json` include, not by widening `rootDir` to the infra root. Bin scripts load envs via runtime `createRequire`, so tsc never needs to see them — the glob was leftover from an earlier direct-import approach.
 
 ### Emerged
 
