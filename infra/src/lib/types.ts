@@ -193,6 +193,19 @@ export function validateConfig(config: EnvironmentConfig): void {
       `apiWafRateLimit must be >= 100 (AWS WAF minimum), got: ${config.apiWafRateLimit}`
     );
   }
+  if (config.xraySamplingRate < 0 || config.xraySamplingRate > 1) {
+    errors.push(
+      `xraySamplingRate must be between 0.0 and 1.0, got: ${config.xraySamplingRate}`
+    );
+  }
+  if (
+    !Number.isInteger(config.xrayReservoirSize) ||
+    config.xrayReservoirSize < 0
+  ) {
+    errors.push(
+      `xrayReservoirSize must be a non-negative integer, got: ${config.xrayReservoirSize}`
+    );
+  }
 
   if (errors.length > 0) {
     throw new Error(
