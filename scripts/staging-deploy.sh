@@ -30,7 +30,7 @@ fi
 git fetch "$REMOTE" --tags --quiet
 
 DATE=$(date +%Y.%m.%d)
-MAX_N=$(git tag -l "staging-${DATE}-[0-9]*" | sed "s/staging-${DATE}-//" | grep -E '^[0-9]+$' | sort -n | tail -1)
+MAX_N=$(git tag -l "staging-${DATE}-[0-9]*" | sed "s/staging-${DATE}-//" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
 N=$(( ${MAX_N:-0} + 1 ))
 TAG="staging-${DATE}-${N}"
 
