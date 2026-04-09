@@ -117,16 +117,38 @@ pub async fn persist_ledger(
         db::soroban::update_operation_tree(&mut **db_tx, tx_id, tree).await?;
     }
 
-    // 7. Contract interface metadata (function signatures from WASM analysis).
-    // TODO: ExtractedContractInterface only has wasm_hash, not contract_id.
-    // We cannot store these rows correctly until we can join wasm_hash → contract_id
-    // (e.g. via a wasm_hash index on soroban_contracts). Deferred to a follow-up task.
-    let _ = contract_interfaces;
-
-    // 8. Upsert contract deployments
+    // 7. Upsert contract deployments (before interface metadata so wasm_hash is populated)
     for deployment in contract_deployments {
         let domain_contract = convert::to_contract(deployment);
         db::soroban::upsert_contract_deployment(&mut **db_tx, &domain_contract).await?;
+    }
+
+    // 8. Contract interface metadata — dual-path persistence for the 2-ledger deploy pattern.
+    //
+    // Soroban separates WASM upload (ContractCodeEntry, ledger A) from contract deployment
+    // (ContractDataEntry, ledger B). ExtractedContractInterface is only produced from
+    // ContractCodeEntry, so by ledger B there is no interface data to apply directly.
+    //
+    // Strategy:
+    //   a) Always upsert into wasm_interface_metadata (staging by wasm_hash) — covers ledger B.
+    //   b) Also apply directly to any soroban_contracts rows that already exist — covers
+    //      same-ledger deploys and re-index flows.
+    //
+    // upsert_contract_deployment() reads wasm_interface_metadata after each deployment upsert,
+    // so any contract deployed in a later ledger automatically picks up the staged metadata.
+    for iface in contract_interfaces {
+        let metadata = serde_json::json!({
+            "functions": iface.functions,
+            "wasm_byte_len": iface.wasm_byte_len,
+        });
+        db::soroban::upsert_wasm_interface_metadata(&mut **db_tx, &iface.wasm_hash, &metadata)
+            .await?;
+        db::soroban::update_contract_interfaces_by_wasm_hash(
+            &mut **db_tx,
+            &iface.wasm_hash,
+            &metadata,
+        )
+        .await?;
     }
 
     // 9. Upsert account states
