@@ -6,6 +6,7 @@ status: completed
 related_adr: ['0005']
 related_tasks: ['0092', '0094']
 tags: [priority-medium, effort-small, layer-infra, nx]
+milestone: 1
 links: []
 history:
   - date: 2026-03-31

@@ -6,6 +6,7 @@ status: backlog
 related_adr: []
 related_tasks: ['0110']
 tags: [ci, rust, cargo-lambda, performance, priority-low, effort-small]
+milestone: 1
 links:
   - .github/workflows/ci.yml
 history:

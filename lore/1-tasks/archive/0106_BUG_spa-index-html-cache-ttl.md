@@ -6,6 +6,7 @@ status: completed
 related_adr: []
 related_tasks: ['0035']
 tags: [priority-high, effort-small, layer-infra]
+milestone: 1
 links: []
 history:
   - date: 2026-04-07

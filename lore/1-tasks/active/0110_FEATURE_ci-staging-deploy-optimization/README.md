@@ -6,6 +6,7 @@ status: active
 related_adr: []
 related_tasks: ['0039', '0038', '0103']
 tags: [ci, cd, cdk, github-actions, staging, priority-medium, effort-medium]
+milestone: 1
 links:
   - .github/workflows/deploy-staging.yml
 history:

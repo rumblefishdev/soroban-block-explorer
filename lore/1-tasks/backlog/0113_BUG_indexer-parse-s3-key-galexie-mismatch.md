@@ -6,6 +6,7 @@ status: backlog
 related_adr: []
 related_tasks: ['0034', '0108']
 tags: [bug, indexer, xdr-parser, staging, priority-high, effort-small]
+milestone: 1
 links:
   - crates/xdr-parser/src/lib.rs
   - crates/indexer/src/handler/mod.rs

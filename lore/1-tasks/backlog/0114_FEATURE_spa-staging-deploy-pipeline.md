@@ -6,6 +6,7 @@ status: backlog
 related_adr: []
 related_tasks: ['0035', '0106', '0084', '0103']
 tags: [layer-infra, layer-frontend, priority-high, effort-small]
+milestone: 2
 links: []
 history:
   - date: 2026-04-08
