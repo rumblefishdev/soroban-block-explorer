@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         indexed += 1;
 
         // Progress log every 10 ledgers
-        if indexed % 10 == 0 {
+        if indexed.is_multiple_of(10) {
             let elapsed = timer.elapsed();
             let avg_ms = elapsed.as_millis() as f64 / indexed as f64;
             info!(
