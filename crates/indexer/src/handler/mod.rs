@@ -79,6 +79,7 @@ pub async fn handler(event: LambdaEvent<S3Event>, state: &HandlerState) -> Resul
 
     let total = payload.records.len();
     let mut processed = 0usize;
+    let mut skipped = 0usize;
 
     for record in &payload.records {
         let bucket = &record.s3.bucket.name;
@@ -94,6 +95,7 @@ pub async fn handler(event: LambdaEvent<S3Event>, state: &HandlerState) -> Resul
             Ok(range) => range,
             Err(e) => {
                 warn!(bucket, key = key.as_str(), error = %e, "skipping non-matching S3 key");
+                skipped += 1;
                 continue;
             }
         };
@@ -106,9 +108,7 @@ pub async fn handler(event: LambdaEvent<S3Event>, state: &HandlerState) -> Resul
                     key = key.as_str(),
                     start = ledger_range.0,
                     end = ledger_range.1,
-                    "S3 record processed (ledger range {}-{})",
-                    ledger_range.0,
-                    ledger_range.1,
+                    "S3 record processed",
                 );
             }
             Err(e) => {
@@ -118,10 +118,10 @@ pub async fn handler(event: LambdaEvent<S3Event>, state: &HandlerState) -> Resul
         }
     }
 
-    if processed == 0 && total > 0 {
+    if skipped > 0 && skipped == total {
         error!(
             total,
-            "all {total} S3 records skipped by parse_s3_key — no data persisted"
+            skipped, "all S3 records skipped by parse_s3_key — no data persisted"
         );
     }
 

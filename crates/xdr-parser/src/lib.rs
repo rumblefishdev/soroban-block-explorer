@@ -111,7 +111,7 @@ pub fn parse_s3_key(key: &str) -> Result<(u32, u32), ParseError> {
         context: None,
     })?;
 
-    // Validate hex prefix (Galexie uses 8-char uppercase hex).
+    // Validate hex prefix (Galexie uses 8-char hex, derived from uint32_max - ledger).
     if hex_prefix.len() != 8 || !hex_prefix.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ParseError {
             kind: ParseErrorKind::InvalidS3Key,
