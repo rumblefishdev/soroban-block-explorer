@@ -948,7 +948,9 @@ mod tests {
             is_sac: None,
             metadata: None,
         };
-        upsert_contract_deployment(&pool, &contract).await.unwrap();
+        upsert_contract_deployments_batch(&pool, &[contract])
+            .await
+            .unwrap();
 
         // Staged interface metadata should have been applied automatically
         let (meta,): (serde_json::Value,) =
