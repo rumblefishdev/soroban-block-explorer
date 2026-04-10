@@ -30,8 +30,10 @@ cargo run -p backfill-bench -- --start 62015000 --end 62015999
 Index 100 ledgers with explicit database URL:
 
 ```bash
-cargo run -p backfill-bench -- --start 62015000 --end 62015099 --database-url postgres://postgres:postgres@localhost:5432/soroban_block_explorer
+cargo run -p backfill-bench -- --start 62015000 --end 62015099 --database-url postgres://postgres:postgres@127.0.0.1:5432/soroban_block_explorer
 ```
+
+> **Tip:** Use `127.0.0.1` instead of `localhost` in the connection string to avoid DNS resolution delays on some systems (IPv6/IPv4 fallback).
 
 ### Arguments
 
