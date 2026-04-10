@@ -17,7 +17,8 @@
 7. [Manual Verification Checklist](#7-manual-verification-checklist)
 8. [Third-Pass Audit Findings (F18-F25)](#8-third-pass-audit-findings-f18-f25)
 9. [Enrichment Pipeline Gap](#9-enrichment-pipeline-gap)
-10. [Recommendations](#10-recommendations)
+10. [Parallel Backfill Safety](#10-parallel-backfill-safety)
+11. [Recommendations](#11-recommendations)
 
 ---
 
@@ -551,9 +552,98 @@ None should be removed — all have valid use cases:
 
 ---
 
-## 10. Recommendations
+## 10. Parallel Backfill Safety
 
-### 10.1 Immediate (Before D1 Closeout)
+### 10.1 Current State
+
+The indexer is designed for idempotency. Parallel backfill (multiple workers processing
+different ledger ranges concurrently, out-of-order) is **safe** for the current codebase
+with two known post-correction issues.
+
+### 10.2 Table-by-Table Assessment
+
+**Safe for out-of-order processing (no issues):**
+
+| Table                     | Mechanism                             | Why Safe                                     |
+| ------------------------- | ------------------------------------- | -------------------------------------------- |
+| `ledgers`                 | ON CONFLICT DO NOTHING                | Immutable, first writer wins                 |
+| `transactions`            | ON CONFLICT (hash) DO UPDATE          | Idempotent, same data                        |
+| `operations`              | ON CONFLICT DO NOTHING                | Immutable                                    |
+| `soroban_events`          | ON CONFLICT DO NOTHING                | Immutable                                    |
+| `soroban_invocations`     | ON CONFLICT DO NOTHING                | Immutable                                    |
+| `soroban_contracts`       | COALESCE(existing, new)               | First-write-wins, metadata merges additively |
+| `wasm_interface_metadata` | UPSERT by wasm_hash                   | Eventually consistent across ledgers         |
+| `tokens`                  | ON CONFLICT DO NOTHING                | First-write-wins                             |
+| `accounts`                | WHERE last_seen_ledger <= EXCLUDED    | Watermark: newer ledger wins, stale rejected |
+| `liquidity_pools`         | WHERE last_updated_ledger <= EXCLUDED | Same watermark pattern                       |
+| `nfts`                    | WHERE last_seen_ledger <= EXCLUDED    | Same watermark pattern                       |
+
+**Known issues requiring post-backfill correction:**
+
+| Issue               | Table      | Cause                                                                                                                | Fix                            |
+| ------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `first_seen_ledger` | `accounts` | Set on INSERT only. If transfer (n+200) before creation (n), value is wrong. Watermark rejects the later correction. | Post-backfill correction query |
+| `minted_at_ledger`  | `nfts`     | INSERT only, not in UPDATE SET. Transfer before mint = NULL permanently.                                             | Post-backfill correction query |
+
+**Post-backfill correction SQL:**
+
+```sql
+-- Fix accounts.first_seen_ledger
+UPDATE accounts a SET first_seen_ledger = sub.min_ledger
+FROM (
+  SELECT source_account, MIN(ledger_sequence) AS min_ledger
+  FROM transactions GROUP BY source_account
+) sub
+WHERE a.account_id = sub.source_account
+  AND a.first_seen_ledger > sub.min_ledger;
+```
+
+### 10.3 Impact of New Tasks on Parallel Safety
+
+| Task | Parallel-safe? | Issue                                                    | Mitigation                                                               |
+| ---- | -------------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 0118 | Yes            | Filter change only, no state                             | None needed                                                              |
+| 0119 | Conditional    | Trustline for account that does not exist yet (FK)       | Add ensure_account_exists before upsert                                  |
+| 0130 | Yes            | DDL only, run before backfill                            | None needed                                                              |
+| 0134 | Yes            | Validation logic, no state                               | None needed                                                              |
+| 0135 | **No**         | holder_count +1/-1 is not safe for concurrent increments | Disable inline during parallel backfill. Use post-backfill recount only. |
+
+### 10.4 Recommended Backfill Execution Order
+
+| Step | When            | What                                                                      |
+| ---- | --------------- | ------------------------------------------------------------------------- |
+| 1    | Before backfill | Run tasks 0118, 0119, 0130, 0134                                          |
+| 2    | Before backfill | Disable inline holder_count increment (task 0135)                         |
+| 3    | During backfill | Run N parallel workers on non-overlapping ledger ranges                   |
+| 4    | After backfill  | Post-correction: first_seen_ledger, minted_at_ledger                      |
+| 5    | After backfill  | One-time holder_count full recount (task 0135)                            |
+| 6    | After backfill  | Enrichment jobs: token metadata (0124), LP analytics (0125)               |
+| 7    | Ongoing         | Switch to live ingestion (single worker) with inline holder_count enabled |
+
+### 10.5 NFT Table: Field-by-Field Mutation Analysis
+
+| Field              | Source            | Mint      | Transfer  | Burn | Mutates?                           |
+| ------------------ | ----------------- | --------- | --------- | ---- | ---------------------------------- |
+| `contract_id`      | event.contract_id | yes       | yes       | yes  | No (PK)                            |
+| `token_id`         | event.data        | yes       | yes       | yes  | No (PK)                            |
+| `collection_name`  | hardcoded None    | null      | null      | null | Never — placeholder for enrichment |
+| `owner_account`    | event topics (to) | recipient | new owner | None | Yes, every transfer/burn           |
+| `name`             | hardcoded None    | null      | null      | null | Never — placeholder for enrichment |
+| `media_url`        | hardcoded None    | null      | null      | null | Never — placeholder for enrichment |
+| `metadata`         | hardcoded None    | null      | null      | null | Never — placeholder for enrichment |
+| `minted_at_ledger` | event.ledger_seq  | Some(seq) | None      | None | INSERT only — not in UPDATE SET    |
+| `last_seen_ledger` | event.ledger_seq  | yes       | yes       | yes  | Yes, every interaction (watermark) |
+
+NFT metadata (name, media_url, metadata, collection_name) requires `token_uri()` RPC calls
+to the contract — not available from XDR events. This is an enrichment job (same pattern as
+token metadata in task 0124). Parallel backfill has zero impact on NFT data correctness
+beyond the known `minted_at_ledger` INSERT-only issue.
+
+---
+
+## 11. Recommendations
+
+### 11.1 Immediate (Before D1 Closeout)
 
 1. **Complete task 0118** (NFT false positives fix) — before backfill, prevents millions of spurious records
 2. **Complete task 0119** (trustline balance extraction) — before backfill, dormant accounts won't self-fix
@@ -563,11 +653,11 @@ None should be removed — all have valid use cases:
 6. **Complete task 0036** (CloudWatch dashboards + alarms) — hard blocker for AC#5
 7. **Run AC#3 spot-check** — manual DB query with known Soroswap/Aquarius hashes
 
-### 10.2 Before D2 Start
+### 11.2 Before D2 Start
 
 8. **Fix F8** (task 0120, Soroban-native token detection) — core feature gap for token listings
 
-### 10.3 All Created Tasks (0118-0135)
+### 11.3 All Created Tasks (0118-0135)
 
 | Task | Title                                   | Severity | Milestone | Effort |
 | ---- | --------------------------------------- | -------- | --------- | ------ |
