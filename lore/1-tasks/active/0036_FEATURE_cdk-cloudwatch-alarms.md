@@ -2,7 +2,7 @@
 id: '0036'
 title: 'CDK: CloudWatch dashboards and alarms'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0006', '0108']
 tags: [priority-medium, effort-small, layer-infra]
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Updated: removed Event Interpreter references. Architecture simplified to 2 Lambdas (API + Indexer).'
+  - date: 2026-04-09
+    status: active
+    who: FilipDz
+    note: 'Activated for implementation'
 ---
 
 # CDK: CloudWatch dashboards and alarms
