@@ -27,8 +27,8 @@ export interface CloudWatchStackProps extends cdk.StackProps {
  * Creates:
  * - One SNS topic per environment for alarm notifications
  * - AWS Chatbot SlackChannelConfiguration subscribing the topic to a Slack channel
- * - 5 alarms covering Galexie ingestion lag, Processor error rate, RDS CPU,
- *   RDS free storage, and API Gateway 5xx rate
+ * - 6 alarms covering Galexie ingestion lag, Processor error rate, DLQ depth,
+ *   RDS CPU, RDS free storage, and API Gateway 5xx rate
  * - A CloudWatch dashboard with Ingestion / API / Resources sections
  *
  * All alarm thresholds are env-configurable via EnvironmentConfig.
@@ -47,8 +47,14 @@ export class CloudWatchStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: CloudWatchStackProps) {
     super(scope, id, props);
 
-    const { config, apiFunction, processorFunction, rdsInstance, restApi } =
-      props;
+    const {
+      config,
+      apiFunction,
+      processorFunction,
+      deadLetterQueue,
+      rdsInstance,
+      restApi,
+    } = props;
 
     // ---------------------
     // SNS Topic
@@ -192,7 +198,32 @@ export class CloudWatchStack extends cdk.Stack {
     );
 
     // ---------------------
-    // Alarm 5: API Gateway 5xx rate
+    // Alarm 5: DLQ depth
+    // Any message landing in the DLQ means a ledger permanently failed processing.
+    // ---------------------
+    withActions(
+      new cloudwatch.Alarm(this, 'DlqDepthAlarm', {
+        alarmName: `${config.envName}-ledger-processor-dlq-depth`,
+        alarmDescription:
+          'Ledger Processor DLQ has messages — one or more ledgers permanently failed processing.',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/SQS',
+          metricName: 'ApproximateNumberOfMessagesVisible',
+          dimensionsMap: { QueueName: deadLetterQueue.queueName },
+          period: cdk.Duration.minutes(1),
+          statistic: cloudwatch.Stats.MAXIMUM,
+          label: 'DLQ depth',
+        }),
+        threshold: 0,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
+    // Alarm 6: API Gateway 5xx rate
     // 5xxError / Count > threshold over 5-minute window.
     // ---------------------
     const stageName = restApi.deploymentStage.stageName;
@@ -283,7 +314,7 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
         ],
-        // Row 3: Processor errors + concurrency
+        // Row 3: Processor errors + DLQ depth
         [
           new cloudwatch.GraphWidget({
             title: 'Ledger Processor errors',
@@ -294,7 +325,22 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Errors',
               }),
             ],
-            width: 12,
+            width: 8,
+            height: 6,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Ledger Processor DLQ depth',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/SQS',
+                metricName: 'ApproximateNumberOfMessagesVisible',
+                dimensionsMap: { QueueName: deadLetterQueue.queueName },
+                period: cdk.Duration.minutes(1),
+                statistic: cloudwatch.Stats.MAXIMUM,
+                label: 'DLQ depth',
+              }),
+            ],
+            width: 8,
             height: 6,
           }),
           new cloudwatch.GraphWidget({
@@ -319,7 +365,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'API',
               }),
             ],
-            width: 12,
+            width: 8,
             height: 6,
           }),
         ],
@@ -356,7 +402,7 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
           new cloudwatch.GraphWidget({
-            title: 'API Gateway 4xx / 5xx rates',
+            title: 'API Gateway 4xx / 5xx errors',
             left: [
               new cloudwatch.Metric({
                 namespace: 'AWS/ApiGateway',
@@ -488,5 +534,12 @@ export class CloudWatchStack extends cdk.Stack {
         ],
       ],
     });
+
+    // ---------------------
+    // Tags
+    // ---------------------
+    cdk.Tags.of(this).add('Project', 'soroban-block-explorer');
+    cdk.Tags.of(this).add('Environment', config.envName);
+    cdk.Tags.of(this).add('ManagedBy', 'cdk');
   }
 }

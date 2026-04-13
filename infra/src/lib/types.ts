@@ -124,7 +124,7 @@ export interface EnvironmentConfig {
 
   /** Minutes of zero Ledger Processor invocations before the Galexie lag alarm fires. */
   readonly galexieLagMinutes: number;
-  /** Error rate threshold (0.0–1.0) for the Ledger Processor error-rate alarm. */
+  /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
   /** RDS CPU utilization % threshold for the RDS CPU alarm (sustained 5 min). */
   readonly rdsCpuThreshold: number;
