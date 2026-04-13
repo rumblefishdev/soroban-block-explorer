@@ -20,7 +20,7 @@ history:
 
 ## Summary
 
-The `tokens.metadata` JSONB column exists in the schema but `convert.rs:168` hardcodes it
+The `tokens.metadata` JSONB column exists in the schema but `convert.rs:167` hardcodes it
 to `None`. The `ExtractedToken` struct has no `metadata` field. No task in backlog, active,
 or archive addresses populating this column.
 

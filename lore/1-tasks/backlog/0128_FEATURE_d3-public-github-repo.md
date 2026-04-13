@@ -24,23 +24,30 @@ Deliverable 3 acceptance criteria #2 requires the repository to be made public. 
 involves reviewing the codebase for secrets, sensitive configuration, and proprietary
 content before making the repo public.
 
-## Known Sensitive Data in Git History
+## Known Data in Git History
 
 The pipeline audit (2026-04-10) identified:
 
 - AWS Account ID `750702271865` in `infra/envs/staging.json` and a worklog file
 - Full ACM certificate ARN in `infra/envs/staging.json:41`
 
-These must be scrubbed using `git-filter-repo` or `BFG Repo Cleaner` before making the
-repo public. Consider moving staging config values to SSM Parameter Store.
+> **Note:** AWS Account IDs and ACM certificate ARNs are **not critical secrets** per AWS
+> documentation — they are resource identifiers, not credentials. Knowing them alone does
+> not grant access. However, scrubbing them is still a best practice for public repos to
+> reduce attack surface (social engineering, targeted resource probing).
+
+Consider moving staging config values to SSM Parameter Store regardless.
 
 ## Implementation
 
 1. Audit git history for secrets using `trufflehog` or `gitleaks`.
-2. Scrub identified sensitive data using `git-filter-repo`.
+2. Scrub any real secrets found (API keys, tokens, passwords) using `git-filter-repo`.
 3. Move environment-specific values to SSM Parameter Store / Secrets Manager.
-4. Add LICENSE file and update README.md.
-5. Change repository visibility to public.
+4. Audit `.gitignore` — ensure `.env`, credentials, and build artifacts are excluded.
+5. Review GitHub Actions workflows — verify no secrets leak into logs.
+6. Add LICENSE file and update README.md.
+7. Add CONTRIBUTING.md with contribution guidelines.
+8. Change repository visibility to public.
 
 ## Acceptance Criteria
 

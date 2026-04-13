@@ -20,9 +20,11 @@ history:
 
 ## Summary
 
-The technical design specifies showing "signer, weight, signature hex" on the transaction
-detail page. The XDR parser does not extract signatures and the transactions table has no
-signatures column.
+The technical design specifies showing signature data on the transaction detail page.
+`DecoratedSignature` in Stellar XDR contains only a 4-byte public key hint and the
+signature blob — signer weight is NOT available from the envelope (it lives in the
+account's signers list on the ledger). The XDR parser does not extract signatures and
+the transactions table has no signatures column.
 
 ## Implementation
 

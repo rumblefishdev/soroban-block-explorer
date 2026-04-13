@@ -43,14 +43,20 @@ but a reordering (same count, wrong order) would produce silently corrupt data.
 
 1. Add `assert_eq!(envelopes.len(), tx_infos.len())` in `process.rs` after extraction.
    On mismatch, fail the entire ledger (do not silently degrade).
-2. Add hash-based cross-check: compute SHA256 of each envelope and verify it matches the
-   `transaction_hash` from `TransactionResultPair`. This confirms correct pairing.
+2. Add hash-based cross-check: compare the `transaction_hash` from
+   `TransactionResultPair` (already extracted as `TxInfo.hash`) against a hash computed
+   from the corresponding envelope. **Important:** Stellar's transaction hash is
+   `SHA256(network_id || ENVELOPE_TYPE_TX || tx_body)` — NOT `SHA256(full_envelope)`.
+   This requires the network passphrase and hashing only the inner transaction body
+   (without signatures). The network passphrase must be passed into the extraction
+   pipeline (from config). Alternatively, a simpler length assertion (step 1) may be
+   sufficient given that ordering is guaranteed by protocol convention.
 3. If hash check fails for any transaction, log error and set `parse_error = true` for
    that specific transaction instead of silently using wrong data.
 
 ## Acceptance Criteria
 
 - [ ] Length assertion: indexer fails loudly if envelope count != meta count
-- [ ] Hash cross-check: each envelope's computed hash matches its result pair hash
+- [ ] Hash cross-check: each envelope's computed hash (using `SHA256(network_id || ENVELOPE_TYPE_TX || tx_body)`) matches its result pair hash, OR length assertion deemed sufficient
 - [ ] On hash mismatch: transaction marked with parse_error, not silently corrupted
 - [ ] Tests: simulated mismatch triggers expected error behavior

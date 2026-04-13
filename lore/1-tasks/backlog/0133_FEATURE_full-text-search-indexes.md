@@ -32,8 +32,10 @@ it useless for the majority of contracts.
 
 New migration:
 
-1. **tokens**: Add `search_vector` TSVECTOR GENERATED from `name` + `asset_code`. Add GIN
-   index. Add B-tree index on `asset_code` and `name`.
+1. **tokens**: Use `pg_trgm` GIN index on `name` and `asset_code` for ILIKE/similarity
+   search. TSVECTOR is not appropriate here — `asset_code` is max 12 chars and `name` is
+   typically short; FTS tokenization/stemming actively hurts short-string search (e.g.,
+   stop-word elimination removes common codes). Add B-tree index on `asset_code`.
 2. **accounts**: Add index on `home_domain` for domain-based lookup.
 3. **nfts**: Add `search_vector` TSVECTOR GENERATED from `name` + `collection_name`. Add
    GIN index.
@@ -42,7 +44,7 @@ New migration:
 
 ## Acceptance Criteria
 
-- [ ] Tokens searchable by name and asset_code via full-text search
+- [ ] Tokens searchable by name and asset_code via `pg_trgm` ILIKE/similarity search
 - [ ] NFTs searchable by name and collection_name via full-text search
 - [ ] Accounts findable by home_domain
 - [ ] Global search (task 0053) has index support for all entity types

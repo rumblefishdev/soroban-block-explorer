@@ -27,15 +27,38 @@ columns exist in the schema but are effectively always NULL. Computing real valu
 - **Volume**: Tracking individual swap operations per pool per time window.
 - **Fee revenue**: Derived from volume \* fee_bps.
 
+## Important: Classic AMM vs Soroban DEX Pools
+
+This task covers **two fundamentally different pool types** that require separate
+implementation paths:
+
+- **Classic AMM pools**: Native `LiquidityPoolEntry` ledger entries. Reserves, total
+  shares, and fee_bps are directly available from XDR (`LiquidityPoolConstantProduct`).
+  Swaps are `PathPayment` operations, not Soroban events. Fee is fixed at pool creation.
+- **Soroban DEX pools** (Soroswap, Phoenix, etc.): Smart contracts storing state in
+  `ContractData` entries. Reserves require contract-specific parsing. Swap events are
+  **not standardized** across DEXes — each has its own event format. Fees may be dynamic.
+
+The current codebase only extracts classic AMM pools via `ledger_entry_changes.rs`.
+Soroban DEX pool support requires per-DEX event parsing adapters.
+
 ## Implementation
+
+### Classic AMM Pools (Phase 1)
 
 1. **Price oracle**: Integrate external price feed (CoinGecko, StellarExpert API, or
    Horizon aggregation endpoint) to get USD prices for pool assets.
-2. **TVL computation**: reserve*a * price*a + reserve_b * price_b, updated per snapshot.
-3. **Volume tracking**: Identify swap operations in `soroban_invocations` or
-   `soroban_events` for each pool and aggregate per time window.
-4. **Fee revenue**: volume \* (fee_bps / 10000).
+2. **TVL computation**: reserve_a _ price_a + reserve_b _ price_b, updated per snapshot.
+3. **Volume tracking**: Identify `PathPayment` operations that modify pool reserves.
+4. **Fee revenue**: volume \* (fee_bps / 10000). Fee is immutable (set at pool creation).
 5. Decide: inline during indexing or separate scheduled enrichment job?
+
+### Soroban DEX Pools (Phase 2 — separate task recommended)
+
+1. Build per-DEX event parsing adapters (Soroswap, Phoenix, etc.).
+2. Extract reserves from contract storage (`ContractData` entries).
+3. Track swaps via contract-specific event patterns in `soroban_events`.
+4. Handle dynamic fee structures per DEX.
 
 ## Acceptance Criteria
 
