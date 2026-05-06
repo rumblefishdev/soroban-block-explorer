@@ -1,9 +1,9 @@
 ---
 id: '0195'
-title: 'Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)'
+title: 'Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, nft_metadata)'
 type: FEATURE
 status: backlog
-related_adr: ['0026', '0029', '0032']
+related_adr: ['0007', '0022', '0023', '0032', '0043']
 related_tasks: ['0125', '0188', '0191', '0194', '0196', '0197']
 tags: [priority-medium, effort-large, layer-enrichment, layer-lambda, audit-gap]
 milestone: 2
@@ -16,7 +16,7 @@ history:
     note: 'Spawned from M2 enrichment planning session 2026-05-06. Second of four tasks (0194-0197) implementing the field allocation rule. Subsumes 0125 (LP TVL part) and 0191 future-work bullets #2 (asset_usd_price implied) + LP analytics kind.'
 ---
 
-# Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)
+# Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, nft_metadata)
 
 ## Summary
 
@@ -24,17 +24,18 @@ Four sub-blocks layered on 0191's SQS-driven type-1 enrichment worker, each popu
 
 ## Status: Backlog
 
-Cannot start until task **0194 sub-block 1a** (schema migration adding `assets.usd_price` + `assets.usd_price_updated_at`) merges to develop. Sub-blocks 2a (icon-name extension), 2b (lp_tvl) and 2d (nft_metadata) write existing columns and are unblocked once 0191 is in production. Sub-block 2c (asset_usd_price) is hard-blocked on 0194 1a.
+Sub-blocks 2a (icon-name extension), 2b (lp_tvl) and 2d (nft_metadata) write existing columns and are unblocked once 0191 is in production. Sub-block 2c (asset_usd_price) was pulled — see §2c below. ADR 0043 (field allocation rule) must already be on develop as its own independent PR — this task references it as established law.
 
 ## Context
 
-### Field allocation rule (from 0194 sub-block 1f / ADR 0026)
+### Field allocation rule (from 0194 sub-block 1f / ADR 0043)
 
 Off-chain = data NOT already in the processed ledger. Decision points crystallised this session:
 
 - **`assets.name` (classic credit only)**: full names like "USD Coin" come from issuer SEP-1 TOML `CURRENCIES[].name`. Off-chain. Soroban/SAC `name` continue indexer-side (task 0156). **Added 2026-05-06 after 0197 dry-run audit** caught misallocation in original 0194 sub-block 1b.
 - **`liquidity_pools.tvl` + `liquidity_pool_snapshots.tvl`**: USD-denominated, requires price oracle. Off-chain.
-- **`assets.usd_price`**: USD price feed (CoinGecko / Reflector / StellarExpert). Off-chain.
+<!-- `assets.usd_price` allocation entry removed — sub-block 2c pulled, see §2c. -->
+
 - **`nfts.{collection_name, name, media_url, metadata}`**: requires Soroban RPC `token_uri()` per NFT, often dereferences to HTTP/IPFS gateway for JSON. Per the rule "on-chain = already in processed ledger", per-token RPC counts as off-chain (audit `docs/audits/2026-04-10-pipeline-data-audit.md` line 644-647 explicitly: "requires `token_uri()` RPC calls to the contract — not available from XDR events. This is an enrichment job"). Karol-confirmed Option A in 2026-05-06 session.
 
 LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by 0194 sub-block 1d.
@@ -69,7 +70,7 @@ Sentinel value depends on column type:
 
 ### Sub-block 2a — Icon kind extension: also persist `assets.name` (classic credit)
 
-**Added 2026-05-06 after 0197 dry-run audit** revealed classic credit `assets.name` is off-chain (SEP-1 TOML `CURRENCIES[].name`) and was incorrectly placed in 0194 sub-block 1b. Per ADR 0026, off-chain → Lambda 2. Cheapest implementation: extend the existing 0191 `icon` kind (which already fetches the same TOML for `image`) to additionally extract and persist `name` in the same SQL UPDATE.
+**Added 2026-05-06 after 0197 dry-run audit** revealed classic credit `assets.name` is off-chain (SEP-1 TOML `CURRENCIES[].name`) and was incorrectly placed in 0194 sub-block 1b. Per ADR 0043, off-chain → Lambda 2. Cheapest implementation: extend the existing 0191 `icon` kind (which already fetches the same TOML for `image`) to additionally extract and persist `name` in the same SQL UPDATE.
 
 **Spec:**
 
@@ -102,7 +103,7 @@ Sentinel value depends on column type:
 - **Producer hook**: `crates/indexer/src/handler/enrichment_publish.rs` — after each new `liquidity_pool_snapshots` row, emit `LpTvl { pool_id, snapshot_id }`
 - **Permanent fails**: pool legs without any oracle data → sentinel decision TBD (proposal: write `tvl=0` + log warn). Transient (5xx, network) → `EnrichError::Transient`, SQS retry.
 
-### Sub-block 2c — `asset_usd_price` `EnrichmentMessage` variant
+### Sub-block 2c — REMOVED (asset USD price deferred to future-work)
 
 **New territory** — no precursor task. Captured as 0191 future-work bullet #6 ("stellarchain.io/markets parity") without a dedicated task.
 

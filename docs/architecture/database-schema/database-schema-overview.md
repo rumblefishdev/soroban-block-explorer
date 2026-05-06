@@ -582,8 +582,8 @@ CREATE TABLE assets (
     issuer_id    BIGINT        REFERENCES accounts(id),           -- ADR 0026
     contract_id  BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030
     name         VARCHAR(256),
-    total_supply NUMERIC(28,7),                                   -- populated by metadata worker (ADR 0022)
-    holder_count INTEGER,                                         -- ditto
+    total_supply NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
+    holder_count INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
     icon_url     VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
     CONSTRAINT ck_assets_asset_type_range CHECK (asset_type BETWEEN 0 AND 15),
     -- asset_type = 2 (SAC) admits two shapes — classic-credit wrap carries
@@ -842,9 +842,9 @@ CREATE TABLE liquidity_pool_snapshots (
     reserve_a       NUMERIC(28,7) NOT NULL,
     reserve_b       NUMERIC(28,7) NOT NULL,
     total_shares    NUMERIC(28,7) NOT NULL,
-    tvl             NUMERIC(28,7),
-    volume          NUMERIC(28,7),
-    fee_revenue     NUMERIC(28,7),
+    tvl             NUMERIC(28,7),                            -- Lambda 2 enrichment (ADR 0043 / task 0195 §2b — off-chain price oracle)
+    volume          NUMERIC(28,7),                            -- indexer post-write recompute (ADR 0043 / task 0194 §1d)
+    fee_revenue     NUMERIC(28,7),                            -- indexer post-write recompute (ADR 0043 / task 0194 §1d)
     created_at      TIMESTAMPTZ   NOT NULL,
     PRIMARY KEY (id, created_at),
     CONSTRAINT ck_lps_pool_id_len CHECK (octet_length(pool_id) = 32)

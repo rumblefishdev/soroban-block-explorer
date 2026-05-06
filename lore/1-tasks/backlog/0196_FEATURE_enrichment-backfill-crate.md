@@ -3,7 +3,7 @@ id: '0196'
 title: 'Enrichment backfill: new crate that drains pre-existing un-enriched DB rows for every kind'
 type: FEATURE
 status: backlog
-related_adr: ['0026', '0029', '0032']
+related_adr: ['0007', '0032', '0043']
 related_tasks: ['0188', '0191', '0194', '0195', '0197']
 tags: [priority-medium, effort-medium, layer-cli, layer-enrichment]
 milestone: 2
@@ -19,11 +19,11 @@ history:
 
 ## Summary
 
-A standalone CLI crate (`crates/enrichment-backfill`) that drains pre-existing rows the live SQS-driven worker never saw — tens of thousands of pubnet assets that pre-date 0191's queue, every existing LP snapshot that pre-dates `lp_tvl`, every NFT that pre-dates `nft_metadata`, every asset before `asset_usd_price` columns existed. Reuses the same `enrichment-shared::enrich_and_persist::*` functions that the live worker uses, so drain logic and live logic share a single implementation; no SQS involved — direct DB writes via streaming SELECTs and bounded concurrency.
+A standalone CLI crate (`crates/enrichment-backfill`) that drains pre-existing rows the live SQS-driven worker never saw — tens of thousands of pubnet assets that pre-date 0191's queue, every existing LP snapshot that pre-dates `lp_tvl`, every NFT that pre-dates `nft_metadata`. Reuses the same `enrichment-shared::enrich_and_persist::*` functions that the live worker uses, so drain logic and live logic share a single implementation; no SQS involved — direct DB writes via streaming SELECTs and bounded concurrency.
 
 ## Status: Backlog
 
-Cannot start until task **0195** has merged the three new `enrich_*` functions to `enrichment-shared` (`lp_tvl`, `asset_usd_price`, `nft_metadata`). The `icon` subcommand can theoretically land sooner since `enrich_asset_icon` is already in 0191's PR — split-PR option captured below.
+Cannot start until task **0195** has merged the two new `enrich_*` functions to `enrichment-shared` (`lp_tvl`, `nft_metadata`; `asset_usd_price` was pulled — see 0195 §2c). The `icon` subcommand can theoretically land sooner since `enrich_asset_icon` is already in 0191's PR — split-PR option captured below.
 
 ## Context
 
@@ -47,8 +47,7 @@ The live SQS-driven worker (0191 + 0195 kinds) is **forward-only**: it processes
 
 - **`assets.icon_url`** (kind: `icon`): 0191's producer SQL `WHERE icon_url IS NULL` correctly skips already-processed rows, but assets that existed in DB before the queue went live were never published. Backfill streams `SELECT id FROM assets WHERE icon_url IS NULL` and calls `enrich_asset_icon` directly.
 - **`liquidity_pool_snapshots.tvl`** (kind: `lp_tvl`): every snapshot row created before 0195's hook lands has `tvl IS NULL`.
-- **`assets.usd_price`** (kind: `asset_usd_price`): until 0194 1a lands the column, none exists. After 0194 1a, every existing asset starts with `NULL`.
-- **`nfts.{collection_name, name, media_url, metadata}`** (kind: `nft_metadata`): every NFT minted before 0195 2c lands has all four NULL.
+- **`nfts.{collection_name, name, media_url, metadata}`** (kind: `nft_metadata`): every NFT minted before 0195 2d lands has all four NULL.
 
 ### Force-retry semantics (clarified 2026-05-06)
 
@@ -71,7 +70,6 @@ CLI shape:
 enrichment-backfill icon [--limit N] [--asset-id N]            # standard, WHERE icon_url IS NULL OR (asset_type=1 AND name IS NULL)
 enrichment-backfill icon --force-retry [--limit N]             # γ: no filter, idempotent overwrite
 enrichment-backfill lp-tvl ...
-enrichment-backfill asset-usd-price ...
 enrichment-backfill nft-metadata ...
 enrichment-backfill status                                      # COUNT(*) per-column un-populated, per-kind
 ```
@@ -132,7 +130,6 @@ Each subcommand wires kind-specific:
 match cli.command {
     Cmd::Icon(args) => drain_kind(pool, fetcher, args.force_retry, args.limit, ICON_KIND).await,
     Cmd::LpTvl(args) => drain_kind(pool, oracle, args.force_retry, args.limit, LP_TVL_KIND).await,
-    Cmd::AssetUsdPrice(args) => ...,
     Cmd::NftMetadata(args) => ...,
     Cmd::Status => print_status(pool).await,
 }
@@ -167,20 +164,20 @@ If 0195 timeline slips, ship `crates/enrichment-backfill` with `icon` subcommand
 ## Acceptance Criteria
 
 - [ ] `crates/enrichment-backfill` crate builds, lints, integrated into workspace
-- [ ] All four kind subcommands (`icon`, `lp-tvl`, `asset-usd-price`, `nft-metadata`) wired
+- [ ] All three kind subcommands (`icon`, `lp-tvl`, `nft-metadata`) wired
 - [ ] `--force-retry` flag implemented per γ semantics (no filter, in-place overwrite)
 - [ ] `--asset-id`/`--snapshot-id`/`--nft-id` surgical mode per kind
 - [ ] `status` subcommand prints per-kind un-populated counts
 - [ ] Integration test per subcommand
 - [ ] Benchmark: 50K asset icon backfill < 30 min on local laptop documented in README
 - [ ] README runbook with example invocations + post-deployment ops checklist
-- [ ] **Docs updated**: `docs/architecture/indexing-pipeline/**` — section on backfill mechanics; ADR 0026 mentions backfill as the rule's drain path
+- [ ] **Docs updated**: `docs/architecture/indexing-pipeline/**` — section on backfill mechanics; ADR 0043 mentions backfill as the rule's drain path
 - [ ] **API types regenerated** — N/A, this crate ships no API surface
 - [ ] 0191 Future Work bullet #1 marked obsolete in 0191 archive notes (override note already in 0196 history)
 
 ## Future Work (out of scope, spawn separate tasks)
 
-- **Production scheduling**: backfill is jobs-on-demand for ops, NOT a cron Lambda. Periodic refresh for `asset_usd_price` is embedded in producer SQL TTL (0195 2b). If other kinds ever need periodic refresh, spawn a dedicated cron Lambda task — separate from this backfill crate.
+- **Production scheduling**: backfill is jobs-on-demand for ops, NOT a cron Lambda. If any kind ever needs periodic refresh, spawn a dedicated cron Lambda task — separate from this backfill crate.
 - **Multi-region distributed backfill**: not needed for current pubnet asset volume. Re-evaluate if drain target exceeds 1M rows.
 - **Status web dashboard**: `enrichment-backfill status` is CLI-only. If ops wants live progress in a dashboard, plumb metrics to existing CloudWatch dashboard — separate task.
 

@@ -3,7 +3,7 @@ id: '0194'
 title: 'DB completeness: schema additions + indexer for on-chain NULL fields needed by list endpoints'
 type: FEATURE
 status: active
-related_adr: ['0029', '0032', '0037']
+related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks:
   ['0119', '0125', '0135', '0156', '0188', '0191', '0195', '0196', '0197']
 tags:
