@@ -380,7 +380,7 @@ pub(super) async fn upsert_contracts_returning_id(
 ) -> Result<HashMap<String, i64>, HandlerError> {
     let mut out: HashMap<String, i64> = HashMap::new();
 
-    // Pass 1 — rich rows with metadata.
+    // Pass 1 — rich rows with name (per ADR 0042 typed column).
     for chunk in staged.contract_rows.chunks(CHUNK_SIZE) {
         let mut contract_ids: Vec<String> = Vec::with_capacity(chunk.len());
         let mut wasm_hashes: Vec<Option<Vec<u8>>> = Vec::with_capacity(chunk.len());
@@ -390,7 +390,7 @@ pub(super) async fn upsert_contracts_returning_id(
         // ADR 0031: contract_type is SMALLINT (Rust ContractType enum).
         let mut types: Vec<Option<ContractType>> = Vec::with_capacity(chunk.len());
         let mut sacs: Vec<bool> = Vec::with_capacity(chunk.len());
-        let mut metadatas: Vec<Option<Value>> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(chunk.len());
 
         for r in chunk {
             contract_ids.push(r.contract_id.clone());
@@ -404,18 +404,18 @@ pub(super) async fn upsert_contracts_returning_id(
             deployed.push(r.deployed_at_ledger);
             types.push(Some(r.contract_type));
             sacs.push(r.is_sac);
-            metadatas.push(r.metadata.clone());
+            names.push(r.name.clone());
         }
 
         let rows: Vec<(i64, String)> = sqlx::query_as(
             r#"
             INSERT INTO soroban_contracts (
                 contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id,
-                deployed_at_ledger, contract_type, is_sac, metadata
+                deployed_at_ledger, contract_type, is_sac, name
             )
             SELECT * FROM UNNEST(
                 $1::VARCHAR[], $2::BYTEA[], $3::BIGINT[], $4::BIGINT[],
-                $5::BIGINT[], $6::SMALLINT[], $7::BOOL[], $8::JSONB[]
+                $5::BIGINT[], $6::SMALLINT[], $7::BOOL[], $8::VARCHAR[]
             )
             ON CONFLICT (contract_id) DO UPDATE SET
                 wasm_hash = COALESCE(EXCLUDED.wasm_hash, soroban_contracts.wasm_hash),
@@ -423,7 +423,7 @@ pub(super) async fn upsert_contracts_returning_id(
                 deployed_at_ledger = COALESCE(EXCLUDED.deployed_at_ledger, soroban_contracts.deployed_at_ledger),
                 contract_type = COALESCE(EXCLUDED.contract_type, soroban_contracts.contract_type),
                 is_sac = soroban_contracts.is_sac OR EXCLUDED.is_sac,
-                metadata = COALESCE(EXCLUDED.metadata, soroban_contracts.metadata)
+                name = COALESCE(EXCLUDED.name, soroban_contracts.name)
             RETURNING id, contract_id
             "#,
         )
@@ -434,7 +434,7 @@ pub(super) async fn upsert_contracts_returning_id(
         .bind(&deployed)
         .bind(&types)
         .bind(&sacs)
-        .bind(&metadatas)
+        .bind(&names)
         .fetch_all(&mut **db_tx)
         .await?;
 
@@ -501,6 +501,86 @@ pub(super) async fn upsert_contracts_returning_id(
         }
     }
     Ok(out)
+}
+
+/// Apply late-init / re-init `Symbol("name")` storage writes to
+/// `soroban_contracts.name`.
+///
+/// Per ADR 0042 + task 0156, the constructor pattern (deploy + storage
+/// init in the same ledger) is handled by `extract_contract_deployments`
+/// populating `name` directly. This helper covers the orthogonal cases:
+///
+/// * **Late-init** — contract deployed in an earlier ledger, the
+///   `Symbol("name")` storage entry is created by a subsequent `init()`
+///   invocation. The contract row already exists with `name = NULL`.
+/// * **Re-init / name update** — a contract overwrites its previous
+///   `Symbol("name")` storage entry. The new value should win.
+///
+/// Both cases are handled by an unconditional SET (no `name IS NULL`
+/// guard), because the on-chain storage event IS the source of truth:
+/// if we observed a write, the chain wants that value persisted.
+///
+/// Contracts not present in the table (referenced-only StrKeys whose
+/// upsert ran in pass 2 of `upsert_contracts_returning_id` and produced
+/// a bare row, OR contracts that have not yet appeared at all) match
+/// the `WHERE sc.contract_id = c.contract_id` predicate the same way
+/// once their row exists; until then this UPDATE is a no-op for them.
+pub(super) async fn apply_contract_name_writes(
+    db_tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    name_writes: &[(String, String)],
+) -> Result<(), super::HandlerError> {
+    if name_writes.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in name_writes.chunks(CHUNK_SIZE) {
+        let mut contract_ids: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<String> = Vec::with_capacity(chunk.len());
+        for (cid, name) in chunk {
+            contract_ids.push(cid.clone());
+            names.push(name.clone());
+        }
+        // Pass 1 — `soroban_contracts.name`. Always applied; this is the
+        // primary target and the source for the GENERATED `search_vector`.
+        sqlx::query(
+            r#"
+            UPDATE soroban_contracts sc
+               SET name = c.name
+              FROM UNNEST($1::VARCHAR[], $2::VARCHAR[]) AS c(contract_id, name)
+             WHERE sc.contract_id = c.contract_id
+            "#,
+        )
+        .bind(&contract_ids)
+        .bind(&names)
+        .execute(&mut **db_tx)
+        .await?;
+
+        // Pass 2 — mirror the name onto `assets.name` for Soroban-native
+        // Fungible tokens (`asset_type = 3` per ADR 0031 / TokenAssetType).
+        // The asset row keys on the `soroban_contracts.id` surrogate FK
+        // (ADR 0030), so we resolve via the StrKey → id JOIN. SAC rows
+        // (`asset_type = 2`) and classic rows (0/1) carry name from
+        // `asset_code` or SEP-1 enrichment, not from on-chain
+        // `Symbol("name")` storage; the `asset_type = 3` filter excludes
+        // them. Same atomic transaction as Pass 1 — `assets.name` and
+        // `soroban_contracts.name` cannot diverge.
+        sqlx::query(
+            r#"
+            UPDATE assets a
+               SET name = c.name
+              FROM UNNEST($1::VARCHAR[], $2::VARCHAR[]) AS c(contract_id, name),
+                   soroban_contracts sc
+             WHERE sc.contract_id = c.contract_id
+               AND a.contract_id = sc.id
+               AND a.asset_type = 3
+            "#,
+        )
+        .bind(&contract_ids)
+        .bind(&names)
+        .execute(&mut **db_tx)
+        .await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -774,15 +854,11 @@ pub(super) async fn insert_operations(
             continue;
         }
 
-        // `operations_appearances.pool_id` → `liquidity_pools.pool_id` FK
-        // is now satisfied unconditionally — `upsert_pools_and_snapshots`
-        // (called earlier in this transaction; see persist/mod.rs ordering)
-        // runs Pass 2 which stub-inserts any pool_id referenced by these
-        // op rows that isn't yet in `liquidity_pools`. So the historical
-        // defensive `CASE WHEN EXISTS...` (which previously NULL'd
-        // pool_id for cross-range references and silently lost data —
-        // the gap that surfaced in task 0186 multi-laptop merge) is no
-        // longer needed.
+        // `operations_appearances.pool_id` → `liquidity_pools.pool_id` FK must
+        // hold, but a backfill starting mid-stream can see DEPOSIT/WITHDRAW ops
+        // targeting pools created in un-indexed earlier ledgers. Nullify
+        // pool_id when the referenced pool is not present; the op row stays,
+        // only the FK link turns NULL for historical references.
         sqlx::query(
             r#"
             INSERT INTO operations_appearances (
@@ -792,7 +868,12 @@ pub(super) async fn insert_operations(
             )
             SELECT
                 t.tx_id, t.op_type, t.source_id, t.dest_id,
-                t.contract_id, t.asset_code, t.asset_issuer_id, t.pool_id,
+                t.contract_id, t.asset_code, t.asset_issuer_id,
+                CASE
+                    WHEN t.pool_id IS NULL THEN NULL
+                    WHEN EXISTS (SELECT 1 FROM liquidity_pools lp WHERE lp.pool_id = t.pool_id) THEN t.pool_id
+                    ELSE NULL
+                END,
                 t.amount, t.ledger_sequence, t.created_at
               FROM UNNEST(
                 $1::BIGINT[], $2::SMALLINT[], $3::BIGINT[], $4::BIGINT[],
@@ -1586,11 +1667,116 @@ pub(super) async fn upsert_nfts_and_ownership(
 // 13. liquidity_pools + snapshots + lp_positions
 // ---------------------------------------------------------------------------
 
+/// Lore-0189: discover pool_ids referenced by `staged.lp_position_rows` that
+/// are missing both from `staged.pool_rows` (will not be inserted by 13a) and
+/// from the `liquidity_pools` table (no prior persistence).
+///
+/// Such pool_ids would FK-fail the `lp_positions` INSERT at 13c. They show up
+/// during partial / mid-stream backfills when a `pool_share` trustline is
+/// created/updated/removed in a ledger that does not also surface the pool's
+/// `LedgerEntry` (and the pool was created in a pre-window ledger). The
+/// extractor's `state` filter loosening (Layer 3, see `xdr_parser::extract_liquidity_pools`)
+/// covers the common subcase where the pool appears as a `state` snapshot in
+/// op_meta. This function catches the residual: pools with no representation
+/// in the current ledger at all.
+async fn detect_orphan_pool_ids(
+    db_tx: &mut Transaction<'_, Postgres>,
+    staged: &Staged,
+) -> Result<Vec<Vec<u8>>, HandlerError> {
+    if staged.lp_position_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let staged_pool_ids: HashSet<&[u8]> = staged
+        .pool_rows
+        .iter()
+        .map(|p| p.pool_id.as_slice())
+        .collect();
+
+    let mut referenced: HashSet<Vec<u8>> = HashSet::new();
+    for pos in &staged.lp_position_rows {
+        if !staged_pool_ids.contains(pos.pool_id.as_slice()) {
+            referenced.insert(pos.pool_id.to_vec());
+        }
+    }
+    if referenced.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let candidates: Vec<Vec<u8>> = referenced.into_iter().collect();
+    let known: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT pool_id FROM liquidity_pools WHERE pool_id = ANY($1::BYTEA[])")
+            .bind(&candidates)
+            .fetch_all(&mut **db_tx)
+            .await?;
+    let known_set: HashSet<Vec<u8>> = known.into_iter().collect();
+
+    Ok(candidates
+        .into_iter()
+        .filter(|c| !known_set.contains(c))
+        .collect())
+}
+
+/// Lore-0189: write a sentinel placeholder pool row for every orphan pool_id
+/// detected by `detect_orphan_pool_ids`. The row uses a convention marker —
+/// `created_at_ledger = 0` — that no real pool can carry (Stellar pubnet
+/// genesis ledger seq is 1) and that the 13a `ON CONFLICT DO UPDATE` clause
+/// recognizes for a one-shot upgrade when the real pool data is later observed
+/// (extractor `state` filter, Layer 3).
+///
+/// Sentinel field shape:
+/// - asset_a_type=0, asset_a_code=NULL, asset_a_issuer_id=NULL
+/// - asset_b_type=0, asset_b_code=NULL, asset_b_issuer_id=NULL
+/// - fee_bps=0
+/// - created_at_ledger=0  (the marker)
+///
+/// `ON CONFLICT (pool_id) DO NOTHING` because real or earlier-sentinel rows
+/// must not be touched here — the upgrade transition is handled by 13a.
+async fn insert_sentinel_pools(
+    db_tx: &mut Transaction<'_, Postgres>,
+    pool_ids: &[Vec<u8>],
+) -> Result<(), HandlerError> {
+    sqlx::query(
+        r#"
+        INSERT INTO liquidity_pools (
+            pool_id, asset_a_type, asset_a_code, asset_a_issuer_id,
+            asset_b_type, asset_b_code, asset_b_issuer_id,
+            fee_bps, created_at_ledger
+        )
+        SELECT pool_id, 0::SMALLINT, NULL::VARCHAR, NULL::BIGINT,
+               0::SMALLINT, NULL::VARCHAR, NULL::BIGINT,
+               0::INTEGER, 0::BIGINT
+          FROM UNNEST($1::BYTEA[]) AS t(pool_id)
+        ON CONFLICT (pool_id) DO NOTHING
+        "#,
+    )
+    .bind(pool_ids)
+    .execute(&mut **db_tx)
+    .await?;
+    Ok(())
+}
+
 pub(super) async fn upsert_pools_and_snapshots(
     db_tx: &mut Transaction<'_, Postgres>,
     staged: &Staged,
     account_ids: &HashMap<String, i64>,
 ) -> Result<(), HandlerError> {
+    // Lore-0189: emit sentinel placeholder pool rows for any lp_position
+    // pool_id that won't be covered by 13a (not in staged.pool_rows) and
+    // is not already in the DB. Must run BEFORE 13a so the 13c
+    // lp_positions INSERT FK resolves. Sentinels are upgradable —
+    // see 13a's ON CONFLICT clause.
+    let orphan_pool_ids = detect_orphan_pool_ids(db_tx, staged).await?;
+    if !orphan_pool_ids.is_empty() {
+        let sample: Vec<String> = orphan_pool_ids.iter().take(3).map(hex::encode).collect();
+        tracing::warn!(
+            ledger_sequence = staged.ledger_sequence,
+            count = orphan_pool_ids.len(),
+            sample = ?sample,
+            "lore-0189: emitting sentinel placeholder pool rows for orphan lp_positions"
+        );
+        insert_sentinel_pools(db_tx, &orphan_pool_ids).await?;
+    }
+
     // 13a. liquidity_pools
     if !staged.pool_rows.is_empty() {
         for chunk in staged.pool_rows.chunks(CHUNK_SIZE) {
@@ -1627,18 +1813,6 @@ pub(super) async fn upsert_pools_and_snapshots(
                 created_ledgers.push(r.created_at_ledger.unwrap_or(r.last_updated_ledger));
             }
 
-            // ON CONFLICT clause has TWO regimes:
-            //   (a) replay (existing row already a fully-populated pool):
-            //       no-op-ish; keep existing asset_a_type, LEAST the
-            //       created_at_ledger so a later replay can't push it
-            //       forward (mirrors original semantics).
-            //   (b) stub-promotion (existing row was a Pass 2 stub from
-            //       an earlier batch — fee_bps=0 sentinel; see Pass 2
-            //       below): overwrite asset_*_type/code/issuer/fee_bps
-            //       with the now-known real values, take LEAST(created_at).
-            //       Stellar AMM pools always carry fee_bps=30 (CAP-38
-            //       hard-coded), so fee_bps=0 unambiguously identifies a
-            //       stub — never a real pool.
             sqlx::query(
                 r#"
                 INSERT INTO liquidity_pools (
@@ -1651,17 +1825,55 @@ pub(super) async fn upsert_pools_and_snapshots(
                     $5::SMALLINT[], $6::VARCHAR[], $7::BIGINT[],
                     $8::INTEGER[], $9::BIGINT[]
                 )
+                -- Lore-0189: sentinel-aware UPSERT.
+                --
+                -- Existing row with `created_at_ledger=0` is a sentinel
+                -- placeholder emitted by `insert_sentinel_pools` to satisfy
+                -- the lp_positions FK when the real pool dimension was
+                -- not available at the orphan ledger. When real data
+                -- arrives (incoming `created_at_ledger > 0`), every
+                -- dimension field is upgraded to EXCLUDED. Otherwise,
+                -- existing real values are preserved (no downgrade).
+                --
+                -- `created_at_ledger` upgrade table:
+                --   sentinel (0) + real (>0)   → real            (sentinel→real upgrade)
+                --   real (>0) + sentinel (0)   → existing real   (no downgrade)
+                --   real + real                → LEAST(...)      (earliest observation wins)
+                --   sentinel + sentinel        → 0               (still sentinel)
                 ON CONFLICT (pool_id) DO UPDATE SET
-                    asset_a_type      = CASE WHEN liquidity_pools.fee_bps = 0 AND EXCLUDED.fee_bps > 0
-                                             THEN EXCLUDED.asset_a_type ELSE liquidity_pools.asset_a_type END,
-                    asset_a_code      = COALESCE(liquidity_pools.asset_a_code, EXCLUDED.asset_a_code),
-                    asset_a_issuer_id = COALESCE(liquidity_pools.asset_a_issuer_id, EXCLUDED.asset_a_issuer_id),
-                    asset_b_type      = CASE WHEN liquidity_pools.fee_bps = 0 AND EXCLUDED.fee_bps > 0
-                                             THEN EXCLUDED.asset_b_type ELSE liquidity_pools.asset_b_type END,
-                    asset_b_code      = COALESCE(liquidity_pools.asset_b_code, EXCLUDED.asset_b_code),
-                    asset_b_issuer_id = COALESCE(liquidity_pools.asset_b_issuer_id, EXCLUDED.asset_b_issuer_id),
-                    fee_bps           = GREATEST(liquidity_pools.fee_bps, EXCLUDED.fee_bps),
-                    created_at_ledger = LEAST(liquidity_pools.created_at_ledger, EXCLUDED.created_at_ledger)
+                    asset_a_type      = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_a_type
+                                             ELSE liquidity_pools.asset_a_type END,
+                    asset_a_code      = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_a_code
+                                             ELSE liquidity_pools.asset_a_code END,
+                    asset_a_issuer_id = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_a_issuer_id
+                                             ELSE liquidity_pools.asset_a_issuer_id END,
+                    asset_b_type      = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_b_type
+                                             ELSE liquidity_pools.asset_b_type END,
+                    asset_b_code      = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_b_code
+                                             ELSE liquidity_pools.asset_b_code END,
+                    asset_b_issuer_id = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.asset_b_issuer_id
+                                             ELSE liquidity_pools.asset_b_issuer_id END,
+                    fee_bps           = CASE WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                                             THEN EXCLUDED.fee_bps
+                                             ELSE liquidity_pools.fee_bps END,
+                    -- Explicit CASE (not COALESCE+LEAST+NULLIF) so the upgrade
+                    -- semantics are unambiguous on inspection without relying
+                    -- on PG-specific NULL-ignoring LEAST behavior.
+                    created_at_ledger = CASE
+                        WHEN liquidity_pools.created_at_ledger = 0 AND EXCLUDED.created_at_ledger > 0
+                            THEN EXCLUDED.created_at_ledger
+                        WHEN liquidity_pools.created_at_ledger > 0 AND EXCLUDED.created_at_ledger = 0
+                            THEN liquidity_pools.created_at_ledger
+                        WHEN liquidity_pools.created_at_ledger > 0 AND EXCLUDED.created_at_ledger > 0
+                            THEN LEAST(liquidity_pools.created_at_ledger, EXCLUDED.created_at_ledger)
+                        ELSE 0  -- both sentinel
+                    END
                 "#,
             )
             .bind(&pools)
@@ -1676,42 +1888,6 @@ pub(super) async fn upsert_pools_and_snapshots(
             .execute(&mut **db_tx)
             .await?;
         }
-    }
-
-    // 13a-bis. Pass 2 — stub-now-fill-later for liquidity_pools
-    // referenced by ops in this batch but NOT created in any earlier
-    // ledger we've indexed. Mirrors the soroban_contracts Pass 2 pattern
-    // (`upsert_contracts_returning_id` ~line 444). Without this stub,
-    // `insert_operations` below NULLs out `pool_id` to keep the FK
-    // satisfied (see CASE clause in that function) — losing data the
-    // multi-laptop merger can never recover. The stub fills the FK with
-    // bare-minimum sentinel values (asset_*_type=0, fee_bps=0,
-    // created_at_ledger=this ledger as approximation); a later batch
-    // that actually carries CREATE_POOL_OP for the same pool_id will
-    // promote the stub to real values via the ON CONFLICT clause above
-    // (fee_bps=0 detection).
-    let referenced_pool_ids: Vec<Vec<u8>> = staged
-        .op_rows
-        .iter()
-        .filter_map(|r| r.pool_id.as_ref().map(|h| h.to_vec()))
-        .collect();
-    if !referenced_pool_ids.is_empty() {
-        sqlx::query(
-            r#"
-            INSERT INTO liquidity_pools (
-                pool_id, asset_a_type, asset_a_code, asset_a_issuer_id,
-                asset_b_type, asset_b_code, asset_b_issuer_id,
-                fee_bps, created_at_ledger
-            )
-            SELECT pid, 0, NULL, NULL, 0, NULL, NULL, 0, $2
-              FROM UNNEST($1::BYTEA[]) AS t(pid)
-            ON CONFLICT (pool_id) DO NOTHING
-            "#,
-        )
-        .bind(&referenced_pool_ids)
-        .bind(staged.ledger_sequence_i64)
-        .execute(&mut **db_tx)
-        .await?;
     }
 
     // 13b. liquidity_pool_snapshots

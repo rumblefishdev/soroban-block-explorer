@@ -410,9 +410,9 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger      BIGINT,
     contract_type           SMALLINT,                                       -- ADR 0031, nullable
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
-    metadata                JSONB,                                          -- explorer metadata + ABI sigs
+    name                    VARCHAR(256),                                   -- ADR 0042, on-chain Symbol("name")
     search_vector           TSVECTOR GENERATED ALWAYS AS (
-                                to_tsvector('simple', COALESCE(metadata->>'name', '') || ' ' || contract_id)
+                                to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
                             ) STORED,
     CONSTRAINT ck_sc_wasm_hash_len       CHECK (wasm_hash IS NULL OR octet_length(wasm_hash) = 32),
     CONSTRAINT ck_sc_contract_type_range CHECK (contract_type IS NULL OR contract_type BETWEEN 0 AND 15)
@@ -443,9 +443,18 @@ Design notes:
   references before deployment meta is observed — those rows start NULL and get
   filled when the deploy meta lands. The `contract_type_name(ty)` SQL helper renders
   the canonical string
-- `metadata` is JSONB (nested ABI function signatures, optional explorer fields)
-- `search_vector` combines `metadata->>'name'` and the StrKey, enabling contract
-  search on both the friendly name and the canonical identifier
+- `name` is `VARCHAR(256)` ([ADR 0042](../../../lore/2-adrs/0042_soroban-contracts-typed-name-column.md))
+  populated by the indexer from the standard `Symbol("name")` ContractData
+  persistent storage entry — written at deploy time when the storage init
+  is in the same ledger (constructor pattern), or backfilled by
+  `apply_contract_name_writes` on the next ledger that emits the storage
+  Created/Updated event (deploy-then-init pattern). NULL for contracts
+  that never store a `Symbol("name")` value (generic dApps, libraries,
+  routers). Replaces the previous `metadata JSONB` blob, which carried a
+  single closed-shape field and so failed the typed-columns-vs-JSONB test
+  established in ADR 0023 and codified in ADR 0037
+- `search_vector` combines the typed `name` and the StrKey, enabling
+  contract search on both the friendly name and the canonical identifier
 
 ### 4.7 WASM Interface Metadata
 
@@ -792,6 +801,19 @@ Design notes:
 - current reserves and total shares are **not** persisted on the parent row; the most
   recent `liquidity_pool_snapshots` row is the authoritative current-state source
   (pool transaction history itself is derived from `operations_appearances` + `soroban_events_appearances`)
+- **Sentinel placeholder rows** ([ADR 0042](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md)):
+  during partial / mid-stream backfills, an `lp_positions` row may reference a pool
+  whose `LedgerEntry` is not in the current ledger and not previously persisted (the
+  pool was created in a pre-window ledger and untouched in the current one). To satisfy
+  the FK without losing the position, the persist layer emits a placeholder pool row
+  with marker convention **`created_at_ledger = 0`** (no real Stellar pool can carry
+  this value — pubnet genesis seq is 1) and minimum-data sentinel fields
+  (`asset_a_type=0, asset_a_code=NULL, asset_a_issuer_id=NULL`,
+  `asset_b_type=0, asset_b_code=NULL, asset_b_issuer_id=NULL`, `fee_bps=0`). Sentinels
+  self-heal: the next time the pool surfaces as `created/updated/restored/state` in
+  any subsequent ledger, the 13a UPSERT replaces every dimension field with real
+  data. Detection: `WHERE created_at_ledger = 0`. Audit-harness invariant
+  `15_liquidity_pools.sql:I6` reports the count as a partial-backfill thermometer.
 
 ### 4.15 Liquidity Pool Snapshots
 

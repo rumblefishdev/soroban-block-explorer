@@ -139,6 +139,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nfts,
         &nft_events,
         &lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -164,6 +165,40 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
     assert_eq!(
         counts_first.events_amount_sum, 1,
         "SUM(amount) must equal the ingested non-diagnostic event count (ADR 0033)"
+    );
+
+    // Task 0156 / ADR 0042 — verify the typed `name` column landed
+    // on `soroban_contracts` from the deployment fixture and that the
+    // GENERATED `search_vector` recomputed so an FTS query matches.
+    // (Unit-level extraction paths — constructor, late-init, re-init,
+    // SCVal variants — are exercised in `state.rs` unit tests; this
+    // case verifies the indexer write path + the typed column +
+    // generated search_vector end-to-end on a real DB.)
+    let (sc_name,): (Option<String>,) =
+        sqlx::query_as("SELECT name FROM soroban_contracts WHERE contract_id = $1")
+            .bind(TOKEN_CONTRACT)
+            .fetch_one(&pool)
+            .await
+            .expect("soroban_contracts row missing for fixture token contract");
+    assert_eq!(
+        sc_name.as_deref(),
+        Some("TEST"),
+        "soroban_contracts.name must reflect deployment.name from the fixture"
+    );
+
+    let (fts_hits,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM soroban_contracts \
+         WHERE contract_id = $1 \
+           AND search_vector @@ to_tsquery('simple', 'TEST')",
+    )
+    .bind(TOKEN_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("FTS query failed");
+    assert_eq!(
+        fts_hits, 1,
+        "GENERATED search_vector must match `to_tsquery('TEST')` on the typed name column \
+         (ADR 0042: search_vector reads `name` directly, not `metadata->>'name'`)"
     );
     assert_eq!(
         counts_first.invocations, 1,
@@ -299,6 +334,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nfts,
         &nft_events,
         &lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -519,6 +555,7 @@ async fn v4_per_op_events_land_in_appearance_index() {
         &[],
         &[],
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -692,6 +729,7 @@ async fn v4_diag_contract_mirror_does_not_inflate_amount() {
         &[tx],
         &[],
         &events,
+        &[],
         &[],
         &[],
         &[],
@@ -895,7 +933,7 @@ fn make_contract_deployment() -> ExtractedContractDeployment {
         deployed_at_ledger: TEST_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
-        metadata: json!({"name": "TEST"}),
+        name: Some("TEST".to_string()),
         // Task 0160: match the SAC asset row fixture (make_sac_asset) so
         // integration tests exercise a complete SAC identity end-to-end.
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Credit {
@@ -1282,7 +1320,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         deployed_at_ledger: STUB_LEDGER_SEQ,
         contract_type: ContractType::Other,
         is_sac: false,
-        metadata: json!({}),
+        name: None,
         sac_asset: None,
     };
 
@@ -1317,6 +1355,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -1396,6 +1435,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -1523,6 +1563,7 @@ async fn nft_filter_drops_fungible_classified_contract() {
         &nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -1616,7 +1657,7 @@ fn deploy_with(contract_id: &str, wasm_hash: &str) -> ExtractedContractDeploymen
         deployed_at_ledger: FILTER_LEDGER_SEQ,
         contract_type: ContractType::Other, // parser default; staging overrides
         is_sac: false,
-        metadata: json!({}),
+        name: None,
         sac_asset: None,
     }
 }
@@ -1763,7 +1804,7 @@ async fn soroban_fungible_contract_produces_assets_row() {
         deployed_at_ledger: TK_LEDGER_SEQ_1,
         contract_type: ContractType::Other, // staging overrides via classifier
         is_sac: false,
-        metadata: json!({}),
+        name: None,
         sac_asset: None,
     }];
     // Drive the real parser → persist wiring end-to-end so a regression in
@@ -1806,6 +1847,7 @@ async fn soroban_fungible_contract_produces_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -1904,7 +1946,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         deployed_at_ledger: LWU_LEDGER_SEQ_1,
         contract_type: ContractType::Other,
         is_sac: false,
-        metadata: json!({}),
+        name: None,
         sac_asset: None,
     }];
 
@@ -1939,6 +1981,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -2009,6 +2052,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache,
     )
     .await
@@ -2076,6 +2120,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &classification_cache2,
     )
     .await
@@ -2307,7 +2352,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         deployed_at_ledger: SAC160_XLM_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
-        metadata: json!({}),
+        name: None,
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Native),
     }];
     let assets = vec![ExtractedAsset {
@@ -2350,6 +2395,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &cache,
     )
     .await
@@ -2452,7 +2498,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         deployed_at_ledger: SAC160_CREDIT_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
-        metadata: json!({}),
+        name: None,
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Credit {
             code: "USDC".to_string(),
             issuer: SAC160_ISSUER_STRKEY.to_string(),
@@ -2485,6 +2531,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &cache,
     )
     .await
@@ -2521,6 +2568,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &cache2,
     )
     .await
@@ -2663,4 +2711,542 @@ async fn native_asset_singleton_seeded_after_migrations() {
     assert!(row.1.is_none(), "issuer_id must be NULL for asset_type=0");
     assert!(row.2.is_none(), "contract_id must be NULL for asset_type=0");
     assert_eq!(row.3.as_deref(), Some("Stellar Lumen"));
+}
+
+// ============================================================================
+// Lore-0189: orphan lp_position → sentinel placeholder pool
+// ============================================================================
+//
+// Reproducer for the bridge backfill crash at ledger 62148003 with FK
+// violation `lp_positions_pool_id_fkey`. Three integration tests cover the
+// new contract:
+//
+//   * Step 3  (orphan_position_emits_sentinel_pool): position references pool
+//             not in pool_rows AND not in DB → sentinel placeholder inserted,
+//             FK satisfied, position written.
+//   * Step 4  (sentinel_pool_upgraded_on_real_data): pre-existing sentinel
+//             upgrades to real metadata when the real pool is later observed.
+//   * Step 3  (orphan_detection_skipped_when_pool_in_db): DB lookup hit
+//             prevents sentinel emission for pre-existing real pools.
+//
+// Each test owns a distinct `LEDGER_SEQ + POOL_ID + ACCOUNT_STRKEY` triple to
+// allow `--test-threads=1` clean isolation. Cleanup removes those rows
+// regardless of test outcome.
+
+const ORPHAN_POOL_ID: &str = "5555555555555555555555555555555555555555555555555555555555555555";
+const ORPHAN_LEDGER_SEQ_T1: u32 = 90_000_011;
+const ORPHAN_TX_HASH_T1: &str = "5111111111111111111111111111111111111111111111111111111111111111";
+const ORPHAN_LEDGER_HASH_T1: &str =
+    "5311111111111111111111111111111111111111111111111111111111111111";
+
+const UPGRADE_POOL_ID: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+const UPGRADE_LEDGER_SEQ_T1: u32 = 90_000_021;
+const UPGRADE_LEDGER_SEQ_T2: u32 = 90_000_022;
+const UPGRADE_TX_HASH_T1: &str = "6111111111111111111111111111111111111111111111111111111111111111";
+const UPGRADE_TX_HASH_T2: &str = "6222222222222222222222222222222222222222222222222222222222222222";
+const UPGRADE_LEDGER_HASH_T1: &str =
+    "6311111111111111111111111111111111111111111111111111111111111111";
+const UPGRADE_LEDGER_HASH_T2: &str =
+    "6322222222222222222222222222222222222222222222222222222222222222";
+
+const SKIP_POOL_ID: &str = "7777777777777777777777777777777777777777777777777777777777777777";
+const SKIP_LEDGER_SEQ_T1: u32 = 90_000_031;
+const SKIP_LEDGER_SEQ_T2: u32 = 90_000_032;
+const SKIP_TX_HASH_T1: &str = "7111111111111111111111111111111111111111111111111111111111111111";
+const SKIP_TX_HASH_T2: &str = "7222222222222222222222222222222222222222222222222222222222222222";
+const SKIP_LEDGER_HASH_T1: &str =
+    "7311111111111111111111111111111111111111111111111111111111111111";
+const SKIP_LEDGER_HASH_T2: &str =
+    "7322222222222222222222222222222222222222222222222222222222222222";
+
+/// Minimal ledger fixture for lore-0189 tests.
+fn make_lore_0189_ledger(seq: u32, hash: &str) -> ExtractedLedger {
+    ExtractedLedger {
+        sequence: seq,
+        hash: hash.to_string(),
+        closed_at: TEST_CLOSED_AT + i64::from(seq) * 5,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    }
+}
+
+/// Minimal transaction fixture: source = SRC_STRKEY (already exercised by
+/// other tests, so account row + FKs resolve consistently).
+fn make_lore_0189_tx(tx_hash: &str, ledger_seq: u32, closed_at: i64) -> ExtractedTransaction {
+    ExtractedTransaction {
+        hash: tx_hash.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: ledger_seq,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 1000,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: closed_at,
+        parse_error: false,
+    }
+}
+
+/// Real (non-sentinel) pool fixture for the upgrade test.
+fn make_lore_0189_real_pool(pool_id: &str, ledger_seq: u32) -> ExtractedLiquidityPool {
+    ExtractedLiquidityPool {
+        pool_id: pool_id.to_string(),
+        asset_a: json!("native"),
+        asset_b: json!({"type": "credit_alphanum4", "code": "USDC", "issuer": ISSUER_STRKEY}),
+        fee_bps: 30,
+        reserves: json!({"a": 1_000_000i64, "b": 2_000_000i64}),
+        total_shares: "1414213".to_string(),
+        tvl: None,
+        // `state`-derived pools have None; only created/restored set Some.
+        // For the upgrade test we use updated semantics — real data observed
+        // in a later ledger.
+        created_at_ledger: None,
+        last_updated_ledger: ledger_seq,
+        created_at: TEST_CLOSED_AT + i64::from(ledger_seq) * 5,
+    }
+}
+
+/// Real snapshot fixture matching `make_lore_0189_real_pool`.
+fn make_lore_0189_real_snapshot(pool_id: &str, ledger_seq: u32) -> ExtractedLiquidityPoolSnapshot {
+    ExtractedLiquidityPoolSnapshot {
+        pool_id: pool_id.to_string(),
+        ledger_sequence: ledger_seq,
+        created_at: TEST_CLOSED_AT + i64::from(ledger_seq) * 5,
+        reserves: json!({"a": 1_000_000i64, "b": 2_000_000i64}),
+        total_shares: "1414213".to_string(),
+        tvl: None,
+        volume: None,
+        fee_revenue: None,
+    }
+}
+
+/// Cleanup any rows the lore-0189 tests may have written.
+async fn clean_lore_0189(
+    pool: &PgPool,
+    pool_id_hex: &str,
+    ledger_seqs: &[u32],
+    tx_hashes: &[&str],
+) {
+    for sql in [
+        "DELETE FROM lp_positions WHERE pool_id = decode($1, 'hex')",
+        "DELETE FROM liquidity_pool_snapshots WHERE pool_id = decode($1, 'hex')",
+        "DELETE FROM liquidity_pools WHERE pool_id = decode($1, 'hex')",
+    ] {
+        let _ = sqlx::query(sql).bind(pool_id_hex).execute(pool).await;
+    }
+    for h in tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for seq in ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(*seq))
+            .execute(pool)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn orphan_position_emits_sentinel_pool() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0189 orphan test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0189 orphan test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_lore_0189(
+        &pool,
+        ORPHAN_POOL_ID,
+        &[ORPHAN_LEDGER_SEQ_T1],
+        &[ORPHAN_TX_HASH_T1],
+    )
+    .await;
+
+    // Orphan setup: lp_positions reference ORPHAN_POOL_ID, but no pool_rows.
+    let ledger = make_lore_0189_ledger(ORPHAN_LEDGER_SEQ_T1, ORPHAN_LEDGER_HASH_T1);
+    let txs = vec![make_lore_0189_tx(
+        ORPHAN_TX_HASH_T1,
+        ORPHAN_LEDGER_SEQ_T1,
+        ledger.closed_at,
+    )];
+    let lp_positions = vec![ExtractedLpPosition {
+        pool_id: ORPHAN_POOL_ID.to_string(),
+        account_id: SRC_STRKEY.to_string(),
+        shares: "10.0000000".to_string(),
+        first_deposit_ledger: Some(ORPHAN_LEDGER_SEQ_T1),
+        last_updated_ledger: ORPHAN_LEDGER_SEQ_T1,
+    }];
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &txs,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(), // no pool_rows
+        &Vec::new(), // no snapshot_rows
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &lp_positions,
+        &[],
+        &cache,
+    )
+    .await
+    .expect("orphan persist must succeed via sentinel pool");
+
+    // Sentinel pool present with all marker fields.
+    #[allow(clippy::type_complexity)]
+    let sentinel: (
+        i16,
+        Option<String>,
+        Option<i64>,
+        i16,
+        Option<String>,
+        Option<i64>,
+        i32,
+        i64,
+    ) = sqlx::query_as(
+        r#"
+            SELECT asset_a_type, asset_a_code, asset_a_issuer_id,
+                   asset_b_type, asset_b_code, asset_b_issuer_id,
+                   fee_bps, created_at_ledger
+              FROM liquidity_pools
+             WHERE pool_id = decode($1, 'hex')
+            "#,
+    )
+    .bind(ORPHAN_POOL_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("sentinel pool row must exist");
+    assert_eq!(sentinel.0, 0, "asset_a_type sentinel = 0");
+    assert!(sentinel.1.is_none(), "asset_a_code sentinel = NULL");
+    assert!(sentinel.2.is_none(), "asset_a_issuer_id sentinel = NULL");
+    assert_eq!(sentinel.3, 0, "asset_b_type sentinel = 0");
+    assert!(sentinel.4.is_none(), "asset_b_code sentinel = NULL");
+    assert!(sentinel.5.is_none(), "asset_b_issuer_id sentinel = NULL");
+    assert_eq!(sentinel.6, 0, "fee_bps sentinel = 0");
+    assert_eq!(
+        sentinel.7, 0,
+        "created_at_ledger sentinel marker = 0 (Stellar genesis is 1)"
+    );
+
+    // Position written, FK to sentinel pool resolves.
+    let position_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM lp_positions WHERE pool_id = decode($1, 'hex')")
+            .bind(ORPHAN_POOL_ID)
+            .fetch_one(&pool)
+            .await
+            .expect("position count");
+    assert_eq!(position_count, 1, "orphan position written via sentinel FK");
+
+    clean_lore_0189(
+        &pool,
+        ORPHAN_POOL_ID,
+        &[ORPHAN_LEDGER_SEQ_T1],
+        &[ORPHAN_TX_HASH_T1],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sentinel_pool_upgraded_on_real_data() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0189 upgrade test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0189 upgrade test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_lore_0189(
+        &pool,
+        UPGRADE_POOL_ID,
+        &[UPGRADE_LEDGER_SEQ_T1, UPGRADE_LEDGER_SEQ_T2],
+        &[UPGRADE_TX_HASH_T1, UPGRADE_TX_HASH_T2],
+    )
+    .await;
+
+    // T1: orphan position → sentinel pool with created_at_ledger=0.
+    let ledger_t1 = make_lore_0189_ledger(UPGRADE_LEDGER_SEQ_T1, UPGRADE_LEDGER_HASH_T1);
+    let txs_t1 = vec![make_lore_0189_tx(
+        UPGRADE_TX_HASH_T1,
+        UPGRADE_LEDGER_SEQ_T1,
+        ledger_t1.closed_at,
+    )];
+    let lp_positions_t1 = vec![ExtractedLpPosition {
+        pool_id: UPGRADE_POOL_ID.to_string(),
+        account_id: SRC_STRKEY.to_string(),
+        shares: "1.0000000".to_string(),
+        first_deposit_ledger: Some(UPGRADE_LEDGER_SEQ_T1),
+        last_updated_ledger: UPGRADE_LEDGER_SEQ_T1,
+    }];
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger_t1,
+        &txs_t1,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &lp_positions_t1,
+        &[],
+        &cache,
+    )
+    .await
+    .expect("T1 sentinel persist");
+
+    // Verify sentinel.
+    let cal: i64 = sqlx::query_scalar(
+        "SELECT created_at_ledger FROM liquidity_pools WHERE pool_id = decode($1, 'hex')",
+    )
+    .bind(UPGRADE_POOL_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("T1 sentinel must exist");
+    assert_eq!(cal, 0, "T1 row must be sentinel");
+
+    // T2: real pool dimension observed → sentinel must upgrade.
+    let ledger_t2 = make_lore_0189_ledger(UPGRADE_LEDGER_SEQ_T2, UPGRADE_LEDGER_HASH_T2);
+    let txs_t2 = vec![make_lore_0189_tx(
+        UPGRADE_TX_HASH_T2,
+        UPGRADE_LEDGER_SEQ_T2,
+        ledger_t2.closed_at,
+    )];
+    let real_pools = vec![make_lore_0189_real_pool(
+        UPGRADE_POOL_ID,
+        UPGRADE_LEDGER_SEQ_T2,
+    )];
+    let real_snapshots = vec![make_lore_0189_real_snapshot(
+        UPGRADE_POOL_ID,
+        UPGRADE_LEDGER_SEQ_T2,
+    )];
+
+    persist_ledger(
+        &pool,
+        &ledger_t2,
+        &txs_t2,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &real_pools,
+        &real_snapshots,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &[],
+        &cache,
+    )
+    .await
+    .expect("T2 real-data persist");
+
+    // Verify upgrade. asset_a_type real (0=NATIVE here, but distinguishable
+    // via created_at_ledger > 0). asset_b_type=1 (credit_alphanum4) is the
+    // unambiguous real marker. fee_bps=30 real.
+    let upgraded: (i16, Option<String>, i16, Option<String>, i32, i64) = sqlx::query_as(
+        r#"
+        SELECT asset_a_type, asset_a_code, asset_b_type, asset_b_code,
+               fee_bps, created_at_ledger
+          FROM liquidity_pools
+         WHERE pool_id = decode($1, 'hex')
+        "#,
+    )
+    .bind(UPGRADE_POOL_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("upgraded pool must exist");
+    assert_eq!(upgraded.2, 1, "asset_b_type upgraded to credit_alphanum4");
+    assert_eq!(upgraded.3.as_deref(), Some("USDC"), "asset_b_code upgraded");
+    assert_eq!(upgraded.4, 30, "fee_bps upgraded to 30");
+    assert!(
+        upgraded.5 > 0,
+        "created_at_ledger upgraded to real value > 0 (got {})",
+        upgraded.5
+    );
+
+    clean_lore_0189(
+        &pool,
+        UPGRADE_POOL_ID,
+        &[UPGRADE_LEDGER_SEQ_T1, UPGRADE_LEDGER_SEQ_T2],
+        &[UPGRADE_TX_HASH_T1, UPGRADE_TX_HASH_T2],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn orphan_detection_skipped_when_pool_in_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0189 in-DB skip test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0189 in-DB skip test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_lore_0189(
+        &pool,
+        SKIP_POOL_ID,
+        &[SKIP_LEDGER_SEQ_T1, SKIP_LEDGER_SEQ_T2],
+        &[SKIP_TX_HASH_T1, SKIP_TX_HASH_T2],
+    )
+    .await;
+
+    // T1: real pool dimension observed first (no positions yet).
+    let ledger_t1 = make_lore_0189_ledger(SKIP_LEDGER_SEQ_T1, SKIP_LEDGER_HASH_T1);
+    let txs_t1 = vec![make_lore_0189_tx(
+        SKIP_TX_HASH_T1,
+        SKIP_LEDGER_SEQ_T1,
+        ledger_t1.closed_at,
+    )];
+    let real_pools = vec![make_lore_0189_real_pool(SKIP_POOL_ID, SKIP_LEDGER_SEQ_T1)];
+    let real_snapshots = vec![make_lore_0189_real_snapshot(
+        SKIP_POOL_ID,
+        SKIP_LEDGER_SEQ_T1,
+    )];
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger_t1,
+        &txs_t1,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &real_pools,
+        &real_snapshots,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &[],
+        &cache,
+    )
+    .await
+    .expect("T1 real pool persist");
+
+    // T2: position references same pool — but with NO pool_row this ledger.
+    // detect_orphan_pool_ids should hit DB and find the pool, NOT emit sentinel.
+    let ledger_t2 = make_lore_0189_ledger(SKIP_LEDGER_SEQ_T2, SKIP_LEDGER_HASH_T2);
+    let txs_t2 = vec![make_lore_0189_tx(
+        SKIP_TX_HASH_T2,
+        SKIP_LEDGER_SEQ_T2,
+        ledger_t2.closed_at,
+    )];
+    let lp_positions_t2 = vec![ExtractedLpPosition {
+        pool_id: SKIP_POOL_ID.to_string(),
+        account_id: SRC_STRKEY.to_string(),
+        shares: "5.0000000".to_string(),
+        first_deposit_ledger: Some(SKIP_LEDGER_SEQ_T2),
+        last_updated_ledger: SKIP_LEDGER_SEQ_T2,
+    }];
+
+    persist_ledger(
+        &pool,
+        &ledger_t2,
+        &txs_t2,
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(), // no pool_rows in T2
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &Vec::new(),
+        &lp_positions_t2,
+        &[],
+        &cache,
+    )
+    .await
+    .expect("T2 position persist with pre-existing pool");
+
+    // Pool unchanged (still real, not downgraded).
+    let cal: i64 = sqlx::query_scalar(
+        "SELECT created_at_ledger FROM liquidity_pools WHERE pool_id = decode($1, 'hex')",
+    )
+    .bind(SKIP_POOL_ID)
+    .fetch_one(&pool)
+    .await
+    .expect("pre-existing pool row must remain");
+    assert!(
+        cal > 0,
+        "pre-existing real pool must NOT be downgraded to sentinel (got created_at_ledger={cal})"
+    );
+
+    // Position written.
+    let position_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM lp_positions WHERE pool_id = decode($1, 'hex')")
+            .bind(SKIP_POOL_ID)
+            .fetch_one(&pool)
+            .await
+            .expect("position count");
+    assert_eq!(
+        position_count, 1,
+        "position FK to pre-existing pool resolves"
+    );
+
+    clean_lore_0189(
+        &pool,
+        SKIP_POOL_ID,
+        &[SKIP_LEDGER_SEQ_T1, SKIP_LEDGER_SEQ_T2],
+        &[SKIP_TX_HASH_T1, SKIP_TX_HASH_T2],
+    )
+    .await;
 }
