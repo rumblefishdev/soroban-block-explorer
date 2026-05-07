@@ -2,7 +2,7 @@
 id: '0186'
 title: 'DB merge script for multi-laptop backfill snapshots'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0040']
 related_tasks: ['0010']
 tags: [backfill, db, merge, postgres, tooling]
@@ -24,6 +24,23 @@ history:
     status: active
     who: fmazur
     note: 'Pivot to manual flow — drop simulated multi-laptop test rig (postgres-truth, postgres-laptop-a, postgres-laptop-b) + scripts/db-merge-tests/. Operator generates snapshots themselves via backfill-runner / backfill-bench, organizes them with a numeric filename prefix, and ingests in order. Runtime infra reduced to 2 containers (postgres-merge + postgres-snapshot-source). T1–T6 corpus removed; correctness verification is now ad-hoc (operator maintains their own ground-truth DB if desired and uses `db-merge diff` against it).'
+  - date: 2026-05-07
+    status: completed
+    who: fmazur
+    note: >
+      Done. `crates/db-merge` ships ingest/finalize/diff end-to-end (17 tables × per-table
+      step + per-table diff projection + 2-step finalize). 2-container runtime infra
+      (postgres-merge 5436 + postgres-snapshot-source 5437) under db-merge profile.
+      3 helper scripts: gen-merge-snapshots / run-merge-snapshots / diff-merge-vs-truth.
+      Manual verification: 4×250 mainnet ledgers (62016000-62016999) — 4 ingests + finalize
+      passed with full data through every step (~9 min). Diff-vs-truth, idempotency, and
+      wrong-order-rejection: NOT exercised; deferred. Two notable post-merge fixes landed
+      with completion: (a) soroban_contracts.metadata→name alignment after lore-0156 typed
+      column migration (b965613); (b) helper script tooling + ORIGINAL/MERGED diff headers
+      (7d86d17). One in-conflict design choice during develop merge: kept lore-0189
+      sentinel approach for orphan lp_positions, dropped lore-0186 Pass 2 stub for
+      cross-range op pool refs — see Design Decisions § Emerged for the trade-off and
+      Future Work for the multi-laptop disjoint-coverage caveat that re-emerges.
 ---
 
 # DB merge script for multi-laptop backfill snapshots
@@ -37,12 +54,14 @@ The script is invoked once per snapshot, **chronologically oldest-first**,
 against the same target. Estimate: 1–2 weeks of focused work
 (infra + script + diff harness + test corpus).
 
-## Status: Active
+## Status: Completed
 
-**Current state:** Implementation complete — `crates/db-merge` ships
-`ingest` / `finalize` / `diff` end-to-end against the 2-container runtime
-infra. Outstanding work is operator-side manual verification (Step 5)
-on a real multi-laptop run; AC checklist below tracks remaining items.
+`crates/db-merge` ships `ingest` / `finalize` / `diff` end-to-end against
+the 2-container runtime infra. Verified by one real 4×250 mainnet
+ledger run (62016000-62016999) — 4 ingests + finalize succeeded.
+`db-merge diff` against an operator-maintained sequential ground-truth,
+idempotency replay, and wrong-order rejection were NOT exercised before
+closure (see Implementation Notes § Verification scope and AC checklist).
 
 ## Context
 
@@ -224,8 +243,8 @@ that's out of scope of the current manual flow.
       profile; reset procedures (merge target, snapshot source) documented
       in `crates/db-merge/README.md`.
 - [x] `merge ingest` automates the FDW setup (`CREATE EXTENSION
-    postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
-    INTO merge_source`) and tears it down on success.
+  postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
+  INTO merge_source`) and tears it down on success.
 - [x] `crates/db-merge` exists with three subcommands: `ingest`, `finalize`,
       `diff`; CLI flags follow `backfill-runner` conventions.
 - [x] All 18 ADR-0040 table-by-table merge semantics implemented (collapsed
@@ -245,10 +264,16 @@ that's out of scope of the current manual flow.
 - [x] `merge diff` produces a per-table table with row counts + md5 on a
       normalized natural-key projection. Operator uses it ad-hoc against
       whatever ground-truth DB they maintain.
-- [ ] **Manual verification** (per Step 5) performed against operator's
-      own ground-truth backfill at least once before declaring the tool
-      production-ready: chronological-merge correctness, idempotency,
-      wrong-order rejection. Notes appended to this task.
+- [~] **Manual verification** (per Step 5) — partial. 4×250 mainnet
+  sequential ingest + finalize executed end-to-end without errors
+  (preflight, all 17 step modules, FDW bridge teardown, pre-merge
+  pg*dump, finalize sequences + nfts.current_owner*\* rebuild — see
+  Implementation Notes § Verification scope for table-by-table row
+  counts). NOT exercised: (a) `db-merge diff` against an
+  independent sequential ground-truth backfill, (b) idempotency
+  replay (same snapshot twice), (c) wrong-order rejection
+  (re-ingesting an earlier range after a later one). Helper script
+  `scripts/diff-merge-vs-truth.sh` ready for (a) when needed.
 - [ ] **Docs updated** — N/A: offline operational tool, not part of indexer/
       API/infra shape under `docs/architecture/**`. If `crates/db-merge`
       becomes a permanent piece of the pipeline (e.g. ongoing parallel
@@ -290,3 +315,82 @@ script):
 (soroban_events_appearances), 1060 (soroban_invocations_appearances),
 1643–1645 (liquidity_pools), 1702 (lp_snapshots), 1749–1754 (lp_positions),
 1866–1948 (account_balances_current).
+
+---
+
+## Implementation Notes
+
+**Crate layout** (`crates/db-merge/src/`):
+
+- `cli.rs` — clap subcommands: `ingest <snapshot> --target-url --snapshot-source-url [--allow-overlap]`, `finalize --target-url`, `diff --left --right`
+- `main.rs`, `error.rs` — entry + error type
+- `ingest.rs` — orchestrates the per-snapshot pipeline (snapshot-source reset → pg_restore → FDW bridge → preflight → backup → steps loop → FDW teardown)
+- `snapshot_source.rs` — `docker compose stop/rm/up -d` lifecycle for `postgres-snapshot-source` + `pg_restore` invocation
+- `fdw.rs` — `CREATE EXTENSION postgres_fdw` + server + user mapping + `IMPORT FOREIGN SCHEMA public … INTO merge_source` + teardown
+- `preflight.rs` — migrations match (incl. checksum), ledger range non-overlap & strictly later, partition layout match, CHECK constraint match
+- `backup.rs` — pre-merge `pg_dump --format=custom` of target → `.temp/db-merge-backups/pre-merge-<timestamp>.dump`
+- `batcher.rs` — `ledger_windowed` + single-batch helpers, 100k row windows, SAVEPOINT per batch
+- `steps/{17 tables}.rs` — per-table merge SQL (REMAP / DEDUP / WATERMARK / UNION); aggregator at `steps/mod.rs`
+- `diff/{17 tables}.rs` — per-table normalized natural-key projection → md5; aggregator at `diff/mod.rs`
+- `finalize/{nfts_current_owner, sequences}.rs` — Step 13 + Step 14
+
+**Runtime infra** (docker-compose.yml, `db-merge` profile):
+
+- `postgres-merge` (5436) — merge target, persistent
+- `postgres-snapshot-source` (5437) — ephemeral, reset before every ingest
+
+**Helper scripts** (`scripts/`):
+
+- `gen-merge-snapshots.sh` — N×COUNT-ledger snapshots via wipe → up → migrate → backfill-bench → pg_dump (zstd:19, custom, no-owner, no-privileges); default 4×250 from 62016000
+- `run-merge-snapshots.sh` — discover _.dump in lexical order → merge target up + migrate + `_\_default`partitions → loop`ingest`+`finalize`; `RESET=1` for fresh target
+- `diff-merge-vs-truth.sh` — sequential ground-truth on 5432 + finalize on both sides for parity → `db-merge diff --left <truth> --right <merge>`
+
+**Verification scope** (4×250 mainnet ledgers, 62016000-62016999, 2026-05-07):
+
+| Stage                                              | Outcome                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4× `merge ingest` chronologically                  | all preflight checks passed; FDW bridge set up + torn down each time; pre-merge backups (4× ~50MB) saved                                                                                                                                                                                                                                                 |
+| Per-table row counts (cumulative across 4 ingests) | ledgers 1000, accounts 104215, soroban*contracts 10111, transactions 394342, operations_appearances 625428, nfts 92694, lp_snapshots 41129, transaction_participants ~750k, events_appearances ~635k, invocations_appearances ~190k, lp_positions / nft_ownership / current_owner*\* mostly empty (no NFT transfers / minimal LP activity in test range) |
+| `merge finalize`                                   | nfts.current*owner*\* rebuild OK (0 rows — no nft_ownership events); 7× setval applied                                                                                                                                                                                                                                                                   |
+| Total wall-clock                                   | ~9 min on workstation                                                                                                                                                                                                                                                                                                                                    |
+
+NOT exercised: `db-merge diff --left <truth> --right <merge>` against a sequential ground-truth backfill, idempotency replay, wrong-order rejection. Operator can run `bash scripts/diff-merge-vs-truth.sh` to cover (a) at any time.
+
+---
+
+## Issues Encountered
+
+- **`soroban_contracts.metadata` column removed by lore-0156 typed-name migration** — migration `20260505130000_soroban_contracts_typed_name_column` (landed via develop merge) replaced `metadata JSONB` with typed `name VARCHAR(256)`. Merger `steps/soroban_contracts` and `diff/soroban_contracts` still referenced `s.metadata` → ingest aborted at "column s.metadata does not exist" in the second step. Fix: 4× `metadata`→`name` in the step query (input projection, INSERT col list, SELECT col list, ON CONFLICT clause) + 1× in diff canonical projection (commit `b965613`).
+- **Partition-layout mismatch on first merge run** — `run-merge-snapshots.sh` initially called `cargo run -p db-partition-mgmt --bin cli` to create partitions on `postgres-merge`. That CLI runs `ensure_all_partitions` which adds 217 monthly children (`y2024m02`…`y2026m08`) on top of `*_default`. But `backfill-bench` (which produced the snapshots) only calls `ensure_default_partition` — snapshots have `*_default` only. Preflight rejected with "non-default children present on target". Fix: replaced the CLI invocation with raw `psql` `CREATE TABLE … PARTITION OF … DEFAULT` for the 7 time-partitioned tables — matches snapshot layout exactly.
+- **Conflict in `crates/indexer/src/handler/persist/write.rs` on develop merge** — two parallel sentinel-aware UPSERT designs collided: branch-side lore-0186 Pass 2 stub (`fee_bps=0` detection) for cross-range op pool refs vs develop-side lore-0189 orphan placeholder (`created_at_ledger=0` marker via `insert_sentinel_pools`) for orphan `lp_positions`. Resolution: take develop entirely (lore-0189 wins). Implication captured under Future Work.
+
+---
+
+## Design Decisions
+
+### From Plan
+
+1. **Per-table batching with `SAVEPOINT`s every 100k rows + pre-merge `pg_dump` as rollback path** — single transaction over 150M rows blows up locks/WAL.
+2. **`postgres_fdw` + ephemeral `postgres-snapshot-source` container** — `pg_restore` cannot retarget a schema, and renaming `public` on the live target is impossible. FDW lets the merger run plain `INSERT INTO target.X SELECT … FROM merge_source.X` set-based across a Docker-network hop.
+3. **Per-table normalized natural-key hash for `diff`** — surrogate IDs (BIGSERIAL) differ across DBs even with identical logical content, so raw diff is impossible. Per-table projection replaces every surrogate FK with the referenced natural key, excludes surrogate `id` and `search_vector`, sorts by natural key, hashes via `md5(string_agg(...))`.
+4. **Rust + sqlx + clap, new `crates/db-merge`** — parity with `backfill-runner`/`db-partition-mgmt`.
+5. **Post-final-snapshot `nfts.current_owner_*` rebuild + `setval` via `merge finalize`** — wasteful to recompute after every ingest.
+
+### Emerged
+
+6. **Pivot to manual flow (5 → 2 runtime containers)** — original plan had 5-DB simulated multi-laptop test rig (`postgres-truth`, `postgres-laptop-a`, `postgres-laptop-b`) + `scripts/db-merge-tests/` (T1-T6 test corpus, ~13 files, ~840 LOC). Dropped in favour of operator-driven snapshot generation: 3 helper scripts replaced the harness, ground-truth maintenance is operator's responsibility. Runtime collapsed to `postgres-merge` + `postgres-snapshot-source` only. Test rig moved to `.trash/scripts-db-merge-tests/`. Commit `c080e29`.
+7. **`*_default` partitions only on merge target** — discovered via Issue #2. Helper script uses raw psql `CREATE TABLE *_default PARTITION OF … DEFAULT` for the 7 time-partitioned tables instead of the full `db-partition-mgmt-cli` (which would create monthly children that mismatch snapshots).
+8. **Diff output headers `ROWS_ORIGINAL` / `ROWS_MERGED` / `HASH_ORIGINAL` / `HASH_MERGED`** instead of generic `_L` / `_R` — semantic over generic. Convention pinned: `--left` = ORIGINAL (truth), `--right` = MERGED. CLI flags themselves left as `--left/--right` — the tool stays generic, only the labels are opinionated. Commit `7d86d17`.
+9. **Lightweight `pg_dump` recipe**: `--format=custom --compress=zstd:19 --no-owner --no-privileges` as default in helper script. zstd:19 is near-max compression in PG16's custom format (15-30% smaller than default gzip-6 at comparable CPU). Documented alternatives (zstd:22, directory+jobs, plain+external zstd, --data-only with pre-migrated source) under § Snapshot creation in README.
+10. **Took develop's lore-0189 sentinel approach over branch's lore-0186 Pass 2 stub** during write.rs conflict resolution — lore-0189 (sentinel `created_at_ledger=0` for orphan `lp_positions` placeholders) wins over lore-0186 (Pass 2 stub for cross-range op→pool refs with `fee_bps=0` marker). Trade-off captured in Future Work.
+
+---
+
+## Future Work
+
+Prose-only — no backlog tasks spawned.
+
+- **Cross-range op→pool linkage in disjoint multi-laptop merges.** Branch's lore-0186 commit `0592c62` added a Pass 2 stub in `upsert_pools_and_snapshots` that auto-stubbed `liquidity_pools` rows for any `pool_id` referenced by `operations_appearances` but not yet present in the target — together with the removal of the defensive `CASE WHEN EXISTS … ELSE NULL` nullify in `insert_operations`. That commit was effectively reverted by taking develop's `write.rs` whole during the merge conflict (Design Decision § Emerged #10). Net effect with current code: when laptop A backfills ledgers `[X..Y]` containing a `CREATE_POOL_OP`, and laptop B backfills `[Y+1..Z]` containing a `DEPOSIT_OP` referencing that pool, laptop B's snapshot will have `operations_appearances.pool_id = NULL` for the deposit (the defensive nullify catches it). The merger then loses the op→pool linkage permanently — XDR is gone after backfill. Acceptable for the verified scenario (4×250 chronologically sequential snapshots from one laptop slot reused 4×; no real cross-range refs). Becomes a real data-loss issue if the team adopts truly disjoint multi-laptop coverage. Re-introducing the lore-0186 Pass 2 stub on top of the lore-0189 sentinel-aware UPSERT is feasible (both stubs share `fee_bps=0` marker, hybrid detection covers both classes — see commit message of `b9cc223` for the analysis); deferred until disjoint multi-laptop runs become a workflow.
+- **Manual verification suite extension.** Currently only a single chronological-merge scenario was exercised. The deleted T1–T6 corpus from `scripts/db-merge-tests/` (in `.trash/scripts-db-merge-tests/`) covers idempotency, wrong-order rejection, single-snapshot reproducibility, scale smoke. If the merger sees real-team usage and bug reports start appearing, re-introduce a slimmed-down version of that harness against the 2-container infra.
+- **Snapshot transport.** Operator currently moves snapshot files between laptops manually (USB / S3 / scp). Out of scope by design; merger takes local paths.
+- **Live-source merge.** ADR 0040 + this implementation assume snapshots are dumped first, not connected live. A `merge ingest --source-url <live>` variant skipping `pg_restore` could be useful for repeated mid-stream merges; not implemented.
