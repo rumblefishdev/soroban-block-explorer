@@ -511,6 +511,29 @@ Six columns are always NULL because they require data from outside the XDR:
 
 ### 9.3 Proposed Enrichment Architecture
 
+> **Superseded 2026-05-06** by [ADR 0043](../../lore/2-adrs/0043_field-allocation-rule.md)
+> and tasks 0188 / 0191 / 0194 / 0195. The "scheduled cron" tier described
+> below was split between two distinct paths once the field-allocation rule
+> crystallised:
+>
+> - **On-chain fields** (LP `volume`, `fee_revenue`, `assets.holder_count`,
+>   classic credit `assets.total_supply`) → indexer-side per-ledger
+>   recompute. Owned by task 0194 §1b/§1c/§1d. Lives in
+>   `crates/indexer/src/handler/persist/write.rs` (`recompute_asset_aggregates`
+>   - the post-INSERT volume UPDATE in `upsert_pools_and_snapshots`).
+>     No EventBridge cron, no separate Lambda — the work happens inside the
+>     normal persist transaction.
+> - **Off-chain fields** (LP `tvl`, NFT metadata, asset USD price)
+>   → SQS-driven type-1 worker Lambda (`crates/enrichment-worker`,
+>   shipped by task 0191) consuming messages emitted by the indexer
+>   producer. Off-chain detail-only fields (asset `description`,
+>   `home_page`) → runtime type-2 fetch in the API handler
+>   (`crates/api/src/runtime_enrichment/sep1`, task 0188); no DB column.
+>
+> The `0124, 0125, 0135` task references in the table below are obsolete
+> as written — superseded by `0188, 0191, 0194, 0195`. Original text
+> retained below for historical context.
+
 The enrichment pipeline sits between ingestion and API. It has three execution modes:
 
 **Inline (synchronous, per ledger):**

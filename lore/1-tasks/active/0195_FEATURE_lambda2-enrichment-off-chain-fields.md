@@ -1,9 +1,9 @@
 ---
 id: '0195'
-title: 'Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)'
+title: 'Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, nft_metadata)'
 type: FEATURE
 status: active
-related_adr: ['0026', '0029', '0032']
+related_adr: ['0007', '0022', '0023', '0032', '0043']
 related_tasks: ['0125', '0188', '0191', '0194', '0196', '0197']
 tags: [priority-medium, effort-large, layer-enrichment, layer-lambda, audit-gap]
 milestone: 2
@@ -20,7 +20,7 @@ history:
     note: 'Activated. 0194 frozen pending Oskar consult on price oracle (shared dep with §2c); proceeding with 0195 in parallel — §2a/§2b/§2d are unblocked.'
 ---
 
-# Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)
+# Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, nft_metadata)
 
 ## Summary
 
@@ -28,20 +28,21 @@ Four sub-blocks layered on 0191's SQS-driven type-1 enrichment worker, each popu
 
 ## Status: Backlog
 
-Cannot start until task **0194 sub-block 1a** (schema migration adding `assets.usd_price` + `assets.usd_price_updated_at`) merges to develop. Sub-blocks 2a (icon-name extension), 2b (lp_tvl) and 2d (nft_metadata) write existing columns and are unblocked once 0191 is in production. Sub-block 2c (asset_usd_price) is hard-blocked on 0194 1a.
+Sub-blocks 2a (icon-name extension), 2b (lp_tvl) and 2d (nft_metadata) write existing columns and are unblocked once 0191 is in production. Sub-block 2c (asset_usd_price) was pulled — see §2c below. ADR 0043 (field allocation rule) must already be on develop as its own independent PR — this task references it as established law.
 
 ## Context
 
-### Field allocation rule (from 0194 sub-block 1f / ADR 0026)
+### Field allocation rule (from 0194 sub-block 1f / ADR 0043)
 
 Off-chain = data NOT already in the processed ledger. Decision points crystallised this session:
 
 - **`assets.name` (classic credit only)**: full names like "USD Coin" come from issuer SEP-1 TOML `CURRENCIES[].name`. Off-chain. Soroban/SAC `name` continue indexer-side (task 0156). **Added 2026-05-06 after 0197 dry-run audit** caught misallocation in original 0194 sub-block 1b.
 - **`liquidity_pools.tvl` + `liquidity_pool_snapshots.tvl`**: USD-denominated, requires price oracle. Off-chain.
-- **`assets.usd_price`**: USD price feed (CoinGecko / Reflector / StellarExpert). Off-chain.
+<!-- `assets.usd_price` allocation entry removed — sub-block 2c pulled, see §2c. -->
+
 - **`nfts.{collection_name, name, media_url, metadata}`**: requires Soroban RPC `token_uri()` per NFT, often dereferences to HTTP/IPFS gateway for JSON. Per the rule "on-chain = already in processed ledger", per-token RPC counts as off-chain (audit `docs/audits/2026-04-10-pipeline-data-audit.md` line 644-647 explicitly: "requires `token_uri()` RPC calls to the contract — not available from XDR events. This is an enrichment job"). Karol-confirmed Option A in 2026-05-06 session.
 
-LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by 0194 sub-block 1d.
+LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by **task 0199** (per-op extraction + USD denomination); 0199 depends on this task's §2b oracle for the USD half.
 
 ### Reuse from 0191
 
@@ -73,7 +74,7 @@ Sentinel value depends on column type:
 
 ### Sub-block 2a — Icon kind extension: also persist `assets.name` (classic credit)
 
-**Added 2026-05-06 after 0197 dry-run audit** revealed classic credit `assets.name` is off-chain (SEP-1 TOML `CURRENCIES[].name`) and was incorrectly placed in 0194 sub-block 1b. Per ADR 0026, off-chain → Lambda 2. Cheapest implementation: extend the existing 0191 `icon` kind (which already fetches the same TOML for `image`) to additionally extract and persist `name` in the same SQL UPDATE.
+**Added 2026-05-06 after 0197 dry-run audit** revealed classic credit `assets.name` is off-chain (SEP-1 TOML `CURRENCIES[].name`) and was incorrectly placed in 0194 sub-block 1b. Per ADR 0043, off-chain → Lambda 2. Cheapest implementation: extend the existing 0191 `icon` kind (which already fetches the same TOML for `image`) to additionally extract and persist `name` in the same SQL UPDATE.
 
 **Spec:**
 
@@ -91,7 +92,7 @@ Sentinel value depends on column type:
 
 ### Sub-block 2b — `lp_tvl` `EnrichmentMessage` variant
 
-**Supersedes 0125** (LP price oracle / TVL part). The volume/fee_revenue part of 0125's scope already moved to 0194 sub-block 1d. 0125 archived as `superseded by: ["0194", "0195"]`.
+**Supersedes 0125** (LP price oracle / TVL part). The volume/fee_revenue part of 0125's scope moved to task 0199. 0125 archived as `superseded by: ["0195", "0199"]`.
 
 **Spec:**
 
@@ -106,19 +107,9 @@ Sentinel value depends on column type:
 - **Producer hook**: `crates/indexer/src/handler/enrichment_publish.rs` — after each new `liquidity_pool_snapshots` row, emit `LpTvl { pool_id, snapshot_id }`
 - **Permanent fails**: pool legs without any oracle data → sentinel decision TBD (proposal: write `tvl=0` + log warn). Transient (5xx, network) → `EnrichError::Transient`, SQS retry.
 
-### Sub-block 2c — `asset_usd_price` `EnrichmentMessage` variant
+### Sub-block 2c — REMOVED (asset USD price deferred to future-work)
 
-**New territory** — no precursor task. Captured as 0191 future-work bullet #6 ("stellarchain.io/markets parity") without a dedicated task.
-
-**Spec:**
-
-- New variant: `EnrichmentMessage::AssetUsdPrice { asset_id: i32 }`
-- New module `crates/enrichment-shared/src/enrich_and_persist/asset_usd_price.rs`
-- Source: **CoinGecko Stellar list** primary (~30 req/min free tier, batch endpoint `/simple/price?ids=...`), StellarExpert fallback. Reflector unsuitable here because most classic credit assets (where USD price matters most) aren't in Reflector feed.
-- Writes `assets.usd_price = ?, assets.usd_price_updated_at = NOW()`
-- **Producer SQL with TTL refresh**: `WHERE usd_price IS NULL OR usd_price_updated_at < NOW() - INTERVAL '24h'`. This embeds periodic refresh into the producer — replaces a dedicated janitor cron Lambda for this kind. Cap producer batch size so each ledger doesn't re-emit thousands of stale rows.
-- Alternative trigger model (decide in spec phase): daily-cron Lambda that scans + emits, vs. embedding TTL in indexer producer SQL. Tradeoff: cron is simpler but requires separate infra; embedded TTL re-uses producer but adds complexity to indexer SQL.
-- **Permanent fails** (asset not in CoinGecko list): sentinel `usd_price = 0` with `updated_at = NOW()` so TTL refresh doesn't immediately re-attempt. Reconsider after first ops report.
+**2026-05-06 review (Karol):** pulled from M2. The sub-block was speculative — driven by 0191 future-work bullet #6 ("stellarchain.io/markets parity") with no PM ticket, frontend mock, or shipped consumer. The corresponding `assets.usd_price` + `usd_price_updated_at` column adds (originally 0194 §1a) were also pulled. Asset USD price work as a whole moves to future-work; revisit when a real product ask materialises.
 
 ### Sub-block 2d — `nft_metadata` `EnrichmentMessage` variant
 
@@ -142,7 +133,7 @@ Sentinel value depends on column type:
 
 ### Common: ADR amendment + docs
 
-- ADR 0029 (`abandon-parsed-artifacts-read-time-xdr-fetch`) amendment: extend "runtime_enrichment umbrella" section with type-1 SQS model + new kinds. Captured already as 0191 Future Work bullet #3.
+- ADR 0043 (field allocation rule, drafted in 0194 sub-block 1f) is the home for "runtime_enrichment umbrella" governance — type-1 SQS model + per-kind matrix lives there. ADR 0029 is about the **read-time XDR fetch** path (detail endpoint type-2 enrichment); it does NOT need amendment for type-1 write-side concerns. The 0191 Future Work bullet #3 ("ADR 0029 amendment") was misallocated and is corrected here.
 - Docs `docs/architecture/indexing-pipeline/enrichment.md` (or create if absent) — kind-by-kind matrix
 - Docs `docs/architecture/database-schema/**` — column source attribution updated
 
@@ -150,21 +141,22 @@ Sentinel value depends on column type:
 
 - [ ] Sub-block 2a: `Sep1Currency.name` field added; icon kind extended to UPDATE `assets.name` via `COALESCE` (no overwrite of indexer-set Soroban/SAC names); sample query shows non-NULL `name` on classic credit assets with SEP-1 TOML support; producer SQL re-emits classic credit assets with NULL name
 - [ ] Sub-block 2b: `lp_tvl` kind dispatched, sample query shows non-NULL `tvl` on production-region pools with valid oracle data
-- [ ] Sub-block 2c: `asset_usd_price` kind dispatched, sample query shows non-NULL `usd_price` on top-50 assets by activity
+<!-- Sub-block 2c acceptance removed — pulled. -->
+
 - [ ] Sub-block 2d: `nft_metadata` kind dispatched, sample query shows non-NULL `name`/`media_url` on minted NFTs from at least one well-known collection
 - [ ] Each kind has its permanent / transient EnrichError mapping documented + tested
 - [ ] Each kind has integration test (mock oracle / mock RPC / mock IPFS gateway)
 - [ ] DepthAlarm thresholds per CDK reviewed for new producer rates
-- [ ] **Docs updated**: ADR 0029 amendment, `docs/architecture/indexing-pipeline/enrichment.md`, `docs/architecture/database-schema/**`
+- [ ] **Docs updated**: ADR 0043 amendment (per-kind matrix table for new kinds), `docs/architecture/indexing-pipeline/enrichment.md` (or create), `docs/architecture/database-schema/**`. NO ADR 0029 amendment — that ADR is read-path, not enrichment write-path.
 - [ ] **API types regenerated** — if any DTO field is exposed (e.g. `nfts.metadata` JSON shape), codegen committed in same PR
-- [ ] 0125 archived as `superseded by: ["0194", "0195"]`
+- [ ] 0125 archived as `superseded by: ["0195", "0199"]`
 
 ## Future Work (out of scope, spawn separate tasks)
 
 - **Per-collection NFT batching** if per-token cost becomes prohibitive in production
 - **Periodic janitor for `lp_tvl`**: cron Lambda re-emitting stale snapshots — only if observe stale TVLs in production
 - **Worker observability per kind**: CloudWatch custom metrics (success/fail counters, fetch latency histogram per kind)
-- **`asset_usd_price` extended sources**: if CoinGecko coverage gaps observed, evaluate Coinbase API or Kraken public ticker
+- **`asset_usd_price` whole feature**: pulled from M2 (no PM ticket / consumer). Re-evaluate when a real product ask materialises; would land as a brand-new task with column adds + Lambda 2 kind + producer hook + backfill subcommand bundled.
 
 ## Notes
 

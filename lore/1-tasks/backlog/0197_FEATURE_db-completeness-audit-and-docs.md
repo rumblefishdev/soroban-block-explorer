@@ -3,7 +3,7 @@ id: '0197'
 title: 'DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix'
 type: FEATURE
 status: backlog
-related_adr: ['0026', '0029', '0032', '0037']
+related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks: ['0188', '0191', '0194', '0195', '0196']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
 milestone: 2
@@ -13,7 +13,7 @@ history:
   - date: '2026-05-06'
     status: backlog
     who: karolkow
-    note: 'Spawned from M2 enrichment planning session 2026-05-06. Fourth and final of four tasks (0194-0197). Verifies the field allocation rule (ADR 0026) is followed end-to-end after 0194/0195/0196 land.'
+    note: 'Spawned from M2 enrichment planning session 2026-05-06. Fourth and final of four tasks (0194-0197). Verifies the field allocation rule (ADR 0043) is followed end-to-end after 0194/0195/0196 land.'
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
@@ -28,7 +28,7 @@ Cannot start until **0194, 0195, AND 0196** all merge to develop. This task is p
 
 ## Context
 
-### Field allocation rule (ADR 0026, locked in 0194 sub-block 1f)
+### Field allocation rule (ADR 0043, locked in 0194 sub-block 1f)
 
 > List endpoint + on-chain (data already in processed ledger) → indexer; off-chain (HTTP / oracle / per-row RPC) → enrichment Lambda 2; detail-only fields → runtime type-2 in API handler, NEVER persisted.
 
@@ -117,8 +117,8 @@ Per `lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md`, every PR chan
 
 ### Step 4: ADR cross-check
 
-- ADR 0026 (field allocation rule, from 0194) — re-affirm without amendment, OR amend if implementation revealed edge cases
-- ADR 0029 (abandon-parsed-artifacts) — confirm 0195's amendment landed
+- ADR 0043 (field allocation rule, from 0194) — re-affirm without amendment, OR amend if implementation revealed edge cases
+- ADR 0029 (abandon-parsed-artifacts) — read-path ADR, NO amendment from 0194/0195/0196 expected. Confirm no spurious amendment was added.
 - ADR 0037 (current-schema-snapshot) — confirm 0194's amendment landed
 
 ### Step 5: Audit doc supersession
@@ -138,7 +138,7 @@ Each anti-pattern or wiring gap discovered → backlog task with `audit-gap` tag
 - [ ] `docs/architecture/indexing-pipeline/**` refreshed
 - [ ] `docs/architecture/backend/**` refreshed
 - [ ] `docs/architecture/xdr-parsing/**` refreshed
-- [ ] ADR 0026/0029/0037 cross-checked
+- [ ] ADR 0043/0029/0037 cross-checked
 - [ ] Audit doc 2026-04-10 supersession header added
 - [ ] **Docs updated** — this is the task, mark all checked
 - [ ] **API types regenerated** — N/A (audit-only, no code changes expected)

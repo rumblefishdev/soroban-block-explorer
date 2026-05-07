@@ -2193,6 +2193,130 @@ async fn upsert_balances_credit(
 }
 
 // ---------------------------------------------------------------------------
+// 15. assets aggregate recompute (task 0194 sub-blocks 1b + 1c)
+// ---------------------------------------------------------------------------
+// After credit-balance upserts and trustline removals land, recompute
+// `assets.holder_count` and `assets.total_supply` on every (code, issuer_id)
+// pair that this ledger touched. Recompute (rather than incremental delta)
+// avoids ON CONFLICT-vs-INSERT introspection on the upsert path; the
+// affected-set is bounded per ledger so the cost stays small.
+//
+// `holder_count` = COUNT of **active holders** (trustlines with balance > 0).
+// Matches Stellar ecosystem convention (StellarExpert / Stellarchain.io):
+// an empty trustline is an opt-in but not a "holder" in the explorer sense.
+// `total_supply` = SUM of trustline balances only (MVP scope).
+//
+// **MVP simplification — full Horizon parity deferred.** Stellar protocol
+// stores no `AssetEntry` / `AssetSupplyEntry` on-chain (10 LedgerEntry
+// types: ACCOUNT / TRUSTLINE / OFFER / DATA / CLAIMABLE_BALANCE /
+// LIQUIDITY_POOL / CONTRACT_DATA / CONTRACT_CODE / CONFIG_SETTING /
+// TTL — none persists supply). Horizon's `/assets` derives supply from
+// 4 sources: trustlines + claimable_balances + liquidity_pool reserves +
+// SAC contract holdings. We aggregate **only trustlines** in this MVP
+// to match the literal spec; full parity (additional 3 sources) is
+// captured under "Future Work" in task 0194 and intentionally deferred
+// — the missing components require schema additions (no
+// `claimable_balances` table, no per-asset SAC contract holdings
+// tracking) and dedicated design work, beyond this task's scope.
+// Documented drift on popular DeFi assets (e.g. USDC w/ heavy Soroswap +
+// SAC use): up to ~20-50% under-count vs Horizon. List-endpoint UI
+// note recommended once that drift becomes user-visible.
+//
+// SAC-only assets (no `(code, issuer)`) and Soroban-native tokens
+// (contract_id only, no issuer_id) are not touched here — their supply +
+// holders semantics differ and 0194 explicitly scopes 1b/1c to classic
+// credit / SAC-classic-wrap rows. Per ADR 0043 (field allocation rule):
+// list-endpoint + on-chain → indexer.
+
+pub(super) async fn recompute_asset_aggregates(
+    db_tx: &mut Transaction<'_, Postgres>,
+    staged: &Staged,
+    account_ids: &HashMap<String, i64>,
+) -> Result<(), HandlerError> {
+    use std::collections::HashSet;
+
+    // Collect distinct (code, issuer_id) pairs from credit balance writes
+    // and trustline removals. Skip native (no code/issuer).
+    let mut affected: HashSet<(String, i64)> = HashSet::new();
+
+    for r in &staged.balance_rows {
+        if r.asset_type == AssetType::Native {
+            continue;
+        }
+        let (Some(code), Some(issuer_key)) = (r.asset_code.as_ref(), r.issuer_str_key.as_ref())
+        else {
+            continue;
+        };
+        let Some(issuer_id) = account_ids.get(issuer_key).copied() else {
+            // Same defensive skip pattern as `upsert_balances_credit`: if the
+            // issuer wasn't seeded, the row didn't write either, so the
+            // recompute would touch nothing. Warn-log so a sustained pattern
+            // is observable instead of silently dropping.
+            tracing::warn!(
+                code = %code,
+                issuer = %issuer_key,
+                "recompute_asset_aggregates: issuer StrKey unseeded; skipping balance row aggregation"
+            );
+            continue;
+        };
+        affected.insert((code.clone(), issuer_id));
+    }
+
+    for r in &staged.trustline_removals {
+        let Some(issuer_id) = account_ids.get(&r.issuer_str_key).copied() else {
+            tracing::warn!(
+                code = %r.asset_code,
+                issuer = %r.issuer_str_key,
+                "recompute_asset_aggregates: issuer StrKey unseeded; skipping trustline-removal aggregation"
+            );
+            continue;
+        };
+        affected.insert((r.asset_code.clone(), issuer_id));
+    }
+
+    if affected.is_empty() {
+        return Ok(());
+    }
+
+    let mut codes: Vec<String> = Vec::with_capacity(affected.len());
+    let mut issuer_ids: Vec<i64> = Vec::with_capacity(affected.len());
+    for (code, issuer_id) in affected {
+        codes.push(code);
+        issuer_ids.push(issuer_id);
+    }
+
+    // Single UPDATE — LATERAL aggregate per affected pair, COALESCE so that
+    // assets whose every trustline was removed land on `holder_count = 0`,
+    // `total_supply = 0` instead of being skipped by an empty group.
+    sqlx::query(
+        r#"
+        UPDATE assets a
+        SET holder_count = COALESCE(sub.cnt, 0)::INTEGER,
+            total_supply = COALESCE(sub.sum, 0)::NUMERIC(28,7)
+        FROM UNNEST($1::VARCHAR[], $2::BIGINT[]) AS aff(code, issuer_id)
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) FILTER (WHERE abc.balance > 0) AS cnt,
+                SUM(abc.balance)                        AS sum
+            FROM account_balances_current abc
+            WHERE abc.asset_code = aff.code
+              AND abc.issuer_id  = aff.issuer_id
+              AND abc.asset_type <> 0
+        ) sub ON TRUE
+        WHERE a.asset_code = aff.code
+          AND a.issuer_id  = aff.issuer_id
+          AND a.asset_type IN (1, 2)
+        "#,
+    )
+    .bind(&codes)
+    .bind(&issuer_ids)
+    .execute(&mut **db_tx)
+    .await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
