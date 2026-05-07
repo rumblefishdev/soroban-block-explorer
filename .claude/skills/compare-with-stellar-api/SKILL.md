@@ -161,6 +161,39 @@ Hard rules:
 | 2   | stellar.expert               | `https://stellar.expert/explorer/public`                            | `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`.                                                                                                                                           | WebFetch        |
 | 3   | Raw XDR (independent decode) | n/a — fetch from Horizon `/transactions/<hash>` then decode locally | See "Subagent 3 specifics" below.                                                                                                                                                                                                             | WebFetch + Bash |
 
+### Pre-flight: StrKey CRC-16 validation (free, no network)
+
+Before dispatching subagents to verify entity rows whose primary identifier is a StrKey (`G…` account, `C…` contract), run `stellar_sdk.StrKey.decode_*` locally to catch malformed StrKeys. Audit databases sometimes contain hand-rolled fixture data (e.g. `GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAISSUER`, `CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASAC`) — these look StrKey-shaped but fail the CRC-16 invariant. They will return HTTP 400 from external sources; pre-validating saves a round-trip and produces a cleaner verdict.
+
+```bash
+~/.local/venvs/stellar-sdk/bin/python3 -c "
+from stellar_sdk.strkey import StrKey
+import sys
+for line in sys.stdin:
+    sk = line.strip()
+    if not sk: continue
+    valid = False
+    try: StrKey.decode_ed25519_public_key(sk); valid = 'G'
+    except Exception: pass
+    if not valid:
+        try: StrKey.decode_contract(sk); valid = 'C'
+        except Exception: pass
+    print(f'{sk[:12]}…  {valid or \"INVALID_CRC\"}')"
+```
+
+Pipe a list of StrKeys; rows printing `INVALID_CRC` are fixture data, not real on-chain entities — flag them as `STRUCTURAL_FAIL` in the report and don't bother external verification.
+
+### HTTP 400 vs 404 — distinguishing fixture data from "unknown"
+
+When a StrKey-keyed source returns an error, the status code is informative:
+
+| Status | Meaning                                                                                          | Action                                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| 400    | StrKey is malformed (CRC-16 fails) — not a valid encoding                                        | **STRUCTURAL_FAIL** — synthetic/fixture data; flag in report. Run the local StrKey check above to confirm.              |
+| 404    | StrKey is well-formed but not indexed by this source                                              | **SOURCE_MISSING** — entity may be real-but-unknown (e.g. tx older than the source's retention window). Try other sources. |
+
+This distinction was confirmed empirically against both Horizon (`/assets?asset_issuer=…`) and stellar.expert (`/asset/<c>-<i>`, `/contract/<C>`). Control test: known-good but unindexed contract `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` returns 404 on stellar.expert (parser accepts it, indexer doesn't have it); synthetic `CAAAAA…SAC` returns 400 (parser rejects). Conflating the two leads to incorrect verdicts.
+
 ### Subagent 3 specifics (Raw XDR)
 
 This subagent does **independent XDR decoding** so it doesn't trust any explorer's display layer.
