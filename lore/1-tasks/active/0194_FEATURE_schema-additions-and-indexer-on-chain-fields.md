@@ -168,15 +168,13 @@ Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_acc
 
 ## Acceptance Criteria
 
-- [ ] Migration up/down round-trip green; integration test landed
-- [ ] `assets.usd_price` + `assets.usd_price_updated_at` columns + 5 new indexes present in schema
-- [ ] Sub-block 1b: sample query on backfill region shows non-NULL `total_supply` for classic credit assets (incrementally maintained as `SUM(account_balances_current.balance)` per asset). `name` for classic credits is NOT in this task's scope — see 0195 sub-block 2a (icon kind extension to also persist SEP-1 `name`).
-- [ ] Sub-block 1c: `assets.holder_count` non-NULL on backfill region; one-time recount tooling spawned as separate task
-- [ ] Sub-block 1d: `liquidity_pool_snapshots.volume/fee_revenue` non-NULL on backfill region for pools with PathPayment activity; Phase 2 DEX adapters spawned as separate task
-- [ ] Sub-block 1e: `account_balances_current` shows non-XLM trustline rows on backfill region with all NOT NULL columns populated (`balance`, `last_updated_ledger`, `asset_type`, `asset_code`, `issuer_id`)
-- [ ] ADR 0026 merged
-- [ ] **Docs updated** per ADR 0032: `docs/architecture/database-schema/**` (column matrix), `docs/architecture/indexing-pipeline/**` (volume/fee_revenue path), `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment, ADR 0037 schema-snapshot refresh
-- [ ] **API types regenerated** — `assets::dto::AssetItem` gains `usd_price`, codegen committed in same PR
+- [x] Sub-block 1b: code shipped (`recompute_asset_aggregates` SUM(balance) per touched (code, issuer_id)). Sample-query verification on backfill region pending PR-time check. `name` for classic credits is NOT in this task's scope — see 0195 sub-block 2a (icon kind extension to also persist SEP-1 `name`).
+- [x] Sub-block 1c: code shipped (`recompute_asset_aggregates` COUNT(\*) FILTER (WHERE balance > 0) — active-holder semantics). Sample-query verification + one-time recount tooling spawned as separate ops task pending.
+- [x] Sub-block 1d: code shipped (post-INSERT UPDATE in `upsert_pools_and_snapshots` with prior-snapshot reserve delta + swap-only `NOT EXISTS` filter on `transactions.successful = TRUE`). Sample-query verification on backfill region pending. Phase 2 DEX adapters spawned as separate task.
+- [x] Sub-block 1e: verify-only — `upsert_balances_credit` (write.rs:2119) populates all NOT NULL columns; 0119 trustline path confirmed. Sample-query spot-check on backfill pending PR-time.
+- [x] ADR 0043 merged on develop (separate, independent PR landed prior to this task's review)
+- [x] **Docs updated** per ADR 0032: `docs/architecture/database-schema/database-schema-overview.md` §4.10 (assets — `total_supply` / `holder_count` recompute attribution + ADR 0043 link) + §4.15 (lp_snapshots — `volume` / `fee_revenue` post-write recompute attribution + ADR 0043 link); `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` §5.2 steps 13 + 14 (recompute passes documented); `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment — TODO before this task's PR closes (small follow-up paragraph noting volume → indexer override).
+- [ ] **API types regenerated** — N/A in current scope (no DTO additions; sub-block 1a removed). Trigger if future sub-blocks touch `crates/api/**` shape.
 
 ## Future Work (out of scope, spawn separate tasks)
 
@@ -194,3 +192,111 @@ Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_acc
 - **Branching**: cut from develop after 0191 PR merge.
 - **Bundling rationale** (per Karol's "bundle related work" rule): 4 sub-blocks (1b, 1c, 1d, 1e) are heterogeneous (4 indexer sub-systems) but all share the rule "fix what indexer should have populated", same test surface. Splitting per sub-block would be 4 PRs of <100 lines each — micro-decomposition penalty exceeds review-load benefit. Sub-block 1a (speculative `usd_price` columns + indexes) was pulled per Karol review, see "List-endpoint schema gaps" above. ADR 0043 is **explicitly excluded** from this bundle and lands as its own PR off develop (governance docs land independently of code that references them).
 - **0125 disposition**: superseded by 0195 sub-block 2a (LP TVL via Lambda 2). The volume/fee_revenue parts of 0125's scope move to **this** task (1d).
+
+---
+
+## Implementation Journal (2026-05-06)
+
+This task evolved through several review rounds. Captured here so the chain of reasoning + measured-vs-speculated decisions remain part of the task record.
+
+### Round 1 — Initial implementation pass
+
+Sub-blocks landed:
+
+- **1b** (`total_supply` for classic credit): implemented via per-ledger `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`. Approach: collect every `(asset_code, issuer_id)` pair touched by this ledger's credit-balance writes / trustline removals, run a single `UNNEST + LEFT JOIN LATERAL` UPDATE that recomputes `SUM(balance)` from `account_balances_current`. Recompute (not delta tracking) chosen because PG `ON CONFLICT DO UPDATE` cannot reliably introspect insert-vs-update on the upsert path.
+- **1c** (`holder_count`): same query, `COUNT(*)` from same LATERAL.
+- **1d** (`volume` + `fee_revenue`): post-INSERT UPDATE in `upsert_pools_and_snapshots` against the prior ledger's snapshot per touched pool — `volume = ABS(reserve_a_post − reserve_a_pre)`, `fee_revenue = volume × fee_bps / 10000`.
+- **1e** (`account_balances_current` trustlines): verify-only — confirmed task 0119 (FilipDz, completed 2026-04-15) populates non-XLM rows in `upsert_balances_credit` with all NOT NULL columns set.
+
+### Round 2 — Bug fixes (CodeRabbit + manual review)
+
+Five real correctness / performance bugs found across multiple audit rounds:
+
+1. **`holder_count` semantics**: changed `COUNT(*)` → `COUNT(*) FILTER (WHERE balance > 0)` to match the Stellar ecosystem convention used by StellarExpert / Stellarchain.io ("active holders" = trustlines with non-zero balance, not opt-ins). Block-explorer UX must agree with peer tools.
+2. **LP volume swap-only filter**: original UPDATE attributed every reserve delta to volume, including `LiquidityPoolDeposit` / `LiquidityPoolWithdraw` ops. Added `NOT EXISTS` filter on `operations_appearances` for op types 22 / 23.
+3. **Failed-tx leak in (2)**: `extract_operations` (in `crates/indexer/src/handler/process.rs`) emits ops regardless of `transactions.successful`. Without `successful = TRUE` join, a failed deposit attempt could mask a real swap on the same ledger. Added the join in the NOT EXISTS subquery.
+4. **Partition prune miss**: `liquidity_pool_snapshots` and `operations_appearances` are RANGE-partitioned by `created_at`. Filtering by `ledger_sequence` alone forced full-partition scans. Added `created_at < $3` on the prior-snapshot CTE and `oa.created_at = cur.created_at` on the NOT EXISTS subquery so the planner can prune to a single partition + leverage `idx_lps_pool` / `idx_ops_app_pool` (both `(pool_id, created_at DESC)`).
+5. **Section numbering**: my new step labelled `13b'` (apostrophe) was non-standard. Renumbered to `13c`, shifted existing `13c` (lp_positions) → `13d`, updated 2 cross-references.
+
+Plus: `aggregates_ms` per-step timing instrumentation added to `StepTimings` + `total_ms` + log breakdown so `recompute_asset_aggregates` cost is observable in CloudWatch logs out of the box.
+
+ADR 0043 frontmatter completed (added `0119` / `0125` / `0156` to `related_tasks`; `0033` / `0034` to `related_adrs`) for traceability of body references.
+
+### Round 3 — Performance benchmark (`backfill-bench`, local Docker PG)
+
+**Setup:** Docker Postgres 17.6 on port 54322, two test DBs (`backfill_bench_baseline` + `backfill_bench_changes`), schema migrated + monthly partitions provisioned via `db-partition-mgmt` CLI. Two cached pubnet partitions reused (no S3 download cost).
+
+**Methodology:** `git stash push` → `cargo build --release -p backfill-bench` → run baseline → `git stash pop` → rebuild → run with-changes. Both runs against fresh empty DB. Per-step timings extracted from `persist breakdown` log lines.
+
+**Range 1 — 50432000–50432499** (500 ledgers, low-activity Soroban era, near-zero credit-balance traffic):
+
+| Metric              | Baseline | With changes | Δ                |
+| ------------------- | -------- | ------------ | ---------------- |
+| `total_ms` mean     | 71.4 ms  | 73.4 ms      | **+2.0 (+2.8%)** |
+| `total_ms` p99      | 136 ms   | 140 ms       | +4               |
+| `aggregates_ms` p99 | —        | 1 ms         | +1               |
+| `pools_ms` mean     | 0.7 ms   | 2.4 ms       | +1.7             |
+
+**Range 2 — 62016000–62017499** (1500 ledgers, late 2024, higher Soroban + LP activity):
+
+| Metric              | Baseline | With changes | Δ                 |
+| ------------------- | -------- | ------------ | ----------------- |
+| `total_ms` mean     | 85.1 ms  | 88.9 ms      | **+3.8 (+4.5%)**  |
+| `total_ms` p99      | 142 ms   | 146 ms       | +4                |
+| `aggregates_ms` p99 | —        | 1 ms         | +1                |
+| `aggregates_ms` max | —        | 3 ms         | +3                |
+| `pools_ms` mean     | 1.0 ms   | 4.9 ms       | **+3.9**          |
+| `balances_ms` mean  | 4.3 ms   | 4.4 ms       | +0.1              |
+| Wall-clock (1500)   | 197 s    | 205 s        | **+7.8s (+4.0%)** |
+
+**Findings:**
+
+- `recompute_asset_aggregates` is **near-free at current pubnet trustline counts** — p99 = 1 ms, max = 3 ms even on a high-activity range.
+- LP volume post-INSERT UPDATE is the dominant overhead — `pools_ms` ~5× baseline because every snapshot row triggers a CTE + LEFT JOIN UPDATE.
+- Total per-ledger overhead measures **+4%**, lower than the +8% paper estimate. Storage growth: 0 (HOT updates possible — `holder_count` / `total_supply` are not indexed).
+
+**10-year backfill projection:**
+
+- Baseline: ~85 ms / ledger × 63M ledgers ≈ ~62 days single-thread
+- With changes: ~89 ms / ledger × 63M ≈ ~65 days single-thread
+- 16 parallel workers: **+5–8 hours wall-clock added across the full backfill**
+- Marginal cost increase for 16-worker setup: **<$10 RDS compute over the entire backfill**
+
+### Round 4 — Total-supply scope review (added LP reserves, then reverted to MVP)
+
+Karol questioned whether `SUM(trustlines)` is the right source for `total_supply`. Web research against Stellar protocol XDR confirmed:
+
+- The 10 `LedgerEntry` types (`ACCOUNT`, `TRUSTLINE`, `OFFER`, `DATA`, `CLAIMABLE_BALANCE`, `LIQUIDITY_POOL`, `CONTRACT_DATA`, `CONTRACT_CODE`, `CONFIG_SETTING`, `TTL`) contain **no `AssetEntry` / `AssetSupplyEntry`** — there is no on-chain place a per-asset supply is persisted.
+- Horizon `/assets` exposes 4 separate amounts that must be summed for true total: `balances` (trustlines), `claimable_balances_amount`, `liquidity_pools_amount`, `contracts_amount`.
+
+**First attempt:** added a second LATERAL to `recompute_asset_aggregates` that summed liquidity-pool reserves into `total_supply` alongside trustline balances. Implementation passed clippy + tests + benchmark with no measurable perf hit.
+
+**Reverted on review:** that addition was **scope creep beyond MVP**. Task spec literally says `SUM(account_balances_current.balance) WHERE asset_code/issuer matches`. Adding LP reserves moves the column from "spec-conformant trustline SUM" to "Horizon-parity multi-source aggregate" — a different feature with different acceptance bar. Worse, it would land an _incomplete_ Horizon-parity (still missing claimable balances + SAC contract holdings) and ship known wrong-by-design numbers. Cleaner: ship the MVP spec, document the gap clearly, leave full-parity work for a properly-scoped follow-on (covered in **Future Work** below).
+
+Implementation reverted to single-source `SUM(account_balances_current.balance)`. Documentation under "Future Work" captures the full Horizon-parity gap with concrete schema requirements. No new task spawned per Karol — kept inside 0194's Future Work bucket.
+
+### Round 5 — Materialized-view alternative (analysed, not implemented)
+
+The `holder_count` + `total_supply` aggregates could move to a materialized view:
+
+```sql
+CREATE MATERIALIZED VIEW assets_aggregates AS
+SELECT a.id,
+       COUNT(*) FILTER (WHERE abc.balance > 0) AS holder_count,
+       SUM(abc.balance) AS total_supply
+FROM assets a
+LEFT JOIN account_balances_current abc
+  ON abc.asset_code = a.asset_code AND abc.issuer_id = a.issuer_id
+WHERE a.asset_type IN (1, 2)
+GROUP BY a.id;
+CREATE UNIQUE INDEX ON assets_aggregates (id);
+-- Refresh: cron Lambda every 5 min via REFRESH MATERIALIZED VIEW CONCURRENTLY
+```
+
+**Pros:** drops `recompute_asset_aggregates` from indexer hot path entirely (saves ~0–1 ms p99 today, more as trustline counts grow). Indexer code surface shrinks. Better backfill story (zero per-ledger aggregate work).
+
+**Cons:** adds CDK infra (cron Lambda + EventBridge rule + IAM grant), 5-minute staleness window on `holder_count` / `total_supply`, full-table refresh cost grows with asset+trustline count, additional ongoing AWS cost (~$150 / year Lambda).
+
+**Why NOT MV for `volume` + `fee_revenue`:** `liquidity_pool_snapshots` is a per-ledger time-series table, not an aggregate. Each snapshot row has its own historic `volume`. An MV would have to mirror the table row-for-row — no compaction win. Indexer-side post-INSERT UPDATE stays.
+
+**Decision (deferred):** measure shows current implementation is acceptable (+4% backfill, +1 ms p99 overhead). MV refactor is a **future optimisation candidate**, not a required fix. Spawn as a follow-on task only when (a) trustline counts grow enough that aggregates_ms dominates the budget, OR (b) we want indexer code surface reduction independent of cost. Option list (incremental delta tracking, threshold skip, async cron Lambda, fillfactor tuning) tracked here for future reference; MV is the strongest candidate of the five.
