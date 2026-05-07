@@ -7,6 +7,7 @@
 //!
 //! See task 0043 and ADR 0008.
 
+pub mod cache_control;
 pub mod cursor;
 pub mod errors;
 pub mod extractors;

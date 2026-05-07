@@ -124,4 +124,7 @@ pub fn register_routes() -> OpenApiRouter<crate::AppState> {
         .nest("/v1", crate::ledgers::router())
         .nest("/v1", crate::accounts::router())
         .nest("/v1", crate::search::router())
+        .layer(axum::middleware::from_fn(
+            crate::common::cache_control::enforce_no_store_on_errors,
+        ))
 }

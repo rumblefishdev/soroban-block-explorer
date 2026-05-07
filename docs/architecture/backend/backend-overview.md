@@ -417,6 +417,40 @@ flag is FALSE).
 No caching: `q` variability makes a TTL cache useless and the per-CTE `LIMIT` keeps each
 query bounded.
 
+### 6.4 Response Caching
+
+Per task 0055, every public endpoint sets an explicit `Cache-Control` header
+that the API Gateway stage cache (CDK config — task 0097) honours. Constants
+live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
+
+| Tier             | `Cache-Control`       | Endpoints                                                                                                                                                                                                           |
+| ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Long** (300s)  | `public, max-age=300` | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                      |
+| **Medium** (60s) | `public, max-age=60`  | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                   |
+| **Short** (10s)  | `public, max-age=10`  | `GET /network/stats`, list endpoints, `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, etc. |
+| **No-store**     | `no-store`            | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                              |
+
+Two endpoints carry **conditional** logic:
+
+- `GET /ledgers/:sequence` — Long when `next_sequence` is `Some` (closed
+  ledger, immutable per Stellar consensus); Short when the requested ledger
+  is the chain head and the indexer may still be settling.
+- `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
+  archive overlay merged); Short when archive fetch failed
+  (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
+  sooner.
+
+The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
+`infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
+clamps to its configured floor); raising above 10s would expose stale data
+past one Stellar ledger cycle (~5s).
+
+Cache-key requirements (consumed by CDK task 0097): full path + every query
+parameter, including `cursor`. Different filter combinations produce
+distinct cache entries. See
+[`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md) for the
+infrastructure contract.
+
 ## 7. Data Access and Response Model
 
 ### 7.1 Source of Data
