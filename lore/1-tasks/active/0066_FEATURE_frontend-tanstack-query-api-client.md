@@ -2,7 +2,7 @@
 id: '0066'
 title: 'Frontend: TanStack Query setup, API client, polling, env config'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-07
+    status: active
+    who: FilipDz
+    note: 'Activated'
 ---
 
 # Frontend: TanStack Query setup, API client, polling, env config
