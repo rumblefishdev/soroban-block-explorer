@@ -198,8 +198,7 @@ async fn sample_transactions(
             SampledTx {
                 hash_hex: r.get("hash_hex"),
                 tx_id: r.get("tx_id"),
-                ledger_sequence: u32::try_from(ledger_sequence)
-                    .expect("ledger_sequence fits u32"),
+                ledger_sequence: u32::try_from(ledger_sequence).expect("ledger_sequence fits u32"),
                 created_at: r.get("created_at"),
                 operation_count: r.get("operation_count"),
             }
@@ -315,7 +314,8 @@ async fn run_diff(
     samples: Vec<SampledTx>,
     concurrency: usize,
 ) -> Result<Report, Box<dyn std::error::Error + Send + Sync>> {
-    let cache: Arc<Mutex<HashMap<u32, Arc<LedgerCloseMeta>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let cache: Arc<Mutex<HashMap<u32, Arc<LedgerCloseMeta>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let sem = Arc::new(Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(samples.len());
 
@@ -361,7 +361,10 @@ async fn run_diff(
                     Outcome::Match => report.matched += 1,
                     Outcome::Diverge { first_div } => {
                         report.diverged += 1;
-                        *report.first_div_index_histogram.entry(first_div).or_insert(0) += 1;
+                        *report
+                            .first_div_index_histogram
+                            .entry(first_div)
+                            .or_insert(0) += 1;
                         diverging.push(cmp);
                     }
                 }
@@ -665,9 +668,21 @@ fn ledger_seq_of(meta: &LedgerCloseMeta) -> u32 {
 
 fn collect_tx_metas(meta: &LedgerCloseMeta) -> Vec<&TransactionMeta> {
     match meta {
-        LedgerCloseMeta::V0(v) => v.tx_processing.iter().map(|p| &p.tx_apply_processing).collect(),
-        LedgerCloseMeta::V1(v) => v.tx_processing.iter().map(|p| &p.tx_apply_processing).collect(),
-        LedgerCloseMeta::V2(v) => v.tx_processing.iter().map(|p| &p.tx_apply_processing).collect(),
+        LedgerCloseMeta::V0(v) => v
+            .tx_processing
+            .iter()
+            .map(|p| &p.tx_apply_processing)
+            .collect(),
+        LedgerCloseMeta::V1(v) => v
+            .tx_processing
+            .iter()
+            .map(|p| &p.tx_apply_processing)
+            .collect(),
+        LedgerCloseMeta::V2(v) => v
+            .tx_processing
+            .iter()
+            .map(|p| &p.tx_apply_processing)
+            .collect(),
     }
 }
 

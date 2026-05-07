@@ -3276,17 +3276,13 @@ async fn orphan_detection_skipped_when_pool_in_db() {
 //    while introducing the per-row apply-position metadata.
 
 const ORD_LEDGER_SEQ: u32 = 90_000_004;
-const ORD_LEDGER_HASH: &str =
-    "9292929292929292929292929292929292929292929292929292929292929292";
-const ORD_TX_HASH: &str =
-    "0192019201920192019201920192019201920192019201920192019201920192";
+const ORD_LEDGER_HASH: &str = "9292929292929292929292929292929292929292929292929292929292929292";
+const ORD_TX_HASH: &str = "0192019201920192019201920192019201920192019201920192019201920192";
 const ORD_CLOSED_AT: i64 = 1_777_118_700;
 
 const FOLD_LEDGER_SEQ: u32 = 90_000_005;
-const FOLD_LEDGER_HASH: &str =
-    "9393939393939393939393939393939393939393939393939393939393939393";
-const FOLD_TX_HASH: &str =
-    "f01df01df01df01df01df01df01df01df01df01df01df01df01df01df01df01d";
+const FOLD_LEDGER_HASH: &str = "9393939393939393939393939393939393939393939393939393939393939393";
+const FOLD_TX_HASH: &str = "f01df01df01df01df01df01df01df01df01df01df01df01df01df01df01df01d";
 const FOLD_CLOSED_AT: i64 = 1_777_118_800;
 
 #[tokio::test]
@@ -3520,7 +3516,11 @@ async fn application_order_min_fold_for_duplicate_identity() {
     .await
     .expect("fetch folded rows");
 
-    assert_eq!(rows.len(), 3, "5 envelope ops fold to 3 distinct identities");
+    assert_eq!(
+        rows.len(),
+        3,
+        "5 envelope ops fold to 3 distinct identities"
+    );
     assert_eq!(
         rows[0],
         (1, "DSTA".to_string(), 1),
