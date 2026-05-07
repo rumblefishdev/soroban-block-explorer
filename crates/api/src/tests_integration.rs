@@ -1779,10 +1779,10 @@ async fn ledgers_detail_unknown_sequence_returns_404_against_real_db() {
 }
 
 /// Detail endpoint shape against a real DB row + the head-vs-closed
-/// Cache-Control branching. Selects the two most recent ledgers
-/// (`ORDER BY closed_at DESC LIMIT 2`); uses the most recent as the
-/// head-ledger assertion (`next_sequence is null` → 10s TTL) and the
-/// second-most-recent as the closed-ledger assertion (`next_sequence`
+/// Cache-Control branching. Selects the two highest-sequence ledgers
+/// (`ORDER BY closed_at DESC, sequence DESC LIMIT 2`); uses the first
+/// as the head-ledger assertion (`next_sequence is null` → 10s TTL)
+/// and the second as the closed-ledger assertion (`next_sequence`
 /// non-null → 300s TTL).
 #[tokio::test]
 async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
@@ -1796,14 +1796,25 @@ async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
     // Pick the head and an older ledger from the live DB. Skip if the
     // table has fewer than two rows (no way to distinguish head vs
     // closed under that condition).
-    let rows: Vec<(i64,)> =
-        match sqlx::query_as("SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 2")
-            .fetch_all(&pool)
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return,
-        };
+    //
+    // Tie-break by `sequence DESC` (task 0201): on shared dev DBs the
+    // `persist_integration` fixtures insert synthetic ledgers with
+    // identical `closed_at` values. Sorting by `closed_at` alone is
+    // therefore non-deterministic across the tied rows and may pick a
+    // non-head ledger, which the handler reports under the LONG TTL
+    // branch (it computes "head-ness" from `next_sequence IS NULL`,
+    // not from `closed_at`). Matching the list-endpoint canonical
+    // ordering `(closed_at DESC, sequence DESC)` resolves the tie to
+    // the actual chain head and is a no-op against production data.
+    let rows: Vec<(i64,)> = match sqlx::query_as(
+        "SELECT sequence FROM ledgers ORDER BY closed_at DESC, sequence DESC LIMIT 2",
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
     if rows.len() < 2 {
         eprintln!("DB has fewer than 2 ledgers — skipping detail Cache-Control test");
         return;
