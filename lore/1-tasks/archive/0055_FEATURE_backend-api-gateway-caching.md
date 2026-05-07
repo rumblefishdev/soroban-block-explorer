@@ -35,10 +35,6 @@ Define and implement the per-endpoint Cache-Control header strategy for API Gate
 
 > **Stack:** axum 0.8 + utoipa 5.4 + sqlx 0.8 (per ADR 0005). Code in crates/api/.
 
-## Status: Backlog
-
-**Current state:** Not started. Depends on task 0023 (API bootstrap).
-
 ## Context
 
 Caching at the API Gateway level is the primary response caching mechanism. CloudFront is NOT used for the API in the initial topology. Cache keys must include the full path plus all query parameters so that different filters produce different cache entries.

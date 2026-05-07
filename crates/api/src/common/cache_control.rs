@@ -16,7 +16,7 @@
 //! need to special-case error paths.
 
 use axum::extract::Request;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -36,7 +36,7 @@ pub fn attach(resp: &mut Response, value: HeaderValue) {
 /// should ever be cached.
 pub async fn enforce_no_store_on_errors(req: Request, next: Next) -> Response {
     let mut resp = next.run(req).await;
-    if !resp.status().is_success() && resp.status() != StatusCode::NOT_MODIFIED {
+    if !resp.status().is_success() {
         resp.headers_mut().insert(header::CACHE_CONTROL, NO_STORE);
     }
     resp
@@ -47,7 +47,7 @@ mod tests {
     use super::*;
     use axum::Router;
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{Request, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::get;
     use tower::ServiceExt;
