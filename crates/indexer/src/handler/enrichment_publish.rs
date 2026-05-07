@@ -12,14 +12,23 @@
 //!
 //! - Match a `(code, issuer_strkey)` tuple or `contract_id` StrKey from
 //!   the parser's `ExtractedAsset` slice for this ledger, AND
-//! - Currently have `icon_url IS NULL` (un-enriched, including the
-//!   sentinel `''` is **not** NULL — already-attempted permanent fails
-//!   are skipped).
+//! - Are missing at least one column the `icon` worker fills:
+//!     - `icon_url IS NULL`, OR
+//!     - `asset_type IN (1, 2) AND name IS NULL` — ClassicCredit + SAC
+//!       rows whose human-readable `name` has not yet been resolved
+//!       from the issuer's SEP-1 TOML (task 0195). Soroban-native
+//!       (asset_type=3) is filled by the indexer (task 0156); native
+//!       (asset_type=0) is out of scope.
+//!
+//! Both predicates use the same `''` sentinel pattern: a permanent
+//! enrichment fail writes `''` (not NULL), so already-attempted assets
+//! drop out of the predicate naturally. Transient failures retain NULL
+//! and re-attempt via SQS retry → DLQ.
 //!
 //! This intentionally re-emits messages for *un-enriched but
 //! pre-existing* asset rows that happened to be touched by this
 //! ledger. The worker absorbs the cost of duplicates per the contract
-//! in `enrichment_shared::enrich_and_persist::icon`. Once an asset is enriched it
+//! in `enrichment_shared::enrich_and_persist::sep1_assets`. Once an asset is enriched it
 //! drops out of this query naturally.
 //!
 //! ## Configuration
@@ -139,7 +148,10 @@ async fn select_unenriched_asset_ids(
         FROM assets a
         LEFT JOIN accounts iss          ON iss.id = a.issuer_id
         LEFT JOIN soroban_contracts sc  ON sc.id = a.contract_id
-        WHERE a.icon_url IS NULL
+        WHERE (
+                a.icon_url IS NULL
+                OR (a.asset_type IN (1, 2) AND a.name IS NULL)
+              )
           AND (
                 -- classic_credit / sac match by (code, issuer_strkey) tuple
                 (a.asset_code, iss.account_id) IN (

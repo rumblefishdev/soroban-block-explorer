@@ -9,6 +9,6 @@
 //! writes.
 
 pub mod error;
-pub mod icon;
+pub mod sep1_assets;
 
 pub use error::EnrichError;

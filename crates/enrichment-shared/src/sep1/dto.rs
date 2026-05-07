@@ -3,7 +3,11 @@
 //! Started under task 0188 with a strict scope: only the SEP-1 fields
 //! surfaced by `GET /v1/assets/{id}` (`code` / `issuer` / `desc` / and
 //! `DOCUMENTATION.ORG_URL`). Task 0191 added `image` to support type-1
-//! icon enrichment of `assets.icon_url`. Anything else in the file is
+//! icon enrichment of `assets.icon_url`. Task 0195 added `name` so the
+//! same per-asset SEP-1 fetch can also populate `assets.name` for
+//! ClassicCredit + SAC rows (parser leaves both NULL — see state.rs:820
+//! and CAP-46-6: SAC's on-chain `name()` returns the machine `code:issuer`
+//! form, not the human-readable name). Anything else in the file is
 //! silently ignored — keep the parser surface no wider than the
 //! consumer surface; add a field here at the same time you add the
 //! consumer.
@@ -38,6 +42,9 @@ pub struct Sep1Currency {
     pub desc: Option<String>,
     /// Mapped to `assets.icon_url` (worker type-1, task 0191).
     pub image: Option<String>,
+    /// Mapped to `assets.name` for ClassicCredit + SAC (worker type-1, task 0195).
+    /// Soroban-native `name` is filled by the indexer (task 0156 / ADR 0042).
+    pub name: Option<String>,
 }
 
 /// `[DOCUMENTATION]` table. Only `ORG_URL` is consumed today (mapped to
@@ -59,6 +66,7 @@ mod tests {
 code = "USDC"
 issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
 desc = "Fully reserved fiat-collateralised stablecoin."
+name = "USD Coin"
 
 [DOCUMENTATION]
 ORG_URL = "https://example.com"
@@ -75,6 +83,7 @@ ORG_URL = "https://example.com"
             usdc.desc.as_deref(),
             Some("Fully reserved fiat-collateralised stablecoin.")
         );
+        assert_eq!(usdc.name.as_deref(), Some("USD Coin"));
         let doc = parsed.documentation.expect("documentation block");
         assert_eq!(doc.org_url.as_deref(), Some("https://example.com"));
     }
@@ -102,12 +111,13 @@ display_decimals = 2
 "#;
         let parsed: Sep1TomlParsed = toml::from_str(toml_text).expect("parse");
         assert_eq!(parsed.currencies.len(), 1);
-        // `name`, `conditions`, `display_decimals` are intentionally
-        // not modelled — they are silently dropped. `image` IS modelled
-        // (task 0191) and is asserted below alongside the other in-scope
-        // fields.
+        // `conditions`, `display_decimals` are intentionally not modelled —
+        // they are silently dropped. `name` (task 0195) and `image`
+        // (task 0191) ARE modelled and are asserted below alongside the
+        // other in-scope fields.
         let usdc = &parsed.currencies[0];
         assert_eq!(usdc.code.as_deref(), Some("USDC"));
+        assert_eq!(usdc.name.as_deref(), Some("USD Coin"));
         assert_eq!(usdc.image.as_deref(), Some("https://example.com/usdc.png"));
         assert!(usdc.desc.is_none());
         assert!(parsed.documentation.is_none());

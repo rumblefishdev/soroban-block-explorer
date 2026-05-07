@@ -5,9 +5,11 @@
 //! shared `enrichment-shared` crate.
 //!
 //! Per task 0191:
-//! - Worker writes are unconditional overwrites (no `WHERE col IS NULL`
-//!   short-circuit). The duplicate-message contract lives in
-//!   `enrichment_shared::enrich_and_persist::icon`.
+//! - Worker writes follow `real > sentinel > NULL` priority per column
+//!   (`COALESCE(NULLIF($n, ''), col, $n)`): a later run that finally
+//!   resolves a value upgrades the row, but a permanent-fail sentinel
+//!   never clobbers an existing real value. Duplicate-message contract
+//!   lives in `enrichment_shared::enrich_and_persist::sep1_assets`.
 //! - Batch failure model: each record is processed independently. A
 //!   per-record failure is reported via `BatchItemFailures` so SQS
 //!   redelivers only the failed messages, not the whole batch (the
@@ -23,7 +25,7 @@ use std::sync::Arc;
 
 use aws_lambda_events::event::sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage};
 use enrichment_shared::enrich_and_persist::EnrichError;
-use enrichment_shared::enrich_and_persist::icon::enrich_asset_icon;
+use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
 use enrichment_shared::sep1::Sep1Fetcher;
 use lambda_runtime::{Error, LambdaEvent, service_fn};
 use serde::Deserialize;
@@ -146,7 +148,7 @@ async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), R
 
     match msg {
         EnrichmentMessage::Icon { asset_id } => {
-            enrich_asset_icon(&state.pool, asset_id, &state.sep1).await?;
+            enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
             Ok(())
         }
     }

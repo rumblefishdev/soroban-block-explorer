@@ -13,153 +13,154 @@ history:
   - date: '2026-05-06'
     status: backlog
     who: karolkow
-    note: 'Spawned from M2 enrichment planning session 2026-05-06. Second of four tasks (0194-0197) implementing the field allocation rule. Subsumes 0125 (LP TVL part) and 0191 future-work bullets #2 (asset_usd_price implied) + LP analytics kind.'
+    note: 'Spawned from M2 enrichment planning. Subsumes 0125 (LP TVL), 0191 future-work LP analytics + asset_usd_price.'
   - date: '2026-05-07'
     status: active
     who: karolkow
-    note: 'Activated. 0194 frozen pending Oskar consult on price oracle (shared dep with §2c); proceeding with 0195 in parallel — §2a/§2b/§2d are unblocked.'
+    note: |
+      Activated. Spec consolidated (3 amendment passes folded in):
+      §2c (asset_usd_price) pulled — no consumer.
+      §2a scope corrected to ClassicCredit + SAC after parser audit (state.rs:824 explicit `name=None` on SAC; CAP-46-6 confirms SAC's on-chain `name()` is `code:issuer` machine ID, not human name).
+      §2b/§2d producers pivoted to insert-hook (no live-path dedup; backfill → 0196).
+      §2b oracle ordering corrected: StellarExpert primary, Reflector limited-scope (open question: §2b/§2d lack frontend consumer — same speculative case as pulled §2c, decision pending).
 ---
 
-# Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, nft_metadata)
+# Lambda 2 enrichment: off-chain NULL fields
 
 ## Summary
 
-Four sub-blocks layered on 0191's SQS-driven type-1 enrichment worker, each populating a column that **cannot** be derived from the processed ledger and therefore needs an external source: extension of the existing `icon` kind to also persist classic credit `assets.name` from the same SEP-1 fetch (added 2026-05-06 after 0197 dry-run audit), USD price oracle for LP TVL, USD price feed for asset list sort-by-value, and Soroban RPC `token_uri()` for NFT metadata. All four reuse the existing `enrichment-shared` crate, `enrichment-worker` dispatch, indexer SQS producer, and the permanent-vs-transient EnrichError taxonomy from 0191.
+Three sub-blocks on 0191's SQS-driven type-1 enrichment worker, each populating a column that **cannot** be derived from the processed ledger:
 
-## Status: Backlog
+- **§2a** — extend existing `icon` kind to also persist `assets.name` from the same SEP-1 fetch (ClassicCredit + SAC).
+- **§2b** — `lp_tvl` kind: USD price oracle for `liquidity_pool_snapshots.tvl`.
+- **§2d** — `nft_metadata` kind: Soroban RPC `token_uri()` + IPFS gateway for `nfts.{name,media_url,metadata}`.
 
-Sub-blocks 2a (icon-name extension), 2b (lp_tvl) and 2d (nft_metadata) write existing columns and are unblocked once 0191 is in production. Sub-block 2c (asset_usd_price) was pulled — see §2c below. ADR 0043 (field allocation rule) must already be on develop as its own independent PR — this task references it as established law.
+(§2c asset_usd_price pulled — see history.)
+
+All reuse `enrichment-shared`, worker dispatch, indexer producer, and the permanent/transient `EnrichError` taxonomy from 0191.
+
+## Status: Active
+
+ADR 0043 (field allocation rule) accepted on develop.
+
+**PR ordering**: §2a (~30 LoC, no decisions pending) ships first. §2b gated on oracle-source decision. §2d gated on IPFS gateway + Soroban RPC sizing. Spec stays bundled for ADR 0043 amendment + docs coherence.
 
 ## Context
 
-### Field allocation rule (from 0194 sub-block 1f / ADR 0043)
+### Field allocation per ADR 0043
 
-Off-chain = data NOT already in the processed ledger. Decision points crystallised this session:
+Off-chain = data NOT in processed ledger. Decisions:
 
-- **`assets.name` (classic credit only)**: full names like "USD Coin" come from issuer SEP-1 TOML `CURRENCIES[].name`. Off-chain. Soroban/SAC `name` continue indexer-side (task 0156). **Added 2026-05-06 after 0197 dry-run audit** caught misallocation in original 0194 sub-block 1b.
-- **`liquidity_pools.tvl` + `liquidity_pool_snapshots.tvl`**: USD-denominated, requires price oracle. Off-chain.
-<!-- `assets.usd_price` allocation entry removed — sub-block 2c pulled, see §2c. -->
+- **`assets.name`** (asset_type IN (1, 2)) — SEP-1 TOML `CURRENCIES[].name`. ClassicCredit: no on-chain source (XDR `Asset` enum = code+issuer). SAC: on-chain `name()` returns `<code>:<issuer_strkey>` machine ID per CAP-46-6, not human name; project leaves `name=None` ([state.rs:820-827](crates/xdr-parser/src/state.rs:820)). Soroban-native (asset_type=3) is owned by indexer/0156. Native (asset_type=0) out of scope.
+- **`liquidity_pool_snapshots.tvl`** — USD-denominated, requires oracle. Off-chain.
+- **`nfts.{collection_name, name, media_url, metadata}`** — per-token `token_uri()` RPC + JSON fetch. Off-chain.
 
-- **`nfts.{collection_name, name, media_url, metadata}`**: requires Soroban RPC `token_uri()` per NFT, often dereferences to HTTP/IPFS gateway for JSON. Per the rule "on-chain = already in processed ledger", per-token RPC counts as off-chain (audit `docs/audits/2026-04-10-pipeline-data-audit.md` line 644-647 explicitly: "requires `token_uri()` RPC calls to the contract — not available from XDR events. This is an enrichment job"). Karol-confirmed Option A in 2026-05-06 session.
-
-LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by **task 0199** (per-op extraction + USD denomination); 0199 depends on this task's §2b oracle for the USD half.
+LP `volume` / `fee_revenue` are on-chain → task 0199 (depends on §2b oracle for USD half).
 
 ### Reuse from 0191
 
-The 0191 PR (branch `feat/0191_type1-enrichment-worker-lambda`, commit `25c93c9`) delivers:
+`enrichment-shared` lib (`sep1/`, `enrich_and_persist/`, EnrichError) + `enrichment-worker` Lambda (SqsEvent dispatch, `EnrichmentMessage` tagged enum) + `enrichment_publish.rs` Publisher + CDK queue/dlq/alarms + sentinel `''` pattern.
 
-- `crates/enrichment-shared` library: `sep1/` (HTTP fetcher with LRU cache) + `enrich_and_persist/` (`icon.rs` + `error.rs` with permanent/transient EnrichError split)
-- `crates/enrichment-worker` Lambda binary: `SqsEvent` dispatch via `EnrichmentMessage` tagged enum (`#[serde(tag = "kind")]`)
-- `crates/indexer/src/handler/enrichment_publish.rs`: `Publisher` struct, `publish_for_extracted_assets`
-- CDK: `enrichmentQueue` (visibility 60s, retention 14d, maxReceiveCount 3) + dlq + DepthAlarm with Slack wiring + worker ErrorRateAlarm + dashboard widget
-- Sentinel pattern (icon.rs:140 `write_sentinel`): writes empty-string `''` for permanent fails so producer SQL `WHERE icon_url IS NULL` short-circuits re-publish
+### Sentinel strategy per producer model
 
-This task adds three `EnrichmentMessage` variants and three new modules under `enrichment-shared/src/enrich_and_persist/`. Worker dispatch gets three new `match` arms. Producer gets three new SELECT-and-batch hooks.
-
-### Permanent / transient taxonomy (0191 design decision #11)
-
-Each new kind must map its failure modes to:
-
-- `EnrichError::Database(#[from] sqlx::Error)` — DB write failed, transient, SQS retry
-- `EnrichError::Transient(String)` — recoverable upstream (5xx, network, timeout), SQS retry
-- Permanent fails → write sentinel + ack (no DLQ spam)
-
-Sentinel value depends on column type:
-
-- VARCHAR/TEXT (existing icon, NFT fields): `''` empty string
-- NUMERIC: TBD per kind (e.g. `0` or a separate `_status` column — design decision per kind)
-- TIMESTAMPTZ: `NULL` is fine (column meaning "last attempt" can be tracked via `updated_at` companion column)
+- **Query-and-batch** (§2a, inherited from 0191): producer re-SELECTs rows missing column on each ledger touch. Sentinel `''` REQUIRED — without it the same row is re-emitted forever. Update SQL `COALESCE(NULLIF($n, ''), col, $n)`: `real > sentinel > NULL` priority — sentinels are upgradable, real values stick, NULLs fill.
+- **Insert-hook** (§2b, §2d): producer emits exactly once on row INSERT. No dedup needed live. Sentinels (`tvl=0`, `nfts.name=''`, etc.) exist for downstream UI fallback / WARN breadcrumb only. Backfill of pre-existing rows → 0196 (which owns its own status-column / `_attempted_at` strategy).
 
 ## Implementation Plan
 
-### Sub-block 2a — Icon kind extension: also persist `assets.name` (classic credit)
+### §2a — Icon kind extension: also persist `assets.name`
 
-**Added 2026-05-06 after 0197 dry-run audit** revealed classic credit `assets.name` is off-chain (SEP-1 TOML `CURRENCIES[].name`) and was incorrectly placed in 0194 sub-block 1b. Per ADR 0043, off-chain → Lambda 2. Cheapest implementation: extend the existing 0191 `icon` kind (which already fetches the same TOML for `image`) to additionally extract and persist `name` in the same SQL UPDATE.
+Cheapest path: extend the existing `icon` kind (already fetches the same TOML for `image`).
 
-**Spec:**
+**Changes:**
 
-- Extend `crates/enrichment-shared/src/sep1/dto.rs:32-41` `Sep1Currency` struct with `pub name: Option<String>`. Confirms with SEP-1 spec field `[[CURRENCIES]] name` (e.g. "USD Coin").
-- Extend `crates/enrichment-shared/src/enrich_and_persist/icon.rs` `enrich_asset_icon` to also UPDATE `assets.name` when SEP-1 yields one. Combined SQL: `UPDATE assets SET icon_url = $1, name = COALESCE($2, name) WHERE id = $3` — `COALESCE` so we don't overwrite existing Soroban/SAC names extracted by the indexer.
-- Sentinel `''` for `icon_url` continues unchanged. For `name`: leave NULL when not present in TOML (no sentinel needed — `name IS NULL` is fine, list endpoint UI falls back to `asset_code`).
-- Producer SQL on `enrichment_publish.rs` extends asset selection: `WHERE icon_url IS NULL OR (asset_type = 1 AND name IS NULL)` (asset_type=1 = classic credit; we don't re-emit Soroban/SAC for `name` because indexer/0156 owns those).
-- No new `EnrichmentMessage` variant — reuse `EnrichmentMessage::Icon { asset_id }` since it's the same SEP-1 fetch.
+- `Sep1Currency.name: Option<String>` ([dto.rs:32](crates/enrichment-shared/src/sep1/dto.rs)).
+- `enrich_asset_from_sep1` (rename of `enrich_asset_icon`) writes both columns in one UPDATE:
+  ```sql
+  UPDATE assets
+     SET icon_url = COALESCE(NULLIF($1, ''), icon_url, $1),
+         name     = COALESCE(NULLIF($2, ''), name,     $2)
+   WHERE id = $3
+  ```
+  Bind for `name`: `Some("real")` if SEP-1 yields, `Some("")` sentinel for permanent fail on asset_type IN (1, 2), `None` (NULL bind, COALESCE no-op) for asset_type 0/3 — protects indexer/0156-set Soroban-native names.
+- Producer SQL: `WHERE icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`.
+- No new `EnrichmentMessage` variant — reuse `Icon { asset_id }` (one TOML fetch yields both fields).
+- UI: list/detail must treat `name = ''` as "no SEP-1 name" → fall back to `asset_code`.
 
-**Why piggyback on icon kind, not separate `asset_name` kind:**
+### §2b — `lp_tvl` `EnrichmentMessage` variant
 
-- Single TOML fetch yields both `image` and `name` from the same `CURRENCIES[]` entry. Two kinds = two HTTP fetches per asset. Wasteful.
-- Sep1Fetcher LRU cache makes the second fetch cheap, but the message ↔ row dispatch overhead doubles.
-- The existing 0191 worker error taxonomy (permanent → sentinel + ack, transient → DLQ retry) covers `name` failures identically — name failures are exactly the same TOML-fetch failures as icon failures.
+Supersedes 0125 (LP TVL part; volume/fee_revenue → 0199).
 
-### Sub-block 2b — `lp_tvl` `EnrichmentMessage` variant
+- `EnrichmentMessage::LpTvl { pool_id: [u8; 32], snapshot_id: i64 }`.
+- New module `enrich_and_persist/lp_tvl.rs` exposing `enrich_pool_tvl(pool, pool_id, snapshot_id, oracle)`.
+- Compute `tvl = reserve_a × price_a_usd + reserve_b × price_b_usd`. UPDATE `liquidity_pool_snapshots.tvl`.
+- Producer hook = INSERT-driven on each new snapshot row. Live exactly-once; backfill → 0196.
+- Permanent fail: write `tvl=0` + WARN log (pool_id, snapshot_id, per-leg oracle errors). `0` ambiguous vs "empty pool" — disambiguator is the log.
+- Transient (5xx, network, timeout) → `EnrichError::Transient`, SQS retry → DLQ.
+- **Oracle source ordering — DECISION GATING (must resolve before merge; see AC):**
+  1. Pegged-direct fast path (USDC/USDT/EURC issuer-StrKey allowlist).
+  2. **StellarExpert** `/asset/<code>-<issuer>` `price7d` (broad coverage; likely real primary).
+  3. **Reflector** Soroban on-chain feed (limited supported list; pin contract ID + asset codes).
+  4. Horizon `/trade_aggregations` last resort.
+  5. CoinGecko skipped (duplicates StellarExpert).
 
-**Supersedes 0125** (LP price oracle / TVL part). The volume/fee_revenue part of 0125's scope moved to task 0199. 0125 archived as `superseded by: ["0195", "0199"]`.
+### §2c — REMOVED
 
-**Spec:**
+Pulled 2026-05-06: speculative, no PM ticket / consumer / frontend mock. `assets.usd_price` column add (originally 0194 §1a) also pulled. Re-evaluate when product ask materialises.
 
-- New variant: `EnrichmentMessage::LpTvl { pool_id: [u8; 32], snapshot_id: i64 }` (binary pool_id matches schema's BYTEA(32))
-- New module `crates/enrichment-shared/src/enrich_and_persist/lp_tvl.rs` exposing `enrich_pool_tvl(pool, pool_id, snapshot_id, oracle: &impl PriceOracle)`
-- Compute `tvl = reserve_a × price_a_usd + reserve_b × price_b_usd`. Both legs queried from oracle. UPDATE both `liquidity_pools.tvl` (latest) and `liquidity_pool_snapshots.tvl` (specific snapshot row).
-- **Oracle source decision**:
-  1. **Reflector** primary — Soroban on-chain price feed contract (used by Soroswap), no rate limit, native to Stellar
-  2. **StellarExpert API** fallback — `/asset/<code>-<issuer>` returns `price7d`, free, caches CoinGecko underneath
-  3. **Horizon `/trade_aggregations`** sanity check + USDC/USDT pegged direct (price=1, no oracle call)
-  4. CoinGecko skipped — duplicates StellarExpert, adds rate limit
-- **Producer hook**: `crates/indexer/src/handler/enrichment_publish.rs` — after each new `liquidity_pool_snapshots` row, emit `LpTvl { pool_id, snapshot_id }`
-- **Permanent fails**: pool legs without any oracle data → sentinel decision TBD (proposal: write `tvl=0` + log warn). Transient (5xx, network) → `EnrichError::Transient`, SQS retry.
+### §2d — `nft_metadata` `EnrichmentMessage` variant
 
-### Sub-block 2c — REMOVED (asset USD price deferred to future-work)
+- `EnrichmentMessage::NftMetadata { nft_id: i32 }`.
+- New module `enrich_and_persist/nft_metadata.rs`. Pipeline: SELECT `(contract_id, token_id)` → Soroban RPC `token_uri()` → resolve URI (HTTP / IPFS gateway) → parse JSON → UPDATE `nfts`.
+- Producer hook = INSERT on `nfts` (mint event only — not transfer/burn).
+- Permanent fail: `name=''`, `media_url=''`, `metadata='{}'`, `collection_name` left NULL. Sentinels for UI fallback, NOT for dedup.
+- Transient → `EnrichError::Transient`, SQS retry → DLQ.
+- **DECISION GATING (must resolve before merge):**
+  - **IPFS gateway**: single, fallback chain, or round-robin. Default proposal: Cloudflare primary + Pinata fallback.
+  - **Soroban RPC sizing**: estimate sustained QPS from realistic mint volume × per-token cost; size DepthAlarm threshold + worker concurrency cap.
 
-**2026-05-06 review (Karol):** pulled from M2. The sub-block was speculative — driven by 0191 future-work bullet #6 ("stellarchain.io/markets parity") with no PM ticket, frontend mock, or shipped consumer. The corresponding `assets.usd_price` + `usd_price_updated_at` column adds (originally 0194 §1a) were also pulled. Asset USD price work as a whole moves to future-work; revisit when a real product ask materialises.
+### Common — ADR + docs
 
-### Sub-block 2d — `nft_metadata` `EnrichmentMessage` variant
-
-**New territory** — supersedes audit-mention only (audit doc line 644-647), no dedicated task.
-
-**Spec:**
-
-- New variant: `EnrichmentMessage::NftMetadata { nft_id: i32 }` (where `nft_id` references `nfts.id`)
-- New module `crates/enrichment-shared/src/enrich_and_persist/nft_metadata.rs`
-- Pipeline:
-  1. SELECT `contract_id, token_id` from `nfts` table
-  2. Soroban RPC call: `token_uri(token_id)` on the NFT contract — returns URI string
-  3. URI may be `https://...`, `ipfs://...`, or on-chain ContractData reference
-  4. Resolve URI → fetch JSON metadata (HTTP for `https://`, IPFS gateway for `ipfs://`)
-  5. Parse JSON → extract `name`, `description` → maps to `collection_name`, `name`, `media_url`, `metadata`
-  6. UPDATE `nfts` row with parsed fields
-- **IPFS gateway choice**: Pinata public gateway or Cloudflare `cloudflare-ipfs.com` — free, cache-friendly, no auth. Decide in spec phase (DDoS resilience may favour multi-gateway round-robin).
-- **Producer hook**: indexer emits `NftMetadata { nft_id }` after each new `nfts` row insert (NFT mint event). DOES NOT re-emit on transfer/burn (those don't change metadata).
-- **Sentinel handling**: permanent fail (404 on token_uri, malformed JSON, IPFS gateway gives 404) → write `name=''`, `media_url=''`, `metadata='{}'` so producer dedup `WHERE name IS NULL` short-circuits. Transient (gateway 5xx, RPC timeout) → `EnrichError::Transient`, SQS retry.
-- **Cost concern**: NFT collections can have 10k+ tokens. Per-NFT call is justified for off-chain pattern (this is exactly why it's Lambda 2 not indexer — see ADR 0026). If volume becomes prohibitive, consider per-collection batching (one RPC call returns all metadata) — captured as Future Work.
-
-### Common: ADR amendment + docs
-
-- ADR 0043 (field allocation rule, drafted in 0194 sub-block 1f) is the home for "runtime_enrichment umbrella" governance — type-1 SQS model + per-kind matrix lives there. ADR 0029 is about the **read-time XDR fetch** path (detail endpoint type-2 enrichment); it does NOT need amendment for type-1 write-side concerns. The 0191 Future Work bullet #3 ("ADR 0029 amendment") was misallocated and is corrected here.
-- Docs `docs/architecture/indexing-pipeline/enrichment.md` (or create if absent) — kind-by-kind matrix
-- Docs `docs/architecture/database-schema/**` — column source attribution updated
+- ADR 0043 amendment: per-kind matrix table for new kinds. (ADR 0029 NOT amended — read-path, not write-path.)
+- `docs/architecture/indexing-pipeline/enrichment.md` (create if absent).
+- `docs/architecture/database-schema/**` — column source attribution.
 
 ## Acceptance Criteria
 
-- [ ] Sub-block 2a: `Sep1Currency.name` field added; icon kind extended to UPDATE `assets.name` via `COALESCE` (no overwrite of indexer-set Soroban/SAC names); sample query shows non-NULL `name` on classic credit assets with SEP-1 TOML support; producer SQL re-emits classic credit assets with NULL name
-- [ ] Sub-block 2b: `lp_tvl` kind dispatched, sample query shows non-NULL `tvl` on production-region pools with valid oracle data
-<!-- Sub-block 2c acceptance removed — pulled. -->
+**§2a:**
 
-- [ ] Sub-block 2d: `nft_metadata` kind dispatched, sample query shows non-NULL `name`/`media_url` on minted NFTs from at least one well-known collection
-- [ ] Each kind has its permanent / transient EnrichError mapping documented + tested
-- [ ] Each kind has integration test (mock oracle / mock RPC / mock IPFS gateway)
-- [ ] DepthAlarm thresholds per CDK reviewed for new producer rates
-- [ ] **Docs updated**: ADR 0043 amendment (per-kind matrix table for new kinds), `docs/architecture/indexing-pipeline/enrichment.md` (or create), `docs/architecture/database-schema/**`. NO ADR 0029 amendment — that ADR is read-path, not enrichment write-path.
-- [ ] **API types regenerated** — if any DTO field is exposed (e.g. `nfts.metadata` JSON shape), codegen committed in same PR
-- [ ] 0125 archived as `superseded by: ["0195", "0199"]`
+- [ ] `Sep1Currency.name` added; combined UPDATE with `COALESCE(NULLIF(...), col, ...)` priority `real > sentinel > NULL`.
+- [ ] Sample query: non-NULL `name` on ClassicCredit + SAC assets with SEP-1 TOML support.
+- [ ] Test: producer dedup `WHERE icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)` does not infinite-re-emit a sentinel-marked row.
+- [ ] List/detail endpoints render `asset_code` when `name = ''`.
 
-## Future Work (out of scope, spawn separate tasks)
+**§2b:**
 
-- **Per-collection NFT batching** if per-token cost becomes prohibitive in production
-- **Periodic janitor for `lp_tvl`**: cron Lambda re-emitting stale snapshots — only if observe stale TVLs in production
-- **Worker observability per kind**: CloudWatch custom metrics (success/fail counters, fetch latency histogram per kind)
-- **`asset_usd_price` whole feature**: pulled from M2 (no PM ticket / consumer). Re-evaluate when a real product ask materialises; would land as a brand-new task with column adds + Lambda 2 kind + producer hook + backfill subcommand bundled.
+- [ ] Insert-hook emits exactly one `LpTvl` per new snapshot.
+- [ ] Oracle source ordering pinned in spec (no TBD at merge).
+- [ ] `tvl=0` written on permanent fail with WARN log; transient → SQS retry.
 
-## Notes
+**§2d:**
 
-- **Sentinel semantics confirmation (2026-05-06 session)**: current behavior on `assets.icon_url` (write `''` on permanent fail, transient retries to DLQ) stays as-is. Each new kind designs its own sentinel value but follows the same "permanent → sentinel + ack, transient → retry/DLQ" split per 0191 design decision #11.
-- **Bundling rationale**: 4 sub-blocks share the SQS scaffolding, EnrichError taxonomy, dispatch pattern, and ops/CDK surface. Splitting per kind would force 4× repeated context. Each sub-block is one new module (or module extension for 2a) + one match arm + one producer hook + one CDK threshold review — ~50-300 LoC each.
-- **2a is intentionally NOT a new EnrichmentMessage variant**: extending the existing `Icon` variant is correct because (a) one TOML fetch yields both `image` and `name`, (b) failure modes are identical (same SEP-1 endpoint), (c) sentinel behaviour for icon_url stays untouched while `name` simply stays NULL on permanent fails (no display impact — UI falls back to `asset_code`). Adding a separate `AssetName` variant would double the queue traffic for zero benefit.
+- [ ] Insert-hook emits exactly one `NftMetadata` per mint; no re-emit on transfer/burn.
+- [ ] IPFS gateway choice pinned.
+- [ ] Soroban RPC QPS estimate → DepthAlarm + concurrency cap derived.
+- [ ] Sample query: non-NULL `name`/`media_url` on minted NFTs from a known collection.
+
+**Common:**
+
+- [ ] Per-kind permanent/transient `EnrichError` mapping documented + unit-tested.
+- [ ] Per-kind integration test (mock oracle / mock RPC / mock IPFS gateway).
+- [ ] CDK DepthAlarm thresholds reviewed for new producer rates.
+- [ ] Docs updated (ADR 0043 amendment + enrichment.md + schema docs).
+- [ ] API types regenerated if any DTO field exposed.
+- [ ] 0125 archived as `superseded by: ["0195", "0199"]`.
+- [ ] 0196 backlog updated to capture §2b/§2d backfill dedup ownership.
+
+## Future Work (out of scope)
+
+- **Per-collection NFT batching** if per-token RPC cost prohibitive.
+- **`lp_tvl` periodic janitor** — only if observed stale TVLs in production.
+- **Per-kind CloudWatch metrics** (success/fail counters, fetch latency histograms).
+- **`asset_usd_price`** — re-evaluate when product ask materialises.
+- **Sentinel-in-VARCHAR retire**: replace `''` overload + `NULLIF` SQL with explicit `{icon_url, name}_attempted_at TIMESTAMPTZ` companion columns. Senior-correct status separation. Bundle with 0196's status-column work to retrofit both 0191's `icon_url` and 0195's `name` simultaneously.
