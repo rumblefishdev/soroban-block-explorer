@@ -77,6 +77,7 @@ These flaws compound. After review (2026-05-07 session) the approach was deemed 
 
 ## Notes
 
+- **Required consultation with Oskar** — Oskar owns the price API integration. Phase 2 (USD denomination) must be designed jointly with him: oracle source choice (Reflector vs StellarExpert vs alternative), cache/refresh semantics, fallback behavior, latency budget, and the oracle ↔ indexer/Lambda 2 contract. Do not start Phase 2 implementation without Oskar's sign-off on the price-feed shape.
 - **Blocked on 0195 §2b** for the USD denomination phase. Phase 1 (per-op extraction in asset_a units) can land independently and gives correct gross volume even before the oracle is wired.
 - **MVP option**: ship Phase 1 first, leave `volume` in asset_a units with a clear UI disclaimer. Phase 2 (USD) follows once 0195 §2b is in production. This preserves "correctness" (no opposite-swap netting) while deferring "completeness" (USD).
 - **Schema cost**: adding `volume_usd` + `fee_revenue_usd` columns adds 16 bytes per snapshot row (NUMERIC(28,7) ≈ 8B each). At ~17k ledgers/day × N pools, the storage delta is small compared to the existing `reserve_a/b/total_shares` triple.
