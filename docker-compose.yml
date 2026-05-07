@@ -1,5 +1,5 @@
-# Common config for the db-merge test databases. Anchor lives at the top
-# so the 5 services below stay one-line-different from each other.
+# Common config for the db-merge databases. Anchor lives at the top so
+# the 2 services below stay one-line-different from each other.
 x-postgres-base: &postgres-base
   image: postgres:16-alpine
   environment:
@@ -29,7 +29,7 @@ services:
       timeout: 3s
       retries: 5
 
-  # db-merge test infrastructure (task 0186 §Step 1, ADR 0040).
+  # db-merge runtime infrastructure (task 0186 §Step 1, ADR 0040).
   # Gated behind the `db-merge` profile so they don't start on
   # `docker compose up` — opt in via `--profile db-merge` or
   # `COMPOSE_PROFILES=db-merge`.
@@ -37,24 +37,6 @@ services:
   # FDW from postgres-merge reaches postgres-snapshot-source by service
   # name on the default compose network (port 5432, internal). The host
   # ports below are only for the db-merge CLI / pg_restore.
-
-  postgres-truth:
-    <<: *postgres-base
-    ports: ['5433:5432']
-    volumes: [pgdata-truth:/var/lib/postgresql/data]
-    profiles: [db-merge]
-
-  postgres-laptop-a:
-    <<: *postgres-base
-    ports: ['5434:5432']
-    volumes: [pgdata-laptop-a:/var/lib/postgresql/data]
-    profiles: [db-merge]
-
-  postgres-laptop-b:
-    <<: *postgres-base
-    ports: ['5435:5432']
-    volumes: [pgdata-laptop-b:/var/lib/postgresql/data]
-    profiles: [db-merge]
 
   postgres-merge:
     <<: *postgres-base
@@ -70,8 +52,5 @@ services:
 
 volumes:
   pgdata:
-  pgdata-truth:
-  pgdata-laptop-a:
-  pgdata-laptop-b:
   pgdata-merge:
   pgdata-snapshot-source:

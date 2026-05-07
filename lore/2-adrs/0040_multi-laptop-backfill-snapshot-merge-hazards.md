@@ -1,9 +1,9 @@
 ---
 id: '0040'
 title: 'Multi-laptop backfill snapshot merge — schema hazards and playbook'
-status: proposed
+status: accepted
 deciders: [fmazur]
-related_tasks: []
+related_tasks: ['0186']
 related_adrs: ['0010', '0026', '0027', '0030', '0035', '0036', '0037', '0038']
 tags: [backfill, schema, merge, postgres, surrogate-keys, partitioning]
 links: []
@@ -12,6 +12,10 @@ history:
     status: proposed
     who: fmazur
     note: 'ADR created — captures schema-level hazards before writing the multi-laptop snapshot merge script'
+  - date: 2026-05-07
+    status: accepted
+    who: fmazur
+    note: 'Implementation landed in `crates/db-merge` (task 0186): `ingest` / `finalize` / `diff` subcommands cover every table-by-table semantic in this ADR. Runtime infra is two containers (`postgres-merge` + `postgres-snapshot-source`) under the `db-merge` compose profile; the previously-planned simulated multi-laptop test rig (`postgres-truth`, `postgres-laptop-a`, `postgres-laptop-b` + `scripts/db-merge-tests/`) was dropped in favour of operator-driven manual verification — operator generates snapshots themselves via `backfill-runner` / `backfill-bench`, organises them with a numeric filename prefix, ingests in chronological order, and (optionally) maintains their own ground-truth DB to feed `db-merge diff`.'
 ---
 
 # ADR 0040: Multi-laptop backfill snapshot merge — schema hazards and playbook

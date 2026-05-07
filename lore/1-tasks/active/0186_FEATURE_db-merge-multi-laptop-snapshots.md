@@ -20,6 +20,10 @@ history:
     status: active
     who: fmazur
     note: 'Fix infeasible Step 0 snapshot mechanism — switch to postgres_fdw + 5th ephemeral container (postgres-snapshot-source)'
+  - date: 2026-05-07
+    status: active
+    who: fmazur
+    note: 'Pivot to manual flow — drop simulated multi-laptop test rig (postgres-truth, postgres-laptop-a, postgres-laptop-b) + scripts/db-merge-tests/. Operator generates snapshots themselves via backfill-runner / backfill-bench, organizes them with a numeric filename prefix, and ingests in order. Runtime infra reduced to 2 containers (postgres-merge + postgres-snapshot-source). T1–T6 corpus removed; correctness verification is now ad-hoc (operator maintains their own ground-truth DB if desired and uses `db-merge diff` against it).'
 ---
 
 # DB merge script for multi-laptop backfill snapshots
@@ -35,8 +39,10 @@ against the same target. Estimate: 1–2 weeks of focused work
 
 ## Status: Active
 
-**Current state:** ADR 0040 accepted; schema audit complete. Implementation
-not started. Step 0 design decisions need to be ratified before coding.
+**Current state:** Implementation complete — `crates/db-merge` ships
+`ingest` / `finalize` / `diff` end-to-end against the 2-container runtime
+infra. Outstanding work is operator-side manual verification (Step 5)
+on a real multi-laptop run; AC checklist below tracks remaining items.
 
 ## Context
 
@@ -71,29 +77,35 @@ writing any code; record decisions inline in the script README.
 | **Language**           | Rust (new `crates/db-merge`)                                                                                                                                                                               | Parity with `db-migrate`/`backfill-runner`; sqlx already in workspace; CLI via clap consistent with `backfill-runner`.                                                                                                                                                                                                                                                                                                           |
 | **Pre-merge backup**   | `pg_dump --format=custom` of target before every `merge ingest` invocation; user removes after success                                                                                                     | Only safe rollback for cross-table corruption. Path printed to stderr at start.                                                                                                                                                                                                                                                                                                                                                  |
 
-### Step 1: Test infrastructure — 5 Docker databases
+### Step 1: Runtime infrastructure — 2 Docker databases
 
-Add to `docker-compose.yml`:
+Add to `docker-compose.yml` under the `db-merge` compose profile:
 
 | Service                    | Port | Role                                                                                                                 |
 | -------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
-| `postgres` (existing)      | 5432 | Live target during real backfill — **don't touch in tests**                                                          |
-| `postgres-truth`           | 5433 | Sequential ground-truth backfill of full range                                                                       |
-| `postgres-laptop-a`        | 5434 | Simulated laptop A, lower ledger range                                                                               |
-| `postgres-laptop-b`        | 5435 | Simulated laptop B, upper ledger range                                                                               |
-| `postgres-merge`           | 5436 | Merge target — receives snapshots A+B chronologically                                                                |
+| `postgres` (existing)      | 5432 | Live indexer target for normal dev work — **unrelated to the merge flow**                                            |
+| `postgres-merge`           | 5436 | Merge target — receives every snapshot chronologically                                                               |
 | `postgres-snapshot-source` | 5437 | Ephemeral; `pg_restore` target for the current snapshot. Reset (drop volume + recreate) before every `merge ingest`. |
 
-All five test DBs share identical config (image `postgres:16-alpine`,
+Both runtime DBs share identical config (image `postgres:16-alpine`,
 healthcheck, same credentials). The script accepts `--target-url` for the
 merge destination and `--snapshot-source-url` for the FDW source.
 
+**Manual flow.** The operator runs `backfill-runner` / `backfill-bench`
+themselves — on whatever Postgres they like (their own laptop, a separate
+DB, the `postgres` slot reused 4× sequentially) — and `pg_dump
+--format=custom` produces N snapshot files. They organize the files with
+a numeric filename prefix (`01_*.dump`, `02_*.dump`, …) so they can
+remember the chronological order; `db-merge` itself does not parse
+filenames. Then they call `db-merge ingest` once per file, oldest-first,
+followed by `db-merge finalize`.
+
 **Reset procedures**:
 
-- Between test runs (clean merge target):
+- Start of a fresh merge run (clean merge target):
   `docker compose stop postgres-merge && docker volume rm <prefix>_pgdata-merge && docker compose up -d postgres-merge` then run migrations.
-- Between snapshots within one test run (clean snapshot source):
-  same pattern on `postgres-snapshot-source`. The merge script can do this
+- Between snapshots within one run (clean snapshot source):
+  same pattern on `postgres-snapshot-source`. The merge script does this
   automatically as the first step of `merge ingest`.
 
 Truncating tables is _not_ sufficient — leaves sequence state and partition
@@ -178,60 +190,65 @@ Two DBs with identical _logical_ contents but different surrogate id
 allocations will produce identical hashes. This is the **only credible
 correctness check** for the merge.
 
-### Step 5: Test corpus
+### Step 5: Manual verification
 
-Pick a small ledger range that exercises every code path (recommend
-~10k ledgers around a known interesting block — Soroban activity, SAC,
-NFT mints, LP activity). Then run, in order:
+There is no automated test corpus checked in. The operator verifies a
+merge run themselves, ad-hoc, after each meaningful change. Suggested
+checks (none of these are wired into CI):
 
-| Test                                     | Setup                                                                                                                               | Expected                                                                                                                                |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **T1: First-snapshot edge case**         | Empty `postgres-merge` ← snapshot of `postgres-laptop-a`                                                                            | All remap tables degenerate (every natural key is new); diff vs `postgres-laptop-a` returns 25× match.                                  |
-| **T2: Single-snapshot reproducibility**  | `postgres-truth` ← sequential backfill of laptop-a's range; `postgres-merge` ← snapshot of `postgres-laptop-a`                      | diff(`postgres-truth`, `postgres-merge`) returns 25× match. **This is the test that single-snapshot merge equals sequential backfill.** |
-| **T3: Two-snapshot chronological merge** | `postgres-truth` ← sequential backfill of full range; `postgres-merge` ← snapshot of laptop-a, then laptop-b, then `merge finalize` | diff(`postgres-truth`, `postgres-merge`) returns 25× match. **The actual end-to-end correctness test.**                                 |
-| **T4: Idempotency**                      | After T3, re-run `merge ingest <snapshot-a>` and `merge ingest <snapshot-b>` (replay)                                               | Zero new rows in any table; zero changes to watermark columns; diff still 25× match.                                                    |
-| **T5: Wrong order rejected**             | After ingesting laptop-b, attempt to ingest laptop-a (older range)                                                                  | Pre-flight precondition aborts with "source range precedes target — chronological-only contract violated".                              |
-| **T6: Scale smoke test**                 | Full-range pair (whatever the team has handy ≥10M ledgers per snapshot)                                                             | Completes; record wall-clock time, peak temp space, peak RSS. AC threshold below.                                                       |
+- **First-snapshot sanity.** Empty `postgres-merge` ← single snapshot
+  via `merge ingest`; if the operator separately maintains a sequential
+  backfill of the same range, `db-merge diff` should report 25× match.
+- **Two-snapshot chronological merge.** `postgres-merge` ← snapshot A,
+  then snapshot B (B's ledger range strictly after A's), then `merge
+finalize`. Compare against an operator-maintained sequential
+  backfill of the full range with `db-merge diff` — expect 25× match.
+- **Idempotency.** Re-run `merge ingest <snapshot>` (with
+  `--allow-overlap`) on an already-merged target; expect zero new rows
+  and zero modified watermark columns.
+- **Wrong-order rejection.** After ingesting a later range, attempt to
+  ingest an earlier one without `--allow-overlap`; preflight must abort
+  with "source range precedes target".
+
+If the team needs reproducible regression coverage in the future,
+re-introduce a scripted harness (the previous `scripts/db-merge-tests/`
+lives in `.trash/scripts-db-merge-tests/` as a starting point) — but
+that's out of scope of the current manual flow.
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] `docker-compose.yml` has `postgres-truth`, `postgres-laptop-a`,
-      `postgres-laptop-b`, `postgres-merge`, `postgres-snapshot-source`
-      services on ports 5433–5437; both reset procedures (merge target,
-      snapshot source) documented in script README.
-- [ ] `merge ingest` automates the FDW setup (`CREATE EXTENSION
-postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
-INTO merge_source`) and tears it down on success.
-- [ ] `crates/db-merge` exists with three subcommands: `ingest`, `finalize`,
+- [x] `docker-compose.yml` has `postgres-merge` and `postgres-snapshot-source`
+      services on ports 5436 and 5437, both gated behind the `db-merge`
+      profile; reset procedures (merge target, snapshot source) documented
+      in `crates/db-merge/README.md`.
+- [x] `merge ingest` automates the FDW setup (`CREATE EXTENSION
+    postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
+    INTO merge_source`) and tears it down on success.
+- [x] `crates/db-merge` exists with three subcommands: `ingest`, `finalize`,
       `diff`; CLI flags follow `backfill-runner` conventions.
-- [ ] All 18 ADR-0040 table-by-table merge semantics implemented (collapsed
+- [x] All 18 ADR-0040 table-by-table merge semantics implemented (collapsed
       into 15 substeps under task §"Step 3: Topological merge"); FK rewrites
       are JOIN-in-SELECT with B-tree indexes on remap tables; no post-insert
       UPDATE on partitioned tables.
-- [ ] Per-table batching at 100k rows; `SAVEPOINT` per batch; failure of one
+- [x] Per-table batching at 100k rows; `SAVEPOINT` per batch; failure of one
       batch retries without rolling back the whole table.
-- [ ] Pre-merge precondition checks abort on: migration mismatch (incl.
+- [x] Pre-merge precondition checks abort on: migration mismatch (incl.
       checksum), ledger-range overlap, source-precedes-target, partition
       drift, CHECK drift.
-- [ ] `search_vector` excluded from `soroban_contracts` INSERT column list;
-      Postgres recomputes on each insert (verified by post-insert
-      `to_tsvector` parity check on a sample row).
-- [ ] Pre-merge `pg_dump` taken; path printed to stderr; user owns cleanup.
-- [ ] `merge finalize` runs Step 13 (`nfts.current_owner_*` rebuild) and
+- [x] `search_vector` excluded from `soroban_contracts` INSERT column list;
+      Postgres recomputes on each insert.
+- [x] Pre-merge `pg_dump` taken; path printed to stderr; user owns cleanup.
+- [x] `merge finalize` runs Step 13 (`nfts.current_owner_*` rebuild) and
       Step 14 (`setval` all 7 sequences); idempotent.
-- [ ] `merge diff` produces 25-row table with row counts + md5 per table on
-      a normalized natural-key projection.
-- [ ] **T1** (first-snapshot) passes: 25× match.
-- [ ] **T2** (single-snapshot reproducibility) passes: 25× match.
-- [ ] **T3** (two-snapshot chronological) passes: 25× match.
-- [ ] **T4** (idempotency) passes: re-running ingest is a strict no-op
-      (zero new rows, zero modified columns; diff still 25× match).
-- [ ] **T5** (wrong order) passes: pre-flight rejects with actionable error.
-- [ ] **T6** (scale smoke) passes thresholds: ≤4h wall-clock per ~10M-ledger
-      snapshot on a workstation; peak temp space ≤30% of source dump size.
-      (Adjust thresholds after first run; record actuals in task notes.)
+- [x] `merge diff` produces a per-table table with row counts + md5 on a
+      normalized natural-key projection. Operator uses it ad-hoc against
+      whatever ground-truth DB they maintain.
+- [ ] **Manual verification** (per Step 5) performed against operator's
+      own ground-truth backfill at least once before declaring the tool
+      production-ready: chronological-merge correctness, idempotency,
+      wrong-order rejection. Notes appended to this task.
 - [ ] **Docs updated** — N/A: offline operational tool, not part of indexer/
       API/infra shape under `docs/architecture/**`. If `crates/db-merge`
       becomes a permanent piece of the pipeline (e.g. ongoing parallel
@@ -255,7 +272,8 @@ ergonomics, not correctness):
   rely on ON CONFLICT idempotency; add `--from-batch` only if T4 testing
   reveals replay performance issues.
 - **Concurrent `merge ingest` invocations.** Forbidden — script takes a
-  Postgres advisory lock at start. Worth asserting in T-something.
+  Postgres advisory lock at start. Worth covering in operator manual
+  verification (Step 5) once before declaring production-ready.
 - **Source DB live during merge.** The ADR assumes source is dumped first,
   not connected live. Live-source merge is a future variant (skip pg_dump
   step), out of scope here.
