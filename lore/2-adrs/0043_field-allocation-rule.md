@@ -119,7 +119,7 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 ### Negative
 
 - Three write paths instead of two — slightly more infrastructure surface (SQS queue + DLQ + worker Lambda for type-1; in-process LRU cache for type-2; standard indexer for on-chain).
-- Edge cases require judgement (e.g. "data is on-chain but expensive to derive" — see task 0198 LP volume per-op extraction, originally planned as 0194 §1d but pulled after correctness review).
+- Edge cases require judgement (e.g. "data is on-chain but expensive to derive" — see task 0199 LP volume per-op extraction, originally planned as 0194 §1d but pulled after correctness review).
 
 ### Neutral
 
@@ -141,7 +141,7 @@ Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 
 | `assets.usd_price` + `usd_price_updated_at`         | Lambda 2 (CoinGecko / StellarExpert)                   | 0194 §1a (column) + 0195 §2c (population) |
 | `assets.description`, `assets.home_page`            | runtime type-2 (`runtime_enrichment::sep1`)            | 0188                                      |
 | `liquidity_pool_snapshots.tvl`                      | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b                                  |
-| `liquidity_pool_snapshots.volume`, `fee_revenue`    | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0198                                      |
+| `liquidity_pool_snapshots.volume`, `fee_revenue`    | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0199                                      |
 | `nfts.{collection_name, name, media_url, metadata}` | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                  |
 | `account_balances_current` (trustline rows)         | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e    |
 | Transaction `envelope_xdr`, full `events` payload   | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                |

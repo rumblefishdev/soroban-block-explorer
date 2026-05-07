@@ -38,7 +38,7 @@ Off-chain = data NOT already in the processed ledger. Decision points crystallis
 
 - **`nfts.{collection_name, name, media_url, metadata}`**: requires Soroban RPC `token_uri()` per NFT, often dereferences to HTTP/IPFS gateway for JSON. Per the rule "on-chain = already in processed ledger", per-token RPC counts as off-chain (audit `docs/audits/2026-04-10-pipeline-data-audit.md` line 644-647 explicitly: "requires `token_uri()` RPC calls to the contract — not available from XDR events. This is an enrichment job"). Karol-confirmed Option A in 2026-05-06 session.
 
-LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by **task 0198** (per-op extraction + USD denomination); 0198 depends on this task's §2b oracle for the USD half.
+LP `volume` and `fee_revenue` are **NOT** in this task's scope — they're on-chain (PathPayment delta + arithmetic), handled by **task 0199** (per-op extraction + USD denomination); 0199 depends on this task's §2b oracle for the USD half.
 
 ### Reuse from 0191
 
@@ -88,7 +88,7 @@ Sentinel value depends on column type:
 
 ### Sub-block 2b — `lp_tvl` `EnrichmentMessage` variant
 
-**Supersedes 0125** (LP price oracle / TVL part). The volume/fee_revenue part of 0125's scope moved to task 0198. 0125 archived as `superseded by: ["0195", "0198"]`.
+**Supersedes 0125** (LP price oracle / TVL part). The volume/fee_revenue part of 0125's scope moved to task 0199. 0125 archived as `superseded by: ["0195", "0199"]`.
 
 **Spec:**
 
@@ -145,7 +145,7 @@ Sentinel value depends on column type:
 - [ ] DepthAlarm thresholds per CDK reviewed for new producer rates
 - [ ] **Docs updated**: ADR 0043 amendment (per-kind matrix table for new kinds), `docs/architecture/indexing-pipeline/enrichment.md` (or create), `docs/architecture/database-schema/**`. NO ADR 0029 amendment — that ADR is read-path, not enrichment write-path.
 - [ ] **API types regenerated** — if any DTO field is exposed (e.g. `nfts.metadata` JSON shape), codegen committed in same PR
-- [ ] 0125 archived as `superseded by: ["0195", "0198"]`
+- [ ] 0125 archived as `superseded by: ["0195", "0199"]`
 
 ## Future Work (out of scope, spawn separate tasks)
 

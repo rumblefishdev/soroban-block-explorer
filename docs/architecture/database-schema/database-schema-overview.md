@@ -843,8 +843,8 @@ CREATE TABLE liquidity_pool_snapshots (
     reserve_b       NUMERIC(28,7) NOT NULL,
     total_shares    NUMERIC(28,7) NOT NULL,
     tvl             NUMERIC(28,7),                            -- Lambda 2 enrichment (ADR 0043 / task 0195 §2b — off-chain price oracle)
-    volume          NUMERIC(28,7),                            -- deferred to task 0198 (per-op extraction + USD oracle)
-    fee_revenue     NUMERIC(28,7),                            -- deferred to task 0198 (derived from USD-denominated volume)
+    volume          NUMERIC(28,7),                            -- deferred to task 0199 (per-op extraction + USD oracle)
+    fee_revenue     NUMERIC(28,7),                            -- deferred to task 0199 (derived from USD-denominated volume)
     created_at      TIMESTAMPTZ   NOT NULL,
     PRIMARY KEY (id, created_at),
     CONSTRAINT ck_lps_pool_id_len CHECK (octet_length(pool_id) = 32)
@@ -866,7 +866,7 @@ Design notes:
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
   the schema's balance / amount handling
-- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0198** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0198 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
+- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0199** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0199 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
 - `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
 - `created_at` drives interval queries and monthly partition management
 

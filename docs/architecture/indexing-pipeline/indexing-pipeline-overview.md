@@ -201,7 +201,7 @@ committed in a single atomic DB transaction:
     accepts `state` change_type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
     snapshot of a referenced-but-unmodified pool. `volume` and
-    `fee_revenue` columns stay NULL — populated by **task 0198** (per-op
+    `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
     extraction from PathPayment `claimedOffers[].amount_sold` + USD
     denomination via oracle). Per
     [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
