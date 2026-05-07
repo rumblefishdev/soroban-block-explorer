@@ -30,9 +30,11 @@ history:
 
 The test at
 [crates/api/src/tests_integration.rs:1786](../../../crates/api/src/tests_integration.rs)
-picks the "head" ledger via `SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 1`
-and asserts the `/v1/ledgers/{seq}` response carries
-`Cache-Control: public, max-age=10` (the SHORT TTL branch).
+picks the two most-recent ledgers via
+`SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 2`, treats
+the first as the chain head, and asserts the `/v1/ledgers/{seq}` response
+for that head carries `Cache-Control: public, max-age=10` (the SHORT TTL
+branch).
 
 On a dev DB shared with `persist_integration` test fixtures (which insert
 synthetic ledgers at sequences `90_000_001`, `90_000_002`, `90_000_003`

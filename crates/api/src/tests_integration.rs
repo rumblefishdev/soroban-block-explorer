@@ -1779,10 +1779,10 @@ async fn ledgers_detail_unknown_sequence_returns_404_against_real_db() {
 }
 
 /// Detail endpoint shape against a real DB row + the head-vs-closed
-/// Cache-Control branching. Selects the two most recent ledgers
-/// (`ORDER BY closed_at DESC LIMIT 2`); uses the most recent as the
-/// head-ledger assertion (`next_sequence is null` → 10s TTL) and the
-/// second-most-recent as the closed-ledger assertion (`next_sequence`
+/// Cache-Control branching. Selects the two highest-sequence ledgers
+/// (`ORDER BY closed_at DESC, sequence DESC LIMIT 2`); uses the first
+/// as the head-ledger assertion (`next_sequence is null` → 10s TTL)
+/// and the second as the closed-ledger assertion (`next_sequence`
 /// non-null → 300s TTL).
 #[tokio::test]
 async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
@@ -1797,7 +1797,7 @@ async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
     // table has fewer than two rows (no way to distinguish head vs
     // closed under that condition).
     //
-    // Tie-break by `sequence DESC` (task 0194): on shared dev DBs the
+    // Tie-break by `sequence DESC` (task 0201): on shared dev DBs the
     // `persist_integration` fixtures insert synthetic ledgers with
     // identical `closed_at` values. Sorting by `closed_at` alone is
     // therefore non-deterministic across the tied rows and may pick a
