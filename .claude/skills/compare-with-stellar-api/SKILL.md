@@ -179,6 +179,17 @@ This subagent does **independent XDR decoding** so it doesn't trust any explorer
      | jq -r '{envelope_xdr, result_xdr, result_meta_xdr, inner_transaction}'
    ```
    For fee-bumped rows, also fetch `/transactions/<inner_tx_hash_hex>` if you need the inner envelope separately (or drill into outer's `feeBump.tx.innerTx`).
+
+   **Fallback chain when `result_meta_xdr` is missing or stripped** — common for Soroban txs (Horizon mainnet has dropped `result_meta_xdr` on `/transactions/<hash>` for Soroban entries). Try in order:
+
+   | Source | URL | What it has | Caveat |
+   | --- | --- | --- | --- |
+   | Horizon mainnet | `https://horizon.stellar.org/transactions/<hash>` | `envelope_xdr`, `result_xdr`, `fee_meta_xdr`. **No `result_meta_xdr` for Soroban.** | First try; cheap. |
+   | Lobstr mirror | `https://horizon.stellar.lobstr.co/transactions/<hash>` | All four XDRs incl. `result_meta_xdr` v4 (`m.operations[i].events`). | **Strips `v4.events` (TxLevel) — CAP-67 fee/refund events emitted by the native XLM SAC are absent.** Do NOT use this source alone to verify `soroban_events_appearances` rows for the XLM SAC contract on a Soroban tx; you'll get a false MISMATCH. |
+   | soroban-rpc | `POST https://mainnet.sorobanrpc.com` JSON-RPC `getEvents` (or `getTransaction`) | Full event set incl. CAP-67 TxLevel fee/refund events. | **~5-day retention only** — older ledgers return `startLedger must be within the ledger range: <a> - <b>`. For older ledgers, only the archive `.xdr.zst` is authoritative. |
+   | Archive `.xdr.zst` | per ADR 0029, `https://history.stellar.org/...` | Authoritative, full ledger meta. | Heavy fetch (full ledger blob, decompress, parse). Last resort. |
+
+   When verifying `soroban_events_appearances` (E3 statement E) with the entity at risk being the native XLM SAC `CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA`, prefer **soroban-rpc `getEvents`** filtered by `contractIds` for the tx's ledger, OR fetch the ledger's archive blob and decode. A Lobstr-derived "this contract emitted no event" is structurally incomplete for fee/refund events.
 3. Decode each XDR blob. Probe order (try each, use first that can handle the envelope type):
 
    - **py-stellar-sdk** (PREFERRED — covers both classic AND Soroban envelopes, ~100-200 ms per decode):
@@ -200,9 +211,19 @@ This subagent does **independent XDR decoding** so it doesn't trust any explorer
    - `fee_charged` ← `result_xdr → feeCharged`
    - `memo_type`, `memo_content` ← `envelope_xdr → memo`
    - per-op `type`, `source_account`, `destination_account`, etc. ← `envelope_xdr → operations[i]`
-   - per-event `topics`, `data` ← `result_meta_xdr → events[]`
-   - per-invocation `function_name`, `args`, `return_value` ← `envelope_xdr → operations[i].body.invokeHostFunctionOp` + `result_meta_xdr`
+   - per-event `topics`, `data` ← **CAP-67 (Protocol 23+) splits events across three locations** in `result_meta_xdr` v4:
+     - `v4.events[]` — **TxLevel** events: BeforeAllTxs / AfterTx / AfterAllTxs. Carries fee/refund events emitted by the native XLM SAC (`CAS3J7GY…`) for **every tx** (Soroban + classic). Lobstr mirror strips this — see fallback table above.
+     - `v4.operations[i].events[]` — **PerOp** events: Soroban contract events emitted during `InvokeHostFunction` execution + (Protocol 23+) classic-op SAC events.
+     - `v4.diagnostic_events[]` — **Diagnostic** events: debug traces (`fn_call`, `fn_return`, `core_metrics`, `log`). Hash-excluded per CAP-67. Captive-core in diagnostic mode also includes byte-identical Contract-typed copies of every PerOp event here. Indexer's `soroban_events_appearances` filters this container by source (task 0182), so for verification ONLY use TxLevel + PerOp.
+   - per-invocation `function_name`, `args`, `return_value` ← `envelope_xdr → operations[i].body.invokeHostFunctionOp` + `result_meta_xdr` (function args from envelope; return_value from `v4.soroban_meta.return_value`).
+   - per-invocation **call tree** (caller_account / caller_contract per task 0183) ← reconstructed from `fn_call`/`fn_return` diagnostic events. **Caveat: mainnet stellar-core does not emit fn_call/fn_return by default** — Lobstr-served meta typically has `diagnostic_events: []`. The indexer presumably reads from a Galexie captive-core source with diagnostics enabled. Verifying F4/F5-style deeper sub-invocations (those not appearing in the envelope's auth tree) requires either the original Galexie meta or accepting an UNVERIFIABLE verdict.
 5. Report per the standard output format. The whole point: this subagent's MATCH means "the XDR itself confirms the DB", which is much stronger than "Horizon's display agrees".
+
+**Source-completeness caveat for Soroban event verification (read this before flagging a `soroban_events_appearances` MISMATCH):**
+
+- The XLM SAC contract `CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA` (mainnet, `is_sac=true`, `contract_pk=3` on this project) **emits at least one fee event for every tx** under CAP-67. A `soroban_events_appearances` row with this contract on **any** tx (Soroban or classic) is structurally expected — it is **not** a DB false-positive.
+- Quick sanity check before reporting MISMATCH: `SELECT count(*) FILTER (WHERE EXISTS (SELECT 1 FROM soroban_events_appearances sea WHERE sea.transaction_id=t.id AND sea.created_at=t.created_at AND sea.contract_id=<XLM_SAC_PK>)) FROM transactions t WHERE t.successful=true LIMIT 100;` — if it returns ~100, the row is per-tx fee-event semantics, not a bug.
+- If you saw the contract emit no event in `m.operations[i].events` from a Lobstr-fetched meta, that's expected: Lobstr strips `v4.events` (TxLevel) where fee events live. Re-fetch via soroban-rpc `getEvents` or accept UNVERIFIABLE.
 
 ## Step 5 — Frontend-contract check
 
@@ -244,3 +265,5 @@ Do not commit, do not modify code, do not spawn lore tasks. Wait for the user to
 - Conflating `SOURCE_MISSING` with `MISMATCH` in the report.
 - Treating a Horizon/stellar.expert MISMATCH as gospel when Raw XDR says MATCH — explorers can be wrong; XDR is the ground truth.
 - Auto-creating follow-up lore tasks for findings — present in chat; the user decides what becomes a task.
+- Trusting a single XDR fetch source for `soroban_events_appearances` verification — Horizon mainnet drops `result_meta_xdr` for Soroban; Lobstr strips `v4.events` (TxLevel CAP-67 fee/refund events). A "no event from XLM SAC" verdict from either source alone is incomplete. Cross-check with soroban-rpc `getEvents` (if within ~5-day retention) or accept UNVERIFIABLE.
+- Flagging `soroban_events_appearances` rows for the native XLM SAC (`CAS3J7GY…`) as DB false-positives — every tx has at least one CAP-67 fee event from that contract; the row is expected.
