@@ -12,6 +12,10 @@ path = "src/bin/horizon-diff.rs"
 name = "archive-diff"
 path = "src/bin/archive-diff.rs"
 
+[[bin]]
+name = "operations-order-diff"
+path = "src/bin/operations-order-diff.rs"
+
 [dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 sqlx = { workspace = true }
@@ -26,7 +30,12 @@ clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 hex = { workspace = true }
 # Phase 2c needs to re-parse XDR independently of `crates/xdr-parser`.
+# `operations-order-diff` is the exception — it audits whether persist preserves
+# the apply-order produced by `xdr-parser`, so it intentionally reuses the parser
+# (the bug under audit is in `staging.rs`, not in `xdr-parser`).
 stellar-xdr = { workspace = true }
+xdr-parser = { path = "../xdr-parser" }
+domain = { path = "../domain" }
 zstd = { workspace = true }
 # `archive-diff --table liquidity_pools` reconstructs LiquidityPoolParameters
 # XDR from DB-stored asset rows and SHA-256s the canonical bytes for
