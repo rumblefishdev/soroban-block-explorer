@@ -47,10 +47,18 @@ SELECT
     iss.home_domain                     AS issuer_home_domain, -- internal SEP-1 lookup key
     sc.contract_id                      AS contract_id,
     a.name,
-    a.total_supply,
-    a.holder_count,                     -- may be NULL or stale: ongoing tracking
-                                        -- is blocked behind task 0135
-                                        -- (token-holder-count-tracking).
+    a.total_supply,                     -- recomputed by indexer per ledger:
+                                        -- SUM(account_balances_current.balance)
+                                        -- for this (code, issuer_id). MVP
+                                        -- scope — full Horizon parity (claimable
+                                        -- + LP + SAC contract holdings) tracked
+                                        -- under task 0194 Future Work; DeFi
+                                        -- drift documented there.
+    a.holder_count,                     -- recomputed by indexer per ledger:
+                                        -- COUNT(*) FILTER (balance > 0) —
+                                        -- active holders, StellarExpert
+                                        -- convention (task 0194 §1c,
+                                        -- supersedes 0135).
     a.icon_url,
     sc.deployed_at_ledger               AS deployed_at_ledger
     -- not in DB: description, home_page — runtime SEP-1 fetch via

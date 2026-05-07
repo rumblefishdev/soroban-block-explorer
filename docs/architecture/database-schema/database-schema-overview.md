@@ -661,7 +661,7 @@ Design notes:
   [ADR 0023](../../../lore/2-adrs/0023_tokens-typed-metadata-columns.md) Part 3
   and supersedes the per-entity S3 hydration sketched under task 0164;
   details-only fields are not persisted at all
-- `total_supply` and `holder_count` are stock fields also populated post-ingest
+- `total_supply` and `holder_count` are stock fields populated by the **indexer per ledger**, not by enrichment Lambda 2 — both are on-chain-derivable from `account_balances_current` (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), list-endpoint + on-chain → indexer). After the credit-balance upsert pass, `recompute_asset_aggregates` (`crates/indexer/src/handler/persist/write.rs`) collects every `(asset_code, issuer_id)` pair touched by this ledger and runs a single UPDATE that rewrites `holder_count = COUNT(*) FILTER (WHERE balance > 0)` (active-holder semantics, matching the Stellar ecosystem convention used by StellarExpert / Stellarchain.io) and `total_supply = SUM(balance)` from `account_balances_current`. **MVP scope** — Stellar protocol stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply is always derived. Horizon `/assets` aggregates 4 sources (trustlines + claimable_balances + LP reserves + SAC contract holdings); MVP aggregates only trustlines. Drift on heavily-used DeFi assets can be material (~20-50% under-count vs Horizon for USDC w/ heavy Soroswap + SAC use). Full Horizon parity tracked under task 0194 Future Work. Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT introspection on the upsert path; the affected-set is bounded per ledger so the cost stays small. Implementation owned by task 0194 §1b (total_supply) + §1c (holder_count, supersedes blocked task 0135).
 - `soroban_contracts.contract_type = 'token'` classifies a contract's SEP-41 role
   and is intentionally distinct from this table's name — the two coexist without
   ambiguity now that the table is `assets`
@@ -865,8 +865,9 @@ Design notes:
 - composite `(id, created_at)` PK is required by the partitioning key rule;
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
-  the schema's balance / amount handling; `volume` and `fee_revenue` are
-  explorer-level derived measures
+  the schema's balance / amount handling
+- `volume` and `fee_revenue` are populated by the **indexer** (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), on-chain → indexer): after the snapshot rows for a ledger are inserted by `upsert_pools_and_snapshots` (`crates/indexer/src/handler/persist/write.rs`), a single CTE-driven UPDATE looks up each touched pool's prior snapshot and computes `volume = ABS(reserve_a_post − reserve_a_pre)` plus `fee_revenue = volume × lp.fee_bps / 10000`. The UPDATE excludes any pool that saw a **successful** `LiquidityPoolDeposit` (op type 22) or `LiquidityPoolWithdraw` (23) in the same ledger via a `NOT EXISTS` filter on `operations_appearances` joined to `transactions.successful = TRUE`, so `volume` reflects swap-only activity. The `successful = TRUE` join is required because failed deposit / withdraw ops still land in `operations_appearances` (Stellar tx semantics) but do not move reserves; without the join, a failed deposit attempt could mask a real swap on the same ledger. First-snapshot-per-pool and mixed-op ledgers (successful swap + successful deposit on the same pool in the same ledger) leave both fields NULL — chart endpoints handle NULL gracefully. Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) is a separate task.
+- `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
 - `created_at` drives interval queries and monthly partition management
 
 ### 4.16 LP Positions

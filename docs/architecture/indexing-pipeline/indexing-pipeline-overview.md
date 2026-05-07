@@ -200,11 +200,52 @@ committed in a single atomic DB transaction:
     `extract_liquidity_pools` post-lore-0189). The extractor itself
     accepts `state` change_type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
-    snapshot of a referenced-but-unmodified pool
+    snapshot of a referenced-but-unmodified pool. **After** the snapshot
+    INSERT, a single CTE-driven UPDATE (`upsert_pools_and_snapshots`,
+    bottom of step 13) joins each touched pool to its prior snapshot and
+    fills `volume = ABS(reserve_a delta)` + `fee_revenue = volume × fee_bps / 10000`
+    on the just-inserted row. The UPDATE adds a `NOT EXISTS` filter on
+    `operations_appearances` joined to `transactions.successful = TRUE`
+    for op types 22 (`LiquidityPoolDeposit`) / 23
+    (`LiquidityPoolWithdraw`) in the same ledger, so **successful**
+    deposit / withdraw activity is excluded from volume — only pure-swap
+    reserve deltas survive. Failed deposit / withdraw attempts still
+    appear in `operations_appearances` (Stellar tx semantics: appearance
+    index records every op, success flag lives on the parent
+    transaction); the `successful = TRUE` join keeps them from
+    incorrectly suppressing volume on a real swap that landed in the
+    same ledger. Mixed-op ledgers (swap + deposit on the same pool in
+    the same ledger) and first-snapshot-per-pool both leave volume +
+    fee_revenue NULL; chart endpoints handle NULL gracefully. Per
+    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
+    volume + fee_revenue are on-chain-derivable and belong to the
+    indexer; the off-chain `tvl` (USD oracle) is Lambda 2's responsibility
+    (task 0195 §2b).
 14. upsert `accounts` summary and `account_balances_current`
     (the parallel `account_balance_history` append was removed in task 0159
     per [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md);
-    chart feature design deferred to launch time)
+    chart feature design deferred to launch time). **After** the balance
+    upsert pass, `recompute_asset_aggregates`
+    (`crates/indexer/src/handler/persist/write.rs`) collects every
+    `(asset_code, issuer_id)` pair touched by this ledger's credit-balance
+    writes and trustline removals and runs a single UPDATE that rewrites
+    `assets.holder_count = COUNT(*) FILTER (WHERE balance > 0)`
+    (active-holder semantics, matching Stellar ecosystem convention)
+    and `assets.total_supply = SUM(balance)` from
+    `account_balances_current`. **MVP scope** — Stellar protocol
+    stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply
+    is always derived. Horizon `/assets` aggregates 4 sources
+    (trustlines + claimable_balances + LP reserves + SAC contract
+    holdings); MVP aggregates only trustlines. Material drift on
+    DeFi assets vs Horizon is documented under task 0194 Future Work.
+    Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT
+    introspection on the upsert path; the affected-set is bounded per
+    ledger so the cost stays small. Per
+    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), both
+    columns are on-chain-derivable from `account_balances_current` and
+    belong to the indexer (list-endpoint + on-chain → indexer); SEP-1
+    `name` for classic credit is off-chain and belongs to Lambda 2
+    (task 0195 §2a, supersedes blocked task 0135 / draft task 0124).
 
 ### 5.3 Write Target
 

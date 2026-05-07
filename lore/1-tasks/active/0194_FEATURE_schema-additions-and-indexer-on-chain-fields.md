@@ -27,6 +27,21 @@ history:
     status: active
     who: karolkow
     note: 'Activated to start implementation. Branch cut from develop; 0191 SQS enrichment branch will be merged into the feature branch since 0191 PR has not yet landed on develop and 0194 needs its enrichment-shared crate context.'
+  - date: '2026-05-06'
+    status: active
+    who: karolkow
+    note: >
+      Implementation pass: sub-blocks 1b (total_supply SUM via per-ledger
+      recompute on touched assets), 1c (holder_count = COUNT(*) FILTER
+      (WHERE balance > 0) — active-holder semantics matching Stellar
+      ecosystem convention), 1d (LP volume + fee_revenue via post-INSERT
+      UPDATE with prior-snapshot reserve delta + swap-only NOT EXISTS
+      filter excluding deposit/withdraw ops 22/23), and 1e (verify-only
+      — 0119 trustline path confirmed in
+      `crates/indexer/src/handler/persist/write.rs`) landed. Sub-block
+      1a removed (usd_price + indexes pulled as speculative). ADR 0043
+      already on develop. cargo check + clippy + cargo test -p api/indexer
+      all clean. API types regen baseline (no DTO changes net).
 ---
 
 # DB completeness: schema additions + indexer for on-chain NULL fields needed by list endpoints
@@ -64,45 +79,23 @@ Sources hardcoded `None`:
 - `crates/xdr-parser/src/state.rs:484-486` → `tvl/volume/fee_revenue: None` (snapshot, mixed → split)
 - Audit doc `docs/audits/2026-04-10-pipeline-data-audit.md` §5.2 line 261-264 confirms
 
-### List-endpoint schema gaps (new columns needed)
+### List-endpoint schema gaps
 
-`assets.usd_price` + `assets.usd_price_updated_at` are needed for any future stellarchain.io/markets-style sort-by-value on `/v1/assets` list. Captured as 0191 future-work bullet #6 ("Asset USD prices stellarchain.io/markets parity"). Task 0195 will populate them via Lambda 2; this task lands the columns + index.
+**No new columns needed.** Initial draft proposed `assets.usd_price` + `assets.usd_price_updated_at` for future stellarchain.io/markets-style sort-by-value on `/v1/assets`. **2026-05-06 review (Karol): pulled.** Both columns and the proposed sort feature are speculative — no PM ticket, no frontend mock, no committed product goal beyond "stellarchain.io parity if/when we ever want it" (lifted from 0191 future-work bullet #6). Per YAGNI: defer columns + indexes until a real product ask materialises. Asset USD price work moves entirely to **future-work**; `0195 §2c (asset_usd_price kind)` is dropped from M2.
 
-NFT/LP/transactions/ledgers/contracts list DTOs all map cleanly to existing columns — no schema additions needed for those.
+NFT/LP/transactions/ledgers/contracts list DTOs all map cleanly to existing columns — no schema additions needed for those either.
 
 ### Why split from sister tasks
 
-- **vs 0195** (Lambda 2 enrichment): 0195 fills off-chain NULL columns. 0195 depends on 0194 sub-block 1a (the `assets.usd_price` column) being merged.
+- **vs 0195** (Lambda 2 enrichment): 0195 fills off-chain NULL columns. (Original blocker on 1a removed — 1a deleted.)
 - **vs 0196** (enrichment-backfill crate): 0196 drains pre-existing un-enriched rows for fields populated by 0195 (or 0191's `assets.icon_url`). 0196 depends on 0195 having shared `enrich_*` functions ready.
 - **vs 0197** (audit + docs): 0197 is the final verification — confirms every list field is in schema, indexed, and populated.
 
 ## Implementation Plan
 
-### Sub-block 1a — Schema migrations (atomic, FIRST commit)
+### Sub-block 1a — REMOVED (2026-05-06)
 
-Single migration `crates/db/migrations/{TIMESTAMP}_db-completeness-additions.up.sql` adding:
-
-```sql
--- New columns
-ALTER TABLE assets ADD COLUMN usd_price NUMERIC(28,7);
-ALTER TABLE assets ADD COLUMN usd_price_updated_at TIMESTAMPTZ;
-
--- New indexes for soon-to-be-populated fields
-CREATE INDEX idx_assets_usd_price
-  ON assets (usd_price DESC) WHERE usd_price IS NOT NULL;
-CREATE INDEX idx_assets_holder_count
-  ON assets (holder_count DESC) WHERE holder_count IS NOT NULL;
-CREATE INDEX idx_lp_snapshots_volume
-  ON liquidity_pool_snapshots (pool_id, volume DESC) WHERE volume IS NOT NULL;
-CREATE INDEX idx_lp_snapshots_fee_revenue
-  ON liquidity_pool_snapshots (pool_id, fee_revenue DESC) WHERE fee_revenue IS NOT NULL;
-CREATE INDEX idx_abc_balance
-  ON account_balances_current (balance DESC) WHERE balance > 0;
-```
-
-Down migration: drop in reverse order. Integration test: round-trip migrate up→down→up. ADR 0037 (`current-schema-snapshot`) amended in same PR per ADR 0032 evergreen rule.
-
-**Rust side:** `assets::dto::AssetItem` gets `pub usd_price: Option<String>`; `crates/api/src/assets/queries.rs` SQL extends SELECT. **Trigger CI gate `API types freshness`** — run `npx nx run @rumblefish/api-types:generate` after Rust DTO change, commit `libs/api-types/src/{openapi.json,generated/}` in same commit per CLAUDE.md.
+Originally specified an atomic schema migration adding `assets.usd_price`, `assets.usd_price_updated_at`, plus 5 partial indexes. Pulled after Karol review: the columns serve speculative `sort-by-USD-price` and the indexes back speculative sort variants that no shipped endpoint uses. Both are deferred to future-work; this task no longer touches `assets` schema. Sub-blocks 1b/1c/1d/1e cover indexer-side population only on existing nullable columns.
 
 ### Sub-block 1b — Classic credit `assets.total_supply`
 
@@ -127,7 +120,22 @@ For Soroban tokens, `name` continues to be populated by task **0156** (active) �
 - One-time recount Lambda subcommand needed post-backfill — captured as Future Work, separate ops job
 - Wire in `crates/xdr-parser/src/account_state.rs` and `crates/indexer/src/handler/persist/staging.rs` UPSERT path
 
-### Sub-block 1d — LP `volume` + `fee_revenue` (Phase 1 classic AMM)
+### Sub-block 1d implementation note (2026-05-06)
+
+**Status: landed.** Approach taken in `crates/indexer/src/handler/persist/write.rs::upsert_pools_and_snapshots`:
+
+After snapshot rows for the current ledger are inserted, a single CTE-driven UPDATE looks up the prior ledger's snapshot per touched pool and computes:
+
+- `volume = ABS(cur.reserve_a − prior.reserve_a)` (single-leg, conventional)
+- `fee_revenue = ROUND(volume × lp.fee_bps / 10000.0, 7)`
+
+**Swap-only filter:** the UPDATE adds `NOT EXISTS (... operations_appearances oa JOIN transactions t ... WHERE oa.pool_id = cur.pool_id AND oa.ledger_sequence = $2 AND oa.type IN (22, 23) AND t.successful = TRUE)` — excluding any pool that saw a **successful** `LiquidityPoolDeposit` (op type 22) or `LiquidityPoolWithdraw` (23) in the same ledger. Those ops move reserves but their delta is not trading volume. Failed deposit / withdraw ops still land in `operations_appearances` per Stellar semantics, so joining on `transactions.successful = TRUE` is required to avoid excluding a pool whose only deposit attempt failed (no actual state change → real swap delta on that ledger should still count as volume). Conservative semantics: a pool that mixed a successful swap with a successful deposit in the same ledger gets `volume = NULL` for that ledger rather than an inflated number. Pure-swap ledgers (the common case) populate volume correctly because reserve_a only changes when an asset crosses the pool, so reserve delta = sum of swap amounts.
+
+First-snapshot-per-pool (no prior row) leaves both fields NULL — chart endpoints already handle NULL gracefully.
+
+The hardcoded `volume: None, fee_revenue: None` at `xdr-parser/src/state.rs:622-624` is left in place — values are filled at the persist layer post-INSERT, not at extraction. Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) remains explicit Future Work — separate task, separate PR.
+
+### Sub-block 1d original spec (Phase 1 classic AMM)
 
 **Phase 1 scope only — classic AMM via PathPayment ops.** Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) is explicit Future Work, separate task.
 
@@ -142,26 +150,21 @@ Implementation:
 
 ### Sub-block 1e — `account_balances_current` trustline balances
 
-Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_account_states()` populates only native XLM; trustline balances are extracted nowhere despite the column existing. This was task **0119** which is archived — first sub-step is to verify whether 0119 actually completed this work or was archived prematurely.
+Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_account_states()` populates only native XLM; trustline balances are extracted nowhere despite the column existing. **Task 0119 (FilipDz, completed 2026-04-15) implemented trustline balance extraction across 4 files (+758 lines), 6 unit + 3 integration tests, with `[x]` acceptance items confirmed.** Default plan for 1e is therefore **verify-only**.
 
-If 0119 incomplete:
+**Verify-only plan:**
 
-- Extend `crates/xdr-parser/src/account_state.rs` to emit balance rows for every TrustLine ledger entry change (create, modify, delete)
-- Wire into `staging.rs` upsert for `account_balances_current`
-- Sub-block 1c (holder_count) and sub-block 1b (classic credit `total_supply` SUM) both depend on this being complete — same code path
-- All NOT NULL columns in `account_balances_current` (`account_id`, `asset_type`, `asset_code`, `issuer_id`, `balance`, `last_updated_ledger`) populated atomically on every TrustLine row write — schema enforces, INSERT will fail otherwise. Acceptance must spot-check non-NULL on every column for non-XLM rows on backfill region.
+- Confirm `account_balances_current` on backfill region contains non-XLM rows (sample query: `SELECT COUNT(*) FROM account_balances_current WHERE asset_type != 0`).
+- Spot-check that all NOT NULL columns (`account_id`, `asset_type`, `asset_code`, `issuer_id`, `balance`, `last_updated_ledger`) are populated on the non-XLM rows.
+- Confirm sub-block 1b (classic credit `total_supply` SUM) and 1c (holder_count from change_trust) can build on existing 0119 infrastructure without modification.
 
-### Sub-block 1f — ADR 0026: Field allocation rule
+**Contingency (only if verify-only surfaces a regression):** if non-XLM rows are missing or NOT NULL columns are NULL on the backfill region, re-open the trustline extraction work in `crates/xdr-parser/src/account_state.rs` and `staging.rs`. This contingency is unlikely — 0119 has shipped acceptance — but keeps the sub-block honest.
 
-**New ADR** locking the rule: "List endpoint + on-chain (data already in processed ledger) → indexer; off-chain (HTTP / oracle / per-row RPC) → enrichment Lambda 2; detail-only fields → runtime type-2 in API handler, NEVER persisted." References:
+### Sub-block 1f — REMOVED (ADR creation is independent of this task)
 
-- ADR 0029 (abandon-parsed-artifacts-read-time-xdr-fetch) — companion read-time pattern
-- Task 0188 (SEP-1 type-2 detail enrichment, the precedent)
-- Task 0191 (SQS-driven type-1 enrichment, the precedent)
-- Migration `20260424000000_drop_assets_sep1_detail_cols.up.sql` (the precedent for "no detail-only columns")
-- Audit doc Section 9.3 (now amended)
+[ADR 0043](../../2-adrs/0043_field-allocation-rule.md) (field allocation rule) is **not** created inside this task. Per project policy, ADRs land independently on develop, prior to the tasks that reference them.
 
-This is the linchpin governance doc. Task 0195/0196/0197 reference it verbatim.
+**Sequencing status:** ADR 0043 was merged to develop (commit `745e56b` plus template-alignment follow-up `148bf3c`) **before** this task's implementation pass landed. Tasks 0195/0196/0197 reference ADR 0043 as established law.
 
 ## Acceptance Criteria
 
@@ -180,9 +183,14 @@ This is the linchpin governance doc. Task 0195/0196/0197 reference it verbatim.
 - **Phase 2 LP volume**: Soroban DEX adapters (Soroswap, Phoenix, etc.) — per-DEX event format, dynamic fees. Spawn after Phase 1 lands.
 - **Holder_count one-time recount**: post-backfill ops Lambda subcommand to fully recount. Spawn after 1c lands.
 - **Classic credit `assets.name`** moved out of this task entirely — see 0195 sub-block 2a (icon kind extended to also persist `name` from same SEP-1 fetch). Decision rationale: classic credit names are off-chain (issuer SEP-1 TOML `CURRENCIES[].name`) → Lambda 2 per ADR 0043.
+- **Full Horizon-parity `total_supply`** — current MVP sums only trustline balances. Stellar protocol stores no on-chain `AssetEntry` / `AssetSupplyEntry` (10 LedgerEntry types: ACCOUNT, TRUSTLINE, OFFER, DATA, CLAIMABLE_BALANCE, LIQUIDITY_POOL, CONTRACT_DATA, CONTRACT_CODE, CONFIG_SETTING, TTL — none persists supply). Horizon `/assets` aggregates 4 sources: trustlines + claimable_balances + liquidity_pool reserves + SAC contract holdings. To match Horizon and avoid drift on popular DeFi assets (e.g. USDC w/ heavy Soroswap + SAC use, ~20-50% under-count today), a follow-on must:
+  - Add **liquidity-pool reserve aggregation** — schema already in place (`liquidity_pools` + `liquidity_pool_snapshots`); SQL was prototyped in Round 4 (LATERAL on latest snapshot per pool, index-only seek via `idx_lps_pool`) and benchmarked clean. Trivial to re-land standalone.
+  - Add **`claimable_balances` table + extraction** — new ledger entry type (`CLAIMABLE_BALANCE`) currently not extracted by xdr-parser. Requires new staging row + write path + DTO + canonical SQL. Rare in practice.
+  - Add **per-asset SAC contract holdings tracking** — needs `contract_data` ledger entry decoding to detect `Balance(address)` storage keys per SAC contract. Most complex of the three; potentially material drift for popular DeFi assets.
+  - Update `recompute_asset_aggregates` SQL to sum all 4 sources, or refactor to materialized view (see Round 5 in Implementation Journal).
 
 ## Notes
 
 - **Branching**: cut from develop after 0191 PR merge.
-- **Bundling rationale** (per Karol's "bundle related work" rule): 5 sub-blocks 1a-1f are heterogeneous (schema + 4 indexer sub-systems + ADR) but all share the rule "fix what indexer should have populated", same migration, same test surface, same ADR. Splitting per sub-block would be 5 PRs of <100 lines each — micro-decomposition penalty exceeds review-load benefit.
+- **Bundling rationale** (per Karol's "bundle related work" rule): 4 sub-blocks (1b, 1c, 1d, 1e) are heterogeneous (4 indexer sub-systems) but all share the rule "fix what indexer should have populated", same test surface. Splitting per sub-block would be 4 PRs of <100 lines each — micro-decomposition penalty exceeds review-load benefit. Sub-block 1a (speculative `usd_price` columns + indexes) was pulled per Karol review, see "List-endpoint schema gaps" above. ADR 0043 is **explicitly excluded** from this bundle and lands as its own PR off develop (governance docs land independently of code that references them).
 - **0125 disposition**: superseded by 0195 sub-block 2a (LP TVL via Lambda 2). The volume/fee_revenue parts of 0125's scope move to **this** task (1d).
