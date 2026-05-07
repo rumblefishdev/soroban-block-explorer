@@ -23,6 +23,62 @@ in chronological order. Typical 1000-ledger run, split 4×250:
    `04_d.dump` — one invocation per file, oldest-first.
 6. `db-merge finalize --target-url <merge>` once at the end.
 
+## Helper scripts (`scripts/`)
+
+Three bash wrappers automate the manual flow above end-to-end. Run in
+order. All accept env-var overrides; defaults reproduce the reference
+4×250-ledger run starting at mainnet ledger 62016000.
+
+### 1. `scripts/gen-merge-snapshots.sh` — generate snapshots
+
+Loops `ITERATIONS` times (default 4); each iteration:
+`docker compose down -v --rmi local` → `up -d` → `npm run db:migrate` →
+`backfill-bench --start LO --end HI` → `pg_dump --compress=zstd:19`
+into `.temp/merge-snapshots/0N_ledgers-LO-HI.dump`. Each iteration
+covers `COUNT` consecutive ledgers (default 250) starting at
+`START + (N-1)*COUNT`. **Wipes 5432 every iteration** — runs in the
+preparation phase, before any merge work.
+
+Override: `START=… COUNT=… ITERATIONS=… OUT_DIR=… bash scripts/gen-merge-snapshots.sh`.
+
+### 2. `scripts/run-merge-snapshots.sh` — merge them
+
+Discovers `*.dump` files in `$SNAPSHOTS_DIR` (default
+`.temp/merge-snapshots`), sorts lexically (so `0N_` prefix maps to
+chronological order), brings up `postgres-merge` + `postgres-snapshot-source`,
+migrates the merge target, creates the seven `*_default` partitions to
+match the snapshot layout, then loops `db-merge ingest` per file
+followed by one `db-merge finalize`. Pre-merge backups land in
+`.temp/db-merge-backups/`.
+
+Run with **`RESET=1`** for a fresh merge target — required when
+`pgdata-merge` already has data, otherwise the chronological-only
+preflight rejects the first ingest:
+
+```bash
+RESET=1 bash scripts/run-merge-snapshots.sh
+```
+
+### 3. `scripts/diff-merge-vs-truth.sh` — verify
+
+Builds a single-laptop sequential ground-truth backfill on `postgres`
+(5432) covering the same range, runs `db-merge finalize` on both sides
+for parity (so `nfts.current_owner_*` is rebuilt the same way on
+truth as on merge), then `db-merge diff --left <truth> --right <merge>`.
+Output: 17-row table `TABLE | ROWS_ORIGINAL | ROWS_MERGED |
+HASH_ORIGINAL | HASH_MERGED | MATCH`. Exit 0 = all 17 match → merge
+logically identical to the sequential backfill. Convention: `--left`
+is ORIGINAL (truth), `--right` is MERGED.
+
+**Wipes 5432** to build the truth from scratch (~12 min for 1000
+ledgers). Skip the rebuild and reuse whatever's already there:
+
+```bash
+SKIP_TRUTH=1 bash scripts/diff-merge-vs-truth.sh
+```
+
+Override range with `START=… END=…`.
+
 ## Snapshot creation (`pg_dump`)
 
 `db-merge ingest` consumes `pg_dump --format=custom` files via

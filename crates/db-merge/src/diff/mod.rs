@@ -10,8 +10,10 @@
 //! - sorts deterministically by natural key;
 //! - aggregates `md5(string_agg(canonical, '|' ORDER BY sort_key))`.
 //!
-//! Output is a 17-row table: `table | rows_left | rows_right | hash_left
-//! | hash_right | match`. Exit code 1 if any mismatch.
+//! Output is a 17-row table: `table | rows_original | rows_merged |
+//! hash_original | hash_merged | match`. By convention `--left` is the
+//! ORIGINAL (e.g. sequential ground-truth backfill) and `--right` is
+//! the MERGED target. Exit code 1 if any mismatch.
 
 use sqlx::{Connection, PgConnection, Row};
 
@@ -135,12 +137,12 @@ fn print_report(report: &[Row1]) {
         .unwrap_or(20)
         .max(20);
     println!(
-        "{:<table_w$}  {:>8}  {:>8}  {:<10}  {:<10}  MATCH",
-        "TABLE", "ROWS_L", "ROWS_R", "HASH_L", "HASH_R"
+        "{:<table_w$}  {:>13}  {:>13}  {:<13}  {:<13}  MATCH",
+        "TABLE", "ROWS_ORIGINAL", "ROWS_MERGED", "HASH_ORIGINAL", "HASH_MERGED"
     );
     println!(
         "{}",
-        "-".repeat(table_w + 2 + 8 + 2 + 8 + 2 + 10 + 2 + 10 + 2 + 5)
+        "-".repeat(table_w + 2 + 13 + 2 + 13 + 2 + 13 + 2 + 13 + 2 + 5)
     );
     for r in report {
         let lh = r
@@ -155,7 +157,7 @@ fn print_report(report: &[Row1]) {
             .unwrap_or("(empty)");
         let mark = if r.matches() { "OK" } else { "FAIL" };
         println!(
-            "{:<table_w$}  {:>8}  {:>8}  {:<10}  {:<10}  {}",
+            "{:<table_w$}  {:>13}  {:>13}  {:<13}  {:<13}  {}",
             r.table, r.rows_left, r.rows_right, lh, rh, mark
         );
     }
