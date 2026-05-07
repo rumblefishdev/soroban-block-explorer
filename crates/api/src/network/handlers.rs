@@ -4,25 +4,15 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::cache_control;
 use crate::common::errors;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::dto::NetworkStats;
 use super::queries;
-
-/// API-Gateway-facing cache hint. Matches the `apiGatewayCacheTtlMutable`
-/// value (10s) in `infra/envs/{staging,production}.json` so that when
-/// the gateway cache cluster is enabled it uses its configured TTL
-/// rather than treating the response as cacheable indefinitely.
-/// Worst-case user-perceived staleness is additive (~inner TTL + this
-/// header), not bounded by the inner TTL — see `cache.rs` module docs.
-/// Browsers / CDNs may also observe this header; `public` makes that
-/// explicit.
-const CACHE_CONTROL_VALUE: HeaderValue = HeaderValue::from_static("public, max-age=10");
 
 /// Get top-level chain overview stats.
 ///
@@ -70,13 +60,9 @@ pub async fn get_network_stats(State(state): State<AppState>) -> Response {
     }
 }
 
-/// Build the 200 response with the canonical `Cache-Control` header.
-/// Centralised so cache-hit and cache-miss paths cannot drift on the
-/// header set.
 fn ok_response(stats: Arc<NetworkStats>) -> Response {
     let mut resp = Json(stats).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, CACHE_CONTROL_VALUE);
+    cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
 

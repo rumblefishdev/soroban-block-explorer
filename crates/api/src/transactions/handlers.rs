@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use domain::OperationType;
 
+use crate::common::cache_control;
 use crate::common::cursor::TsIdCursor;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -12,6 +13,7 @@ use crate::common::filters;
 use crate::common::pagination::{finalize_ts_id_page, into_envelope};
 use crate::common::path;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
+use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
 use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
 use crate::runtime_enrichment::stellar_archive::merge::merge_e3_response;
 use crate::state::AppState;
@@ -121,7 +123,9 @@ pub async fn list_transactions(
         })
         .collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +277,18 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         soroban_invocations,
     };
 
-    Json(merge_e3_response(light, heavy)).into_response()
+    // Finalized tx + full heavy overlay → immutable per Stellar consensus.
+    // Degraded response (heavy unavailable) gets short TTL so a retry can
+    // pick up the archive sooner.
+    let body = merge_e3_response(light, heavy);
+    let cache_value = if body.heavy_fields_status == HeavyFieldsStatus::Ok {
+        cache_control::LONG
+    } else {
+        cache_control::SHORT
+    };
+    let mut resp = Json(body).into_response();
+    cache_control::attach(&mut resp, cache_value);
+    resp
 }
 
 fn db_operations(op_rows: &[super::queries::OpRow]) -> Vec<OperationItem> {
