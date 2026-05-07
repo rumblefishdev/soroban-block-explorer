@@ -324,6 +324,14 @@ async fn run_all_steps(
     write::upsert_balances(db_tx, staged, &account_ids).await?;
     timings.balances_ms = t.elapsed().as_millis();
 
+    let t = Instant::now();
+    // Task 0194 sub-blocks 1b + 1c — recompute `assets.holder_count` and
+    // `assets.total_supply` for every (code, issuer_id) the balance writes
+    // touched. Must run after `upsert_balances` so the aggregates see the
+    // post-write state.
+    write::recompute_asset_aggregates(db_tx, staged, &account_ids).await?;
+    timings.aggregates_ms = t.elapsed().as_millis();
+
     let _ = ledger_sequence;
     Ok(())
 }

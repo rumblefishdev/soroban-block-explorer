@@ -843,8 +843,8 @@ CREATE TABLE liquidity_pool_snapshots (
     reserve_b       NUMERIC(28,7) NOT NULL,
     total_shares    NUMERIC(28,7) NOT NULL,
     tvl             NUMERIC(28,7),                            -- Lambda 2 enrichment (ADR 0043 / task 0195 §2b — off-chain price oracle)
-    volume          NUMERIC(28,7),                            -- indexer post-write recompute (ADR 0043 / task 0194 §1d)
-    fee_revenue     NUMERIC(28,7),                            -- indexer post-write recompute (ADR 0043 / task 0194 §1d)
+    volume          NUMERIC(28,7),                            -- deferred to task 0198 (per-op extraction + USD oracle)
+    fee_revenue     NUMERIC(28,7),                            -- deferred to task 0198 (derived from USD-denominated volume)
     created_at      TIMESTAMPTZ   NOT NULL,
     PRIMARY KEY (id, created_at),
     CONSTRAINT ck_lps_pool_id_len CHECK (octet_length(pool_id) = 32)
@@ -866,7 +866,7 @@ Design notes:
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
   the schema's balance / amount handling
-- `volume` and `fee_revenue` are populated by the **indexer** (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), on-chain → indexer): after the snapshot rows for a ledger are inserted by `upsert_pools_and_snapshots` (`crates/indexer/src/handler/persist/write.rs`), a single CTE-driven UPDATE looks up each touched pool's prior snapshot and computes `volume = ABS(reserve_a_post − reserve_a_pre)` plus `fee_revenue = volume × lp.fee_bps / 10000`. The UPDATE excludes any pool that saw a **successful** `LiquidityPoolDeposit` (op type 22) or `LiquidityPoolWithdraw` (23) in the same ledger via a `NOT EXISTS` filter on `operations_appearances` joined to `transactions.successful = TRUE`, so `volume` reflects swap-only activity. The `successful = TRUE` join is required because failed deposit / withdraw ops still land in `operations_appearances` (Stellar tx semantics) but do not move reserves; without the join, a failed deposit attempt could mask a real swap on the same ledger. First-snapshot-per-pool and mixed-op ledgers (successful swap + successful deposit on the same pool in the same ledger) leave both fields NULL — chart endpoints handle NULL gracefully. Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) is a separate task.
+- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0198** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0198 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
 - `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
 - `created_at` drives interval queries and monthly partition management
 

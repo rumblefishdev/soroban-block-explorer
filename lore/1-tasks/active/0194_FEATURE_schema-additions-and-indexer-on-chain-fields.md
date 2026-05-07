@@ -5,7 +5,18 @@ type: FEATURE
 status: active
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks:
-  ['0119', '0125', '0135', '0156', '0188', '0191', '0195', '0196', '0197']
+  [
+    '0119',
+    '0125',
+    '0135',
+    '0156',
+    '0188',
+    '0191',
+    '0195',
+    '0196',
+    '0197',
+    '0198',
+  ]
 tags:
   [
     priority-medium,
@@ -42,6 +53,21 @@ history:
       1a removed (usd_price + indexes pulled as speculative). ADR 0043
       already on develop. cargo check + clippy + cargo test -p api/indexer
       all clean. API types regen baseline (no DTO changes net).
+  - date: '2026-05-07'
+    status: active
+    who: karolkow
+    note: >
+      Sub-block 1d (LP volume + fee_revenue) PULLED entirely. Two
+      correctness flaws made the snapshot-delta approach unfit: (1)
+      reserve delta nets opposite swaps inside one ledger, losing gross
+      volume; (2) single-leg in asset_a units without USD reference is a
+      weak metric for a block explorer. Proper fix needs per-op
+      extraction from PathPayment claimedOffers + price oracle (blocked
+      on 0195 §2b). Spawned task 0198 to track. Code removed from
+      `write.rs::upsert_pools_and_snapshots`; `liquidity_pool_snapshots`
+      `volume` and `fee_revenue` columns stay nullable, populated by
+      0198 when it lands. Task 0194 final scope: 1b + 1c + 1e (verify) +
+      ADR 0043 reference.
 ---
 
 # DB completeness: schema additions + indexer for on-chain NULL fields needed by list endpoints
@@ -69,8 +95,8 @@ Subagent audit confirmed by reading `crates/xdr-parser/src/state.rs`, `crates/in
 | `assets.holder_count`                   | INTEGER       | always NULL                                              | ✅ trustline delta (`change_trust create/delete`) | sub-block 1c                                                                              |
 | `assets.name` (classic credit)          | VARCHAR(256)  | NULL for classic credit (Soroban handled by 0156 active) | ❌ — classic credit names come from SEP-1 TOML    | **OUT OF SCOPE — moved to 0195 sub-block 2a** (icon kind extended to also persist `name`) |
 | `assets.total_supply` (classic credit)  | NUMERIC(28,7) | NULL for classic credit                                  | ✅ SUM of trustline balances                      | sub-block 1b (depends on 1e)                                                              |
-| `liquidity_pool_snapshots.volume`       | NUMERIC(28,7) | always NULL                                              | ✅ PathPayment ops + LP swap event delta          | sub-block 1d                                                                              |
-| `liquidity_pool_snapshots.fee_revenue`  | NUMERIC(28,7) | always NULL                                              | ✅ derived `volume × fee_bps / 10000`             | sub-block 1d                                                                              |
+| `liquidity_pool_snapshots.volume`       | NUMERIC(28,7) | always NULL                                              | ⚠️ on-chain in principle, but needs per-op + USD  | **OUT OF SCOPE — moved to 0198** (per-op extraction + oracle)                             |
+| `liquidity_pool_snapshots.fee_revenue`  | NUMERIC(28,7) | always NULL                                              | ⚠️ derived from USD-denominated volume            | **OUT OF SCOPE — moved to 0198**                                                          |
 | `account_balances_current` (trustlines) | row data      | only native XLM populated                                | ✅ TrustLine ledger entries                       | sub-block 1e                                                                              |
 
 Sources hardcoded `None`:
@@ -120,33 +146,18 @@ For Soroban tokens, `name` continues to be populated by task **0156** (active) �
 - One-time recount Lambda subcommand needed post-backfill — captured as Future Work, separate ops job
 - Wire in `crates/xdr-parser/src/account_state.rs` and `crates/indexer/src/handler/persist/staging.rs` UPSERT path
 
-### Sub-block 1d implementation note (2026-05-06)
+### Sub-block 1d — REMOVED (2026-05-07)
 
-**Status: landed.** Approach taken in `crates/indexer/src/handler/persist/write.rs::upsert_pools_and_snapshots`:
+LP `volume` + `fee_revenue` pulled from this task entirely. **Moved to task 0198** (`LP volume + fee_revenue: per-op extraction with USD-denominated values`).
 
-After snapshot rows for the current ledger are inserted, a single CTE-driven UPDATE looks up the prior ledger's snapshot per touched pool and computes:
+**Why pulled:** initial implementation used reserve-delta (`ABS(reserve_a_post − reserve_a_pre)`) per ledger. Two correctness flaws surfaced in review:
 
-- `volume = ABS(cur.reserve_a − prior.reserve_a)` (single-leg, conventional)
-- `fee_revenue = ROUND(volume × lp.fee_bps / 10000.0, 7)`
+1. **Reserve delta nets opposite swaps inside one ledger.** A ~5s ledger can carry both `swap +50` and `swap −30` on the same pool. Reserve delta = 20; gross volume = 80. The exchange convention is gross. Snapshot-delta loses the cancelled half.
+2. **Single-leg, no USD denomination.** Volume in asset_a (e.g. XLM) without a price reference is hard to consume — comparing pool XLM/USDC vs pool XLM/AQUA, the XLM-leg numbers look comparable but the USD reality may differ 10×.
 
-**Swap-only filter:** the UPDATE adds `NOT EXISTS (... operations_appearances oa JOIN transactions t ... WHERE oa.pool_id = cur.pool_id AND oa.ledger_sequence = $2 AND oa.type IN (22, 23) AND t.successful = TRUE)` — excluding any pool that saw a **successful** `LiquidityPoolDeposit` (op type 22) or `LiquidityPoolWithdraw` (23) in the same ledger. Those ops move reserves but their delta is not trading volume. Failed deposit / withdraw ops still land in `operations_appearances` per Stellar semantics, so joining on `transactions.successful = TRUE` is required to avoid excluding a pool whose only deposit attempt failed (no actual state change → real swap delta on that ledger should still count as volume). Conservative semantics: a pool that mixed a successful swap with a successful deposit in the same ledger gets `volume = NULL` for that ledger rather than an inflated number. Pure-swap ledgers (the common case) populate volume correctly because reserve_a only changes when an asset crosses the pool, so reserve delta = sum of swap amounts.
+These flaws compound. Better to ship NULLs than wrong numbers. Proper fix needs PathPayment `claimedOffers[].amount_sold` per-op extraction + price oracle (blocked on 0195 §2b for the USD half). Captured in task 0198 with full implementation plan.
 
-First-snapshot-per-pool (no prior row) leaves both fields NULL — chart endpoints already handle NULL gracefully.
-
-The hardcoded `volume: None, fee_revenue: None` at `xdr-parser/src/state.rs:622-624` is left in place — values are filled at the persist layer post-INSERT, not at extraction. Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) remains explicit Future Work — separate task, separate PR.
-
-### Sub-block 1d original spec (Phase 1 classic AMM)
-
-**Phase 1 scope only — classic AMM via PathPayment ops.** Phase 2 (Soroban DEX adapters: Soroswap, Phoenix) is explicit Future Work, separate task.
-
-Implementation:
-
-- In `crates/indexer/src/handler/persist/staging.rs:1234` PathPayment branch, detect when path contains a `liquidityPoolId` (already extracted on line 1254 for op detail). Compute reserve delta from before/after `LiquidityPoolEntry` ledger entry change.
-- Volume contribution per swap = the asset amount that crossed the pool. Increment the **live current snapshot row** for that pool (per the existing snapshot windowing logic — verify whether windowing is hourly/daily and where rollover happens).
-- `fee_revenue = volume × fee_bps / 10000` computed in the same write — `fee_bps` lives on `liquidity_pools` row.
-- Drop `volume: None, fee_revenue: None` hardcoding at `xdr-parser/src/state.rs:485-486`.
-
-**Audit doc Section 9.3** (`docs/audits/2026-04-10-pipeline-data-audit.md:512-535`) originally proposed scheduled cron Lambda for both TVL **and** volume. The volume part is explicitly overridden here per the field allocation rule — volume is on-chain derivable, no oracle, no HTTP, so it belongs in the indexer. [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) records this override; ADR 0032 evergreen requires `docs/architecture/indexing-pipeline/**` + `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment in same PR.
+`liquidity_pool_snapshots.volume` and `liquidity_pool_snapshots.fee_revenue` columns stay in schema, NULL until 0198 lands. The hardcoded `volume: None, fee_revenue: None` at `xdr-parser/src/state.rs:484-486` stays.
 
 ### Sub-block 1e — `account_balances_current` trustline balances
 
@@ -170,15 +181,15 @@ Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_acc
 
 - [x] Sub-block 1b: code shipped (`recompute_asset_aggregates` SUM(balance) per touched (code, issuer_id)). Sample-query verification on backfill region pending PR-time check. `name` for classic credits is NOT in this task's scope — see 0195 sub-block 2a (icon kind extension to also persist SEP-1 `name`).
 - [x] Sub-block 1c: code shipped (`recompute_asset_aggregates` COUNT(\*) FILTER (WHERE balance > 0) — active-holder semantics). Sample-query verification + one-time recount tooling spawned as separate ops task pending.
-- [x] Sub-block 1d: code shipped (post-INSERT UPDATE in `upsert_pools_and_snapshots` with prior-snapshot reserve delta + swap-only `NOT EXISTS` filter on `transactions.successful = TRUE`). Sample-query verification on backfill region pending. Phase 2 DEX adapters spawned as separate task.
+- [ ] Sub-block 1d: PULLED — moved to task 0198 (per-op extraction + USD denomination). Reserve-delta approach was incorrect (nets opposite swaps; lacks USD reference). Snapshot columns stay NULL until 0198 lands.
 - [x] Sub-block 1e: verify-only — `upsert_balances_credit` (write.rs:2119) populates all NOT NULL columns; 0119 trustline path confirmed. Sample-query spot-check on backfill pending PR-time.
 - [x] ADR 0043 merged on develop (separate, independent PR landed prior to this task's review)
-- [x] **Docs updated** per ADR 0032: `docs/architecture/database-schema/database-schema-overview.md` §4.10 (assets — `total_supply` / `holder_count` recompute attribution + ADR 0043 link) + §4.15 (lp_snapshots — `volume` / `fee_revenue` post-write recompute attribution + ADR 0043 link); `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` §5.2 steps 13 + 14 (recompute passes documented); `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment — TODO before this task's PR closes (small follow-up paragraph noting volume → indexer override).
-- [ ] **API types regenerated** — N/A in current scope (no DTO additions; sub-block 1a removed). Trigger if future sub-blocks touch `crates/api/**` shape.
+- [x] **Docs updated** per ADR 0032: `docs/architecture/database-schema/database-schema-overview.md` §4.10 (assets — `total_supply` / `holder_count` recompute attribution + ADR 0043 link) + §4.15 (lp_snapshots — `volume` / `fee_revenue` deferred to 0198); `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` §5.2 step 14 (recompute pass documented; LP volume note removed). Audit doc Section 9.3 amendment — N/A here, will be made by 0198.
+- [ ] **API types regenerated** — N/A in current scope (no DTO additions; sub-blocks 1a + 1d removed). Trigger if future sub-blocks touch `crates/api/**` shape.
 
 ## Future Work (out of scope, spawn separate tasks)
 
-- **Phase 2 LP volume**: Soroban DEX adapters (Soroswap, Phoenix, etc.) — per-DEX event format, dynamic fees. Spawn after Phase 1 lands.
+- **LP volume + fee_revenue**: pulled from this task entirely → tracked in **task 0198** (per-op extraction from PathPayment `claimedOffers` + USD oracle via 0195 §2b). Includes Phase 2 Soroban DEX adapters (Soroswap, Phoenix) once Phase 1 lands.
 - **Holder_count one-time recount**: post-backfill ops Lambda subcommand to fully recount. Spawn after 1c lands.
 - **Classic credit `assets.name`** moved out of this task entirely — see 0195 sub-block 2a (icon kind extended to also persist `name` from same SEP-1 fetch). Decision rationale: classic credit names are off-chain (issuer SEP-1 TOML `CURRENCIES[].name`) → Lambda 2 per ADR 0043.
 - **Full Horizon-parity `total_supply`** — current MVP sums only trustline balances. Stellar protocol stores no on-chain `AssetEntry` / `AssetSupplyEntry` (10 LedgerEntry types: ACCOUNT, TRUSTLINE, OFFER, DATA, CLAIMABLE_BALANCE, LIQUIDITY_POOL, CONTRACT_DATA, CONTRACT_CODE, CONFIG_SETTING, TTL — none persists supply). Horizon `/assets` aggregates 4 sources: trustlines + claimable_balances + liquidity_pool reserves + SAC contract holdings. To match Horizon and avoid drift on popular DeFi assets (e.g. USDC w/ heavy Soroswap + SAC use, ~20-50% under-count today), a follow-on must:
@@ -190,8 +201,8 @@ Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_acc
 ## Notes
 
 - **Branching**: cut from develop after 0191 PR merge.
-- **Bundling rationale** (per Karol's "bundle related work" rule): 4 sub-blocks (1b, 1c, 1d, 1e) are heterogeneous (4 indexer sub-systems) but all share the rule "fix what indexer should have populated", same test surface. Splitting per sub-block would be 4 PRs of <100 lines each — micro-decomposition penalty exceeds review-load benefit. Sub-block 1a (speculative `usd_price` columns + indexes) was pulled per Karol review, see "List-endpoint schema gaps" above. ADR 0043 is **explicitly excluded** from this bundle and lands as its own PR off develop (governance docs land independently of code that references them).
-- **0125 disposition**: superseded by 0195 sub-block 2a (LP TVL via Lambda 2). The volume/fee_revenue parts of 0125's scope move to **this** task (1d).
+- **Bundling rationale** (per Karol's "bundle related work" rule): final scope is 3 sub-blocks (1b, 1c, 1e) — all on the assets / balances axis, same write path (`upsert_balances` + `recompute_asset_aggregates`). Sub-block 1a (speculative `usd_price` columns + indexes) was pulled as YAGNI; sub-block 1d (LP volume) was pulled mid-implementation after correctness review and re-spawned as task 0198. ADR 0043 is **explicitly excluded** from this bundle and lands as its own PR off develop (governance docs land independently of code that references them).
+- **0125 disposition**: superseded by 0195 sub-block 2a (LP TVL via Lambda 2). The volume/fee_revenue parts of 0125's scope move to **task 0198** (no longer in 0194).
 
 ---
 
