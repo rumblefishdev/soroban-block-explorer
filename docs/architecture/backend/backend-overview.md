@@ -144,20 +144,33 @@ The backend serves data from the block explorer's own database, adding:
 - **Search** - unified search across transaction hashes, account IDs, contract IDs, token
   identifiers, NFT identifiers, pool IDs, and indexed metadata using PostgreSQL full-text
   indexes
-- **Read-time XDR fetch for heavy-field endpoints** — per
+- **Runtime details enrichment** — per
   [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md),
-  the backend does **not** store raw envelope / result / result-meta XDR on
-  `transactions`, and per
-  [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) /
-  [ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md)
-  it does not store decoded events / invocation-tree nodes either. For E3
-  `/transactions/:hash` (full envelope + parsed invocation tree),
-  E13 `/contracts/:id/invocations` (per-node function name / args / return value),
-  and E14 `/contracts/:id/events` (full event detail) the API fetches the
-  corresponding `.xdr.zst` from the public Stellar ledger archive, decompresses
-  it, parses it with the shared `crates/xdr-parser` crate, and merges the
-  decoded payload into the response. List endpoints never call the archive and
-  answer from typed summary columns + appearance indexes only
+  the backend resolves enrichable detail fields at request time rather than
+  persisting them. Two transport-specific submodules under
+  `crates/api/src/runtime_enrichment/` share the architectural shape
+  (per-request, fail-soft, in-process LRU-cached). Status surfacing is
+  per-submodule: archive-backed endpoints expose a `heavy_fields_status`
+  discriminator (`ok` / `unavailable`); SEP-1 enrichment surfaces failures
+  silently as `null` description / home_page (warn-logged) and adds no
+  status field today:
+  - **`runtime_enrichment::stellar_archive`** — fetches `.xdr.zst` ledger files
+    from the public Stellar archive on S3, decompresses with `crates/xdr-parser`
+    and merges decoded payload into responses. Drives E3 `/transactions/:hash`
+    (full envelope + parsed invocation tree, per
+    [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) /
+    [ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md))
+    and E14 `/contracts/:id/events` (full event detail). List endpoints never
+    call the archive and answer from typed summary columns + appearance indexes only.
+  - **`runtime_enrichment::sep1`** — issues HTTPS GETs to
+    `https://{issuer.home_domain}/.well-known/stellar.toml`, parses the SEP-1
+    schema, and merges `[[CURRENCIES]]` per-token fields plus
+    `[DOCUMENTATION]` org info into asset detail responses (task 0188).
+    Built-in safeguards: 100 KB body cap (per SEP-1 spec), 1 s connect / 2 s
+    request timeouts, RFC 1035 hostname validation rejecting IP literals, and
+    a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
+    consumed only by `GET /v1/assets/{id}`; future detail endpoints
+    (accounts, etc.) will reuse the same fetcher
 - **Surrogate-key resolution** — every StrKey that enters a route parameter
   (`G...`, `C...`) is resolved to the `BIGINT` surrogate via the relevant
   `UNIQUE` index at the request boundary
@@ -416,6 +429,40 @@ flag is FALSE).
 
 No caching: `q` variability makes a TTL cache useless and the per-CTE `LIMIT` keeps each
 query bounded.
+
+### 6.4 Response Caching
+
+Per task 0055, every public endpoint sets an explicit `Cache-Control` header
+that the API Gateway stage cache (CDK config — task 0097) honours. Constants
+live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
+
+| Tier             | `Cache-Control`       | Endpoints                                                                                                                                                                                                           |
+| ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Long** (300s)  | `public, max-age=300` | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                      |
+| **Medium** (60s) | `public, max-age=60`  | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                   |
+| **Short** (10s)  | `public, max-age=10`  | `GET /network/stats`, list endpoints, `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, etc. |
+| **No-store**     | `no-store`            | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                              |
+
+Two endpoints carry **conditional** logic:
+
+- `GET /ledgers/:sequence` — Long when `next_sequence` is `Some` (closed
+  ledger, immutable per Stellar consensus); Short when the requested ledger
+  is the chain head and the indexer may still be settling.
+- `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
+  archive overlay merged); Short when archive fetch failed
+  (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
+  sooner.
+
+The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
+`infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
+clamps to its configured floor); raising above 10s would expose stale data
+past one Stellar ledger cycle (~5s).
+
+Cache-key requirements (consumed by CDK task 0097): full path + every query
+parameter, including `cursor`. Different filter combinations produce
+distinct cache entries. See
+[`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md) for the
+infrastructure contract.
 
 ## 7. Data Access and Response Model
 

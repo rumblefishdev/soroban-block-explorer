@@ -2,9 +2,9 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::cache_control;
 use crate::common::cursor::TsIdCursor;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -15,9 +15,6 @@ use crate::state::AppState;
 
 use super::dto::{AccountBalance, AccountDetailResponse, AccountTransactionItem};
 use super::queries::{fetch_account, fetch_balances, fetch_transactions};
-
-/// 10s matches the API Gateway `apiGatewayCacheTtlMutable` config.
-const CACHE_CONTROL_SHORT: HeaderValue = HeaderValue::from_static("public, max-age=10");
 
 // ---------------------------------------------------------------------------
 // GET /v1/accounts/:account_id
@@ -85,8 +82,7 @@ pub async fn get_account(
     };
 
     let mut resp = Json(body).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, CACHE_CONTROL_SHORT);
+    cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
 
@@ -166,7 +162,6 @@ pub async fn list_account_transactions(
         .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, CACHE_CONTROL_SHORT);
+    cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }

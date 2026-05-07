@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
 use xdr_parser::EventSource;
 
+use crate::common::cache_control;
 use crate::common::cursor::{self, TsIdCursor};
 use crate::common::extractors::Pagination;
 use crate::common::{errors, path};
@@ -47,7 +48,11 @@ async fn fetch_unique_ledgers(
             .collect()
     };
 
-    let results = state.fetcher.fetch_ledgers(&unique_seqs).await;
+    let results = state
+        .runtime_enrichment
+        .stellar_archive
+        .fetch_ledgers(&unique_seqs)
+        .await;
     unique_seqs
         .into_iter()
         .zip(results)
@@ -130,7 +135,9 @@ pub async fn get_contract(
     }
 
     if let Some(cached) = state.contract_cache.get(&contract_id) {
-        return Json(cached).into_response();
+        let mut resp = Json(cached).into_response();
+        cache_control::attach(&mut resp, cache_control::MEDIUM);
+        return resp;
     }
 
     let contract = match fetch_contract(&state.db, &contract_id).await {
@@ -171,7 +178,9 @@ pub async fn get_contract(
     state
         .contract_cache
         .insert(contract_id, Arc::clone(&response));
-    Json(response).into_response()
+    let mut resp = Json(response).into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
 }
 
 #[utoipa::path(
@@ -207,12 +216,14 @@ pub async fn get_interface(
         }
     };
 
-    Json(InterfaceResponse {
+    let mut resp = Json(InterfaceResponse {
         contract_id: row.contract_id,
         wasm_hash: row.wasm_hash,
         interface_metadata: row.interface_metadata,
     })
-    .into_response()
+    .into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
 }
 
 #[utoipa::path(
@@ -291,7 +302,7 @@ pub async fn list_invocations(
         })
         .collect();
 
-    Json(Paginated {
+    let mut resp = Json(Paginated {
         data,
         page: PageInfo {
             cursor: next_cursor,
@@ -299,7 +310,9 @@ pub async fn list_invocations(
             has_more: db_had_more,
         },
     })
-    .into_response()
+    .into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(
@@ -382,7 +395,7 @@ pub async fn list_events(
         None => pagination.cursor.as_ref().map(cursor::encode),
     };
 
-    Json(Paginated {
+    let mut resp = Json(Paginated {
         data: expanded.items,
         page: PageInfo {
             cursor: next_cursor,
@@ -390,7 +403,9 @@ pub async fn list_events(
             has_more,
         },
     })
-    .into_response()
+    .into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 struct ExpandedPage<T> {

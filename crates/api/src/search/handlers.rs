@@ -7,6 +7,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use crate::common::cache_control;
 use crate::common::errors;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
@@ -131,11 +132,13 @@ pub async fn get_search(
     //    that hits an existing row.
     match queries::fetch_redirect(&state.db, &classified).await {
         Ok(Some((entity_type, entity_id))) => {
-            return Json(SearchResponse::Redirect(SearchRedirect {
+            let mut resp = Json(SearchResponse::Redirect(SearchRedirect {
                 entity_type,
                 entity_id,
             }))
             .into_response();
+            cache_control::attach(&mut resp, cache_control::NO_STORE);
+            return resp;
         }
         Ok(None) => {}
         Err(e) => {
@@ -155,7 +158,9 @@ pub async fn get_search(
         };
 
     let groups = group_hits(rows);
-    Json(SearchResponse::Results(SearchResults { groups })).into_response()
+    let mut resp = Json(SearchResponse::Results(SearchResults { groups })).into_response();
+    cache_control::attach(&mut resp, cache_control::NO_STORE);
+    resp
 }
 
 /// Parse the optional CSV `?type=` filter.
