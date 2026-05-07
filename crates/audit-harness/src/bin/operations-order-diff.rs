@@ -45,7 +45,7 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 use stellar_xdr::curr::{LedgerCloseMeta, LedgerCloseMetaBatch, Limits, ReadXdr, TransactionMeta};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use xdr_parser::ExtractedOperation;
 
 const PARTITION_SIZE: u32 = 64_000;
@@ -314,8 +314,15 @@ async fn run_diff(
     samples: Vec<SampledTx>,
     concurrency: usize,
 ) -> Result<Report, Box<dyn std::error::Error + Send + Sync>> {
-    let cache: Arc<Mutex<HashMap<u32, Arc<LedgerCloseMeta>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    // Per-ledger singleflight: the inner `OnceCell` is a write-once slot
+    // shared across all tasks that ask for the same ledger sequence —
+    // exactly one of them runs the S3 GET + zstd decode + XDR parse;
+    // the rest await the same future and read its result. Without this,
+    // concurrent tasks sampling distinct txs from the same ledger would
+    // each issue a redundant fetch + parse before any of them got to
+    // populate the cache.
+    type LedgerCell = OnceCell<Arc<LedgerCloseMeta>>;
+    let cache: Arc<Mutex<HashMap<u32, Arc<LedgerCell>>>> = Arc::new(Mutex::new(HashMap::new()));
     let sem = Arc::new(Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(samples.len());
 
@@ -416,7 +423,7 @@ async fn compare_tx(
     http: &reqwest::Client,
     archive_url: &str,
     network_id: &[u8; 32],
-    cache: &Mutex<HashMap<u32, Arc<LedgerCloseMeta>>>,
+    cache: &Mutex<HashMap<u32, Arc<OnceCell<Arc<LedgerCloseMeta>>>>>,
     s: &SampledTx,
 ) -> Result<TxComparison, Box<dyn std::error::Error + Send + Sync>> {
     let meta = get_ledger_meta(http, archive_url, cache, s.ledger_sequence).await?;
@@ -433,31 +440,47 @@ async fn compare_tx(
 async fn get_ledger_meta(
     http: &reqwest::Client,
     archive_url: &str,
-    cache: &Mutex<HashMap<u32, Arc<LedgerCloseMeta>>>,
+    cache: &Mutex<HashMap<u32, Arc<OnceCell<Arc<LedgerCloseMeta>>>>>,
     seq: u32,
 ) -> Result<Arc<LedgerCloseMeta>, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(m) = cache.lock().await.get(&seq).cloned() {
-        return Ok(m);
-    }
-    let url = ledger_url(archive_url, seq);
-    let bytes = http
-        .get(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
+    // Get-or-insert the per-ledger `OnceCell`. The cache `Mutex` is held
+    // only long enough to look up / insert the cell handle — the
+    // (potentially slow) fetch + parse runs against a clone of the cell
+    // outside the lock so that concurrent requests for *different*
+    // ledgers do not serialise on the cache.
+    let cell = {
+        let mut guard = cache.lock().await;
+        guard
+            .entry(seq)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
+    };
+    let meta = cell
+        .get_or_try_init(|| async {
+            let url = ledger_url(archive_url, seq);
+            let bytes = http
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            let xdr = zstd::decode_all(&bytes[..])?;
+            let batch = LedgerCloseMetaBatch::from_xdr(&xdr, Limits::none())?;
+            let meta = batch
+                .ledger_close_metas
+                .iter()
+                .find(|m| ledger_seq_of(m) == seq)
+                .ok_or_else(|| {
+                    Box::<dyn std::error::Error + Send + Sync>::from(
+                        "requested ledger seq not in batch",
+                    )
+                })?
+                .clone();
+            Ok::<Arc<LedgerCloseMeta>, Box<dyn std::error::Error + Send + Sync>>(Arc::new(meta))
+        })
         .await?;
-    let xdr = zstd::decode_all(&bytes[..])?;
-    let batch = LedgerCloseMetaBatch::from_xdr(&xdr, Limits::none())?;
-    let meta = batch
-        .ledger_close_metas
-        .iter()
-        .find(|m| ledger_seq_of(m) == seq)
-        .ok_or("requested ledger seq not in batch")?
-        .clone();
-    let arc = Arc::new(meta);
-    cache.lock().await.insert(seq, arc.clone());
-    Ok(arc)
+    Ok(meta.clone())
 }
 
 fn extract_xdr_order(

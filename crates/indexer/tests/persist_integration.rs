@@ -3560,5 +3560,4 @@ async fn clean_minimal_test_ledger(pool: &PgPool, tx_hash: &str, ledger_seq: u32
     // canonical fixture and may be touched by parallel tests. Only the
     // ledger / transaction / FK-dependent rows need scoped cleanup; the
     // canonical-fixture cleanup wipes the account rows.
-    let _ = ledger_seq;
 }

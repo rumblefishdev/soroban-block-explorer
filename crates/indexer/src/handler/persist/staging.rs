@@ -714,7 +714,16 @@ impl Staged {
         // ordering bug: it produced INSERT order keyed by `asset_code`,
         // making `oa.id` BIGSERIAL alphabetic instead of monotone with
         // apply order.
-        op_rows.sort_by_key(|r| (r.tx_hash_hex.clone(), r.application_order));
+        //
+        // `sort_by` with a chained comparator instead of `sort_by_key` so
+        // we don't allocate a new `String` per row to materialise the key
+        // (the tx_hash_hex strings are 64 chars; on a busy partition that
+        // is non-trivial steady-state churn).
+        op_rows.sort_by(|a, b| {
+            a.tx_hash_hex
+                .cmp(&b.tx_hash_hex)
+                .then_with(|| a.application_order.cmp(&b.application_order))
+        });
 
         // --- events flatten for appearance aggregation ---------------------
         //
