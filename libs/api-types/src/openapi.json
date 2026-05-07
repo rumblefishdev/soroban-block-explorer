@@ -2682,7 +2682,12 @@
           "appearance_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Global BIGSERIAL `operations_appearances.id`; result-set order\n(`ORDER BY oa.id`) is the operation's within-tx application order."
+            "description": "Global BIGSERIAL `operations_appearances.id`. Internal ordering\nartefact only; not a within-tx index. Use `application_order`\nfor apply-order display and to join against\n`XdrOperationDto.application_order` from the heavy overlay."
+          },
+          "application_order": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "1-based per-tx apply position carrying on-chain operation order\n(task 0192). For folded appearance rows (multiple identical-identity\nenvelope ops collapsed into one row, see task 0163) this is the\nMIN of the folded ops' indices — the position of the row's first\noccurrence in `tx.operations[]`. `None` for pre-task-0192 rows\nwhere the column was not yet populated; clients fall back to\n`appearance_id` order in that case."
           },
           "asset_code": {
             "type": ["string", "null"],

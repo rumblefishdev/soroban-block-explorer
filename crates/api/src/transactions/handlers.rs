@@ -289,6 +289,7 @@ fn db_operations(op_rows: &[super::queries::OpRow]) -> Vec<OperationItem> {
             asset_code: op.asset_code.clone(),
             asset_issuer: op.asset_issuer.clone(),
             pool_id: op.pool_id.clone(),
+            application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,
         })

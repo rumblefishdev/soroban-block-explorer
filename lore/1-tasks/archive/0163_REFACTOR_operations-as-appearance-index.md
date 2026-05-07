@@ -24,6 +24,22 @@ history:
       carrying CCB ops (179/179). DB size 70 → 67 MB after dropping redundant
       `idx_ops_app_tx`. No API breakage — per-op detail already served from
       XDR via `stellar_archive` path.
+  - date: 2026-05-07
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Postscript (task 0192). The premise "no API endpoint reads
+      `application_order`" was correct at the time of this archive but was
+      contradicted shortly after by endpoint 03 Statement C, which used
+      `ORDER BY oa.id` and documented (in the SQL header) that it was
+      monotone with apply order. Empirically false — the
+      `HashMap<identity, count>` aggregation introduced here produced
+      alphabetic-by-asset_code INSERT order, making `oa.id` BIGSERIAL
+      alphabetic instead of apply-ordered. Task 0192 reintroduced
+      `application_order SMALLINT` as a NULLABLE column (not a revert of
+      this refactor — the appearance-index pattern stays) and replaced
+      the alphabetic identity-tuple sort in staging with an explicit
+      `min_apply_order` aggregation + `sort_by_key((tx, application_order))`.
 ---
 
 # Refactor: `operations` → `operations_appearances`

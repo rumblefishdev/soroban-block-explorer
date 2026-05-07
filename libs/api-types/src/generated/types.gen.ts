@@ -571,10 +571,22 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * Global BIGSERIAL `operations_appearances.id`; result-set order
-   * (`ORDER BY oa.id`) is the operation's within-tx application order.
+   * Global BIGSERIAL `operations_appearances.id`. Internal ordering
+   * artefact only; not a within-tx index. Use `application_order`
+   * for apply-order display and to join against
+   * `XdrOperationDto.application_order` from the heavy overlay.
    */
   appearance_id: number;
+  /**
+   * 1-based per-tx apply position carrying on-chain operation order
+   * (task 0192). For folded appearance rows (multiple identical-identity
+   * envelope ops collapsed into one row, see task 0163) this is the
+   * MIN of the folded ops' indices — the position of the row's first
+   * occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
+   * where the column was not yet populated; clients fall back to
+   * `appearance_id` order in that case.
+   */
+  application_order?: number | null;
   /**
    * Asset code (≤12 chars) for classic asset operations.
    */
