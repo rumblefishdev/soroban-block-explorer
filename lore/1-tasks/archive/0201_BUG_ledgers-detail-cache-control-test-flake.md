@@ -2,7 +2,7 @@
 id: '0201'
 title: 'ledgers detail Cache-Control test flake on shared dev DB'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0047']
 tags: [priority-low, effort-small, layer-api, layer-tests, flake]
@@ -22,6 +22,17 @@ history:
       rule. Originally drafted as 0194 against a stale develop-merge-base
       that did not see the existing `0194_FEATURE_*` task; renumbered to
       0201 (next free ID after develop fast-forward) before push.
+  - date: '2026-05-07'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Landed via PR #164 (commit b94cefd). Test fixture `head-pick`
+      SELECT now matches the list-endpoint canonical ordering
+      `(closed_at DESC, sequence DESC)`, so synthetic ledgers
+      90_000_001..90_000_003 (identical `closed_at`) deterministically
+      resolve to the highest sequence — chain-tip semantics restored.
+      Handler unchanged. No-op against production data. 1 file changed
+      (crates/api/src/tests_integration.rs).
 ---
 
 # `ledgers_detail_returns_header_and_cache_control_against_real_db` flakes on shared dev DB
