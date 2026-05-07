@@ -243,6 +243,28 @@ ENGINE = MergeTree()
 PARTITION BY toYYYYMM(created_at)
 ORDER BY (id, created_at);
 
+-- wasm_interface_metadata
+CREATE TABLE mirror.wasm_interface_metadata (
+    wasm_hash_hex FixedString(64) CODEC(LZ4),
+    metadata      String CODEC(LZ4)  -- JSONB → String
+)
+ENGINE = MergeTree()
+ORDER BY wasm_hash_hex;
+
+-- nft_ownership (partitioned, may be empty in audit DB)
+CREATE TABLE mirror.nft_ownership (
+    nft_id          UInt32 CODEC(Delta, LZ4),
+    transaction_id  UInt64 CODEC(Delta, LZ4),
+    owner_id        Nullable(UInt64) CODEC(LZ4),
+    event_type      Int8,
+    ledger_sequence UInt64 CODEC(Delta, LZ4),
+    event_order     Int16,
+    created_at      DateTime64(6, 'UTC') CODEC(DoubleDelta, LZ4)
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (nft_id, created_at, ledger_sequence, event_order);
+
 -- liquidity_pool_snapshots
 CREATE TABLE mirror.liquidity_pool_snapshots (
     id              UInt64 CODEC(Delta, LZ4),
@@ -342,6 +364,9 @@ copy_table "lp_positions" \
 copy_table_renamed "transaction_hash_index" "transaction_hash_index" \
     "encode(hash, 'hex') AS hash_hex, ledger_sequence, created_at"
 
+copy_table "wasm_interface_metadata" \
+    "encode(wasm_hash, 'hex') AS wasm_hash_hex, metadata::TEXT AS metadata"
+
 echo "=== Step 4: Copy data — partitioned tables (per partition) ==="
 
 PARTITIONS=$(run_pg -tA -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename ~ '_y[0-9]+m[0-9]+\$' ORDER BY tablename")
@@ -372,6 +397,10 @@ for partition in $PARTITIONS; do
             ch_tbl="liquidity_pool_snapshots"
             select_clause="id, encode(pool_id, 'hex') AS pool_id_hex, ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue, created_at"
             ;;
+        nft_ownership_y*)
+            ch_tbl="nft_ownership"
+            select_clause="nft_id, transaction_id, owner_id, event_type, ledger_sequence, event_order, created_at"
+            ;;
         *)
             echo "  $partition: skipping (no parent mapping)"
             continue
@@ -394,7 +423,7 @@ for partition in $PARTITIONS; do
 done
 
 echo "=== Step 5: Optimize merges ==="
-for tbl in operations_appearances soroban_events_appearances soroban_invocations_appearances transactions transaction_participants liquidity_pool_snapshots ledgers accounts soroban_contracts liquidity_pools assets nfts account_balances_current lp_positions transaction_hash_index; do
+for tbl in operations_appearances soroban_events_appearances soroban_invocations_appearances transactions transaction_participants liquidity_pool_snapshots nft_ownership ledgers accounts soroban_contracts liquidity_pools assets nfts account_balances_current lp_positions transaction_hash_index wasm_interface_metadata; do
     echo "  Optimizing mirror.$tbl..."
     run_ch -q "OPTIMIZE TABLE mirror.$tbl FINAL" 2>/dev/null || echo "    (skip — table empty or doesn't exist)"
 done
