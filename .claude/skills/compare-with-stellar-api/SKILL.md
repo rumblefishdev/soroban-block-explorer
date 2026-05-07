@@ -161,6 +161,33 @@ Hard rules:
 | 2   | stellar.expert               | `https://stellar.expert/explorer/public`                            | `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`.                                                                                                                                           | WebFetch        |
 | 3   | Raw XDR (independent decode) | n/a — fetch from Horizon `/transactions/<hash>` then decode locally | See "Subagent 3 specifics" below.                                                                                                                                                                                                             | WebFetch + Bash |
 
+### stellar.expert `/contract/<C>` field surface inventory
+
+The stellar.expert API contract endpoint (`https://api.stellar.expert/explorer/public/contract/<C>`) is the primary external source for Soroban contract verification (Horizon REST has no `/contracts` endpoint). What it does and does not expose, observed empirically:
+
+**Exposes:**
+
+- `contract` — C-StrKey
+- `created` — Unix epoch timestamp of deployment (NOT a ledger sequence)
+- `creator` — G-StrKey of the deployer/uploader account
+- `asset` — only for SAC contracts (e.g. `"POSTER-GAVAILXQ…-2"` or `"XLM"` for native SAC); absent on non-SAC
+- `wasm` — wasm hash hex for non-SAC contracts; `null` or absent for SAC
+- `payments_count`, `subinvocation`, `events`, `errors`, `storage_entries` — lifetime aggregates
+- `validation` — verification status for non-SAC code
+
+**Does NOT expose** (verifications that need an alternative path or accept UNVERIFIABLE):
+
+- Ledger sequences for any deploy/upload event — convert `created` Unix ts → DB `ledgers.closed_at::epoch` to cross-check `deployed_at_ledger` / `wasm_uploaded_at_ledger`.
+- Explicit `is_sac` flag — infer from `asset` field present + `wasm` absent/null.
+- `contract_type` numeric encoding.
+- Unique caller counts (DB has `recent_unique_callers`, stellar.expert does not surface this distinct dimension).
+- Top-level lifetime `invocations` count is sometimes returned as `null` even on contracts with documented activity — gating/lag/unpopulated. Treat as UNVERIFIABLE rather than MISMATCH; cross-check via soroban-rpc `getEvents` if the contract's activity falls within ~5-day RPC retention.
+
+**Status code semantics** (same as `/asset/`):
+- 200 → contract known to indexer, fields populated.
+- 400 → StrKey malformed (CRC fails) → STRUCTURAL_FAIL (synthetic/fixture).
+- 404 → valid StrKey, contract not indexed → SOURCE_MISSING.
+
 ### Pre-flight: StrKey CRC-16 validation (free, no network)
 
 Before dispatching subagents to verify entity rows whose primary identifier is a StrKey (`G…` account, `C…` contract), run `stellar_sdk.StrKey.decode_*` locally to catch malformed StrKeys. Audit databases sometimes contain hand-rolled fixture data (e.g. `GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAISSUER`, `CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASAC`) — these look StrKey-shaped but fail the CRC-16 invariant. They will return HTTP 400 from external sources; pre-validating saves a round-trip and produces a cleaner verdict.
