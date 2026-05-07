@@ -2,10 +2,11 @@
 //! remapped via `merge_remap.accounts`. Mirror of indexer upsert at
 //! `write.rs:410-427`.
 //!
-//! **`search_vector` is GENERATED ALWAYS** (per ADR 0040 +
-//! migration 0002) — must be omitted from the INSERT column list. If
-//! included, Postgres raises `cannot insert a non-DEFAULT value into
-//! column "search_vector"`. AC #7 asserts this is honored.
+//! **`search_vector` is GENERATED ALWAYS** (migration
+//! `20260505130000_soroban_contracts_typed_name_column` recreated it
+//! reading typed `name` instead of `metadata->>'name'`) — must be
+//! omitted from the INSERT column list. If included, Postgres raises
+//! `cannot insert a non-DEFAULT value into column "search_vector"`.
 //!
 //! Batched by source `id` (no clean ledger column on this table).
 //! `wasm_uploaded_at_ledger`/`deployed_at_ledger` are both nullable —
@@ -27,7 +28,7 @@ pub async fn run(conn: &mut PgConnection) -> Result<MergeStats, MergeError> {
             SELECT s.id AS src_id, s.contract_id, s.wasm_hash,
                    s.wasm_uploaded_at_ledger,
                    ra.target_id AS deployer_id_remapped,
-                   s.deployed_at_ledger, s.contract_type, s.is_sac, s.metadata
+                   s.deployed_at_ledger, s.contract_type, s.is_sac, s.name
               FROM merge_source.soroban_contracts s
               LEFT JOIN merge_remap.accounts ra ON ra.source_id = s.deployer_id
              WHERE s.id BETWEEN {lo} AND {hi}
@@ -35,10 +36,10 @@ pub async fn run(conn: &mut PgConnection) -> Result<MergeStats, MergeError> {
         inserted AS (
             INSERT INTO soroban_contracts (
                 contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id,
-                deployed_at_ledger, contract_type, is_sac, metadata
+                deployed_at_ledger, contract_type, is_sac, name
             )
             SELECT contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id_remapped,
-                   deployed_at_ledger, contract_type, is_sac, metadata
+                   deployed_at_ledger, contract_type, is_sac, name
               FROM input
             ON CONFLICT (contract_id) DO UPDATE SET
                 wasm_hash          = COALESCE(EXCLUDED.wasm_hash, soroban_contracts.wasm_hash),
@@ -46,7 +47,7 @@ pub async fn run(conn: &mut PgConnection) -> Result<MergeStats, MergeError> {
                 deployed_at_ledger = COALESCE(EXCLUDED.deployed_at_ledger, soroban_contracts.deployed_at_ledger),
                 contract_type      = COALESCE(EXCLUDED.contract_type, soroban_contracts.contract_type),
                 is_sac             = soroban_contracts.is_sac OR EXCLUDED.is_sac,
-                metadata           = COALESCE(EXCLUDED.metadata, soroban_contracts.metadata)
+                name               = COALESCE(EXCLUDED.name, soroban_contracts.name)
             RETURNING id, contract_id
         )
         INSERT INTO merge_remap.soroban_contracts (source_id, target_id)

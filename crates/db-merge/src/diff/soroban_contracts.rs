@@ -12,7 +12,7 @@ WITH proj AS (
            COALESCE(sc.deployed_at_ledger::text, 'NULL') || '|' ||
            COALESCE(sc.contract_type::text, 'NULL') || '|' ||
            sc.is_sac::text || '|' ||
-           COALESCE(sc.metadata::text, 'NULL') AS canonical
+           COALESCE(sc.name, 'NULL') AS canonical
       FROM soroban_contracts sc
       LEFT JOIN accounts a ON a.id = sc.deployer_id
 )
