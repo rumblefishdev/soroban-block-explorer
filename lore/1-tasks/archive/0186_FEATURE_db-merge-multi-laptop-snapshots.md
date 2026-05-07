@@ -243,8 +243,8 @@ that's out of scope of the current manual flow.
       profile; reset procedures (merge target, snapshot source) documented
       in `crates/db-merge/README.md`.
 - [x] `merge ingest` automates the FDW setup (`CREATE EXTENSION
-  postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
-  INTO merge_source`) and tears it down on success.
+postgres_fdw`, server, user mapping, `IMPORT FOREIGN SCHEMA public …
+INTO merge_source`) and tears it down on success.
 - [x] `crates/db-merge` exists with three subcommands: `ingest`, `finalize`,
       `diff`; CLI flags follow `backfill-runner` conventions.
 - [x] All 18 ADR-0040 table-by-table merge semantics implemented (collapsed
