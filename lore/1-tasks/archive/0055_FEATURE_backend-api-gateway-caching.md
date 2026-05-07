@@ -2,7 +2,7 @@
 id: '0055'
 title: 'Backend: API Gateway response caching and cache-control headers'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0005']
 related_tasks: ['0023', '0092', '0097']
 tags: [layer-backend, caching, api-gateway, performance]
@@ -21,6 +21,10 @@ history:
     status: active
     who: FilipDz
     note: 'Activated as M2 wrap-up after 0048 merge. Per-endpoint Cache-Control already set across modules; this task wraps up the strategy + immutable-tx detection + error-response no-store + spec doc for CDK task 0097.'
+  - date: 2026-05-07
+    status: completed
+    who: FilipDz
+    note: 'Shipped via PR #163. 14 new integration tests, 200 total passing. Spawned 0198 follow-up for canonical SQL 06 partial-index fix.'
 ---
 
 # Backend: API Gateway response caching and cache-control headers
@@ -156,16 +160,16 @@ Document the API Gateway stage-level cache configuration needed to respect the C
 
 ## Acceptance Criteria
 
-- [ ] Cache-Control headers set correctly per endpoint
-- [ ] Long TTL (300s+) for closed ledgers and finalized transactions
-- [ ] Short TTL (5-15s) for lists, stats, and frequently changing detail
-- [ ] Medium TTL (60-120s) for contract/token/NFT metadata
-- [ ] No cache for search endpoint
-- [ ] Cache keys include full path + all query parameters
-- [ ] Error responses not cached
-- [ ] CloudFront not used for API (confirmed)
-- [ ] Immutable detection logic for ledgers and transactions
-- [ ] API Gateway stage cache configuration documented
+- [x] Cache-Control headers set correctly per endpoint
+- [x] Long TTL (300s+) for closed ledgers and finalized transactions
+- [x] Short TTL (5-15s) for lists, stats, and frequently changing detail
+- [x] Medium TTL (60-120s) for contract/token/NFT metadata
+- [x] No cache for search endpoint
+- [x] Cache keys include full path + all query parameters (documented in `api-gateway-cache-spec.md` — gateway-side, CDK 0097 implements)
+- [x] Error responses not cached (tower middleware `enforce_no_store_on_errors`)
+- [x] CloudFront not used for API (confirmed in `api-gateway-cache-spec.md`)
+- [x] Immutable detection logic for ledgers and transactions
+- [x] API Gateway stage cache configuration documented (`docs/architecture/backend/api-gateway-cache-spec.md`)
 
 ## Notes
 

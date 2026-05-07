@@ -3251,10 +3251,12 @@ async fn transactions_detail_cache_control_short_when_archive_unavailable_agains
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let cc = cache_control(&resp);
-    assert!(
-        cc.as_deref() == Some("public, max-age=10") || cc.as_deref() == Some("public, max-age=300"),
-        "expected SHORT or LONG, got {cc:?}"
+    // Test env uses fake AWS creds in build_app() — fetch_ledger always fails,
+    // so heavy_fields_status = Unavailable and handler must emit SHORT.
+    assert_eq!(
+        cache_control(&resp).as_deref(),
+        Some("public, max-age=10"),
+        "archive-unavailable branch must emit SHORT (10s)"
     );
 }
 

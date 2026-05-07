@@ -41,8 +41,8 @@ The full per-endpoint mapping is documented in
    upstream response (this covers errors + search).
 4. **Cache key = full path + every query parameter** (including
    `cursor`, `filter[…]`, `limit`, `q`, etc.). Different filters → distinct
-   cache entries. Concretely, configure the stage to hash `path +
-normalisedQueryString`. Header-based variation is not used today.
+   cache entries. Concretely, configure the stage to hash
+   `path + normalisedQueryString`. Header-based variation is not used today.
 5. **Method scope:** only `GET` (the API has no other public verbs). If
    any future `POST`/`PUT`/`DELETE` is added, exclude it from the
    gateway cache by default.
@@ -84,17 +84,23 @@ production traffic based on observed hit rate.
 
 ## Verification (post-deploy)
 
-Once 0097 lands the CDK config:
+Once 0097 lands the CDK config, verify against the deployed API
+Gateway stage. API Gateway exposes cache hits via the
+`X-Amzn-Cache-Status: Hit` response header (or the `cache-status`
+field in stage execution logs when CloudWatch logging is enabled).
+Do **not** look for a CloudFront `X-Cache` header — there is no
+CloudFront layer in this topology.
 
-1. Curl a long-tier endpoint twice in succession: assert
-   `X-Cache: Hit from cloudfront-or-equivalent` on second call.
-2. Curl `/search?q=…` twice: assert no cache hit signal — every call
-   reaches origin.
+1. Curl a long-tier endpoint (e.g. `/v1/ledgers/:closed_seq`) twice in
+   succession: second response should carry `X-Amzn-Cache-Status: Hit`
+   (or its CloudWatch-logs equivalent).
+2. Curl `/search?q=…` twice: every call reaches origin (cache status
+   `Miss` or absent).
 3. Curl an unmatched route: assert response is 404 with
    `Cache-Control: no-store` and no gateway-side caching.
 4. Hit `/v1/transactions/:hash` for the same hash twice: if heavy
-   archive succeeds both times, assert long-tier cache. If the first
-   call degrades, assert short-tier on both (cached for 10s).
+   archive succeeds both times, second call hits long-tier cache. If
+   the first call degrades, both calls cached for 10s only.
 
 ## References
 
