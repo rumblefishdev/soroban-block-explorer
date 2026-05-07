@@ -3,8 +3,9 @@ id: '0043'
 title: 'How new fields reach the API: indexer column / enrichment Lambda column / runtime fetch (no column)'
 status: accepted
 deciders: [karolkow]
-related_tasks: ['0188', '0191', '0194', '0195', '0196', '0197']
-related_adrs: ['0007', '0022', '0023', '0029', '0032']
+related_tasks:
+  ['0119', '0125', '0156', '0188', '0191', '0194', '0195', '0196', '0197']
+related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034']
 tags: [governance, enrichment, schema, indexer, lambda, milestone-2]
 links:
   - docs/audits/2026-04-10-pipeline-data-audit.md
@@ -56,7 +57,7 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 ## Decision
 
-**Scope:** API-visible fields. See *Scope* above for the auxiliary-column carve-out.
+**Scope:** API-visible fields. See _Scope_ above for the auxiliary-column carve-out.
 
 **Rule:**
 
@@ -64,7 +65,7 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 - **Off-chain** (HTTP fetch, oracle call, per-row RPC) → **enrichment Lambda 2** (the type-1 SQS-driven worker from task 0191). Persist to typed columns. List endpoints serve those columns directly; the worker keeps them populated.
 - **Detail-only** (returned only by `/:id` endpoints, never by list endpoints) → **runtime type-2 enrichment in the API handler**. **Never persist.** No dedicated DB column.
 
-"On-chain" here means *already in the processed ledger as it arrives at the indexer* — i.e. derivable from XDR without an additional network round-trip. Per-token Soroban RPC calls (`token_uri()` for NFTs) are off-chain under this rule, even though the underlying data lives on Stellar, because they require an extra RPC per row outside the indexer's normal stream.
+"On-chain" here means _already in the processed ledger as it arrives at the indexer_ — i.e. derivable from XDR without an additional network round-trip. Per-token Soroban RPC calls (`token_uri()` for NFTs) are off-chain under this rule, even though the underlying data lives on Stellar, because they require an extra RPC per row outside the indexer's normal stream.
 
 ---
 
@@ -73,7 +74,7 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 1. **Latency parity for list endpoints.** A list endpoint returning N rows cannot afford N HTTP fetches per request. Anything required by a list response must be in a typed column at request time. Indexer (on-chain) and Lambda 2 (off-chain) both produce typed columns; runtime type-2 cannot.
 2. **Cost parity for off-chain reads.** Off-chain data is rare-change per row (SEP-1 TOML, USD price, NFT metadata). Paying the HTTP cost once at write time and serving thousands of reads from Postgres is dramatically cheaper than paying it per request.
 3. **Detail endpoints tolerate per-request fetch.** A single `/v1/assets/{id}` response with a 24 h LRU cache absorbs the SEP-1 fetch cost in the cold path and amortises it across warm requests. The data does not warrant the storage + invalidation cost of a column.
-4. **Anti-pattern prevention.** A column that is *only ever written by the detail handler and never read by list endpoints* is a pure liability — schema bloat, index bloat, indexer write amplification — without any read benefit. The rule rejects this shape outright.
+4. **Anti-pattern prevention.** A column that is _only ever written by the detail handler and never read by list endpoints_ is a pure liability — schema bloat, index bloat, indexer write amplification — without any read benefit. The rule rejects this shape outright.
 5. **Audit doc Section 9.3 override.** The 2026-04-10 pipeline audit proposed a single scheduled cron Lambda for both LP TVL (off-chain, USD-denominated) and LP volume (on-chain, PathPayment delta). This ADR splits them: TVL → Lambda 2, volume → indexer. The cleaner allocation surfaces the cost asymmetry that the cron-bundled proposal hid.
 
 ---
@@ -130,24 +131,24 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 0197.
 
-| Field | Path | Owning task |
-|---|---|---|
-| `assets.name` (Soroban / SAC) | indexer (on-chain `ContractData`) | 0156 |
-| `assets.name` (classic credit) | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`) | 0195 §2a |
-| `assets.icon_url` | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`) | 0191 |
-| `assets.holder_count` | indexer (trustline delta) | 0194 §1c |
-| `assets.total_supply` (classic credit) | indexer (SUM of trustline balances) | 0194 §1b |
-| `assets.usd_price` + `usd_price_updated_at` | Lambda 2 (CoinGecko / StellarExpert) | 0194 §1a (column) + 0195 §2c (population) |
-| `assets.description`, `assets.home_page` | runtime type-2 (`runtime_enrichment::sep1`) | 0188 |
-| `liquidity_pool_snapshots.tvl` | Lambda 2 (Reflector / StellarExpert oracle) | 0195 §2b |
-| `liquidity_pool_snapshots.volume`, `fee_revenue` | indexer (PathPayment delta + arithmetic) | 0194 §1d |
-| `nfts.{collection_name, name, media_url, metadata}` | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway) | 0195 §2d |
-| `account_balances_current` (trustline rows) | indexer (TrustLine ledger entries) | 0119 (completed), verified by 0194 §1e |
-| Transaction `envelope_xdr`, full `events` payload | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034 |
+| Field                                               | Path                                                   | Owning task                               |
+| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------- |
+| `assets.name` (Soroban / SAC)                       | indexer (on-chain `ContractData`)                      | 0156                                      |
+| `assets.name` (classic credit)                      | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`)              | 0195 §2a                                  |
+| `assets.icon_url`                                   | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`)             | 0191                                      |
+| `assets.holder_count`                               | indexer (trustline delta)                              | 0194 §1c                                  |
+| `assets.total_supply` (classic credit)              | indexer (SUM of trustline balances)                    | 0194 §1b                                  |
+| `assets.usd_price` + `usd_price_updated_at`         | Lambda 2 (CoinGecko / StellarExpert)                   | 0194 §1a (column) + 0195 §2c (population) |
+| `assets.description`, `assets.home_page`            | runtime type-2 (`runtime_enrichment::sep1`)            | 0188                                      |
+| `liquidity_pool_snapshots.tvl`                      | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b                                  |
+| `liquidity_pool_snapshots.volume`, `fee_revenue`    | indexer (PathPayment delta + arithmetic)               | 0194 §1d                                  |
+| `nfts.{collection_name, name, media_url, metadata}` | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                  |
+| `account_balances_current` (trustline rows)         | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e    |
+| Transaction `envelope_xdr`, full `events` payload   | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                |
 
 ---
 
 ## Notes
 
 - **Independence from tasks:** this ADR lands directly on develop as a standalone commit, before tasks 0194 / 0195 / 0196 / 0197 start implementation. Governance docs land independently of the code that references them so the rule is canonical at the time of code review.
-- **ADR 0029 boundary:** ADR 0029 covers the *read-time XDR fetch* path (E3 / E14 heavy fields from S3). It is a sibling of this ADR's runtime type-2 case, sharing the in-process LRU + fail-soft pattern. ADR 0029 does not need amendment for type-1 write-side concerns; this ADR is the home for those.
+- **ADR 0029 boundary:** ADR 0029 covers the _read-time XDR fetch_ path (E3 / E14 heavy fields from S3). It is a sibling of this ADR's runtime type-2 case, sharing the in-process LRU + fail-soft pattern. ADR 0029 does not need amendment for type-1 write-side concerns; this ADR is the home for those.

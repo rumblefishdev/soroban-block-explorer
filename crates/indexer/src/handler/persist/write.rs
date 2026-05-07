@@ -1671,7 +1671,7 @@ pub(super) async fn upsert_nfts_and_ownership(
 /// are missing both from `staged.pool_rows` (will not be inserted by 13a) and
 /// from the `liquidity_pools` table (no prior persistence).
 ///
-/// Such pool_ids would FK-fail the `lp_positions` INSERT at 13c. They show up
+/// Such pool_ids would FK-fail the `lp_positions` INSERT at 13d. They show up
 /// during partial / mid-stream backfills when a `pool_share` trustline is
 /// created/updated/removed in a ledger that does not also surface the pool's
 /// `LedgerEntry` (and the pool was created in a pre-window ledger). The
@@ -1762,7 +1762,7 @@ pub(super) async fn upsert_pools_and_snapshots(
 ) -> Result<(), HandlerError> {
     // Lore-0189: emit sentinel placeholder pool rows for any lp_position
     // pool_id that won't be covered by 13a (not in staged.pool_rows) and
-    // is not already in the DB. Must run BEFORE 13a so the 13c
+    // is not already in the DB. Must run BEFORE 13a so the 13d
     // lp_positions INSERT FK resolves. Sentinels are upgradable —
     // see 13a's ON CONFLICT clause.
     let orphan_pool_ids = detect_orphan_pool_ids(db_tx, staged).await?;

@@ -105,17 +105,7 @@ Sentinel value depends on column type:
 
 ### Sub-block 2c — REMOVED (asset USD price deferred to future-work)
 
-**New territory** — no precursor task. Captured as 0191 future-work bullet #6 ("stellarchain.io/markets parity") without a dedicated task.
-
-**Spec:**
-
-- New variant: `EnrichmentMessage::AssetUsdPrice { asset_id: i32 }`
-- New module `crates/enrichment-shared/src/enrich_and_persist/asset_usd_price.rs`
-- Source: **CoinGecko Stellar list** primary (~30 req/min free tier, batch endpoint `/simple/price?ids=...`), StellarExpert fallback. Reflector unsuitable here because most classic credit assets (where USD price matters most) aren't in Reflector feed.
-- Writes `assets.usd_price = ?, assets.usd_price_updated_at = NOW()`
-- **Producer SQL with TTL refresh**: `WHERE usd_price IS NULL OR usd_price_updated_at < NOW() - INTERVAL '24h'`. This embeds periodic refresh into the producer — replaces a dedicated janitor cron Lambda for this kind. Cap producer batch size so each ledger doesn't re-emit thousands of stale rows.
-- Alternative trigger model (decide in spec phase): daily-cron Lambda that scans + emits, vs. embedding TTL in indexer producer SQL. Tradeoff: cron is simpler but requires separate infra; embedded TTL re-uses producer but adds complexity to indexer SQL.
-- **Permanent fails** (asset not in CoinGecko list): sentinel `usd_price = 0` with `updated_at = NOW()` so TTL refresh doesn't immediately re-attempt. Reconsider after first ops report.
+**2026-05-06 review (Karol):** pulled from M2. The sub-block was speculative — driven by 0191 future-work bullet #6 ("stellarchain.io/markets parity") with no PM ticket, frontend mock, or shipped consumer. The corresponding `assets.usd_price` + `usd_price_updated_at` column adds (originally 0194 §1a) were also pulled. Asset USD price work as a whole moves to future-work; revisit when a real product ask materialises.
 
 ### Sub-block 2d — `nft_metadata` `EnrichmentMessage` variant
 
@@ -139,7 +129,7 @@ Sentinel value depends on column type:
 
 ### Common: ADR amendment + docs
 
-- ADR 0029 (`abandon-parsed-artifacts-read-time-xdr-fetch`) amendment: extend "runtime_enrichment umbrella" section with type-1 SQS model + new kinds. Captured already as 0191 Future Work bullet #3.
+- ADR 0043 (field allocation rule, drafted in 0194 sub-block 1f) is the home for "runtime_enrichment umbrella" governance — type-1 SQS model + per-kind matrix lives there. ADR 0029 is about the **read-time XDR fetch** path (detail endpoint type-2 enrichment); it does NOT need amendment for type-1 write-side concerns. The 0191 Future Work bullet #3 ("ADR 0029 amendment") was misallocated and is corrected here.
 - Docs `docs/architecture/indexing-pipeline/enrichment.md` (or create if absent) — kind-by-kind matrix
 - Docs `docs/architecture/database-schema/**` — column source attribution updated
 
@@ -147,12 +137,13 @@ Sentinel value depends on column type:
 
 - [ ] Sub-block 2a: `Sep1Currency.name` field added; icon kind extended to UPDATE `assets.name` via `COALESCE` (no overwrite of indexer-set Soroban/SAC names); sample query shows non-NULL `name` on classic credit assets with SEP-1 TOML support; producer SQL re-emits classic credit assets with NULL name
 - [ ] Sub-block 2b: `lp_tvl` kind dispatched, sample query shows non-NULL `tvl` on production-region pools with valid oracle data
-- [ ] Sub-block 2c: `asset_usd_price` kind dispatched, sample query shows non-NULL `usd_price` on top-50 assets by activity
+<!-- Sub-block 2c acceptance removed — pulled. -->
+
 - [ ] Sub-block 2d: `nft_metadata` kind dispatched, sample query shows non-NULL `name`/`media_url` on minted NFTs from at least one well-known collection
 - [ ] Each kind has its permanent / transient EnrichError mapping documented + tested
 - [ ] Each kind has integration test (mock oracle / mock RPC / mock IPFS gateway)
 - [ ] DepthAlarm thresholds per CDK reviewed for new producer rates
-- [ ] **Docs updated**: ADR 0029 amendment, `docs/architecture/indexing-pipeline/enrichment.md`, `docs/architecture/database-schema/**`
+- [ ] **Docs updated**: ADR 0043 amendment (per-kind matrix table for new kinds), `docs/architecture/indexing-pipeline/enrichment.md` (or create), `docs/architecture/database-schema/**`. NO ADR 0029 amendment — that ADR is read-path, not enrichment write-path.
 - [ ] **API types regenerated** — if any DTO field is exposed (e.g. `nfts.metadata` JSON shape), codegen committed in same PR
 - [ ] 0125 archived as `superseded by: ["0194", "0195"]`
 
@@ -161,7 +152,7 @@ Sentinel value depends on column type:
 - **Per-collection NFT batching** if per-token cost becomes prohibitive in production
 - **Periodic janitor for `lp_tvl`**: cron Lambda re-emitting stale snapshots — only if observe stale TVLs in production
 - **Worker observability per kind**: CloudWatch custom metrics (success/fail counters, fetch latency histogram per kind)
-- **`asset_usd_price` extended sources**: if CoinGecko coverage gaps observed, evaluate Coinbase API or Kraken public ticker
+- **`asset_usd_price` whole feature**: pulled from M2 (no PM ticket / consumer). Re-evaluate when a real product ask materialises; would land as a brand-new task with column adds + Lambda 2 kind + producer hook + backfill subcommand bundled.
 
 ## Notes
 

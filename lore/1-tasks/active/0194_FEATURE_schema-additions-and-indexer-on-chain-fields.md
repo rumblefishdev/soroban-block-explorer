@@ -33,7 +33,7 @@ history:
 
 ## Summary
 
-Audit of list-endpoint DTOs vs DB schema vs actual writes shows a population gap: several columns exist in the schema but are always NULL because the indexer never writes them, and at least two list-endpoint sort fields (asset USD price + timestamp) need new schema columns. This task lands the schema additions atomically, wires indexer-side population for every NULL field whose source data is **already in the processed ledger** (no external HTTP, no per-row RPC), and codifies the field-allocation rule as a new ADR. Off-chain fields (oracle prices, SEP-1, NFT `token_uri()` RPC) are the sister task 0195's scope.
+Audit of list-endpoint DTOs vs DB schema vs actual writes shows a population gap: several columns exist in the schema but are always NULL because the indexer never writes them, and at least two list-endpoint sort fields (asset USD price + timestamp) need new schema columns. This task lands the schema additions atomically and wires indexer-side population for every NULL field whose source data is **already in the processed ledger** (no external HTTP, no per-row RPC). Off-chain fields (oracle prices, SEP-1, NFT `token_uri()` RPC) are the sister task 0195's scope. The governing [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) (field allocation rule) was merged to develop independently before this task's implementation landed.
 
 ## Status: Backlog
 
@@ -106,9 +106,9 @@ Down migration: drop in reverse order. Integration test: round-trip migrate up�
 
 ### Sub-block 1b — Classic credit `assets.total_supply`
 
-**Gap origin:** `crates/xdr-parser/src/extract_assets/` only emits Soroban + SAC deployments. Classic credits (USDC, EURT, etc.) reach the DB only via the `account_state` TrustLine path and never carry `total_supply`. The `total_supply` part of 0191 known gap "priority #2 classic credit enrichment" is on-chain (SUM of trustline balances) → indexer per ADR 0026.
+**Gap origin:** `crates/xdr-parser/src/extract_assets/` only emits Soroban + SAC deployments. Classic credits (USDC, EURT, etc.) reach the DB only via the `account_state` TrustLine path and never carry `total_supply`. The `total_supply` part of 0191 known gap "priority #2 classic credit enrichment" is on-chain (SUM of trustline balances) → indexer per [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) (field allocation rule).
 
-**Scope clarification (post-2026-05-06 dry-run audit, see 0197 dry-run notes):** classic credit `assets.name` is **OUT OF SCOPE for this sub-block**. Classic credits have no on-chain `name` field — full names like "USD Coin" come from issuer SEP-1 TOML `CURRENCIES[].name`. Per ADR 0026 (1f) that's off-chain → Lambda 2 territory. Allocated to **0195 sub-block 2a (icon kind extension)** which already fetches the same TOML and can persist `name` alongside `icon_url` in a single fetch. `Sep1Currency.name` field will be added to the DTO there.
+**Scope clarification (post-2026-05-06 preliminary planning audit):** classic credit `assets.name` is **OUT OF SCOPE for this sub-block**. Classic credits have no on-chain `name` field — full names like "USD Coin" come from issuer SEP-1 TOML `CURRENCIES[].name`. Per [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) that's off-chain → Lambda 2 territory. Allocated to **0195 sub-block 2a (icon kind extension)** which already fetches the same TOML and can persist `name` alongside `icon_url` in a single fetch. `Sep1Currency.name` field will be added to the DTO there.
 
 For Soroban tokens, `name` continues to be populated by task **0156** (active) — `name` from on-chain `ContractData`. SAC `name` continues to be populated by indexer at deploy time. This sub-block does NOT touch `assets.name`.
 
@@ -138,7 +138,7 @@ Implementation:
 - `fee_revenue = volume × fee_bps / 10000` computed in the same write — `fee_bps` lives on `liquidity_pools` row.
 - Drop `volume: None, fee_revenue: None` hardcoding at `xdr-parser/src/state.rs:485-486`.
 
-**Audit doc Section 9.3** (`docs/audits/2026-04-10-pipeline-data-audit.md:512-535`) originally proposed scheduled cron Lambda for both TVL **and** volume. The volume part is explicitly overridden here per the field allocation rule — volume is on-chain derivable, no oracle, no HTTP, so it belongs in the indexer. ADR 0026 (sub-block 1f) records this override; ADR 0032 evergreen requires `docs/architecture/indexing-pipeline/**` + `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment in same PR.
+**Audit doc Section 9.3** (`docs/audits/2026-04-10-pipeline-data-audit.md:512-535`) originally proposed scheduled cron Lambda for both TVL **and** volume. The volume part is explicitly overridden here per the field allocation rule — volume is on-chain derivable, no oracle, no HTTP, so it belongs in the indexer. [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) records this override; ADR 0032 evergreen requires `docs/architecture/indexing-pipeline/**` + `docs/audits/2026-04-10-pipeline-data-audit.md` Section 9.3 amendment in same PR.
 
 ### Sub-block 1e — `account_balances_current` trustline balances
 
@@ -179,7 +179,7 @@ This is the linchpin governance doc. Task 0195/0196/0197 reference it verbatim.
 
 - **Phase 2 LP volume**: Soroban DEX adapters (Soroswap, Phoenix, etc.) — per-DEX event format, dynamic fees. Spawn after Phase 1 lands.
 - **Holder_count one-time recount**: post-backfill ops Lambda subcommand to fully recount. Spawn after 1c lands.
-- **Classic credit `assets.name`** moved out of this task entirely — see 0195 sub-block 2a (icon kind extended to also persist `name` from same SEP-1 fetch). Decision rationale: classic credit names are off-chain (issuer SEP-1 TOML `CURRENCIES[].name`) → Lambda 2 per ADR 0026.
+- **Classic credit `assets.name`** moved out of this task entirely — see 0195 sub-block 2a (icon kind extended to also persist `name` from same SEP-1 fetch). Decision rationale: classic credit names are off-chain (issuer SEP-1 TOML `CURRENCIES[].name`) → Lambda 2 per ADR 0043.
 
 ## Notes
 

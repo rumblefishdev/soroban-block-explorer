@@ -62,6 +62,7 @@ struct StepTimings {
     nfts_ms: u128,
     pools_ms: u128,
     balances_ms: u128,
+    aggregates_ms: u128,
     stage_ms: u128,
 }
 
@@ -187,7 +188,8 @@ pub async fn persist_ledger(
         + timings.assets_ms
         + timings.nfts_ms
         + timings.pools_ms
-        + timings.balances_ms;
+        + timings.balances_ms
+        + timings.aggregates_ms;
 
     info!(
         ledger_sequence = ledger.sequence,
@@ -207,6 +209,7 @@ pub async fn persist_ledger(
         nfts_ms = timings.nfts_ms,
         pools_ms = timings.pools_ms,
         balances_ms = timings.balances_ms,
+        aggregates_ms = timings.aggregates_ms,
         retries = attempt,
         "persist breakdown"
     );

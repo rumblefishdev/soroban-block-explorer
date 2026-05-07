@@ -164,7 +164,7 @@ If 0195 timeline slips, ship `crates/enrichment-backfill` with `icon` subcommand
 ## Acceptance Criteria
 
 - [ ] `crates/enrichment-backfill` crate builds, lints, integrated into workspace
-- [ ] All three kind subcommands (`icon`, `lp-tvl`, `nft-metadata`) wired
+- [ ] All three kind subcommands (`icon`, `lp-tvl`, `nft-metadata`) wired. Split-PR path acceptable (see Step 7): `icon` may land first against existing `enrich_asset_icon` (0191); `lp-tvl` and `nft-metadata` follow once their `enrich_*` functions land in `enrichment-shared` via 0195. Final task acceptance requires all three wired regardless of PR boundary.
 - [ ] `--force-retry` flag implemented per γ semantics (no filter, in-place overwrite)
 - [ ] `--asset-id`/`--snapshot-id`/`--nft-id` surgical mode per kind
 - [ ] `status` subcommand prints per-kind un-populated counts
