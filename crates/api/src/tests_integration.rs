@@ -80,6 +80,10 @@ fn build_app(db: PgPool) -> Router {
         .nest("/v1", assets::router())
         .nest("/v1", ledgers::router())
         .nest("/v1", accounts::router())
+        .nest("/v1", crate::search::router())
+        .layer(axum::middleware::from_fn(
+            crate::common::cache_control::enforce_no_store_on_errors,
+        ))
         .with_state(state)
         .split_for_parts();
     router
@@ -1775,10 +1779,10 @@ async fn ledgers_detail_unknown_sequence_returns_404_against_real_db() {
 }
 
 /// Detail endpoint shape against a real DB row + the head-vs-closed
-/// Cache-Control branching. Selects the two most recent ledgers
-/// (`ORDER BY closed_at DESC LIMIT 2`); uses the most recent as the
-/// head-ledger assertion (`next_sequence is null` → 10s TTL) and the
-/// second-most-recent as the closed-ledger assertion (`next_sequence`
+/// Cache-Control branching. Selects the two highest-sequence ledgers
+/// (`ORDER BY closed_at DESC, sequence DESC LIMIT 2`); uses the first
+/// as the head-ledger assertion (`next_sequence is null` → 10s TTL)
+/// and the second as the closed-ledger assertion (`next_sequence`
 /// non-null → 300s TTL).
 #[tokio::test]
 async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
@@ -1792,14 +1796,25 @@ async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
     // Pick the head and an older ledger from the live DB. Skip if the
     // table has fewer than two rows (no way to distinguish head vs
     // closed under that condition).
-    let rows: Vec<(i64,)> =
-        match sqlx::query_as("SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 2")
-            .fetch_all(&pool)
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return,
-        };
+    //
+    // Tie-break by `sequence DESC` (task 0201): on shared dev DBs the
+    // `persist_integration` fixtures insert synthetic ledgers with
+    // identical `closed_at` values. Sorting by `closed_at` alone is
+    // therefore non-deterministic across the tied rows and may pick a
+    // non-head ledger, which the handler reports under the LONG TTL
+    // branch (it computes "head-ness" from `next_sequence IS NULL`,
+    // not from `closed_at`). Matching the list-endpoint canonical
+    // ordering `(closed_at DESC, sequence DESC)` resolves the tie to
+    // the actual chain head and is a no-op against production data.
+    let rows: Vec<(i64,)> = match sqlx::query_as(
+        "SELECT sequence FROM ledgers ORDER BY closed_at DESC, sequence DESC LIMIT 2",
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
     if rows.len() < 2 {
         eprintln!("DB has fewer than 2 ledgers — skipping detail Cache-Control test");
         return;
@@ -3129,4 +3144,280 @@ async fn accounts_transactions_cursor_round_trip_no_overlap_against_real_db() {
             "hash {h} appears on both pages A={hashes_a:?} B={hashes_b:?}"
         );
     }
+}
+
+// ===========================================================================
+// task 0055 — Cache-Control / no-store middleware coverage
+// ===========================================================================
+
+fn cache_control(resp: &axum::response::Response) -> Option<String> {
+    resp.headers()
+        .get(axum::http::header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Unmatched route on the live router → axum bare 404; middleware must
+/// stamp `Cache-Control: no-store` so the gateway never caches it.
+#[tokio::test]
+async fn default_404_route_returns_no_store() {
+    let app = lazy_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/no-such-route-here")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
+}
+
+/// Validation 400 (handler-set Cache-Control header would ordinarily be
+/// missing or wrong) → middleware overwrites to `no-store`.
+#[tokio::test]
+async fn validation_400_returns_no_store() {
+    let app = lazy_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/transactions?limit=abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
+}
+
+/// Path-shape 404 (well-formed but not indexed) → no-store.
+#[tokio::test]
+async fn handler_404_returns_no_store_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts/GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
+}
+
+/// `GET /v1/transactions` → SHORT (10s).
+#[tokio::test]
+async fn transactions_list_cache_control_short_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/transactions?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=10"));
+}
+
+/// `GET /v1/transactions/:hash` → conditional.
+/// In tests the S3 archive isn't reachable so heavy_fields_status falls to
+/// Unavailable; assert the SHORT branch fires (LONG branch is exercised by
+/// the live `cargo lambda invoke` E2E).
+#[tokio::test]
+async fn transactions_detail_cache_control_short_when_archive_unavailable_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT encode(hash, 'hex') FROM transaction_hash_index LIMIT 1")
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+    let Some((hash_hex,)) = row else {
+        eprintln!("no rows in transaction_hash_index — skipping");
+        return;
+    };
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/transactions/{hash_hex}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Test env uses fake AWS creds in build_app() — fetch_ledger always fails,
+    // so heavy_fields_status = Unavailable and handler must emit SHORT.
+    assert_eq!(
+        cache_control(&resp).as_deref(),
+        Some("public, max-age=10"),
+        "archive-unavailable branch must emit SHORT (10s)"
+    );
+}
+
+/// `GET /v1/assets/:id` → MEDIUM (60s).
+#[tokio::test]
+async fn assets_detail_cache_control_medium_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let row: Option<(i32,)> = sqlx::query_as("SELECT id FROM assets LIMIT 1")
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+    let Some((id,)) = row else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/assets/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=60"));
+}
+
+/// `GET /v1/contracts/:id` → MEDIUM (60s).
+#[tokio::test]
+async fn contracts_detail_cache_control_medium_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT contract_id FROM soroban_contracts LIMIT 1")
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+    let Some((cid,)) = row else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/contracts/{cid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=60"));
+}
+
+/// `GET /v1/nfts` (list) → SHORT (10s).
+#[tokio::test]
+async fn nfts_list_cache_control_short_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/nfts?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=10"));
+}
+
+/// `GET /v1/liquidity-pools/:id/chart` → MEDIUM (60s).
+#[tokio::test]
+async fn lp_chart_cache_control_medium_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT encode(pool_id, 'hex') FROM liquidity_pools LIMIT 1")
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+    let Some((pool_hex,)) = row else {
+        eprintln!("no liquidity pools — skipping");
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{pool_hex}/chart?interval=1h&from=2026-04-01T00:00:00Z&to=2026-04-02T00:00:00Z"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if resp.status() == StatusCode::OK {
+        assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=60"));
+    } else {
+        eprintln!("chart 200 not reachable in this env: {}", resp.status());
+    }
+}
+
+/// `GET /v1/search` → no-store (variable q makes caching impractical).
+#[tokio::test]
+async fn search_cache_control_no_store_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/search?q=GAA")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
 }

@@ -310,6 +310,7 @@ CREATE TABLE operations_appearances (
     asset_issuer_id   BIGINT       REFERENCES accounts(id),                -- ADR 0026
     pool_id           BYTEA,                                               -- 32-byte LP hash (ADR 0024)
     amount            BIGINT       NOT NULL,                               -- collapsed-duplicate count
+    application_order SMALLINT,                                            -- task 0192: 1-based MIN apply pos across folded ops
     ledger_sequence   BIGINT       NOT NULL,
     created_at        TIMESTAMPTZ  NOT NULL,
     PRIMARY KEY (id, created_at),
@@ -318,6 +319,8 @@ CREATE TABLE operations_appearances (
     CONSTRAINT ck_ops_app_pool_id_len CHECK (pool_id IS NULL OR octet_length(pool_id) = 32),
     CONSTRAINT ck_ops_app_type_range  CHECK (type BETWEEN 0 AND 127),      -- ADR 0031 range
     CONSTRAINT ck_ops_app_amount_pos  CHECK (amount > 0),
+    CONSTRAINT ck_ops_app_application_order_range
+        CHECK (application_order IS NULL OR (application_order BETWEEN 1 AND 32767)),
     CONSTRAINT uq_ops_app_identity    UNIQUE NULLS NOT DISTINCT
         (transaction_id, type, source_id, destination_id,
          contract_id, asset_code, asset_issuer_id, pool_id,
@@ -353,14 +356,29 @@ Design notes:
   (e.g. type-14 `CREATE_CLAIMABLE_BALANCE` with source inherited from tx)
   collapse correctly. Observed compression: 28% overall on backfill sample,
   type-14 collapses from 12 709 operations to 179 rows
-- `transfer_amount NUMERIC(28,7)` and `application_order SMALLINT` were
-  dropped — no API endpoint reads them, and per-op detail is already
-  re-materialised from XDR by `runtime_enrichment::stellar_archive` extractors per
+- `transfer_amount NUMERIC(28,7)` was dropped — no API endpoint reads it, and
+  per-op detail is already re-materialised from XDR by
+  `runtime_enrichment::stellar_archive` extractors per
   [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
-- ingest staging aggregates operations at the `HashMap<OpIdentity, i64>`
-  level before the bulk INSERT; write layer uses
-  `ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING` for replay
-  idempotency
+- `application_order SMALLINT` was dropped together with `transfer_amount` in
+  task 0163 on the premise "no API endpoint reads it", and re-introduced by
+  [task 0192](../../../lore/1-tasks/active/0192_BUG_operations-appearances-ordering-not-apply-order.md)
+  after empirical evidence showed endpoint 03 Statement C had implicitly
+  re-introduced an ordering dependency through `ORDER BY oa.id`. The column
+  carries the 1-based on-chain apply position; for folded rows (multiple
+  identical-identity envelope ops collapsed into one row) it stores the
+  MIN of the folded ops' indices — the position of the row's first
+  occurrence in `tx.operations[]`. NULLABLE for backward compatibility
+  with pre-task-0192 historical rows
+- ingest staging aggregates operations at the
+  `HashMap<OpIdentity, (count, min_apply_order)>` level before the bulk
+  INSERT, with `min_apply_order` tracked via explicit `min()` reduction so
+  the value is independent of HashMap iteration order. The pre-task-0192
+  alphabetic-identity sort that produced the ordering bug
+  (`oa.id` BIGSERIAL alphabetic-by-asset_code on multi-asset bulk txs)
+  has been replaced with `sort_by_key((tx_hash_hex, application_order))`.
+  Write layer uses `ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING`
+  for replay idempotency
 
 ### 4.5 Transaction Participants
 

@@ -56,6 +56,10 @@ pub struct OpRow {
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
     pub pool_id: Option<String>,
+    /// 1-based per-tx apply position (task 0192). `None` for pre-task-0192
+    /// rows where the column was not yet populated by the indexer; the
+    /// caller falls back to `appearance_id` ordering for those.
+    pub application_order: Option<i16>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -370,8 +374,10 @@ pub async fn fetch_operations(
     transaction_id: i64,
     created_at: DateTime<Utc>,
 ) -> Result<Vec<OpRow>, sqlx::Error> {
-    // ORDER BY oa.id: BIGSERIAL is monotone with ingest = within-tx
-    // application order, so result-set position is the operation's index.
+    // Task 0192: ORDER BY oa.application_order is the canonical contract.
+    // `NULLS LAST, oa.id` keeps pre-task-0192 rows (where application_order
+    // is NULL) in stable post-payload position so result-set order remains
+    // deterministic even on partial-backfill DBs.
     let raw: Vec<PgRow> = sqlx::query(
         "SELECT \
             oa.id                           AS appearance_id, \
@@ -383,6 +389,7 @@ pub async fn fetch_operations(
             oa.asset_code, \
             iss.account_id                  AS asset_issuer, \
             encode(oa.pool_id, 'hex')       AS pool_id, \
+            oa.application_order, \
             oa.ledger_sequence, \
             oa.created_at \
          FROM operations_appearances oa \
@@ -391,7 +398,7 @@ pub async fn fetch_operations(
          LEFT JOIN soroban_contracts sc  ON sc.id  = oa.contract_id \
          LEFT JOIN accounts          iss ON iss.id = oa.asset_issuer_id \
          WHERE oa.transaction_id = $1 AND oa.created_at = $2 \
-         ORDER BY oa.id",
+         ORDER BY oa.application_order NULLS LAST, oa.id",
     )
     .bind(transaction_id)
     .bind(created_at)
@@ -410,6 +417,7 @@ pub async fn fetch_operations(
             asset_code: r.get("asset_code"),
             asset_issuer: r.get("asset_issuer"),
             pool_id: r.get("pool_id"),
+            application_order: r.get("application_order"),
             ledger_sequence: r.get("ledger_sequence"),
             created_at: r.get("created_at"),
         })
