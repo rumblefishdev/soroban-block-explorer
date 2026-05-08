@@ -250,9 +250,9 @@ erDiagram
     nfts ||--o{ nft_ownership : "nft_id"
 ```
 
-## ENGINE / PARTITION BY / ORDER BY per tabela
+## ENGINE / PARTITION BY / ORDER BY per table
 
-| Tabela                            | Engine                                        | PARTITION BY                      | ORDER BY                                                      | Obóz                    |
+| Table                             | Engine                                        | PARTITION BY                      | ORDER BY                                                      | Category                |
 | --------------------------------- | --------------------------------------------- | --------------------------------- | ------------------------------------------------------------- | ----------------------- |
 | `ledgers`                         | `MergeTree`                                   | `intDiv(sequence, 500000)`        | `(sequence)`                                                  | C immutable             |
 | `accounts`                        | `ReplacingMergeTree(last_seen_ledger)`        | —                                 | `(id)`                                                        | B state                 |
@@ -300,7 +300,7 @@ LAYOUT(COMPLEX_KEY_CACHE(SIZE_IN_CELLS 1000000));
 
 ## Type legend
 
-| Skrót w diagramie | CH type                                          |
+| Diagram shorthand | CH type                                          |
 | ----------------- | ------------------------------------------------ |
 | `Int64`           | `Int64`                                          |
 | `Int32`           | `Int32`                                          |
@@ -311,13 +311,13 @@ LAYOUT(COMPLEX_KEY_CACHE(SIZE_IN_CELLS 1000000));
 | `Decimal128`      | `Decimal128(7)` (PG: `NUMERIC(28,7)`)            |
 | `DateTime64`      | `DateTime64(3, 'UTC')` (PG: `TIMESTAMPTZ`)       |
 
-## Co nie weszło do CH (vs PG snapshot)
+## Not carried over to CH (vs PG snapshot)
 
-- `_sqlx_migrations` — DROP, zastąpione przez `init.sql`
-- `soroban_events_appearances` — zastąpione przez full-content `soroban_events`
-- `nfts.metadata` — DROP (CH only, PG zostaje)
-- `soroban_contracts.search_vector` (tsvector) — DROP, brak odpowiednika w CH
-- `created_at` na fact tables — DROP wszędzie poza `ledgers.closed_at`
+- `_sqlx_migrations` — DROP, replaced by `init.sql`
+- `soroban_events_appearances` — replaced by full-content `soroban_events`
+- `nfts.metadata` — DROP (CH only, PG keeps it)
+- `soroban_contracts.search_vector` (tsvector) — DROP, no CH equivalent
+- `created_at` on fact tables — DROP everywhere except `ledgers.closed_at`
 
-PG schema jest **niezmieniona** względem snapshotu z 2026-05-08 — wszystkie
-powyższe drop-y dotyczą wyłącznie CH-owej wersji w `crates/db-clickhouse/schema/init.sql`.
+PG schema is **unchanged** relative to the 2026-05-08 snapshot — all drops
+above apply only to the CH copy in `crates/db-clickhouse/schema/init.sql`.

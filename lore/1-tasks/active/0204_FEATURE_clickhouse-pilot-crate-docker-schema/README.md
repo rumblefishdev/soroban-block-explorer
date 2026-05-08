@@ -39,7 +39,7 @@ history:
       ADR 0044 review resolved 6 of 7 open questions. Step 1 (client) and
       Step 5 (migrations) are no longer choices — official `clickhouse`
       crate latest stable, single idempotent `init.sql`. Step 3 schema
-      now carries concrete translation rules: engine per "obóz"
+      now carries concrete translation rules: engine per "category"
       (Replacing for fact + state, plain MergeTree for immutable
       lookup), `PARTITION BY intDiv(ledger_sequence, 500000)`,
       `created_at` dropped from CH side except `ledgers.closed_at` (PG
@@ -145,7 +145,7 @@ deltas, and they live exclusively in `crates/db-clickhouse/schema/init.sql`.
 | GIN / `pg_trgm` indexes                             | OMIT (no equivalent)                                               |
 | Partial unique indexes                              | OMIT (no enforcement); document in the README                      |
 
-#### Engine choice per table "obóz" (resolves Q1)
+#### Engine choice per table "category" (resolves Q1)
 
 - **Append-only fact tables** (`transactions`, `operations_appearances`,
   `transaction_participants`, `nft_ownership`, `liquidity_pool_snapshots`,
@@ -348,7 +348,7 @@ instance skips it cleanly (`#[ignore]` if env unset).
       actually does, including the four CH-side drops
       (`_sqlx_migrations`, `nfts.metadata`, `created_at` on fact
       tables, `soroban_contracts.search_vector`)
-- [ ] Engine-per-`obóz` rule applied (append-only fact + state →
+- [ ] Engine-per-`category` rule applied (append-only fact + state →
       `ReplacingMergeTree`; immutable lookup → `MergeTree`); each
       `CREATE TABLE` carries the right ENGINE per ADR 0044 §Decision §5
 - [ ] All partitioned tables use
@@ -356,8 +356,8 @@ instance skips it cleanly (`#[ignore]` if env unset).
 - [ ] Smoke test inserts and reads back one row in each of the 17
       tables (gated on `CLICKHOUSE_URL` env)
 - [ ] No file under `crates/{api,indexer,domain,db,db-merge,db-migrate,
-    db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,
-    backfill-bench}` is modified by this PR (verified via
+  db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,
+  backfill-bench}` is modified by this PR (verified via
       `git diff --stat`)
 - [ ] **Docs updated** — `docs/architecture/database-schema/clickhouse-pilot.md`
       created; `database-schema-overview.md`,
@@ -365,8 +365,8 @@ instance skips it cleanly (`#[ignore]` if env unset).
       `technical-design-general-overview.md` updated per ADR 0032; each
       links back to ADR 0044
 - [ ] **API types regenerated** — `N/A — pilot does not touch `crates/api/**`,
-    `Cargo.{toml,lock}`workspace-member additions only, no schema
-    change to`libs/api-types/**`
+  `Cargo.{toml,lock}`workspace-member additions only, no schema
+  change to`libs/api-types/**`
 
 ## Out of Scope
 

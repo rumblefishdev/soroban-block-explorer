@@ -35,7 +35,7 @@ history:
     note: >
       ADR review walked through all seven open questions; six resolved
       and folded into §Decision §4–§5. Resolutions: Q1 mixed engine per
-      "obóz" (Replacing for fact + state, plain for immutable lookup);
+      "category" (Replacing for fact + state, plain for immutable lookup);
       Q2 PARTITION BY intDiv(ledger_sequence, 500000) + drop `created_at`
       from every CH table except `ledgers` (Postgres unchanged);
       Q3 nfts.metadata dropped (CH only), wasm_interface_metadata.metadata
@@ -55,7 +55,7 @@ history:
 **Related:**
 
 - [ADR 0033: soroban_events → soroban_events_appearances (read-time event detail from S3)](0033_soroban-events-appearances-read-time-detail.md) — the folded design this pilot deliberately reverses for the ClickHouse copy of the table
-- [Task 0204: db-clickhouse crate + Docker service + mirrored schema](../1-tasks/backlog/0204_FEATURE_clickhouse-pilot-crate-docker-schema.md) — implementation of this ADR's decision
+- [Task 0204: db-clickhouse crate + Docker service + mirrored schema](../1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md) — implementation of this ADR's decision
 
 ---
 
@@ -206,7 +206,7 @@ show.
    measurements. The rules below are the canonical reference — task
    0204 implements them in `crates/db-clickhouse/`.
 
-   **Engine per table "obóz" (resolves Q1):**
+   **Engine per table "category" (resolves Q1):**
 
    - **Append-only fact tables** (`transactions`, `operations_appearances`,
      `transaction_participants`, `nft_ownership`, `liquidity_pool_snapshots`,
@@ -468,7 +468,7 @@ Q6 (pilot success criteria) remains genuinely open — deferred to a
 follow-up ADR after first measurements.
 
 1. ~~**`MergeTree` engine choice per table.**~~ **Resolved 2026-05-08:**
-   mixed engine per "obóz" — append-only fact tables and state tables
+   mixed engine per "category" — append-only fact tables and state tables
    use `ReplacingMergeTree` (with version column on state tables);
    immutable lookup tables use plain `MergeTree`. See §Decision §5.
 2. ~~**Partitioning granularity.**~~ **Resolved 2026-05-08:**
