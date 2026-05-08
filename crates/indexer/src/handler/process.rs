@@ -46,12 +46,21 @@ fn network_id() -> &'static [u8; 32] {
 /// If `cw_client` is provided, publishes `LastProcessedLedgerSequence` to CloudWatch.
 /// `classification_cache` is the per-worker NFT-filter cache (task 0118 Phase 2);
 /// callers reuse the same instance across ledgers so it accumulates.
+/// Per-ledger output exposed to the Galaxy Lambda handler so it can
+/// drive both the cross-batch asset enrichment publish and the
+/// per-ledger NFT mint publish (task 0195 §2d).
+pub struct ProcessLedgerOutput {
+    pub extracted_assets: Vec<xdr_parser::types::ExtractedAsset>,
+    pub ledger_sequence: u32,
+    pub had_nft_mints: bool,
+}
+
 pub async fn process_ledger(
     meta: &LedgerCloseMeta,
     pool: &PgPool,
     cw_client: Option<&CloudWatchClient>,
     classification_cache: &ClassificationCache,
-) -> Result<Vec<xdr_parser::types::ExtractedAsset>, HandlerError> {
+) -> Result<ProcessLedgerOutput, HandlerError> {
     // --- Stage 0024: Ledger + transaction extraction ---
     let extracted_ledger = xdr_parser::extract_ledger(meta);
     let ledger_sequence = extracted_ledger.sequence;
@@ -264,10 +273,16 @@ pub async fn process_ledger(
         publish_ledger_sequence_metric(cw, ledger_sequence).await;
     }
 
-    // Return the extracted assets so callers that care about them
-    // (Galaxy Lambda handler, for type-1 enrichment SQS publish per
-    // task 0191) can consume the slice. Backfill callers ignore it.
-    Ok(all_assets)
+    // Return the extracted assets + ledger sequence + nft-mint flag
+    // so the Galaxy Lambda handler can drive the cross-batch asset
+    // enrichment publish (task 0191) and the per-ledger NFT mint
+    // publish (task 0195 §2d). Backfill callers ignore the struct.
+    let had_nft_mints = !all_nfts.is_empty();
+    Ok(ProcessLedgerOutput {
+        extracted_assets: all_assets,
+        ledger_sequence,
+        had_nft_mints,
+    })
 }
 
 /// Publish `LastProcessedLedgerSequence` to CloudWatch.

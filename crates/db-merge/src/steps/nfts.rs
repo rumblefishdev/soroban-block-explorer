@@ -30,7 +30,7 @@ pub async fn run(conn: &mut PgConnection) -> Result<MergeStats, MergeError> {
         WITH input AS (
             SELECT n.id AS src_id, rsc.target_id AS contract_id_remapped,
                    n.token_id, n.collection_name, n.name, n.media_url,
-                   n.metadata, n.minted_at_ledger,
+                   n.minted_at_ledger,
                    ra.target_id AS current_owner_id_remapped,
                    n.current_owner_ledger
               FROM merge_source.nfts n
@@ -40,18 +40,17 @@ pub async fn run(conn: &mut PgConnection) -> Result<MergeStats, MergeError> {
         ),
         inserted AS (
             INSERT INTO nfts (
-                contract_id, token_id, collection_name, name, media_url, metadata,
+                contract_id, token_id, collection_name, name, media_url,
                 minted_at_ledger, current_owner_id, current_owner_ledger
             )
             SELECT contract_id_remapped, token_id, collection_name, name, media_url,
-                   metadata, minted_at_ledger,
+                   minted_at_ledger,
                    current_owner_id_remapped, current_owner_ledger
               FROM input
             ON CONFLICT (contract_id, token_id) DO UPDATE SET
                 collection_name  = COALESCE(EXCLUDED.collection_name, nfts.collection_name),
                 name             = COALESCE(EXCLUDED.name, nfts.name),
                 media_url        = COALESCE(EXCLUDED.media_url, nfts.media_url),
-                metadata         = COALESCE(EXCLUDED.metadata, nfts.metadata),
                 minted_at_ledger = COALESCE(nfts.minted_at_ledger, EXCLUDED.minted_at_ledger),
                 current_owner_id = CASE
                     WHEN EXCLUDED.current_owner_ledger > COALESCE(nfts.current_owner_ledger, 0)

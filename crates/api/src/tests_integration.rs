@@ -63,6 +63,8 @@ fn build_app(db: PgPool) -> Router {
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(s3),
         sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
+        nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
+            .expect("build nft_token_uri fetcher"),
     };
     let state = AppState {
         db,

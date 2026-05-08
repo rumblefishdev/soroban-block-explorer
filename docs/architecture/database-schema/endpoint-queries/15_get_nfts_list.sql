@@ -44,7 +44,12 @@ SELECT
     n.collection_name,
     n.name,
     n.media_url,
-    n.metadata,
+    -- `nfts.metadata` was dropped in migration
+    -- 20260507120000_drop_nfts_metadata.up.sql per ADR 0043 detail-only
+    -- carve-out (task 0195 §2d). The detail endpoint serves it via
+    -- `runtime_enrichment::nft_metadata` (Soroban RPC `token_uri()` +
+    -- IPFS gateway, LRU 24h, fail-soft). The list endpoint never
+    -- returned it.
     n.minted_at_ledger,
     own.account_id    AS current_owner,
     n.current_owner_ledger

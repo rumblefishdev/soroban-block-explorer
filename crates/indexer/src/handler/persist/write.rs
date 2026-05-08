@@ -1525,7 +1525,6 @@ pub(super) async fn upsert_nfts_and_ownership(
             let mut collections: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
             let mut names: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
             let mut medias: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
-            let mut metadatas: Vec<Option<Value>> = Vec::with_capacity(idx_chunk.len());
             let mut minted: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
             let mut owners: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
             let mut owner_ledgers: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
@@ -1541,7 +1540,6 @@ pub(super) async fn upsert_nfts_and_ownership(
                 collections.push(r.collection_name.clone());
                 names.push(r.name.clone());
                 medias.push(r.media_url.clone());
-                metadatas.push(r.metadata.clone());
                 minted.push(r.minted_at_ledger);
                 owners.push(resolve_opt_id(
                     account_ids,
@@ -1555,17 +1553,16 @@ pub(super) async fn upsert_nfts_and_ownership(
                 r#"
                 INSERT INTO nfts (
                     contract_id, token_id, collection_name, name, media_url,
-                    metadata, minted_at_ledger, current_owner_id, current_owner_ledger
+                    minted_at_ledger, current_owner_id, current_owner_ledger
                 )
                 SELECT * FROM UNNEST(
                     $1::BIGINT[], $2::VARCHAR[], $3::VARCHAR[], $4::VARCHAR[], $5::TEXT[],
-                    $6::JSONB[], $7::BIGINT[], $8::BIGINT[], $9::BIGINT[]
+                    $6::BIGINT[], $7::BIGINT[], $8::BIGINT[]
                 )
                 ON CONFLICT (contract_id, token_id) DO UPDATE SET
                   collection_name = COALESCE(EXCLUDED.collection_name, nfts.collection_name),
                   name            = COALESCE(EXCLUDED.name, nfts.name),
                   media_url       = COALESCE(EXCLUDED.media_url, nfts.media_url),
-                  metadata        = COALESCE(EXCLUDED.metadata, nfts.metadata),
                   minted_at_ledger = COALESCE(nfts.minted_at_ledger, EXCLUDED.minted_at_ledger),
                   current_owner_id = CASE
                       WHEN EXCLUDED.current_owner_ledger > COALESCE(nfts.current_owner_ledger, 0)
@@ -1582,7 +1579,6 @@ pub(super) async fn upsert_nfts_and_ownership(
             .bind(&collections)
             .bind(&names)
             .bind(&medias)
-            .bind(&metadatas)
             .bind(&minted)
             .bind(&owners)
             .bind(&owner_ledgers)

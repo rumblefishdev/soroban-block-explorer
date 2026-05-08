@@ -15,7 +15,9 @@ use crate::common::pagination::{finalize_page, into_envelope};
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
-use super::dto::{ListParams, NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
+use super::dto::{
+    ListParams, NftDetailResponse, NftIdCursor, NftItem, NftTransferCursor, NftTransferItem,
+};
 use super::queries::{ResolvedListParams, fetch_by_id, fetch_list, fetch_transfers, nft_exists};
 
 /// Parse `:id` path parameter as a positive `i32` (NFT surrogate id).
@@ -100,7 +102,7 @@ pub async fn list_nfts(
         ("id" = i32, Path, description = "Internal NFT surrogate id (`nfts.id`)."),
     ),
     responses(
-        (status = 200, description = "NFT detail", body = NftItem),
+        (status = 200, description = "NFT detail", body = NftDetailResponse),
         (status = 400, description = "Invalid id format", body = ErrorEnvelope),
         (status = 404, description = "NFT not found",   body = ErrorEnvelope),
         (status = 500, description = "Internal server error", body = ErrorEnvelope),
@@ -121,7 +123,25 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
         }
     };
 
-    let mut resp = Json(row).into_response();
+    // NFT metadata (attributes / traits / description / animation_url)
+    // is detail-only per ADR 0043 — fetched at request time via
+    // `runtime_enrichment::nft_token_uri` (per-token Soroban RPC
+    // `token_uri()` + HTTP / IPFS gateway → JSON). Cold-cache hit
+    // pays ~500ms-2s; LRU 24h absorbs warm requests. Fail-soft to
+    // `null`. The `metadata` field on the wire response is independent
+    // of the fetcher module name — same convention as the SEP-1
+    // fetcher serving `description` / `home_page`.
+    let metadata = state
+        .runtime_enrichment
+        .nft_token_uri
+        .resolve(&row.contract_id, &row.token_id)
+        .await;
+
+    let response = NftDetailResponse {
+        item: row,
+        metadata,
+    };
+    let mut resp = Json(response).into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);
     resp
 }

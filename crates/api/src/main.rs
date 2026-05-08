@@ -111,6 +111,8 @@ async fn main() {
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(s3_client),
         sep1: Sep1Fetcher::new().expect("failed to build SEP-1 stellar.toml HTTP client"),
+        nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
+            .expect("failed to build NFT token_uri HTTP client"),
     };
 
     let config = AppConfig::from_env();
@@ -166,6 +168,8 @@ mod tests {
             // tests below never reach get_asset, so the client never makes a
             // real request.
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
+            nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
+                .expect("build nft_token_uri fetcher"),
         };
         app(
             &test_config(),

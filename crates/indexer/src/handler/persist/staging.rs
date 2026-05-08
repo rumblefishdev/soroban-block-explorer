@@ -150,7 +150,6 @@ pub(super) struct NftRow {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub metadata: Option<Value>,
     pub minted_at_ledger: Option<i64>,
     pub current_owner_str_key: Option<String>,
     pub current_owner_ledger: Option<i64>,
@@ -984,7 +983,6 @@ impl Staged {
                     existing.name = existing.name.clone().or_else(|| nft.name.clone());
                     existing.media_url =
                         existing.media_url.clone().or_else(|| nft.media_url.clone());
-                    existing.metadata = existing.metadata.clone().or_else(|| nft.metadata.clone());
                 }
                 None => {
                     nft_indices.insert(key, nft_rows.len());
@@ -994,7 +992,6 @@ impl Staged {
                         collection_name: nft.collection_name.clone(),
                         name: nft.name.clone(),
                         media_url: nft.media_url.clone(),
-                        metadata: nft.metadata.clone(),
                         minted_at_ledger: nft.minted_at_ledger.map(i64::from),
                         current_owner_str_key: nft.owner_account.clone(),
                         current_owner_ledger: Some(incoming_ledger),

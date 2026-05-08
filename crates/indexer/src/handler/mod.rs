@@ -161,8 +161,9 @@ async fn process_s3_object(
     // so we pay the SQS lookup + SendMessageBatch round-trips once per
     // S3 record rather than once per ledger.
     let mut batch_extracted_assets = Vec::new();
+    let mut nft_mint_ledgers = Vec::new();
     for ledger_meta in batch.ledger_close_metas.iter() {
-        let extracted_assets = match process::process_ledger(
+        let output = match process::process_ledger(
             ledger_meta,
             &state.db_pool,
             Some(&state.cw_client),
@@ -170,7 +171,7 @@ async fn process_s3_object(
         )
         .await
         {
-            Ok(assets) => assets,
+            Ok(o) => o,
             Err(e) => {
                 error!(
                     key,
@@ -180,17 +181,34 @@ async fn process_s3_object(
                 return Err(e);
             }
         };
-        batch_extracted_assets.extend(extracted_assets);
+        if output.had_nft_mints {
+            nft_mint_ledgers.push(output.ledger_sequence);
+        }
+        batch_extracted_assets.extend(output.extracted_assets);
     }
 
-    // Type-1 enrichment SQS publish (task 0191). Galaxy Lambda
-    // concern only — kept here in handler/mod.rs (Lambda-specific
-    // orchestration) so the shared `process_ledger` stays free of
-    // SQS coupling. Fail-soft: publish errors do not abort the
-    // S3 record because the persistence has already committed.
+    // Type-1 enrichment SQS publish. Galaxy Lambda concern only — kept
+    // here in handler/mod.rs (Lambda-specific orchestration) so the
+    // shared `process_ledger` stays free of SQS coupling. Fail-soft:
+    // publish errors do not abort the S3 record because the persistence
+    // has already committed.
+    //
+    // Two kinds:
+    // - `icon` (task 0191) — re-emission OK; query-and-batch dedup via
+    //   sentinel keeps the worker idempotent.
+    // - `nft_token_uri` (task 0195 §2d) — insert-hook semantics; we
+    //   look up nfts minted in this batch's ledgers that haven't been
+    //   enriched yet (`name IS NULL`), guaranteeing exactly-once
+    //   delivery per nft_id under normal operation. Inherits the same
+    //   Lambda 2 / SQS queue / DLQ / DepthAlarm config as the icon
+    //   kind — adding a kind is a code change only, no CDK delta.
     state
         .enrichment_publisher
         .publish_for_extracted_assets(&state.db_pool, &batch_extracted_assets)
+        .await;
+    state
+        .enrichment_publisher
+        .publish_for_minted_nfts(&state.db_pool, &nft_mint_ledgers)
         .await;
 
     Ok(())
