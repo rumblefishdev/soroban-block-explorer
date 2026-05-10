@@ -1141,6 +1141,30 @@ The DB therefore holds only:
 This split — typed summaries in the DB, heavy payloads fetched on-demand from the
 public archive — is the core architectural choice, not accidental duplication.
 
+### 8.0 ClickHouse pilot (parallel store, read-empty)
+
+A parallel ClickHouse store was added next to the production Postgres
+schema per
+[ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
+(implementation in
+[task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)).
+It mirrors the table-by-table logical shape described above, with five
+deliberate divergences (full-content `soroban_events` replacing
+`soroban_events_appearances`, `created_at` dropped from every CH table
+except `ledgers`, `nfts.metadata` dropped CH-side, `_sqlx_migrations`
+replaced by an idempotent `init.sql`, `transaction_hash_index` exposed as
+a `Dictionary` for hot point lookups). **Postgres is unchanged by all
+five.**
+
+The ClickHouse copy lives in `crates/db-clickhouse/` and runs as the
+`clickhouse` service in `docker-compose.yml`. It is read-empty in scope —
+no indexer dual-write, no API reads. The full pilot schema reference,
+including the type-translation table and divergence rationale, lives in
+[`clickhouse-pilot.md`](./clickhouse-pilot.md).
+
+This subsection only flags that the pilot exists; the rest of this
+document continues to describe the Postgres source-of-truth schema.
+
 ## 8. Evolution Rules and Delivery Notes
 
 ### 8.1 Schema Evolution Rules
