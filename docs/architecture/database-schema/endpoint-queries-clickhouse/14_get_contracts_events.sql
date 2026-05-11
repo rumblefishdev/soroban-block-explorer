@@ -15,6 +15,7 @@
 --   $2  :limit                 Int      page size
 --   $3  :cursor_ledger         Int64    NULL on first page
 --   $4  :cursor_tx_id          Int64    NULL on first page
+--   $5  :cursor_event_index    Int16    NULL on first page
 -- Indexes:      soroban_contracts ORDER BY (id) — leading resolve.
 --               soroban_events ORDER BY (contract_id, ledger_sequence,
 --                 transaction_id, event_index) + PARTITION BY intDiv.
@@ -61,6 +62,10 @@ FROM soroban_events se FINAL
 JOIN transactions t FINAL ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence
 WHERE
     se.contract_id = (SELECT id FROM soroban_contracts FINAL WHERE contract_id = $1 LIMIT 1)
-    AND ($3 IS NULL OR (se.ledger_sequence, se.transaction_id) < ($3, $4))
+    -- Cursor includes event_index as the tiebreaker so multi-event txs
+    -- page cleanly: ORDER BY uses all three columns, so the keyset
+    -- predicate must too (otherwise a page boundary inside a multi-event
+    -- tx would skip or repeat rows). Review feedback (Copilot PR #174).
+    AND ($3 IS NULL OR (se.ledger_sequence, se.transaction_id, se.event_index) < ($3, $4, $5))
 ORDER BY se.ledger_sequence DESC, se.transaction_id DESC, se.event_index DESC
 LIMIT $2;

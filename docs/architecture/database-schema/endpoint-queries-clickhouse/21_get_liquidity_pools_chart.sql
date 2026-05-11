@@ -55,6 +55,10 @@ JOIN ledgers l ON l.sequence = lps.ledger_sequence
 WHERE lps.pool_id = $1
   AND lps.ledger_sequence >= $2
   AND lps.ledger_sequence <  $3
-  AND intDiv(lps.ledger_sequence, 500000) BETWEEN intDiv($2, 500000) AND intDiv($3, 500000)
+  -- Range is half-open `[from, to)`; the last included ledger is `$3 - 1`,
+  -- so the upper partition bound must use `intDiv($3 - 1, 500000)`. Using
+  -- `intDiv($3, 500000)` would scan one extra partition when `$3` falls
+  -- on a partition boundary. Review feedback (Copilot PR #174).
+  AND intDiv(lps.ledger_sequence, 500000) BETWEEN intDiv($2, 500000) AND intDiv($3 - 1, 500000)
 GROUP BY bucket
 ORDER BY bucket ASC;

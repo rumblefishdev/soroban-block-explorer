@@ -55,11 +55,15 @@
 --     asset bucket's `label`; API decodes.
 
 SELECT entity_type, identifier, label, surrogate_id FROM (
-    -- Transactions: dictGet hot path (§5.5)
+    -- Transactions: dictGet hot path (§5.5). Use $2 (parsed hash bytes)
+    -- — the API classifier accepts BOTH hex AND base64 inputs for the
+    -- raw query $1, so `unhex($1)` would throw on a base64-shaped q.
+    -- $2 carries the pre-parsed bytes regardless of the input encoding.
+    -- Review feedback (Copilot PR #174).
     SELECT
         'transaction'                                                                       AS entity_type,
-        lower(hex(unhex($1)))                                                               AS identifier,
-        concat('ledger ', toString(dictGet('transaction_hash_dict', 'ledger_sequence', toString(unhex($1))))) AS label,
+        lower(hex($2))                                                                      AS identifier,
+        concat('ledger ', toString(dictGet('transaction_hash_dict', 'ledger_sequence', toString($2)))) AS label,
         CAST(NULL AS Nullable(Int64))                                                       AS surrogate_id
     WHERE $5 = true
       AND $2 IS NOT NULL
