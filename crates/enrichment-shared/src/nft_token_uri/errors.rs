@@ -109,8 +109,8 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
         }
         // Soroban RPC errors collapse a wide surface (network, 5xx,
         // contract revert). Treat as transient by default — a
-        // contract-revert distinction can be layered on later by
-        // surfacing the JSON-RPC error code through `SorobanRpc`.
+        // contract-revert distinction can be added when the RPC client
+        // lands and surfaces the JSON-RPC error code.
         NftTokenUriError::SorobanRpc(_) => true,
         _ => false,
     }

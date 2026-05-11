@@ -7,6 +7,10 @@ deserializes each ledger, and persists to the ADR 0027 schema via
 `indexer::handler::process::process_ledger` — the shared parse-and-persist
 contract. No reimplementation of the write path.
 
+Also drives the ClickHouse pilot store (ADR 0044) behind
+`--target clickhouse`; that path is currently a no-op persist (task
+0205) — see [Targets](#targets) below.
+
 ## Prerequisites
 
 - The `aws` CLI on `PATH` (subprocess driver — no native SDK dependency).
@@ -44,13 +48,81 @@ cargo run -p backfill-runner -- status --start 50457424 --end 50460000
 
 ### Flags
 
-| Flag             | Default                  | Notes                                               |
-|------------------|--------------------------|-----------------------------------------------------|
-| `--start`        | required                 | First ledger sequence (inclusive).                  |
-| `--end`          | required                 | Last ledger sequence (inclusive).                   |
-| `--database-url` | env `DATABASE_URL`       | Postgres DSN (required if env not set).             |
-| `--temp-dir`     | `.temp/backfill-runner`  | Local scratch dir (env `BACKFILL_TEMP_DIR`).        |
-| `--verbose`/`-v` | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
+| Flag                | Default                  | Notes                                               |
+|---------------------|--------------------------|-----------------------------------------------------|
+| `--start`           | required                 | First ledger sequence (inclusive).                  |
+| `--end`             | required                 | Last ledger sequence (inclusive).                   |
+| `--target`          | `postgres`               | One of `postgres` \| `clickhouse`. See [Targets](#targets). |
+| `--database-url`    | env `DATABASE_URL`       | Postgres DSN (required when `--target postgres`).   |
+| `--clickhouse-url`  | env `CLICKHOUSE_URL`     | ClickHouse HTTP endpoint (used when `--target clickhouse`). |
+| `--temp-dir`        | `.temp/backfill-runner`  | Local scratch dir (env `BACKFILL_TEMP_DIR`).        |
+| `--keep-partitions` | off                      | Don't delete each partition's local folder after a successful index. Iteration / debug flag — see [Iteration](#iteration). |
+| `--verbose`/`-v`    | off                      | Enable per-ledger + per-partition info logs. Without it only warnings print during the run. |
+
+## Targets
+
+The runner writes to one of two parallel stores, selected by `--target`.
+Default is `postgres` so existing invocations (CI scripts, runbooks, the
+aws-public-blockchain workflow) keep working byte-for-byte without edits.
+
+| Target       | Status              | Required env / flag                                                                        |
+|--------------|---------------------|--------------------------------------------------------------------------------------------|
+| `postgres`   | production          | `--database-url` / `DATABASE_URL`                                                          |
+| `clickhouse` | **stub — no writes**| `--clickhouse-url` / `CLICKHOUSE_URL`, plus `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` (defaults from `db_clickhouse::Config::from_env`) |
+
+### `--target clickhouse` (stubbed)
+
+The ClickHouse path runs the full parse pipeline end-to-end against
+`aws s3 sync`'d ledgers, but the writer is currently a **no-op stub**
+(`db_clickhouse::persist::persist_ledger_clickhouse`). Per-ledger
+context is emitted via `tracing::info!` and zero rows are persisted.
+
+This intentional half-step (task 0205, ADR 0044 §Decision §6) wires the
+flag-based plumbing — `Sink` enum + dispatch over `preflight`,
+`load_completed`, `persist_ledger` — without the cost of writing real
+INSERTs against a schema that still has open design questions.
+A follow-up task lands the real INSERTs for the 17 mirrored tables and
+removes the stub.
+
+```bash
+# Stub ClickHouse run — parses every ledger, writes nothing.
+CLICKHOUSE_URL=http://localhost:8123 \
+    cargo run -p backfill-runner -- \
+    --target clickhouse \
+    run --start 62016000 --end 62016099
+```
+
+### Iteration
+
+A 64k-ledger partition is ~11.6 GB compressed; `aws s3 sync` against an
+empty folder takes ~60 s. Default behaviour deletes each partition's
+local folder right after it indexes (`partition local folder cleaned up`
+log line) to bound disk at ~2 × partition_size — see [Shape](#shape).
+For real backfills that's what you want.
+
+For tight iteration loops — typically against `--target clickhouse`
+where the persist path is a stub and you want to re-run the same range
+many times — pass `--keep-partitions`:
+
+```bash
+CLICKHOUSE_URL=http://localhost:8123 \
+    cargo run -p backfill-runner -- \
+    --target clickhouse \
+    --keep-partitions \
+    run --start 62016000 --end 62016099
+```
+
+The first run still pays the full sync cost. Subsequent runs find a
+fully-populated folder (64 000 `.xdr.zst` files for a closed partition);
+the sync stage short-circuits to a sub-second file-count check and
+skips the `aws s3 sync` subprocess entirely — `partition local folder
+already complete — skipping aws s3 sync` in the verbose log. Public-
+archive partitions are immutable once closed, so this is safe; the
+"current" (in-progress) partition cannot match the count and falls
+back to the normal sync path.
+
+Drop `--keep-partitions` once you're done — long runs with it on grow
+disk linearly with partition count.
 
 ### Start ledger
 

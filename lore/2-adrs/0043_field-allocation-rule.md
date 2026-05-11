@@ -170,21 +170,21 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 0197.
 
-| Field                                              | Path                                                   | Owning task                               |
-| -------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------- |
-| `assets.name` (Soroban / SAC)                      | indexer (on-chain `ContractData`)                      | 0156                                      |
-| `assets.name` (classic credit)                     | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`)              | 0195 §2a                                  |
-| `assets.icon_url`                                  | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`)             | 0191                                      |
-| `assets.holder_count`                              | indexer (trustline delta)                              | 0194 §1c                                  |
-| `assets.total_supply` (classic credit)             | indexer (SUM of trustline balances)                    | 0194 §1b                                  |
-| `assets.usd_price` + `usd_price_updated_at`        | Lambda 2 (CoinGecko / StellarExpert)                   | 0194 §1a (column) + 0195 §2c (population) |
-| `assets.description`, `assets.home_page`           | runtime type-2 (`runtime_enrichment::sep1`)            | 0188                                      |
-| `liquidity_pool_snapshots.tvl`                     | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b                                  |
-| `liquidity_pool_snapshots.volume`, `fee_revenue`   | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0199                                      |
-| `nfts.{collection_name, name, media_url}`          | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                  |
-| NFT detail `metadata` (attributes / traits / etc.) | runtime type-2 (`runtime_enrichment::nft_metadata`)    | 0195 §2d                                  |
-| `account_balances_current` (trustline rows)        | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e    |
-| Transaction `envelope_xdr`, full `events` payload  | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                |
+| Field                                              | Path                                                   | Owning task                                       |
+| -------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
+| `assets.name` (Soroban / SAC)                      | indexer (on-chain `ContractData`)                      | 0156                                              |
+| `assets.name` (classic credit)                     | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`)              | 0195 §2a                                          |
+| `assets.icon_url`                                  | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`)             | 0191                                              |
+| `assets.holder_count`                              | indexer (trustline delta — recompute)                  | 0194 §1c                                          |
+| `assets.total_supply` (classic credit)             | indexer (SUM of trustline balances — recompute)        | 0194 §1b                                          |
+| `assets.usd_price` + `usd_price_updated_at`        | n/a — deferred to future-work (column + population)    | future-work (0194 §1a + 0195 §2c removed from M2) |
+| `assets.description`, `assets.home_page`           | runtime type-2 (`runtime_enrichment::sep1`)            | 0188                                              |
+| `liquidity_pool_snapshots.tvl`                     | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b → 0199                                   |
+| `liquidity_pool_snapshots.volume`, `fee_revenue`   | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0199                                              |
+| `nfts.{collection_name, name, media_url}`          | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                          |
+| NFT detail `metadata` (attributes / traits / etc.) | runtime type-2 (`runtime_enrichment::nft_token_uri`)   | 0195 §2d                                          |
+| `account_balances_current` (trustline rows)        | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e            |
+| Transaction `envelope_xdr`, full `events` payload  | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                        |
 
 ---
 

@@ -2585,7 +2585,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
             "required": ["id", "contract_id", "token_id"],
             "properties": {
               "collection_name": {
@@ -2625,16 +2625,20 @@
           },
           {
             "type": "object",
+            "required": ["metadata"],
             "properties": {
-              "metadata": {}
+              "metadata": {
+                "type": ["object", "null"],
+                "description": "Off-chain JSON metadata fetched at request time. Always present\non the wire — `null` indicates fetch failure / unsupported\ncontent-type, not field absence."
+              }
             }
           }
         ],
-        "description": "Detail response. `metadata` is fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSONB blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). Defaults to `null` when the\nfetch fails or the contract returns a non-JSON `image/*` URI."
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row, see\n`15_get_nfts_list.sql` for the on-the-wire columns), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
       },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
         "required": ["id", "contract_id", "token_id"],
         "properties": {
           "collection_name": {
@@ -2730,7 +2734,12 @@
           "appearance_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Global BIGSERIAL `operations_appearances.id`; result-set order\n(`ORDER BY oa.id`) is the operation's within-tx application order."
+            "description": "Global BIGSERIAL `operations_appearances.id`. Internal ordering\nartefact only; not a within-tx index. Use `application_order`\nfor apply-order display and to join against\n`XdrOperationDto.application_order` from the heavy overlay."
+          },
+          "application_order": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "1-based per-tx apply position carrying on-chain operation order\n(task 0192). For folded appearance rows (multiple identical-identity\nenvelope ops collapsed into one row, see task 0163) this is the\nMIN of the folded ops' indices — the position of the row's first\noccurrence in `tx.operations[]`. `None` for pre-task-0192 rows\nwhere the column was not yet populated; clients fall back to\n`appearance_id` order in that case."
           },
           "asset_code": {
             "type": ["string", "null"],
@@ -3153,7 +3162,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
               "required": ["id", "contract_id", "token_id"],
               "properties": {
                 "collection_name": {

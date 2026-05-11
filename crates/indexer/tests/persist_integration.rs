@@ -242,6 +242,43 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         sac_identity.2.is_some(),
         "SAC contract_id resolved to soroban_contracts.id"
     );
+
+    // Task 0194 §1b + §1c — `recompute_asset_aggregates` runs after
+    // `upsert_balances` and rewrites the touched `(code, issuer_id)` asset
+    // row's `holder_count` + `total_supply`. The fixture's `make_account_state`
+    // contributes one credit trustline for `(USDC, ISSUER)` with balance
+    // `5.0000000`, so after the first persist:
+    //   holder_count = 1   (COUNT(*) FILTER (WHERE balance > 0))
+    //   total_supply = 5.0000000 (SUM(balance))
+    // Project `total_supply::TEXT` because the workspace `sqlx` features do
+    // not include `bigdecimal` — NUMERIC(28,7) round-trips losslessly through
+    // TEXT for assertion purposes.
+    let agg_first: (Option<i32>, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT a.holder_count, a.total_supply::TEXT
+          FROM assets a
+          JOIN accounts iss ON iss.id = a.issuer_id
+         WHERE a.asset_code = $1
+           AND iss.account_id = $2
+           AND a.asset_type IN (1, 2)
+        "#,
+    )
+    .bind("USDC")
+    .bind(ISSUER_STRKEY)
+    .fetch_one(&pool)
+    .await
+    .expect("USDC@ISSUER row must exist for aggregate assertion");
+    assert_eq!(
+        agg_first.0,
+        Some(1),
+        "task 0194 §1c: holder_count = COUNT(*) FILTER (WHERE balance > 0) — one active holder"
+    );
+    assert_eq!(
+        agg_first.1.as_deref(),
+        Some("5.0000000"),
+        "task 0194 §1b: total_supply = SUM(balance) of trustlines for (USDC, ISSUER)"
+    );
+
     assert_eq!(counts_first.pools, 1, "liquidity_pools row count");
     assert_eq!(
         counts_first.pool_snapshots, 1,
@@ -292,12 +329,14 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
     // to the typed enum, and the SQL helper renders the same canonical label
     // as OperationType::as_str(). Closes the Rust ↔ SQL drift gap on every run.
     // Task 0163: each fixture op has distinct identity so amount == 1 per row.
-    let ops: Vec<(OperationType, String, i64)> = sqlx::query_as(
+    // Task 0192: ORDER BY application_order — Payment is op_index=1, Invoke
+    // is op_index=2, so this projects to apply order [Payment, Invoke].
+    let ops: Vec<(OperationType, String, i64, i16)> = sqlx::query_as(
         r#"
-        SELECT type, op_type_name(type), amount
+        SELECT type, op_type_name(type), amount, application_order
           FROM operations_appearances
          WHERE ledger_sequence = $1
-         ORDER BY type
+         ORDER BY application_order
         "#,
     )
     .bind(i64::from(TEST_LEDGER_SEQ))
@@ -312,9 +351,11 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
     assert_eq!(ops[0].0, OperationType::Payment);
     assert_eq!(ops[0].1, "PAYMENT");
     assert_eq!(ops[0].2, 1, "payment appears once");
+    assert_eq!(ops[0].3, 1, "payment fixture has operation_index = 1");
     assert_eq!(ops[1].0, OperationType::InvokeHostFunction);
     assert_eq!(ops[1].1, "INVOKE_HOST_FUNCTION");
     assert_eq!(ops[1].2, 1, "invoke appears once");
+    assert_eq!(ops[1].3, 2, "invoke fixture has operation_index = 2");
 
     // --- Replay — counts must not change ---
     persist_ledger(
@@ -342,6 +383,126 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
 
     let counts_replay = test_counts(&pool).await;
     assert_eq!(counts_replay, counts_first, "replay must be idempotent");
+
+    // === Task 0194 §1b + §1c — trustline-removal-to-zero scenario ===
+    //
+    // Persist a follow-up ledger (`TEST_LEDGER_SEQ + 1`) whose
+    // `ExtractedAccountState.removed_trustlines` contains the USDC entry
+    // from the canonical fixture. `recompute_asset_aggregates` must visit
+    // the touched `(USDC, ISSUER)` pair and, because every trustline has
+    // been removed, the LATERAL aggregate returns NULL → `COALESCE(NULL, 0)`
+    // writes `holder_count = 0`, `total_supply = 0` (zero-out path,
+    // exercising the COALESCE branch flagged by the Copilot review).
+    const REMOVAL_LEDGER_SEQ: u32 = TEST_LEDGER_SEQ + 1;
+    const REMOVAL_TX_HASH: &str =
+        "5555555555555555555555555555555555555555555555555555555555555555";
+    const REMOVAL_LEDGER_HASH: &str =
+        "6666666666666666666666666666666666666666666666666666666666666666";
+
+    let removal_ledger = ExtractedLedger {
+        sequence: REMOVAL_LEDGER_SEQ,
+        hash: REMOVAL_LEDGER_HASH.to_string(),
+        closed_at: TEST_CLOSED_AT + 5,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let removal_tx = ExtractedTransaction {
+        hash: REMOVAL_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: REMOVAL_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 1000,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT + 5,
+        parse_error: false,
+    };
+    let removal_state = ExtractedAccountState {
+        account_id: SRC_STRKEY.to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: REMOVAL_LEDGER_SEQ,
+        sequence_number: 43,
+        balances: json!([
+            {"asset_type": "native", "balance": "1.0000000"},
+        ]),
+        removed_trustlines: vec![json!({
+            "asset_code": "USDC",
+            "issuer": ISSUER_STRKEY,
+        })],
+        home_domain: None,
+        created_at: TEST_CLOSED_AT + 5,
+    };
+
+    persist_ledger(
+        &pool,
+        &removal_ledger,
+        &[removal_tx],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[removal_state],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("removal-ledger persist_ledger failed");
+
+    let agg_after_removal: (Option<i32>, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT a.holder_count, a.total_supply::TEXT
+          FROM assets a
+          JOIN accounts iss ON iss.id = a.issuer_id
+         WHERE a.asset_code = $1
+           AND iss.account_id = $2
+           AND a.asset_type IN (1, 2)
+        "#,
+    )
+    .bind("USDC")
+    .bind(ISSUER_STRKEY)
+    .fetch_one(&pool)
+    .await
+    .expect("USDC@ISSUER asset row must persist past the trustline removal");
+    assert_eq!(
+        agg_after_removal.0,
+        Some(0),
+        "task 0194 §1c: every trustline removed → holder_count = 0 (COALESCE branch)"
+    );
+    assert_eq!(
+        agg_after_removal.1.as_deref(),
+        Some("0.0000000"),
+        "task 0194 §1b: every trustline removed → total_supply = 0 (COALESCE branch)"
+    );
+
+    // Scoped cleanup for the follow-up ledger (canonical `clean_test_ledger`
+    // wipes the shared accounts + asset rows on next test run).
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(REMOVAL_TX_HASH)
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(REMOVAL_TX_HASH)
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+        .bind(i64::from(REMOVAL_LEDGER_SEQ))
+        .execute(&pool)
+        .await;
 }
 
 /// ADR 0031 — every Rust `#[repr(i16)]` enum variant must agree with the
@@ -1709,6 +1870,304 @@ async fn clean_filter_test(pool: &PgPool) {
             hex::decode(NFT_WASM_HASH).unwrap(),
             hex::decode(FUN_WASM_HASH).unwrap(),
         ])
+        .execute(pool)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Task 0202 — nft_events → nft_ownership end-to-end wiring
+// ---------------------------------------------------------------------------
+
+const OWN_LEDGER_SEQ: u32 = 90_000_211;
+const OWN_CLOSED_AT: i64 = 1_777_119_600;
+const OWN_TX_HASH: &str = "aaaa222222222222222222222222222222222222222222222222222222222222";
+const OWN_LEDGER_HASH: &str = "bbbb222222222222222222222222222222222222222222222222222222222222";
+const OWN_NFT_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNNFT";
+const OWN_NFT_WASM_HASH: &str = "cccc222222222222222222222222222222222222222222222222222222222222";
+const OWNER_A_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNERA";
+const OWNER_B_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNERB";
+
+/// End-to-end: parser-emitted NFT events flow through `persist_ledger` and
+/// populate `nft_ownership` with the expected mint/transfer/burn sequence
+/// and monotonic `event_order` per `(contract, token, ledger)`.
+#[tokio::test]
+async fn nft_ownership_populated_for_mint_transfer_burn() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping NFT ownership wiring test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping NFT ownership wiring test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_ownership_test(&pool).await;
+
+    let ledger = ExtractedLedger {
+        sequence: OWN_LEDGER_SEQ,
+        hash: OWN_LEDGER_HASH.to_string(),
+        closed_at: OWN_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: OWN_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: OWN_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: OWN_CLOSED_AT,
+        parse_error: false,
+    };
+
+    // Inline-construct the deployment + nft rows so timestamps align with
+    // OWN_LEDGER_SEQ / OWN_CLOSED_AT. The shared `deploy_with` / `nft_row`
+    // helpers hardcode FILTER_LEDGER_SEQ / FILTER_CLOSED_AT — using them
+    // here would produce a fixture whose deployment + nft creation point
+    // at the 0118-filter test ledger, masking any same-ledger / timestamp
+    // alignment bug in the persist path.
+    let interfaces = vec![iface_with(OWN_NFT_WASM_HASH, &["owner_of", "transfer"])];
+    let deployments = vec![ExtractedContractDeployment {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        wasm_hash: Some(OWN_NFT_WASM_HASH.to_string()),
+        deployer_account: Some(SRC_STRKEY.to_string()),
+        deployed_at_ledger: OWN_LEDGER_SEQ,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    }];
+    let nfts = vec![ExtractedNft {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        token_id: "7".to_string(),
+        collection_name: None,
+        owner_account: Some(DST_STRKEY.to_string()),
+        name: None,
+        media_url: None,
+        minted_at_ledger: Some(OWN_LEDGER_SEQ),
+        last_seen_ledger: OWN_LEDGER_SEQ,
+        created_at: OWN_CLOSED_AT,
+    }];
+
+    // Three events for the same (contract, token, ledger) triple — mint then
+    // transfer then burn — should land as event_order 0, 1, 2.
+    let nft_events = vec![
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Mint,
+            owner_account: Some(OWNER_A_STRKEY.to_string()),
+            event_order: 0,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Transfer,
+            owner_account: Some(OWNER_B_STRKEY.to_string()),
+            event_order: 1,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Burn,
+            owner_account: None,
+            event_order: 2,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+    ];
+
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_assets: Vec<ExtractedAsset> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let classification_cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &interfaces,
+        &deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        &nfts,
+        &nft_events,
+        &no_lp_positions,
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("persist_ledger must succeed for NFT mint/transfer/burn");
+
+    // ── three nft_ownership rows survive the 0118 filter ──
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_one(&pool)
+    .await
+    .expect("count nft_ownership rows");
+    assert_eq!(total, 3, "all three events persisted");
+
+    // ── event_type distribution: 1 Mint, 1 Transfer, 1 Burn ──
+    let rows: Vec<(i16, i16, Option<String>)> = sqlx::query_as(
+        "SELECT o.event_type, o.event_order, a.account_id
+           FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+           LEFT JOIN accounts a ON a.id = o.owner_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2
+          ORDER BY o.event_order ASC",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_all(&pool)
+    .await
+    .expect("fetch event rows");
+    assert_eq!(rows.len(), 3);
+    // event_order monotonic 0,1,2
+    assert_eq!(rows[0].1, 0);
+    assert_eq!(rows[1].1, 1);
+    assert_eq!(rows[2].1, 2);
+    // event_type sequence Mint(0), Transfer(1), Burn(2)
+    assert_eq!(rows[0].0, NftEventType::Mint as i16);
+    assert_eq!(rows[1].0, NftEventType::Transfer as i16);
+    assert_eq!(rows[2].0, NftEventType::Burn as i16);
+    // owner_account: mint→A, transfer→B, burn→None
+    assert_eq!(rows[0].2.as_deref(), Some(OWNER_A_STRKEY));
+    assert_eq!(rows[1].2.as_deref(), Some(OWNER_B_STRKEY));
+    assert!(rows[2].2.is_none(), "burn yields NULL owner_id");
+
+    // ── idempotent replay (ON CONFLICT DO NOTHING) ──
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[ExtractedTransaction {
+            hash: OWN_TX_HASH.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: OWN_CLOSED_AT,
+            parse_error: false,
+        }],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &interfaces,
+        &deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        &nfts,
+        &nft_events,
+        &no_lp_positions,
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("replay must succeed (ON CONFLICT DO NOTHING)");
+
+    let total_after_replay: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_one(&pool)
+    .await
+    .expect("count after replay");
+    assert_eq!(total_after_replay, 3, "replay did not duplicate rows");
+
+    clean_ownership_test(&pool).await;
+}
+
+async fn clean_ownership_test(pool: &PgPool) {
+    let contracts = vec![OWN_NFT_CONTRACT.to_string()];
+    let _ = sqlx::query(
+        "DELETE FROM nft_ownership WHERE nft_id IN (
+            SELECT n.id FROM nfts n
+              JOIN soroban_contracts sc ON sc.id = n.contract_id
+             WHERE sc.contract_id = ANY($1)
+         )",
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "DELETE FROM nfts WHERE contract_id IN (
+            SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+         )",
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(OWN_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(OWN_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+        .bind(i64::from(OWN_LEDGER_SEQ))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = ANY($1)")
+        .bind(&contracts)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = ANY($1::BYTEA[])")
+        .bind(vec![hex::decode(OWN_NFT_WASM_HASH).unwrap()])
         .execute(pool)
         .await;
 }
@@ -3247,4 +3706,311 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &[SKIP_TX_HASH_T1, SKIP_TX_HASH_T2],
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// Task 0192 — operations_appearances.application_order
+// ---------------------------------------------------------------------------
+//
+// Two tests cover the schema + indexer fix:
+//
+// 1. `application_order_preserves_apply_order_not_alphabetic` — the smoking
+//    gun: a 4-op fixture where ops carry distinct asset_codes in
+//    non-alphabetic apply order (Z, A, M, B). Pre-fix, staging's HashMap
+//    aggregation + alphabetic identity sort produced INSERT order
+//    [A, B, M, Z] — endpoint 03 Statement C (`ORDER BY oa.id`) reflected
+//    that. Post-fix, `application_order` carries the apply-order index
+//    1..4 and `ORDER BY application_order` returns [Z, A, M, B].
+//
+// 2. `application_order_min_fold_for_duplicate_identity` — folding
+//    semantics: when N envelope ops fold to one DB row,
+//    `application_order = MIN(operation_index across folded ops)` and
+//    `amount = N`. Verifies the fix preserves task-0163's identity-fold
+//    while introducing the per-row apply-position metadata.
+
+const ORD_LEDGER_SEQ: u32 = 90_000_004;
+const ORD_LEDGER_HASH: &str = "9292929292929292929292929292929292929292929292929292929292929292";
+const ORD_TX_HASH: &str = "0192019201920192019201920192019201920192019201920192019201920192";
+const ORD_CLOSED_AT: i64 = 1_777_118_700;
+
+const FOLD_LEDGER_SEQ: u32 = 90_000_005;
+const FOLD_LEDGER_HASH: &str = "9393939393939393939393939393939393939393939393939393939393939393";
+const FOLD_TX_HASH: &str = "f01df01df01df01df01df01df01df01df01df01df01df01df01df01df01df01d";
+const FOLD_CLOSED_AT: i64 = 1_777_118_800;
+
+#[tokio::test]
+async fn application_order_preserves_apply_order_not_alphabetic() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping task-0192 ordering test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping task-0192 ordering test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_minimal_test_ledger(&pool, ORD_TX_HASH, ORD_LEDGER_SEQ).await;
+
+    let ledger = ExtractedLedger {
+        sequence: ORD_LEDGER_SEQ,
+        hash: ORD_LEDGER_HASH.to_string(),
+        closed_at: ORD_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let transaction = ExtractedTransaction {
+        hash: ORD_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: ORD_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 1000,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: ORD_CLOSED_AT,
+        parse_error: false,
+    };
+
+    // 4 distinct Payment ops with non-alphabetic asset_codes in apply order
+    // [Z, A, M, B]. Pre-fix the alphabetic identity-tuple sort produced
+    // [A, B, M, Z] insert order; post-fix the order is preserved via
+    // `application_order` 1..4.
+    let mk_payment = |op_index: u32, asset: &str| ExtractedOperation {
+        transaction_hash: ORD_TX_HASH.to_string(),
+        operation_index: op_index,
+        op_type: OperationType::Payment,
+        source_account: None,
+        details: json!({
+            "destination": DST_STRKEY,
+            "asset": format!("{asset}:{ISSUER_STRKEY}"),
+            "amount": 1_000_000i64,
+        }),
+    };
+    let operations = vec![(
+        ORD_TX_HASH.to_string(),
+        vec![
+            mk_payment(1, "ZEBRA"),
+            mk_payment(2, "ALPHA"),
+            mk_payment(3, "MIDDLE"),
+            mk_payment(4, "BETA"),
+        ],
+    )];
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[transaction],
+        &operations,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &ClassificationCache::new(),
+    )
+    .await
+    .expect("persist_ledger failed for ordering fixture");
+
+    let rows: Vec<(i16, String)> = sqlx::query_as(
+        r#"
+        SELECT application_order, asset_code
+          FROM operations_appearances
+         WHERE ledger_sequence = $1
+         ORDER BY application_order
+        "#,
+    )
+    .bind(i64::from(ORD_LEDGER_SEQ))
+    .fetch_all(&pool)
+    .await
+    .expect("fetch ordered rows");
+
+    assert_eq!(
+        rows,
+        vec![
+            (1, "ZEBRA".to_string()),
+            (2, "ALPHA".to_string()),
+            (3, "MIDDLE".to_string()),
+            (4, "BETA".to_string()),
+        ],
+        "ORDER BY application_order must reflect on-chain apply order, \
+         not alphabetic asset_code (the pre-task-0192 bug)"
+    );
+
+    clean_minimal_test_ledger(&pool, ORD_TX_HASH, ORD_LEDGER_SEQ).await;
+}
+
+#[tokio::test]
+async fn application_order_min_fold_for_duplicate_identity() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping task-0192 fold test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping task-0192 fold test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_minimal_test_ledger(&pool, FOLD_TX_HASH, FOLD_LEDGER_SEQ).await;
+
+    let ledger = ExtractedLedger {
+        sequence: FOLD_LEDGER_SEQ,
+        hash: FOLD_LEDGER_HASH.to_string(),
+        closed_at: FOLD_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let transaction = ExtractedTransaction {
+        hash: FOLD_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: FOLD_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 1000,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: FOLD_CLOSED_AT,
+        parse_error: false,
+    };
+
+    // 5 ops:
+    //   index 1 — Payment SRC→DST asset DISTINCT_A   (unique identity)
+    //   index 2 — Payment SRC→DST asset USDC         (folded #1)
+    //   index 3 — Payment SRC→DST asset DISTINCT_B   (unique identity)
+    //   index 4 — Payment SRC→DST asset USDC         (folded #2)
+    //   index 5 — Payment SRC→DST asset USDC         (folded #3)
+    //
+    // Expected DB rows after fold:
+    //   USDC      → application_order = 2 (MIN of {2, 4, 5}), amount = 3
+    //   DISTINCT_A → application_order = 1, amount = 1
+    //   DISTINCT_B → application_order = 3, amount = 1
+    let mk_payment = |op_index: u32, asset: &str| ExtractedOperation {
+        transaction_hash: FOLD_TX_HASH.to_string(),
+        operation_index: op_index,
+        op_type: OperationType::Payment,
+        source_account: None,
+        details: json!({
+            "destination": DST_STRKEY,
+            "asset": format!("{asset}:{ISSUER_STRKEY}"),
+            "amount": 1_000_000i64,
+        }),
+    };
+    let operations = vec![(
+        FOLD_TX_HASH.to_string(),
+        vec![
+            mk_payment(1, "DSTA"),
+            mk_payment(2, "USDC"),
+            mk_payment(3, "DSTB"),
+            mk_payment(4, "USDC"),
+            mk_payment(5, "USDC"),
+        ],
+    )];
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[transaction],
+        &operations,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &ClassificationCache::new(),
+    )
+    .await
+    .expect("persist_ledger failed for fold fixture");
+
+    let rows: Vec<(i16, String, i64)> = sqlx::query_as(
+        r#"
+        SELECT application_order, asset_code, amount
+          FROM operations_appearances
+         WHERE ledger_sequence = $1
+         ORDER BY application_order
+        "#,
+    )
+    .bind(i64::from(FOLD_LEDGER_SEQ))
+    .fetch_all(&pool)
+    .await
+    .expect("fetch folded rows");
+
+    assert_eq!(
+        rows.len(),
+        3,
+        "5 envelope ops fold to 3 distinct identities"
+    );
+    assert_eq!(
+        rows[0],
+        (1, "DSTA".to_string(), 1),
+        "DSTA unique → application_order=1, amount=1"
+    );
+    assert_eq!(
+        rows[1],
+        (2, "USDC".to_string(), 3),
+        "USDC folded → application_order=MIN(2,4,5)=2, amount=3"
+    );
+    assert_eq!(
+        rows[2],
+        (3, "DSTB".to_string(), 1),
+        "DSTB unique → application_order=3, amount=1"
+    );
+
+    clean_minimal_test_ledger(&pool, FOLD_TX_HASH, FOLD_LEDGER_SEQ).await;
+}
+
+/// Minimal scoped cleanup for the task-0192 ordering / fold tests. These
+/// fixtures only touch transactions + operations_appearances + accounts;
+/// no liquidity_pools / soroban_contracts / assets to clear.
+async fn clean_minimal_test_ledger(pool: &PgPool, tx_hash: &str, ledger_seq: u32) {
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(tx_hash)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(tx_hash)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+        .bind(i64::from(ledger_seq))
+        .execute(pool)
+        .await;
+    // Accounts (SRC_STRKEY, DST_STRKEY, ISSUER_STRKEY) are shared with the
+    // canonical fixture and may be touched by parallel tests. Only the
+    // ledger / transaction / FK-dependent rows need scoped cleanup; the
+    // canonical-fixture cleanup wipes the account rows.
 }

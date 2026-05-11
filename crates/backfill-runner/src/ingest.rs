@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 
 use indexer::handler::HandlerError;
 use indexer::handler::persist::ClassificationCache;
-use sqlx::PgPool;
 use tracing::info;
 
 use crate::dashboard::Dashboard;
 use crate::error::BackfillError;
 use crate::partition::Partition;
+use crate::sink::Sink;
 
 /// Per-ledger parse + persist timings. Decompression isn't timed —
 /// it's deterministic work on a fixed input and not a useful diagnostic
@@ -62,7 +62,7 @@ pub struct PartitionStats {
 /// without re-parsing the filename.
 pub async fn ingest_ledger_from_file(
     path: &Path,
-    pool: &PgPool,
+    sink: &Sink,
     seq: u32,
     partition_start: u32,
     classification_cache: &ClassificationCache,
@@ -101,7 +101,7 @@ pub async fn ingest_ledger_from_file(
 
     let persist_start = Instant::now();
     for meta in batch.ledger_close_metas.iter() {
-        indexer::handler::process::process_ledger(meta, pool, None, classification_cache).await?;
+        sink.persist_ledger(meta, classification_cache).await?;
     }
     let persist_ms = persist_start.elapsed().as_millis();
 
@@ -137,7 +137,7 @@ pub async fn ingest_ledger_from_file(
 pub async fn index_partition(
     partition: &Partition,
     temp_dir: &Path,
-    pool: &PgPool,
+    sink: &Sink,
     range_start: u32,
     range_end: u32,
     completed: &HashSet<u32>,
@@ -167,7 +167,7 @@ pub async fn index_partition(
             seq,
             path.display()
         );
-        let t = ingest_ledger_from_file(&path, pool, seq, partition.start, classification_cache)
+        let t = ingest_ledger_from_file(&path, sink, seq, partition.start, classification_cache)
             .await?;
         stats.indexed += 1;
         stats.total_bytes += t.bytes as u64;

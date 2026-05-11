@@ -126,11 +126,11 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
     // NFT metadata (attributes / traits / description / animation_url)
     // is detail-only per ADR 0043 — fetched at request time via
     // `runtime_enrichment::nft_token_uri` (per-token Soroban RPC
-    // `token_uri()` + HTTP / IPFS gateway → JSON). Cold-cache hit
-    // pays ~500ms-2s; LRU 24h absorbs warm requests. Fail-soft to
-    // `null`. The `metadata` field on the wire response is independent
-    // of the fetcher module name — same convention as the SEP-1
-    // fetcher serving `description` / `home_page`.
+    // `token_uri()` + HTTP / IPFS gateway → JSON). Warm requests hit
+    // the in-process LRU (24 h, capacity 1024); cold requests pay the
+    // RPC + IPFS round trip. The `metadata` field on the wire response
+    // is independent of the fetcher module name — same convention as
+    // the SEP-1 fetcher serving `description` / `home_page`.
     //
     // 3 s wall-clock cap on the cold path so a slow IPFS gateway can't
     // hold the request anywhere near the API Gateway 29 s ceiling.

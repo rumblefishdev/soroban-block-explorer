@@ -48,8 +48,8 @@ SELECT
     -- 20260507120000_drop_nfts_metadata.up.sql per ADR 0043 detail-only
     -- carve-out (task 0195 §2d). The detail endpoint serves it via
     -- `runtime_enrichment::nft_token_uri` (Soroban RPC `token_uri()` +
-    -- IPFS gateway, LRU 24h, fail-soft). The list endpoint no longer
-    -- returns it (and never persisted it on this row).
+    -- IPFS gateway, LRU 24h, fail-soft). The list endpoint never
+    -- returned it.
     n.minted_at_ledger,
     own.account_id    AS current_owner,
     n.current_owner_ledger

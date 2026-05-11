@@ -52,6 +52,11 @@ pub(super) struct TxRow {
 /// `amount` counts how many operations of identical identity were folded
 /// into this row within the same transaction. Identity keys match the
 /// `uq_ops_app_identity` UNIQUE NULLS NOT DISTINCT constraint.
+///
+/// `application_order` carries the on-chain apply position (task 0192) — for
+/// folded rows, the MIN of `ExtractedOperation.operation_index` across the
+/// folded ops (= position of the first appearance of this identity in
+/// `tx.operations[]`). 1-based per ecosystem parity (ADR 0028 / task 0172).
 pub(super) struct OpRow {
     pub tx_hash_hex: String,
     pub op_type: OperationType,
@@ -62,6 +67,7 @@ pub(super) struct OpRow {
     pub asset_issuer_str_key: Option<String>,
     pub pool_id: Option<[u8; 32]>,
     pub amount: i64,
+    pub application_order: i16,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -612,9 +618,18 @@ impl Staged {
         // Task 0163: collapse operations with identical identity within a
         // transaction into a single appearance row with `amount = COUNT(*)`.
         // Identity columns match the DB `uq_ops_app_identity` constraint.
-        // Per-op detail (transfer amount, application order, memo, claimants,
-        // function args, …) is not carried — the API re-materialises it from
-        // XDR via `xdr_parser::extract_operations`.
+        // Per-op detail (transfer amount, memo, claimants, function args, …)
+        // is not carried — the API re-materialises it from XDR via
+        // `xdr_parser::extract_operations`.
+        //
+        // Task 0192: track `min_apply_order` (= MIN of `operation_index`
+        // across the folded ops) on each aggregation entry so the
+        // appearance row carries the position of its first occurrence in
+        // `tx.operations[]`. The HashMap iteration order is irrelevant
+        // here: the explicit `min` aggregation makes the value
+        // independent of fold sequence, and downstream sorting uses
+        // `application_order` rather than the alphabetic identity tuple
+        // that produced the task-0192 ordering bug.
         type OpIdentity = (
             String,           // tx_hash_hex
             OperationType,    // op_type
@@ -627,11 +642,17 @@ impl Staged {
             i64,              // ledger_sequence
             DateTime<Utc>,    // created_at
         );
+        struct OpAgg {
+            count: i64,
+            /// MIN(`ExtractedOperation.operation_index`) across folded ops.
+            /// 1-based per ecosystem parity (ADR 0028 / task 0172).
+            min_apply_order: u32,
+        }
         let tx_created_at: HashMap<String, DateTime<Utc>> = tx_rows
             .iter()
             .map(|t| (t.hash_hex.clone(), t.created_at))
             .collect();
-        let mut op_agg: HashMap<OpIdentity, i64> = HashMap::new();
+        let mut op_agg: HashMap<OpIdentity, OpAgg> = HashMap::new();
         for (tx_hash, ops) in operations {
             let Some(&created_at) = tx_created_at.get(tx_hash) else {
                 continue;
@@ -654,12 +675,21 @@ impl Staged {
                     ledger_sequence_i64,
                     created_at,
                 );
-                *op_agg.entry(key).or_insert(0) += 1;
+                op_agg
+                    .entry(key)
+                    .and_modify(|agg| {
+                        agg.count += 1;
+                        agg.min_apply_order = agg.min_apply_order.min(op.operation_index);
+                    })
+                    .or_insert(OpAgg {
+                        count: 1,
+                        min_apply_order: op.operation_index,
+                    });
             }
         }
         let mut op_rows: Vec<OpRow> = op_agg
             .into_iter()
-            .map(|(k, amount)| OpRow {
+            .map(|(k, agg)| OpRow {
                 tx_hash_hex: k.0,
                 op_type: k.1,
                 source_str_key: k.2,
@@ -668,39 +698,30 @@ impl Staged {
                 asset_code: k.5,
                 asset_issuer_str_key: k.6,
                 pool_id: k.7,
-                amount,
+                amount: agg.count,
+                // Stellar protocol caps a classic transaction at 100 ops, and
+                // Soroban at 1, so `operation_index` always fits in an i16.
+                application_order: i16::try_from(agg.min_apply_order)
+                    .expect("operation_index exceeds SMALLINT — protocol violation"),
                 ledger_sequence: k.8,
                 created_at: k.9,
             })
             .collect();
-        // Deterministic order for downstream chunking / replay — full identity
-        // tuple is the tie-breaker, otherwise rows sharing a type in the same
-        // tx fall back to HashMap iteration order.
+        // Sort by (tx, application_order) so chunking and replay produce a
+        // deterministic stream that matches on-chain apply order. The
+        // pre-task-0192 alphabetic-identity sort was the root cause of the
+        // ordering bug: it produced INSERT order keyed by `asset_code`,
+        // making `oa.id` BIGSERIAL alphabetic instead of monotone with
+        // apply order.
+        //
+        // `sort_by` with a chained comparator instead of `sort_by_key` so
+        // we don't allocate a new `String` per row to materialise the key
+        // (the tx_hash_hex strings are 64 chars; on a busy partition that
+        // is non-trivial steady-state churn).
         op_rows.sort_by(|a, b| {
-            (
-                a.tx_hash_hex.as_str(),
-                a.op_type as i16,
-                a.source_str_key.as_deref(),
-                a.destination_str_key.as_deref(),
-                a.contract_id.as_deref(),
-                a.asset_code.as_deref(),
-                a.asset_issuer_str_key.as_deref(),
-                a.pool_id.as_ref(),
-                a.ledger_sequence,
-                a.created_at,
-            )
-                .cmp(&(
-                    b.tx_hash_hex.as_str(),
-                    b.op_type as i16,
-                    b.source_str_key.as_deref(),
-                    b.destination_str_key.as_deref(),
-                    b.contract_id.as_deref(),
-                    b.asset_code.as_deref(),
-                    b.asset_issuer_str_key.as_deref(),
-                    b.pool_id.as_ref(),
-                    b.ledger_sequence,
-                    b.created_at,
-                ))
+            a.tx_hash_hex
+                .cmp(&b.tx_hash_hex)
+                .then_with(|| a.application_order.cmp(&b.application_order))
         });
 
         // --- events flatten for appearance aggregation ---------------------

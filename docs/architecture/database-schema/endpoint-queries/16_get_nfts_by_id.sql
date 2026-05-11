@@ -19,7 +19,7 @@
 --     detail-only carve-out (task 0195 §2d). The detail handler
 --     fetches the JSON blob at request time from the per-token
 --     `token_uri()` URL (Soroban RPC + IPFS gateway via
---     `runtime_enrichment::nft_metadata`, LRU 24h, fail-soft) and
+--     `runtime_enrichment::nft_token_uri`, LRU 24h, fail-soft) and
 --     surfaces it as `metadata` on `NftDetailResponse`. The contract-
 --     defined JSONB shape is therefore intentionally not standardised
 --     in this file.

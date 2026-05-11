@@ -814,6 +814,7 @@ pub(super) async fn insert_operations(
         let mut asset_issuer_vec: Vec<Option<i64>> = Vec::with_capacity(chunk.len());
         let mut pool_id_vec: Vec<Option<Vec<u8>>> = Vec::with_capacity(chunk.len());
         let mut amount_vec: Vec<i64> = Vec::with_capacity(chunk.len());
+        let mut application_order_vec: Vec<i16> = Vec::with_capacity(chunk.len());
         let mut ledger_seq_vec: Vec<i64> = Vec::with_capacity(chunk.len());
         let mut created_at_vec: Vec<DateTime<Utc>> = Vec::with_capacity(chunk.len());
 
@@ -846,6 +847,7 @@ pub(super) async fn insert_operations(
             )?);
             pool_id_vec.push(r.pool_id.map(|h| h.to_vec()));
             amount_vec.push(r.amount);
+            application_order_vec.push(r.application_order);
             ledger_seq_vec.push(r.ledger_sequence);
             created_at_vec.push(r.created_at);
         }
@@ -864,7 +866,7 @@ pub(super) async fn insert_operations(
             INSERT INTO operations_appearances (
                 transaction_id, type, source_id, destination_id,
                 contract_id, asset_code, asset_issuer_id, pool_id,
-                amount, ledger_sequence, created_at
+                amount, ledger_sequence, created_at, application_order
             )
             SELECT
                 t.tx_id, t.op_type, t.source_id, t.dest_id,
@@ -874,15 +876,15 @@ pub(super) async fn insert_operations(
                     WHEN EXISTS (SELECT 1 FROM liquidity_pools lp WHERE lp.pool_id = t.pool_id) THEN t.pool_id
                     ELSE NULL
                 END,
-                t.amount, t.ledger_sequence, t.created_at
+                t.amount, t.ledger_sequence, t.created_at, t.application_order
               FROM UNNEST(
                 $1::BIGINT[], $2::SMALLINT[], $3::BIGINT[], $4::BIGINT[],
                 $5::BIGINT[], $6::VARCHAR[], $7::BIGINT[], $8::BYTEA[],
-                $9::BIGINT[], $10::BIGINT[], $11::TIMESTAMPTZ[]
+                $9::BIGINT[], $10::BIGINT[], $11::TIMESTAMPTZ[], $12::SMALLINT[]
               )
                 AS t(tx_id, op_type, source_id, dest_id,
                      contract_id, asset_code, asset_issuer_id, pool_id,
-                     amount, ledger_sequence, created_at)
+                     amount, ledger_sequence, created_at, application_order)
             ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING
             "#,
         )
@@ -897,6 +899,7 @@ pub(super) async fn insert_operations(
         .bind(&amount_vec)
         .bind(&ledger_seq_vec)
         .bind(&created_at_vec)
+        .bind(&application_order_vec)
         .execute(&mut **db_tx)
         .await?;
     }
@@ -2243,30 +2246,19 @@ pub(super) async fn recompute_asset_aggregates(
         else {
             continue;
         };
-        let Some(issuer_id) = account_ids.get(issuer_key).copied() else {
-            // Same defensive skip pattern as `upsert_balances_credit`: if the
-            // issuer wasn't seeded, the row didn't write either, so the
-            // recompute would touch nothing. Warn-log so a sustained pattern
-            // is observable instead of silently dropping.
-            tracing::warn!(
-                code = %code,
-                issuer = %issuer_key,
-                "recompute_asset_aggregates: issuer StrKey unseeded; skipping balance row aggregation"
-            );
-            continue;
-        };
+        // Strict resolve: `upsert_balances_credit` (step 14a) already called
+        // `resolve_id(account_ids, issuer_key, "abc.credit.issuer")?` for the
+        // same row, so an unseeded issuer would have aborted the transaction
+        // upstream. Reuse the same helper here for consistent error semantics.
+        let issuer_id = resolve_id(account_ids, issuer_key, "recompute.balance.issuer")?;
         affected.insert((code.clone(), issuer_id));
     }
 
     for r in &staged.trustline_removals {
-        let Some(issuer_id) = account_ids.get(&r.issuer_str_key).copied() else {
-            tracing::warn!(
-                code = %r.asset_code,
-                issuer = %r.issuer_str_key,
-                "recompute_asset_aggregates: issuer StrKey unseeded; skipping trustline-removal aggregation"
-            );
-            continue;
-        };
+        // Same strict-resolve invariant as the balance-row path above —
+        // `upsert_balances` (step 14a) handled the corresponding DELETE
+        // statement and would have errored on an unseeded issuer.
+        let issuer_id = resolve_id(account_ids, &r.issuer_str_key, "recompute.trustline.issuer")?;
         affected.insert((r.asset_code.clone(), issuer_id));
     }
 
@@ -2297,7 +2289,10 @@ pub(super) async fn recompute_asset_aggregates(
             FROM account_balances_current abc
             WHERE abc.asset_code = aff.code
               AND abc.issuer_id  = aff.issuer_id
-              AND abc.asset_type <> 0
+            -- No explicit `asset_type <> 0` filter needed: native rows
+            -- have NULL `asset_code` / `issuer_id`, so the equality joins
+            -- above already exclude them. The `idx_abc_asset (asset_code,
+            -- issuer_id)` index keeps the seek index-only.
         ) sub ON TRUE
         WHERE a.asset_code = aff.code
           AND a.issuer_id  = aff.issuer_id

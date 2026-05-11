@@ -217,7 +217,9 @@ pub async fn persist_ledger(
     Ok(())
 }
 
-/// Drive all 14 DB steps inside the open transaction, recording per-step timings.
+/// Drive all 15 DB steps inside the open transaction, recording per-step timings.
+/// Step 15 (`recompute_asset_aggregates`, task 0194 §1b + §1c) runs after the
+/// `upsert_balances` pass and is timed separately as `aggregates_ms`.
 async fn run_all_steps(
     db_tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     staged: &Staged,

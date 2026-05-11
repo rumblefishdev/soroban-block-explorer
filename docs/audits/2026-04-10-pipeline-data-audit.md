@@ -512,17 +512,23 @@ Six columns are always NULL because they require data from outside the XDR:
 ### 9.3 Proposed Enrichment Architecture
 
 > **Superseded 2026-05-06** by [ADR 0043](../../lore/2-adrs/0043_field-allocation-rule.md)
-> and tasks 0188 / 0191 / 0194 / 0195. The "scheduled cron" tier described
-> below was split between two distinct paths once the field-allocation rule
-> crystallised:
+> and tasks 0188 / 0191 / 0194 / 0195 / 0199. The "scheduled cron" tier
+> described below was split into three distinct paths once the
+> field-allocation rule crystallised:
 >
-> - **On-chain fields** (LP `volume`, `fee_revenue`, `assets.holder_count`,
->   classic credit `assets.total_supply`) → indexer-side per-ledger
->   recompute. Owned by task 0194 §1b/§1c/§1d. Lives in
->   `crates/indexer/src/handler/persist/write.rs` (`recompute_asset_aggregates`
->   - the post-INSERT volume UPDATE in `upsert_pools_and_snapshots`).
->     No EventBridge cron, no separate Lambda — the work happens inside the
->     normal persist transaction.
+> - **On-chain fields shipped via indexer-side per-ledger recompute**
+>   (`assets.holder_count`, classic credit `assets.total_supply`).
+>   Owned by task 0194 §1b / §1c. Lives in
+>   `crates/indexer/src/handler/persist/write.rs::recompute_asset_aggregates`,
+>   invoked after `upsert_balances` inside the normal persist transaction.
+>   No EventBridge cron, no separate Lambda.
+> - **On-chain fields deferred** (LP `volume`, `fee_revenue`). Originally
+>   planned as task 0194 §1d (snapshot-delta), pulled mid-implementation
+>   after correctness review (reserve delta nets opposite swaps within a
+>   ledger; single-leg unit without USD reference is a weak metric).
+>   Re-spawned as task 0199 — per-op extraction from PathPayment
+>   `claimedOffers[].amount_sold` plus USD denomination via the price
+>   oracle shipped by task 0195 §2b. Columns stay NULL until 0199 lands.
 > - **Off-chain fields** (LP `tvl`, NFT metadata, asset USD price)
 >   → SQS-driven type-1 worker Lambda (`crates/enrichment-worker`,
 >   shipped by task 0191) consuming messages emitted by the indexer
@@ -531,7 +537,7 @@ Six columns are always NULL because they require data from outside the XDR:
 >   (`crates/api/src/runtime_enrichment/sep1`, task 0188); no DB column.
 >
 > The `0124, 0125, 0135` task references in the table below are obsolete
-> as written — superseded by `0188, 0191, 0194, 0195`. Original text
+> as written — superseded by `0188, 0191, 0194, 0195, 0199`. Original text
 > retained below for historical context.
 
 The enrichment pipeline sits between ingestion and API. It has three execution modes:

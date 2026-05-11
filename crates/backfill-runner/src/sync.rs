@@ -20,7 +20,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
-use crate::partition::Partition;
+use crate::partition::{PARTITION_SIZE, Partition};
 
 // Retry policy for the `aws s3 sync` subprocess (task 0145 decision).
 // Hardcoded — not operator-tunable; change the constants if the numbers drift.
@@ -37,6 +37,24 @@ pub async fn sync_partition(partition: &Partition, temp_dir: &Path) -> Result<()
     let local = partition.local_folder(temp_dir);
     tokio::fs::create_dir_all(&local).await?;
 
+    // Fast path: if the local folder already holds the full partition
+    // (PARTITION_SIZE `.xdr.zst` files), skip the `aws s3 sync`
+    // subprocess entirely. Public-archive partitions are immutable
+    // once closed, so a complete local snapshot is authoritative.
+    //
+    // Why this matters: the LIST half of `aws s3 sync` paginates 64
+    // ListObjectsV2 calls (~30–40 s) even when zero GETs follow. For
+    // iteration loops (`--keep-partitions`) that's pure overhead.
+    if let Some((file_count, total_bytes)) = local_partition_complete(&local).await? {
+        info!(
+            partition = partition.start,
+            file_count,
+            total_bytes,
+            "partition local folder already complete — skipping aws s3 sync"
+        );
+        return Ok(());
+    }
+
     let duration = run_sync_with_retry(partition, &local).await?;
     let (file_count, total_bytes) = dir_stats(&local).await?;
 
@@ -49,6 +67,53 @@ pub async fn sync_partition(partition: &Partition, temp_dir: &Path) -> Result<()
     );
 
     Ok(())
+}
+
+/// Cheap pre-check: if `local` already contains exactly `PARTITION_SIZE`
+/// `.xdr.zst` files, return their `(count, total_bytes)` so the caller
+/// can short-circuit the `aws s3 sync` subprocess. Returns `None` for
+/// anything else (missing dir, partial dir, extra files) — the safe
+/// default is "run the sync".
+///
+/// Safety: public-archive partitions are immutable once their end
+/// ledger is written, so file-count parity with `PARTITION_SIZE` is
+/// sufficient to declare the local snapshot authoritative for the
+/// closed partitions a backfill covers. The "current" (in-progress)
+/// partition cannot match this check by construction.
+async fn local_partition_complete(dir: &Path) -> Result<Option<(usize, u64)>, BackfillError> {
+    count_complete_partition(dir, PARTITION_SIZE as usize).await
+}
+
+/// Inner generic helper exposed for unit tests so they can exercise the
+/// completeness logic against a small fixture without materialising
+/// 64 000 files on disk per test. Production calls go through
+/// `local_partition_complete` which fixes `expected = PARTITION_SIZE`.
+async fn count_complete_partition(
+    dir: &Path,
+    expected: usize,
+) -> Result<Option<(usize, u64)>, BackfillError> {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".xdr.zst") {
+            continue;
+        }
+        let meta = entry.metadata().await?;
+        count += 1;
+        bytes += meta.len();
+    }
+    if count == expected {
+        Ok(Some((count, bytes)))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Run `aws s3 sync` with exponential backoff. Returns the duration of
@@ -156,5 +221,69 @@ mod tests {
         assert_eq!(RETRY_BASE_DELAY, Duration::from_secs(2));
         assert_eq!(RETRY_MAX_DELAY, Duration::from_secs(30));
         assert_eq!(RETRY_MULTIPLIER, 2);
+    }
+
+    /// Fixture helper: create `count` `.xdr.zst` files of `bytes_each`
+    /// bytes in a fresh tempdir and return its path. Also drops one
+    /// non-ledger file so the filter in `count_complete_partition`
+    /// actually has something to ignore.
+    async fn fixture_dir(count: usize, bytes_each: usize) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        for i in 0..count {
+            let path = dir.path().join(format!("file-{i:08X}.xdr.zst"));
+            tokio::fs::write(&path, vec![0u8; bytes_each])
+                .await
+                .expect("write fixture file");
+        }
+        // Non-ledger sibling — must be ignored by the .xdr.zst filter.
+        tokio::fs::write(dir.path().join("README.txt"), b"ignore me")
+            .await
+            .expect("write sibling");
+        dir
+    }
+
+    #[tokio::test]
+    async fn local_partition_complete_returns_none_for_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        let got = count_complete_partition(&missing, 3)
+            .await
+            .expect("missing dir is Ok(None), not an error");
+        assert!(
+            got.is_none(),
+            "missing dir should produce None, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_partition_complete_returns_none_for_partial_dir() {
+        let dir = fixture_dir(2, 7).await; // expected=3, have 2 → partial
+        let got = count_complete_partition(dir.path(), 3).await.unwrap();
+        assert!(
+            got.is_none(),
+            "partial dir should produce None, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_partition_complete_returns_some_for_exact_count() {
+        let dir = fixture_dir(3, 17).await;
+        let got = count_complete_partition(dir.path(), 3)
+            .await
+            .expect("readable dir")
+            .expect("exact count yields Some");
+        assert_eq!(got.0, 3, "file count");
+        assert_eq!(got.1, 3 * 17, "summed bytes");
+    }
+
+    #[tokio::test]
+    async fn local_partition_complete_returns_none_when_extra_files_push_over_count() {
+        // 4 .xdr.zst files when only 3 expected → over → None.
+        let dir = fixture_dir(4, 5).await;
+        let got = count_complete_partition(dir.path(), 3).await.unwrap();
+        assert!(
+            got.is_none(),
+            "extra files should produce None, got {got:?}"
+        );
     }
 }

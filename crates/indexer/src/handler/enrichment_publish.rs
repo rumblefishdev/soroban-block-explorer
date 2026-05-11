@@ -131,12 +131,13 @@ impl Publisher {
             return;
         }
 
-        publish_icon_messages(&self.client, &self.queue_url, &asset_ids).await;
+        publish_sep1_assets_messages(&self.client, &self.queue_url, &asset_ids).await;
     }
 
     /// Insert-hook publisher for NFT mints (task 0195 §2d). Looks up
-    /// `nfts.id` rows with `minted_at_ledger IN ($ledgers) AND name IS
-    /// NULL` and emits one `nft_metadata` message per id.
+    /// `nfts.id` rows with `minted_at_ledger IN ($ledgers)` that still
+    /// have `NULL` in any of `name` / `media_url` / `collection_name`
+    /// and emits one `nft_token_uri` message per id.
     ///
     /// Insert-hook semantics: a freshly minted NFT row has all
     /// off-chain columns NULL. Once the worker writes either a real
@@ -144,6 +145,12 @@ impl Publisher {
     /// drops out of the query. Re-running the same ledger (idempotent
     /// retries) re-selects the same id but the worker UPDATE is
     /// idempotent so duplicate emissions are harmless.
+    ///
+    /// Bounded to the current batch's `minted_at_ledger`: an SQS publish
+    /// failure leaks those nft_ids (no re-emission window since the
+    /// mint ledger has passed). Outbox-style transactional emit is
+    /// infra overkill for a block explorer; the 0196 enrichment
+    /// backfill crate drains the gap directly.
     #[instrument(skip_all, fields(ledgers = ledger_sequences.len()))]
     pub async fn publish_for_minted_nfts(&self, pool: &PgPool, ledger_sequences: &[u32]) {
         if ledger_sequences.is_empty() {
@@ -316,16 +323,19 @@ async fn publish_nft_token_uri_messages(client: &SqsClient, queue_url: &str, nft
     }
 }
 
-async fn publish_icon_messages(client: &SqsClient, queue_url: &str, asset_ids: &[i32]) {
+async fn publish_sep1_assets_messages(client: &SqsClient, queue_url: &str, asset_ids: &[i32]) {
     // SendMessageBatch caps at 10 messages per request.
     for chunk in asset_ids.chunks(10) {
         let mut entries = Vec::with_capacity(chunk.len());
         for (idx, id) in chunk.iter().enumerate() {
             // Build the JSON body via serde so future kinds with
             // string fields can't accidentally introduce injection.
-            let body =
-                serde_json::json!({ "kind": "sep1_assets", "asset_id": id }).to_string();
-            debug!(kind = "sep1_assets", asset_id = id, "publishing enrichment msg");
+            let body = serde_json::json!({ "kind": "sep1_assets", "asset_id": id }).to_string();
+            debug!(
+                kind = "sep1_assets",
+                asset_id = id,
+                "publishing enrichment msg"
+            );
             let entry = SendMessageBatchRequestEntry::builder()
                 .id(format!("msg-{idx}-{id}"))
                 .message_body(body)

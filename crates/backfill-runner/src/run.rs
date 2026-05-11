@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use indexer::handler::persist::ClassificationCache;
 use indicatif::MultiProgress;
-use sqlx::PgPool;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -26,14 +25,15 @@ use crate::dashboard::{Dashboard, install_panic_hook};
 use crate::error::BackfillError;
 use crate::ingest::{PartitionStats, index_partition};
 use crate::partition::{Partition, partitions_for_range};
-use crate::resume::load_completed;
+use crate::sink::Sink;
 use crate::sync::sync_partition;
 
 pub async fn execute(
-    database_url: &str,
+    sink: &Sink,
     temp_dir: &Path,
     start: u32,
     end: u32,
+    keep_partitions: bool,
     mp: &MultiProgress,
 ) -> Result<(), BackfillError> {
     assert!(
@@ -43,12 +43,10 @@ pub async fn execute(
 
     tokio::fs::create_dir_all(&temp_dir).await?;
 
-    let pool = db::pool::create_pool(database_url)?;
-
     // Pre-flight. Either check failing means the run has no chance of
     // completing — panic loudly rather than produce a typed error.
     preflight_aws().await;
-    preflight_db(&pool).await;
+    preflight_sink(sink).await;
 
     let partitions = partitions_for_range(start, end);
     if partitions.is_empty() {
@@ -56,7 +54,7 @@ pub async fn execute(
         return Ok(());
     }
 
-    let completed = load_completed(&pool, start, end).await?;
+    let completed = sink.load_completed(start, end).await?;
 
     // Filter out partitions whose entire clamped range is already in the
     // `ledgers` table. With cleanup-after-index the local folder is gone
@@ -133,7 +131,7 @@ pub async fn execute(
         let stats = index_partition(
             partition,
             temp_dir,
-            &pool,
+            sink,
             start,
             end,
             &completed,
@@ -158,14 +156,28 @@ pub async fn execute(
         // prefetch reclaims disk sooner in the sync-slower-than-index
         // case. A failure here is a hard error — silent warn-and-
         // continue would accumulate the garbage we just removed.
-        dashboard.set_stage("cleaning");
-        let local = partition.local_folder(temp_dir);
-        tokio::fs::remove_dir_all(&local).await?;
-        info!(
-            partition = partition.start,
-            local = %local.display(),
-            "partition local folder cleaned up"
-        );
+        //
+        // `--keep-partitions` short-circuits the delete for iteration
+        // workflows (re-running the same range against the CH stub
+        // turns the next `aws s3 sync` into a cheap LIST instead of an
+        // 11.6 GB re-download).
+        if keep_partitions {
+            let local = partition.local_folder(temp_dir);
+            info!(
+                partition = partition.start,
+                local = %local.display(),
+                "partition local folder kept (--keep-partitions)"
+            );
+        } else {
+            dashboard.set_stage("cleaning");
+            let local = partition.local_folder(temp_dir);
+            tokio::fs::remove_dir_all(&local).await?;
+            info!(
+                partition = partition.start,
+                local = %local.display(),
+                "partition local folder cleaned up"
+            );
+        }
 
         // Await prefetch so its error (if any) surfaces synchronously
         // before we advance. Happy path: already resolved, zero wait.
@@ -263,10 +275,9 @@ async fn preflight_aws() {
     );
 }
 
-async fn preflight_db(pool: &PgPool) {
-    sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(pool)
+async fn preflight_sink(sink: &Sink) {
+    sink.preflight()
         .await
-        .unwrap_or_else(|err| panic!("pre-flight: database unreachable: {err}"));
-    info!("pre-flight: database reachable");
+        .unwrap_or_else(|err| panic!("pre-flight: sink unreachable: {err}"));
+    info!("pre-flight: sink reachable");
 }

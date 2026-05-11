@@ -89,6 +89,14 @@ impl NftTokenUriFetcher {
     /// failure path. The api detail handler folds errors fail-soft to
     /// `null` via `.ok().flatten()`; the worker classifies via
     /// [`super::errors::is_transient`] for SQS-retry-vs-sentinel-write.
+    ///
+    /// `moka::try_get_with` caches `Ok` only — neither transient nor
+    /// permanent errors poison the slot. The trade-off is that a
+    /// broken NFT may re-enter `fetch_uncached` on repeat traffic; in
+    /// exchange we keep observability (every permanent fail logs at
+    /// the worker call site) and self-healing (a flaky 4xx from an
+    /// IPFS gateway is re-fetched on the next attempt instead of
+    /// being cemented for the cache TTL).
     #[instrument(skip(self), fields(contract_id = %contract_id, token_id = %token_id))]
     pub async fn resolve(
         &self,
@@ -280,18 +288,18 @@ async fn simulate_transaction(
         .ok_or_else(|| NftTokenUriError::MalformedRpcResponse("missing results[0].xdr".into()))
 }
 
-/// Decode base64 ScVal XDR into URI string. Accepts `ScVal::String` and
-/// `ScVal::Symbol`; rejects everything else as malformed.
+/// Decode base64 ScVal XDR into URI string. Only `ScVal::String` is
+/// accepted: `ScSymbol` is limited to 32 bytes in XDR and cannot hold a
+/// realistic URI, and any other variant is a producer-side contract bug.
 fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
     let raw = BASE64
         .decode(xdr_b64)
         .map_err(|e| NftTokenUriError::MalformedRpcResponse(format!("xdr base64: {e}")))?;
     let bytes = match ScVal::from_xdr(&raw, Limits::none())? {
         ScVal::String(ScString(s)) => s.into_vec(),
-        ScVal::Symbol(ScSymbol(s)) => s.into_vec(),
         other => {
             return Err(NftTokenUriError::MalformedRpcResponse(format!(
-                "token_uri returned non-string ScVal: {other:?}"
+                "token_uri returned non-String ScVal: {other:?}"
             )));
         }
     };
@@ -300,7 +308,7 @@ fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
 }
 
 /// `ipfs://...` → `https://<gateway>/ipfs/...`; HTTPS passes through.
-pub(super) fn resolve_ipfs_to_https(uri: &str) -> String {
+pub(crate) fn resolve_ipfs_to_https(uri: &str) -> String {
     uri.strip_prefix("ipfs://")
         .map(|rest| format!("{IPFS_GATEWAY_BASE}{rest}"))
         .unwrap_or_else(|| uri.to_owned())
@@ -727,6 +735,27 @@ mod tests {
         };
         assert_eq!(source.status().map(|s| s.as_u16()), Some(503));
         assert!(super::super::errors::is_transient(&err));
+    }
+
+    #[tokio::test]
+    async fn resolve_propagates_permanent_error_as_err() {
+        // Permanent fails (MalformedInput here) must surface as Err so
+        // the worker call site can warn-log every occurrence. `moka`'s
+        // `try_get_with` does not cache Err, so a repeat call re-enters
+        // `fetch_uncached` — observability + self-healing over the
+        // sub-ms cache-hit savings of a negative cache.
+        let fetcher = NftTokenUriFetcher::with_rpc_url("http://unused".to_owned()).expect("build");
+        let err = fetcher
+            .resolve("not-a-strkey", "42")
+            .await
+            .expect_err("permanent fail must propagate as Err");
+        assert!(matches!(*err, NftTokenUriError::MalformedInput { .. }));
+        // Repeat call: must also propagate Err (not silently cached).
+        let err2 = fetcher
+            .resolve("not-a-strkey", "42")
+            .await
+            .expect_err("repeat permanent fail must still propagate");
+        assert!(matches!(*err2, NftTokenUriError::MalformedInput { .. }));
     }
 
     #[tokio::test]

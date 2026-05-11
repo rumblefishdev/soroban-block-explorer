@@ -15,6 +15,7 @@ members = [
     "crates/enrichment-shared",
     "crates/enrichment-worker",
     "crates/backfill-enrichment-runner",
+    "crates/db-clickhouse",
 ]
 
 [workspace.dependencies]
