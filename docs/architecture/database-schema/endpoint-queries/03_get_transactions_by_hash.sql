@@ -95,6 +95,7 @@ SELECT
     oa.asset_code,
     iss.account_id                  AS asset_issuer,
     encode(oa.pool_id, 'hex')       AS pool_id_hex,
+    oa.application_order,
     oa.ledger_sequence,
     oa.created_at
     -- not in DB: per-op stroop amount
@@ -109,12 +110,20 @@ SELECT
     -- not in DB: per-operation return values
     --           — encoded inside result_meta_xdr per-operation result entries.
     --             Archive overlay required for Advanced mode. ADR 0029.
-    -- Operation ordering: `appearance_id` (oa.id) is a global BIGSERIAL across
-    --   all ledgers/partitions, NOT a within-tx index. The result-set order
-    --   from `ORDER BY oa.id` is monotone with ingest order, which IS the
-    --   operation application order within a tx (operations land sequentially
-    --   during a single ingest). Frontend §6.4 Advanced mode "operation IDs"
-    --   should display row-position within the result set (1..N), not oa.id.
+    -- Operation ordering (task 0192): `application_order` carries the
+    --   1-based on-chain apply position for this row. For folded rows
+    --   (multiple identical-identity envelope ops collapsed into one row
+    --   per task 0163) this is the MIN of the folded ops' indices —
+    --   the position of the row's first occurrence in `tx.operations[]`.
+    --   `appearance_id` (oa.id) is a global BIGSERIAL ingest artefact and
+    --   is NOT monotone with apply order: the indexer's HashMap-keyed
+    --   identity aggregation produced alphabetic-by-asset_code INSERT
+    --   order, so `oa.id` ordering = alphabetic on multi-asset bulk txs.
+    --   Use `application_order` for display; fall back to `oa.id` only
+    --   for pre-task-0192 rows where the column is NULL (`NULLS LAST`).
+    --   Frontend §6.4 Advanced mode "operation IDs" displays
+    --   `application_order` to align with `XdrOperationDto.application_order`
+    --   from the heavy archive overlay.
 FROM operations_appearances oa
 LEFT JOIN accounts          src ON src.id = oa.source_id
 LEFT JOIN accounts          dst ON dst.id = oa.destination_id
@@ -122,7 +131,7 @@ LEFT JOIN soroban_contracts sc  ON sc.id  = oa.contract_id
 LEFT JOIN accounts          iss ON iss.id = oa.asset_issuer_id
 WHERE oa.transaction_id = $1
   AND oa.created_at     = $2
-ORDER BY oa.id;
+ORDER BY oa.application_order NULLS LAST, oa.id;
 
 -- @@ split @@
 
