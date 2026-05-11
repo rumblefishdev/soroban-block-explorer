@@ -10,17 +10,29 @@ mod ingest;
 mod partition;
 mod resume;
 mod run;
+mod sink;
 mod status;
 mod sync;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Default local scratch dir. CLI `--temp-dir` or `BACKFILL_TEMP_DIR`
 /// overrides. Single source of truth — `run` and `status` both receive
 /// it via their `execute` args, no duplicated constant.
 const DEFAULT_TEMP_DIR: &str = ".temp/backfill-runner";
+
+/// Which parallel store to write to. Defaults to `postgres` so existing
+/// invocations (CI scripts, runbooks, the aws-public-blockchain workflow)
+/// keep working byte-for-byte without edits. `clickhouse` writes are
+/// currently **stubbed** — the parse pipeline runs end-to-end but no
+/// rows are persisted (task 0205, ADR 0044).
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Target {
+    Postgres,
+    Clickhouse,
+}
 
 #[derive(Parser)]
 #[command(name = "backfill-runner", version, about)]
@@ -28,15 +40,39 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// PostgreSQL connection string.
+    /// Which store to write to. Defaults to `postgres`.
+    #[arg(long, value_enum, default_value = "postgres")]
+    target: Target,
+
+    /// PostgreSQL connection string. Required when `--target postgres`.
     #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    database_url: Option<String>,
+
+    /// ClickHouse HTTP endpoint (e.g. `http://localhost:8123`).
+    /// Overrides `CLICKHOUSE_URL` for the duration of the run when
+    /// `--target clickhouse` is set. Other ClickHouse env vars
+    /// (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`)
+    /// are picked up by `db_clickhouse::Config::from_env()` as usual.
+    #[arg(long, env = "CLICKHOUSE_URL")]
+    clickhouse_url: Option<String>,
 
     /// Local scratch directory for `aws s3 sync` output. Each partition
-    /// lands under `<temp-dir>/<HEX>--<start>-<end>/` and is deleted
-    /// after it indexes successfully.
+    /// lands under `<temp-dir>/<HEX>--<start>-<end>/` and (by default)
+    /// is deleted after it indexes successfully.
     #[arg(long, env = "BACKFILL_TEMP_DIR", default_value = DEFAULT_TEMP_DIR)]
     temp_dir: PathBuf,
+
+    /// Keep each partition's local folder on disk after it finishes
+    /// indexing. Default: delete (bounds disk at ~2 × partition_size).
+    ///
+    /// Intended for iteration / debugging — most useful when re-running
+    /// the same range repeatedly (e.g. `--target clickhouse` stub work):
+    /// the next `aws s3 sync` against a fully-populated folder is a cheap
+    /// LIST instead of an 11.6 GB / 60 s re-download per partition.
+    /// **Do not pass this for a real backfill** — disk grows linearly
+    /// with the number of indexed partitions.
+    #[arg(long)]
+    keep_partitions: bool,
 
     /// Enable per-ledger and per-partition progress logs. Without this
     /// flag only warnings are shown during the run; the final summary
@@ -98,14 +134,51 @@ async fn main() {
     // subcommand entrypoints still return `Result` for pool / IO wiring;
     // `.expect` converts any residual Err into an immediate panic with a
     // clear message and no graceful-exit path.
+    let sink = build_sink(
+        cli.target,
+        cli.database_url.as_deref(),
+        cli.clickhouse_url.as_deref(),
+    );
+
     match cli.command {
         Command::Run { start, end } => {
-            run::execute(&cli.database_url, &cli.temp_dir, start, end, &mp)
+            run::execute(&sink, &cli.temp_dir, start, end, cli.keep_partitions, &mp)
                 .await
                 .expect("backfill run failed")
         }
-        Command::Status { start, end } => status::execute(&cli.database_url, start, end)
+        Command::Status { start, end } => status::execute(&sink, start, end)
             .await
             .expect("status failed"),
+    }
+}
+
+/// Build the `Sink` for the chosen target. Panics loudly at startup if
+/// the URL required for the chosen target is missing — same posture as
+/// the existing pre-flight panics.
+///
+/// The CH side reads remaining ClickHouse env vars (user, password,
+/// database) via `db_clickhouse::Config::from_env`; the `--clickhouse-url`
+/// CLI flag already overrides `CLICKHOUSE_URL` for the URL field
+/// because clap is reading the same env var.
+fn build_sink(
+    target: Target,
+    database_url: Option<&str>,
+    clickhouse_url: Option<&str>,
+) -> sink::Sink {
+    match target {
+        Target::Postgres => {
+            let url = database_url.unwrap_or_else(|| {
+                panic!("--target postgres requires --database-url or DATABASE_URL env")
+            });
+            let pool = db::pool::create_pool(url).expect("failed to construct Postgres pool");
+            sink::Sink::Postgres(pool)
+        }
+        Target::Clickhouse => {
+            let mut cfg = db_clickhouse::Config::from_env();
+            if let Some(url) = clickhouse_url {
+                cfg.url = url.to_string();
+            }
+            sink::Sink::Clickhouse(db_clickhouse::client(&cfg))
+        }
     }
 }

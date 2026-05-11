@@ -124,6 +124,25 @@ their data intact.**
 > snapshots), that's catastrophic. Always scope by service name when
 > resetting just one DB.
 
+
+```bash
+docker compose rm -sfv clickhouse db-clickhouse-init
+docker volume ls | grep clickhouse
+docker volume rm sorban-block-explorer_clickhouse-data
+docker compose up -d clickhouse db-clickhouse-init
+docker compose logs db-clickhouse-init | tail -5
+docker exec -i $(docker ps -qf name=clickhouse) clickhouse-client \
+  -u default --password clickhouse -q \
+  "SELECT count() FROM system.tables WHERE database='default'"
+
+cargo run --release -p backfill-runner -- \
+--target clickhouse \
+--keep-partitions \
+--verbose \
+run --start 62016000 --end 62016099
+
+```
+
 ```bash
 # 1. Stop + remove only the ClickHouse-related containers.
 docker compose stop clickhouse db-clickhouse-init

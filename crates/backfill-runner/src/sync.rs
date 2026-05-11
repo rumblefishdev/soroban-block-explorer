@@ -20,7 +20,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
-use crate::partition::Partition;
+use crate::partition::{PARTITION_SIZE, Partition};
 
 // Retry policy for the `aws s3 sync` subprocess (task 0145 decision).
 // Hardcoded — not operator-tunable; change the constants if the numbers drift.
@@ -37,6 +37,24 @@ pub async fn sync_partition(partition: &Partition, temp_dir: &Path) -> Result<()
     let local = partition.local_folder(temp_dir);
     tokio::fs::create_dir_all(&local).await?;
 
+    // Fast path: if the local folder already holds the full partition
+    // (PARTITION_SIZE `.xdr.zst` files), skip the `aws s3 sync`
+    // subprocess entirely. Public-archive partitions are immutable
+    // once closed, so a complete local snapshot is authoritative.
+    //
+    // Why this matters: the LIST half of `aws s3 sync` paginates 64
+    // ListObjectsV2 calls (~30–40 s) even when zero GETs follow. For
+    // iteration loops (`--keep-partitions`) that's pure overhead.
+    if let Some((file_count, total_bytes)) = local_partition_complete(&local).await? {
+        info!(
+            partition = partition.start,
+            file_count,
+            total_bytes,
+            "partition local folder already complete — skipping aws s3 sync"
+        );
+        return Ok(());
+    }
+
     let duration = run_sync_with_retry(partition, &local).await?;
     let (file_count, total_bytes) = dir_stats(&local).await?;
 
@@ -49,6 +67,42 @@ pub async fn sync_partition(partition: &Partition, temp_dir: &Path) -> Result<()
     );
 
     Ok(())
+}
+
+/// Cheap pre-check: if `local` already contains exactly `PARTITION_SIZE`
+/// `.xdr.zst` files, return their `(count, total_bytes)` so the caller
+/// can short-circuit the `aws s3 sync` subprocess. Returns `None` for
+/// anything else (missing dir, partial dir, extra files) — the safe
+/// default is "run the sync".
+///
+/// Safety: public-archive partitions are immutable once their end
+/// ledger is written, so file-count parity with `PARTITION_SIZE` is
+/// sufficient to declare the local snapshot authoritative for the
+/// closed partitions a backfill covers. The "current" (in-progress)
+/// partition cannot match this check by construction.
+async fn local_partition_complete(dir: &Path) -> Result<Option<(usize, u64)>, BackfillError> {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".xdr.zst") {
+            continue;
+        }
+        let meta = entry.metadata().await?;
+        count += 1;
+        bytes += meta.len();
+    }
+    if count == PARTITION_SIZE as usize {
+        Ok(Some((count, bytes)))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Run `aws s3 sync` with exponential backoff. Returns the duration of

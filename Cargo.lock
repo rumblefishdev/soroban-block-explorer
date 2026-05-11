@@ -853,10 +853,14 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "clickhouse",
  "db",
+ "db-clickhouse",
  "indexer",
  "indicatif",
+ "serde",
  "sqlx",
+ "stellar-xdr",
  "thiserror",
  "tokio",
  "tracing",
@@ -1313,6 +1317,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "xdr-parser",
 ]
 
 [[package]]
