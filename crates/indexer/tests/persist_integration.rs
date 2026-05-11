@@ -1957,7 +1957,6 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         owner_account: Some(DST_STRKEY.to_string()),
         name: None,
         media_url: None,
-        metadata: None,
         minted_at_ledger: Some(OWN_LEDGER_SEQ),
         last_seen_ledger: OWN_LEDGER_SEQ,
         created_at: OWN_CLOSED_AT,
