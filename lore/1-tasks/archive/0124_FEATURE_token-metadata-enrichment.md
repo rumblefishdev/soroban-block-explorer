@@ -33,6 +33,13 @@ history:
 
 # Indexer: token metadata enrichment pipeline
 
+> **⚠️ DEPRECATED / SUPERSEDED — do not implement.** The "JSONB blob
+> enrichment" approach is obsolete. Replaced by **0188** (runtime SEP-1
+> type-2 enrichment for `assets.description` / `home_page`) plus
+> **0191** + **0195** (Lambda 2 typed-column writes for
+> `icon_url` / `name`). See `lore/2-adrs/0043_field-allocation-rule.md`
+> for the current policy.
+
 ## Summary
 
 The `assets.metadata` JSONB column exists in the schema but `convert.rs:167` hardcodes it

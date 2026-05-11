@@ -24,7 +24,9 @@
 //!   tallied as `db_failed`, the drain continues but every NFT row
 //!   reports a failure.
 //! - `status` — print per-column NULL / sentinel counts for both kinds
-//!   in one shot. Cheap point-in-time visibility for the runbook.
+//!   plus a deferred section for the LP-analytics columns owned by
+//!   task 0199 (`liquidity_pool_snapshots.{tvl, volume, fee_revenue}`).
+//!   Cheap point-in-time visibility for the runbook.
 //!
 //! ## Semantics
 //!
@@ -360,7 +362,27 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     )
     .fetch_one(db);
 
-    let (assets, nfts) = tokio::try_join!(assets_q, nfts_q)?;
+    // LP analytics columns (`tvl`, `volume`, `fee_revenue`) already exist
+    // in the `liquidity_pool_snapshots` schema (migration 0006) but their
+    // population is owned by task 0199, blocked on the price API. No
+    // `enrich` subcommand drains them yet — the rows surface here so the
+    // operator has visibility into the gap. Column types are
+    // `NUMERIC(28,7)`; no `''`-sentinel convention applies (0199 plans
+    // `tvl = 0` for permanent-fail, but that's also a legitimate value
+    // for empty pools — distinguishing is out of `enrich status` scope).
+    let lp_q = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE tvl IS NULL)         AS tvl_null,
+            COUNT(*) FILTER (WHERE volume IS NULL)      AS volume_null,
+            COUNT(*) FILTER (WHERE fee_revenue IS NULL) AS fee_revenue_null,
+            COUNT(*)                                    AS total
+        FROM liquidity_pool_snapshots
+        "#,
+    )
+    .fetch_one(db);
+
+    let (assets, nfts, lp) = tokio::try_join!(assets_q, nfts_q, lp_q)?;
 
     let now = Utc::now().to_rfc3339();
     println!("# backfill-enrichment-runner — status\n");
@@ -401,8 +423,37 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         nfts.try_get("collection_sentinel")?,
     );
     println!(
-        "\n**Total nfts rows:** {}",
+        "\n**Total nfts rows:** {}\n",
         nfts.try_get::<i64, _>("total")?
+    );
+
+    println!("## `lp-analytics` kind (liquidity_pool_snapshots) — DEFERRED to 0199\n");
+    println!("| column                                         | NULL (pending) |    total |");
+    println!("| ---------------------------------------------- | -------------: | -------: |");
+    let lp_total: i64 = lp.try_get("total")?;
+    print_status_pending_row(
+        "`liquidity_pool_snapshots.tvl`                  ",
+        lp.try_get("tvl_null")?,
+        lp_total,
+    );
+    print_status_pending_row(
+        "`liquidity_pool_snapshots.volume`               ",
+        lp.try_get("volume_null")?,
+        lp_total,
+    );
+    print_status_pending_row(
+        "`liquidity_pool_snapshots.fee_revenue`          ",
+        lp.try_get("fee_revenue_null")?,
+        lp_total,
+    );
+    println!(
+        "\n**Total liquidity_pool_snapshots rows:** {lp_total}\n"
+    );
+    println!(
+        "> `enrich` has no `lp-analytics` subcommand today — population \
+         is owned by task 0199 (LP analytics: TVL + volume + \
+         fee_revenue), blocked on the team-built price API. NULL counts \
+         above will stay at 100% until 0199 ships its Lambda 2 path."
     );
 
     Ok(())
@@ -415,6 +466,12 @@ fn print_status_header() {
 
 fn print_status_row(label: &str, null: i64, sentinel: i64) {
     println!("| {label} | {null:>14} | {sentinel:>15} |");
+}
+
+/// Deferred-kind row: `{label} | NULL count | total`. No sentinel column —
+/// deferred kinds don't have a sentinel convention defined yet.
+fn print_status_pending_row(label: &str, null: i64, total: i64) {
+    println!("| {label} | {null:>14} | {total:>8} |");
 }
 
 // ---------------------------------------------------------------------------

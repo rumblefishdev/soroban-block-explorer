@@ -94,7 +94,10 @@ DATABASE_URL=... cargo run -p backfill-enrichment-runner -- status
 Operator-chainable: exit code is `0` on a clean run (every processed
 row reached a terminal outcome — real value or sentinel), `1` on any
 transient failure or DB error. So
-`enrich icon && enrich nft-metadata` short-circuits cleanly.
+`enrich icon && enrich nft-metadata` short-circuits cleanly
+(shorthand for
+`cargo run -p backfill-enrichment-runner -- icon && cargo run -p backfill-enrichment-runner -- nft-metadata`,
+or define a shell alias `alias enrich='cargo run -p backfill-enrichment-runner --'`).
 
 ## Output
 
