@@ -154,7 +154,12 @@ pub async fn process_ledger(
     // so the Galaxy Lambda handler can drive the cross-batch asset
     // enrichment publish (task 0191) and the per-ledger NFT mint
     // publish (task 0195 §2d). Backfill callers ignore the struct.
-    let had_nft_mints = !parsed.nfts.is_empty();
+    //
+    // `detect_nfts` also returns rows for transfer/burn (mint=Some,
+    // transfer/burn=None on `minted_at_ledger`); checking `any(mint)`
+    // keeps the producer query from being entered when a ledger only
+    // touched existing NFTs.
+    let had_nft_mints = parsed.nfts.iter().any(|n| n.minted_at_ledger.is_some());
     Ok(ProcessLedgerOutput {
         extracted_assets: parsed.assets,
         ledger_sequence,

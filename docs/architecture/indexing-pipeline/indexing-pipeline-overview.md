@@ -207,7 +207,10 @@ committed in a single atomic DB transaction:
     [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
     the per-op extraction half is on-chain → indexer and the USD
     denomination is off-chain → Lambda 2; the off-chain `tvl` (USD
-    oracle) is Lambda 2's responsibility (task 0195 §2b). **"Lambda 2"**
+    oracle) is Lambda 2's responsibility — consolidated under
+    **task 0199** along with `volume` / `fee_revenue` (the former 0195
+    §2b moved when LP analytics were unified into a single owning task,
+    see ADR 0043 matrix). **"Lambda 2"**
     here is the SQS-driven enrichment worker introduced in task 0191
     and documented in [`enrichment.md`](./enrichment.md) — it lives
     outside the Ledger Processor described in §7.1 (which is the only

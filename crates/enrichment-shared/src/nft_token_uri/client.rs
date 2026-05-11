@@ -308,7 +308,7 @@ fn decode_token_uri_result(xdr_b64: &str) -> Result<String, NftTokenUriError> {
 }
 
 /// `ipfs://...` → `https://<gateway>/ipfs/...`; HTTPS passes through.
-pub(super) fn resolve_ipfs_to_https(uri: &str) -> String {
+pub(crate) fn resolve_ipfs_to_https(uri: &str) -> String {
     uri.strip_prefix("ipfs://")
         .map(|rest| format!("{IPFS_GATEWAY_BASE}{rest}"))
         .unwrap_or_else(|| uri.to_owned())

@@ -55,8 +55,8 @@ use sqlx::{PgPool, Row};
 use tracing::{debug, instrument, warn};
 
 use super::EnrichError;
-use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
+use crate::nft_token_uri::{NftTokenUriFetcher, resolve_ipfs_to_https};
 
 /// `nfts.name VARCHAR(256)`.
 const MAX_NAME_BYTES: usize = 256;
@@ -122,19 +122,24 @@ pub async fn enrich_nft_token_uri(
 /// Pull `name`, `image`, `collection` from the JSON blob; cap each at
 /// the column width so an oversize value cannot break the UPDATE.
 ///
-/// `image` is additionally re-checked through [`is_safe_media_url`]:
-/// the frontend renders it as `<img src>`, so anything other than
-/// `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
-/// with the empty-string sentinel to avoid mixed-content warnings
-/// and XSS vectors. The fetcher already validates the outer
-/// `token_uri()` URI and is expected to resolve any `ipfs://` form to
-/// HTTPS before exposing it here, so this is defence in depth — same
-/// pattern as `sep1_assets::is_safe_icon_url`.
+/// `image` handling:
+/// 1. `ipfs://...` is resolved to the configured HTTPS gateway URL via
+///    [`resolve_ipfs_to_https`]. Common NFT-metadata convention
+///    (OpenSea / OpenZeppelin) stores `image` as `ipfs://Qm.../1.png`,
+///    so without this step `media_url` would be the empty sentinel for
+///    most real-world collections.
+/// 2. The resolved value is then re-checked through [`is_safe_media_url`]:
+///    the frontend renders it as `<img src>`, so anything other than
+///    `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
+///    with the empty-string sentinel to avoid mixed-content warnings
+///    and XSS vectors. Same defence-in-depth pattern as
+///    `sep1_assets::is_safe_icon_url`.
 fn extract_columns(json: &Value) -> (String, String, String) {
     let name = trimmed_string(json.get("name"), MAX_NAME_BYTES);
     let image_raw = trimmed_string(json.get("image"), 1024); // TEXT but cap to keep bodies reasonable
-    let image = if image_raw.is_empty() || is_safe_media_url(&image_raw) {
-        image_raw
+    let image_resolved = resolve_ipfs_to_https(&image_raw); // empty string passes through
+    let image = if image_resolved.is_empty() || is_safe_media_url(&image_resolved) {
+        image_resolved
     } else {
         warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
         String::new()
@@ -242,6 +247,22 @@ mod tests {
         assert_eq!(name, "Spaced");
         assert_eq!(image, "");
         assert_eq!(collection, "");
+    }
+
+    #[test]
+    fn extract_columns_resolves_ipfs_image_to_gateway_url() {
+        // OpenSea / OpenZeppelin convention: `image` is `ipfs://Qm.../...`.
+        // Without resolve_ipfs_to_https the is_safe_media_url check would
+        // reject it and we'd write the sentinel, leaving `nfts.media_url`
+        // empty for most real-world collections.
+        let blob = json!({
+            "name": "Punk #4521",
+            "image": "ipfs://QmFoo/4521.png",
+            "collection": "CryptoPunks",
+        });
+        let (_, image, _) = extract_columns(&blob);
+        assert!(image.starts_with("https://"));
+        assert!(image.ends_with("/ipfs/QmFoo/4521.png"));
     }
 
     #[test]

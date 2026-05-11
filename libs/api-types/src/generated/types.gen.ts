@@ -511,11 +511,15 @@ export type NetworkStats = {
 };
 
 /**
- * Detail response. `metadata` is fetched at request time via
- * `runtime_enrichment::nft_token_uri` — full JSONB blob from the
+ * Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
+ * flattened in (same shape as the list-endpoint row, see
+ * `15_get_nfts_list.sql` for the on-the-wire columns), plus a
+ * `metadata` field fetched at request time via
+ * `runtime_enrichment::nft_token_uri` — full JSON blob from the
  * per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
- * description, animation_url, etc.). Defaults to `null` when the
- * fetch fails or the contract returns a non-JSON `image*` URI.
+ * description, animation_url, etc.). `metadata` is always present
+ * in the response, set to `null` when the fetch fails or the contract
+ * returns a non-JSON `image*` URI (fail-soft per ADR 0043).
  */
 export type NftDetailResponse = {
   collection_name?: string | null;
@@ -538,12 +542,20 @@ export type NftDetailResponse = {
   owner_account?: string | null;
   token_id: string;
 } & {
-  metadata?: unknown;
+  /**
+   * Off-chain JSON metadata fetched at request time. Always present
+   * on the wire — `null` indicates fetch failure / unsupported
+   * content-type, not field absence.
+   */
+  metadata: {
+    [key: string]: unknown;
+  } | null;
 };
 
 /**
- * One NFT row returned by the list endpoint. Shape pinned to canonical
- * SQL `15_get_nfts_list.sql`.
+ * One NFT row. Same shape on `GET /v1/nfts` list rows and as the
+ * flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
+ * to canonical SQL `15_get_nfts_list.sql` for the column projection.
  */
 export type NftItem = {
   collection_name?: string | null;

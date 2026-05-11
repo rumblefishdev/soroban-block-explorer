@@ -129,6 +129,12 @@ impl Publisher {
     /// drops out of the query. Re-running the same ledger (idempotent
     /// retries) re-selects the same id but the worker UPDATE is
     /// idempotent so duplicate emissions are harmless.
+    ///
+    /// Bounded to the current batch's `minted_at_ledger`: an SQS publish
+    /// failure leaks those nft_ids (no re-emission window since the
+    /// mint ledger has passed). Outbox-style transactional emit is
+    /// infra overkill for a block explorer; the 0196 enrichment
+    /// backfill crate drains the gap directly.
     #[instrument(skip_all, fields(ledgers = ledger_sequences.len()))]
     pub async fn publish_for_minted_nfts(&self, pool: &PgPool, ledger_sequences: &[u32]) {
         if ledger_sequences.is_empty() {
