@@ -29,6 +29,61 @@ services:
       timeout: 3s
       retries: 5
 
+  # ClickHouse pilot store (ADR 0044, task 0204). Stands next to Postgres,
+  # not as a replacement. Read-empty for now — populated by a follow-up
+  # ADR/task once the schema stabilises. Same local-dev credential posture
+  # as Postgres: default `default` user with no password.
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3
+    ports:
+      - '${CLICKHOUSE_HTTP_PORT:-8123}:8123'
+      - '${CLICKHOUSE_NATIVE_PORT:-9000}:9000'
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8123/ping || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to the
+  # ClickHouse service once it is healthy. Idempotent — every statement
+  # is `CREATE … IF NOT EXISTS`, so re-running is a no-op. Survives
+  # `docker compose down -v` cleanly because the schema is re-applied
+  # on the next `up`.
+  #
+  # Implemented via `clickhouse-client --queries-file` rather than the
+  # Rust `db-clickhouse-init` binary so the sidecar boots in seconds
+  # without a workspace compile. The Rust CLI applies the SAME
+  # `init.sql` and is intended for local-dev iteration outside Docker
+  # (`cargo run -p db-clickhouse --bin db-clickhouse-init`); both paths
+  # share the file via `include_str!`.
+  db-clickhouse-init:
+    image: clickhouse/clickhouse-server:26.3
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
+    entrypoint:
+      - clickhouse-client
+      - --host=clickhouse
+      - --port=9000
+      - --user=default
+      - --password=clickhouse
+      - --multiquery
+      - --queries-file=/init.sql
+    restart: 'no'
+
   # db-merge runtime infrastructure (task 0186 §Step 1, ADR 0040).
   # Gated behind the `db-merge` profile so they don't start on
   # `docker compose up` — opt in via `--profile db-merge` or
@@ -54,3 +109,4 @@ volumes:
   pgdata:
   pgdata-merge:
   pgdata-snapshot-source:
+  clickhouse-data:

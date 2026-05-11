@@ -229,6 +229,30 @@ That split should remain stable even if the network layout expands later.
 - stores explorer records and derived state
 - serves as the only read source for the public API
 
+**Local-dev ClickHouse pilot (parallel store, read-empty)**
+
+- runs as the `clickhouse` service in `docker-compose.yml`
+  (`clickhouse/clickhouse-server:26.3`) alongside the existing `postgres`
+  service, exposing HTTP `8123` and native `9000`
+- holds the schema in `crates/db-clickhouse/schema/init.sql` (17 tables
+  - 1 `Dictionary`); applied idempotently by the `db-clickhouse-init`
+    sidecar service after `clickhouse` reports healthy, and equally by
+    the Rust `db-clickhouse-init` CLI when iterating outside Docker
+- **read-empty in scope:** no indexer write path, no API read path
+  against ClickHouse. The pilot evaluates whether a columnar OLAP store
+  is worth standing up next to RDS for analytical workloads (event
+  scans, dashboard slicing) before committing to any migration
+- documented in
+  [`docs/architecture/database-schema/clickhouse-pilot.md`](../database-schema/clickhouse-pilot.md);
+  decision recorded in
+  [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
+  and implemented under
+  [task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)
+- **not part of the AWS-hosted runtime.** Production infrastructure
+  remains Postgres-only; whether ClickHouse moves into the AWS topology
+  is gated on a follow-up ADR with measured PASS/FAIL criteria after
+  dual-write or backfill produces real data
+
 ### 5.3 Processing Components
 
 **Lambda — Ledger Processor**
