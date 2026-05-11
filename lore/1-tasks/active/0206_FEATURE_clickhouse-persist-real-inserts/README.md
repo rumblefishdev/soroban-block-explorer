@@ -86,10 +86,6 @@ Two owner-set requirements drive the work:
 Lands the writer plus the `backfill-runner::Sink` partition-writer
 lifecycle in one task. Schema is untouched.
 
-## Status: Backlog
-
-**Awaiting promotion via `lore_set-task`.**
-
 ## Context
 
 - **Where we are.** Task 0204 stood up the CH pilot crate + Docker
