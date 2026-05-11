@@ -18,7 +18,7 @@ use indexer::handler::persist::ClassificationCache;
 use serde::Deserialize;
 use sqlx::PgPool;
 use stellar_xdr::curr::LedgerCloseMeta;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::BackfillError;
 use crate::resume;
@@ -89,7 +89,25 @@ impl Sink {
                     .into_iter()
                     .map(|r| r.sequence)
                     .collect();
-                let set: HashSet<u32> = rows.into_iter().map(|s| s as u32).collect();
+                // `sequence` is i64 in the CH schema (matches PG bigint) but
+                // ledger sequences are u32-bounded by Stellar protocol. The
+                // SQL `BETWEEN start AND end` already constrains the range,
+                // but defend against bogus / manually-inserted rows by
+                // using `try_from` and warning on anything that doesn't
+                // fit. A silent `as u32` would wrap negatives / overflows.
+                let set: HashSet<u32> = rows
+                    .into_iter()
+                    .filter_map(|s| match u32::try_from(s) {
+                        Ok(v) => Some(v),
+                        Err(_) => {
+                            warn!(
+                                value = s,
+                                "skipping out-of-range sequence from clickhouse ledgers"
+                            );
+                            None
+                        }
+                    })
+                    .collect();
                 info!(
                     start,
                     end,

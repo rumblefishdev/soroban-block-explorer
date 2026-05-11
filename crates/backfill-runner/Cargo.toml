@@ -37,3 +37,8 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 indicatif = "0.18"
 tracing-indicatif = "0.3"
+
+[dev-dependencies]
+# Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
+# directories without polluting the developer's filesystem.
+tempfile = "3"

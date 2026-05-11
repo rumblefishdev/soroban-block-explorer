@@ -258,7 +258,7 @@ deletes in one PR; nothing else has changed.
 
 [`crates/backfill-runner`](../../../crates/backfill-runner/README.md)
 accepts `--target {postgres,clickhouse}` (task
-[0205](../../../lore/1-tasks/active/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)).
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)).
 The CH path runs the full parse pipeline against `aws s3 sync`'d
 ledgers but **writes nothing**: `db_clickhouse::persist::persist_ledger_clickhouse`
 is a no-op stub that logs per-ledger context and returns `Ok`.

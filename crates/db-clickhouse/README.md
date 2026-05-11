@@ -125,10 +125,16 @@ their data intact.**
 > resetting just one DB.
 
 
+The clickhouse volume is named `<project>_clickhouse-data` where
+`<project>` defaults to the directory name docker compose was invoked
+from (e.g. `soroban-block-explorer_clickhouse-data` for a fresh clone).
+Confirm the exact name with `docker volume ls | grep clickhouse`
+before removing — typos silently succeed.
+
 ```bash
 docker compose rm -sfv clickhouse db-clickhouse-init
-docker volume ls | grep clickhouse
-docker volume rm sorban-block-explorer_clickhouse-data
+docker volume ls | grep clickhouse   # confirm the actual name
+docker volume rm <copy-the-name-from-the-line-above>
 docker compose up -d clickhouse db-clickhouse-init
 docker compose logs db-clickhouse-init | tail -5
 docker exec -i $(docker ps -qf name=clickhouse) clickhouse-client \

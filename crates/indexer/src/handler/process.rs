@@ -45,6 +45,12 @@ pub struct ParseOutput {
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
     pub contract_name_writes: Vec<(String, String)>,
+    /// Per-transaction operation tree JSON, collected by `extract_invocations`.
+    /// Currently unused by the PG persist path (the parameter is
+    /// `_operation_trees`) but kept on `ParseOutput` so the end-to-end
+    /// wiring stays live for the future consumer that flips the
+    /// underscore. Cheap to leave wired; costly to re-introduce later.
+    pub operation_trees: Vec<(String, serde_json::Value)>,
     /// Parse-half wall time in ms.
     pub parse_ms: u128,
     /// Per-tx indices skipped due to `parse_error`. Surfaced for diagnostic logs.
@@ -106,7 +112,7 @@ pub async fn process_ledger(
         &parsed.operations,
         &parsed.events,
         &parsed.invocations,
-        &[],
+        &parsed.operation_trees,
         &parsed.contract_interfaces,
         &parsed.contract_deployments,
         &parsed.account_states,
@@ -170,7 +176,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let mut all_operations = Vec::new();
     let mut all_events = Vec::new();
     let mut all_invocations = Vec::new();
-    let mut all_operation_trees = Vec::new();
+    let mut all_operation_trees: Vec<(String, serde_json::Value)> = Vec::new();
     let mut all_contract_interfaces = Vec::new();
     let mut all_ledger_entry_changes = Vec::new();
     let mut all_nft_events = Vec::new();
@@ -315,12 +321,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     // path (task 0149); parser does not yet produce these — empty vec.
     let nft_events: Vec<xdr_parser::types::ExtractedNftEvent> = Vec::new();
 
-    // `operation_trees` is intentionally dropped — the PG persist path
-    // does not consume it (the parameter is `_operation_trees`). Keep
-    // local computation for the side-effect-free invocation extraction
-    // already wired above, but don't carry it on `ParseOutput`.
-    let _ = all_operation_trees;
-
     ParseOutput {
         ledger: extracted_ledger,
         transactions: extracted_transactions,
@@ -337,6 +337,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nft_events,
         lp_positions: all_lp_positions,
         contract_name_writes: all_contract_name_writes,
+        operation_trees: all_operation_trees,
         parse_ms,
         tx_parse_errors,
     }
