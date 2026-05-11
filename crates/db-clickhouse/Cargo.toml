@@ -1,0 +1,19 @@
+[package]
+name = "db-clickhouse"
+version = "0.1.0"
+edition = "2024"
+description = "ClickHouse pilot — connection layer + schema apply CLI for the parallel store (ADR 0044, task 0204)"
+
+[[bin]]
+name = "db-clickhouse-init"
+path = "src/bin/db-clickhouse-init.rs"
+
+[dependencies]
+# Official ClickHouse Inc.-maintained client (resolves ADR 0044 §Decision §5
+# Q4). Pinned to the latest stable release at task 0204 implementation time
+# (2026-05-08). Bump deliberately in a follow-up PR if blocked by a bug.
+clickhouse = "=0.15.0"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }

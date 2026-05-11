@@ -14,6 +14,7 @@ members = [
     "crates/db-merge",
     "crates/enrichment-shared",
     "crates/enrichment-worker",
+    "crates/db-clickhouse",
 ]
 
 [workspace.dependencies]
