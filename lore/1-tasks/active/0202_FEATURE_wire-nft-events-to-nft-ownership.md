@@ -181,11 +181,14 @@ correct LEAD-window `from_account` values.
       iterates BOTH `nft_rows` and `nft_ownership_rows`).
 - [x] Integration test asserts the end-to-end flow (parser → staging
       → write → DB row) for a multi-event NFT scenario.
-- [ ] E17 endpoint (`GET /v1/nfts/:id/transfers`) returns the full
-      ownership timeline — **deferred to operator smoke test at deploy
-      time**. The integration test verifies persisted rows are present
-      and ordered; the canonical SQL `17_*.sql` LEAD window already
-      derives `from_account` per ADR 0033 / task 0051.
+- [x] E17 endpoint (`GET /v1/nfts/:id/transfers`) returns the full
+      ownership timeline — **verified empirically against the local
+      audit DB**. Injected 3 fixture rows for `nft_id=1` (mint/transfer/burn
+      across real `transaction_id` + `ledger_sequence` triples), spun up
+      the API via `cargo lambda watch`, hit `/lambda-url/api/v1/nfts/1/transfers`
+      → HTTP 200 with 3 events ordered by `created_at DESC`. LEAD-window
+      `from_account` derivation works: transfer's `from_account` =
+      mint's `to_account`, burn's `from_account` = transfer's `to_account`.
 - [x] **Docs updated** — N/A — reason: `database-schema-overview.md`
       already describes `nft_ownership` accurately (no "follow-up
       pending" wording found via grep); no schema or shape change.
