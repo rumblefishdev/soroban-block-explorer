@@ -9,16 +9,15 @@
 
 use crate::error::BackfillError;
 use crate::partition::{Partition, partitions_for_range};
-use crate::resume::load_completed;
+use crate::sink::Sink;
 
-pub async fn execute(database_url: &str, start: u32, end: u32) -> Result<(), BackfillError> {
+pub async fn execute(sink: &Sink, start: u32, end: u32) -> Result<(), BackfillError> {
     assert!(
         start <= end,
         "invalid range: start ({start}) must be <= end ({end})"
     );
 
-    let pool = db::pool::create_pool(database_url)?;
-    let completed = load_completed(&pool, start, end).await?;
+    let completed = sink.load_completed(start, end).await?;
 
     let partitions = partitions_for_range(start, end);
     let mut totals = PartitionCounts::default();
