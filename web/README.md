@@ -23,14 +23,37 @@ npx nx typecheck @rumblefish/soroban-block-explorer-web
 
 ```text
 web/
-  index.html          # SPA entry point
-  vite.config.ts      # Vite app config with React plugin
+  index.html              # SPA entry point
+  vite.config.ts          # Vite app config with React plugin
+  .env.{development,      # Per-mode public config (VITE_API_BASE_URL).
+       staging,           # `.env.local` / `.env.*.local` are gitignored
+       production}        # for developer-specific overrides.
   src/
-    main.tsx          # React root render (StrictMode)
-    app.tsx           # Root App component
+    main.tsx              # React root render (StrictMode + QueryProvider)
+    app.tsx               # Root App component
+    vite-env.d.ts         # Types for import.meta.env
+    api/
+      index.ts            # Public surface; side-effect-imports client.ts
+      client.ts           # Configures the generated @hey-api/client-fetch
+      config.ts           # Reads + validates VITE_API_BASE_URL
+      QueryProvider.tsx   # QueryClient + ReactQueryDevtools (dev only)
+      polling.ts          # Per-resource staleTime / refetchInterval policies
+      queryKeys.ts        # invalidateResource() / matchResource() helpers
+      hooks/              # Thin wrappers around generated *Options
 ```
+
+## Data Layer
+
+API requests, caching, polling and invalidation all flow through TanStack Query.
+Page tasks consume hook wrappers from `src/api/hooks/` — they should never call
+`fetch` or the generated SDK directly. The hooks compose the auto-generated
+`@hey-api/openapi-ts` `@tanstack/react-query` plugin output from `libs/api-types`
+with a per-resource cache policy from `src/api/polling.ts`.
+
+Architecture detail: [docs/architecture/frontend/frontend-overview.md §8](../docs/architecture/frontend/frontend-overview.md#8-data-fetching-and-view-state-model).
 
 ## Workspace Imports
 
-Uses `@rumblefish/soroban-block-explorer-ui` for shared UI components.
+Uses `@rumblefish/soroban-block-explorer-ui` for shared UI components and
+`@rumblefish/api-types` for OpenAPI-derived types, SDK and TanStack Query hooks.
 Cross-project imports resolve via the `soroban-block-explorer-source` export condition.

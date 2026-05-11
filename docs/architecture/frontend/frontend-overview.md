@@ -611,6 +611,24 @@ Expected page-level data patterns:
 - Detail pages: one primary entity query plus one or more related subresource queries
 - Search: query-driven request behavior with debounce to avoid unnecessary churn
 
+### 8.1 Implementation Layout
+
+The data layer lives in `web/src/api/` and is built on top of the `@hey-api/openapi-ts`
+`@tanstack/react-query` plugin output in `libs/api-types`. Page tasks consume hook
+wrappers from this folder — they do not call `fetch` or the generated SDK directly.
+
+| File                | Role                                                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.ts`         | Reads + validates `VITE_API_BASE_URL` at startup (no API keys are ever read; the frontend is anonymous).                                                                                 |
+| `client.ts`         | Configures the generated `@hey-api/client-fetch` instance with the base URL and registers an error interceptor that stamps `status` on errors.                                           |
+| `QueryProvider.tsx` | Constructs the singleton `QueryClient` (60s default `staleTime`, 5min `gcTime`, `refetchOnWindowFocus`, retry once on 5xx/network, never on 4xx) and mounts `ReactQueryDevtools` in dev. |
+| `polling.ts`        | Per-resource cache policies: `homePolicy` (10s stale / 12s refetch), `listPolicy` (60s), `detailPolicy` (5min), `searchPolicy` (no cache).                                               |
+| `queryKeys.ts`      | `invalidateResource(qc, resource)` / `matchResource(resource)` predicates over the codegen `_id`-prefixed keys (resource → list of SDK ids).                                             |
+| `hooks/use*.ts`     | Thin wrappers around generated `*Options` / `*InfiniteOptions` that spread the matching policy and shape the public hook signature.                                                      |
+
+Environment configs live in `web/.env.{development,staging,production}` and are loaded
+by Vite at build time. No URLs are hardcoded in source.
+
 ## 9. Performance and Error Handling
 
 - **Pagination** - all list views use cursor-based pagination backed by the block
