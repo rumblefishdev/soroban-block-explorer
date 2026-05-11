@@ -1,7 +1,6 @@
 import {
   listTransactionsInfiniteOptions,
   type ListTransactionsData,
-  type Options,
 } from '@rumblefish/api-types';
 import { useInfiniteQuery } from '@tanstack/react-query';
 
@@ -12,11 +11,9 @@ type Filters = NonNullable<ListTransactionsData['query']>;
 export const useTransactionsList = (filters?: Filters) =>
   useInfiniteQuery({
     ...listTransactionsInfiniteOptions(
-      filters
-        ? ({ query: filters } as Options<ListTransactionsData>)
-        : undefined
+      filters ? { query: filters } : undefined
     ),
     ...listPolicy,
-    initialPageParam: {} as { query?: ListTransactionsData['query'] },
+    initialPageParam: {},
     getNextPageParam: (lastPage) => lastPage.page.cursor ?? undefined,
   });

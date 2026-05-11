@@ -1,29 +1,34 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 const SDK_IDS_BY_RESOURCE = {
-  transactions: [
+  transactions: new Set([
     'listTransactions',
     'getTransaction',
     'listAccountTransactions',
     'listAssetTransactions',
     'listPoolTransactions',
-  ],
-  accounts: ['getAccount', 'listAccountTransactions'],
-  ledgers: ['listLedgers', 'getLedger'],
-  assets: ['listAssets', 'getAsset', 'listAssetTransactions'],
-  contracts: ['getContract', 'getInterface', 'listInvocations', 'listEvents'],
-  nfts: ['listNfts', 'getNft', 'listNftTransfers'],
-  pools: [
+  ]),
+  accounts: new Set(['getAccount', 'listAccountTransactions']),
+  ledgers: new Set(['listLedgers', 'getLedger']),
+  assets: new Set(['listAssets', 'getAsset', 'listAssetTransactions']),
+  contracts: new Set([
+    'getContract',
+    'getInterface',
+    'listInvocations',
+    'listEvents',
+  ]),
+  nfts: new Set(['listNfts', 'getNft', 'listNftTransfers']),
+  pools: new Set([
     'listPools',
     'getPool',
     'getPoolChart',
     'listParticipants',
     'listPoolTransactions',
-  ],
-  search: ['getSearch'],
-  network: ['getNetworkStats'],
-  health: ['health'],
-} as const satisfies Record<string, readonly string[]>;
+  ]),
+  search: new Set(['getSearch']),
+  network: new Set(['getNetworkStats']),
+  health: new Set(['health']),
+} as const satisfies Record<string, ReadonlySet<string>>;
 
 export type Resource = keyof typeof SDK_IDS_BY_RESOURCE;
 
@@ -38,8 +43,7 @@ export const matchResource =
   (queryKey: readonly unknown[]): boolean => {
     const head = queryKey[0];
     if (!isGeneratedKeyHead(head)) return false;
-    const ids = SDK_IDS_BY_RESOURCE[resource] as readonly string[];
-    return ids.includes(head._id);
+    return SDK_IDS_BY_RESOURCE[resource].has(head._id);
   };
 
 export const invalidateResource = (
