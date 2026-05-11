@@ -7,11 +7,10 @@
 //! a `Sep1Error` that the consumer maps silently to null fields — the API never
 //! 5xx's because of an enrichment failure.
 //!
-//! Cache: `moka::future::Cache` (built via `crate::cache::ttl_future_cache`)
-//! with a 24 h TTL and 1024-entry capacity; warm only within a single Lambda
-//! container, lost on cold start. The future variant lets us collapse
-//! concurrent cold-cache misses for the same `home_domain` onto a single
-//! in-flight HTTP fetch via `try_get_with`.
+//! Cache: `moka::future::Cache` with a 24 h TTL and 1024-entry capacity; warm
+//! only within a single Lambda container, lost on cold start. The future
+//! variant lets us collapse concurrent cold-cache misses for the same
+//! `home_domain` onto a single in-flight HTTP fetch via `try_get_with`.
 //!
 //! Built-in SSRF guards (best-effort, not airtight):
 //!   - `home_domain` must be RFC 1035-style (ASCII alphanumeric / `.` / `-`).
@@ -35,10 +34,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use moka::future::Cache as FutureCache;
 use reqwest::redirect::Policy;
 use tracing::instrument;
-
-use crate::cache::{FutureCache, ttl_future_cache};
 
 use super::dto::Sep1TomlParsed;
 use super::errors::Sep1Error;
@@ -92,7 +90,10 @@ impl Sep1Fetcher {
             .redirect(Policy::limited(0))
             .user_agent(USER_AGENT)
             .build()?;
-        let cache = ttl_future_cache(CACHE_TTL, CACHE_CAPACITY);
+        let cache = FutureCache::builder()
+            .time_to_live(CACHE_TTL)
+            .max_capacity(CACHE_CAPACITY)
+            .build();
         Ok(Self { client, cache })
     }
 
@@ -135,9 +136,15 @@ async fn fetch_uncached(client: &reqwest::Client, host: &str) -> Result<Sep1Toml
     })?;
 
     if !resp.status().is_success() {
-        // `error_for_status` consumes the response and turns the status
-        // into a `reqwest::Error`. Safe to unwrap — we just checked
-        // `is_success() == false`.
+        // `error_for_status` only produces an `Err` for 4xx/5xx, so on
+        // its own a 3xx-without-Location response would slip through and
+        // trigger a panic on `expect_err`. We're safe here because the
+        // client is built with `Policy::limited(0)`: any 3xx is rejected
+        // up in `client.get(...).send().await` as
+        // `reqwest::Error::TooManyRedirects` and never reaches this
+        // branch. 1xx is consumed by hyper and 2xx is filtered out by
+        // `is_success()` above, so the only statuses that land here are
+        // 4xx/5xx — which `error_for_status` always converts to `Err`.
         let err = resp.error_for_status().expect_err("status was not success");
         return Err(Sep1Error::Http {
             host: host.to_owned(),

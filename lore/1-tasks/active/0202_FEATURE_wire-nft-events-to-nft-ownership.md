@@ -2,7 +2,7 @@
 id: '0202'
 title: 'Indexer: wire nft_events → nft_ownership population'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0027', '0029', '0031', '0033']
 related_tasks: ['0051', '0118']
 tags: [layer-indexer, nfts, soroban, priority-medium, effort-small, follow-up]
@@ -13,6 +13,10 @@ links:
   - crates/xdr-parser/src/nft.rs
   - docs/architecture/database-schema/endpoint-queries/17_get_nfts_transfers.sql
 history:
+  - date: '2026-05-08'
+    status: active
+    who: stkrolikiewicz
+    note: 'Activated for implementation. Picked up after CH mirror analysis confirmed nft_ownership = 0 rows across all partitions; surrounding plumbing (schema, parser, staging, write, API) already ready — only the wiring step in process.rs:228 stub remains.'
   - date: '2026-05-07'
     status: backlog
     who: stkrolikiewicz

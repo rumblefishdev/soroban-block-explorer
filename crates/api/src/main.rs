@@ -87,18 +87,9 @@ async fn main() {
 
     tracing::info!("api cold start — resolving database credentials");
 
-    let database_url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) => {
-            let secret_arn =
-                std::env::var("SECRET_ARN").expect("either DATABASE_URL or SECRET_ARN must be set");
-            let rds_endpoint = std::env::var("RDS_PROXY_ENDPOINT")
-                .expect("RDS_PROXY_ENDPOINT must be set when using SECRET_ARN");
-            db::secrets::resolve_database_url(&secret_arn, &rds_endpoint)
-                .await
-                .expect("failed to resolve database URL from Secrets Manager")
-        }
-    };
+    let database_url = db::secrets::resolve_or_env()
+        .await
+        .expect("failed to resolve database URL");
 
     let db = db::pool::create_pool(&database_url).expect("failed to create DB pool");
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())

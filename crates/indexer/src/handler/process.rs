@@ -87,7 +87,7 @@ pub async fn process_ledger(
     pool: &PgPool,
     cw_client: Option<&CloudWatchClient>,
     classification_cache: &ClassificationCache,
-) -> Result<(), HandlerError> {
+) -> Result<Vec<xdr_parser::types::ExtractedAsset>, HandlerError> {
     let parsed = parse_ledger(meta);
     let ledger_sequence = parsed.ledger.sequence;
     let parse_ms = parsed.parse_ms;
@@ -135,7 +135,10 @@ pub async fn process_ledger(
         publish_ledger_sequence_metric(cw, ledger_sequence).await;
     }
 
-    Ok(())
+    // Return the extracted assets so callers that care about them
+    // (Galaxy Lambda handler, for type-1 enrichment SQS publish per
+    // task 0191) can consume the slice. Backfill callers ignore it.
+    Ok(parsed.assets)
 }
 
 /// Pure parse half of `process_ledger` — runs every extract stage and
