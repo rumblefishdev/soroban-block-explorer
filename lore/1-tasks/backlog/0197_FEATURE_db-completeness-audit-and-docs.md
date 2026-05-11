@@ -17,7 +17,7 @@ history:
   - date: '2026-05-11'
     status: backlog
     who: karolkow
-    note: 'Scope expanded to absorb 0196''s deferred verification work (the 50K enrichment-drain benchmark + per-subcommand integration tests previously folded into 0196 Future Work). 0196 itself still ships as a prerequisite — this task absorbs only the post-merge verification gate, not the crate implementation. Benchmark covers every kind the `enrich` binary exposes (`sep1-assets` mandatory; `nft-metadata` once 0195 §2d Phase E ships; future kinds added via their own delivery PRs).'
+    note: "Scope expanded to absorb 0196's deferred verification work (the 50K enrichment-drain benchmark + per-subcommand integration tests previously folded into 0196 Future Work). 0196 itself still ships as a prerequisite — this task absorbs only the post-merge verification gate, not the crate implementation. Benchmark covers every kind the `enrich` binary exposes (`sep1-assets` mandatory; `nft-metadata` once 0195 §2d Phase E ships; future kinds added via their own delivery PRs)."
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
@@ -167,9 +167,9 @@ Verifies the backfill drain at production scale across every kind the `enrich` b
 - [ ] ADR 0043/0029/0037 cross-checked
 - [ ] Audit doc 2026-04-10 supersession header added
 - [ ] Enrichment drain benchmark run per kind (`sep1-assets` mandatory;
-  `nft-metadata` once 0195 §2d Phase E ships); README benchmark
-  tables populated with measured p50 / p95 / total / unreachable %
-  per kind; raw logs committed under `docs/audits/`
+      `nft-metadata` once 0195 §2d Phase E ships); README benchmark
+      tables populated with measured p50 / p95 / total / unreachable %
+      per kind; raw logs committed under `docs/audits/`
 - [ ] **Docs updated** — this is the task, mark all checked
 - [ ] **API types regenerated** — N/A (audit-only, no code changes expected)
 

@@ -150,7 +150,9 @@ export class ComputeStack extends cdk.Stack {
     const enrichmentQueue = new sqs.Queue(this, 'EnrichmentQueue', {
       queueName: `${config.envName}-enrichment`,
       retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
-      visibilityTimeout: cdk.Duration.seconds(enrichmentVisibilityTimeoutSeconds),
+      visibilityTimeout: cdk.Duration.seconds(
+        enrichmentVisibilityTimeoutSeconds
+      ),
       deadLetterQueue: {
         queue: enrichmentDlq,
         maxReceiveCount: 3,

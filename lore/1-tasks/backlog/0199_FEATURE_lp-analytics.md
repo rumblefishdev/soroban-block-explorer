@@ -66,14 +66,14 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
   - `fee_revenue = volume × fee_bps / 10000` (skip when volume NULL)
 - **Atomicity model.** A single UPDATE statement carries all three column writes (transactional atomicity). **Semantic atomicity is per-column, not all-or-nothing**: a partial-oracle outcome can leave one column populated while another stays NULL — the column's input is the discriminator, not a global "all or none" gate. Decision matrix:
 
-  | Inputs available             | `tvl`                        | `volume`                              | `fee_revenue`              |
-  | ---------------------------- | ---------------------------- | ------------------------------------- | -------------------------- |
-  | `price_a` + `price_b` + `gross_volume_a` | computed | computed | computed |
-  | `price_a` + `price_b`, `gross_volume_a IS NONE` (no swaps) | computed | NULL | NULL |
-  | `price_a` only (price_b permanent fail)  | NULL (need both legs) | computed | computed |
-  | `price_b` only (price_a permanent fail)  | NULL (need both legs) | NULL (no `price_a`) | NULL |
-  | both prices permanent fail   | NULL                         | NULL                                  | NULL                       |
-  | any input transient          | (no write — `EnrichError::Transient` → SQS retry) | | |
+  | Inputs available                                           | `tvl`                                             | `volume`            | `fee_revenue` |
+  | ---------------------------------------------------------- | ------------------------------------------------- | ------------------- | ------------- |
+  | `price_a` + `price_b` + `gross_volume_a`                   | computed                                          | computed            | computed      |
+  | `price_a` + `price_b`, `gross_volume_a IS NONE` (no swaps) | computed                                          | NULL                | NULL          |
+  | `price_a` only (price_b permanent fail)                    | NULL (need both legs)                             | computed            | computed      |
+  | `price_b` only (price_a permanent fail)                    | NULL (need both legs)                             | NULL (no `price_a`) | NULL          |
+  | both prices permanent fail                                 | NULL                                              | NULL                | NULL          |
+  | any input transient                                        | (no write — `EnrichError::Transient` → SQS retry) |                     |               |
 
 - **Sentinel.** Permanent oracle failure writes `NULL` (not `0`) for any column whose required inputs are unavailable, and emits a WARN log carrying `pool_id`, `snapshot_id`, per-leg oracle error. NULL preserves the "fetch attempted, no value" semantics without conflating with legitimate zero-volume snapshots (a pool with no swaps in a ledger genuinely has `volume = 0`). `liquidity_pools.tvl` (latest, if column exists) is NEVER overwritten by Lambda 2 — only by indexer reserves recompute. If operational distinction between "permanent fail" and "pending" becomes valuable, surface via metrics / log filters or a future `oracle_status` enum, not via numeric sentinels.
 - Transient (price-API 5xx, network, rate limit) → `EnrichError::Transient` → SQS retry → DLQ.

@@ -106,18 +106,18 @@ in the drain.
 
 - [x] Crate builds, lints, integrated into workspace.
 - [x] `icon` + `nft-metadata` + `status` subcommands wired.
-  `lp-tvl` not in scope (owned by 0199, blocked on price oracle).
+      `lp-tvl` not in scope (owned by 0199, blocked on price oracle).
 - [x] `--force-retry` γ-semantics, `--id N` surgical mode,
-  `--limit N` cap.
+      `--limit N` cap.
 - [x] `status` subcommand prints per-kind NULL / sentinel counts.
 - [x] Pure-helper unit tests (12, all green).
 - [x] Manual smoke against Circle USDC.
 - [x] README runbook + ops checklist.
 - [x] ADR 0043 amended with the type-1 drain path; 0191
-  Future-Work bullet #1 marked obsolete in the 0191 archive.
+      Future-Work bullet #1 marked obsolete in the 0191 archive.
 - [ ] Integration tests per subcommand and 50K real-world
-  `enrich icon` benchmark — **folded into 0197** (post-merge
-  verification gate; no separate tasks).
+      `enrich icon` benchmark — **folded into 0197** (post-merge
+      verification gate; no separate tasks).
 
 ## Design Decisions (Emerged)
 
