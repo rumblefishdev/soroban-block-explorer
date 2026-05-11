@@ -220,12 +220,11 @@ pub async fn process_ledger(
     // persist_ledger owns the transaction lifecycle (open/commit/retry) so that
     // transient 40001/40P01 conflicts replay the full envelope.
     //
-    // Signature extension params (task 0149) — the parser does not yet produce
-    // these; pass empty slices so wiring is in place end-to-end:
-    //   * nft_events → `nft_ownership` rows (follow-up from 0118)
-    // `lp_positions` is now produced by `extract_lp_positions` above (task 0162).
-    // `inner_tx_hash` is now carried per-row on `ExtractedTransaction` (task 0169).
-    let nft_events: Vec<xdr_parser::types::ExtractedNftEvent> = Vec::new();
+    // `lp_positions` is produced by `extract_lp_positions` above (task 0162).
+    // `inner_tx_hash` is carried per-row on `ExtractedTransaction` (task 0169).
+    // `nft_events` are derived from `all_nft_events` (task 0202) — schema-shaped
+    // rows for `nft_ownership` with per-(contract, token, ledger) event_order.
+    let nft_events = xdr_parser::extract_nft_ownership_events(&all_nft_events);
 
     let persist_timer = Instant::now();
     persist::persist_ledger(

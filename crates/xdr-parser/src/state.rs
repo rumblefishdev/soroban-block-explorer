@@ -7,15 +7,15 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use crate::classification::{ContractClassification, classify_contract_from_wasm_spec};
 use crate::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
-    ExtractedLpPosition, ExtractedNft, NftEvent, SacAssetIdentity,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent, SacAssetIdentity,
 };
-use domain::{ContractType, TokenAssetType};
+use domain::{ContractType, NftEventType, TokenAssetType};
 
 // ---------------------------------------------------------------------------
 // Step 1 + Step 7: Contract Deployment + SAC Detection
@@ -914,6 +914,81 @@ fn token_id_to_string(token_id: &Value) -> String {
         return v.to_string();
     }
     String::new()
+}
+
+// ---------------------------------------------------------------------------
+// Step 6b: NFT Ownership Event Extraction (task 0202)
+// ---------------------------------------------------------------------------
+
+/// Transform raw parser `NftEvent` records into schema-shaped
+/// `ExtractedNftEvent` rows for `nft_ownership`.
+///
+/// The parser (`detect_nft_events`) emits events with a JSON-typed
+/// `token_id`, string `event_kind` ("mint"/"transfer"/"burn"), and split
+/// `from`/`to` fields. The persistence layer expects a stringified
+/// `token_id`, the `NftEventType` enum, and a unified `owner_account`
+/// field (`Some(to)` for mint/transfer, `None` for burn).
+///
+/// Additionally, this fn computes `event_order` — a per-`(contract, token,
+/// ledger)` monotonic ordinal (SMALLINT) required by the schema PK
+/// `(nft_id, created_at, ledger_sequence, event_order)` and by the
+/// LEAD-window pagination in `17_get_nfts_transfers.sql`.
+///
+/// Events with empty `token_id` are skipped (matches `detect_nfts`
+/// behaviour). Events with `event_kind` not in {"mint","transfer","burn"}
+/// are skipped — the parser already restricts emission to these three
+/// kinds, so the guard is defensive.
+#[instrument(skip(events), fields(event_count = events.len()))]
+pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEvent> {
+    let mut order_counter: HashMap<(String, String, u32), u16> = HashMap::new();
+    let mut out: Vec<ExtractedNftEvent> = Vec::with_capacity(events.len());
+
+    for event in events {
+        let token_id = token_id_to_string(&event.token_id);
+        if token_id.is_empty() {
+            continue;
+        }
+
+        let event_type = match event.event_kind.parse::<NftEventType>() {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(
+                    event_kind = %event.event_kind,
+                    error = %e,
+                    "unknown NFT event_kind — skipping (parser should not emit this)"
+                );
+                continue;
+            }
+        };
+
+        let owner_account = match event_type {
+            NftEventType::Mint | NftEventType::Transfer => event.to.clone(),
+            NftEventType::Burn => None,
+        };
+
+        let key = (
+            event.contract_id.clone(),
+            token_id.clone(),
+            event.ledger_sequence,
+        );
+        let event_order = *order_counter
+            .entry(key)
+            .and_modify(|c| *c += 1)
+            .or_insert(0);
+
+        out.push(ExtractedNftEvent {
+            transaction_hash: event.transaction_hash.clone(),
+            contract_id: event.contract_id.clone(),
+            token_id,
+            event_type,
+            owner_account,
+            event_order,
+            ledger_sequence: event.ledger_sequence,
+            created_at: event.created_at,
+        });
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -2182,5 +2257,146 @@ mod tests {
 
         let nfts = detect_nfts(&events);
         assert!(nfts.is_empty());
+    }
+
+    // -- NFT Ownership Event Extraction Tests (task 0202) --
+
+    fn make_nft_event(
+        contract: &str,
+        kind: &str,
+        token: i64,
+        from: Option<&str>,
+        to: Option<&str>,
+        ledger: u32,
+    ) -> NftEvent {
+        NftEvent {
+            transaction_hash: format!("tx{}", ledger),
+            contract_id: contract.into(),
+            event_kind: kind.into(),
+            token_id: json!({"type": "u32", "value": token}),
+            from: from.map(Into::into),
+            to: to.map(Into::into),
+            ledger_sequence: ledger,
+            created_at: 1700000000 + ledger as i64,
+        }
+    }
+
+    #[test]
+    fn mint_event_yields_owner_to() {
+        let events = vec![make_nft_event(
+            "CNFT1",
+            "mint",
+            42,
+            None,
+            Some("GRECIPIENT"),
+            100,
+        )];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].contract_id, "CNFT1");
+        assert_eq!(out[0].token_id, "42");
+        assert_eq!(out[0].event_type, NftEventType::Mint);
+        assert_eq!(out[0].owner_account.as_deref(), Some("GRECIPIENT"));
+        assert_eq!(out[0].event_order, 0);
+        assert_eq!(out[0].ledger_sequence, 100);
+    }
+
+    #[test]
+    fn transfer_event_yields_owner_to() {
+        let events = vec![make_nft_event(
+            "CNFT1",
+            "transfer",
+            42,
+            Some("GFROM"),
+            Some("GTO"),
+            100,
+        )];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event_type, NftEventType::Transfer);
+        assert_eq!(out[0].owner_account.as_deref(), Some("GTO"));
+    }
+
+    #[test]
+    fn burn_event_yields_owner_none() {
+        let events = vec![make_nft_event(
+            "CNFT1",
+            "burn",
+            42,
+            Some("GBURNER"),
+            None,
+            100,
+        )];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event_type, NftEventType::Burn);
+        assert!(out[0].owner_account.is_none());
+    }
+
+    #[test]
+    fn event_order_monotonic_per_triple() {
+        let events = vec![
+            make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
+            make_nft_event("CNFT1", "transfer", 42, Some("GA"), Some("GB"), 100),
+            make_nft_event("CNFT1", "transfer", 42, Some("GB"), Some("GC"), 100),
+        ];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].event_order, 0);
+        assert_eq!(out[1].event_order, 1);
+        assert_eq!(out[2].event_order, 2);
+    }
+
+    #[test]
+    fn event_order_resets_per_token() {
+        let events = vec![
+            // Same contract, same ledger, different tokens.
+            make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
+            make_nft_event("CNFT1", "mint", 43, None, Some("GB"), 100),
+            // Different contract, same ledger.
+            make_nft_event("CNFT2", "mint", 42, None, Some("GC"), 100),
+        ];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 3);
+        // Each (contract, token, ledger) triple starts its own counter.
+        assert_eq!(out[0].event_order, 0);
+        assert_eq!(out[1].event_order, 0);
+        assert_eq!(out[2].event_order, 0);
+    }
+
+    #[test]
+    fn token_id_jsonvalue_stringified() {
+        // Numeric token_id → "42".
+        let numeric = NftEvent {
+            transaction_hash: "tx1".into(),
+            contract_id: "CNFT1".into(),
+            event_kind: "mint".into(),
+            token_id: json!({"type": "u64", "value": 42}),
+            from: None,
+            to: Some("GA".into()),
+            ledger_sequence: 100,
+            created_at: 1700000000,
+        };
+        // String token_id → "uuid-abc".
+        let string = NftEvent {
+            transaction_hash: "tx2".into(),
+            contract_id: "CNFT1".into(),
+            event_kind: "mint".into(),
+            token_id: json!({"type": "string", "value": "uuid-abc"}),
+            from: None,
+            to: Some("GB".into()),
+            ledger_sequence: 100,
+            created_at: 1700000000,
+        };
+
+        let out = extract_nft_ownership_events(&[numeric, string]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].token_id, "42");
+        assert_eq!(out[1].token_id, "uuid-abc");
     }
 }
