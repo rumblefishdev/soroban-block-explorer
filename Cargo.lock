@@ -891,6 +891,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "backfill-enrichment-runner"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "db",
+ "enrichment-shared",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "backfill-runner"
 version = "0.1.0"
 dependencies = [
