@@ -8,9 +8,9 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::cache_control;
 use crate::common::cursor::TsIdCursor;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -22,30 +22,6 @@ use crate::transactions::dto::TransactionListItem;
 
 use super::dto::{LedgerDetailResponse, LedgerListItem};
 use super::queries::{LedgerTxRow, fetch_by_sequence, fetch_list, fetch_transactions};
-
-/// Short-TTL hint (10s) — used by the list endpoint and by the head
-/// ledger's detail response. The value is pinned by the API Gateway
-/// `apiGatewayCacheTtlMutable: 10` config in
-/// `infra/envs/{staging,production}.json`, NOT by the ~5s Stellar
-/// ledger close cadence. Lowering the header below 10s is wasted: the
-/// gateway will still cache the response for its configured 10s window.
-/// Raising it above 10s would expose stale data past one ledger cycle.
-const CACHE_CONTROL_SHORT: HeaderValue = HeaderValue::from_static("public, max-age=10");
-
-/// Long-TTL hint (300s) — used by closed (non-head) ledger detail
-/// responses. Closed ledgers are immutable per Stellar consensus, so a
-/// 5-minute browser / CDN cache is safe. The "is closed" decision uses
-/// `LedgerDetailRow.next_sequence`: when a later ledger exists in DB
-/// the requested one cannot still be settling. Note: an indexer
-/// reindex of historical rows (e.g. tasks 0168/0169/0170) can change
-/// `transaction_count` on otherwise-immutable ledger rows; cache purge
-/// is the operational mitigation in that case. Same caveat applies to
-/// **backfill gaps**: `next_sequence` is computed via LATERAL on the
-/// indexed rows, not the chain-actual successor — if ledger N+1 is
-/// missing while N+2 is present, a request for N pins `next_sequence
-/// = N+2` under the long TTL, and a later backfill of N+1 will not
-/// invalidate the cached response. Cache purge is the same mitigation.
-const CACHE_CONTROL_LONG: HeaderValue = HeaderValue::from_static("public, max-age=300");
 
 // ---------------------------------------------------------------------------
 // GET /v1/ledgers
@@ -94,8 +70,7 @@ pub async fn list_ledgers(
     let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.closed_at, |r| r.sequence);
 
     let mut resp = Json(into_envelope(rows, page)).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, CACHE_CONTROL_SHORT);
+    cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
 
@@ -194,18 +169,15 @@ pub async fn get_ledger(
         transactions: into_envelope(tx_data, tx_page),
     };
 
-    // Cache-Control by chain position. `next_sequence` from LATERAL is
-    // null exactly when no later ledger has closed yet — i.e. this row
-    // is the chain head and the indexer may still be settling. Anything
-    // older is immutable and safe to cache long.
+    // `next_sequence` is null only at the chain head; older ledgers are
+    // immutable per Stellar consensus and safe to cache long.
     let cache_value = if body.next_sequence.is_none() {
-        CACHE_CONTROL_SHORT
+        cache_control::SHORT
     } else {
-        CACHE_CONTROL_LONG
+        cache_control::LONG
     };
 
     let mut resp = Json(body).into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, cache_value);
+    cache_control::attach(&mut resp, cache_value);
     resp
 }

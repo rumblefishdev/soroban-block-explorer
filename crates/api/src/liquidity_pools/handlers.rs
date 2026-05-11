@@ -7,6 +7,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::cursor::TsIdCursor;
 use crate::common::errors;
@@ -107,7 +108,9 @@ pub async fn list_participants(
         })
         .collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +281,9 @@ pub async fn list_pools(
     });
     let data: Vec<PoolItem> = rows.into_iter().map(map_pool_item).collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(
@@ -310,7 +315,9 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     };
 
-    Json(map_pool_item(row)).into_response()
+    let mut resp = Json(map_pool_item(row)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(
@@ -383,7 +390,9 @@ pub async fn list_pool_transactions(
         })
         .collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 const ALLOWED_INTERVALS: &[&str] = &["1h", "1d", "1w"];
@@ -532,12 +541,14 @@ pub async fn get_pool_chart(
         }
     };
 
-    Json(ChartResponse {
+    let mut resp = Json(ChartResponse {
         pool_id,
         interval,
         from,
         to,
         data_points,
     })
-    .into_response()
+    .into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
 }

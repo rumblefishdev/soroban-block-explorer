@@ -814,6 +814,7 @@ pub(super) async fn insert_operations(
         let mut asset_issuer_vec: Vec<Option<i64>> = Vec::with_capacity(chunk.len());
         let mut pool_id_vec: Vec<Option<Vec<u8>>> = Vec::with_capacity(chunk.len());
         let mut amount_vec: Vec<i64> = Vec::with_capacity(chunk.len());
+        let mut application_order_vec: Vec<i16> = Vec::with_capacity(chunk.len());
         let mut ledger_seq_vec: Vec<i64> = Vec::with_capacity(chunk.len());
         let mut created_at_vec: Vec<DateTime<Utc>> = Vec::with_capacity(chunk.len());
 
@@ -846,6 +847,7 @@ pub(super) async fn insert_operations(
             )?);
             pool_id_vec.push(r.pool_id.map(|h| h.to_vec()));
             amount_vec.push(r.amount);
+            application_order_vec.push(r.application_order);
             ledger_seq_vec.push(r.ledger_sequence);
             created_at_vec.push(r.created_at);
         }
@@ -864,7 +866,7 @@ pub(super) async fn insert_operations(
             INSERT INTO operations_appearances (
                 transaction_id, type, source_id, destination_id,
                 contract_id, asset_code, asset_issuer_id, pool_id,
-                amount, ledger_sequence, created_at
+                amount, ledger_sequence, created_at, application_order
             )
             SELECT
                 t.tx_id, t.op_type, t.source_id, t.dest_id,
@@ -874,15 +876,15 @@ pub(super) async fn insert_operations(
                     WHEN EXISTS (SELECT 1 FROM liquidity_pools lp WHERE lp.pool_id = t.pool_id) THEN t.pool_id
                     ELSE NULL
                 END,
-                t.amount, t.ledger_sequence, t.created_at
+                t.amount, t.ledger_sequence, t.created_at, t.application_order
               FROM UNNEST(
                 $1::BIGINT[], $2::SMALLINT[], $3::BIGINT[], $4::BIGINT[],
                 $5::BIGINT[], $6::VARCHAR[], $7::BIGINT[], $8::BYTEA[],
-                $9::BIGINT[], $10::BIGINT[], $11::TIMESTAMPTZ[]
+                $9::BIGINT[], $10::BIGINT[], $11::TIMESTAMPTZ[], $12::SMALLINT[]
               )
                 AS t(tx_id, op_type, source_id, dest_id,
                      contract_id, asset_code, asset_issuer_id, pool_id,
-                     amount, ledger_sequence, created_at)
+                     amount, ledger_sequence, created_at, application_order)
             ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING
             "#,
         )
@@ -897,6 +899,7 @@ pub(super) async fn insert_operations(
         .bind(&amount_vec)
         .bind(&ledger_seq_vec)
         .bind(&created_at_vec)
+        .bind(&application_order_vec)
         .execute(&mut **db_tx)
         .await?;
     }
@@ -2301,7 +2304,10 @@ pub(super) async fn recompute_asset_aggregates(
             FROM account_balances_current abc
             WHERE abc.asset_code = aff.code
               AND abc.issuer_id  = aff.issuer_id
-              AND abc.asset_type <> 0
+            -- No explicit `asset_type <> 0` filter needed: native rows
+            -- have NULL `asset_code` / `issuer_id`, so the equality joins
+            -- above already exclude them. The `idx_abc_asset (asset_code,
+            -- issuer_id)` index keeps the seek index-only.
         ) sub ON TRUE
         WHERE a.asset_code = aff.code
           AND a.issuer_id  = aff.issuer_id

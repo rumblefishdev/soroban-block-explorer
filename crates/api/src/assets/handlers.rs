@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use domain::TokenAssetType;
 
+use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::cursor::TsIdCursor;
 use crate::common::errors;
@@ -128,7 +129,9 @@ pub async fn list_assets(
     });
     let data: Vec<AssetItem> = rows.into_iter().map(map_item).collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(
@@ -200,7 +203,9 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
         description,
         home_page,
     };
-    Json(response).into_response()
+    let mut resp = Json(response).into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
 }
 
 /// Pull the two SEP-1 fields the API exposes: `desc` from the matching
@@ -327,7 +332,9 @@ pub async fn list_asset_transactions(
                 has_more: false,
             },
         );
-        return Json(empty).into_response();
+        let mut resp = Json(empty).into_response();
+        cache_control::attach(&mut resp, cache_control::SHORT);
+        return resp;
     }
 
     let mut rows = match fetch_transactions(
@@ -361,5 +368,7 @@ pub async fn list_asset_transactions(
         })
         .collect();
 
-    Json(into_envelope(data, page)).into_response()
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }

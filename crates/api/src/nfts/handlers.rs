@@ -6,6 +6,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -86,7 +87,9 @@ pub async fn list_nfts(
         cursor::encode(&NftIdCursor { id: r.id })
     });
 
-    Json(into_envelope(rows, page)).into_response()
+    let mut resp = Json(into_envelope(rows, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
 
 #[utoipa::path(
@@ -118,7 +121,9 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
         }
     };
 
-    Json(row).into_response()
+    let mut resp = Json(row).into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
 }
 
 #[utoipa::path(
@@ -178,5 +183,7 @@ pub async fn list_nft_transfers(
         })
     });
 
-    Json(into_envelope(rows, page)).into_response()
+    let mut resp = Json(into_envelope(rows, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
 }
