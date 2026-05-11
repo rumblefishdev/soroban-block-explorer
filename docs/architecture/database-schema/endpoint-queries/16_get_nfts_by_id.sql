@@ -1,11 +1,11 @@
 -- Endpoint:     GET /nfts/:id
--- Purpose:      NFT detail: identity + media + metadata + current owner.
+-- Purpose:      NFT detail: identity + media + current owner. The
+--               `metadata` JSONB blob (attributes, traits,
+--               description, animation_url, etc.) is NOT served from
+--               this query — see Notes.
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.12
--- Schema:       ADR 0037
--- Data sources: DB-only (today). The `metadata` JSONB column carries the
---               full attribute set; if a per-NFT S3 enrichment layout
---               lands later (parallel to assets/{id}.json), revise to
---               overlay it. Until then JSONB is the full source.
+-- Schema:       ADR 0037, ADR 0043 (detail-only allocation)
+-- Data sources: DB columns + runtime type-2 enrichment fold-in.
 -- Inputs:
 --   $1  :id  INT  NFT surrogate id
 -- Indexes:      nfts PK (id),
@@ -14,14 +14,15 @@
 -- Notes:
 --   • Single statement. Owner LEFT JOIN tolerates NULL — happens for
 --     burned NFTs (current_owner_id NULL) per ADR 0037 §13.
---   • SCHEMA-DOC GAP: the JSONB shape of `nfts.metadata` is contract-
---     defined at mint time and NOT standardized in `docs/architecture/**`.
---     Frontend §6.12 needs to render the "full attribute list (traits,
---     properties)" — that requires either a documented canonical shape
---     (so the frontend knows where to look) or a defensive UI that walks
---     arbitrary JSONB. Until a canonical shape is locked, the API returns
---     the JSONB verbatim. If a per-NFT S3 enrichment layout lands later
---     (parallel to assets/{id}.json), revise this file to overlay it.
+--   • The `nfts.metadata` JSONB column was dropped in migration
+--     20260507120000_drop_nfts_metadata.up.sql per ADR 0043
+--     detail-only carve-out (task 0195 §2d). The detail handler
+--     fetches the JSON blob at request time from the per-token
+--     `token_uri()` URL (Soroban RPC + IPFS gateway via
+--     `runtime_enrichment::nft_token_uri`, LRU 24h, fail-soft) and
+--     surfaces it as `metadata` on `NftDetailResponse`. The contract-
+--     defined JSONB shape is therefore intentionally not standardised
+--     in this file.
 
 SELECT
     n.id,
@@ -30,7 +31,6 @@ SELECT
     n.collection_name,
     n.name,
     n.media_url,
-    n.metadata,
     n.minted_at_ledger,
     own.account_id    AS current_owner,
     n.current_owner_ledger

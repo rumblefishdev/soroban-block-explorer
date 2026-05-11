@@ -65,8 +65,12 @@ The current design implies the following principles:
 - typed columns are preferred over JSONB for anything that participates in a
   closed domain (enums as `SMALLINT` per ADR 0031, hashes as `BYTEA(32)` per
   ADR 0024, balances as `NUMERIC(28,7)`); JSONB is reserved for genuinely open
-  metadata shapes (`soroban_contracts.metadata`, `wasm_interface_metadata.metadata`,
-  `nfts.metadata`)
+  metadata shapes (`soroban_contracts.metadata`, `wasm_interface_metadata.metadata`).
+  Detail-only NFT attributes (formerly `nfts.metadata` JSONB) are NOT persisted —
+  per ADR 0043 they are fetched at request time on `GET /v1/nfts/:id` via
+  `runtime_enrichment::nft_token_uri` (Soroban RPC `token_uri()` + IPFS gateway,
+  LRU 24h, fail-soft). The column was dropped in migration
+  `20260507120000_drop_nfts_metadata.up.sql` (task 0195 §2d).
 - relational links are always surrogate `BIGINT` FKs to `accounts.id` /
   `soroban_contracts.id` (ADRs 0026 / 0030); StrKeys stay as public lookup keys but
   are not joined on internally
@@ -732,10 +736,11 @@ CREATE TABLE nfts (
     id                   SERIAL       PRIMARY KEY,
     contract_id          BIGINT       NOT NULL REFERENCES soroban_contracts(id),  -- ADR 0030
     token_id             VARCHAR(256) NOT NULL,
-    collection_name      VARCHAR(256),
-    name                 VARCHAR(256),
-    media_url            TEXT,
-    metadata             JSONB,
+    collection_name      VARCHAR(256),                                            -- task 0195 §2d (Lambda 2)
+    name                 VARCHAR(256),                                            -- task 0195 §2d (Lambda 2)
+    media_url            TEXT,                                                    -- task 0195 §2d (Lambda 2)
+    -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
+    --  served at request time via `runtime_enrichment::nft_token_uri`)
     minted_at_ledger     BIGINT,
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
     current_owner_ledger BIGINT,

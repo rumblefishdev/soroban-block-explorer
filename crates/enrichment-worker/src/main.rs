@@ -5,9 +5,11 @@
 //! shared `enrichment-shared` crate.
 //!
 //! Per task 0191:
-//! - Worker writes are unconditional overwrites (no `WHERE col IS NULL`
-//!   short-circuit). The duplicate-message contract lives in
-//!   `enrichment_shared::enrich_and_persist::icon`.
+//! - Worker writes follow `real > sentinel > NULL` priority per column
+//!   (`COALESCE(NULLIF($n, ''), col, $n)`): a later run that finally
+//!   resolves a value upgrades the row, but a permanent-fail sentinel
+//!   never clobbers an existing real value. Duplicate-message contract
+//!   lives in `enrichment_shared::enrich_and_persist::sep1_assets`.
 //! - Batch failure model: each record is processed independently. A
 //!   per-record failure is reported via `BatchItemFailures` so SQS
 //!   redelivers only the failed messages, not the whole batch (the
@@ -23,7 +25,9 @@ use std::sync::Arc;
 
 use aws_lambda_events::event::sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage};
 use enrichment_shared::enrich_and_persist::EnrichError;
-use enrichment_shared::enrich_and_persist::icon::enrich_asset_icon;
+use enrichment_shared::enrich_and_persist::nft_token_uri::enrich_nft_token_uri;
+use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
+use enrichment_shared::nft_token_uri::NftTokenUriFetcher;
 use enrichment_shared::sep1::Sep1Fetcher;
 use lambda_runtime::{Error, LambdaEvent, service_fn};
 use serde::Deserialize;
@@ -40,12 +44,24 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum EnrichmentMessage {
-    Icon { asset_id: i32 },
+    Icon {
+        asset_id: i32,
+    },
+    /// NFT `token_uri()` kind — task 0195 §2d. Insert-hook driven,
+    /// exactly once per `nfts` mint row. Worker fetches `token_uri()`
+    /// via Soroban RPC, resolves the URI through the IPFS gateway,
+    /// and writes `nfts.{name, media_url, collection_name}` from the
+    /// JSON. The `metadata` JSONB column was dropped per ADR 0043 —
+    /// the detail blob is served via runtime type-2 in the api crate.
+    NftTokenUri {
+        nft_id: i32,
+    },
 }
 
 struct WorkerState {
     pool: PgPool,
     sep1: Sep1Fetcher,
+    nft_token_uri: NftTokenUriFetcher,
 }
 
 #[tokio::main]
@@ -63,7 +79,12 @@ async fn main() -> Result<(), Error> {
 
     let pool = db::pool::create_pool(&database_url)?;
     let sep1 = Sep1Fetcher::new()?;
-    let state = Arc::new(WorkerState { pool, sep1 });
+    let nft_token_uri = NftTokenUriFetcher::new()?;
+    let state = Arc::new(WorkerState {
+        pool,
+        sep1,
+        nft_token_uri,
+    });
 
     info!("enrichment-worker ready — starting Lambda runtime");
 
@@ -149,7 +170,11 @@ async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), R
     let msg = parse_message(record)?;
     match msg {
         EnrichmentMessage::Icon { asset_id } => {
-            enrich_asset_icon(&state.pool, asset_id, &state.sep1).await?;
+            enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
+            Ok(())
+        }
+        EnrichmentMessage::NftTokenUri { nft_id } => {
+            enrich_nft_token_uri(&state.pool, nft_id, &state.nft_token_uri).await?;
             Ok(())
         }
     }
@@ -215,8 +240,20 @@ mod tests {
     fn enrichment_message_parses_icon_variant() {
         let json = r#"{"kind":"icon","asset_id":42}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::Icon { asset_id } = msg;
+        let EnrichmentMessage::Icon { asset_id } = msg else {
+            panic!("expected Icon variant, got {msg:?}");
+        };
         assert_eq!(asset_id, 42);
+    }
+
+    #[test]
+    fn enrichment_message_parses_nft_token_uri_variant() {
+        let json = r#"{"kind":"nft_token_uri","nft_id":99}"#;
+        let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
+        let EnrichmentMessage::NftTokenUri { nft_id } = msg else {
+            panic!("expected NftTokenUri variant, got {msg:?}");
+        };
+        assert_eq!(nft_id, 99);
     }
 
     #[test]
@@ -271,7 +308,10 @@ mod tests {
     #[test]
     fn parse_message_returns_icon_on_well_formed_body() {
         let r = record(Some("m-1"), Some(r#"{"kind":"icon","asset_id":7}"#));
-        let EnrichmentMessage::Icon { asset_id } = parse_message(&r).expect("ok");
+        let msg = parse_message(&r).expect("ok");
+        let EnrichmentMessage::Icon { asset_id } = msg else {
+            panic!("expected Icon variant, got {msg:?}");
+        };
         assert_eq!(asset_id, 7);
     }
 

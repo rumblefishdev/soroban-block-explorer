@@ -1358,7 +1358,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NftItem"
+                  "$ref": "#/components/schemas/NftDetailResponse"
                 }
               }
             }
@@ -2581,9 +2581,64 @@
           }
         }
       },
+      "NftDetailResponse": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
+            "required": ["id", "contract_id", "token_id"],
+            "properties": {
+              "collection_name": {
+                "type": ["string", "null"]
+              },
+              "contract_id": {
+                "type": "string",
+                "description": "Contract C-StrKey resolved via `soroban_contracts` join."
+              },
+              "id": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "last_seen_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64",
+                "description": "Most recent ledger where ownership state changed\n(`nfts.current_owner_ledger`)."
+              },
+              "media_url": {
+                "type": ["string", "null"]
+              },
+              "minted_at_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64"
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "owner_account": {
+                "type": ["string", "null"],
+                "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+              },
+              "token_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["metadata"],
+            "properties": {
+              "metadata": {
+                "type": ["object", "null"],
+                "description": "Off-chain JSON metadata fetched at request time. Always present\non the wire — `null` indicates fetch failure / unsupported\ncontent-type, not field absence."
+              }
+            }
+          }
+        ],
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row, see\n`15_get_nfts_list.sql` for the on-the-wire columns), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
+      },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
         "required": ["id", "contract_id", "token_id"],
         "properties": {
           "collection_name": {
@@ -2604,9 +2659,6 @@
           },
           "media_url": {
             "type": ["string", "null"]
-          },
-          "metadata": {
-            "description": "Verbatim JSONB at mint time. Shape is contract-defined (no canonical\nschema yet) — frontend renders defensively."
           },
           "minted_at_ledger": {
             "type": ["integer", "null"],
@@ -3110,7 +3162,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
               "required": ["id", "contract_id", "token_id"],
               "properties": {
                 "collection_name": {
@@ -3131,9 +3183,6 @@
                 },
                 "media_url": {
                   "type": ["string", "null"]
-                },
-                "metadata": {
-                  "description": "Verbatim JSONB at mint time. Shape is contract-defined (no canonical\nschema yet) — frontend renders defensively."
                 },
                 "minted_at_ledger": {
                   "type": ["integer", "null"],

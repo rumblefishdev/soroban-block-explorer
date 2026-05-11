@@ -25,8 +25,9 @@ pub struct ListParams {
     pub filter_name: Option<String>,
 }
 
-/// One NFT row returned by the list endpoint. Shape pinned to canonical
-/// SQL `15_get_nfts_list.sql`.
+/// One NFT row. Same shape on `GET /v1/nfts` list rows and as the
+/// flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
+/// to canonical SQL `15_get_nfts_list.sql` for the column projection.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NftItem {
     pub id: i32,
@@ -36,15 +37,33 @@ pub struct NftItem {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    /// Verbatim JSONB at mint time. Shape is contract-defined (no canonical
-    /// schema yet) — frontend renders defensively.
-    pub metadata: Option<serde_json::Value>,
     pub minted_at_ledger: Option<i64>,
     /// Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
     pub owner_account: Option<String>,
     /// Most recent ledger where ownership state changed
     /// (`nfts.current_owner_ledger`).
     pub last_seen_ledger: Option<i64>,
+}
+
+/// Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
+/// flattened in (same shape as the list-endpoint row, see
+/// `15_get_nfts_list.sql` for the on-the-wire columns), plus a
+/// `metadata` field fetched at request time via
+/// `runtime_enrichment::nft_token_uri` — full JSON blob from the
+/// per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
+/// description, animation_url, etc.). `metadata` is always present
+/// in the response, set to `null` when the fetch fails or the contract
+/// returns a non-JSON `image/*` URI (fail-soft per ADR 0043).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct NftDetailResponse {
+    #[serde(flatten)]
+    #[schema(inline)]
+    pub item: NftItem,
+    /// Off-chain JSON metadata fetched at request time. Always present
+    /// on the wire — `null` indicates fetch failure / unsupported
+    /// content-type, not field absence.
+    #[schema(value_type = Object, nullable, required)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// One row of NFT transfer history. Shape pinned to canonical SQL

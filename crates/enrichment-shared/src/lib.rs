@@ -18,4 +18,5 @@
 //! [`runtime_enrichment`]: ../api/runtime_enrichment/index.html
 
 pub mod enrich_and_persist;
+pub mod nft_token_uri;
 pub mod sep1;

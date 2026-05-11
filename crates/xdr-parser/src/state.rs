@@ -886,7 +886,6 @@ pub fn detect_nfts(nft_events: &[NftEvent]) -> Vec<ExtractedNft> {
             owner_account,
             name: None,
             media_url: None,
-            metadata: None,
             minted_at_ledger,
             last_seen_ledger: event.ledger_sequence,
             created_at: event.created_at,

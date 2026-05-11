@@ -32,7 +32,6 @@ fn map_nft_item(r: &PgRow) -> NftItem {
         collection_name: r.get("collection_name"),
         name: r.get("name"),
         media_url: r.get("media_url"),
-        metadata: r.get("metadata"),
         minted_at_ledger: r.get("minted_at_ledger"),
         owner_account: r.get("owner_account"),
         last_seen_ledger: r.get("last_seen_ledger"),
@@ -76,7 +75,6 @@ pub async fn fetch_list(
             n.collection_name,
             n.name,
             n.media_url,
-            n.metadata,
             n.minted_at_ledger,
             own.account_id        AS owner_account,
             n.current_owner_ledger AS last_seen_ledger
@@ -114,7 +112,6 @@ pub async fn fetch_by_id(pool: &PgPool, id: i32) -> Result<Option<NftItem>, sqlx
             n.collection_name,
             n.name,
             n.media_url,
-            n.metadata,
             n.minted_at_ledger,
             own.account_id        AS owner_account,
             n.current_owner_ledger AS last_seen_ledger

@@ -1,0 +1,311 @@
+//! `nfts.{name, media_url, collection_name}` enrichment from per-token
+//! `token_uri()` JSON metadata.
+//!
+//! Per task 0195 §2d.
+//!
+//! ### Failure model
+//!
+//! Producer is an insert-hook on `nfts` mint events, so a row is
+//! emitted exactly once per nft_id under normal operation. Inside this
+//! handler `fetcher.resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`:
+//!
+//! - `Ok(Some(json))` → extract columns, write real values.
+//! - `Ok(None)` → reserved for future "fetched, intentionally empty";
+//!   falls through to sentinel write.
+//! - `Err(arc_err)` classified by [`is_transient`]:
+//!   - transient (Http 5xx / connect / timeout, SorobanRpc) →
+//!     `EnrichError::Transient` → SQS retry → DLQ.
+//!   - permanent (4xx, malformed JSON, unsafe scheme, malformed input,
+//!     XDR codec, …) → sentinel write + warn log so the row records
+//!     "fetch attempted, no value" and the producer predicate
+//!     short-circuits on the next ledger touch. Permanent errors are
+//!     not cached by the fetcher, so a DLQ replay or backfill retry
+//!     re-logs the warn each time — observability over micro-cost.
+//!
+//! Defence-in-depth at column extraction:
+//!
+//! - `is_safe_media_url` re-check on the `image` field replaces unsafe
+//!   schemes (`http://`, `data:`, `javascript:`) with the sentinel `''`
+//!   against a contract smuggling a non-`https://` URL past the fetcher.
+//! - `trimmed_string` caps each column at the schema width
+//!   (VARCHAR(256) for `name` / `collection_name`, 1 KB for
+//!   `media_url`) and writes the sentinel on overflow rather than
+//!   letting the UPDATE fail.
+//!
+//! UPDATE uses `COALESCE(NULLIF($n, ''), col, $n)` per column —
+//! priority `real > sentinel > NULL` (same shape as the §2a SEP-1
+//! pipeline). A later DLQ replay or 0196 backfill that succeeds will
+//! upgrade a sentinel-marked row in place; sentinels never clobber an
+//! existing real value.
+//!
+//! ### Two `token_uri` response conventions
+//!
+//! Handled by the fetcher:
+//!
+//! - `application/json` — standard NFT metadata. Parse → extract
+//!   `name`, `image` → `media_url`, `collection`.
+//! - `image/*` — direct-image convention (e.g. JamesBachini Soroban
+//!   example). The URI itself is the image; the fetcher synthesises a
+//!   JSON `{ "image": "<url>" }` so this handler still writes only
+//!   `media_url` and leaves `name` / `collection_name` as the
+//!   "absent-in-source" sentinel.
+
+use serde_json::Value;
+use sqlx::{PgPool, Row};
+use tracing::{debug, instrument, warn};
+
+use super::EnrichError;
+use crate::nft_token_uri::errors::is_transient;
+use crate::nft_token_uri::{NftTokenUriFetcher, resolve_ipfs_to_https};
+
+/// `nfts.name VARCHAR(256)`.
+const MAX_NAME_BYTES: usize = 256;
+/// `nfts.collection_name VARCHAR(256)`.
+const MAX_COLLECTION_BYTES: usize = 256;
+
+#[instrument(skip(pool, fetcher), fields(nft_id))]
+pub async fn enrich_nft_token_uri(
+    pool: &PgPool,
+    nft_id: i32,
+    fetcher: &NftTokenUriFetcher,
+) -> Result<(), EnrichError> {
+    // Minimal up-front lookup: the fetcher needs `(contract_id, token_id)`
+    // to call `token_uri(token_id)`. Re-using `nfts.contract_id → soroban_contracts(id)`
+    // keeps the producer-emitted message body to a single integer.
+    let row = sqlx::query(
+        r#"
+        SELECT sc.contract_id AS contract_strkey,
+               n.token_id
+          FROM nfts n
+          JOIN soroban_contracts sc ON sc.id = n.contract_id
+         WHERE n.id = $1
+        "#,
+    )
+    .bind(nft_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        warn!("nft_id {nft_id} not found; acking SQS message");
+        return Ok(());
+    };
+
+    let contract_strkey: String = row.try_get("contract_strkey")?;
+    let token_id: String = row.try_get("token_id")?;
+
+    let (name, media_url, collection_name) =
+        match fetcher.resolve(&contract_strkey, &token_id).await {
+            Ok(Some(json)) => extract_columns(&json),
+            // Fetcher honoured the convention but produced no JSON (reserved
+            // for future variants). Permanent — sentinel write so producer
+            // dedup short-circuits.
+            Ok(None) => (String::new(), String::new(), String::new()),
+            // Transient (Http 5xx / connect / timeout, SorobanRpc) → bounce
+            // to SQS retry → DLQ → DepthAlarm.
+            Err(arc_err) if is_transient(&arc_err) => {
+                return Err(EnrichError::Transient(arc_err.to_string()));
+            }
+            // Permanent (4xx, malformed JSON, unsafe scheme, malformed
+            // input, XDR codec, etc.) → sentinel + warn. Operator can grep
+            // every occurrence; DLQ replay / backfill re-logs on retry.
+            Err(arc_err) => {
+                warn!(error = %arc_err, "nft token_uri permanent fail; sentinel write");
+                (String::new(), String::new(), String::new())
+            }
+        };
+
+    write_columns(pool, nft_id, &name, &media_url, &collection_name).await?;
+    debug!(nft_id, "nft token_uri UPDATE applied");
+    Ok(())
+}
+
+/// Pull `name`, `image`, `collection` from the JSON blob; cap each at
+/// the column width so an oversize value cannot break the UPDATE.
+///
+/// `image` handling:
+/// 1. `ipfs://...` is resolved to the configured HTTPS gateway URL via
+///    [`resolve_ipfs_to_https`]. Common NFT-metadata convention
+///    (OpenSea / OpenZeppelin) stores `image` as `ipfs://Qm.../1.png`,
+///    so without this step `media_url` would be the empty sentinel for
+///    most real-world collections.
+/// 2. The resolved value is then re-checked through [`is_safe_media_url`]:
+///    the frontend renders it as `<img src>`, so anything other than
+///    `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
+///    with the empty-string sentinel to avoid mixed-content warnings
+///    and XSS vectors. Same defence-in-depth pattern as
+///    `sep1_assets::is_safe_icon_url`.
+fn extract_columns(json: &Value) -> (String, String, String) {
+    let name = trimmed_string(json.get("name"), MAX_NAME_BYTES);
+    let image_raw = trimmed_string(json.get("image"), 1024); // TEXT but cap to keep bodies reasonable
+    let image_resolved = resolve_ipfs_to_https(&image_raw); // empty string passes through
+    let image = if image_resolved.is_empty() || is_safe_media_url(&image_resolved) {
+        image_resolved
+    } else {
+        warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
+        String::new()
+    };
+    let collection = trimmed_string(json.get("collection"), MAX_COLLECTION_BYTES);
+    (name, image, collection)
+}
+
+/// Frontend renders `media_url` as `<img src>`. Only `https://` passes —
+/// `http://` is mixed-content; `javascript:` / `data:` are XSS vectors.
+fn is_safe_media_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("https://")
+}
+
+fn trimmed_string(v: Option<&Value>, max_bytes: usize) -> String {
+    let Some(s) = v.and_then(Value::as_str) else {
+        return String::new();
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.len() > max_bytes {
+        warn!(
+            bytes = trimmed.len(),
+            max = max_bytes,
+            "value too long; sentinel written"
+        );
+        return String::new();
+    }
+    trimmed.to_owned()
+}
+
+/// Single UPDATE writing all three columns with `real > sentinel > NULL`
+/// priority via `COALESCE(NULLIF($n, ''), col, $n)` — same pattern as the
+/// SEP-1 icon kind in `sep1_assets.rs`. The pattern matters even for the
+/// nominally exactly-once insert-hook model:
+///
+/// - `NULLIF($n, '')` collapses an empty-string sentinel to `NULL`.
+/// - `COALESCE(real, col, sentinel)` then prefers a real fetch result,
+///   falls back to the existing column value, and only writes the
+///   sentinel when nothing is there.
+///
+/// Net effect:
+/// - First call lands real values → persisted. Re-delivery (SQS
+///   visibility-timeout race, DLQ replay, 0196 backfill) cannot clobber
+///   them with sentinels on a flap.
+/// - First call lands sentinels → persisted. A later real fetch
+///   (backfill) upgrades them. Sentinels are upgradable; real values stick.
+async fn write_columns(
+    pool: &PgPool,
+    nft_id: i32,
+    name: &str,
+    media_url: &str,
+    collection_name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE nfts \
+         SET name            = COALESCE(NULLIF($1, ''), name,            $1), \
+             media_url       = COALESCE(NULLIF($2, ''), media_url,       $2), \
+             collection_name = COALESCE(NULLIF($3, ''), collection_name, $3) \
+         WHERE id = $4",
+    )
+    .bind(name)
+    .bind(media_url)
+    .bind(collection_name)
+    .bind(nft_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_columns_pulls_standard_fields() {
+        let blob = json!({
+            "name": "Punk #4521",
+            "image": "https://example.com/4521.png",
+            "collection": "CryptoPunks",
+            "attributes": [{"trait_type": "Hat", "value": "Beanie"}]
+        });
+        let (name, image, collection) = extract_columns(&blob);
+        assert_eq!(name, "Punk #4521");
+        assert_eq!(image, "https://example.com/4521.png");
+        assert_eq!(collection, "CryptoPunks");
+    }
+
+    #[test]
+    fn extract_columns_returns_empty_for_missing_keys() {
+        let blob = json!({});
+        assert_eq!(
+            extract_columns(&blob),
+            (String::new(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn extract_columns_trims_whitespace() {
+        let blob = json!({"name": "  Spaced  ", "image": "", "collection": null});
+        let (name, image, collection) = extract_columns(&blob);
+        assert_eq!(name, "Spaced");
+        assert_eq!(image, "");
+        assert_eq!(collection, "");
+    }
+
+    #[test]
+    fn extract_columns_resolves_ipfs_image_to_gateway_url() {
+        // OpenSea / OpenZeppelin convention: `image` is `ipfs://Qm.../...`.
+        // Without resolve_ipfs_to_https the is_safe_media_url check would
+        // reject it and we'd write the sentinel, leaving `nfts.media_url`
+        // empty for most real-world collections.
+        let blob = json!({
+            "name": "Punk #4521",
+            "image": "ipfs://QmFoo/4521.png",
+            "collection": "CryptoPunks",
+        });
+        let (_, image, _) = extract_columns(&blob);
+        assert!(image.starts_with("https://"));
+        assert!(image.ends_with("/ipfs/QmFoo/4521.png"));
+    }
+
+    #[test]
+    fn trimmed_string_caps_oversize_to_sentinel() {
+        let too_long = "x".repeat(MAX_NAME_BYTES + 1);
+        let v = Value::String(too_long);
+        assert_eq!(trimmed_string(Some(&v), MAX_NAME_BYTES), "");
+    }
+
+    #[test]
+    fn trimmed_string_handles_non_string() {
+        assert_eq!(trimmed_string(Some(&json!(42)), 256), "");
+        assert_eq!(trimmed_string(Some(&json!(null)), 256), "");
+        assert_eq!(trimmed_string(None, 256), "");
+    }
+
+    #[test]
+    fn is_safe_media_url_accepts_https() {
+        assert!(is_safe_media_url("https://example.com/x.png"));
+        assert!(is_safe_media_url("HTTPS://example.com/x.png"));
+        assert!(is_safe_media_url("  https://gateway/ipfs/Qm.../x.png  "));
+    }
+
+    #[test]
+    fn is_safe_media_url_rejects_unsafe_schemes() {
+        assert!(!is_safe_media_url("http://example.com/x.png"));
+        assert!(!is_safe_media_url("data:image/png;base64,iVBOR..."));
+        assert!(!is_safe_media_url("javascript:alert(1)"));
+        assert!(!is_safe_media_url("file:///etc/passwd"));
+        assert!(!is_safe_media_url("ipfs://Qm.../x.png")); // expected pre-resolved by fetcher
+        assert!(!is_safe_media_url(""));
+    }
+
+    #[test]
+    fn extract_columns_replaces_unsafe_image_with_sentinel() {
+        let blob = json!({
+            "name": "Punk",
+            "image": "javascript:alert(1)",
+            "collection": "X"
+        });
+        let (name, image, collection) = extract_columns(&blob);
+        assert_eq!(name, "Punk");
+        assert_eq!(image, ""); // sentinel — not the malicious scheme
+        assert_eq!(collection, "X");
+    }
+}

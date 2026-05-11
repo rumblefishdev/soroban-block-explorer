@@ -394,7 +394,6 @@ pub struct ExtractedNft {
     pub owner_account: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub metadata: Option<serde_json::Value>,
     pub minted_at_ledger: Option<u32>,
     /// Updated on every NFT state change. Watermark column.
     pub last_seen_ledger: u32,

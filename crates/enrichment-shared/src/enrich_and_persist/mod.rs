@@ -9,6 +9,7 @@
 //! writes.
 
 pub mod error;
-pub mod icon;
+pub mod nft_token_uri;
+pub mod sep1_assets;
 
 pub use error::EnrichError;
