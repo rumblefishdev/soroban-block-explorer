@@ -254,6 +254,24 @@ If the pilot fails to outperform Postgres on storage and query latency
 once measurements exist, the whole crate plus the compose service
 deletes in one PR; nothing else has changed.
 
+### Writers (stubbed)
+
+[`crates/backfill-runner`](../../../crates/backfill-runner/README.md)
+accepts `--target {postgres,clickhouse}` (task
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)).
+The CH path runs the full parse pipeline against `aws s3 sync`'d
+ledgers but **writes nothing**: `db_clickhouse::persist::persist_ledger_clickhouse`
+is a no-op stub that logs per-ledger context and returns `Ok`.
+
+The stub-driven phase is intentional. It validates the flag-based
+plumbing — `Sink` enum, dispatch across preflight / load_completed /
+persist — and lets us compare parse-side timings between the two
+targets without committing to a write-shape that still has open design
+questions. Real INSERTs for the 17 mirrored tables land in a follow-up
+task gated on this path being green end-to-end.
+
+The indexer Lambda is unchanged — no ClickHouse dual-write yet.
+
 ---
 
 ## References

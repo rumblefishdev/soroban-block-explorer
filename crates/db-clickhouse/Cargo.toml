@@ -13,6 +13,9 @@ path = "src/bin/db-clickhouse-init.rs"
 # Q4). Pinned to the latest stable release at task 0204 implementation time
 # (2026-05-08). Bump deliberately in a follow-up PR if blocked by a bug.
 clickhouse = "=0.15.0"
+# Shared Extracted* types — the CH stub mirrors the PG persist signature
+# without duplicating the type surface (task 0205).
+xdr-parser = { path = "../xdr-parser" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

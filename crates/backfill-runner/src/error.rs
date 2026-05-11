@@ -8,6 +8,16 @@ pub enum BackfillError {
     #[error("database pool init: {0}")]
     Db(#[from] sqlx::Error),
 
+    /// ClickHouse client / query failure (task 0205, `--target clickhouse`).
+    #[error("clickhouse: {0}")]
+    Ch(#[from] clickhouse::error::Error),
+
+    /// ClickHouse stub persist failure (task 0205). The stub itself only
+    /// returns `Ok`, but the type is wired in so the follow-up that lands
+    /// real INSERTs doesn't widen `BackfillError` again.
+    #[error("clickhouse persist: {0}")]
+    ChPersist(#[from] db_clickhouse::SchemaError),
+
     #[error("indexer: {0}")]
     Indexer(#[from] indexer::handler::HandlerError),
 
