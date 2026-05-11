@@ -55,7 +55,7 @@ SELECT
                                         -- under task 0194 Future Work; DeFi
                                         -- drift documented there.
     a.holder_count,                     -- recomputed by indexer per ledger:
-                                        -- COUNT(*) FILTER (balance > 0) —
+                                        -- COUNT(*) FILTER (WHERE balance > 0) —
                                         -- active holders, StellarExpert
                                         -- convention (task 0194 §1c,
                                         -- supersedes 0135).

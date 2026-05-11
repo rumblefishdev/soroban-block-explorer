@@ -2250,30 +2250,19 @@ pub(super) async fn recompute_asset_aggregates(
         else {
             continue;
         };
-        let Some(issuer_id) = account_ids.get(issuer_key).copied() else {
-            // Same defensive skip pattern as `upsert_balances_credit`: if the
-            // issuer wasn't seeded, the row didn't write either, so the
-            // recompute would touch nothing. Warn-log so a sustained pattern
-            // is observable instead of silently dropping.
-            tracing::warn!(
-                code = %code,
-                issuer = %issuer_key,
-                "recompute_asset_aggregates: issuer StrKey unseeded; skipping balance row aggregation"
-            );
-            continue;
-        };
+        // Strict resolve: `upsert_balances_credit` (step 14a) already called
+        // `resolve_id(account_ids, issuer_key, "abc.credit.issuer")?` for the
+        // same row, so an unseeded issuer would have aborted the transaction
+        // upstream. Reuse the same helper here for consistent error semantics.
+        let issuer_id = resolve_id(account_ids, issuer_key, "recompute.balance.issuer")?;
         affected.insert((code.clone(), issuer_id));
     }
 
     for r in &staged.trustline_removals {
-        let Some(issuer_id) = account_ids.get(&r.issuer_str_key).copied() else {
-            tracing::warn!(
-                code = %r.asset_code,
-                issuer = %r.issuer_str_key,
-                "recompute_asset_aggregates: issuer StrKey unseeded; skipping trustline-removal aggregation"
-            );
-            continue;
-        };
+        // Same strict-resolve invariant as the balance-row path above —
+        // `upsert_balances` (step 14a) handled the corresponding DELETE
+        // statement and would have errored on an unseeded issuer.
+        let issuer_id = resolve_id(account_ids, &r.issuer_str_key, "recompute.trustline.issuer")?;
         affected.insert((r.asset_code.clone(), issuer_id));
     }
 
