@@ -510,6 +510,16 @@ bottlenecks.
 
 The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 
+### Read queries (reference set)
+
+[`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
+the canonical reference set of CH-side read queries for the 23 public REST
+endpoints, parallel to the PG [`endpoint-queries/`](./endpoint-queries/README.md)
+set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
+`FINAL` on `ReplacingMergeTree` reads, partition-prunes via
+`intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
+`ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/active/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
+
 ---
 
 ## References
@@ -518,5 +528,7 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 - [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) — folded events design that this pilot deliberately reverses on the CH side
 - [ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md) — evergreen docs maintenance policy
 - [Task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md) — implementation task
+- [Task 0207](../../../lore/1-tasks/active/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md) — CH endpoint queries reference set
 - [`crates/db-clickhouse/README.md`](../../../crates/db-clickhouse/README.md) — crate-level README with translation table and dev workflow
+- [`endpoint-queries-clickhouse/README.md`](./endpoint-queries-clickhouse/README.md) — 23 CH-side endpoint queries + FINAL/Dict/§5 conventions
 - [`notes/G-clickhouse-schema-er.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md) — full ER diagram + ENGINE/PARTITION BY/ORDER BY matrix

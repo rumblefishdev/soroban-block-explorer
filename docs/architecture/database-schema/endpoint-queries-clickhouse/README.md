@@ -179,24 +179,69 @@ docker compose exec clickhouse clickhouse-client \
 ./run_endpoint_ch.sh all
 ```
 
-## Validation tiers (task 0207 Phase 4)
+## Validation tiers
 
-| Tier | What                                                                                                                                 | When                    |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| 1    | Schema parse — `clickhouse-client --format=Null` returns exit 0 against canonical schema                                             | per-commit, CI gate     |
-| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance   | per-query, before merge |
-| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header | per-query, before merge |
-| 4    | Aggregate equivalence — aggregating queries (E01 stats, E15/16 NFTs, E22 search) compare totals PG vs CH; tolerance per §5           | per-query, before merge |
+| Tier | What                                                                                                                                 | Status as of task 0207                                                                                                                                                                                 |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | Schema parse — `clickhouse-client --format=Null` returns exit 0 against canonical schema                                             | **Done.** All 34 statements (23 files) pass.                                                                                                                                                           |
+| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance   | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows. |
+| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header | **Deferred** — same gate as Tier 2.                                                                                                                                                                    |
+| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                        | **Deferred** — same gate as Tier 2.                                                                                                                                                                    |
 
-See `compare_pg_ch.sh` for the Tier 2-4 helper.
+The scaffold helper `compare_pg_ch.sh` is in place so the Tier 2-4 work
+is a small follow-up once the CH writer lands — it does not require
+re-deriving the per-endpoint binding logic.
+
+## Reviewer guide
+
+Per-query checklist when reviewing a new or modified `.sql` file here:
+
+1. **Header completeness.** Every line of the header convention is filled.
+   `ADR 0044 §:` MUST cite every applicable rule (§4.N for engines, §5.N
+   for divergences). Empty `Notes:` is OK; empty `ADR 0044 §:` is NOT.
+2. **`FINAL` discipline.** Cross-check every read against the FINAL table
+   above. Forgotten `FINAL` on a `ReplacingMergeTree` read returns dup
+   rows pre-merge; over-applied `FINAL` on a plain `MergeTree` (`ledgers`,
+   `liquidity_pools`, `wasm_interface_metadata`) is harmless but wastes a
+   merge pass.
+3. **§5.1 anti-pattern.** No JOIN to `soroban_events_appearances` — that
+   table does not exist in CH. The full-content `soroban_events` is the
+   only events table.
+4. **§5.2 anti-pattern.** No `*.created_at` projection or filter on tables
+   other than `ledgers`. If the query needs `closed_at`, JOIN `ledgers` on
+   `ledger_sequence`.
+5. **§5.3 anti-pattern.** No `nfts.metadata` projection. The column is
+   absent. Metadata is fetched at the API layer via Soroban RPC
+   `token_uri()` (ADR 0043).
+6. **§5.5 hot path.** For hash → ledger_sequence lookups, prefer
+   `dictGet('transaction_hash_dict', 'ledger_sequence', toString($1))`
+   over a full scan of `transaction_hash_index`.
+7. **Partition predicate.** Every read against a partitioned fact table
+   that has a ledger range available should include
+   `intDiv(ledger_sequence, 500000) BETWEEN intDiv($a, 500000) AND intDiv($b, 500000)`
+   (or `=` for single-ledger queries). Missing the predicate forces the
+   planner to scan all partitions.
+8. **Cursor shape.** Keyset cursors drop the `created_at` term that
+   PG-side equivalents use. CH cursors are tuples of integer columns
+   (`ledger_sequence`, `application_order`, `id`, etc.).
+9. **Enum decoding.** SMALLINT enum columns (`asset_type`, `event_type`,
+   `contract_type`, etc.) project as raw `Int16` — no `*_name()` SQL
+   helper exists in CH; decode happens in the API layer.
+10. **`pg_trgm` regression awareness (§R3).** Substring search uses
+    `positionCaseInsensitiveUTF8(col, $q) > 0` not `ILIKE '%q%'`. The
+    cost is a linear scan after FINAL — acceptable for small tables
+    (assets, NFTs) only.
+11. **Tier 1 parse-check.** Reviewer runs `./run_endpoint_ch.sh <id> --syntax-only`
+    against a populated local CH. Exit 0 = parses + plans cleanly.
+12. **Anti-pattern grep.** `grep -nE 'NOW\(\)|encode\(|decode\(|ILIKE|::float8|::bigint|created_at|ON CONFLICT|soroban_events_appearances|n\.metadata|nfts\.metadata|LATERAL' NN_*.sql` should return no hits (PG idioms / §5 violations).
 
 ## Adding a new query
 
 1. Pick the matching `NN_get_*.sql` filename from PG `endpoint-queries/` for naming parity.
 2. Copy the header template (above) and fill every line — empty `Notes:` is OK; empty `ADR 0044 §:` is NOT.
-3. Map every PG construct via the [translation rules in `MAPPING.md`](MAPPING.md) (working doc — moved into task 0207 notes before close).
+3. Apply the PG → CH translation rules from the [§5 quick-ref](#adr-0044-5-divergences-quick-ref) above, plus the standard CH idiom swaps (`now()` for `NOW()`, `INTERVAL N UNIT` for `'N units'`, `lower(hex(b))` for `encode(b, 'hex')`, `unhex(s)` for `decode(s, 'hex')`, `toFloat64()` for `::float8`, etc.).
 4. `FINAL` discipline check (see table above).
 5. Partition predicate check (every `ledger_sequence` range read).
 6. `./run_endpoint_ch.sh <id> --syntax-only` → exit 0 = Tier 1 OK.
-7. Populate a small CH range via `cargo run -p backfill-runner -- --target clickhouse --start S --end E` → run Tier 2-4 via `compare_pg_ch.sh <id>`.
+7. Once CH writer is non-stub, populate a small range via `cargo run -p backfill-runner -- --target clickhouse --start S --end E` → run Tier 2-4 via `compare_pg_ch.sh <id>`.
 8. Update [Index](#index) row above.
