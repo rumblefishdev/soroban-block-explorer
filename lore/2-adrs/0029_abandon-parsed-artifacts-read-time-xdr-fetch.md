@@ -315,6 +315,37 @@ partition_start` for partition directories per
 
 ---
 
+## Postscript — Appearance-index ordering contract (task 0192)
+
+[Task 0192](../1-tasks/active/0192_BUG_operations-appearances-ordering-not-apply-order.md)
+clarifies a corollary of this ADR that was implicit and got broken: the
+boundary between **what lives in the DB** (typed identity columns + amount
+fold count) and **what lives in XDR** (per-op detail). For ordering
+specifically:
+
+- The DB stores **only** the canonical apply-order position per appearance
+  row (`operations_appearances.application_order SMALLINT`, 1-based, MIN-fold
+  across collapsed envelope ops). It does NOT store the per-op details —
+  those continue to live in `envelope_xdr` and are re-materialised at read
+  time per this ADR.
+- The DB **does not** rely on `oa.id` (BIGSERIAL ingest artefact) for any
+  semantic ordering contract. The pre-task-0192 implicit assumption that
+  `oa.id` is monotone with apply order was empirically false (the indexer's
+  HashMap-keyed identity aggregation produced alphabetic-by-asset_code INSERT
+  order); endpoint 03 Statement C now orders by
+  `oa.application_order NULLS LAST, oa.id`.
+- The API DTO surfaces `application_order` on `OperationItem`. The XDR
+  overlay (`XdrOperationDto.application_order` from
+  `xdr_parser::extract_operations`) carries the same 1-based per-tx
+  position, so light + heavy can be joined on this key.
+
+This generalises to all appearance-index tables (cf. ADRs 0033 / 0034 for
+events / invocations): identity-fold + first-appearance position is the
+canonical ordering contract; raw row IDs are internal artefacts and MUST
+NOT be exposed by APIs as ordering keys.
+
+---
+
 ## References
 
 - [ADR 0011: S3 offload — lightweight DB schema](0011_s3-offload-lightweight-db-schema.md)

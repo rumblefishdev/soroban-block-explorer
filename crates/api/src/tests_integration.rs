@@ -28,6 +28,8 @@ use crate::assets;
 use crate::contracts;
 use crate::ledgers;
 use crate::nfts;
+use crate::runtime_enrichment::RuntimeEnrichment;
+use crate::runtime_enrichment::sep1::Sep1Fetcher;
 use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
 use crate::state::AppState;
 use crate::{liquidity_pools, transactions};
@@ -52,12 +54,19 @@ fn build_app(db: PgPool) -> Router {
         .timeout_config(crate::runtime_enrichment::stellar_archive::default_timeout_config())
         .build();
     let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
-    let fetcher = StellarArchiveFetcher::new(s3);
     let contract_cache = crate::contracts::cache::new_contract_cache();
     let network_cache = crate::network::cache::new_network_cache();
+    // Real fetchers with default config. Integration tests below never
+    // hit a real issuer or S3 (validation tests short-circuit before
+    // any handler reaches the fetcher; DB-gated tests use fixtures).
+    // Keeping them construct-only ensures AppState wiring stays exercised.
+    let runtime_enrichment = RuntimeEnrichment {
+        stellar_archive: StellarArchiveFetcher::new(s3),
+        sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
+    };
     let state = AppState {
         db,
-        fetcher,
+        runtime_enrichment,
         contract_cache,
         network_cache,
         network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
@@ -1770,10 +1779,10 @@ async fn ledgers_detail_unknown_sequence_returns_404_against_real_db() {
 }
 
 /// Detail endpoint shape against a real DB row + the head-vs-closed
-/// Cache-Control branching. Selects the two most recent ledgers
-/// (`ORDER BY closed_at DESC LIMIT 2`); uses the most recent as the
-/// head-ledger assertion (`next_sequence is null` → 10s TTL) and the
-/// second-most-recent as the closed-ledger assertion (`next_sequence`
+/// Cache-Control branching. Selects the two highest-sequence ledgers
+/// (`ORDER BY closed_at DESC, sequence DESC LIMIT 2`); uses the first
+/// as the head-ledger assertion (`next_sequence is null` → 10s TTL)
+/// and the second as the closed-ledger assertion (`next_sequence`
 /// non-null → 300s TTL).
 #[tokio::test]
 async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
@@ -1787,14 +1796,25 @@ async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
     // Pick the head and an older ledger from the live DB. Skip if the
     // table has fewer than two rows (no way to distinguish head vs
     // closed under that condition).
-    let rows: Vec<(i64,)> =
-        match sqlx::query_as("SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 2")
-            .fetch_all(&pool)
-            .await
-        {
-            Ok(r) => r,
-            Err(_) => return,
-        };
+    //
+    // Tie-break by `sequence DESC` (task 0201): on shared dev DBs the
+    // `persist_integration` fixtures insert synthetic ledgers with
+    // identical `closed_at` values. Sorting by `closed_at` alone is
+    // therefore non-deterministic across the tied rows and may pick a
+    // non-head ledger, which the handler reports under the LONG TTL
+    // branch (it computes "head-ness" from `next_sequence IS NULL`,
+    // not from `closed_at`). Matching the list-endpoint canonical
+    // ordering `(closed_at DESC, sequence DESC)` resolves the tie to
+    // the actual chain head and is a no-op against production data.
+    let rows: Vec<(i64,)> = match sqlx::query_as(
+        "SELECT sequence FROM ledgers ORDER BY closed_at DESC, sequence DESC LIMIT 2",
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return,
+    };
     if rows.len() < 2 {
         eprintln!("DB has fewer than 2 ledgers — skipping detail Cache-Control test");
         return;

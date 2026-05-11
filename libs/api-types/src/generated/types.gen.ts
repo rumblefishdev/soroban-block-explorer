@@ -60,8 +60,14 @@ export type AccountTransactionItem = {
 };
 
 /**
- * Detail response. `description` / `home_page` always `null` until task
- * 0164 wires the per-entity S3 hydration (ADR 0037 §342).
+ * Detail response. `description` is populated from the issuer stellar.toml
+ * `CURRENCIES[].desc` field; `home_page` is populated from
+ * `DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —
+ * the org URL is the closest semantic match and preserves backward
+ * compatibility with the previous DB-sourced column). Both default to
+ * `null` for native XLM, assets without an issuer, issuers without an
+ * on-chain `home_domain`, fetch failures, and stellar.toml files with
+ * no matching `[[CURRENCIES]]` entry.
  */
 export type AssetDetailResponse = {
   asset_code?: string | null;
@@ -571,10 +577,22 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * Global BIGSERIAL `operations_appearances.id`; result-set order
-   * (`ORDER BY oa.id`) is the operation's within-tx application order.
+   * Global BIGSERIAL `operations_appearances.id`. Internal ordering
+   * artefact only; not a within-tx index. Use `application_order`
+   * for apply-order display and to join against
+   * `XdrOperationDto.application_order` from the heavy overlay.
    */
   appearance_id: number;
+  /**
+   * 1-based per-tx apply position carrying on-chain operation order
+   * (task 0192). For folded appearance rows (multiple identical-identity
+   * envelope ops collapsed into one row, see task 0163) this is the
+   * MIN of the folded ops' indices — the position of the row's first
+   * occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
+   * where the column was not yet populated; clients fall back to
+   * `appearance_id` order in that case.
+   */
+  application_order?: number | null;
   /**
    * Asset code (≤12 chars) for classic asset operations.
    */

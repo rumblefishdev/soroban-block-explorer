@@ -2,7 +2,7 @@
 id: '0195'
 title: 'Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0026', '0029', '0032']
 related_tasks: ['0125', '0188', '0191', '0194', '0196', '0197']
 tags: [priority-medium, effort-large, layer-enrichment, layer-lambda, audit-gap]
@@ -14,6 +14,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from M2 enrichment planning session 2026-05-06. Second of four tasks (0194-0197) implementing the field allocation rule. Subsumes 0125 (LP TVL part) and 0191 future-work bullets #2 (asset_usd_price implied) + LP analytics kind.'
+  - date: '2026-05-07'
+    status: active
+    who: karolkow
+    note: 'Activated. 0194 frozen pending Oskar consult on price oracle (shared dep with §2c); proceeding with 0195 in parallel — §2a/§2b/§2d are unblocked.'
 ---
 
 # Lambda 2 enrichment: off-chain NULL fields (icon-name extension, lp_tvl, asset_usd_price, nft_metadata)

@@ -112,8 +112,10 @@ pub struct InvocationAppearanceItem {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// Global BIGSERIAL `operations_appearances.id`; result-set order
-    /// (`ORDER BY oa.id`) is the operation's within-tx application order.
+    /// Global BIGSERIAL `operations_appearances.id`. Internal ordering
+    /// artefact only; not a within-tx index. Use `application_order`
+    /// for apply-order display and to join against
+    /// `XdrOperationDto.application_order` from the heavy overlay.
     pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).
@@ -129,6 +131,14 @@ pub struct OperationItem {
     pub asset_issuer: Option<String>,
     /// Hex-encoded liquidity pool ID.
     pub pool_id: Option<String>,
+    /// 1-based per-tx apply position carrying on-chain operation order
+    /// (task 0192). For folded appearance rows (multiple identical-identity
+    /// envelope ops collapsed into one row, see task 0163) this is the
+    /// MIN of the folded ops' indices — the position of the row's first
+    /// occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
+    /// where the column was not yet populated; clients fall back to
+    /// `appearance_id` order in that case.
+    pub application_order: Option<i16>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }

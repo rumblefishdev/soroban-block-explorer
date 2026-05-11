@@ -2,7 +2,7 @@
 id: '0192'
 title: 'operations_appearances order by oa.id != on-chain apply order'
 type: BUG
-status: active
+status: completed
 related_adr: ['0029', '0033', '0034']
 related_tasks: ['0163', '0172']
 tags:
@@ -45,6 +45,51 @@ history:
       Activated. Prerequisite to running the 374k-ledger audit-harness
       backfill — fixing this first avoids ingesting millions of rows
       with broken ordering and a second backfill to repair them.
+  - date: '2026-05-07'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Landed via PR #165 (commit 0c2c32e), 3-phase plan:
+
+      Phase 0 — `crates/audit-harness/src/bin/operations-order-diff.rs`
+      bin samples N multi-op non-Soroban txs from real DB, fetches each
+      ledger from public SDF archive, walks `tx.operations[]` via
+      xdr-parser, projects to indexer's identity tuple, and reports
+      divergence rate plus breakdowns by op-count / dominant op type /
+      ledger range. Drove the backfill decision (forward-only).
+
+      Phase 1 — indexer fix in
+      `crates/indexer/src/handler/persist/staging.rs`:
+        • HashMap aggregation now tracks (count, min_apply_order) per
+          identity tuple, fed from `ExtractedOperation.operation_index`.
+          MIN-fold matches the appearance-index folding semantics from
+          task 0163.
+        • Drop the alphabetic identity-tuple sort that was the root
+          cause. Replace with `sort_by_key((tx_hash, application_order))`.
+        • New `application_order: i16` field on `OpRow`.
+
+      Schema migration (NULLABLE, idempotent, partition-aware):
+        • `ALTER TABLE operations_appearances ADD COLUMN
+          application_order SMALLINT` with range CHECK 1..32767.
+        • Existing rows stay NULL — backfill decision deferred to the
+          audit-harness report.
+
+      Phase 2 — endpoint 03 Statement C reads `application_order` for
+      apply-order ORDER BY (replacing the implicit `oa.id` reliance);
+      docs + ADR + DTO updated in same PR.
+
+      Tests: replaced bug-hiding `ORDER BY type` projection with
+      `ORDER BY application_order` + new
+      `application_order_preserves_apply_order_not_alphabetic` (4 Payment
+      ops with codes [Z, A, M, B]) and
+      `application_order_min_fold_for_duplicate_identity` (5 ops folding
+      to 3 identities, MIN-fold semantics).
+
+      Net change: indexer staging + persist + write paths, schema
+      migration, endpoint 03 SQL, audit harness, integration tests,
+      ADR/docs. Zero breaking changes; existing rows tolerate NULL
+      `application_order` and the API ORDER BY falls back to `oa.id` for
+      legacy data per the migration's SQL.
 ---
 
 # `operations_appearances ORDER BY oa.id` ≠ on-chain apply order
