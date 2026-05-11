@@ -15,9 +15,10 @@
 //!   (asset_type IN (1, 2) AND name IS NULL)`. Writes both
 //!   `assets.icon_url` and `assets.name` via `enrich_asset_from_sep1`;
 //!   both columns come from the issuer's SEP-1 TOML
-//!   (`CURRENCIES[].image` / `CURRENCIES[].name`). The matching SQS
-//!   wire-format `kind` string is still `"icon"` (historical, kept
-//!   stable for in-flight messages and DLQ replays).
+//!   (`CURRENCIES[].image` / `CURRENCIES[].name`). Drain bypasses SQS
+//!   entirely (see module header); the live worker reads the same
+//!   kind from SQS messages whose wire `"kind"` field is
+//!   `"sep1_assets"` (renamed in 0196 from the historical `"icon"`).
 //! - `nft-metadata` — drain `nfts` rows where all three of
 //!   `name / media_url / collection_name` are NULL. Writes
 //!   `nfts.{name, media_url, collection_name}` via
@@ -92,9 +93,8 @@ enum Command {
     /// Drain the SEP-1 enrichment kind. Writes BOTH `assets.icon_url`
     /// (from `CURRENCIES[].image`, all asset types) AND `assets.name`
     /// (from `CURRENCIES[].name`, ClassicCredit + SAC only —
-    /// `asset_type IN (1, 2)`). The SQS wire-format `kind` string is
-    /// still `"icon"` for in-flight-message + DLQ-replay compatibility
-    /// across the indexer / worker / this CLI.
+    /// `asset_type IN (1, 2)`). Does NOT touch SQS; CLI calls the
+    /// shared `enrich_*` function directly.
     #[command(name = "sep1-assets")]
     Sep1Assets(DrainArgs),
     /// Drain `nfts` rows missing `name` / `media_url` / `collection_name`

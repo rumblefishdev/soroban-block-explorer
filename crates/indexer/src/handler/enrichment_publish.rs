@@ -14,8 +14,13 @@
 //!   resulting URL (HTTP / IPFS gateway) and writes
 //!   `nfts.{name, media_url, collection_name}`.
 //!
-//! The kind name `icon` is historical — kept for SQS wire-format
-//! stability across the indexer / worker / backfill / DLQ replays.
+//! Wire `kind` is `"sep1_assets"` (snake_case form of the Rust variant
+//! `EnrichmentMessage::Sep1Assets`). The historical name was `"icon"`
+//! — renamed in 0196 once the kind grew beyond `icon_url` to also
+//! write `assets.name`. **Breaking change**: pre-rename in-flight SQS
+//! messages and DLQ entries with `"kind":"icon"` will not deserialise
+//! against the current worker; drain the DLQ before deploy if any are
+//! present.
 //!
 //! ## Selection criteria
 //!
@@ -23,7 +28,7 @@
 //!
 //! - Match a `(code, issuer_strkey)` tuple or `contract_id` StrKey from
 //!   the parser's `ExtractedAsset` slice for this ledger, AND
-//! - Are missing at least one column the `icon` worker fills:
+//! - Are missing at least one column the `sep1_assets` worker fills:
 //!     - `icon_url IS NULL`, OR
 //!     - `asset_type IN (1, 2) AND name IS NULL` — ClassicCredit + SAC
 //!       rows whose human-readable `name` has not yet been resolved
@@ -318,8 +323,9 @@ async fn publish_icon_messages(client: &SqsClient, queue_url: &str, asset_ids: &
         for (idx, id) in chunk.iter().enumerate() {
             // Build the JSON body via serde so future kinds with
             // string fields can't accidentally introduce injection.
-            let body = serde_json::json!({ "kind": "icon", "asset_id": id }).to_string();
-            debug!(kind = "icon", asset_id = id, "publishing enrichment msg");
+            let body =
+                serde_json::json!({ "kind": "sep1_assets", "asset_id": id }).to_string();
+            debug!(kind = "sep1_assets", asset_id = id, "publishing enrichment msg");
             let entry = SendMessageBatchRequestEntry::builder()
                 .id(format!("msg-{idx}-{id}"))
                 .message_body(body)

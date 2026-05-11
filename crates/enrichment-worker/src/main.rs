@@ -44,12 +44,14 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum EnrichmentMessage {
-    /// SEP-1 issuer TOML kind. Wire `"kind": "icon"` (historical name
-    /// from 0191 when the kind only wrote `assets.icon_url`); 0195 §2a
-    /// extended the writeback to `assets.name` (ClassicCredit + SAC).
-    /// The wire-format string is kept stable so in-flight messages,
-    /// DLQ replays, and the indexer publisher remain compatible —
-    /// only the Rust identifier changed for clarity.
+    /// SEP-1 issuer TOML kind. Wire `"kind": "sep1_assets"` (snake_case
+    /// of the variant name — serde `rename_all = "snake_case"` does the
+    /// mapping). Historical name was `"icon"` (0191, when the kind only
+    /// wrote `assets.icon_url`); 0195 §2a extended the writeback to
+    /// `assets.name` (ClassicCredit + SAC) and 0196 renamed both the
+    /// Rust identifier and the wire string for clarity. **Breaking
+    /// change**: pre-rename SQS messages with `"kind": "icon"` will not
+    /// deserialise — drain the DLQ before deploy if any are present.
     Sep1Assets {
         asset_id: i32,
     },

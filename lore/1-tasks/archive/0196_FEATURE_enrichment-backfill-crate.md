@@ -27,19 +27,24 @@ history:
     note: >
       Post-completion review pass — three follow-up commits (8503ae9
       code-review fixes, 319be94 `Icon` → `Sep1Assets` rename, 48d10a5
-      CodeRabbit pass). CLI subcommand renamed from `icon` to
-      `sep1-assets`; SQS wire-format `kind` string still `"icon"` via
-      `#[serde(rename = "icon")]` so in-flight messages + DLQ replays
-      stay bit-compatible. `trimmed_string` split into `_chars`
+      CodeRabbit pass) plus a final fixup commit. CLI subcommand and
+      SQS wire `kind` both renamed `icon` → `sep1_assets` (snake_case
+      of the Rust variant via serde `rename_all`). 319be94 / 48d10a5
+      claimed wire compatibility via `#[serde(rename = "icon")]` but
+      the attribute was never added — Karol caught the doc/code lie
+      and chose option B (accept the breaking wire change). Indexer
+      publisher emits `"kind":"sep1_assets"` now; pre-0196 DLQ items
+      with `"kind":"icon"` must be drained manually before deploy.
+      `trimmed_string` split into `_chars`
       (VARCHAR(256) columns) and `_bytes` (TEXT media_url). IPFS
       `validate_uri` now percent-decodes `%2e` before path-traversal
       check (mixed-encoding bypass). Drained spawn handles on `--limit`
       break. Pool size scaled to `concurrency + 2` (review fix
       commit 8503ae9 had claimed-but-not-done). Stale Phase E
       `unimplemented!()` doc refs across worker / backfill / shared
-      purged. Tests grown 12 → 14 (multibyte + bytes-cap). 65 tests
-      enrichment-shared (+8 mixed-encoding + permanent-variant
-      coverage). Workspace clippy `-D warnings` clean.
+      purged. enrichment-shared grown to 57 tests (+6 mixed-encoding
+      traversal + multibyte boundary + bytes-cap). Backfill stays at
+      12 tests. Workspace clippy `-D warnings` clean.
 ---
 
 # Enrichment backfill: new crate that drains pre-existing un-enriched DB rows for every kind
@@ -121,18 +126,24 @@ in the drain.
    throttled effective fan-out by 60%. Caught in the code-review
    pass (simplify skill).
 
-2. **CLI subcommand renamed `icon` → `sep1-assets`; SQS wire kept
-   `"icon"`.** Post-completion Karol flag: `Icon` enrichment kind
-   has written both `assets.icon_url` AND `assets.name` since 0195
-   §2a — the name implied a narrower scope than reality. Renamed
-   Rust identifiers (`EnrichmentMessage::Sep1Assets`, backfill
-   `Kind::Sep1Assets`, CLI subcommand `sep1-assets`). SQS wire-
-   format `kind` string preserved as `"icon"` via
-   `#[serde(rename = "icon")]` so in-flight messages, DLQ replays,
-   and the indexer publisher stay bit-compatible. Backfill `Kind`
-   label string moved to `"sep1_assets"` for report headers.
-   Operators using prior `enrich icon` invocation must switch to
-   `enrich sep1-assets` (no alias kept).
+2. **CLI subcommand + SQS wire `kind` renamed `icon` → `sep1_assets`.**
+   Post-completion Karol flag: `Icon` enrichment kind has written
+   both `assets.icon_url` AND `assets.name` since 0195 §2a — the
+   name implied a narrower scope than reality. Renamed across the
+   system: `EnrichmentMessage::Sep1Assets` (worker), `Kind::Sep1Assets`
+   (backfill), CLI subcommand `sep1-assets`, and the SQS wire `kind`
+   string `"sep1_assets"` (serde `rename_all = "snake_case"` does the
+   mapping). An earlier draft tried to keep the wire string as
+   `"icon"` via `#[serde(rename = "icon")]` but the attribute was
+   never actually added — the indexer publisher kept emitting
+   `{"kind":"icon",...}` while the worker enum deserialised against
+   `"sep1_assets"`, breaking the worker silently against every
+   indexer message. Fix landed in the final review pass: indexer
+   publisher updated to emit `"kind":"sep1_assets"` + matching debug
+   log, doc-comments and README updated to reflect the actual wire
+   string. **Breaking wire change vs 0191/0195** — pre-0196 SQS
+   messages or DLQ entries carrying `"kind":"icon"` will not
+   deserialise; drain the DLQ before deploying.
 
 3. **`trimmed_string` split into `_chars` (VARCHAR) and `_bytes`
    (TEXT).** Original single helper used `trimmed.len()` (byte

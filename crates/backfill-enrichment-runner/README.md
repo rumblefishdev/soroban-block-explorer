@@ -15,24 +15,23 @@ with subcommands per kind plus a `status` aggregator.
 
 ## Subcommands
 
-| Subcommand     | Kind                          | Function called                                           | Columns written                            |
-| -------------- | ----------------------------- | --------------------------------------------------------- | ------------------------------------------ |
-| `sep1-assets`  | `Sep1Assets` (wire `"icon"`)  | `enrich_and_persist::sep1_assets::enrich_asset_from_sep1` | `assets.icon_url` (all types) and `assets.name` (ClassicCredit + SAC, `asset_type IN (1, 2)`) — both from the issuer's SEP-1 TOML `CURRENCIES[]` entry |
-| `nft-metadata` | `NftTokenUri`                 | `enrich_and_persist::nft_token_uri::enrich_nft_token_uri` | `nfts.name`, `nfts.media_url`, `nfts.collection_name` |
-| `status`       | (read-only)                   | inline `COUNT(*) FILTER` query                            | none — prints a Markdown table             |
+| Subcommand     | Kind                                | Function called                                           | Columns written                            |
+| -------------- | ----------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
+| `sep1-assets`  | `Sep1Assets` (wire `"sep1_assets"`) | `enrich_and_persist::sep1_assets::enrich_asset_from_sep1` | `assets.icon_url` (all types) and `assets.name` (ClassicCredit + SAC, `asset_type IN (1, 2)`) — both from the issuer's SEP-1 TOML `CURRENCIES[]` entry |
+| `nft-metadata` | `NftTokenUri`                       | `enrich_and_persist::nft_token_uri::enrich_nft_token_uri` | `nfts.name`, `nfts.media_url`, `nfts.collection_name` |
+| `status`       | (read-only)                         | inline `COUNT(*) FILTER` query                            | none — prints a Markdown table             |
 
 > **Naming note:** the `sep1-assets` subcommand is the SEP-1 enrichment
 > kind. It writes both `icon_url` AND `name` (not icon-only despite the
-> historical kind name from 0191). The Rust identifier was renamed to
-> `Sep1Assets` for clarity (here, in `EnrichmentMessage::Sep1Assets` in
-> the worker, and `Kind::Sep1Assets` internally), but the SQS wire-format
-> `kind` string is **kept as `"icon"`** via `#[serde(rename = "icon")]`
-> for in-flight-message + DLQ-replay compatibility across the indexer
-> publisher, worker consumer, and any operator runbooks pinned to the
-> old wire kind. Other SEP-1 fields (`description`, `home_page`) are
-> **type-2** per [ADR 0043](../../lore/2-adrs/0043_field-allocation-rule.md) —
-> fetched at request time in the API (`runtime_enrichment::sep1`),
-> never persisted, no backfill needed.
+> historical 0191 name). The Rust identifier and the SQS wire `kind`
+> string were both renamed to `Sep1Assets` / `"sep1_assets"` in 0196.
+> **Breaking wire change vs 0191/0195** — pre-rename SQS messages or
+> DLQ entries carrying `"kind":"icon"` will not deserialise against
+> the current worker; drain the DLQ before deploying 0196. Other SEP-1
+> fields (`description`, `home_page`) are **type-2** per
+> [ADR 0043](../../lore/2-adrs/0043_field-allocation-rule.md) — fetched
+> at request time in the API (`runtime_enrichment::sep1`), never
+> persisted, no backfill needed.
 
 ### `nft-metadata` readiness
 

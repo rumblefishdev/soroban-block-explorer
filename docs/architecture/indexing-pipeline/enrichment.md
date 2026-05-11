@@ -20,7 +20,7 @@
 1. [Why type-1 enrichment exists](#1-why-type-1-enrichment-exists)
 2. [Pipeline shape](#2-pipeline-shape)
 3. [Enrichment kinds](#3-enrichment-kinds)
-   - [3.1 `sep1_assets` (wire `"icon"`) — SEP-1 issuer TOML](#31-sep1_assets-wire-icon--sep-1-issuer-toml)
+   - [3.1 `sep1_assets` — SEP-1 issuer TOML](#31-sep1_assets--sep-1-issuer-toml)
    - [3.2 `nft_token_uri` — per-token contract view + IPFS](#32-nft_token_uri--per-token-contract-view--ipfs)
    - [3.3 Backfill drain — `crates/backfill-enrichment-runner` (task 0196)](#33-backfill-drain--cratesbackfill-enrichment-runner-task-0196)
 4. [Defensive guards](#4-defensive-guards)
@@ -84,15 +84,17 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 
 ## 3. Enrichment kinds
 
-### 3.1 `sep1_assets` (wire `"icon"`) — SEP-1 issuer TOML
+### 3.1 `sep1_assets` — SEP-1 issuer TOML
 
-> **Naming:** Rust identifier is `Sep1Assets`
+> **Naming:** Rust identifier `Sep1Assets`
 > (`EnrichmentMessage::Sep1Assets`, `Kind::Sep1Assets`, CLI subcommand
-> `sep1-assets`); the SQS wire-format `kind` string is still `"icon"`
-> via `#[serde(rename = "icon")]` for in-flight-message + DLQ-replay
-> compatibility. Both `assets.icon_url` and `assets.name` are written
-> in a single pass — the kind name is historical from 0191 when it
-> only wrote `icon_url`.
+> `sep1-assets`); SQS wire `kind` = `"sep1_assets"` via serde
+> `rename_all = "snake_case"`. **Renamed in 0196 from the historical
+> `"icon"`** — the kind has written both `assets.icon_url` AND
+> `assets.name` since 0195 §2a, so the `icon` name was misleading.
+> **Breaking wire change**: pre-0196 SQS messages or DLQ entries with
+> `"kind":"icon"` will not deserialise against the current worker;
+> drain the DLQ before deploying 0196.
 
 |                     |                                                                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
