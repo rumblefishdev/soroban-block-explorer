@@ -3,38 +3,53 @@
 //!
 //! Per task 0195 §2d.
 //!
-//! ### Hard-fail (NFT-only divergence from SEP-1)
-//!
-//! Every fetch / parse / validation failure propagates as
-//! `EnrichError::Transient` → SQS retry → DLQ. **No sentinel write
-//! path.** A row that fails to enrich stays NULL until manual DLQ
-//! replay or 0196 backfill. The operator sees the failure via the
-//! DepthAlarm; we never silently substitute `''` for missing data.
+//! ### Failure model — soft-fail downstream of fetcher
 //!
 //! Producer is an insert-hook on `nfts` mint events, so a row is
-//! emitted exactly once per nft_id under normal operation —
-//! permanent failures land 1 message in the DLQ, not a flood.
+//! emitted exactly once per nft_id under normal operation. Inside this
+//! handler:
+//!
+//! - `fetcher.resolve()` returns `Option<Value>`; the fetcher
+//!   internally maps every RPC / HTTP / parse error to `None` via its
+//!   cache closure. `None` → worker writes empty-string sentinels in
+//!   `nfts.{name, media_url, collection_name}` so the row records
+//!   "fetch attempted, no value" and the producer predicate
+//!   `name IS NULL` short-circuits on the next ledger touch.
+//! - The `is_safe_media_url` re-check on the `image` field inside JSON
+//!   metadata replaces unsafe schemes (`http://`, `data:`,
+//!   `javascript:`) with the sentinel `''` — defence in depth against
+//!   a contract smuggling a non-`https://` URL past the fetcher.
+//! - `trimmed_string` caps each column at the schema width
+//!   (VARCHAR(256) for `name` / `collection_name`, 1 KB for
+//!   `media_url`) and writes the sentinel on overflow rather than
+//!   letting the UPDATE fail.
+//!
+//! UPDATE uses `COALESCE(NULLIF($n, ''), col, $n)` per column —
+//! priority `real > sentinel > NULL` (same shape as the §2a SEP-1
+//! pipeline). A later DLQ replay or 0196 backfill that succeeds will
+//! upgrade a sentinel-marked row in place; sentinels never clobber an
+//! existing real value.
+//!
+//! ### Hard-fail chokepoint — `NftTokenUriFetcher::resolve()` stub
+//!
+//! Until the real Soroban RPC client lands, the fetcher's
+//! `resolve()` is `unimplemented!()` — calls panic loudly. Worker
+//! callers crash the SQS invocation (→ DLQ); api callers crash the
+//! request (→ 502). That's the only intentional hard-fail in the
+//! pipeline; once the real fetcher returns `Option<Value>`, this
+//! handler resumes the soft-fail downstream behaviour described above.
 //!
 //! ### Two `token_uri` response conventions
 //!
-//! Handled by the underlying [`NftTokenUriFetcher`]:
+//! Handled by the fetcher:
 //!
 //! - `application/json` — standard NFT metadata. Parse → extract
-//!   `name`, `image` → `media_url`, `collection`. Unsafe `image`
-//!   schemes (`http://`, `data:`, `javascript:`) → hard-fail.
+//!   `name`, `image` → `media_url`, `collection`.
 //! - `image/*` — direct-image convention (e.g. JamesBachini Soroban
-//!   example). The URI itself is the image; `name` and
-//!   `collection_name` are absent — fetcher synthesises a JSON
-//!   `{ "image": "<url>" }` so the worker writes only `media_url` and
-//!   leaves the other two as empty (legitimate "field missing in
-//!   source", NOT a sentinel).
-//!
-//! ### STUB STATUS
-//!
-//! `NftTokenUriFetcher::resolve()` currently returns
-//! `Err(NotImplemented)` for every input until the Soroban RPC client
-//! lands in this workspace. Beta callers see DLQ alarms / 502s —
-//! intentional, not a regression.
+//!   example). The URI itself is the image; the fetcher synthesises a
+//!   JSON `{ "image": "<url>" }` so this handler still writes only
+//!   `media_url` and leaves `name` / `collection_name` as the
+//!   "absent-in-source" sentinel.
 
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -42,6 +57,7 @@ use tracing::{debug, instrument, warn};
 
 use super::EnrichError;
 use crate::nft_token_uri::NftTokenUriFetcher;
+use crate::nft_token_uri::errors::is_transient;
 
 /// `nfts.name VARCHAR(256)`.
 const MAX_NAME_BYTES: usize = 256;
@@ -78,14 +94,25 @@ pub async fn enrich_nft_token_uri(
     let contract_strkey: String = row.try_get("contract_strkey")?;
     let token_id: String = row.try_get("token_id")?;
 
-    let parsed = fetcher.resolve(&contract_strkey, &token_id).await;
-    let (name, media_url, collection_name) = match parsed {
-        Some(json) => extract_columns(&json),
-        // Fetcher returned None — either a permanent fail (4xx, malformed
-        // JSON, unsupported Content-Type) or the stub. Write all-empty
-        // sentinels so the row records "tried, nothing available".
-        None => (String::new(), String::new(), String::new()),
-    };
+    let (name, media_url, collection_name) =
+        match fetcher.resolve(&contract_strkey, &token_id).await {
+            Ok(Some(json)) => extract_columns(&json),
+            // Fetcher honoured the convention but produced no JSON (reserved
+            // for future variants). Permanent — sentinel write so producer
+            // dedup short-circuits.
+            Ok(None) => (String::new(), String::new(), String::new()),
+            // Transient (Http 5xx / connect / timeout, SorobanRpc) → bounce
+            // to SQS retry → DLQ → DepthAlarm.
+            Err(arc_err) if is_transient(&arc_err) => {
+                return Err(EnrichError::Transient(arc_err.to_string()));
+            }
+            // Permanent (4xx, malformed JSON, unsafe scheme, malformed
+            // input, XDR codec, etc.) → sentinel + warn. Operator can grep.
+            Err(arc_err) => {
+                warn!(error = %arc_err, "nft token_uri permanent fail; sentinel write");
+                (String::new(), String::new(), String::new())
+            }
+        };
 
     write_columns(pool, nft_id, &name, &media_url, &collection_name).await?;
     debug!(nft_id, "nft token_uri UPDATE applied");

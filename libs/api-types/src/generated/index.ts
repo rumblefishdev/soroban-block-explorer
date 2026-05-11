@@ -169,6 +169,7 @@ export type {
   ListTransactionsResponse,
   ListTransactionsResponses,
   NetworkStats,
+  NftDetailResponse,
   NftItem,
   NftTransferItem,
   OperationItem,

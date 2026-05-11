@@ -207,7 +207,13 @@ committed in a single atomic DB transaction:
     [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
     the per-op extraction half is on-chain → indexer and the USD
     denomination is off-chain → Lambda 2; the off-chain `tvl` (USD
-    oracle) is Lambda 2's responsibility (task 0195 §2b).
+    oracle) is Lambda 2's responsibility (task 0195 §2b). **"Lambda 2"**
+    here is the SQS-driven enrichment worker introduced in task 0191
+    and documented in [`enrichment.md`](./enrichment.md) — it lives
+    outside the Ledger Processor described in §7.1 (which is the only
+    _ingestion-path_ Lambda). Lambda 2 runs off SQS messages emitted
+    by the Ledger Processor after each ledger commit; the two
+    Lambdas share neither code path nor invocation lifecycle.
 14. upsert `accounts` summary and `account_balances_current`
     (the parallel `account_balance_history` append was removed in task 0159
     per [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md);
