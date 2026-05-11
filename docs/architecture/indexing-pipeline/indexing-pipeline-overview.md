@@ -198,7 +198,7 @@ committed in a single atomic DB transaction:
     the 13a UPSERT replaces all dimension fields with real data when the
     real pool is later observed (created/updated/restored, or `state` per
     `extract_liquidity_pools` post-lore-0189). The extractor itself
-    accepts `state` change_type for `liquidity_pool` entries (lore-0189),
+    accepts `state` change*type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
     snapshot of a referenced-but-unmodified pool. `volume` and
     `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
@@ -211,7 +211,7 @@ committed in a single atomic DB transaction:
     here is the SQS-driven enrichment worker introduced in task 0191
     and documented in [`enrichment.md`](./enrichment.md) — it lives
     outside the Ledger Processor described in §7.1 (which is the only
-    _ingestion-path_ Lambda). Lambda 2 runs off SQS messages emitted
+    \_ingestion-path* Lambda). Lambda 2 runs off SQS messages emitted
     by the Ledger Processor after each ledger commit; the two
     Lambdas share neither code path nor invocation lifecycle.
 14. upsert `accounts` summary and `account_balances_current`
@@ -283,6 +283,14 @@ delivery medium:
 Keeping the write-path identical means backfill and live ingest produce
 byte-for-byte the same rows for a given ledger, and the replay-safe
 derived-state guards work without special-casing.
+
+`backfill-runner` also accepts `--target clickhouse` (task
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md))
+to drive the ClickHouse pilot store ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
+That path is currently a **no-op persist stub** (logs only, zero
+rows written); the parse pipeline above is unaffected and the default
+`--target postgres` is unchanged. Real CH INSERTs land in a follow-up
+task — see [`docs/architecture/database-schema/clickhouse-pilot.md#writers-stubbed`](../database-schema/clickhouse-pilot.md#writers-stubbed).
 
 ### 6.3 Backfill Scope and Execution Model
 
