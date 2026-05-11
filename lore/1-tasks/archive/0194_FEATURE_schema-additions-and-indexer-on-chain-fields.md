@@ -2,7 +2,7 @@
 id: '0194'
 title: 'DB completeness: schema additions + indexer for on-chain NULL fields needed by list endpoints'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks:
   [
@@ -76,9 +76,9 @@ history:
 
 Audit of list-endpoint DTOs vs DB schema vs actual writes shows a population gap: several columns exist in the schema but are always NULL because the indexer never writes them, and at least two list-endpoint sort fields (asset USD price + timestamp) need new schema columns. This task lands the schema additions atomically and wires indexer-side population for every NULL field whose source data is **already in the processed ledger** (no external HTTP, no per-row RPC). Off-chain fields (oracle prices, SEP-1, NFT `token_uri()` RPC) are the sister task 0195's scope. The governing [ADR 0043](../../2-adrs/0043_field-allocation-rule.md) (field allocation rule) was merged to develop independently before this task's implementation landed.
 
-## Status: Backlog
+## Status: Completed
 
-Cannot start until 0191 PR (`feat/0191_type1-enrichment-worker-lambda`) merges to develop — that PR introduces the SQS enrichment infrastructure and `enrichment-shared` crate that 0195 builds on, and 0194 should land first so 0195's column writes have somewhere to go.
+Implementation landed (sub-blocks 1b + 1c + 1e); 0191 SQS enrichment infrastructure is on develop. Sub-block 1d pulled mid-implementation and re-spawned as task 0199 (LP analytics — per-op extraction + USD oracle). The original 0191-merge blocker is resolved.
 
 ## Context
 
@@ -142,7 +142,7 @@ For Soroban tokens, `name` continues to be populated by task **0156** (active) �
 **Reactivates blocked task 0135** (`0135_FEATURE_token-holder-count-tracking`).
 
 - Inline `+1` on `change_trust create` (new trustline), `-1` on `change_trust delete` (trustline removal), no-op on balance updates
-- Edge cases: trustline-flag changes, authoreized-to-maintain-liabilities transitions — verify with audit's holder-count semantics
+- Edge cases: trustline-flag changes, authorized-to-maintain-liabilities transitions — verify with audit's holder-count semantics
 - One-time recount Lambda subcommand needed post-backfill — captured as Future Work, separate ops job
 - Wire in `crates/xdr-parser/src/account_state.rs` and `crates/indexer/src/handler/persist/staging.rs` UPSERT path
 
@@ -179,10 +179,10 @@ Audit finding F7 (`docs/audits/2026-04-10-pipeline-data-audit.md`): `extract_acc
 
 ## Acceptance Criteria
 
-- [x] Sub-block 1b: code shipped (`recompute_asset_aggregates` SUM(balance) per touched (code, issuer_id)). Sample-query verification on backfill region pending PR-time check. `name` for classic credits is NOT in this task's scope — see 0195 sub-block 2a (icon kind extension to also persist SEP-1 `name`).
-- [x] Sub-block 1c: code shipped (`recompute_asset_aggregates` COUNT(\*) FILTER (WHERE balance > 0) — active-holder semantics). Sample-query verification + one-time recount tooling spawned as separate ops task pending.
+- [x] Sub-block 1b: code shipped (`recompute_asset_aggregates` SUM(balance) per touched (code, issuer_id)); operational backfill sample-query verification deferred. `name` for classic credits is NOT in this task's scope — see 0195 sub-block 2a (icon kind extension to also persist SEP-1 `name`).
+- [x] Sub-block 1c: code shipped (`recompute_asset_aggregates` COUNT(\*) FILTER (WHERE balance > 0) — active-holder semantics); operational backfill sample-query verification + one-time recount tooling deferred.
 - [ ] Sub-block 1d: PULLED — moved to task 0199 (per-op extraction + USD denomination). Reserve-delta approach was incorrect (nets opposite swaps; lacks USD reference). Snapshot columns stay NULL until 0199 lands.
-- [x] Sub-block 1e: verify-only — `upsert_balances_credit` (write.rs:2119) populates all NOT NULL columns; 0119 trustline path confirmed. Sample-query spot-check on backfill pending PR-time.
+- [x] Sub-block 1e: verify-only — `upsert_balances_credit` (write.rs:2119) populates all NOT NULL columns; 0119 trustline path confirmed; operational backfill spot-check deferred.
 - [x] ADR 0043 merged on develop (separate, independent PR landed prior to this task's review)
 - [x] **Docs updated** per ADR 0032: `docs/architecture/database-schema/database-schema-overview.md` §4.10 (assets — `total_supply` / `holder_count` recompute attribution + ADR 0043 link) + §4.15 (lp_snapshots — `volume` / `fee_revenue` deferred to 0199); `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` §5.2 step 14 (recompute pass documented; LP volume note removed). Audit doc Section 9.3 amendment — N/A here, will be made by 0199.
 - [ ] **API types regenerated** — N/A in current scope (no DTO additions; sub-blocks 1a + 1d removed). Trigger if future sub-blocks touch `crates/api/**` shape.

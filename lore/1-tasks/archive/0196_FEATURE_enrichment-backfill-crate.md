@@ -12,7 +12,7 @@ history:
   - date: '2026-05-06'
     status: backlog
     who: karolkow
-    note: Spawned from M2 enrichment planning. Karol override of 0191 Future-Work bullet #1 — backfill must be a separate crate, not a `backfill-runner` subcommand.
+    note: Spawned from M2 enrichment planning. Karol overrode 0191 Future-Work bullet #1 — backfill must be a separate crate, not a `backfill-runner` subcommand.
   - date: '2026-05-11'
     status: active
     who: karolkow

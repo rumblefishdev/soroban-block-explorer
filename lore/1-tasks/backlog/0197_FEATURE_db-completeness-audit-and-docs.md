@@ -17,7 +17,7 @@ history:
   - date: '2026-05-11'
     status: backlog
     who: karolkow
-    note: 'Scope expanded to absorb 0196 future work. 0197 is the natural post-merge verification gate for the 0194-0197 chain, so the enrichment drain benchmark folds in cleanly here — covers every kind the `enrich` binary exposes (`icon` mandatory; `nft-metadata` once 0195 §2d Phase E ships; future kinds added via their own delivery PRs).'
+    note: 'Scope expanded to absorb 0196''s deferred verification work (the 50K enrichment-drain benchmark + per-subcommand integration tests previously folded into 0196 Future Work). 0196 itself still ships as a prerequisite — this task absorbs only the post-merge verification gate, not the crate implementation. Benchmark covers every kind the `enrich` binary exposes (`sep1-assets` mandatory; `nft-metadata` once 0195 §2d Phase E ships; future kinds added via their own delivery PRs).'
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
@@ -135,12 +135,12 @@ Each anti-pattern or wiring gap discovered → backlog task with `audit-gap` tag
 
 ### Step 7: Enrichment drain benchmark on staging (absorbed from 0196)
 
-Verifies the backfill drain at production scale across every kind the `enrich` binary exposes. The 0196 README sets a "< 30 min on local laptop, `--concurrency 10 --chunk-size 200`" target inherited from the spec without empirical backing; this step confirms or amends it with measured numbers, kind by kind.
+Verifies the backfill drain at production scale across every kind the `enrich` binary exposes. The **`backfill-enrichment-runner` crate README** (`crates/backfill-enrichment-runner/README.md`) currently sets a "< 30 min on local laptop, `--concurrency 10 --chunk-size 200`" target inherited from the spec without empirical backing; this step confirms or amends it with measured numbers, kind by kind.
 
-**Per kind in scope** (matches `enrich --help` at the time of 0197 activation; today: `icon`, `nft-metadata`):
+**Per kind in scope** (matches `enrich --help` at the time of 0197 activation; today: `sep1-assets`, `nft-metadata`):
 
 1. Pull (or share) a staging snapshot with realistic per-kind volume:
-   - `icon`: ~50K classic-credit assets across ~5K issuers (LRU cache hit rate is the dominant variable).
+   - `sep1-assets`: ~50K classic-credit assets across ~5K issuers (LRU cache hit rate is the dominant variable).
    - `nft-metadata`: ~50K minted NFT rows across the active Soroban contracts. Pre-requisite: 0195 §2d Phase E shipped (real `NftTokenUriFetcher::resolve`); without it the subcommand panics on the first row.
 2. Baseline run per kind:
    ```
@@ -148,7 +148,7 @@ Verifies the backfill drain at production scale across every kind the `enrich` b
      > /tmp/enrich-<kind>-50k.txt 2>&1
    ```
 3. Sweep `--concurrency` ∈ {5, 10, 20, 50}. Capture total wall clock, per-chunk row-rate (extract p50 / p95 from `tracing` log timestamps), `unreachable %`, `db_failed`.
-4. Replace the README "Wall clock target: < 30 min" prose with measured tables (one per kind: concurrency × row-rate × wall clock × unreachable %) plus a one-line recommendation per kind.
+4. Replace the **`backfill-enrichment-runner` crate README** "Benchmark target / Wall clock target: < 30 min" prose with measured tables (one per kind: concurrency × row-rate × wall clock × unreachable %) plus a one-line recommendation per kind.
 5. Raw run logs land in `docs/audits/{TIMESTAMP}-enrich-drain-bench.log` (one file covers all kinds), alongside the list-endpoint-completeness doc from Step 1.
 
 **Future kinds** (e.g. `lp-tvl` once 0199 lands, or anything added after) — re-run this step's procedure as part of their delivery PR; no separate 0197-style task needed.
@@ -166,7 +166,7 @@ Verifies the backfill drain at production scale across every kind the `enrich` b
 - [ ] `docs/architecture/xdr-parsing/**` refreshed
 - [ ] ADR 0043/0029/0037 cross-checked
 - [ ] Audit doc 2026-04-10 supersession header added
-- [ ] Enrichment drain benchmark run per kind (`icon` mandatory;
+- [ ] Enrichment drain benchmark run per kind (`sep1-assets` mandatory;
   `nft-metadata` once 0195 §2d Phase E ships); README benchmark
   tables populated with measured p50 / p95 / total / unreachable %
   per kind; raw logs committed under `docs/audits/`

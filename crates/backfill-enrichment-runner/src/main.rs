@@ -225,11 +225,13 @@ async fn run_sep1_assets(
                 (asset_id, res)
             }));
         }
+        // Always drain every spawned handle — `effective_chunk` already
+        // capped this chunk at `cap - processed`, so the outer top-of-loop
+        // `limit_reached` check breaks at the next iteration. Bailing
+        // mid-await would leak background DB writes whose results never
+        // reach the report.
         for h in handles {
             collect_join(&mut report, h.await);
-            if limit_reached(args.limit, report.processed) {
-                break;
-            }
         }
     }
 
@@ -304,11 +306,9 @@ async fn run_nft_metadata(
                 (nft_id, res)
             }));
         }
+        // See `run_sep1_assets`: chunk size is already capped, no mid-await break.
         for h in handles {
             collect_join(&mut report, h.await);
-            if limit_reached(args.limit, report.processed) {
-                break;
-            }
         }
     }
 

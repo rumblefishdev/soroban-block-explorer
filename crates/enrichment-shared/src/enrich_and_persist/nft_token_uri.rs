@@ -54,10 +54,13 @@ use super::EnrichError;
 use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
 
-/// `nfts.name VARCHAR(256)`.
-const MAX_NAME_BYTES: usize = 256;
+/// `nfts.name VARCHAR(256)` — Postgres VARCHAR limits character count, not bytes.
+const MAX_NAME_CHARS: usize = 256;
 /// `nfts.collection_name VARCHAR(256)`.
-const MAX_COLLECTION_BYTES: usize = 256;
+const MAX_COLLECTION_CHARS: usize = 256;
+/// `nfts.media_url` is TEXT (no schema cap); the byte cap here just keeps
+/// pathological URLs out of the row body.
+const MAX_MEDIA_URL_BYTES: usize = 1024;
 
 #[instrument(skip(pool, fetcher), fields(nft_id))]
 pub async fn enrich_nft_token_uri(
@@ -126,15 +129,15 @@ pub async fn enrich_nft_token_uri(
 /// HTTPS before exposing it here, so this is defence in depth — same
 /// pattern as `sep1_assets::is_safe_icon_url`.
 fn extract_columns(json: &Value) -> (String, String, String) {
-    let name = trimmed_string(json.get("name"), MAX_NAME_BYTES);
-    let image_raw = trimmed_string(json.get("image"), 1024); // TEXT but cap to keep bodies reasonable
+    let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
+    let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
     let image = if image_raw.is_empty() || is_safe_media_url(&image_raw) {
         image_raw
     } else {
         warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
         String::new()
     };
-    let collection = trimmed_string(json.get("collection"), MAX_COLLECTION_BYTES);
+    let collection = trimmed_string_chars(json.get("collection"), MAX_COLLECTION_CHARS);
     (name, image, collection)
 }
 
@@ -144,7 +147,33 @@ fn is_safe_media_url(url: &str) -> bool {
     url.trim().to_ascii_lowercase().starts_with("https://")
 }
 
-fn trimmed_string(v: Option<&Value>, max_bytes: usize) -> String {
+/// Postgres `VARCHAR(N)` caps character count, not byte length, so the
+/// `name` and `collection_name` columns must measure with `chars().count()`.
+/// Mismatched units would let a 256-char ASCII value pass and a 256-char
+/// multi-byte value fail (or vice versa).
+fn trimmed_string_chars(v: Option<&Value>, max_chars: usize) -> String {
+    let Some(s) = v.and_then(Value::as_str) else {
+        return String::new();
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let count = trimmed.chars().count();
+    if count > max_chars {
+        warn!(
+            chars = count,
+            max = max_chars,
+            "value too long for VARCHAR; sentinel written"
+        );
+        return String::new();
+    }
+    trimmed.to_owned()
+}
+
+/// Byte-count cap for TEXT columns where the limit is a body-size
+/// safeguard rather than a schema constraint.
+fn trimmed_string_bytes(v: Option<&Value>, max_bytes: usize) -> String {
     let Some(s) = v.and_then(Value::as_str) else {
         return String::new();
     };
@@ -240,17 +269,44 @@ mod tests {
     }
 
     #[test]
-    fn trimmed_string_caps_oversize_to_sentinel() {
-        let too_long = "x".repeat(MAX_NAME_BYTES + 1);
+    fn trimmed_string_chars_caps_oversize_to_sentinel() {
+        let too_long = "x".repeat(MAX_NAME_CHARS + 1);
         let v = Value::String(too_long);
-        assert_eq!(trimmed_string(Some(&v), MAX_NAME_BYTES), "");
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), "");
     }
 
     #[test]
-    fn trimmed_string_handles_non_string() {
-        assert_eq!(trimmed_string(Some(&json!(42)), 256), "");
-        assert_eq!(trimmed_string(Some(&json!(null)), 256), "");
-        assert_eq!(trimmed_string(None, 256), "");
+    fn trimmed_string_chars_uses_char_count_not_byte_length() {
+        // 256 multi-byte chars (each emoji = 4 bytes) → 1024 bytes but 256 chars.
+        // Char-cap MUST accept this (matches VARCHAR(256) capacity); byte-cap
+        // would have wrongly rejected it.
+        let exactly_max = "🚀".repeat(MAX_NAME_CHARS);
+        assert_eq!(exactly_max.chars().count(), MAX_NAME_CHARS);
+        assert!(exactly_max.len() > MAX_NAME_CHARS); // confirm bytes > chars
+        let v = Value::String(exactly_max.clone());
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), exactly_max);
+
+        // One char over the cap → sentinel.
+        let over = "🚀".repeat(MAX_NAME_CHARS + 1);
+        let v = Value::String(over);
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), "");
+    }
+
+    #[test]
+    fn trimmed_string_chars_handles_non_string() {
+        assert_eq!(trimmed_string_chars(Some(&json!(42)), 256), "");
+        assert_eq!(trimmed_string_chars(Some(&json!(null)), 256), "");
+        assert_eq!(trimmed_string_chars(None, 256), "");
+    }
+
+    #[test]
+    fn trimmed_string_bytes_caps_for_text_columns() {
+        let too_long = "x".repeat(MAX_MEDIA_URL_BYTES + 1);
+        let v = Value::String(too_long);
+        assert_eq!(
+            trimmed_string_bytes(Some(&v), MAX_MEDIA_URL_BYTES),
+            ""
+        );
     }
 
     #[test]

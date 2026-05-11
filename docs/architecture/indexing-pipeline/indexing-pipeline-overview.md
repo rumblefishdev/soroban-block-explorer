@@ -311,10 +311,24 @@ Its responsibilities are:
 - keep replay of the same ledger idempotent
 - prevent stale backfill writes from overwriting newer live-derived state
 
-The Ledger Processor is the only Lambda worker in the indexing pipeline. It turns raw
-ledger-close artifacts into first-class explorer records. If event enrichment (human-readable
-interpretations of swap, transfer, mint, and burn patterns) is needed in the future, it will
-be done inline within the Ledger Processor rather than in a separate Lambda.
+The Ledger Processor is the only Lambda worker on the **ingestion path** — it turns raw
+ledger-close artifacts into first-class explorer records. **Inline-eligible** event enrichment
+(human-readable interpretations of swap / transfer / mint / burn patterns) stays inside the
+Ledger Processor; the criterion is "derivable purely from the processed ledger".
+
+A second worker — the SQS-driven **enrichment Lambda 2** introduced in task 0191 and
+documented in [`enrichment.md`](./enrichment.md) — runs **off** the ingestion path and handles
+work that fails the inline criterion: oracle lookups (USD prices), per-row HTTP fetches
+(SEP-1 issuer TOML, NFT `token_uri()`), and any expensive or long-running enrichment that
+would push the Ledger Processor past its per-ledger budget. Lambda 2 consumes SQS messages
+emitted by the Ledger Processor after each ledger commit and writes the result back to typed
+columns; the two Lambdas share neither code path nor invocation lifecycle.
+
+Allocation rule (codified by [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md)):
+
+- **On-chain + cheap** → inline in the Ledger Processor.
+- **Off-chain (HTTP / oracle / per-row RPC) + needed by list endpoints** → Lambda 2 (typed-column write).
+- **Detail-only off-chain fields** → runtime type-2 fetch in the API handler (no DB column).
 
 ## 8. Operational Characteristics
 

@@ -336,8 +336,11 @@ pub(super) fn validate_uri(uri: &str) -> Result<(), NftTokenUriError> {
         // could trick a misbehaving gateway into serving an unrelated
         // file. The gateway is the last line of defence, but rejecting
         // up-front keeps the contract-vs-our-validator boundary clean.
-        let lowered = rest.to_ascii_lowercase();
-        if lowered.contains("%2e%2e") || rest.split('/').any(|seg| seg == ".." || seg == ".") {
+        // Decode `%2e` (any case) → `.` first so mixed encodings like
+        // `.%2e`, `%2e.`, `%2e/` collapse to literal-dot segments before
+        // the per-segment match.
+        let normalized = rest.to_ascii_lowercase().replace("%2e", ".");
+        if normalized.split('/').any(|seg| seg == ".." || seg == ".") {
             return Err(bad());
         }
         return Ok(());
@@ -491,6 +494,24 @@ mod tests {
         ));
         assert!(matches!(
             validate_uri("ipfs://QmFoo/./1.json"),
+            Err(NftTokenUriError::MalformedUri { .. })
+        ));
+        // Mixed-encoding traversals — fully-encoded `%2e%2e`, partially-
+        // encoded `.%2e` / `%2e.`, single-encoded `%2e` (literal dot).
+        assert!(matches!(
+            validate_uri("ipfs://QmFoo/.%2e/1.json"),
+            Err(NftTokenUriError::MalformedUri { .. })
+        ));
+        assert!(matches!(
+            validate_uri("ipfs://QmFoo/%2e./1.json"),
+            Err(NftTokenUriError::MalformedUri { .. })
+        ));
+        assert!(matches!(
+            validate_uri("ipfs://QmFoo/%2E%2E/1.json"),
+            Err(NftTokenUriError::MalformedUri { .. })
+        ));
+        assert!(matches!(
+            validate_uri("ipfs://QmFoo/%2e/1.json"),
             Err(NftTokenUriError::MalformedUri { .. })
         ));
     }

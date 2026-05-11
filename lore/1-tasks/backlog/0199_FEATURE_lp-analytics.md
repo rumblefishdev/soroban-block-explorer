@@ -52,6 +52,7 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
 ### Phase 1 — Indexer-side extraction
 
 - XDR parser: extract `claimedOffers[]` from PathPayment ops (types 2 + 13). Sum `amount_sold` per `(pool_id, ledger_sequence)`. Naturally excludes `LiquidityPoolDeposit` / `LiquidityPoolWithdraw` (capital flow, not volume — different op types, no claimed_offers).
+- **Bidirectional swap normalization.** `claimedOffers[].amount_sold` is denominated in the asset that was sold, so an A→B swap reports in A while a B→A swap reports in B. Both directions count toward gross pool volume; the parser must convert B-denominated amounts into the A-denominated accumulator `gross_volume_a` before summing. The conversion uses the trade's effective price (`amount_bought_a / amount_sold_b`), not a snapshot reserve ratio (which would suffer the same opposite-swap netting flaw the snapshot-delta approach hit). Verification queries (see Acceptance Criteria below) compare USD-denominated totals **after** this normalization, so any direction mismatch surfaces as a Horizon-vs-explorer drift on a known mixed-direction pool.
 - Producer hook in `enrichment_publish.rs`: insert-hook on each new `liquidity_pool_snapshots` row. Emit `EnrichmentMessage::LpAnalytics { pool_id: [u8; 32], snapshot_id: i64, gross_volume_a: Option<NumericString> }`. `None` for ledgers without swap activity on this pool. Exactly-once per snapshot insert.
 - No DB write to `liquidity_pool_snapshots.volume` from indexer side. Phase 1 is parse + emit only.
 
@@ -63,8 +64,18 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
   - `tvl = reserve_a × price_a + reserve_b × price_b`
   - `volume = gross_volume_a × price_a` (skip when `gross_volume_a IS NONE` → leave `volume = NULL`)
   - `fee_revenue = volume × fee_bps / 10000` (skip when volume NULL)
-- UPDATE the snapshot row with all three values atomically.
-- Sentinel (insert-hook → exactly-once → no dedup risk): permanent oracle fail writes `tvl = 0` + WARN log carrying pool_id, snapshot_id, per-leg oracle errors. `liquidity_pools.tvl` (latest, if column exists) NOT overwritten with sentinel `0`.
+- **Atomicity model.** A single UPDATE statement carries all three column writes (transactional atomicity). **Semantic atomicity is per-column, not all-or-nothing**: a partial-oracle outcome can leave one column populated while another stays NULL — the column's input is the discriminator, not a global "all or none" gate. Decision matrix:
+
+  | Inputs available             | `tvl`                        | `volume`                              | `fee_revenue`              |
+  | ---------------------------- | ---------------------------- | ------------------------------------- | -------------------------- |
+  | `price_a` + `price_b` + `gross_volume_a` | computed | computed | computed |
+  | `price_a` + `price_b`, `gross_volume_a IS NONE` (no swaps) | computed | NULL | NULL |
+  | `price_a` only (price_b permanent fail)  | NULL (need both legs) | computed | computed |
+  | `price_b` only (price_a permanent fail)  | NULL (need both legs) | NULL (no `price_a`) | NULL |
+  | both prices permanent fail   | NULL                         | NULL                                  | NULL                       |
+  | any input transient          | (no write — `EnrichError::Transient` → SQS retry) | | |
+
+- **Sentinel.** Permanent oracle failure writes `NULL` (not `0`) for any column whose required inputs are unavailable, and emits a WARN log carrying `pool_id`, `snapshot_id`, per-leg oracle error. NULL preserves the "fetch attempted, no value" semantics without conflating with legitimate zero-volume snapshots (a pool with no swaps in a ledger genuinely has `volume = 0`). `liquidity_pools.tvl` (latest, if column exists) is NEVER overwritten by Lambda 2 — only by indexer reserves recompute. If operational distinction between "permanent fail" and "pending" becomes valuable, surface via metrics / log filters or a future `oracle_status` enum, not via numeric sentinels.
 - Transient (price-API 5xx, network, rate limit) → `EnrichError::Transient` → SQS retry → DLQ.
 - Backfill of pre-existing snapshots (NULL because they predate this task) → owned by 0196.
 
@@ -83,10 +94,10 @@ Soroswap, Phoenix, etc. emit `swap` events with explicit per-swap amounts; no Pa
 **Phase 2 (Lambda 2):**
 
 - [ ] `tvl`, `volume`, `fee_revenue` populated by Lambda 2 from `reserves + gross_volume_a + fee_bps + oracle prices`.
-- [ ] Permanent oracle fail → `tvl = 0` + WARN log; transient → SQS retry.
-- [ ] `liquidity_pools.tvl` (if column exists) not overwritten by sentinel `0`.
+- [ ] Permanent oracle fail → per-column NULL (matrix in Phase 2 §Atomicity) + WARN log carrying pool_id, snapshot_id, per-leg oracle errors; transient → SQS retry.
+- [ ] `liquidity_pools.tvl` (if column exists) is not overwritten by Lambda 2 under any oracle outcome (only by indexer reserves recompute).
 - [ ] Sample query: non-NULL `tvl` and `volume` on production-region pools with valid oracle data.
-- [ ] Sample query: `volume / price_a ≈ Horizon /liquidity_pools/{id}/trades` gross volume (verifies extraction correctness end-to-end).
+- [ ] Sample query: `volume / price_a` agrees with Horizon `/liquidity_pools/{id}/trades` gross volume **within 1% tolerance** on a known mixed-direction pool. The "≈" comparison is intentional — Horizon and the explorer both use per-operation extraction (Horizon parses `claimedOffers[]` the same way), so the only sources of drift are (a) USD price-snapshot timing (Horizon uses asset units, we multiply by `price_a` then divide back), (b) rounding in `NUMERIC(28,7)` arithmetic, (c) Soroban DEX swap events not yet covered in Phase 1 (Phase 3 scope). Drift > 1% on a classic-only pool indicates an extraction bug and blocks the AC.
 - [ ] `GET /liquidity-pools/:id/chart` returns non-null time series (originally 0125 AC).
 
 **Phase 3:**
