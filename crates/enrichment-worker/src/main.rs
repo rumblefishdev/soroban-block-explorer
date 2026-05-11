@@ -44,7 +44,13 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum EnrichmentMessage {
-    Icon {
+    /// SEP-1 issuer TOML kind. Wire `"kind": "icon"` (historical name
+    /// from 0191 when the kind only wrote `assets.icon_url`); 0195 §2a
+    /// extended the writeback to `assets.name` (ClassicCredit + SAC).
+    /// The wire-format string is kept stable so in-flight messages,
+    /// DLQ replays, and the indexer publisher remain compatible —
+    /// only the Rust identifier changed for clarity.
+    Sep1Assets {
         asset_id: i32,
     },
     /// NFT `token_uri()` kind — task 0195 §2d. Insert-hook driven,
@@ -166,7 +172,7 @@ async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), R
         .map_err(|e| RecordError::Permanent(format!("malformed enrichment JSON: {e}")))?;
 
     match msg {
-        EnrichmentMessage::Icon { asset_id } => {
+        EnrichmentMessage::Sep1Assets { asset_id } => {
             enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
             Ok(())
         }

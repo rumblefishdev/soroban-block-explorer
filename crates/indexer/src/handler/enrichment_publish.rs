@@ -1,10 +1,21 @@
-//! Type-1 enrichment SQS produce path (task 0191).
+//! Type-1 enrichment SQS produce path (task 0191; SEP-1 `name`
+//! writeback added in 0195 §2a; NFT `token_uri` kind added in 0195 §2d).
 //!
 //! After a ledger's persistence transaction commits, the indexer
-//! publishes one SQS message per asset that needs runtime enrichment.
-//! The downstream worker Lambda (`crates/enrichment-worker`) consumes
-//! the queue, fetches the issuer's stellar.toml, and writes
-//! `assets.icon_url`.
+//! publishes SQS messages for every row that needs off-chain enrichment.
+//! Two kinds today:
+//!
+//! - `icon` (SEP-1 issuer TOML) — worker fetches
+//!   `https://{home_domain}/.well-known/stellar.toml` and writes
+//!   `assets.icon_url` (all asset types) plus `assets.name`
+//!   (ClassicCredit + SAC, `asset_type IN (1, 2)`).
+//! - `nft_token_uri` — worker calls Soroban RPC `simulateTransaction`
+//!   on the contract's `token_uri(token_id)` view, fetches the
+//!   resulting URL (HTTP / IPFS gateway) and writes
+//!   `nfts.{name, media_url, collection_name}`.
+//!
+//! The kind name `icon` is historical — kept for SQS wire-format
+//! stability across the indexer / worker / backfill / DLQ replays.
 //!
 //! ## Selection criteria
 //!

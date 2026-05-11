@@ -87,11 +87,6 @@ pub enum NftTokenUriError {
     /// deserialisation).
     #[error("XDR codec: {0}")]
     Xdr(#[from] stellar_xdr::curr::Error),
-
-    /// Stub variant — the Soroban RPC client is not yet wired into
-    /// this workspace. Remove once the real implementation lands.
-    #[error("nft token_uri fetcher not yet implemented")]
-    NotImplemented,
 }
 
 /// Classifier for the worker's `EnrichError` mapping. Transient
@@ -114,8 +109,8 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
         }
         // Soroban RPC errors collapse a wide surface (network, 5xx,
         // contract revert). Treat as transient by default — a
-        // contract-revert distinction can be added when the RPC client
-        // lands and surfaces the JSON-RPC error code.
+        // contract-revert distinction can be layered on later by
+        // surfacing the JSON-RPC error code through `SorobanRpc`.
         NftTokenUriError::SorobanRpc(_) => true,
         _ => false,
     }

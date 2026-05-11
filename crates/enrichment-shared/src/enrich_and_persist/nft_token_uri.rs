@@ -9,12 +9,16 @@
 //! emitted exactly once per nft_id under normal operation. Inside this
 //! handler:
 //!
-//! - `fetcher.resolve()` returns `Option<Value>`; the fetcher
-//!   internally maps every RPC / HTTP / parse error to `None` via its
-//!   cache closure. `None` → worker writes empty-string sentinels in
+//! - `fetcher.resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`.
+//!   This handler dispatches via `is_transient`: transient errors
+//!   (Http 5xx / connect / timeout, SorobanRpc) bubble as
+//!   `EnrichError::Transient` so SQS retries; permanent errors (4xx,
+//!   malformed JSON, unsafe scheme, malformed input, XDR codec) and
+//!   `Ok(None)` write empty-string sentinels in
 //!   `nfts.{name, media_url, collection_name}` so the row records
 //!   "fetch attempted, no value" and the producer predicate
-//!   `name IS NULL` short-circuits on the next ledger touch.
+//!   `name IS NULL OR media_url IS NULL OR collection_name IS NULL`
+//!   short-circuits on the next ledger touch.
 //! - The `is_safe_media_url` re-check on the `image` field inside JSON
 //!   metadata replaces unsafe schemes (`http://`, `data:`,
 //!   `javascript:`) with the sentinel `''` — defence in depth against
@@ -29,15 +33,6 @@
 //! pipeline). A later DLQ replay or 0196 backfill that succeeds will
 //! upgrade a sentinel-marked row in place; sentinels never clobber an
 //! existing real value.
-//!
-//! ### Hard-fail chokepoint — `NftTokenUriFetcher::resolve()` stub
-//!
-//! Until the real Soroban RPC client lands, the fetcher's
-//! `resolve()` is `unimplemented!()` — calls panic loudly. Worker
-//! callers crash the SQS invocation (→ DLQ); api callers crash the
-//! request (→ 502). That's the only intentional hard-fail in the
-//! pipeline; once the real fetcher returns `Option<Value>`, this
-//! handler resumes the soft-fail downstream behaviour described above.
 //!
 //! ### Two `token_uri` response conventions
 //!

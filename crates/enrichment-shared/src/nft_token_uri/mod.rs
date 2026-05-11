@@ -51,15 +51,14 @@
 //!   example). The URI itself is the image; `name` and
 //!   `collection_name` get permanent-fail sentinels at write time.
 //!
-//! ### STUB STATUS
+//! ### Implementation status
 //!
-//! The current revision is a stub. The Soroban RPC piece (build the
-//! `simulateTransaction` envelope for `token_uri(token_id)`, decode
-//! the SCV result) requires an in-house JSON-RPC + XDR-builder crate
-//! that does not yet live in this workspace. The `NftTokenUriFetcher`
-//! surface is finalised so consumers can compile and route through it
-//! today; `resolve()` returns `None` (warn-logged) until the RPC client
-//! lands. See task 0195 §2d for the full plan.
+//! Fully wired in task 0195 §2d Phase E (commit `af7e271`). The
+//! Soroban RPC piece — build the `simulateTransaction` envelope for
+//! `token_uri(token_id)`, POST to RPC, decode the `ScVal::String`
+//! result, resolve `ipfs://` through the gateway, branch on response
+//! Content-Type — lives in `client.rs` and is exercised by both
+//! consumers (worker + api runtime shim).
 
 mod client;
 pub mod errors;

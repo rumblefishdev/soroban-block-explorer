@@ -11,18 +11,21 @@
 //!
 //! ## Subcommands
 //!
-//! - `icon` — drain `assets` rows where `icon_url IS NULL OR
-//!   (asset_type IN (1, 2) AND name IS NULL)`. Writes `assets.icon_url`
-//!   + `assets.name` via `enrich_asset_from_sep1`.
+//! - `sep1-assets` — drain `assets` rows where `icon_url IS NULL OR
+//!   (asset_type IN (1, 2) AND name IS NULL)`. Writes both
+//!   `assets.icon_url` and `assets.name` via `enrich_asset_from_sep1`;
+//!   both columns come from the issuer's SEP-1 TOML
+//!   (`CURRENCIES[].image` / `CURRENCIES[].name`). The matching SQS
+//!   wire-format `kind` string is still `"icon"` (historical, kept
+//!   stable for in-flight messages and DLQ replays).
 //! - `nft-metadata` — drain `nfts` rows where all three of
 //!   `name / media_url / collection_name` are NULL. Writes
 //!   `nfts.{name, media_url, collection_name}` via
-//!   `enrich_nft_token_uri`. `NftTokenUriFetcher::resolve` is
-//!   `unimplemented!()` until the Soroban-RPC + IPFS fetcher lands;
-//!   running the subcommand on real data before then panics loudly
-//!   inside the spawned task — caught by the join-error handler and
-//!   tallied as `db_failed`, the drain continues but every NFT row
-//!   reports a failure.
+//!   `enrich_nft_token_uri`. The Soroban-RPC + IPFS fetcher behind
+//!   `NftTokenUriFetcher::resolve` is fully wired (task 0195 §2d
+//!   Phase E). The join-error handler in `collect_join` still catches
+//!   any unexpected spawn panic and tallies it as `db_failed` so the
+//!   drain survives a single bad row instead of tearing down.
 //! - `status` — print per-column NULL / sentinel counts for both kinds
 //!   plus a deferred section for the LP-analytics columns owned by
 //!   task 0199 (`liquidity_pool_snapshots.{tvl, volume, fee_revenue}`).
@@ -30,10 +33,15 @@
 //!
 //! ## Semantics
 //!
-//! - **Standard filter** = live-worker-aligned producer predicate. The
-//!   `''` sentinel written on permanent fail breaks the OR-clause on
-//!   the next pass; without sentinels the producer (and this drain)
-//!   would infinitely re-publish rows the issuer can't satisfy.
+//! - **Standard filter** = predicate per kind. For `sep1-assets`,
+//!   bit-identical to the indexer's per-batch dedup query so the drain
+//!   covers exactly the rows the producer would re-emit. For
+//!   `nft-metadata`, stricter than the producer (all three columns
+//!   NULL) — the drain only targets pre-queue rows the live worker
+//!   has never touched. The `''` sentinel written on permanent fail
+//!   breaks the predicate on subsequent passes; without sentinels the
+//!   drain (like the producer) would infinitely re-touch rows the
+//!   upstream permanently can't satisfy.
 //! - **`--force-retry`** = γ-semantics: drop the filter, walk every
 //!   row. `enrich_*` functions are idempotent — real → real, sentinel
 //!   → real (upgrade), real → sentinel only on legitimate
@@ -41,15 +49,15 @@
 //!   `COALESCE(NULLIF($n, ''), col, $n)` so a sentinel never clobbers
 //!   a real value.
 //! - **`--id N`** = surgical mode for a single row (`assets.id` for
-//!   `icon`, `nfts.id` for `nft-metadata`). Bypasses the streaming
-//!   cursor. Exit code 0 on success, 1 on transient failure (caller
-//!   can chain with `||` in a shell).
+//!   `sep1-assets`, `nfts.id` for `nft-metadata`). Bypasses the
+//!   streaming cursor. Exit code 0 on success, 1 on transient failure
+//!   (caller can chain with `||` in a shell).
 //!
 //! ## Usage
 //!
 //! ```bash
-//! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- icon --concurrency 10
-//! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- icon --id 4242
+//! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- sep1-assets --concurrency 10
+//! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- sep1-assets --id 4242
 //! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- nft-metadata --force-retry
 //! DATABASE_URL=postgres://... cargo run -p backfill-enrichment-runner -- status
 //! ```
@@ -81,11 +89,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Drain `assets` rows missing `icon_url` or `name` (SEP-1 kind).
-    Icon(DrainArgs),
+    /// Drain the SEP-1 enrichment kind. Writes BOTH `assets.icon_url`
+    /// (from `CURRENCIES[].image`, all asset types) AND `assets.name`
+    /// (from `CURRENCIES[].name`, ClassicCredit + SAC only —
+    /// `asset_type IN (1, 2)`). The SQS wire-format `kind` string is
+    /// still `"icon"` for in-flight-message + DLQ-replay compatibility
+    /// across the indexer / worker / this CLI.
+    #[command(name = "sep1-assets")]
+    Sep1Assets(DrainArgs),
     /// Drain `nfts` rows missing `name` / `media_url` / `collection_name`
-    /// (`token_uri()` kind). Panics inside the spawned task until the
-    /// Soroban-RPC fetcher lands; failures are caught and tallied.
+    /// (`token_uri()` kind). Backed by the Soroban-RPC + IPFS fetcher
+    /// shipped in 0195 §2d Phase E.
     NftMetadata(DrainArgs),
     /// Print per-column NULL / sentinel counts for every kind and exit.
     Status,
@@ -106,7 +120,7 @@ struct DrainArgs {
     limit: Option<usize>,
 
     /// Surgical mode — enrich a single row by id then exit.
-    /// `assets.id` for `icon`, `nfts.id` for `nft-metadata`.
+    /// `assets.id` for `sep1-assets`, `nfts.id` for `nft-metadata`.
     #[arg(long)]
     id: Option<i32>,
 
@@ -131,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Undersizing the pool would throttle effective concurrency below
     // the requested fan-out.
     let pool_size: u32 = match &cli.command {
-        Command::Icon(a) | Command::NftMetadata(a) => a.concurrency as u32 + 2,
+        Command::Sep1Assets(a) | Command::NftMetadata(a) => a.concurrency as u32 + 2,
         Command::Status => 2,
     };
     let db = PgPoolOptions::new()
@@ -140,9 +154,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await?;
 
     let report = match cli.command {
-        Command::Icon(args) => {
+        Command::Sep1Assets(args) => {
             let fetcher = Arc::new(Sep1Fetcher::new()?);
-            run_icon(&db, fetcher, args).await?
+            run_sep1_assets(&db, fetcher, args).await?
         }
         Command::NftMetadata(args) => {
             let fetcher = Arc::new(NftTokenUriFetcher::new()?);
@@ -159,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     db.close().await;
 
     // Operator-chainable exit: non-zero on transient unreachability so
-    // `enrich icon && enrich nft-metadata` short-circuits cleanly on
+    // `enrich sep1-assets && enrich nft-metadata` short-circuits cleanly on
     // the first failing kind. Sentinel writes are part of `succeeded`
     // — they are the intended outcome of a permanent-fail row.
     if report.unreachable > 0 || report.db_failed > 0 {
@@ -169,16 +183,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 // ---------------------------------------------------------------------------
-// `icon` — SEP-1 assets drain
+// `sep1-assets` — SEP-1 assets drain (icon_url + name from issuer TOML)
 // ---------------------------------------------------------------------------
 
-async fn run_icon(
+async fn run_sep1_assets(
     db: &sqlx::PgPool,
     fetcher: Arc<Sep1Fetcher>,
     args: DrainArgs,
 ) -> Result<BackfillReport, sqlx::Error> {
     let started = Instant::now();
-    let mut report = BackfillReport::new(Kind::Icon);
+    let mut report = BackfillReport::new(Kind::Sep1Assets);
 
     if let Some(id) = args.id {
         let res = enrich_asset_from_sep1(db, id, &fetcher).await;
@@ -194,7 +208,7 @@ async fn run_icon(
             break;
         }
         let chunk = effective_chunk(args.chunk_size, args.limit, report.processed);
-        let ids = select_icon_chunk(db, last_id, chunk, args.force_retry).await?;
+        let ids = select_sep1_assets_chunk(db, last_id, chunk, args.force_retry).await?;
         if ids.is_empty() {
             break;
         }
@@ -223,7 +237,7 @@ async fn run_icon(
     Ok(report)
 }
 
-async fn select_icon_chunk(
+async fn select_sep1_assets_chunk(
     db: &sqlx::PgPool,
     last_id: i32,
     chunk_size: i64,
@@ -490,9 +504,8 @@ fn limit_reached(limit: Option<usize>, processed: usize) -> bool {
 }
 
 /// Map a `JoinHandle::await` result into the report. A `JoinError`
-/// here means the spawned task panicked (e.g. an `unimplemented!()`
-/// fetcher path) — counting it as `db_failed` keeps the drain alive
-/// instead of tearing down on one bad row.
+/// here means the spawned task panicked — counting it as `db_failed`
+/// keeps the drain alive instead of tearing down on one bad row.
 fn collect_join(
     report: &mut BackfillReport,
     join_result: Result<(i32, Result<(), EnrichError>), tokio::task::JoinError>,
@@ -513,14 +526,14 @@ fn collect_join(
 
 #[derive(Debug, Clone, Copy)]
 enum Kind {
-    Icon,
+    Sep1Assets,
     NftTokenUri,
 }
 
 impl Kind {
     fn label(self) -> &'static str {
         match self {
-            Kind::Icon => "icon",
+            Kind::Sep1Assets => "sep1_assets",
             Kind::NftTokenUri => "nft_token_uri",
         }
     }
@@ -663,8 +676,8 @@ mod tests {
 
     #[test]
     fn report_new_initialises_counters_to_zero() {
-        let r = BackfillReport::new(Kind::Icon);
-        assert_eq!(r.kind.label(), "icon");
+        let r = BackfillReport::new(Kind::Sep1Assets);
+        assert_eq!(r.kind.label(), "sep1_assets");
         assert_eq!(r.processed, 0);
         assert_eq!(r.succeeded, 0);
         assert_eq!(r.unreachable, 0);
@@ -674,7 +687,7 @@ mod tests {
 
     #[test]
     fn tally_ok_increments_succeeded() {
-        let mut r = BackfillReport::new(Kind::Icon);
+        let mut r = BackfillReport::new(Kind::Sep1Assets);
         tally(&mut r, 1, Ok(()));
         assert_eq!(r.processed, 1);
         assert_eq!(r.succeeded, 1);
@@ -684,7 +697,7 @@ mod tests {
 
     #[test]
     fn tally_transient_increments_unreachable_and_captures_sample() {
-        let mut r = BackfillReport::new(Kind::Icon);
+        let mut r = BackfillReport::new(Kind::Sep1Assets);
         tally(&mut r, 42, Err(EnrichError::Transient("dns fail".into())));
         assert_eq!(r.processed, 1);
         assert_eq!(r.unreachable, 1);
@@ -695,7 +708,7 @@ mod tests {
 
     #[test]
     fn tally_database_error_increments_db_failed_without_sample() {
-        let mut r = BackfillReport::new(Kind::Icon);
+        let mut r = BackfillReport::new(Kind::Sep1Assets);
         tally(&mut r, 7, Err(db_err()));
         assert_eq!(r.processed, 1);
         assert_eq!(r.db_failed, 1);
@@ -704,7 +717,7 @@ mod tests {
 
     #[test]
     fn transient_samples_cap_at_constant() {
-        let mut r = BackfillReport::new(Kind::Icon);
+        let mut r = BackfillReport::new(Kind::Sep1Assets);
         for i in 0..25 {
             tally(&mut r, i, Err(EnrichError::Transient(format!("err{i}"))));
         }
