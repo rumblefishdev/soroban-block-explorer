@@ -240,8 +240,20 @@ mod tests {
     fn enrichment_message_parses_icon_variant() {
         let json = r#"{"kind":"icon","asset_id":42}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::Icon { asset_id } = msg;
+        let EnrichmentMessage::Icon { asset_id } = msg else {
+            panic!("expected Icon variant, got {msg:?}");
+        };
         assert_eq!(asset_id, 42);
+    }
+
+    #[test]
+    fn enrichment_message_parses_nft_token_uri_variant() {
+        let json = r#"{"kind":"nft_token_uri","nft_id":99}"#;
+        let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
+        let EnrichmentMessage::NftTokenUri { nft_id } = msg else {
+            panic!("expected NftTokenUri variant, got {msg:?}");
+        };
+        assert_eq!(nft_id, 99);
     }
 
     #[test]
@@ -296,7 +308,10 @@ mod tests {
     #[test]
     fn parse_message_returns_icon_on_well_formed_body() {
         let r = record(Some("m-1"), Some(r#"{"kind":"icon","asset_id":7}"#));
-        let EnrichmentMessage::Icon { asset_id } = parse_message(&r).expect("ok");
+        let msg = parse_message(&r).expect("ok");
+        let EnrichmentMessage::Icon { asset_id } = msg else {
+            panic!("expected Icon variant, got {msg:?}");
+        };
         assert_eq!(asset_id, 7);
     }
 
