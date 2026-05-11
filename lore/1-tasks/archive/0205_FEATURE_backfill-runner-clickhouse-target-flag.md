@@ -2,7 +2,7 @@
 id: '0205'
 title: 'backfill-runner — `--target clickhouse` flag with stub ClickHouse persist'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0044']
 related_tasks: ['0204']
 tags:
@@ -43,6 +43,21 @@ history:
       total, only ~17 lines PG-specific across 6 files. Implement as a
       `--target {postgres,clickhouse}` flag on the existing runner with
       enum-dispatched `Sink` over the 5 hookpoints.
+  - date: '2026-05-11'
+    status: completed
+    who: fmazur
+    note: >
+      All 14 acceptance criteria met. 26 unit tests pass (3 db-clickhouse
+      + 23 backfill-runner; CH-gated and PG-gated tests skip cleanly when
+      env absent). clippy -D warnings clean on indexer, db-clickhouse,
+      backfill-runner. End-to-end CH stub run on local CH: 100 ledgers
+      parsed, zero rows written, per-ledger `persist_ledger_clickhouse
+      called (stub — no writes)` log verified. PG-side regression run on
+      fresh DB with monthly partitions: 100 ledgers @ ~320 ms/ledger,
+      identical shape to pre-0205 process_ledger path. Beyond-scope
+      additions during testing (user-requested): `--keep-partitions`
+      flag, fast-path skip aws-s3-sync when local folder has 64k files,
+      `BackfillError::ChPersist` variant.
 ---
 
 # backfill-runner — `--target clickhouse` flag with stub ClickHouse persist
@@ -287,35 +302,42 @@ run --start N --end M` on a tiny range against a fresh local CH;
 
 ## Acceptance Criteria
 
-- [ ] `backfill-runner` accepts `--target {postgres,clickhouse}` and
+- [x] `backfill-runner` accepts `--target {postgres,clickhouse}` and
       `--clickhouse-url` (env `CLICKHOUSE_URL`). Default `postgres`
       keeps current behaviour byte-for-byte.
-- [ ] `cargo run -p backfill-runner -- --target clickhouse run --start
+- [x] `cargo run -p backfill-runner -- --target clickhouse run --start
 N --end M` runs against a healthy local ClickHouse and parses
       ledgers end-to-end. Stub persist logs per-ledger context; zero
       rows written.
-- [ ] `cargo check -p backfill-runner` + `cargo clippy -p
+- [x] `cargo check -p backfill-runner` + `cargo clippy -p
 backfill-runner -- -D warnings` clean.
-- [ ] `cargo check -p db-clickhouse` + clippy still clean after adding
+- [x] `cargo check -p db-clickhouse` + clippy still clean after adding
       `persist::persist_ledger_clickhouse`.
-- [ ] `cargo check -p indexer` + clippy still clean after `parse_ledger`
+- [x] `cargo check -p indexer` + clippy still clean after `parse_ledger`
       extraction. `process_ledger` public signature unchanged; existing
       PG callers compile without edits.
-- [ ] `Sink` enum + 3 dispatch methods live in
+- [x] `Sink` enum + 3 dispatch methods live in
       `crates/backfill-runner/src/sink.rs`.
-- [ ] `BackfillError` gains `Ch(#[from] clickhouse::error::Error)`.
-- [ ] `Sink::Clickhouse` preflight + load_completed exercised by a
+- [x] `BackfillError` gains `Ch(#[from] clickhouse::error::Error)`.
+      (Plus `ChPersist(#[from] db_clickhouse::SchemaError)` for the stub
+      return type — minimum needed to compile.)
+- [x] `Sink::Clickhouse` preflight + load_completed exercised by a
       unit test gated on `CLICKHOUSE_URL`.
-- [ ] Stub `persist_ledger_clickhouse` unit test asserts `Ok(())` and
+- [x] Stub `persist_ledger_clickhouse` unit test asserts `Ok(())` and
       no client mutation.
-- [ ] `crates/backfill-runner/README.md` documents the `--target` flag + env var pairs + stub status.
-- [ ] `docs/architecture/database-schema/clickhouse-pilot.md` updated
+- [x] `crates/backfill-runner/README.md` documents the `--target` flag + env var pairs + stub status.
+- [x] `docs/architecture/database-schema/clickhouse-pilot.md` updated
       with a "Writers (stubbed)" subsection linking to this task.
-- [ ] Other architecture docs marked N/A with reason per ADR 0032.
-- [ ] `Cargo.lock` regenerated and committed.
-- [ ] PG-side behaviour unchanged: existing
+- [x] Other architecture docs marked N/A with reason per ADR 0032.
+      (`infrastructure-overview.md` not modified — CH path local-dev only;
+      `indexing-pipeline-overview.md` updated with one-paragraph flag
+      mention.)
+- [x] `Cargo.lock` regenerated and committed.
+- [x] PG-side behaviour unchanged: existing
       `cargo run -p backfill-runner -- run --start N --end M` (no
-      `--target` flag) runs against PG exactly as before.
+      `--target` flag) runs against PG exactly as before. Verified by
+      fresh-DB run @ 100 ledgers, ~320 ms/ledger persist (matches
+      production schema with monthly partitions).
 
 ## Out of Scope
 
@@ -351,3 +373,137 @@ backfill-runner -- -D warnings` clean.
 - The `--target` flag intentionally defaults to `postgres` so existing
   CI scripts, runbooks, and aws-public-blockchain workflows keep
   working without edits.
+
+## Implementation Notes
+
+Files touched (13 modified, 2 added):
+
+- `crates/indexer/src/handler/process.rs` — extracted pure
+  `parse_ledger() -> ParseOutput` from `process_ledger`; latter now
+  chains `parse_ledger` + `persist::persist_ledger`. Public signature
+  of `process_ledger` unchanged; PG callers (`handler/mod.rs`,
+  `backfill-bench`) compile without edits.
+- `crates/db-clickhouse/src/persist.rs` (new) — stub
+  `persist_ledger_clickhouse(client, ledger, ..15 slices..) -> Result<(),
+SchemaError>`. Logs per-ledger counts; no INSERTs. Unit test asserts
+  `Ok(())` against unreachable client URL (confirms no network use).
+- `crates/db-clickhouse/Cargo.toml` — added `xdr-parser` dep for the
+  shared `Extracted*` types.
+- `crates/db-clickhouse/src/lib.rs` — `pub mod persist`.
+- `crates/backfill-runner/src/sink.rs` (new) — `Sink::Postgres(PgPool)`
+  / `Sink::Clickhouse(clickhouse::Client)` enum + `preflight`,
+  `load_completed`, `persist_ledger` methods. PG path delegates to
+  existing `resume::load_completed` + `process_ledger` (so PG-only
+  tests in `resume.rs` stay load-bearing). CH-gated unit tests cover
+  preflight + load_completed against live local CH.
+- `crates/backfill-runner/src/{main,run,status,ingest,error}.rs` —
+  wired to `&Sink`. CLI gains `--target` (default `postgres`),
+  `--clickhouse-url` (env `CLICKHOUSE_URL`). `database_url` becomes
+  `Option<String>`. Single `build_sink` helper panics at startup if
+  the URL required for the chosen target is missing.
+- `crates/backfill-runner/Cargo.toml` — added `db-clickhouse`,
+  `clickhouse`, `stellar-xdr`, `serde` deps.
+- `crates/backfill-runner/README.md` — Targets section + flag table +
+  Iteration section.
+- `docs/architecture/database-schema/clickhouse-pilot.md` — Writers
+  (stubbed) subsection under §8.
+- `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`
+  — one-paragraph mention of `--target clickhouse`.
+
+Test surface: 3 new tests in `db-clickhouse` (stub + 2 existing
+schema parse tests still pass), 23 tests in `backfill-runner` (resume
+×3 PG-gated, sink ×2 CH-gated, plus 18 unchanged unit tests).
+
+## Issues Encountered
+
+- **Initial PG run panicked: "no partition of relation transactions
+  found for row"**. Not a regression — fresh-migrated DB has
+  partitioned parents but no monthly children. Fixed by running
+  `cargo run -p db-partition-mgmt --bin cli` before backfill. Already
+  documented in `backfill-runner/README.md` Prerequisites; the runbook
+  now also includes the partition-mgmt-cli step explicitly.
+- **Sink::persist_ledger return type deviated from spec**: task plan
+  called for `Result<LedgerTimings, BackfillError>`. Returning `()`
+  instead — PG variant calls `process_ledger` which doesn't expose
+  internal parse/persist split, so a returned `LedgerTimings` would
+  lie. Caller in `ingest.rs` already measures wall-clock externally
+  for the partition aggregator. Returning `()` preserves PG path
+  byte-for-byte.
+- **clippy `large_enum_variant` on Sink**: `ClickhouseClient` is ~304
+  bytes vs `PgPool` 8 bytes. Boxed variant adds heap indirection per
+  match for no gain (one Sink per process, never in a collection).
+  Suppressed with `#[allow(clippy::large_enum_variant)]` + comment.
+- **`aws s3 sync` LIST phase takes 30-60s** even for fully-synced
+  64k-file folders. Added fast-path in `sync_partition`: if local
+  folder has `PARTITION_SIZE` `.xdr.zst` files, skip the subprocess
+  entirely. Logs `partition local folder already complete — skipping
+aws s3 sync`. Safe for closed (immutable) public-archive partitions;
+  current partition can't match the count by construction.
+
+## Design Decisions
+
+### From Plan
+
+1. **Stub persist signature mirrors the PG `persist_ledger` slice
+   list**: 15 input slices in the exact order the PG writer consumes
+   them. Drops `_operation_trees` (PG drops it too) and
+   `classification_cache` (PG-specific NFT helper, task 0118 Phase 2).
+   Follow-up that lands real CH INSERTs will not need to change call
+   sites.
+
+2. **Writer lives in `crates/db-clickhouse`, not `backfill-runner`**:
+   matches the PG split. `crates/db` exposes the connection layer,
+   `crates/indexer/src/handler/persist/` owns PG writer logic, runner
+   is a thin orchestrator. CH-side analogue: writer in
+   `crates/db-clickhouse`, runner stays a thin orchestrator.
+
+3. **Default `--target postgres`**: existing CI scripts, runbooks, and
+   aws-public-blockchain workflows keep working without edits.
+
+### Emerged
+
+4. **PG `load_completed` delegates to existing `resume::load_completed`**:
+   plan said both Postgres and Clickhouse branches run identical SQL
+   inline. Chose delegation instead to keep the PG resume tests
+   (`resume.rs` unit tests against real `PgPool`) load-bearing — they
+   were already there pre-0205 and a behavioural change would have
+   forced their rewrite. Net result: PG SQL lives in one module
+   (`resume.rs`), CH SQL inline in `sink.rs`. Trade-off: small
+   asymmetry between the two arms; gain: zero test churn.
+
+5. **`Sink::persist_ledger` returns `Result<(), BackfillError>` not
+   `Result<LedgerTimings, BackfillError>`**: see Issues Encountered #2.
+
+6. **`BackfillError::ChPersist(#[from] db_clickhouse::SchemaError)`
+   added on top of the `Ch` variant**: stub returns `SchemaError`, not
+   `clickhouse::error::Error`. Two variants needed for `?` to work.
+
+7. **`--keep-partitions` flag**: user-requested during testing. Lets
+   the partition folder survive between runs so subsequent
+   `aws s3 sync` calls hit the fast-path (see Issues #4) instead of
+   re-downloading 11.6 GB. Documented as iteration aid, not for
+   production backfills (disk grows linearly).
+
+8. **Fast-path skip `aws s3 sync` in `sync_partition`**: user-requested
+   after observing 30s LIST overhead with `--keep-partitions`. When
+   local folder has `PARTITION_SIZE` files, skip the subprocess
+   entirely. See Issues #4.
+
+9. **Indexing pipeline doc updated, infra doc N/A**: per ADR 0032 the
+   `--target clickhouse` flag is a code-shape change that the
+   indexing-pipeline overview should mention. AWS topology
+   (infrastructure-overview.md) does not change — CH path is local-dev
+   only.
+
+## Future Work
+
+Out of scope per task plan; not auto-spawned as backlog tasks per user
+preference.
+
+- Real CH INSERT logic for the 17 mirrored tables (mechanical work
+  once stub plumbing is validated; one `Row` derive + `insert<T>` per
+  table).
+- Indexer Lambda dual-write to CH (separate ADR + task).
+- API read-path A/B against CH (separate ADR + task).
+- Performance benchmarks once real CH writes work — ADR 0044 pilot
+  success criteria.
