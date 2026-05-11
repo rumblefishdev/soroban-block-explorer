@@ -1358,7 +1358,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NftItem"
+                  "$ref": "#/components/schemas/NftDetailResponse"
                 }
               }
             }
@@ -2581,6 +2581,57 @@
           }
         }
       },
+      "NftDetailResponse": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
+            "required": ["id", "contract_id", "token_id"],
+            "properties": {
+              "collection_name": {
+                "type": ["string", "null"]
+              },
+              "contract_id": {
+                "type": "string",
+                "description": "Contract C-StrKey resolved via `soroban_contracts` join."
+              },
+              "id": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "last_seen_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64",
+                "description": "Most recent ledger where ownership state changed\n(`nfts.current_owner_ledger`)."
+              },
+              "media_url": {
+                "type": ["string", "null"]
+              },
+              "minted_at_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64"
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "owner_account": {
+                "type": ["string", "null"],
+                "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+              },
+              "token_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "metadata": {}
+            }
+          }
+        ],
+        "description": "Detail response. `metadata` is fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSONB blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). Defaults to `null` when the\nfetch fails or the contract returns a non-JSON `image/*` URI."
+      },
       "NftItem": {
         "type": "object",
         "description": "One NFT row returned by the list endpoint. Shape pinned to canonical\nSQL `15_get_nfts_list.sql`.",
@@ -2604,9 +2655,6 @@
           },
           "media_url": {
             "type": ["string", "null"]
-          },
-          "metadata": {
-            "description": "Verbatim JSONB at mint time. Shape is contract-defined (no canonical\nschema yet) — frontend renders defensively."
           },
           "minted_at_ledger": {
             "type": ["integer", "null"],
@@ -3126,9 +3174,6 @@
                 },
                 "media_url": {
                   "type": ["string", "null"]
-                },
-                "metadata": {
-                  "description": "Verbatim JSONB at mint time. Shape is contract-defined (no canonical\nschema yet) — frontend renders defensively."
                 },
                 "minted_at_ledger": {
                   "type": ["integer", "null"],

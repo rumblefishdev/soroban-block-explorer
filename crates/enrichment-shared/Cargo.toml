@@ -17,3 +17,19 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 moka = { version = "0.12", features = ["sync", "future"] }
 sqlx = { workspace = true }
+# Soroban RPC token_uri pipeline (task 0195 §2d Phase E): builds the
+# `InvokeContract` envelope, decodes the ScVal result string. Same
+# version as the rest of the workspace.
+stellar-xdr = { workspace = true }
+# Decode the `C...` contract StrKey from `soroban_contracts.contract_id`
+# into the 32-byte ContractId hash the XDR envelope expects.
+stellar-strkey = "0.0.16"
+# Base64 encode/decode for the `transaction` param + `xdr` result of
+# simulateTransaction.
+base64 = { workspace = true }
+
+[dev-dependencies]
+# Mock Soroban RPC + IPFS gateway for fetcher integration tests
+# (Phase E.2). De facto standard for async reqwest mocking.
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

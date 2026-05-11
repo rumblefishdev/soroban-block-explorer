@@ -47,7 +47,7 @@ The live SQS-driven worker (0191 + 0195 kinds) is **forward-only**: it processes
 
 - **`assets.icon_url`** (kind: `icon`): 0191's producer SQL `WHERE icon_url IS NULL` correctly skips already-processed rows, but assets that existed in DB before the queue went live were never published. Backfill streams `SELECT id FROM assets WHERE icon_url IS NULL` and calls `enrich_asset_icon` directly.
 - **`liquidity_pool_snapshots.tvl`** (kind: `lp_tvl`): every snapshot row created before 0195's hook lands has `tvl IS NULL`.
-- **`nfts.{collection_name, name, media_url, metadata}`** (kind: `nft_metadata`): every NFT minted before 0195 2d lands has all four NULL.
+- **`nfts.{collection_name, name, media_url, metadata}`** (kind: `nft_metadata`): every NFT minted before 0195 §2d lands has all four NULL.
 
 ### Force-retry semantics (clarified 2026-05-06)
 
@@ -171,7 +171,7 @@ If 0195 timeline slips, ship `crates/enrichment-backfill` with `icon` subcommand
 - [ ] Integration test per subcommand
 - [ ] Benchmark: 50K asset icon backfill < 30 min on local laptop documented in README
 - [ ] README runbook with example invocations + post-deployment ops checklist
-- [ ] **Docs updated**: `docs/architecture/indexing-pipeline/**` — section on backfill mechanics; ADR 0043 mentions backfill as the rule's drain path
+- [ ] **Docs updated**: `docs/architecture/indexing-pipeline/enrichment.md` (backfill section appended to the existing type-1 deep-dive); ADR 0043 mentions backfill as the rule's drain path
 - [ ] **API types regenerated** — N/A, this crate ships no API surface
 - [ ] 0191 Future Work bullet #1 marked obsolete in 0191 archive notes (override note already in 0196 history)
 

@@ -65,6 +65,29 @@ pub enum NftTokenUriError {
     #[error("malformed URI: {uri}")]
     MalformedUri { uri: String },
 
+    /// Producer / parser bug — input from DB did not match the shape
+    /// the fetcher expects. `field` is the tag (`"token_id (not u32)"`,
+    /// `"contract_id strkey"`, …); `value` is the offending content
+    /// quoted into the log. Hard-fail by design — visible instead of
+    /// silent staleness. Examples:
+    /// - `token_id` not parseable as `u32` (contract uses `ScVal::U64`
+    ///   / `ScVal::String` / `ScVal::Bytes` token_ids instead of the
+    ///   OpenZeppelin / ERC-721 sequential-counter convention);
+    /// - `contract_id` not a valid `C...` Soroban StrKey.
+    #[error("malformed {field}: {value}")]
+    MalformedInput { field: &'static str, value: String },
+
+    /// JSON-RPC response shape did not match the expected
+    /// `{result: {results: [{xdr: ...}]}}` envelope, or the inner
+    /// `xdr` field decoded to a non-`ScVal::String` value.
+    #[error("malformed simulateTransaction response: {0}")]
+    MalformedRpcResponse(String),
+
+    /// XDR encode/decode failure (envelope serialisation or ScVal
+    /// deserialisation).
+    #[error("XDR codec: {0}")]
+    Xdr(#[from] stellar_xdr::curr::Error),
+
     /// Stub variant — the Soroban RPC client is not yet wired into
     /// this workspace. Remove once the real implementation lands.
     #[error("nft token_uri fetcher not yet implemented")]

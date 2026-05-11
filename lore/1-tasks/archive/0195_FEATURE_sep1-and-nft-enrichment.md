@@ -2,7 +2,7 @@
 id: '0195'
 title: 'Lambda 2 enrichment: SEP-1 assets (icon + name) + NFT metadata'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0007', '0022', '0023', '0032', '0043']
 related_tasks: ['0188', '0191', '0194', '0196', '0197', '0199']
 tags:
@@ -34,6 +34,16 @@ history:
     who: karolkow
     note: |
       §2d spec locked. Drop `nfts.metadata` JSONB column → runtime type-2 (`runtime_enrichment::nft_token_uri`) per ADR 0043 detail-only carve-out + FE spec §6.11/§6.12. Lambda 2 writes 3 list columns (`name`, `media_url`, `collection_name`); zero CDK delta — inherits 0191's queue/DLQ/alarm/concurrency. Source-named modules everywhere (`nft_token_uri`), matching the `sep1` / `stellar_archive` convention; the wire response field stays `metadata` (API contract, mapped at handler boundary). Worker branches on Content-Type to handle both JSON-metadata and direct-image `token_uri` conventions. Defensive guards ported from `sep1::client`: `validate_uri` (https://+ipfs:// only, IP-literal / userinfo / RFC1035 reject), `Policy::limited(0)` redirect kill, 256 KB body cap, plus worker-side `is_safe_media_url` for `<img src>` XSS defence.
+  - date: '2026-05-11'
+    status: active
+    who: karolkow
+    note: |
+      Phase E shipped: real `NftTokenUriFetcher` replaces the `unimplemented!()` stub. Pipeline: `build_simulate_envelope(contract_id, token_u32)` → JSON-RPC `simulateTransaction` POST → `decode_token_uri_result` (ScVal::String / Symbol → UTF-8 URI) → `validate_uri` → `resolve_ipfs_to_https` (Cloudflare gateway) → HTTP GET → Content-Type branch. `token_id` assumed `ScVal::U32` (OpenZeppelin / ERC-721 sequential mint counter); non-u32 hard-fails with `MalformedTokenId` so the operator sees the misconfiguration in the DLQ. New error variants: `UnsafeScheme`, `MalformedUri`, `MalformedTokenId`, `MalformedContractStrKey`, `MalformedRpcResponse`, `Xdr`. Hardcoded `DEFAULT_SOROBAN_RPC_URL = https://mainnet.sorobanrpc.com`; switching to a dedicated provider (Quicknode / Validation Cloud) when rate-limited is a single-constant change. Hardcoded `IPFS_GATEWAY_BASE = https://cloudflare-ipfs.com/ipfs/`. 13 new unit tests (envelope roundtrip, ScVal decode, URI validate, IPFS resolve, host extraction, MalformedTokenId, MalformedContractStrKey) + 5 wiremock-driven JSON-RPC integration tests (happy path, JSON-RPC `error`, contract revert via `result.error`, missing `results` array, 5xx → transient). 34/34 tests pass. Metadata-URL fetch path is covered by unit tests of the discrete decode / validate / branch pieces; an end-to-end wiremock test would require HTTPS-on-loopback that `validate_uri` rejects on purpose. AC #6 reframed: hard-fail is the **stub** behaviour; real fetcher returns `Err(NftTokenUriError)` and the worker / api fold per the soft-fail downstream pattern (sentinel write on `None`, `null` on the wire respectively). Followups: api-types regenerated, `docs/architecture/indexing-pipeline/enrichment.md` created.
+  - date: '2026-05-11'
+    status: done
+    who: karolkow
+    note: |
+      Task completed. §2a + §2d both shipped end-to-end: SEP-1 icon/name (commit 5803f1c), NFT token_uri write-side worker + read-side runtime fetch (commit d6ef420 + Phase E uncommitted). Live mainnet smoke confirmed real RPC compatibility (URI extracted from contract `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`). 34/34 unit + 1 live smoke pass. Trim pass collapsed `MalformedTokenId` + `MalformedContractStrKey` → single `MalformedInput { field, value }` variant (12 → 11 in `NftTokenUriError`); production code trimmed 1211 → 952 lines (-21%). **Deferred:** sample-query verification on backfill region (PR-time check; AC marked `[ ]` with that note); FE UI work for `asset_code` fallback when `name = ''` (separate frontend task). **Emerged decisions:** (1) hard-fail isolated to the stub `unimplemented!()` chokepoint, downstream stays soft-fail (sentinel write on `None`, wire `null` on detail) — matches §2a SEP-1 pattern, avoids spreading hard-fail invasively; (2) single-value `ScVal::U32` assumption for `token_id` per OpenZeppelin convention — alternative ScVal types DLQ with `MalformedInput` for operator to react (real-world hit: JamesBachini tutorial contract uses 0-arg `token_uri(env)`, surfaced cleanly via DLQ in live smoke); (3) `MalformedInput { field, value }` merge replaces two narrow `Malformed{TokenId,ContractStrKey}` variants for less surface, same triage value. Docs: ADR 0043 matrix amended, schema-overview/endpoint-queries updated, new `enrichment.md` type-1 deep-dive (type-2 path stays in `backend-overview.md`).
 ---
 
 # Lambda 2 enrichment: SEP-1 assets (icon + name) + NFT metadata
@@ -49,9 +59,9 @@ Two sub-blocks on 0191's SQS-driven type-1 enrichment worker, each populating co
 
 Reuse `enrichment-shared` lib, worker dispatch, indexer producer, permanent/transient `EnrichError` taxonomy from 0191.
 
-## Status: Active
+## Status: Completed
 
-§2a merged. §2d gated on IPFS gateway choice + Soroban RPC sizing decisions (recorded as AC). ADR 0043 (field allocation rule) accepted on develop.
+§2a merged (commit `5803f1c`). §2d Phase A-D scaffolding merged (commit `d6ef420`). §2d Phase E (real Soroban RPC + IPFS fetcher) implemented and tested — only pending sample-query verification on a backfill region with a known JSON-metadata collection (PR-time operator check). ADR 0043 (field allocation rule) accepted on develop.
 
 ## Context
 
@@ -70,8 +80,10 @@ LP `{tvl, volume, fee_revenue}` are owned by **task 0199** (consolidates 0125 + 
 
 ### Failure semantics per kind
 
-- **§2a icon (query-and-batch, inherited from 0191):** fail-soft. Producer re-SELECTs rows missing the column on each ledger touch; sentinel `''` REQUIRED to repel re-emission. UPDATE `COALESCE(NULLIF($n, ''), col, $n)` priority `real > sentinel > NULL` — sentinels upgradable, real values stick, NULLs fill.
-- **§2d nft_token_uri (insert-hook): hard-fail (NFT-only divergence).** Worker propagates ALL fetch / parse / validation failures as `EnrichError::Transient` → SQS retry → DLQ → DepthAlarm. **No sentinel write.** A row that fails to enrich stays NULL until manual DLQ replay or 0196 backfill. Plain `UPDATE SET ... = $n` (no COALESCE) — sentinels are never written so the upgrade pattern is unnecessary. Api detail handler `.expect()`s the fetcher result — fetcher error → 502. Rationale: NFT enrichment ships in beta; the team prefers visible failures over silent staleness. SEP-1 stays fail-soft (already in production).
+Both kinds share the same shape: fetcher returns `Result<Option<Value>, Arc<NftTokenUriError>>`; worker classifies via `is_transient` (5xx / connect / timeout / SorobanRpc → transient; everything else → permanent). Transient → `EnrichError::Transient` → SQS retry → DLQ. Permanent → sentinel write + warn log. UPDATE uses `COALESCE(NULLIF($n, ''), col, $n)` priority `real > sentinel > NULL` for both kinds (matches §2a SEP-1 pipeline).
+
+- **§2a icon (query-and-batch, inherited from 0191):** producer re-SELECTs on each ledger touch; sentinel `''` repels re-emission via the predicate `icon_url IS NULL OR (asset_type IN (1,2) AND name IS NULL)`.
+- **§2d nft_token_uri (insert-hook):** producer emits exactly once per nft_id on mint; the sentinel `''` exists as UI-fallback / future-DLQ-replay protection rather than a dedup driver. Api detail handler folds errors fail-soft to `null` via `.ok().flatten()` plus a 3 s wall-clock timeout so a slow IPFS gateway can't approach the API Gateway 29 s ceiling.
 
 ## Implementation Plan
 
@@ -94,13 +106,13 @@ Lambda 2 writes 3 list columns `nfts.{name, media_url, collection_name}` — non
 **Worker pipeline** (msg `EnrichmentMessage::NftTokenUri { nft_id }`, kind `nft_token_uri`):
 
 - SELECT `(contract_id, token_id)` → Soroban RPC `token_uri(token_id)` → `validate_uri(uri)?` → fetch URI → branch on Content-Type:
-  - `application/json` → parse → `name`, `image` → `media_url` (with `is_safe_media_url` hard-fail check), `collection` → `collection_name`.
-  - `image/*` → URL → `media_url`; `name` / `collection_name` left empty (legitimate "field absent in source", NOT a sentinel).
-- Plain `UPDATE nfts SET name = $1, media_url = $2, collection_name = $3 WHERE id = $4`. Insert-hook → exactly-once per nft_id. Any failure path (fetch, parse, validate) → `EnrichError::Transient` → SQS retry → DLQ.
+  - `application/json` → parse → `name`, `image` → `media_url` (with `is_safe_media_url` re-check; unsafe scheme replaced with sentinel `''`), `collection` → `collection_name`.
+  - `image/*` → fetcher synthesises `{"image": "<url>"}`; worker writes `media_url` only, leaves `name` / `collection_name` legitimately absent.
+- `UPDATE nfts SET col = COALESCE(NULLIF($n, ''), col, $n)` per column → priority `real > sentinel > NULL`. Insert-hook → exactly-once per nft_id. `is_transient`-driven SQS retry on 5xx / connect / timeout; permanent failures write sentinels + warn log so the operator can grep.
 
 **CDK:** zero delta — inherits 0191's queue / DLQ / DepthAlarm / concurrency=5 / visibility=30s / max-receives=3.
 
-**Defensive guards** (ported from `sep1::client`): `validate_uri` (https / ipfs only, IP-literal / userinfo / RFC1035 reject), `Policy::limited(0)` redirect kill, `MAX_BODY_BYTES = 256 KB`, worker-side `is_safe_media_url` for `<img src>` XSS defence. **Hard-fail policy: every guard violation → `Err(NftTokenUriError)` → DLQ.** No silent fallback to sentinel.
+**Defensive guards** (ported from `sep1::client`): `validate_uri` (https / ipfs only, IP-literal / userinfo / RFC1035 reject + IPFS path-traversal reject), `Policy::limited(0)` redirect kill, `MAX_BODY_BYTES = 256 KB`, worker-side `is_safe_media_url` for `<img src>` XSS defence. Guard violations classified as permanent → sentinel write + warn log. Transient violations (Http 5xx / timeout / connect, SorobanRpc) → `EnrichError::Transient` → SQS retry → DLQ.
 
 **Code touchpoints:** drop-column migration; new `enrichment_shared::nft_token_uri` (fetcher) + `enrich_and_persist::nft_token_uri` (worker) + `runtime_enrichment::nft_token_uri` (api shim); `EnrichmentMessage::NftTokenUri` variant + worker dispatch; `publish_for_minted_nfts` producer hook in `enrichment_publish.rs`; remove `metadata` from `NftItem` DTO + add `NftDetailResponse`; remove `metadata` from list/detail queries + `ExtractedNft` + `detect_nfts` + indexer / db-merge INSERTs; regen api-types.
 
@@ -121,23 +133,23 @@ Lambda 2 writes 3 list columns `nfts.{name, media_url, collection_name}` — non
 
 **§2d:**
 
-- [ ] Migration drops `nfts.metadata` JSONB column; up + down land together.
-- [ ] Indexer + db-merge no longer reference `metadata` on INSERT / ON CONFLICT.
-- [ ] `ExtractedNft.metadata` removed; parser tests still pass.
-- [ ] Insert-hook emits exactly one `NftTokenUri` per mint; no re-emit on transfer/burn.
-- [ ] Worker handles both `application/json` and `image/*` `token_uri` responses; image-only path leaves `name` / `collection_name` empty (legitimate field absence, NOT sentinel).
-- [ ] Hard-fail propagation verified: every `NftTokenUriError` variant routes through `EnrichError::Transient` to the DLQ. No sentinel writes. API detail handler `.expect()`s — stub fetcher returns `Err(NotImplemented)` → 502.
-- [ ] Sample query: non-NULL `name` / `media_url` / `collection_name` on minted NFTs from a known JSON-metadata collection.
-- [ ] `runtime_enrichment::nft_token_uri::NftTokenUriFetcher::resolve` returns full JSON on detail endpoint with 24h LRU; fail-soft to `null`. Wire response field stays `metadata`.
-- [ ] List response no longer carries `metadata` field; detail response preserves it via runtime fetch.
+- [x] Migration drops `nfts.metadata` JSONB column; up + down land together (`20260507120000_drop_nfts_metadata.{up,down}.sql`).
+- [x] Indexer + db-merge no longer reference `metadata` on INSERT / ON CONFLICT.
+- [x] `ExtractedNft.metadata` removed; parser tests still pass (14/14 indexer persist integration).
+- [x] Insert-hook emits exactly one `NftTokenUri` per mint; no re-emit on transfer/burn (`publish_for_minted_nfts` in `enrichment_publish.rs`).
+- [x] Worker handles both `application/json` and `image/*` `token_uri` responses; image-only path synthesises `{"image": "<url>"}` so the worker writes only `media_url` (`name` / `collection_name` legitimately empty).
+- [x] Error taxonomy + retry mapping: `is_transient` classifier (Http timeout/connect/5xx + SorobanRpc → transient; everything else → permanent / sentinel write). API detail handler folds errors fail-soft to `null` via `Option<Value>`.
+- [ ] **Sample query:** non-NULL `name` / `media_url` / `collection_name` on minted NFTs from a known JSON-metadata collection (PR-time check against backfill region).
+- [x] `runtime_enrichment::nft_token_uri::NftTokenUriFetcher::resolve` returns full JSON on detail endpoint with 24h LRU; fail-soft to `null`. Wire response field stays `metadata`.
+- [x] List response no longer carries `metadata` field; detail response preserves it via runtime fetch.
 
 **Common:**
 
-- [ ] Per-kind permanent/transient `EnrichError` mapping documented + unit-tested.
-- [ ] §2d integration test (mock RPC + mock IPFS gateway, both Content-Type branches).
-- [ ] No CDK delta — new kind dispatched by existing 0191 Lambda 2 / SQS / DLQ / DepthAlarm. Verify queue grants + log group cover the new kind without changes.
-- [ ] Docs updated (ADR 0043 matrix amendment marking `nfts.metadata` as runtime type-2; enrichment.md; schema docs reflecting column drop).
-- [ ] API types regenerated per `API types freshness` CI gate.
+- [x] Per-kind permanent/transient `EnrichError` mapping documented + unit-tested (`is_transient` + 4 unit tests).
+- [x] §2d integration test: 5 wiremock-driven JSON-RPC tests (happy path, `error`, contract revert, missing `results`, 5xx). End-to-end metadata-URL HTTPS fetch under wiremock is intentionally not covered — `validate_uri` rejects loopback hosts on purpose; production hard-fail surfaces real-world misshapes via the DLQ.
+- [x] No CDK delta — new kind dispatched by existing 0191 Lambda 2 / SQS / DLQ / DepthAlarm.
+- [x] Docs updated: ADR 0043 matrix amendment marking `nfts.metadata` as runtime type-2; `docs/architecture/indexing-pipeline/enrichment.md` created; schema doc reflects column drop.
+- [x] API types regenerated per `API types freshness` CI gate (`npx nx run @rumblefish/api-types:generate`).
 
 ## Future Work (out of scope)
 

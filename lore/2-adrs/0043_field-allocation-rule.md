@@ -4,7 +4,18 @@ title: 'How new fields reach the API: indexer column / enrichment Lambda column 
 status: accepted
 deciders: [karolkow]
 related_tasks:
-  ['0119', '0125', '0156', '0188', '0191', '0194', '0195', '0196', '0197']
+  [
+    '0119',
+    '0125',
+    '0156',
+    '0188',
+    '0191',
+    '0194',
+    '0195',
+    '0196',
+    '0197',
+    '0199',
+  ]
 related_adrs: ['0007', '0022', '0023', '0029', '0032', '0033', '0034']
 tags: [governance, enrichment, schema, indexer, lambda, milestone-2]
 links:
