@@ -7,7 +7,7 @@
 //!
 //! - [`stellar_archive`] — S3 reread of public Stellar archive ledgers (ADR 0029).
 //! - [`sep1`] — HTTP fetch of issuer stellar.toml files (task 0188).
-//! - [`nft_metadata`] — Soroban RPC `token_uri()` + IPFS gateway for the
+//! - [`nft_token_uri`] — Soroban RPC `token_uri()` + IPFS gateway for the
 //!   NFT detail page (task 0195 §2d).
 
 pub mod nft_token_uri;

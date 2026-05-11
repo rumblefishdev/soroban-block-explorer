@@ -180,13 +180,13 @@ defeats the LRU) or (b) chunk size too small for the row width.
 
 ## Architecture notes
 
-- **Why a new crate, not a `backfill-runner` subcommand:** `backfill-
-  runner` re-ingests Stellar ledgers from XDR archives via Galexie.
-  Enrichment backfill drains pre-existing DB rows by calling external
-  enrichment APIs. Different concerns, different data sources,
-  different operational profiles. Task 0191 design decision #8 was
-  emphatic that the ledger-backfill code path must not be modified;
-  a separate crate guarantees that.
+- **Why a new crate, not a `backfill-runner` subcommand:**
+  `backfill-runner` re-ingests Stellar ledgers from XDR archives via
+  Galexie. Enrichment backfill drains pre-existing DB rows by calling
+  external enrichment APIs. Different concerns, different data
+  sources, different operational profiles. Task 0191 design decision
+  #8 was emphatic that the ledger-backfill code path must not be
+  modified; a separate crate guarantees that.
 - **Why no SQS path:** a 50K-row queue publish would hit SQS rate
   limits, and per-message visibility-timeout / delete-after-ack
   overhead wastes time when we already hold a DB connection. Direct

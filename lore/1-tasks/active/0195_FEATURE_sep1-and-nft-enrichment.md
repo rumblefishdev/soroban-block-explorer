@@ -21,7 +21,7 @@ history:
     note: |
       Activated. Spec consolidated (3 amendment passes folded in):
       §2c (asset_usd_price) pulled — no consumer.
-      §2a scope corrected to ClassicCredit + SAC after parser audit (state.rs:824 explicit `name=None` on SAC; CAP-46-6 confirms SAC's on-chain `name()` is `code:issuer` machine ID, not human name).
+      §2a scope corrected to ClassicCredit + SAC after parser audit (state.rs:820-827 explicit `name=None` on SAC; CAP-46-6 confirms SAC's on-chain `name()` is `code:issuer` machine ID, not human name).
       §2d producer pivoted to insert-hook (no live-path dedup; backfill → 0196).
   - date: '2026-05-07'
     status: active

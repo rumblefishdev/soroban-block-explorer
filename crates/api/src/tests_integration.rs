@@ -1799,7 +1799,7 @@ async fn ledgers_detail_returns_header_and_cache_control_against_real_db() {
     // table has fewer than two rows (no way to distinguish head vs
     // closed under that condition).
     let rows: Vec<(i64,)> =
-        match sqlx::query_as("SELECT sequence FROM ledgers ORDER BY closed_at DESC LIMIT 2")
+        match sqlx::query_as("SELECT sequence FROM ledgers ORDER BY closed_at DESC, sequence DESC LIMIT 2")
             .fetch_all(&pool)
             .await
         {
