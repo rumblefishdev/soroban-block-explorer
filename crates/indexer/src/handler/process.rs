@@ -317,9 +317,13 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let parse_ms = parse_timer.elapsed().as_millis();
 
-    // `nft_events` slot kept for signature parity with the PG persist
-    // path (task 0149); parser does not yet produce these — empty vec.
-    let nft_events: Vec<xdr_parser::types::ExtractedNftEvent> = Vec::new();
+    // `nft_events` are derived from `all_nft_events` (task 0202) —
+    // schema-shaped rows for `nft_ownership` with per-(contract, token,
+    // ledger) `event_order`. Carried through `ParseOutput` to the PG
+    // persist path (task 0149); the ClickHouse sink (task 0205) ignores
+    // the slice today and will pick it up when CH gains an
+    // `nft_ownership` mirror.
+    let nft_events = xdr_parser::extract_nft_ownership_events(&all_nft_events);
 
     ParseOutput {
         ledger: extracted_ledger,

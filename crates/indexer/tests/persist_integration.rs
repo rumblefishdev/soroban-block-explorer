@@ -1877,6 +1877,305 @@ async fn clean_filter_test(pool: &PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// Task 0202 — nft_events → nft_ownership end-to-end wiring
+// ---------------------------------------------------------------------------
+
+const OWN_LEDGER_SEQ: u32 = 90_000_211;
+const OWN_CLOSED_AT: i64 = 1_777_119_600;
+const OWN_TX_HASH: &str = "aaaa222222222222222222222222222222222222222222222222222222222222";
+const OWN_LEDGER_HASH: &str = "bbbb222222222222222222222222222222222222222222222222222222222222";
+const OWN_NFT_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNNFT";
+const OWN_NFT_WASM_HASH: &str = "cccc222222222222222222222222222222222222222222222222222222222222";
+const OWNER_A_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNERA";
+const OWNER_B_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOWNERB";
+
+/// End-to-end: parser-emitted NFT events flow through `persist_ledger` and
+/// populate `nft_ownership` with the expected mint/transfer/burn sequence
+/// and monotonic `event_order` per `(contract, token, ledger)`.
+#[tokio::test]
+async fn nft_ownership_populated_for_mint_transfer_burn() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping NFT ownership wiring test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping NFT ownership wiring test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_ownership_test(&pool).await;
+
+    let ledger = ExtractedLedger {
+        sequence: OWN_LEDGER_SEQ,
+        hash: OWN_LEDGER_HASH.to_string(),
+        closed_at: OWN_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: OWN_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: OWN_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: OWN_CLOSED_AT,
+        parse_error: false,
+    };
+
+    // Inline-construct the deployment + nft rows so timestamps align with
+    // OWN_LEDGER_SEQ / OWN_CLOSED_AT. The shared `deploy_with` / `nft_row`
+    // helpers hardcode FILTER_LEDGER_SEQ / FILTER_CLOSED_AT — using them
+    // here would produce a fixture whose deployment + nft creation point
+    // at the 0118-filter test ledger, masking any same-ledger / timestamp
+    // alignment bug in the persist path.
+    let interfaces = vec![iface_with(OWN_NFT_WASM_HASH, &["owner_of", "transfer"])];
+    let deployments = vec![ExtractedContractDeployment {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        wasm_hash: Some(OWN_NFT_WASM_HASH.to_string()),
+        deployer_account: Some(SRC_STRKEY.to_string()),
+        deployed_at_ledger: OWN_LEDGER_SEQ,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    }];
+    let nfts = vec![ExtractedNft {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        token_id: "7".to_string(),
+        collection_name: None,
+        owner_account: Some(DST_STRKEY.to_string()),
+        name: None,
+        media_url: None,
+        metadata: None,
+        minted_at_ledger: Some(OWN_LEDGER_SEQ),
+        last_seen_ledger: OWN_LEDGER_SEQ,
+        created_at: OWN_CLOSED_AT,
+    }];
+
+    // Three events for the same (contract, token, ledger) triple — mint then
+    // transfer then burn — should land as event_order 0, 1, 2.
+    let nft_events = vec![
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Mint,
+            owner_account: Some(OWNER_A_STRKEY.to_string()),
+            event_order: 0,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Transfer,
+            owner_account: Some(OWNER_B_STRKEY.to_string()),
+            event_order: 1,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+        ExtractedNftEvent {
+            transaction_hash: OWN_TX_HASH.to_string(),
+            contract_id: OWN_NFT_CONTRACT.to_string(),
+            token_id: "7".to_string(),
+            event_type: NftEventType::Burn,
+            owner_account: None,
+            event_order: 2,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            created_at: OWN_CLOSED_AT,
+        },
+    ];
+
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_assets: Vec<ExtractedAsset> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let classification_cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &interfaces,
+        &deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        &nfts,
+        &nft_events,
+        &no_lp_positions,
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("persist_ledger must succeed for NFT mint/transfer/burn");
+
+    // ── three nft_ownership rows survive the 0118 filter ──
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_one(&pool)
+    .await
+    .expect("count nft_ownership rows");
+    assert_eq!(total, 3, "all three events persisted");
+
+    // ── event_type distribution: 1 Mint, 1 Transfer, 1 Burn ──
+    let rows: Vec<(i16, i16, Option<String>)> = sqlx::query_as(
+        "SELECT o.event_type, o.event_order, a.account_id
+           FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+           LEFT JOIN accounts a ON a.id = o.owner_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2
+          ORDER BY o.event_order ASC",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_all(&pool)
+    .await
+    .expect("fetch event rows");
+    assert_eq!(rows.len(), 3);
+    // event_order monotonic 0,1,2
+    assert_eq!(rows[0].1, 0);
+    assert_eq!(rows[1].1, 1);
+    assert_eq!(rows[2].1, 2);
+    // event_type sequence Mint(0), Transfer(1), Burn(2)
+    assert_eq!(rows[0].0, NftEventType::Mint as i16);
+    assert_eq!(rows[1].0, NftEventType::Transfer as i16);
+    assert_eq!(rows[2].0, NftEventType::Burn as i16);
+    // owner_account: mint→A, transfer→B, burn→None
+    assert_eq!(rows[0].2.as_deref(), Some(OWNER_A_STRKEY));
+    assert_eq!(rows[1].2.as_deref(), Some(OWNER_B_STRKEY));
+    assert!(rows[2].2.is_none(), "burn yields NULL owner_id");
+
+    // ── idempotent replay (ON CONFLICT DO NOTHING) ──
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[ExtractedTransaction {
+            hash: OWN_TX_HASH.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: OWN_LEDGER_SEQ,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: OWN_CLOSED_AT,
+            parse_error: false,
+        }],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &interfaces,
+        &deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        &nfts,
+        &nft_events,
+        &no_lp_positions,
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("replay must succeed (ON CONFLICT DO NOTHING)");
+
+    let total_after_replay: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nft_ownership o
+           JOIN nfts n ON n.id = o.nft_id
+           JOIN soroban_contracts sc ON sc.id = n.contract_id
+          WHERE sc.contract_id = $1 AND o.ledger_sequence = $2",
+    )
+    .bind(OWN_NFT_CONTRACT)
+    .bind(i64::from(OWN_LEDGER_SEQ))
+    .fetch_one(&pool)
+    .await
+    .expect("count after replay");
+    assert_eq!(total_after_replay, 3, "replay did not duplicate rows");
+
+    clean_ownership_test(&pool).await;
+}
+
+async fn clean_ownership_test(pool: &PgPool) {
+    let contracts = vec![OWN_NFT_CONTRACT.to_string()];
+    let _ = sqlx::query(
+        "DELETE FROM nft_ownership WHERE nft_id IN (
+            SELECT n.id FROM nfts n
+              JOIN soroban_contracts sc ON sc.id = n.contract_id
+             WHERE sc.contract_id = ANY($1)
+         )",
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "DELETE FROM nfts WHERE contract_id IN (
+            SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+         )",
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(OWN_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(OWN_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+        .bind(i64::from(OWN_LEDGER_SEQ))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = ANY($1)")
+        .bind(&contracts)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = ANY($1::BYTEA[])")
+        .bind(vec![hex::decode(OWN_NFT_WASM_HASH).unwrap()])
+        .execute(pool)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
 // Task 0120 — Soroban-native token detection + late-WASM bridge
 // ---------------------------------------------------------------------------
 
