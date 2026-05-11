@@ -19,19 +19,9 @@ async fn main() -> Result<(), Error> {
 
     info!("indexer cold start — resolving database credentials");
 
-    // Resolve DATABASE_URL: prefer env var, fall back to Secrets Manager + RDS endpoint.
-    let database_url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) => {
-            let secret_arn = std::env::var("SECRET_ARN")
-                .map_err(|_| "either DATABASE_URL or SECRET_ARN must be set")?;
-            let rds_endpoint = std::env::var("RDS_PROXY_ENDPOINT")
-                .map_err(|_| "RDS_PROXY_ENDPOINT must be set when using SECRET_ARN")?;
-            db::secrets::resolve_database_url(&secret_arn, &rds_endpoint)
-                .await
-                .map_err(|e| format!("failed to resolve database URL: {e}"))?
-        }
-    };
+    let database_url = db::secrets::resolve_or_env()
+        .await
+        .map_err(|e| format!("failed to resolve database URL: {e}"))?;
 
     let db_pool = db::pool::create_pool(&database_url)?;
 

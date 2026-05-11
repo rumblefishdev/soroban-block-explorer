@@ -110,7 +110,7 @@ pub async fn enrich_asset_icon(
                 }
                 Some(url) => {
                     sqlx::query("UPDATE assets SET icon_url = $1 WHERE id = $2")
-                        .bind(&url)
+                        .bind(url)
                         .bind(asset_id)
                         .execute(pool)
                         .await?;
