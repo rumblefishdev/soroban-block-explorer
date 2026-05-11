@@ -250,6 +250,14 @@ Keeping the write-path identical means backfill and live ingest produce
 byte-for-byte the same rows for a given ledger, and the replay-safe
 derived-state guards work without special-casing.
 
+`backfill-runner` also accepts `--target clickhouse` (task
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md))
+to drive the ClickHouse pilot store ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
+That path is currently a **no-op persist stub** (logs only, zero
+rows written); the parse pipeline above is unaffected and the default
+`--target postgres` is unchanged. Real CH INSERTs land in a follow-up
+task — see [`docs/architecture/database-schema/clickhouse-pilot.md#writers-stubbed`](../database-schema/clickhouse-pilot.md#writers-stubbed).
+
 ### 6.3 Backfill Scope and Execution Model
 
 - scope: from Soroban mainnet activation in late 2023 to the present

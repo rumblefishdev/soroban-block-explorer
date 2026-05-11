@@ -10,10 +10,52 @@ use std::sync::OnceLock;
 use std::time::Instant;
 use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
 use tracing::{info, warn};
+use xdr_parser::types::{
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedTransaction,
+};
 
 use super::HandlerError;
 use super::persist;
 use super::persist::ClassificationCache;
+
+/// Parsed-but-not-yet-persisted output of a single `LedgerCloseMeta`.
+///
+/// Mirrors the slices `persist::persist_ledger` consumes, packaged so a
+/// caller can drive parse and persist as separate steps (task 0205 —
+/// CH backfill sink calls `parse_ledger` then a CH-flavored persist).
+/// `process_ledger` still chains both internally and is behaviourally
+/// unchanged for existing PG callers.
+#[derive(Debug, Clone)]
+pub struct ParseOutput {
+    pub ledger: ExtractedLedger,
+    pub transactions: Vec<ExtractedTransaction>,
+    pub operations: Vec<(String, Vec<ExtractedOperation>)>,
+    pub events: Vec<(String, Vec<ExtractedEvent>)>,
+    pub invocations: Vec<(String, Vec<ExtractedInvocation>)>,
+    pub contract_interfaces: Vec<ExtractedContractInterface>,
+    pub contract_deployments: Vec<ExtractedContractDeployment>,
+    pub account_states: Vec<ExtractedAccountState>,
+    pub liquidity_pools: Vec<ExtractedLiquidityPool>,
+    pub pool_snapshots: Vec<ExtractedLiquidityPoolSnapshot>,
+    pub assets: Vec<ExtractedAsset>,
+    pub nfts: Vec<ExtractedNft>,
+    pub nft_events: Vec<ExtractedNftEvent>,
+    pub lp_positions: Vec<ExtractedLpPosition>,
+    pub contract_name_writes: Vec<(String, String)>,
+    /// Per-transaction operation tree JSON, collected by `extract_invocations`.
+    /// Currently unused by the PG persist path (the parameter is
+    /// `_operation_trees`) but kept on `ParseOutput` so the end-to-end
+    /// wiring stays live for the future consumer that flips the
+    /// underscore. Cheap to leave wired; costly to re-introduce later.
+    pub operation_trees: Vec<(String, serde_json::Value)>,
+    /// Parse-half wall time in ms.
+    pub parse_ms: u128,
+    /// Per-tx indices skipped due to `parse_error`. Surfaced for diagnostic logs.
+    pub tx_parse_errors: Vec<usize>,
+}
 
 /// Network identifier hash, derived lazily from the
 /// `STELLAR_NETWORK_PASSPHRASE` env var. Required for SAC contract_id
@@ -52,6 +94,66 @@ pub async fn process_ledger(
     cw_client: Option<&CloudWatchClient>,
     classification_cache: &ClassificationCache,
 ) -> Result<Vec<xdr_parser::types::ExtractedAsset>, HandlerError> {
+    let parsed = parse_ledger(meta);
+    let ledger_sequence = parsed.ledger.sequence;
+    let parse_ms = parsed.parse_ms;
+    let tx_parse_errors_len = parsed.tx_parse_errors.len();
+    let tx_count = parsed.transactions.len();
+
+    // --- Step 4: Atomic database transaction ---
+    //
+    // persist_ledger owns the transaction lifecycle (open/commit/retry) so that
+    // transient 40001/40P01 conflicts replay the full envelope.
+    let persist_timer = Instant::now();
+    persist::persist_ledger(
+        pool,
+        &parsed.ledger,
+        &parsed.transactions,
+        &parsed.operations,
+        &parsed.events,
+        &parsed.invocations,
+        &parsed.operation_trees,
+        &parsed.contract_interfaces,
+        &parsed.contract_deployments,
+        &parsed.account_states,
+        &parsed.liquidity_pools,
+        &parsed.pool_snapshots,
+        &parsed.assets,
+        &parsed.nfts,
+        &parsed.nft_events,
+        &parsed.lp_positions,
+        &parsed.contract_name_writes,
+        classification_cache,
+    )
+    .await?;
+    let persist_ms = persist_timer.elapsed().as_millis();
+
+    info!(
+        ledger_sequence,
+        tx_count,
+        parse_errors = tx_parse_errors_len,
+        parse_ms,
+        persist_ms,
+        "ledger saved to database"
+    );
+
+    if let Some(cw) = cw_client {
+        publish_ledger_sequence_metric(cw, ledger_sequence).await;
+    }
+
+    // Return the extracted assets so callers that care about them
+    // (Galaxy Lambda handler, for type-1 enrichment SQS publish per
+    // task 0191) can consume the slice. Backfill callers ignore it.
+    Ok(parsed.assets)
+}
+
+/// Pure parse half of `process_ledger` — runs every extract stage and
+/// returns the resulting slices in a `ParseOutput`. No I/O, no DB.
+///
+/// Split out for task 0205 so the same parse path can feed both the PG
+/// writer (`persist::persist_ledger`) and the ClickHouse stub
+/// (`db_clickhouse::persist::persist_ledger_clickhouse`).
+pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     // --- Stage 0024: Ledger + transaction extraction ---
     let extracted_ledger = xdr_parser::extract_ledger(meta);
     let ledger_sequence = extracted_ledger.sequence;
@@ -74,7 +176,7 @@ pub async fn process_ledger(
     let mut all_operations = Vec::new();
     let mut all_events = Vec::new();
     let mut all_invocations = Vec::new();
-    let mut all_operation_trees = Vec::new();
+    let mut all_operation_trees: Vec<(String, serde_json::Value)> = Vec::new();
     let mut all_contract_interfaces = Vec::new();
     let mut all_ledger_entry_changes = Vec::new();
     let mut all_nft_events = Vec::new();
@@ -215,59 +317,30 @@ pub async fn process_ledger(
 
     let parse_ms = parse_timer.elapsed().as_millis();
 
-    // --- Step 4: Atomic database transaction ---
-    //
-    // persist_ledger owns the transaction lifecycle (open/commit/retry) so that
-    // transient 40001/40P01 conflicts replay the full envelope.
-    //
-    // Signature extension params (task 0149) — the parser does not yet produce
-    // these; pass empty slices so wiring is in place end-to-end:
-    //   * nft_events → `nft_ownership` rows (follow-up from 0118)
-    // `lp_positions` is now produced by `extract_lp_positions` above (task 0162).
-    // `inner_tx_hash` is now carried per-row on `ExtractedTransaction` (task 0169).
+    // `nft_events` slot kept for signature parity with the PG persist
+    // path (task 0149); parser does not yet produce these — empty vec.
     let nft_events: Vec<xdr_parser::types::ExtractedNftEvent> = Vec::new();
 
-    let persist_timer = Instant::now();
-    persist::persist_ledger(
-        pool,
-        &extracted_ledger,
-        &extracted_transactions,
-        &all_operations,
-        &all_events,
-        &all_invocations,
-        &all_operation_trees,
-        &all_contract_interfaces,
-        &all_contract_deployments,
-        &all_account_states,
-        &all_liquidity_pools,
-        &all_pool_snapshots,
-        &all_assets,
-        &all_nfts,
-        &nft_events,
-        &all_lp_positions,
-        &all_contract_name_writes,
-        classification_cache,
-    )
-    .await?;
-    let persist_ms = persist_timer.elapsed().as_millis();
-
-    info!(
-        ledger_sequence,
-        tx_count = extracted_transactions.len(),
-        parse_errors = tx_parse_errors.len(),
+    ParseOutput {
+        ledger: extracted_ledger,
+        transactions: extracted_transactions,
+        operations: all_operations,
+        events: all_events,
+        invocations: all_invocations,
+        contract_interfaces: all_contract_interfaces,
+        contract_deployments: all_contract_deployments,
+        account_states: all_account_states,
+        liquidity_pools: all_liquidity_pools,
+        pool_snapshots: all_pool_snapshots,
+        assets: all_assets,
+        nfts: all_nfts,
+        nft_events,
+        lp_positions: all_lp_positions,
+        contract_name_writes: all_contract_name_writes,
+        operation_trees: all_operation_trees,
         parse_ms,
-        persist_ms,
-        "ledger saved to database"
-    );
-
-    if let Some(cw) = cw_client {
-        publish_ledger_sequence_metric(cw, ledger_sequence).await;
+        tx_parse_errors,
     }
-
-    // Return the extracted assets so callers that care about them
-    // (Galaxy Lambda handler, for type-1 enrichment SQS publish per
-    // task 0191) can consume the slice. Backfill callers ignore it.
-    Ok(all_assets)
 }
 
 /// Publish `LastProcessedLedgerSequence` to CloudWatch.

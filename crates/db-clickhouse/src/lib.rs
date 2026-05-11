@@ -7,6 +7,8 @@
 
 use clickhouse::Client;
 
+pub mod persist;
+
 /// Schema embedded at compile time. Applied verbatim by `db-clickhouse-init`
 /// and re-exported here so callers can apply it programmatically (e.g. from
 /// integration tests).
