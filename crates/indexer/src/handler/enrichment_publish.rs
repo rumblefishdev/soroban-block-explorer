@@ -119,8 +119,9 @@ impl Publisher {
     }
 
     /// Insert-hook publisher for NFT mints (task 0195 §2d). Looks up
-    /// `nfts.id` rows with `minted_at_ledger IN ($ledgers) AND name IS
-    /// NULL` and emits one `nft_metadata` message per id.
+    /// `nfts.id` rows with `minted_at_ledger IN ($ledgers)` that still
+    /// have `NULL` in any of `name` / `media_url` / `collection_name`
+    /// and emits one `nft_token_uri` message per id.
     ///
     /// Insert-hook semantics: a freshly minted NFT row has all
     /// off-chain columns NULL. Once the worker writes either a real

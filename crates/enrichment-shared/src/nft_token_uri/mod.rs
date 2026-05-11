@@ -37,10 +37,18 @@
 //!
 //! ### Cache + fail-soft semantics
 //!
-//! Same as the SEP-1 fetcher: in-process `moka` LRU 24h, errors mapped
-//! to `None` at the call site, no caching of error results so a
-//! transient failure on a cold key does not poison the slot. The api
-//! never 5xx's because of an enrichment failure.
+//! Same as the SEP-1 fetcher: in-process `moka` LRU 24h, capacity 1024.
+//! `resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`;
+//! call sites decide whether to collapse `Err` to `None` (api detail
+//! handler) or classify transient-vs-permanent for SQS retry
+//! (enrichment worker, via [`errors::is_transient`]). `moka`'s
+//! `try_get_with` only caches `Ok` values, so neither transient nor
+//! permanent errors poison the slot — every failure call site keeps
+//! its warn log + retry semantics intact, at the cost of re-running
+//! the fetch on repeat traffic for a broken NFT. Self-healing on
+//! flaky upstreams (IPFS gateway 4xx blip) is preferred over the
+//! sub-ms cache-hit savings. The api never 5xx's because of an
+//! enrichment failure.
 //!
 //! ### Two `token_uri` response conventions (Content-Type branch)
 //!
@@ -48,18 +56,10 @@
 //!   extract `name`, `image` (resolve `ipfs://` → HTTPS), `collection`.
 //!   Surface the rest as the JSON blob to the api detail handler.
 //! - `image/*` — direct-image convention (JamesBachini Soroban
-//!   example). The URI itself is the image; `name` and
-//!   `collection_name` get permanent-fail sentinels at write time.
-//!
-//! ### STUB STATUS
-//!
-//! The current revision is a stub. The Soroban RPC piece (build the
-//! `simulateTransaction` envelope for `token_uri(token_id)`, decode
-//! the SCV result) requires an in-house JSON-RPC + XDR-builder crate
-//! that does not yet live in this workspace. The `NftTokenUriFetcher`
-//! surface is finalised so consumers can compile and route through it
-//! today; `resolve()` returns `None` (warn-logged) until the RPC client
-//! lands. See task 0195 §2d for the full plan.
+//!   example). The URI itself is the image; the fetcher synthesises
+//!   `{"image": "<url>"}` so the worker writes only `media_url` and
+//!   `name` / `collection_name` legitimately fall through to the
+//!   empty-string sentinel.
 
 mod client;
 pub mod errors;

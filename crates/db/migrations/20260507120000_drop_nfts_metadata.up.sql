@@ -1,7 +1,7 @@
 -- Task 0195 §2d: drop `nfts.metadata` JSONB column.
 -- NFT metadata (attributes, traits, description, animation_url, etc.) is
 -- detail-only per ADR 0043 — read by `GET /v1/nfts/:id`, never by list.
--- Now served via runtime type-2 enrichment (`runtime_enrichment::nft_metadata`)
+-- Now served via runtime type-2 enrichment (`runtime_enrichment::nft_token_uri`)
 -- mirroring the `assets.description` precedent in
 -- `20260424000000_drop_assets_sep1_detail_cols.up.sql`.
 --

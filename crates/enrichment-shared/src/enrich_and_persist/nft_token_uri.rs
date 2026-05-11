@@ -3,22 +3,30 @@
 //!
 //! Per task 0195 §2d.
 //!
-//! ### Failure model — soft-fail downstream of fetcher
+//! ### Failure model
 //!
 //! Producer is an insert-hook on `nfts` mint events, so a row is
 //! emitted exactly once per nft_id under normal operation. Inside this
-//! handler:
+//! handler `fetcher.resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`:
 //!
-//! - `fetcher.resolve()` returns `Option<Value>`; the fetcher
-//!   internally maps every RPC / HTTP / parse error to `None` via its
-//!   cache closure. `None` → worker writes empty-string sentinels in
-//!   `nfts.{name, media_url, collection_name}` so the row records
-//!   "fetch attempted, no value" and the producer predicate
-//!   `name IS NULL` short-circuits on the next ledger touch.
-//! - The `is_safe_media_url` re-check on the `image` field inside JSON
-//!   metadata replaces unsafe schemes (`http://`, `data:`,
-//!   `javascript:`) with the sentinel `''` — defence in depth against
-//!   a contract smuggling a non-`https://` URL past the fetcher.
+//! - `Ok(Some(json))` → extract columns, write real values.
+//! - `Ok(None)` → reserved for future "fetched, intentionally empty";
+//!   falls through to sentinel write.
+//! - `Err(arc_err)` classified by [`is_transient`]:
+//!   - transient (Http 5xx / connect / timeout, SorobanRpc) →
+//!     `EnrichError::Transient` → SQS retry → DLQ.
+//!   - permanent (4xx, malformed JSON, unsafe scheme, malformed input,
+//!     XDR codec, …) → sentinel write + warn log so the row records
+//!     "fetch attempted, no value" and the producer predicate
+//!     short-circuits on the next ledger touch. Permanent errors are
+//!     not cached by the fetcher, so a DLQ replay or backfill retry
+//!     re-logs the warn each time — observability over micro-cost.
+//!
+//! Defence-in-depth at column extraction:
+//!
+//! - `is_safe_media_url` re-check on the `image` field replaces unsafe
+//!   schemes (`http://`, `data:`, `javascript:`) with the sentinel `''`
+//!   against a contract smuggling a non-`https://` URL past the fetcher.
 //! - `trimmed_string` caps each column at the schema width
 //!   (VARCHAR(256) for `name` / `collection_name`, 1 KB for
 //!   `media_url`) and writes the sentinel on overflow rather than
@@ -29,15 +37,6 @@
 //! pipeline). A later DLQ replay or 0196 backfill that succeeds will
 //! upgrade a sentinel-marked row in place; sentinels never clobber an
 //! existing real value.
-//!
-//! ### Hard-fail chokepoint — `NftTokenUriFetcher::resolve()` stub
-//!
-//! Until the real Soroban RPC client lands, the fetcher's
-//! `resolve()` is `unimplemented!()` — calls panic loudly. Worker
-//! callers crash the SQS invocation (→ DLQ); api callers crash the
-//! request (→ 502). That's the only intentional hard-fail in the
-//! pipeline; once the real fetcher returns `Option<Value>`, this
-//! handler resumes the soft-fail downstream behaviour described above.
 //!
 //! ### Two `token_uri` response conventions
 //!
@@ -107,7 +106,8 @@ pub async fn enrich_nft_token_uri(
                 return Err(EnrichError::Transient(arc_err.to_string()));
             }
             // Permanent (4xx, malformed JSON, unsafe scheme, malformed
-            // input, XDR codec, etc.) → sentinel + warn. Operator can grep.
+            // input, XDR codec, etc.) → sentinel + warn. Operator can grep
+            // every occurrence; DLQ replay / backfill re-logs on retry.
             Err(arc_err) => {
                 warn!(error = %arc_err, "nft token_uri permanent fail; sentinel write");
                 (String::new(), String::new(), String::new())

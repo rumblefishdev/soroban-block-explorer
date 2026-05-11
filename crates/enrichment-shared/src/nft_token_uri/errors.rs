@@ -87,11 +87,6 @@ pub enum NftTokenUriError {
     /// deserialisation).
     #[error("XDR codec: {0}")]
     Xdr(#[from] stellar_xdr::curr::Error),
-
-    /// Stub variant — the Soroban RPC client is not yet wired into
-    /// this workspace. Remove once the real implementation lands.
-    #[error("nft token_uri fetcher not yet implemented")]
-    NotImplemented,
 }
 
 /// Classifier for the worker's `EnrichError` mapping. Transient

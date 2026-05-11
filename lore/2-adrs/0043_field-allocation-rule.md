@@ -178,7 +178,7 @@ Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 
 | `liquidity_pool_snapshots.tvl`                     | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b                                  |
 | `liquidity_pool_snapshots.volume`, `fee_revenue`   | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0199                                      |
 | `nfts.{collection_name, name, media_url}`          | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                  |
-| NFT detail `metadata` (attributes / traits / etc.) | runtime type-2 (`runtime_enrichment::nft_metadata`)    | 0195 §2d                                  |
+| NFT detail `metadata` (attributes / traits / etc.) | runtime type-2 (`runtime_enrichment::nft_token_uri`)   | 0195 §2d                                  |
 | `account_balances_current` (trustline rows)        | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e    |
 | Transaction `envelope_xdr`, full `events` payload  | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                |
 

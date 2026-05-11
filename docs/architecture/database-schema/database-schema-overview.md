@@ -68,7 +68,7 @@ The current design implies the following principles:
   metadata shapes (`soroban_contracts.metadata`, `wasm_interface_metadata.metadata`).
   Detail-only NFT attributes (formerly `nfts.metadata` JSONB) are NOT persisted —
   per ADR 0043 they are fetched at request time on `GET /v1/nfts/:id` via
-  `runtime_enrichment::nft_metadata` (Soroban RPC `token_uri()` + IPFS gateway,
+  `runtime_enrichment::nft_token_uri` (Soroban RPC `token_uri()` + IPFS gateway,
   LRU 24h, fail-soft). The column was dropped in migration
   `20260507120000_drop_nfts_metadata.up.sql` (task 0195 §2d).
 - relational links are always surrogate `BIGINT` FKs to `accounts.id` /
@@ -722,7 +722,7 @@ CREATE TABLE nfts (
     name                 VARCHAR(256),                                            -- task 0195 §2d (Lambda 2)
     media_url            TEXT,                                                    -- task 0195 §2d (Lambda 2)
     -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
-    --  served at request time via `runtime_enrichment::nft_metadata`)
+    --  served at request time via `runtime_enrichment::nft_token_uri`)
     minted_at_ledger     BIGINT,
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
     current_owner_ledger BIGINT,

@@ -19,11 +19,11 @@ history:
 
 ## Summary
 
-A standalone CLI crate (`crates/enrichment-backfill`) that drains pre-existing rows the live SQS-driven worker never saw — tens of thousands of pubnet assets that pre-date 0191's queue, every existing LP snapshot that pre-dates `lp_tvl`, every NFT that pre-dates `nft_metadata`. Reuses the same `enrichment-shared::enrich_and_persist::*` functions that the live worker uses, so drain logic and live logic share a single implementation; no SQS involved — direct DB writes via streaming SELECTs and bounded concurrency.
+A standalone CLI crate (`crates/enrichment-backfill`) that drains pre-existing rows the live SQS-driven worker never saw — tens of thousands of pubnet assets that pre-date 0191's queue, every existing LP snapshot that pre-dates `lp_tvl`, every NFT that pre-dates `nft_token_uri`. Reuses the same `enrichment-shared::enrich_and_persist::*` functions that the live worker uses, so drain logic and live logic share a single implementation; no SQS involved — direct DB writes via streaming SELECTs and bounded concurrency.
 
 ## Status: Backlog
 
-Cannot start until task **0195** has merged the two new `enrich_*` functions to `enrichment-shared` (`lp_tvl`, `nft_metadata`; `asset_usd_price` was pulled — see 0195 §2c). The `icon` subcommand can theoretically land sooner since `enrich_asset_icon` is already in 0191's PR — split-PR option captured below.
+Cannot start until task **0195** has merged the two new `enrich_*` functions to `enrichment-shared` (`lp_tvl`, `nft_token_uri`; `asset_usd_price` was pulled — see 0195 §2c). The `icon` subcommand can theoretically land sooner since `enrich_asset_icon` is already in 0191's PR — split-PR option captured below.
 
 ## Context
 
@@ -47,7 +47,7 @@ The live SQS-driven worker (0191 + 0195 kinds) is **forward-only**: it processes
 
 - **`assets.icon_url`** (kind: `icon`): 0191's producer SQL `WHERE icon_url IS NULL` correctly skips already-processed rows, but assets that existed in DB before the queue went live were never published. Backfill streams `SELECT id FROM assets WHERE icon_url IS NULL` and calls `enrich_asset_icon` directly.
 - **`liquidity_pool_snapshots.tvl`** (kind: `lp_tvl`): every snapshot row created before 0195's hook lands has `tvl IS NULL`.
-- **`nfts.{collection_name, name, media_url, metadata}`** (kind: `nft_metadata`): every NFT minted before 0195 §2d lands has all four NULL.
+- **`nfts.{collection_name, name, media_url}`** (kind: `nft_token_uri`): every NFT minted before 0195 §2d lands has all three NULL (the former `metadata` JSONB column was dropped per ADR 0043 / 0195 §2d — served at request time via `runtime_enrichment::nft_token_uri`).
 
 ### Force-retry semantics (clarified 2026-05-06)
 

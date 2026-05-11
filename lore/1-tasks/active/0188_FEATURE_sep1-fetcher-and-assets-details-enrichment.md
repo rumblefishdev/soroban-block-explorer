@@ -100,7 +100,7 @@ pub struct AppState {
 
 Rationale: AppState's field count doesn't grow per new transport; the
 grouping mirrors the `runtime_enrichment` module structure 1:1; future
-submodules (e.g. `nft_metadata`, `price_oracle`) get added to the bundle
+submodules (e.g. `nft_token_uri`, `price_oracle`) get added to the bundle
 without touching `AppState`. Access path becomes
 `state.runtime_enrichment.stellar_archive.fetch_ledger(...)` and
 `state.runtime_enrichment.sep1.fetch(...)`.
