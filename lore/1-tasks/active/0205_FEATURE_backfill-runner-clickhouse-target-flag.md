@@ -291,11 +291,11 @@ run --start N --end M` on a tiny range against a fresh local CH;
       `--clickhouse-url` (env `CLICKHOUSE_URL`). Default `postgres`
       keeps current behaviour byte-for-byte.
 - [ ] `cargo run -p backfill-runner -- --target clickhouse run --start
-  N --end M` runs against a healthy local ClickHouse and parses
+N --end M` runs against a healthy local ClickHouse and parses
       ledgers end-to-end. Stub persist logs per-ledger context; zero
       rows written.
 - [ ] `cargo check -p backfill-runner` + `cargo clippy -p
-  backfill-runner -- -D warnings` clean.
+backfill-runner -- -D warnings` clean.
 - [ ] `cargo check -p db-clickhouse` + clippy still clean after adding
       `persist::persist_ledger_clickhouse`.
 - [ ] `cargo check -p indexer` + clippy still clean after `parse_ledger`

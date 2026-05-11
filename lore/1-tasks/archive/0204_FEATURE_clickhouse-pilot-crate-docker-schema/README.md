@@ -373,8 +373,8 @@ instance skips it cleanly (`#[ignore]` if env unset).
       tables (gated on `CLICKHOUSE_URL` env) — 1/1 PASS including
       `dictGet` resolution after `SYSTEM RELOAD DICTIONARY`
 - [x] No file under `crates/{api,indexer,domain,db,db-merge,db-migrate,
-  db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,
-  backfill-bench}` is modified by this PR (verified via
+db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,
+backfill-bench}` is modified by this PR (verified via
       `git diff --stat`)
 - [x] **Docs updated** — `docs/architecture/database-schema/clickhouse-pilot.md`
       created; `database-schema-overview.md`,
