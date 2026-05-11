@@ -21,6 +21,10 @@ history:
     status: active
     who: FilipDz
     note: 'Implemented under web/src/api/ (scaffold lives in web/, not apps/web/). Built on top of the already-generated @hey-api/openapi-ts @tanstack/react-query plugin output in libs/api-types — Step 6 hooks are thin wrappers over generated queryOptions/infiniteQueryOptions plus per-resource staleTime/refetchInterval from polling.ts. Step 4 queryKeys.ts exposes invalidateResource() predicates over the generated _id-prefixed keys instead of duplicating the key structure.'
+  - date: 2026-05-11
+    status: active
+    who: FilipDz
+    note: 'Env config refined per PR review: only web/.env.development + web/.env.example are committed. Staging/production VITE_API_BASE_URL is passed by the deployment pipeline (CI/CDK) at build time so the URL is owned by infra, not the repo. config.ts already fails fast at runtime when the variable is missing.'
 ---
 
 # Frontend: TanStack Query setup, API client, polling, env config
@@ -123,7 +127,7 @@ Create `apps/web/src/api/hooks/` with base hook patterns:
 - [x] Query keys follow structured pattern: `[resourceType, identifier?, { filters?, cursor? }]` — codegen emits `[{ _id, path, query, ... }]` which is a single structured shape across all queries; `queryKeys.ts` wraps it with `matchResource()`/`invalidateResource()` for resource-level invalidation
 - [x] Home page queries poll at 10-15 second intervals (`homePolicy.refetchInterval = 12_000`)
 - [x] Detail pages issue separate queries per section (pattern via independent wrappers per sub-resource)
-- [x] Environment configs exist for dev, staging, and production (`web/.env.{development,staging,production}`)
+- [x] Environment configs exist for dev, staging, and production — `web/.env.development` is committed for zero-config local dev; staging/production `VITE_API_BASE_URL` is injected at build time by CI/CDK so the URL lives in the deployment pipeline (single source of truth = infra) and isn't hardcoded in the repo. `config.ts` fails fast at runtime if the variable is missing.
 - [x] TanStack Query is the sole browser cache -- no Redux/Zustand/manual global state for server data
 - [x] **Docs updated** — [docs/architecture/frontend/frontend-overview.md](../../../docs/architecture/frontend/frontend-overview.md) §8.1 "Implementation Layout" added per [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md). Other `docs/architecture/**` files: N/A — task is frontend-only, does not change backend/schema/infra shape.
 - [x] **API types regenerated** — `nx run @rumblefish/api-types:check-generated` passes. The only edit under `libs/api-types/**` was a hand-written re-export of `client` in [src/index.ts](../../../libs/api-types/src/index.ts) (not under the gated `src/openapi.json` or `src/generated/**` paths). `openapi.json` and codegen output unchanged.

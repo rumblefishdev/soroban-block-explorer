@@ -25,9 +25,8 @@ npx nx typecheck @rumblefish/soroban-block-explorer-web
 web/
   index.html              # SPA entry point
   vite.config.ts          # Vite app config with React plugin
-  .env.{development,      # Per-mode public config (VITE_API_BASE_URL).
-       staging,           # `.env.local` / `.env.*.local` are gitignored
-       production}        # for developer-specific overrides.
+  .env.development        # Local dev API URL (committed)
+  .env.example            # Template for new contributors
   src/
     main.tsx              # React root render (StrictMode + QueryProvider)
     app.tsx               # Root App component
@@ -41,6 +40,22 @@ web/
       queryKeys.ts        # invalidateResource() / matchResource() helpers
       hooks/              # Thin wrappers around generated *Options
 ```
+
+## Environment configuration
+
+The frontend reads `VITE_API_BASE_URL` from `import.meta.env`. Vite loads
+`.env.<mode>` files based on the build mode:
+
+- `.env.development` (committed) — used by `vite dev`; points at `http://localhost:9000`.
+- `.env.local` / `.env.development.local` (gitignored) — personal overrides.
+- **Staging and production builds** — `VITE_API_BASE_URL` is injected by CI/CD
+  at build time (e.g. `VITE_API_BASE_URL=https://api.example.com npx nx build`).
+  No staging/production URL is committed to the repo; the deployment pipeline
+  owns those values.
+
+If `VITE_API_BASE_URL` is missing at build time, [src/api/config.ts](src/api/config.ts)
+throws with an explicit error — fail-fast instead of shipping a bundle that
+points nowhere.
 
 ## Data Layer
 
