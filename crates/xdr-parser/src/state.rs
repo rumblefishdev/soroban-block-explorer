@@ -938,8 +938,21 @@ fn token_id_to_string(token_id: &Value) -> String {
 /// behaviour). Events with `event_kind` not in {"mint","transfer","burn"}
 /// are skipped — the parser already restricts emission to these three
 /// kinds, so the guard is defensive.
+///
+/// Pathological-input guard: `event_order` is persisted as SMALLINT so
+/// the schema bound is `i16::MAX = 32_767`. Once a single
+/// `(contract, token, ledger)` triple has already produced that many
+/// rows, further events for the same triple are skipped with a warn
+/// instead of overflowing the staging `try_into::<i16>()` and failing
+/// the whole ledger. No real NFT contract reaches this bound; the cap
+/// exists to keep ingestion robust against a malicious / buggy
+/// contract emitting tens of thousands of events for one NFT in a
+/// single ledger.
 #[instrument(skip(events), fields(event_count = events.len()))]
 pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEvent> {
+    /// SMALLINT max — `nft_ownership.event_order` is stored as i16 in PG.
+    const MAX_EVENT_ORDER: u16 = i16::MAX as u16;
+
     let mut order_counter: HashMap<(String, String, u32), u16> = HashMap::new();
     let mut out: Vec<ExtractedNftEvent> = Vec::with_capacity(events.len());
 
@@ -971,10 +984,19 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             token_id.clone(),
             event.ledger_sequence,
         );
-        let event_order = *order_counter
-            .entry(key)
-            .and_modify(|c| *c += 1)
-            .or_insert(0);
+        let counter = order_counter.entry(key).or_insert(0);
+        if *counter > MAX_EVENT_ORDER {
+            warn!(
+                contract_id = %event.contract_id,
+                token_id = %token_id,
+                ledger_sequence = event.ledger_sequence,
+                max = MAX_EVENT_ORDER,
+                "event_order would exceed SMALLINT range; skipping further events for triple"
+            );
+            continue;
+        }
+        let event_order = *counter;
+        *counter = counter.saturating_add(1);
 
         out.push(ExtractedNftEvent {
             transaction_hash: event.transaction_hash.clone(),
@@ -2398,5 +2420,73 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].token_id, "42");
         assert_eq!(out[1].token_id, "uuid-abc");
+    }
+
+    #[test]
+    fn empty_token_id_event_skipped() {
+        // `token_id_to_string` returns "" when the JSON value is null
+        // (e.g. type=void). Such events must be skipped so they never
+        // reach staging — matches `detect_nfts` behaviour.
+        let events = vec![NftEvent {
+            transaction_hash: "tx1".into(),
+            contract_id: "CNFT1".into(),
+            event_kind: "mint".into(),
+            token_id: json!({"type": "void", "value": null}),
+            from: None,
+            to: Some("GA".into()),
+            ledger_sequence: 100,
+            created_at: 1700000000,
+        }];
+
+        let out = extract_nft_ownership_events(&events);
+        assert!(out.is_empty(), "event with empty token_id must be skipped");
+    }
+
+    #[test]
+    fn unknown_event_kind_skipped() {
+        // Parser is supposed to emit only mint/transfer/burn; anything
+        // else is a defence-in-depth skip path. Mixed batch must keep
+        // the recognised events and drop the unknown one.
+        let events = vec![
+            make_nft_event("CNFT1", "approve", 42, Some("GA"), Some("GB"), 100),
+            make_nft_event("CNFT1", "mint", 43, None, Some("GA"), 100),
+        ];
+        let out = extract_nft_ownership_events(&events);
+
+        assert_eq!(out.len(), 1, "unknown event_kind must be skipped");
+        assert_eq!(out[0].event_type, NftEventType::Mint);
+        assert_eq!(out[0].token_id, "43");
+    }
+
+    #[test]
+    fn event_order_overflow_skips_excess_events() {
+        // Pathological-input guard: once a (contract, token, ledger)
+        // triple has emitted i16::MAX events, further events for that
+        // triple are skipped with a warn rather than overflowing the
+        // SMALLINT column at staging.
+        const OVERFLOW_AT: u16 = i16::MAX as u16;
+
+        let mut events = Vec::with_capacity((OVERFLOW_AT as usize) + 5);
+        for _ in 0..(OVERFLOW_AT as usize + 5) {
+            events.push(make_nft_event(
+                "CNFT1",
+                "transfer",
+                42,
+                Some("GA"),
+                Some("GB"),
+                100,
+            ));
+        }
+        let out = extract_nft_ownership_events(&events);
+
+        // Emits exactly i16::MAX + 1 rows (event_order 0..=32_767),
+        // then refuses to write more — five excess events dropped.
+        assert_eq!(
+            out.len(),
+            OVERFLOW_AT as usize + 1,
+            "should emit one row per slot 0..=i16::MAX, no overflow"
+        );
+        assert_eq!(out.first().unwrap().event_order, 0);
+        assert_eq!(out.last().unwrap().event_order, i16::MAX as u16);
     }
 }

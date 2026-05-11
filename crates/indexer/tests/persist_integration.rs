@@ -1778,9 +1778,35 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         parse_error: false,
     };
 
+    // Inline-construct the deployment + nft rows so timestamps align with
+    // OWN_LEDGER_SEQ / OWN_CLOSED_AT. The shared `deploy_with` / `nft_row`
+    // helpers hardcode FILTER_LEDGER_SEQ / FILTER_CLOSED_AT — using them
+    // here would produce a fixture whose deployment + nft creation point
+    // at the 0118-filter test ledger, masking any same-ledger / timestamp
+    // alignment bug in the persist path.
     let interfaces = vec![iface_with(OWN_NFT_WASM_HASH, &["owner_of", "transfer"])];
-    let deployments = vec![deploy_with(OWN_NFT_CONTRACT, OWN_NFT_WASM_HASH)];
-    let nfts = vec![nft_row(OWN_NFT_CONTRACT, "7")];
+    let deployments = vec![ExtractedContractDeployment {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        wasm_hash: Some(OWN_NFT_WASM_HASH.to_string()),
+        deployer_account: Some(SRC_STRKEY.to_string()),
+        deployed_at_ledger: OWN_LEDGER_SEQ,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    }];
+    let nfts = vec![ExtractedNft {
+        contract_id: OWN_NFT_CONTRACT.to_string(),
+        token_id: "7".to_string(),
+        collection_name: None,
+        owner_account: Some(DST_STRKEY.to_string()),
+        name: None,
+        media_url: None,
+        metadata: None,
+        minted_at_ledger: Some(OWN_LEDGER_SEQ),
+        last_seen_ledger: OWN_LEDGER_SEQ,
+        created_at: OWN_CLOSED_AT,
+    }];
 
     // Three events for the same (contract, token, ledger) triple — mint then
     // transfer then burn — should land as event_order 0, 1, 2.
