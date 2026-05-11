@@ -4,7 +4,7 @@ Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory),
 parallel to the [Postgres reference set](../endpoint-queries/README.md) (task
 0167). Schema reference: [ADR 0044 ClickHouse pilot — parallel store](../../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md).
-Driving task: [0207](../../../../lore/1-tasks/active/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
+Driving task: [0207](../../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
 
 These files are the canonical ClickHouse-side read plan for the pilot store.
 They are **reference SQL**, not migration scripts — nothing in this directory
