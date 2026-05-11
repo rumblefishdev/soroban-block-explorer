@@ -460,9 +460,7 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         lp.try_get("fee_revenue_null")?,
         lp_total,
     );
-    println!(
-        "\n**Total liquidity_pool_snapshots rows:** {lp_total}\n"
-    );
+    println!("\n**Total liquidity_pool_snapshots rows:** {lp_total}\n");
     println!(
         "> `enrich` has no `lp-analytics` subcommand today — population \
          is owned by task 0199 (LP analytics: TVL + volume + \

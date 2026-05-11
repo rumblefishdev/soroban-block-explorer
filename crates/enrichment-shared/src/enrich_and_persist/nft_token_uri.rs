@@ -303,10 +303,7 @@ mod tests {
     fn trimmed_string_bytes_caps_for_text_columns() {
         let too_long = "x".repeat(MAX_MEDIA_URL_BYTES + 1);
         let v = Value::String(too_long);
-        assert_eq!(
-            trimmed_string_bytes(Some(&v), MAX_MEDIA_URL_BYTES),
-            ""
-        );
+        assert_eq!(trimmed_string_bytes(Some(&v), MAX_MEDIA_URL_BYTES), "");
     }
 
     #[test]
