@@ -62,6 +62,7 @@ struct StepTimings {
     nfts_ms: u128,
     pools_ms: u128,
     balances_ms: u128,
+    aggregates_ms: u128,
     stage_ms: u128,
 }
 
@@ -187,7 +188,8 @@ pub async fn persist_ledger(
         + timings.assets_ms
         + timings.nfts_ms
         + timings.pools_ms
-        + timings.balances_ms;
+        + timings.balances_ms
+        + timings.aggregates_ms;
 
     info!(
         ledger_sequence = ledger.sequence,
@@ -207,6 +209,7 @@ pub async fn persist_ledger(
         nfts_ms = timings.nfts_ms,
         pools_ms = timings.pools_ms,
         balances_ms = timings.balances_ms,
+        aggregates_ms = timings.aggregates_ms,
         retries = attempt,
         "persist breakdown"
     );
@@ -214,7 +217,9 @@ pub async fn persist_ledger(
     Ok(())
 }
 
-/// Drive all 14 DB steps inside the open transaction, recording per-step timings.
+/// Drive all 15 DB steps inside the open transaction, recording per-step timings.
+/// Step 15 (`recompute_asset_aggregates`, task 0194 §1b + §1c) runs after the
+/// `upsert_balances` pass and is timed separately as `aggregates_ms`.
 async fn run_all_steps(
     db_tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     staged: &Staged,
@@ -320,6 +325,14 @@ async fn run_all_steps(
     let t = Instant::now();
     write::upsert_balances(db_tx, staged, &account_ids).await?;
     timings.balances_ms = t.elapsed().as_millis();
+
+    let t = Instant::now();
+    // Task 0194 sub-blocks 1b + 1c — recompute `assets.holder_count` and
+    // `assets.total_supply` for every (code, issuer_id) the balance writes
+    // touched. Must run after `upsert_balances` so the aggregates see the
+    // post-write state.
+    write::recompute_asset_aggregates(db_tx, staged, &account_ids).await?;
+    timings.aggregates_ms = t.elapsed().as_millis();
 
     let _ = ledger_sequence;
     Ok(())

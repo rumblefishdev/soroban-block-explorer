@@ -600,8 +600,8 @@ CREATE TABLE assets (
     issuer_id    BIGINT        REFERENCES accounts(id),           -- ADR 0026
     contract_id  BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030
     name         VARCHAR(256),
-    total_supply NUMERIC(28,7),                                   -- populated by metadata worker (ADR 0022)
-    holder_count INTEGER,                                         -- ditto
+    total_supply NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
+    holder_count INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
     icon_url     VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
     CONSTRAINT ck_assets_asset_type_range CHECK (asset_type BETWEEN 0 AND 15),
     -- asset_type = 2 (SAC) admits two shapes — classic-credit wrap carries
@@ -679,7 +679,7 @@ Design notes:
   [ADR 0023](../../../lore/2-adrs/0023_tokens-typed-metadata-columns.md) Part 3
   and supersedes the per-entity S3 hydration sketched under task 0164;
   details-only fields are not persisted at all
-- `total_supply` and `holder_count` are stock fields also populated post-ingest
+- `total_supply` and `holder_count` are stock fields populated by the **indexer per ledger**, not by enrichment Lambda 2 — both are on-chain-derivable from `account_balances_current` (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), list-endpoint + on-chain → indexer). After the credit-balance upsert pass, `recompute_asset_aggregates` (`crates/indexer/src/handler/persist/write.rs`) collects every `(asset_code, issuer_id)` pair touched by this ledger and runs a single UPDATE that rewrites `holder_count = COUNT(*) FILTER (WHERE balance > 0)` (active-holder semantics, matching the Stellar ecosystem convention used by StellarExpert / Stellarchain.io) and `total_supply = SUM(balance)` from `account_balances_current`. **MVP scope** — Stellar protocol stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply is always derived. Horizon `/assets` aggregates 4 sources (trustlines + claimable_balances + LP reserves + SAC contract holdings); MVP aggregates only trustlines. Drift on heavily-used DeFi assets can be material (~20-50% under-count vs Horizon for USDC w/ heavy Soroswap + SAC use). Full Horizon parity tracked under task 0194 Future Work. Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT introspection on the upsert path; the affected-set is bounded per ledger so the cost stays small. Implementation owned by task 0194 §1b (total_supply) + §1c (holder_count, supersedes blocked task 0135).
 - `soroban_contracts.contract_type = 'token'` classifies a contract's SEP-41 role
   and is intentionally distinct from this table's name — the two coexist without
   ambiguity now that the table is `assets`
@@ -860,9 +860,9 @@ CREATE TABLE liquidity_pool_snapshots (
     reserve_a       NUMERIC(28,7) NOT NULL,
     reserve_b       NUMERIC(28,7) NOT NULL,
     total_shares    NUMERIC(28,7) NOT NULL,
-    tvl             NUMERIC(28,7),
-    volume          NUMERIC(28,7),
-    fee_revenue     NUMERIC(28,7),
+    tvl             NUMERIC(28,7),                            -- Lambda 2 enrichment (ADR 0043 / task 0195 §2b — off-chain price oracle)
+    volume          NUMERIC(28,7),                            -- deferred to task 0199 (per-op extraction + USD oracle)
+    fee_revenue     NUMERIC(28,7),                            -- deferred to task 0199 (derived from USD-denominated volume)
     created_at      TIMESTAMPTZ   NOT NULL,
     PRIMARY KEY (id, created_at),
     CONSTRAINT ck_lps_pool_id_len CHECK (octet_length(pool_id) = 32)
@@ -883,8 +883,9 @@ Design notes:
 - composite `(id, created_at)` PK is required by the partitioning key rule;
   `pool_id` is `BYTEA(32)` (ADR 0024) with the deferred FK back to `liquidity_pools`
 - reserves are typed `NUMERIC(28,7)` columns (not JSONB), uniform with the rest of
-  the schema's balance / amount handling; `volume` and `fee_revenue` are
-  explorer-level derived measures
+  the schema's balance / amount handling
+- `volume` and `fee_revenue` are NOT populated yet — both columns stay NULL until **task 0199** lands. The indexer cannot derive them correctly from snapshot reserves alone (reserve delta nets opposite swaps inside one ledger and lacks USD denomination). Task 0199 implements per-op extraction from PathPayment `claimedOffers[].amount_sold` plus USD denomination via the price oracle infrastructure of task 0195 §2b. Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), the per-op extraction half is on-chain → indexer, and the USD denomination half is off-chain → Lambda 2.
+- `tvl` is populated by **Lambda 2 enrichment** (off-chain USD oracle, task 0195 §2b — Reflector / StellarExpert) — not by the indexer
 - `created_at` drives interval queries and monthly partition management
 
 ### 4.16 LP Positions

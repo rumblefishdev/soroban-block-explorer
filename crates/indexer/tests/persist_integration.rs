@@ -242,6 +242,43 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         sac_identity.2.is_some(),
         "SAC contract_id resolved to soroban_contracts.id"
     );
+
+    // Task 0194 §1b + §1c — `recompute_asset_aggregates` runs after
+    // `upsert_balances` and rewrites the touched `(code, issuer_id)` asset
+    // row's `holder_count` + `total_supply`. The fixture's `make_account_state`
+    // contributes one credit trustline for `(USDC, ISSUER)` with balance
+    // `5.0000000`, so after the first persist:
+    //   holder_count = 1   (COUNT(*) FILTER (WHERE balance > 0))
+    //   total_supply = 5.0000000 (SUM(balance))
+    // Project `total_supply::TEXT` because the workspace `sqlx` features do
+    // not include `bigdecimal` — NUMERIC(28,7) round-trips losslessly through
+    // TEXT for assertion purposes.
+    let agg_first: (Option<i32>, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT a.holder_count, a.total_supply::TEXT
+          FROM assets a
+          JOIN accounts iss ON iss.id = a.issuer_id
+         WHERE a.asset_code = $1
+           AND iss.account_id = $2
+           AND a.asset_type IN (1, 2)
+        "#,
+    )
+    .bind("USDC")
+    .bind(ISSUER_STRKEY)
+    .fetch_one(&pool)
+    .await
+    .expect("USDC@ISSUER row must exist for aggregate assertion");
+    assert_eq!(
+        agg_first.0,
+        Some(1),
+        "task 0194 §1c: holder_count = COUNT(*) FILTER (WHERE balance > 0) — one active holder"
+    );
+    assert_eq!(
+        agg_first.1.as_deref(),
+        Some("5.0000000"),
+        "task 0194 §1b: total_supply = SUM(balance) of trustlines for (USDC, ISSUER)"
+    );
+
     assert_eq!(counts_first.pools, 1, "liquidity_pools row count");
     assert_eq!(
         counts_first.pool_snapshots, 1,
@@ -346,6 +383,126 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
 
     let counts_replay = test_counts(&pool).await;
     assert_eq!(counts_replay, counts_first, "replay must be idempotent");
+
+    // === Task 0194 §1b + §1c — trustline-removal-to-zero scenario ===
+    //
+    // Persist a follow-up ledger (`TEST_LEDGER_SEQ + 1`) whose
+    // `ExtractedAccountState.removed_trustlines` contains the USDC entry
+    // from the canonical fixture. `recompute_asset_aggregates` must visit
+    // the touched `(USDC, ISSUER)` pair and, because every trustline has
+    // been removed, the LATERAL aggregate returns NULL → `COALESCE(NULL, 0)`
+    // writes `holder_count = 0`, `total_supply = 0` (zero-out path,
+    // exercising the COALESCE branch flagged by the Copilot review).
+    const REMOVAL_LEDGER_SEQ: u32 = TEST_LEDGER_SEQ + 1;
+    const REMOVAL_TX_HASH: &str =
+        "5555555555555555555555555555555555555555555555555555555555555555";
+    const REMOVAL_LEDGER_HASH: &str =
+        "6666666666666666666666666666666666666666666666666666666666666666";
+
+    let removal_ledger = ExtractedLedger {
+        sequence: REMOVAL_LEDGER_SEQ,
+        hash: REMOVAL_LEDGER_HASH.to_string(),
+        closed_at: TEST_CLOSED_AT + 5,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let removal_tx = ExtractedTransaction {
+        hash: REMOVAL_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: REMOVAL_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 1000,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT + 5,
+        parse_error: false,
+    };
+    let removal_state = ExtractedAccountState {
+        account_id: SRC_STRKEY.to_string(),
+        first_seen_ledger: None,
+        last_seen_ledger: REMOVAL_LEDGER_SEQ,
+        sequence_number: 43,
+        balances: json!([
+            {"asset_type": "native", "balance": "1.0000000"},
+        ]),
+        removed_trustlines: vec![json!({
+            "asset_code": "USDC",
+            "issuer": ISSUER_STRKEY,
+        })],
+        home_domain: None,
+        created_at: TEST_CLOSED_AT + 5,
+    };
+
+    persist_ledger(
+        &pool,
+        &removal_ledger,
+        &[removal_tx],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[removal_state],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("removal-ledger persist_ledger failed");
+
+    let agg_after_removal: (Option<i32>, Option<String>) = sqlx::query_as(
+        r#"
+        SELECT a.holder_count, a.total_supply::TEXT
+          FROM assets a
+          JOIN accounts iss ON iss.id = a.issuer_id
+         WHERE a.asset_code = $1
+           AND iss.account_id = $2
+           AND a.asset_type IN (1, 2)
+        "#,
+    )
+    .bind("USDC")
+    .bind(ISSUER_STRKEY)
+    .fetch_one(&pool)
+    .await
+    .expect("USDC@ISSUER asset row must persist past the trustline removal");
+    assert_eq!(
+        agg_after_removal.0,
+        Some(0),
+        "task 0194 §1c: every trustline removed → holder_count = 0 (COALESCE branch)"
+    );
+    assert_eq!(
+        agg_after_removal.1.as_deref(),
+        Some("0.0000000"),
+        "task 0194 §1b: every trustline removed → total_supply = 0 (COALESCE branch)"
+    );
+
+    // Scoped cleanup for the follow-up ledger (canonical `clean_test_ledger`
+    // wipes the shared accounts + asset rows on next test run).
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(REMOVAL_TX_HASH)
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(REMOVAL_TX_HASH)
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+        .bind(i64::from(REMOVAL_LEDGER_SEQ))
+        .execute(&pool)
+        .await;
 }
 
 /// ADR 0031 — every Rust `#[repr(i16)]` enum variant must agree with the

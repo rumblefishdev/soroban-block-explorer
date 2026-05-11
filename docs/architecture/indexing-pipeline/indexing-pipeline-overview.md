@@ -200,11 +200,39 @@ committed in a single atomic DB transaction:
     `extract_liquidity_pools` post-lore-0189). The extractor itself
     accepts `state` change_type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
-    snapshot of a referenced-but-unmodified pool
+    snapshot of a referenced-but-unmodified pool. `volume` and
+    `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
+    extraction from PathPayment `claimedOffers[].amount_sold` + USD
+    denomination via oracle). Per
+    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
+    the per-op extraction half is on-chain → indexer and the USD
+    denomination is off-chain → Lambda 2; the off-chain `tvl` (USD
+    oracle) is Lambda 2's responsibility (task 0195 §2b).
 14. upsert `accounts` summary and `account_balances_current`
     (the parallel `account_balance_history` append was removed in task 0159
     per [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md);
-    chart feature design deferred to launch time)
+    chart feature design deferred to launch time). **After** the balance
+    upsert pass, `recompute_asset_aggregates`
+    (`crates/indexer/src/handler/persist/write.rs`) collects every
+    `(asset_code, issuer_id)` pair touched by this ledger's credit-balance
+    writes and trustline removals and runs a single UPDATE that rewrites
+    `assets.holder_count = COUNT(*) FILTER (WHERE balance > 0)`
+    (active-holder semantics, matching Stellar ecosystem convention)
+    and `assets.total_supply = SUM(balance)` from
+    `account_balances_current`. **MVP scope** — Stellar protocol
+    stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply
+    is always derived. Horizon `/assets` aggregates 4 sources
+    (trustlines + claimable_balances + LP reserves + SAC contract
+    holdings); MVP aggregates only trustlines. Material drift on
+    DeFi assets vs Horizon is documented under task 0194 Future Work.
+    Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT
+    introspection on the upsert path; the affected-set is bounded per
+    ledger so the cost stays small. Per
+    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), both
+    columns are on-chain-derivable from `account_balances_current` and
+    belong to the indexer (list-endpoint + on-chain → indexer); SEP-1
+    `name` for classic credit is off-chain and belongs to Lambda 2
+    (task 0195 §2a, supersedes blocked task 0135 / draft task 0124).
 
 ### 5.3 Write Target
 

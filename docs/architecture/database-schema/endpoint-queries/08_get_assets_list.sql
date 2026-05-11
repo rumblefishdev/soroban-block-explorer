@@ -40,10 +40,17 @@ SELECT
     iss.account_id                       AS issuer,
     sc.contract_id                       AS contract_id,
     a.name,
-    a.total_supply,
-    a.holder_count,                      -- may be NULL or stale: ongoing tracking
-                                         -- is blocked behind task 0135
-                                         -- (token-holder-count-tracking).
+    a.total_supply,                      -- recomputed by indexer per ledger:
+                                         -- SUM(account_balances_current.balance) for this
+                                         -- (code, issuer_id). MVP scope — full Horizon
+                                         -- parity (claimable + LP + SAC contract holdings)
+                                         -- tracked under task 0194 Future Work; drift on
+                                         -- DeFi-heavy assets noted there.
+    a.holder_count,                      -- recomputed by indexer per ledger:
+                                         -- COUNT(*) FILTER (WHERE balance > 0) — active
+                                         -- holders only, matching StellarExpert /
+                                         -- Stellarchain.io convention. Task 0194 §1c
+                                         -- (supersedes blocked task 0135).
     a.icon_url
 FROM assets a
 LEFT JOIN accounts          iss ON iss.id = a.issuer_id
