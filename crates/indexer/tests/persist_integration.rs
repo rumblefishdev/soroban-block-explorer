@@ -4008,8 +4008,9 @@ async fn application_order_min_fold_for_duplicate_identity() {
 // crashes the persist staging path — tracked in [lore-0209](
 // ../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
 // A live-DB reproducer for the crash lives below as
-// `parse_error_empty_source_crashes_persist_until_bug_fixed`
-// (gated by `#[should_panic]`).
+// `parse_error_empty_source_crashes_persist_until_bug_fixed`; it
+// asserts the exact staging-layer error message and skips cleanly
+// when `DATABASE_URL` is unset.
 //
 // This test exercises the populated-source path (Variants B / C) so the
 // `parse_error` flag is proven to round-trip from `ExtractedTransaction`
@@ -4282,22 +4283,34 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
 /// Live-DB reproducer for the empty-source persist crash documented in
 /// [lore-0209](../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
 ///
-/// `make_parse_error_transaction` already pins the populated-source
-/// shape because the empty-source path crashes the staging layer at
-/// `staging.rs:317-321` + `:454` + `write.rs:643`. This test
-/// **expects the crash** so the BUG remains observable until the
-/// referenced task lands. Once the BUG fix lands, this test will
-/// start passing without panic; flip the `#[should_panic]` attribute
-/// off to convert it into a happy-path regression guard.
+/// `make_parse_error_transaction` pins the populated-source shape because
+/// the empty-source path crashes the staging layer at
+/// `staging.rs:317-321` + `:454` + `write.rs:643`. This test asserts
+/// `persist_ledger` returns the exact staging error literal
+/// `"unresolved StrKey for transactions.source"` so the BUG stays
+/// observable until the referenced task lands. Once the BUG fix lands,
+/// this test will fail (the call will succeed and `expect_err` will
+/// panic), prompting the fix author to flip the assertion into a
+/// happy-path regression guard.
+///
+/// Skips cleanly when `DATABASE_URL` is unset / unreachable — matches
+/// the pattern used by every other DB-gated test in this file. No
+/// `#[should_panic]` or `#[ignore]` needed: the error-message
+/// assertion does the same locking work while keeping the test
+/// runnable through the normal `cargo test` flow.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL — live reproducer for lore-0209 BUG; run via `cargo test -- --ignored parse_error_empty_source`"]
-#[should_panic(expected = "unresolved StrKey for transactions.source")]
 async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set to run the empty-source reproducer");
-    let pool = PgPool::connect(&database_url)
-        .await
-        .expect("DATABASE_URL must be reachable to run the reproducer");
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0209 reproducer");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0209 reproducer");
+            return;
+        }
+    };
 
     ensure_default_partitions(&pool).await;
     let tx_hash = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0209bbb";
@@ -4352,13 +4365,17 @@ async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
         &classification_cache,
     )
     .await
-    .expect_err("persist_ledger must error for empty source — the BUG this test reproduces");
+    .expect_err(
+        "lore-0209 BUG: persist_ledger must error for empty source until the fix lands — \
+         if this `expect_err` panics, the BUG is gone and the assertion below should \
+         flip into a happy-path regression guard",
+    );
 
-    // Surface the exact failure mode in the panic message so the
-    // `should_panic(expected = ...)` literal anchors to the real
-    // staging error string. Any drift in the error path will flip
-    // this test red and prompt a re-confirmation.
-    panic!("{err}");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unresolved StrKey for transactions.source"),
+        "expected lore-0209 staging-layer error message, got: {msg}"
+    );
 }
 
 /// Minimal scoped cleanup for the task-0192 ordering / fold tests. These
