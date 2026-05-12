@@ -20,6 +20,13 @@
 --     are NULL today (populated by a future TVL-ingestion task).
 --   • Issuer StrKeys via final joins. Native legs (asset_*_type = 0) have
 --     NULL issuer_id; LEFT JOIN yields NULL.
+--   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
+--     via `lp.created_at_ledger > 0`. Sentinel rows carry
+--     `created_at_ledger = 0` and minimum-data NULL/0 asset/fee
+--     fields; they exist only to satisfy `lp_positions.pool_id` FK
+--     during partial backfills. The detail query returning no row
+--     causes the handler to surface 404 — the desired outcome for a
+--     pool whose real on-chain shape has not yet been observed.
 
 SELECT
     encode(lp.pool_id, 'hex')          AS pool_id_hex,
@@ -61,4 +68,5 @@ LEFT JOIN LATERAL (
     ORDER BY lps.created_at DESC, lps.ledger_sequence DESC
     LIMIT 1
 ) s ON TRUE
-WHERE lp.pool_id = $1;
+WHERE lp.pool_id = $1
+  AND lp.created_at_ledger > 0;  -- sentinel filter (ADR 0041 / task 0193)
