@@ -229,7 +229,7 @@ defeats the LRU) or (b) chunk size too small for the row width.
 
 ## Related
 
-- Task spec: [`lore/1-tasks/active/0196_FEATURE_enrichment-backfill-crate.md`](../../lore/1-tasks/active/0196_FEATURE_enrichment-backfill-crate.md)
+- Task spec: [`lore/1-tasks/archive/0196_FEATURE_enrichment-backfill-crate.md`](../../lore/1-tasks/archive/0196_FEATURE_enrichment-backfill-crate.md)
 - Field allocation rule: [`lore/2-adrs/0043_field-allocation-rule.md`](../../lore/2-adrs/0043_field-allocation-rule.md)
 - Live worker: [`crates/enrichment-worker`](../enrichment-worker)
 - Shared HTTP / fetch primitives: [`crates/enrichment-shared`](../enrichment-shared)

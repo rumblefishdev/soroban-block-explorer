@@ -107,12 +107,15 @@ enum Command {
 
 #[derive(Args)]
 struct DrainArgs {
-    /// Concurrent in-flight fetches.
-    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(usize).range(1..))]
+    /// Concurrent in-flight fetches. Must be >= 1 (`Semaphore(0)` would
+    /// deadlock every spawned task on `acquire_owned()`).
+    #[arg(long, default_value_t = 10, value_parser = parse_positive_usize)]
     concurrency: usize,
 
-    /// Rows pulled per SELECT chunk.
-    #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(i64).range(1..))]
+    /// Rows pulled per SELECT chunk. Must be >= 1 (Postgres treats
+    /// `LIMIT -1` as "no limit", so a negative or zero value would
+    /// pull the entire table in one chunk).
+    #[arg(long, default_value_t = 200, value_parser = parse_positive_i64)]
     chunk_size: i64,
 
     /// Stop after processing at most N rows. Default: drain everything.
@@ -130,6 +133,22 @@ struct DrainArgs {
     /// sentinels.
     #[arg(long)]
     force_retry: bool,
+}
+
+fn parse_positive_usize(s: &str) -> Result<usize, String> {
+    let v: usize = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if v < 1 {
+        return Err("must be >= 1".to_owned());
+    }
+    Ok(v)
+}
+
+fn parse_positive_i64(s: &str) -> Result<i64, String> {
+    let v: i64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if v < 1 {
+        return Err("must be >= 1".to_owned());
+    }
+    Ok(v)
 }
 
 #[tokio::main]
