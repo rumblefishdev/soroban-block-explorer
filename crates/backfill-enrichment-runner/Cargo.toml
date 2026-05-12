@@ -2,7 +2,7 @@
 name = "backfill-enrichment-runner"
 version = "0.1.0"
 edition = "2024"
-description = "Local CLI that drains pre-existing un-enriched DB rows by calling the same enrichment-shared::enrich_and_persist::* functions used by the live SQS-driven enrichment-worker Lambda. Single `enrich` binary with one subcommand per kind (`icon`, `nft-metadata`, `status`), mirroring backfill-runner's shape."
+description = "Local CLI that drains pre-existing un-enriched DB rows by calling the same enrichment-shared::enrich_and_persist::* functions used by the live SQS-driven enrichment-worker Lambda. Single `enrich` binary with one subcommand per kind (`sep1-assets`/`sep1_assets`, `nft-metadata`, `status`), mirroring backfill-runner's shape."
 
 [[bin]]
 name = "enrich"
