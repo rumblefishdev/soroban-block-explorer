@@ -2,7 +2,7 @@
 id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
-status: backlog
+status: blocked
 related_adr: ['0027', '0031', '0043']
 related_tasks: ['0125', '0194', '0195']
 tags:
@@ -20,6 +20,20 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0194 §1d (snapshot-delta volume) — flaws: opposite-swap netting + asset_a units. Absorbed 0195 §2b (LP TVL); 0125 superseded. Spec: zero schema delta — `tvl/volume/fee_revenue` already exist (migration 0006), stay USD-denominated; `gross_volume_a` carried in SQS message body. All three columns owned by Lambda 2.'
+  - date: '2026-05-12'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Promoting `blocked-on-oracle` from tag to lifecycle status. Phases 1+2
+      ship atomically and depend on the team-built price API (owned by Oskar)
+      being ready for consumption — without it Lambda 2 cannot USD-denominate
+      `tvl`, `volume`, `fee_revenue` and Phase 1 (indexer per-op extraction
+      to SQS) produces no observable DB writes on its own. Reusable
+      enrichment scaffolding from 0191 (completed 2026-05-06,
+      `crates/enrichment-shared/`, `crates/enrichment-worker/`, EventBridge
+      + SQS + DLQ) is in place; gating dependency is solely the price API.
+      Move back to active once Oskar's API contract (endpoint shape,
+      freshness, no-price-for-asset behavior, latency budget) is finalized.
 ---
 
 # LP analytics: TVL + volume + fee_revenue

@@ -2,9 +2,9 @@
 id: '0122'
 title: 'Indexer: extract transaction signatures'
 type: FEATURE
-status: backlog
-related_adr: []
-related_tasks: ['0024', '0046']
+status: superseded
+related_adr: ['0004', '0029']
+related_tasks: ['0024', '0046', '0050', '0150']
 tags: [priority-low, effort-small, layer-indexer, audit-gap]
 milestone: 1
 links:
@@ -14,6 +14,23 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from pipeline audit — tech design specifies signatures display on tx detail but XDR parser does not extract them.'
+  - date: '2026-05-12'
+    status: superseded
+    who: stkrolikiewicz
+    by: ['0150']
+    note: >
+      ADR 0029 (2026-04-22) reversed the storage approach this task assumed:
+      signatures are not persisted as JSONB on `transactions`. Instead, task
+      0150 (completed 2026-04-22) added a read-time public-archive XDR fetch
+      that extracts signatures from the envelope; tasks 0046 and 0050 wired
+      the extracted `heavy.signatures` into the E3 (`/v1/transactions/:hash`)
+      and E14 endpoints. Verified live: `SignatureDto` at
+      `crates/api/src/runtime_enrichment/stellar_archive/dto.rs:73`,
+      `envelope_signatures()` at `extractors.rs:209`, response wiring at
+      `crates/api/src/transactions/{dto.rs:62, handlers.rs:139}`. AC1
+      ("extracted AND stored as JSONB") is itself obsolete under ADR 0029;
+      AC2 + AC3 are met via the read path. User-facing gap from the
+      2026-04-10 pipeline audit is closed.
 ---
 
 # Indexer: extract transaction signatures
