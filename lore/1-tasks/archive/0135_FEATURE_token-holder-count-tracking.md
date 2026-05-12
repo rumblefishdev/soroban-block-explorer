@@ -2,10 +2,19 @@
 id: '0135'
 title: 'Indexer: ongoing token holder_count tracking'
 type: FEATURE
-status: blocked
-related_adr: ['0037']
-related_tasks: ['0027', '0049', '0119']
-tags: [priority-medium, effort-medium, layer-indexer, layer-db, audit-gap]
+status: superseded
+superseded_by: ['0194', '0196']
+related_adr: ['0037', '0043']
+related_tasks: ['0027', '0049', '0119', '0194', '0196']
+tags:
+  [
+    priority-medium,
+    effort-medium,
+    layer-indexer,
+    layer-db,
+    audit-gap,
+    superseded,
+  ]
 milestone: 1
 links:
   - docs/audits/2026-04-10-pipeline-data-audit.md
@@ -29,6 +38,27 @@ history:
       pre-backfill dataset would ship misleading counts. Unblocks
       once `backfill-runner` (task 0145) finishes the historical
       sweep.
+  - date: '2026-05-12'
+    status: superseded
+    who: stkrolikiewicz
+    by: ['0194', '0196']
+    note: >
+      Superseded by the 0194 + 0196 combo (both completed, develop).
+      Task 0194 (FEATURE — completed 2026-05-11, karolkow) shipped
+      `recompute_asset_aggregates` in
+      `crates/indexer/src/handler/persist/write.rs`, populating
+      `assets.holder_count` (and `total_supply`) on every ledger that
+      touches the asset, via `COUNT(*) FILTER (WHERE balance > 0)`
+      over `account_balances_current` — active-holder semantics
+      matching StellarExpert convention. Per-ledger overhead +4%
+      mean, +1ms p99. Task 0196 (enrichment-backfill crate) covers
+      the dormant-assets bulk recount that the per-ledger path skips,
+      so the combination provides both ongoing tracking AND historical
+      catch-up. Scope coverage exceeds the original 0135 spec
+      (incremental counter on trustline events was Option A; 0194 chose
+      per-ledger SQL recompute instead — simpler, parallel-backfill-safe
+      by construction). Soroban-token holder_count (0135 §Out of Scope)
+      remains a future follow-up if user-visible drift materialises.
 ---
 
 # Indexer: ongoing token holder_count tracking
