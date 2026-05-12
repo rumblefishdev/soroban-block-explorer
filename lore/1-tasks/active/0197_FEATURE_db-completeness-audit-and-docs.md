@@ -78,6 +78,8 @@ The pattern to verify: detail-only fields (e.g. `description`, `home_page` on as
 
 ### Step 1: Coverage matrix (audit deliverable)
 
+**Scope:** Postgres store only. ClickHouse pilot (ADR 0044, tasks 0204/0206/0207) maintains a parallel store with a separate endpoint-query reference set (`endpoint-queries-clickhouse/`); CH is **not** yet wired to the API read-path. A CH-side equivalence audit is deferred to a follow-up task that runs once CH serves a real `/v1/*` handler — running it now would only verify the 0207 reference SQL against itself.
+
 Output `docs/audits/{TIMESTAMP}-list-endpoint-completeness.md` with a single table:
 
 | Endpoint              | DTO field         | DB column   | Indexed?     | Populated by               | Sample query result         |
@@ -124,6 +126,7 @@ Per `lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md`, every PR chan
 - ADR 0043 (field allocation rule, from 0194) — re-affirm without amendment, OR amend if implementation revealed edge cases
 - ADR 0029 (abandon-parsed-artifacts) — read-path ADR, NO amendment from 0194/0195/0196 expected. Confirm no spurious amendment was added.
 - ADR 0037 (current-schema-snapshot) — confirm 0194's amendment landed
+- ADR 0044 (ClickHouse pilot — parallel store) — confirm no audit-driven amendment required. Audit scope is Postgres-only (see Step 1 preamble); CH parity audit deferred until CH wired to the API read-path. Any amendment here would be out of 0197 scope.
 
 ### Step 5: Audit doc supersession
 
