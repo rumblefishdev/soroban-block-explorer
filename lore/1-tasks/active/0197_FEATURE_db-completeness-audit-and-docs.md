@@ -2,7 +2,7 @@
 id: '0197'
 title: 'DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks: ['0188', '0191', '0194', '0195', '0196']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
@@ -14,6 +14,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from M2 enrichment planning session 2026-05-06. Fourth and final of four tasks (0194-0197). Verifies the field allocation rule (ADR 0043) is followed end-to-end after 0194/0195/0196 land.'
+  - date: '2026-05-12'
+    status: active
+    who: karolkow
+    note: 'Activated. Bundling 0196 work into this branch since needed here.'
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
