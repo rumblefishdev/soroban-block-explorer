@@ -1,0 +1,44 @@
+<!--
+  User-profile-level timeout override for the CH pilot. Mounted at
+  /etc/clickhouse-server/users.d/timeouts.xml.
+
+  CH 26.3 records per-query `with_setting("http_receive_timeout", ...)`
+  in `system.query_log.Settings` but does NOT propagate it to the
+  Poco-level socket read on the HTTP body chunked stream. Only this
+  profile-level XML override takes effect for the wire behaviour.
+  Verified empirically on the 10 k-ledger smoke at 62016000 (task
+  0206 follow-up) — failed identically with and without the per-query
+  override, fixed only after this XML landed.
+
+  Timeouts at 2 hours — 30 min was insufficient for 64k-ledger
+  partitions which take ~80 min wall-clock. Sparse tables
+  (lp_positions ~1700 rows / 84 KiB total per partition;
+  wasm_interface_metadata ~100 rows / 5 KiB total) never fill the
+  client's 256 KiB chunk buffer, so chunks send only at partition
+  end. 30 min cap fired on these idle streams. 2h cap covers any
+  realistic single-partition workload, including future K=4 parallel
+  scenarios where contention slows individual partitions.
+
+  Server-level `keep_alive_timeout` lives in the sibling
+  `config.d/timeouts.xml`. See ADR 0044 history for the full rationale.
+
+  Pilot-only — production deployment needs a narrower posture +
+  monitoring.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <http_receive_timeout>7200</http_receive_timeout>
+            <http_send_timeout>7200</http_send_timeout>
+            <receive_timeout>7200</receive_timeout>
+            <send_timeout>7200</send_timeout>
+
+            <!-- Per-query memory cap. With the server-level
+                 `max_server_memory_usage = 12 GB` (in config.d), this
+                 limits any single INSERT / merge to ~6 GB so two
+                 concurrent operations can't combine to exceed the
+                 server cap. -->
+            <max_memory_usage>6000000000</max_memory_usage>
+        </default>
+    </profiles>
+</clickhouse>
