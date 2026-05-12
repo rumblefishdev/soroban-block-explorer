@@ -381,9 +381,10 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // population is owned by task 0199, blocked on the price API. No
     // `enrich` subcommand drains them yet — the rows surface here so the
     // operator has visibility into the gap. Column types are
-    // `NUMERIC(28,7)`; no `''`-sentinel convention applies (0199 plans
-    // `tvl = 0` for permanent-fail, but that's also a legitimate value
-    // for empty pools — distinguishing is out of `enrich status` scope).
+    // `NUMERIC(28,7)`; no `''`-sentinel convention applies. Under the
+    // updated 0199 spec, permanent oracle failure is represented as
+    // per-column NULL, so `enrich status` reports the gap by counting
+    // NULLs in each analytics column.
     let lp_q = sqlx::query(
         r#"
         SELECT
