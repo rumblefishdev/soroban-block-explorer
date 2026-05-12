@@ -112,7 +112,7 @@ struct DrainArgs {
     concurrency: usize,
 
     /// Rows pulled per SELECT chunk.
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(i64).range(1..))]
     chunk_size: i64,
 
     /// Stop after processing at most N rows. Default: drain everything.
