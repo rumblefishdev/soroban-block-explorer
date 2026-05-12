@@ -402,7 +402,7 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     println!("# backfill-enrichment-runner — status\n");
     println!("**Timestamp:** {now}\n");
 
-    println!("## `icon` kind (assets table)\n");
+    println!("## `sep1-assets` kind (assets table)\n");
     print_status_header();
     print_status_row(
         "`assets.icon_url`           ",
