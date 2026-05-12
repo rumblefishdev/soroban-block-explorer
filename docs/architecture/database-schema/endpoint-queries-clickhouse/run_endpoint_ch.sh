@@ -234,12 +234,22 @@ run_one() {
         ch_exec "$(explain_wrap "$(<"$FILE")")" ;;
 
     02)
-        # Statement A — no filter (the common path; B/C require contract
-        # or op_type filter and aren't useful for a smoke run).
-        # Params: $1=limit, $2=cursor_ledger, $3=cursor_tx_id, $4=source_id, $5=contract_id, $6=op_type.
+        # Statement A — no filter. PR #175 amendment: $7 = latest_partition
+        # (intDiv(max_ledger, 500000)) bounds the scan to one partition
+        # to avoid full-table FINAL memory blowup.
+        # Params: $1=limit, $2=cursor_ledger, $3=cursor_tx_id, $4=source_id,
+        # $5=contract_id, $6=op_type, $7=latest_partition.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E02: GET /transactions (statement A) ==="
+        local latest_part
+        if [[ "$SYNTAX_ONLY" == "1" ]]; then
+            latest_part="124"  # intDiv(62016000, 500000)
+        else
+            latest_part=$(ch_oneshot "SELECT intDiv(max(ledger_sequence), 500000) FROM transactions FINAL")
+            require_value "$latest_part" "transactions" || return 1
+            echo "  latest_partition = $latest_part"
+        fi
         local STMT; STMT=$(get_statement "$FILE" 1)
-        local SUB; SUB=$(substitute_params "$STMT" "50" "NULL" "NULL" "NULL" "NULL" "NULL")
+        local SUB; SUB=$(substitute_params "$STMT" "50" "NULL" "NULL" "NULL" "NULL" "NULL" "$latest_part")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
@@ -342,47 +352,75 @@ run_one() {
         ;;
 
     08)
-        # Params: $1=limit, $2=cursor_id, $3=asset_type, $4=asset_code.
+        # PR #175: assets dropped surrogate id; cursor is 4-tuple natural key.
+        # Params: $1=limit, $2..$5=cursor 4-tuple, $6=asset_type_filter, $7=asset_code_filter.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E08: GET /assets ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL")
+        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL" "NULL" "NULL")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
     09)
-        # Params: $1=asset id (Int32).
+        # PR #175: takes natural 4-tuple instead of single surrogate id.
+        # Params: $1=asset_type, $2=asset_code, $3=issuer_id, $4=contract_id.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E09: GET /assets/:id ==="
-        local aid
+        local atype acode aiss actr
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            aid="$DUMMY_ID_I32"
+            atype="1"; acode="'USDC'"; aiss="0"; actr="0"
         else
-            aid=$(ch_oneshot "SELECT id FROM assets FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$aid" "assets" || return 1
-            echo "  asset id = $aid"
+            # Discover any real asset's 4-tuple
+            local row
+            row=$(ch_oneshot "SELECT toString(asset_type) || '|' || asset_code || '|' || toString(issuer_id) || '|' || toString(contract_id) FROM assets FINAL LIMIT 1")
+            require_value "$row" "assets" || return 1
+            atype="${row%%|*}"; row="${row#*|}"
+            acode="'${row%%|*}'"; row="${row#*|}"
+            aiss="${row%%|*}"; row="${row#*|}"
+            actr="$row"
+            echo "  asset (type, code, issuer_id, contract_id) = ($atype, $acode, $aiss, $actr)"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "$aid")
+        local SUB; SUB=$(substitute_params "$(<"$FILE")" "$atype" "$acode" "$aiss" "$actr")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
     10)
-        # 2 variants (A classic identity, B contract identity).
-        # Params per variant: $1=asset_id, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
+        # 2 variants. PR #175 amendment:
+        #  Variant A (classic identity): $1=asset_code, $2=asset_issuer_id, $3=limit, $4=cursor_ledger, $5=cursor_tx_id.
+        #  Variant B (contract identity): $1=contract_id (Int64), $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E10: GET /assets/:id/transactions ==="
-        local aid
+        # Run variant A with first classic-identity asset (asset_code+issuer_id)
+        local STMT_A SUB_A acode aiss
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            aid="$DUMMY_ID_I32"
+            acode="'USDC'"; aiss="1234"
         else
-            aid=$(ch_oneshot "SELECT id FROM assets FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$aid" "assets" || return 1
-            echo "  asset id = $aid"
+            local row_a
+            row_a=$(ch_oneshot "SELECT asset_code || '|' || toString(issuer_id) FROM assets FINAL WHERE length(asset_code) > 0 AND issuer_id != 0 LIMIT 1")
+            if [[ -n "$row_a" ]]; then
+                acode="'${row_a%%|*}'"; aiss="${row_a#*|}"
+                echo "  variant A (asset_code, issuer_id) = ($acode, $aiss)"
+            else
+                echo "  variant A — no classic asset; skipping"
+                acode=""
+            fi
         fi
-        local stmt_idx
-        for stmt_idx in 1 2; do
-            local STMT SUB
-            STMT=$(get_statement "$FILE" "$stmt_idx")
-            SUB=$(substitute_params "$STMT" "$aid" "50" "NULL" "NULL")
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- variant $stmt_idx ---"
-            ch_exec "$(explain_wrap "$SUB")" || true
-        done
+        if [[ -n "$acode" ]]; then
+            STMT_A=$(get_statement "$FILE" 1)
+            SUB_A=$(substitute_params "$STMT_A" "$acode" "$aiss" "50" "NULL" "NULL")
+            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- variant A (classic identity) ---"
+            ch_exec "$(explain_wrap "$SUB_A")" || true
+        fi
+        # Variant B with first contract-identity asset
+        local STMT_B SUB_B actr_b
+        if [[ "$SYNTAX_ONLY" == "1" ]]; then
+            actr_b="1234"
+        else
+            actr_b=$(ch_oneshot "SELECT toString(contract_id) FROM assets FINAL WHERE contract_id != 0 LIMIT 1")
+        fi
+        if [[ -n "$actr_b" ]]; then
+            echo "  variant B (contract_id) = $actr_b"
+            STMT_B=$(get_statement "$FILE" 2)
+            SUB_B=$(substitute_params "$STMT_B" "$actr_b" "50" "NULL" "NULL")
+            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- variant B (contract identity) ---"
+            ch_exec "$(explain_wrap "$SUB_B")" || true
+        fi
         ;;
 
     11)
@@ -459,39 +497,49 @@ run_one() {
         ;;
 
     15)
-        # Params: $1=limit, $2=cursor_id, $3=collection_name, $4=contract_strkey, $5=name.
+        # PR #175: nfts dropped surrogate id; cursor is (contract_id, token_id) tuple.
+        # Params: $1=limit, $2=cursor_contract_id, $3=cursor_token_id,
+        #         $4=collection_name, $5=contract_strkey_filter, $6=name_filter.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E15: GET /nfts ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL")
+        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL" "NULL")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
     16)
-        # Params: $1=nft id (Int32).
+        # PR #175: takes (contract_strkey, token_id) tuple instead of surrogate id.
+        # Params: $1=contract_strkey, $2=token_id.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E16: GET /nfts/:id ==="
-        local nid
+        local strkey tokid
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            nid="$DUMMY_ID_I32"
+            strkey="$DUMMY_STRKEY_C"; tokid="'1'"
         else
-            nid=$(ch_oneshot "SELECT id FROM nfts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$nid" "nfts" || return 1
-            echo "  nft id = $nid"
+            local row
+            row=$(ch_oneshot "SELECT sc.contract_id || '|' || n.token_id FROM nfts n FINAL JOIN soroban_contracts sc FINAL ON sc.id = n.contract_id LIMIT 1")
+            require_value "$row" "nfts" || return 1
+            strkey="${row%%|*}"
+            tokid="'${row#*|}'"
+            echo "  nft (contract_strkey, token_id) = ($strkey, $tokid)"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "$nid")
+        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'" "$tokid")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
     17)
-        # Params: $1=nft_id, $2=limit, $3=cursor_ledger, $4=cursor_event_order.
+        # PR #175: takes (contract_strkey, token_id) plus cursor.
+        # Params: $1=contract_strkey, $2=token_id, $3=limit, $4=cursor_ledger, $5=cursor_event_order.
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E17: GET /nfts/:id/transfers ==="
-        local nid
+        local strkey17 tokid17
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            nid="$DUMMY_ID_I32"
+            strkey17="$DUMMY_STRKEY_C"; tokid17="'1'"
         else
-            nid=$(ch_oneshot "SELECT id FROM nfts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$nid" "nfts" || return 1
-            echo "  nft id = $nid"
+            local row17
+            row17=$(ch_oneshot "SELECT sc.contract_id || '|' || n.token_id FROM nfts n FINAL JOIN soroban_contracts sc FINAL ON sc.id = n.contract_id LIMIT 1")
+            require_value "$row17" "nfts" || return 1
+            strkey17="${row17%%|*}"
+            tokid17="'${row17#*|}'"
+            echo "  nft (contract_strkey, token_id) = ($strkey17, $tokid17)"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "$nid" "50" "NULL" "NULL")
+        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey17'" "$tokid17" "50" "NULL" "NULL")
         ch_exec "$(explain_wrap "$SUB")"
         ;;
 
@@ -510,7 +558,7 @@ run_one() {
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY created_at_ledger DESC LIMIT 1")
+            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
             require_value "$pool_hex" "liquidity_pools" || return 1
             echo "  pool = $pool_hex"
         fi
@@ -525,7 +573,7 @@ run_one() {
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY created_at_ledger DESC LIMIT 1")
+            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
             require_value "$pool_hex" "liquidity_pools" || return 1
             echo "  pool = $pool_hex"
         fi
@@ -542,7 +590,7 @@ run_one() {
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY created_at_ledger DESC LIMIT 1")
+            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
             require_value "$pool_hex" "liquidity_pools" || return 1
             echo "  pool = $pool_hex (range: 0..100000, bucket=1d)"
         fi
@@ -576,7 +624,7 @@ run_one() {
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(lp.pool_id)) FROM liquidity_pools lp JOIN lp_positions p FINAL ON p.pool_id = lp.pool_id WHERE p.shares > 0 ORDER BY lp.created_at_ledger DESC LIMIT 1")
+            pool_hex=$(ch_oneshot "SELECT lower(hex(lp.pool_id)) FROM liquidity_pools lp JOIN lp_positions p FINAL ON p.pool_id = lp.pool_id WHERE p.shares > 0 ORDER BY lp.last_updated_ledger DESC LIMIT 1")
             require_value "$pool_hex" "lp_positions (with shares > 0)" || return 1
             echo "  pool = $pool_hex"
         fi

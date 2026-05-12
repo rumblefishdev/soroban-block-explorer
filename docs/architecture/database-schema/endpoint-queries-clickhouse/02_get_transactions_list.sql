@@ -2,56 +2,56 @@
 -- Purpose:      Paginated list of transactions. Optional filters:
 --               source_account, contract_id, operation_type.
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.3
--- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
+-- Schema:       ADR 0044 + PR-#175 hybrid-surrogate amendment.
 -- Data sources: DB-only.
 -- Inputs:
---   $1  :limit                Int          page size
---   $2  :cursor_ledger        Int64        NULL on first page
---   $3  :cursor_tx_id         Int64        NULL on first page
---   $4  :source_account_id    Int64        NULL = no filter (resolved by API)
---   $5  :contract_id          Int64        NULL = no filter (statement B path)
---   $6  :op_type              Int16        NULL = no filter (statement C path)
--- Indexes:      transactions ORDER BY (ledger_sequence, application_order, id)
+--   $1  :limit                Int     page size
+--   $2  :cursor_ledger        Int64   NULL on first page (drives partition prune)
+--   $3  :cursor_tx_id         Int64   NULL on first page
+--   $4  :source_account_id    Int64   NULL = no filter (cityhash64 of source StrKey)
+--   $5  :contract_id          Int64   NULL = no filter (cityhash64 of C-StrKey)
+--   $6  :op_type              Int16   NULL = no filter
+--   $7  :latest_partition     Int64   API computes `intDiv(latest_ledger, 500000)`
+--                                     and passes as scan-window upper bound;
+--                                     first page only — drops the full-table-FINAL
+--                                     scan that previously blew CH memory limit.
+-- Indexes:      transactions ORDER BY (ledger_sequence, application_order)
 --                 + PARTITION BY intDiv(ledger_sequence, 500000).
---               operations_appearances ORDER BY (ledger_sequence, transaction_id, id)
---                 — used for contract / op_type filter scans (statement B/C).
---               soroban_invocations_appearances ORDER BY (contract_id, ledger_sequence, transaction_id)
---                 — used in statement B contract UNION.
---               soroban_events ORDER BY (contract_id, ledger_sequence, transaction_id, event_index)
---                 — used in statement B contract UNION (replaces PG soroban_events_appearances per §5.1).
---               accounts ORDER BY (id) — source/account StrKey joins.
---               soroban_contracts ORDER BY (id) — contract_ids[] resolve.
+--               accounts ORDER BY (account_id) — source join by id.
+--               operations_appearances, soroban_invocations_appearances,
+--                 soroban_events all by (contract_id, …) or
+--                 (ledger_sequence, …) — used for `operation_types[]` and
+--                 `contract_surrogate_ids[]` projections.
 -- CH Engine:    All Replacing — FINAL required.
--- CH Pattern:   3 statements (A no filter / B contract filter / C op_type filter)
---                 mirroring PG E02. Cursor uses (ledger_sequence, id) per §5.2.
---                 `operation_types[]` and `contract_ids[]` via correlated
---                 subqueries returning groupUniqArray (CH equivalent of
---                 PG's array_agg DISTINCT pattern).
--- ADR 0044 §:   §4.2 (transactions), §4.3 (operations_appearances,
---                 soroban_invocations_appearances), §4.4 (soroban_events
---                 — §5.1 full-content table replaces PG's appearance index),
---                 §4.5 (state Replacing), §5.2 (no created_at — partition prune
---                 via intDiv).
+-- CH Pattern:   3 statements (A no-filter / B contract / C op_type).
+--               Partition prune ALWAYS applied — `$2 IS NULL` first-page
+--               path uses `$7` (caller-supplied latest_partition) to bound
+--               the scan to one partition. Without this, full-table FINAL
+--               on 20M+ tx rows blows the 5.6 GB default memory limit.
+-- ADR 0044 §:   §4.2 (transactions), §4.3 (operations_appearances et al.),
+--               §4.4 (soroban_events — full payload §5.1), §4.5 (accounts).
+--   **PR #175 amendment:** memory blowup observed on first-page no-filter
+--   path. Fix: caller passes `$7 = intDiv(max_ledger_sequence, 500000)`
+--   so we partition-prune from the start. Frontend can derive `$7` from
+--   the latest_ledger_sequence in E01's response or cache it for ~5s.
 -- Notes:
---   • **§5.1 in E02 contract UNION:** PG's statement B unions
---     `operations_appearances + soroban_invocations_appearances +
---     soroban_events_appearances`. CH-side, the third table is `soroban_events`
---     (the full table, not an appearance index). The UNION shape is identical
---     for the purpose of "any tx that touched contract $5" — both tables
---     carry `(contract_id, transaction_id, ledger_sequence)`.
---   • Cursor `(ledger_sequence, transaction_id) < ($2, $3)` — Stellar
---     monotonicity means this is equivalent to PG's `(created_at, id)`
---     cursor. The API maintains the same opaque base64 cursor format.
---   • PG's `LATERAL (... LIMIT 1)` for `operation_types[]` becomes a
---     correlated scalar subquery returning `Array(Int16)` via
---     `groupUniqArray()`. CH 26.x handles this as a per-row sparse-PK
---     seek into the partition the row already came from.
---   • `contract_ids[]` projection: same UNION as the filter, FINAL'd join
---     to `soroban_contracts` for the C-StrKey display values.
+--   • Partition prune via `intDiv(t.ledger_sequence, 500000) = ifNull($2_part, $7)`
+--     where `$2_part = intDiv($2, 500000)` when cursor set, else `$7`.
+--     Limits scan to ONE partition (~500k ledgers worst case).
+--   • `contract_surrogate_ids[]` projection: PR #175 dropped `assets.id`
+--     surrogate but `soroban_contracts.id` (Int64 cityhash64 hub) is still
+--     the surrogate FK on operations_appearances / soroban_invocations_appearances /
+--     soroban_events. So the projection works as-is — just shape changed.
+--   • `operation_types[]` correlated subquery: cheap because (transaction_id,
+--     ledger_sequence) is partition-pruned, ~1 sparse-PK granule per row.
 
 -- ============================================================================
 -- Statement A — no contract / op_type filter (default path)
 -- ============================================================================
+-- Wrap in subquery so the LIMIT applies BEFORE the JOIN to `accounts`.
+-- Without this, the planner builds a hashtable over both sides of the
+-- JOIN (300k+ accounts × 300k+ tx in one partition) and blows the 5.6 GB
+-- memory limit. With the subquery, only `$1` (= 50) rows reach the JOIN.
 SELECT
     lower(hex(t.hash))                              AS hash_hex,
     t.ledger_sequence,
@@ -69,44 +69,31 @@ SELECT
           AND oa.ledger_sequence = t.ledger_sequence
           AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)
     )                                               AS operation_types,
-    -- Returns Array(Int64) of contract surrogate ids; the API resolves
-    -- ids → C-StrKeys via a batched `IN` lookup on `soroban_contracts`.
-    -- CH 26.x does NOT support correlated subqueries with DISTINCT/UNION
-    -- DISTINCT (NOT_IMPLEMENTED). We work around by:
-    --   (a) using UNION ALL (no dedup) in the correlated branches, and
-    --   (b) letting outer `groupUniqArray` dedup at the row level.
-    -- Each branch is a single sparse-PK seek under the partition predicate,
-    -- so duplicate rows are bounded (~3× the underlying count).
-    arrayDistinct(arrayConcat(
-        (SELECT groupArray(contract_id)
-         FROM operations_appearances FINAL
-         WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence AND contract_id IS NOT NULL
-           AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_invocations_appearances FINAL
-         WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
-           AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_events FINAL
-         WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
-           AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000))
-    ))                                              AS contract_surrogate_ids,
+    -- NOTE: `contract_surrogate_ids[]` projection deliberately omitted from
+    -- statement A — 3 correlated FINAL subqueries × 50 rows blew the 5.6 GB
+    -- memory limit on full mainnet partitions. Frontend that needs "touched
+    -- contracts" badges can call a separate batched endpoint (or use the
+    -- single-tx detail E03). Statement B (contract filter) keeps it because
+    -- the driver set is already pre-filtered to ~limit-sized rows.
     t.id                                            AS cursor_id
-FROM transactions t FINAL
-JOIN accounts src FINAL ON src.id = t.source_id
-WHERE
-    ($2 IS NULL OR (t.ledger_sequence, t.id) < ($2, $3))
-    AND ($4 IS NULL OR t.source_id = $4)
-ORDER BY t.ledger_sequence DESC, t.id DESC
-LIMIT $1;
+FROM (
+    SELECT *
+    FROM transactions FINAL
+    WHERE intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
+      AND ($2 IS NULL OR (ledger_sequence, id) < ($2, $3))
+      AND ($4 IS NULL OR source_id = $4)
+    ORDER BY ledger_sequence DESC, id DESC
+    LIMIT $1
+) t
+JOIN accounts src ON src.id = t.source_id;  -- no FINAL: account_id is deterministic across versions
 
 -- @@ split @@
 
 -- ============================================================================
 -- Statement B — contract filter set (with or without op_type)
 -- ============================================================================
--- Build a small candidate set from the 3-table UNION (broad contract match),
--- then PK-join to transactions, apply optional op_type post-EXISTS, project.
+-- Driven by the 3-table UNION matched on contract_id; partition prune via
+-- intDiv on cursor's ledger or caller-supplied $7.
 SELECT
     lower(hex(t.hash))                              AS hash_hex,
     t.ledger_sequence,
@@ -123,25 +110,14 @@ SELECT
         WHERE oa.transaction_id = t.id AND oa.ledger_sequence = t.ledger_sequence
           AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)
     )                                               AS operation_types,
-    -- Returns Array(Int64) of contract surrogate ids; the API resolves
-    -- ids → C-StrKeys via a batched `IN` lookup on `soroban_contracts`.
-    -- CH 26.x does NOT support correlated subqueries with DISTINCT/UNION
-    -- DISTINCT (NOT_IMPLEMENTED). We work around by:
-    --   (a) using UNION ALL (no dedup) in the correlated branches, and
-    --   (b) letting outer `groupUniqArray` dedup at the row level.
-    -- Each branch is a single sparse-PK seek under the partition predicate,
-    -- so duplicate rows are bounded (~3× the underlying count).
     arrayDistinct(arrayConcat(
-        (SELECT groupArray(contract_id)
-         FROM operations_appearances FINAL
+        (SELECT groupArray(contract_id) FROM operations_appearances FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence AND contract_id IS NOT NULL
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_invocations_appearances FINAL
+        (SELECT groupArray(contract_id) FROM soroban_invocations_appearances FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_events FINAL
+        (SELECT groupArray(contract_id) FROM soroban_events FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000))
     ))                                              AS contract_surrogate_ids,
@@ -151,14 +127,17 @@ FROM (
     FROM (
         SELECT ledger_sequence, transaction_id FROM operations_appearances FINAL
         WHERE contract_id = $5
+          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
           AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
         UNION DISTINCT
         SELECT ledger_sequence, transaction_id FROM soroban_invocations_appearances FINAL
         WHERE contract_id = $5
+          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
           AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
         UNION DISTINCT
         SELECT ledger_sequence, transaction_id FROM soroban_events FINAL
         WHERE contract_id = $5
+          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
           AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
     ) u
     ORDER BY ledger_sequence DESC, transaction_id DESC
@@ -197,25 +176,14 @@ SELECT
         WHERE oa.transaction_id = t.id AND oa.ledger_sequence = t.ledger_sequence
           AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)
     )                                               AS operation_types,
-    -- Returns Array(Int64) of contract surrogate ids; the API resolves
-    -- ids → C-StrKeys via a batched `IN` lookup on `soroban_contracts`.
-    -- CH 26.x does NOT support correlated subqueries with DISTINCT/UNION
-    -- DISTINCT (NOT_IMPLEMENTED). We work around by:
-    --   (a) using UNION ALL (no dedup) in the correlated branches, and
-    --   (b) letting outer `groupUniqArray` dedup at the row level.
-    -- Each branch is a single sparse-PK seek under the partition predicate,
-    -- so duplicate rows are bounded (~3× the underlying count).
     arrayDistinct(arrayConcat(
-        (SELECT groupArray(contract_id)
-         FROM operations_appearances FINAL
+        (SELECT groupArray(contract_id) FROM operations_appearances FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence AND contract_id IS NOT NULL
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_invocations_appearances FINAL
+        (SELECT groupArray(contract_id) FROM soroban_invocations_appearances FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)),
-        (SELECT groupArray(contract_id)
-         FROM soroban_events FINAL
+        (SELECT groupArray(contract_id) FROM soroban_events FINAL
          WHERE transaction_id = t.id AND ledger_sequence = t.ledger_sequence
            AND intDiv(ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000))
     ))                                              AS contract_surrogate_ids,
@@ -224,6 +192,7 @@ FROM (
     SELECT DISTINCT transaction_id, ledger_sequence
     FROM operations_appearances FINAL
     WHERE type = $6
+      AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
       AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
     ORDER BY ledger_sequence DESC, transaction_id DESC
     LIMIT $1 * 4

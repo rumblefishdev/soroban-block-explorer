@@ -2,62 +2,58 @@
 -- Purpose:      Paginated transfer/ownership history for a single NFT.
 --               Default ordering: most recent first.
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.12
--- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
+-- Schema:       ADR 0044 + PR-#175 hybrid-surrogate amendment.
 -- Data sources: DB-only.
 -- Inputs:
---   $1  :nft_id                Int32   NFT surrogate id
---   $2  :limit                 Int     page size
---   $3  :cursor_ledger         Int64   NULL on first page
---   $4  :cursor_event_order    Int16   NULL on first page
--- Indexes:      nfts ORDER BY (id) — keyed input.
---               nft_ownership ORDER BY (nft_id, ledger_sequence, event_order)
---                 + PARTITION BY intDiv(ledger_sequence, 500000). The keyset
---                 walks the natural PK direction.
---               transactions ORDER BY (ledger_sequence, application_order, id)
---                 — composite join for transaction_hash.
+--   $1  :contract_strkey       String  C-form contract ID
+--   $2  :token_id              String  on-chain token_id
+--   $3  :limit                 Int     page size
+--   $4  :cursor_ledger         Int64   NULL on first page
+--   $5  :cursor_event_order    Int16   NULL on first page
+-- Indexes:      soroban_contracts ORDER BY (contract_id) — StrKey resolve.
+--               nft_ownership ORDER BY (contract_id, token_id, ledger_sequence,
+--                 event_order) + PARTITION BY intDiv(ledger_sequence, 500000).
+--                 Natural composite — PR #175 dropped surrogate `nft_id`.
+--               transactions ORDER BY (ledger_sequence, application_order)
+--                 + intDiv partition.
+--               accounts ORDER BY (account_id) — owner LEFT JOIN by id.
 -- CH Engine:    nft_ownership — Replacing partitioned (FINAL).
 --               accounts, transactions — Replacing (FINAL).
--- CH Pattern:   LEAD window function for from_owner synthesis (CH 23.x+
---                 supports LEAD with PARTITION BY + ORDER BY).
---               Cursor drops `created_at` (§5.2) — natural keyset is
---                 `(ledger_sequence, event_order)`.
--- ADR 0044 §:   §4.3 (nft_ownership Replacing partitioned), §4.5 (accounts
---                 Replacing state), §5.2 (no created_at — partition prune
---                 via intDiv on cursor's ledger).
+-- CH Pattern:   LEAD window for from_owner synthesis. Cursor on
+--               `(ledger_sequence, event_order)` walks the natural PK
+--               (contract_id and token_id pinned in WHERE).
+-- ADR 0044 §:   §4.3 (nft_ownership Replacing partitioned). **PR #175
+--               amendment:** `nft_ownership` uses natural composite key
+--               (contract_id, token_id, …); inputs changed from `:nft_id`
+--               to (contract_strkey, token_id).
 -- Notes:
---   • Same `LEAD()`-on-DESC-window pattern as PG E17 — see the PG file's
---     "from_owner synthesis" note for the careful reasoning around LEAD
---     vs LAG on a DESC-ordered window and the page-boundary peek-row
---     stitching contract.
---   • CH supports `LEAD(expr) OVER (PARTITION BY ... ORDER BY ...)` since
---     23.x. The `OVER` clause is identical to PG syntax (CH ANSI-window).
---   • Cursor drops `created_at` term — natural CH keyset is
---     `(ledger_sequence, event_order)` since those columns form the PK
---     ordering and §5.2 dropped `created_at` from `nft_ownership`.
---   • `event_type_name` PG helper not available in CH — project raw Int16,
---     decode in API.
---   • `owner_id` is NULL on a burn (per ADR 0037 §13 + ADR 0044 §4.3 same
---     semantics); LEFT JOIN handles it.
---   • Transaction-hash join uses just `transaction_id = nft_ownership.transaction_id`
---     since CH transactions has no `created_at` (§5.2). Partition pruning
---     on transactions via intDiv on `nft_ownership.ledger_sequence`.
+--   • Same `LEAD()`-on-DESC-window pattern as PG E17 for from_owner.
+--   • Cursor on `(ledger_sequence, event_order)` is the natural keyset
+--     since the row PK is `(contract_id =, token_id =, ledger_sequence,
+--     event_order)` and both leading columns are pinned.
+--   • `event_type_name` PG helper not available — project raw Int16.
+--   • `owner_id` is NULL on a burn — LEFT JOIN handles it.
+--   • Transaction join uses `transaction_id = no.transaction_id` since CH
+--     transactions has no `created_at`. Partition pruning on transactions
+--     via intDiv on `no.ledger_sequence`.
 
 SELECT
     no.ledger_sequence,
     no.event_order,
     no.event_type                                                                   AS event_type,
     LEAD(own.account_id) OVER (
-        PARTITION BY no.nft_id
+        PARTITION BY no.contract_id, no.token_id
         ORDER BY no.ledger_sequence DESC,
                  no.event_order DESC
     )                                                                               AS from_owner,
     own.account_id                                                                  AS to_owner,
     lower(hex(t.hash))                                                              AS transaction_hash_hex
 FROM nft_ownership no FINAL
-LEFT JOIN accounts     own FINAL ON own.id = no.owner_id
+LEFT JOIN accounts     own FINAL ON own.id = no.owner_id AND no.owner_id IS NOT NULL
 JOIN      transactions t   FINAL ON t.id = no.transaction_id AND t.ledger_sequence = no.ledger_sequence
-WHERE no.nft_id = $1
-  AND ($3 IS NULL
-       OR (no.ledger_sequence, no.event_order) < ($3, $4))
+WHERE no.contract_id = (SELECT id FROM soroban_contracts FINAL WHERE contract_id = $1 LIMIT 1)
+  AND no.token_id    = $2
+  AND ($4 IS NULL
+       OR (no.ledger_sequence, no.event_order) < ($4, $5))
 ORDER BY no.ledger_sequence DESC, no.event_order DESC
-LIMIT $2;
+LIMIT $3;

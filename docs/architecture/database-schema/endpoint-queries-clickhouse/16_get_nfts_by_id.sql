@@ -1,37 +1,37 @@
 -- Endpoint:     GET /nfts/:id
 -- Purpose:      NFT detail: identity + media + current owner. The
---               `metadata` JSON blob (attributes, traits, description,
---               animation_url, etc.) is NOT served from this query — see
---               Notes (CH `nfts` table has no metadata column per ADR
---               0044 §5.3, same as PG post-migration-20260507120000).
+--               `metadata` JSON blob is NOT served from this query — see
+--               Notes (CH `nfts` has no metadata col per ADR 0044 §5.3,
+--               same as PG post-migration-20260507120000).
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.12
--- Schema:       ADR 0044 (CH pilot, §5.3 metadata dropped), parallel to
---               PG ADR 0037 + ADR 0043
--- Data sources: DB-only column projection + API-layer runtime fold-in for
---               metadata (Soroban RPC `token_uri()` + IPFS gateway).
+-- Schema:       ADR 0044 + PR-#175 hybrid-surrogate amendment + ADR 0043.
+-- Data sources: DB columns + API-layer runtime fold-in for metadata
+--               (Soroban RPC `token_uri()` + IPFS gateway).
 -- Inputs:
---   $1  :id  Int32  NFT surrogate id
--- Indexes:      nfts ORDER BY (id) — direct seek after FINAL.
---               soroban_contracts ORDER BY (id), accounts ORDER BY (id).
+--   $1  :contract_strkey  String  C-form contract ID
+--   $2  :token_id         String  on-chain token_id (i128/u64/sym/Bytes as String)
+-- Indexes:      nfts ORDER BY (contract_id, token_id) — direct PK seek
+--                 after FINAL (PR #175 dropped surrogate `id`).
+--               soroban_contracts ORDER BY (contract_id) — StrKey resolve.
+--               accounts ORDER BY (account_id) — owner LEFT JOIN by id.
 -- CH Engine:    nfts — Replacing(current_owner_ledger) (FINAL).
 --               soroban_contracts, accounts — Replacing (FINAL).
--- CH Pattern:   single FINAL'd JOIN tree.
+-- CH Pattern:   FINAL'd direct seek on natural composite key. Inputs
+--               changed from single `:id` Int32 (PG surrogate) to
+--               (contract_strkey, token_id) tuple per PR #175.
 -- ADR 0044 §:   §4.6 (nfts Replacing, no metadata col), §5.3 (divergence).
+--   **PR #175 amendment:** inputs changed from `$1 = id Int32` to
+--   `(contract_strkey, token_id)` tuple — surrogate dropped.
 -- Notes:
---   • Same shape as PG E16 (post-ADR-0043 migration). Both sides return
---     identical column sets — neither projects `nfts.metadata`.
---   • The detail handler (`crates/api/src/nfts/handler.rs::get_detail`)
---     fetches the JSON blob at request time from the per-token `token_uri()`
---     URL via `runtime_enrichment::nft_token_uri` (LRU 24h, fail-soft) and
---     surfaces it as `metadata` on the JSON response. This is the same path
---     PG-backed and CH-backed; ADR 0043 detail-only carve-out applies to
---     both stores.
---   • Burned NFT: `current_owner_id = NULL` → LEFT JOIN yields NULL
---     `current_owner` (per ADR 0037 §13).
+--   • PG E16 keeps single `:id` Int32. CH has no surrogate; API passes
+--     the tuple. Migration paths: (a) PG-backed id→tuple lookup; (b)
+--     frontend uses synthetic cityHash64 surrogate from E15 as routing
+--     key and the API decomposes.
+--   • Burned NFT: `current_owner_id IS NULL` → LEFT JOIN yields NULL.
 
 SELECT
-    n.id,
-    sc.contract_id,
+    n.contract_id                             AS contract_id_raw,
+    sc.contract_id                            AS contract_id_strkey,
     n.token_id,
     n.collection_name,
     n.name,
@@ -41,5 +41,6 @@ SELECT
     n.current_owner_ledger
 FROM nfts n FINAL
 JOIN      soroban_contracts sc  FINAL ON sc.id  = n.contract_id
-LEFT JOIN accounts          own FINAL ON own.id = n.current_owner_id
-WHERE n.id = $1;
+LEFT JOIN accounts          own FINAL ON own.id = n.current_owner_id AND n.current_owner_id IS NOT NULL
+WHERE n.contract_id = (SELECT id FROM soroban_contracts FINAL WHERE contract_id = $1 LIMIT 1)
+  AND n.token_id    = $2;

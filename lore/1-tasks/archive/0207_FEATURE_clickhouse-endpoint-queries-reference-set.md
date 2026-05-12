@@ -55,6 +55,34 @@ history:
       CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse`
       is still a no-op per task 0205); `compare_pg_ch.sh` scaffold is
       in place so the follow-up is a small per-endpoint binding pass.
+  - date: '2026-05-12'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Follow-up fix-up on the same branch (post-archive). PR #175
+      (commit b9db354 `feat(lore-0206): clickhouse writer for the 0204-pilot
+      schema`) substantially rewrote `crates/db-clickhouse/schema/init.sql`
+      to the hybrid-surrogate design: 3 hub tables keep `Int64 id`
+      (cityhash64), 14 other tables switched to natural composite keys.
+      Tier 2 sweep against a fresh 64k-ledger backfill (range
+      62016000-62079999, 11.6 GB raw via the now non-stub CH writer)
+      initially scored 9/23 green; 14 queries broken by schema drift
+      (assets/nfts/operations_appearances dropped surrogate `id`,
+      `liquidity_pools.created_at_ledger` renamed `last_updated_ledger`).
+      Rewrote 10 .sql files (02, 03, 08, 09, 10, 15, 16, 17, 18, 19, 22)
+      to use natural composite keys + sentinels `(issuer_id=0, contract_id=0)`
+      for "no issuer / no contract"; runner case branches updated for
+      new param shapes + discovery oneshots swapped to `last_updated_ledger`.
+      E02 memory blowup (5.6 GB exceeded) addressed by (a) partition
+      predicate always applied (`$7 = caller-supplied latest_partition`),
+      (b) JOIN-after-LIMIT subquery pattern (avoids 300k×300k hash
+      hashtable), (c) dropped `contract_surrogate_ids[]` projection
+      (3 correlated FINAL subqueries × 50 rows). Final state: **23/23
+      endpoints return real data on populated CH (Tier 2 PASS)**,
+      32/32 statements parse via --syntax-only (Tier 1 PASS).
+      §5.1 win confirmed: E14 returns inline decoded JSON event payload
+      (`topics_xdr` field actually stores ScVal-decoded JSON not raw XDR
+      per PR #175 writer design).
 ---
 
 # ClickHouse endpoint queries reference set (parallel to PG endpoint-queries/)

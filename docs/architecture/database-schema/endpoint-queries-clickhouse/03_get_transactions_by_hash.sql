@@ -99,9 +99,12 @@ WHERE t.hash = $1
 -- ============================================================================
 -- C. Operations (appearance rows for this tx).
 --    Inputs: $1 = hash (used for partition pruning via Dict lookup).
+--    PR #175 dropped `operations_appearances.id` surrogate; rows are
+--    identified by (transaction_id, application_order). Frontend gets
+--    a stable per-op id by combining the natural key.
 -- ============================================================================
 SELECT
-    oa.id                                   AS appearance_id,
+    oa.application_order                    AS appearance_id, -- natural-key replacement for dropped surrogate
     oa.type                                 AS type,
     src.account_id                          AS source_account,
     dst.account_id                          AS destination_account,
@@ -115,10 +118,10 @@ SELECT
     -- not in DB: per-op stroop amount, raw operation parameters, return values
     --           — Archive XDR overlay. ADR 0029.
 FROM operations_appearances oa FINAL
-LEFT JOIN accounts          src FINAL ON src.id = oa.source_id
-LEFT JOIN accounts          dst FINAL ON dst.id = oa.destination_id
-LEFT JOIN soroban_contracts sc  FINAL ON sc.id  = oa.contract_id
-LEFT JOIN accounts          iss FINAL ON iss.id = oa.asset_issuer_id
+LEFT JOIN accounts          src FINAL ON src.id = oa.source_id          AND oa.source_id         IS NOT NULL
+LEFT JOIN accounts          dst FINAL ON dst.id = oa.destination_id     AND oa.destination_id    IS NOT NULL
+LEFT JOIN soroban_contracts sc  FINAL ON sc.id  = oa.contract_id        AND oa.contract_id       IS NOT NULL
+LEFT JOIN accounts          iss FINAL ON iss.id = oa.asset_issuer_id    AND oa.asset_issuer_id   IS NOT NULL
 JOIN      ledgers           l         ON l.sequence = oa.ledger_sequence
 WHERE oa.transaction_id = (
     SELECT id FROM transactions FINAL WHERE hash = $1
@@ -127,7 +130,9 @@ WHERE oa.transaction_id = (
     LIMIT 1)
   AND intDiv(oa.ledger_sequence, 500000)
       = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
-ORDER BY oa.application_order ASC NULLS LAST, oa.id;
+-- ORDER BY natural shape: application_order is unique within (transaction_id, ledger_sequence)
+-- per PR #175 schema, so this single column gives stable ordering — no oa.id tiebreaker needed.
+ORDER BY oa.application_order ASC NULLS LAST;
 
 -- @@ split @@
 

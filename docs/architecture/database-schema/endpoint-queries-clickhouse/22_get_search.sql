@@ -86,16 +86,19 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
     LIMIT $4
 ) UNION ALL
 SELECT entity_type, identifier, label, surrogate_id FROM (
-    -- Assets: substring on asset_code (CH no pg_trgm — linear scan)
+    -- Assets: substring on asset_code (CH no pg_trgm — linear scan).
+    -- PR #175 dropped `assets.id` surrogate; project a synthetic
+    -- cityHash64 over the natural 4-tuple as opaque routing key.
     SELECT
         'asset'                                                                             AS entity_type,
-        coalesce(a.asset_code, 'XLM')                                                       AS identifier,
+        if(length(a.asset_code) > 0, a.asset_code, 'XLM')                                   AS identifier,
         toString(a.asset_type)                                                              AS label,
-        CAST(a.id AS Nullable(Int64))                                                       AS surrogate_id
+        toInt64(cityHash64(toString(a.asset_type), a.asset_code,
+                           toString(a.issuer_id), toString(a.contract_id)))                 AS surrogate_id
     FROM assets a FINAL
     WHERE $7 = true
       AND (
-              (a.asset_code IS NOT NULL AND positionCaseInsensitiveUTF8(a.asset_code, $1) > 0)
+              (length(a.asset_code) > 0 AND positionCaseInsensitiveUTF8(a.asset_code, $1) > 0)
            OR (a.asset_type = 0 AND (lower($1) = 'xlm' OR lower($1) = 'native'))
           )
     LIMIT $4
@@ -114,12 +117,14 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
     LIMIT $4
 ) UNION ALL
 SELECT entity_type, identifier, label, surrogate_id FROM (
-    -- NFTs: substring on name (CH no pg_trgm — linear scan)
+    -- NFTs: substring on name (CH no pg_trgm — linear scan).
+    -- PR #175 dropped `nfts.id` surrogate; project synthetic
+    -- cityHash64(contract_id, token_id) as opaque routing key.
     SELECT
         'nft'                                                                               AS entity_type,
         coalesce(n.name, '')                                                                AS identifier,
         coalesce(n.collection_name, '')                                                     AS label,
-        CAST(n.id AS Nullable(Int64))                                                       AS surrogate_id
+        toInt64(cityHash64(toString(n.contract_id), n.token_id))                            AS surrogate_id
     FROM nfts n FINAL
     WHERE $9 = true
       AND n.name IS NOT NULL
