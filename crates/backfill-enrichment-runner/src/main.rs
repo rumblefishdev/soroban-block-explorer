@@ -136,7 +136,9 @@ struct DrainArgs {
 }
 
 fn parse_positive_usize(s: &str) -> Result<usize, String> {
-    let v: usize = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let v: usize = s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
     if v < 1 {
         return Err("must be >= 1".to_owned());
     }
@@ -144,7 +146,9 @@ fn parse_positive_usize(s: &str) -> Result<usize, String> {
 }
 
 fn parse_positive_i64(s: &str) -> Result<i64, String> {
-    let v: i64 = s.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let v: i64 = s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
     if v < 1 {
         return Err("must be >= 1".to_owned());
     }

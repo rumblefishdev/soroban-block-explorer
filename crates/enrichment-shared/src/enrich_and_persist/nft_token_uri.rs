@@ -339,7 +339,10 @@ mod tests {
             "collection": "X"
         });
         let (_, image, _) = extract_columns(&blob);
-        assert!(image.starts_with("https://"), "ipfs:// must be resolved, got {image}");
+        assert!(
+            image.starts_with("https://"),
+            "ipfs:// must be resolved, got {image}"
+        );
         assert!(image.ends_with("QmFoo/1.png"));
     }
 
