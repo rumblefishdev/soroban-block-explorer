@@ -100,6 +100,15 @@ The audit operates on a self-contained local Postgres populated by a
 small controlled backfill. This step prepares that environment and
 captures the **PRE-enrichment** state for the coverage matrix.
 
+**Run-time choices locked (2026-05-13):**
+
+- **Initial ledger range:** `51000000..51000300` (300 recent pubnet
+  ledgers). Widen via Step 0.4 diversity check if any audited entity
+  type (`assets` / `lps` / `nfts` / `soroban_contracts`) has zero
+  rows after ingest.
+- **Audit doc filename base:** `2026-05-13` (audit start date). All
+  three snapshot files + the coverage matrix doc use this stem.
+
 1. **Stand up Postgres locally.** `docker compose up postgres` (or
    the project's standard local-dev recipe at audit time). Confirm
    migrations applied via `cargo run -p db-migrate -- migrate`.
@@ -144,9 +153,9 @@ captures the **PRE-enrichment** state for the coverage matrix.
 
    ```bash
    cargo run -p backfill-runner -- status --start 51000000 --end 51000300 \
-     > docs/audits/2026-05-12-pre-indexing-status.txt
+     > docs/audits/2026-05-13-pre-indexing-status.txt
    cargo run -p backfill-enrichment-runner -- status \
-     > docs/audits/2026-05-12-pre-enrichment-status.txt
+     > docs/audits/2026-05-13-pre-enrichment-status.txt
    ```
 
    The `backfill-enrichment-runner status` output is already a
@@ -167,7 +176,7 @@ captures the **PRE-enrichment** state for the coverage matrix.
 7. **Capture POST snapshot.**
    ```bash
    cargo run -p backfill-enrichment-runner -- status \
-     > docs/audits/2026-05-12-post-enrichment-status.txt
+     > docs/audits/2026-05-13-post-enrichment-status.txt
    ```
 
 PRE vs POST diff is the central empirical evidence: indexer-driven
@@ -193,7 +202,7 @@ API read-path. A CH-side equivalence audit is deferred to a follow-up
 task that runs once CH serves a real `/v1/*` handler — running it now
 would only verify the 0207 reference SQL against itself.
 
-Output `docs/audits/2026-05-12-list-endpoint-completeness.md` with a single table per endpoint:
+Output `docs/audits/2026-05-13-list-endpoint-completeness.md` with a single table per endpoint:
 
 | Endpoint     | DTO field         | DB column         | Indexed? | Populated by           | PRE drain (NULL / sentinel / populated) | POST drain (NULL / sentinel / populated) |
 | ------------ | ----------------- | ----------------- | -------- | ---------------------- | --------------------------------------- | ---------------------------------------- |
