@@ -2,7 +2,7 @@
 id: '0190'
 title: 'Test coverage gap: transactions.parse_error=true path never exercised'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags:
@@ -29,6 +29,10 @@ history:
       crates/indexer/tests/persist_integration.rs has 12 fixtures with
       parse_error=false and zero with true — DB persist + API Archive
       overlay handlers for parse_error rows are entirely untested.
+  - date: '2026-05-12'
+    status: active
+    who: karolkow
+    note: 'Activated. Bundling with 0193 in a single PR (both effort-small, no shared file surface but combined to reduce lifecycle overhead).'
 ---
 
 # Test coverage gap: `transactions.parse_error=true` path never exercised
