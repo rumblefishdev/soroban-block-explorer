@@ -140,13 +140,19 @@ export class ComputeStack extends cdk.Stack {
       retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
     });
 
+    // Visibility timeout must exceed the worker's per-record budget.
+    // AWS recommends visibility ≥ 6× function timeout so a slow batch
+    // never duplicates work mid-flight; clamped at a 60 s floor.
+    const enrichmentVisibilityTimeoutSeconds = Math.max(
+      60,
+      config.enrichmentWorkerLambdaTimeout * 6
+    );
     const enrichmentQueue = new sqs.Queue(this, 'EnrichmentQueue', {
       queueName: `${config.envName}-enrichment`,
       retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
-      // Visibility timeout must exceed the worker's per-record budget.
-      // Worker is one HTTP fetch (~2 s timeout) + one UPDATE — pad to
-      // 60 s so a slow batch never duplicates work mid-flight.
-      visibilityTimeout: cdk.Duration.seconds(60),
+      visibilityTimeout: cdk.Duration.seconds(
+        enrichmentVisibilityTimeoutSeconds
+      ),
       deadLetterQueue: {
         queue: enrichmentDlq,
         maxReceiveCount: 3,
@@ -265,13 +271,18 @@ export class ComputeStack extends cdk.Stack {
     // SQS event source mapping. ReportBatchItemFailures lets the worker
     // ack only the records it successfully processed — failed records
     // redeliver up to maxReceiveCount and then land in the DLQ.
-    enrichmentWorkerFunction.addEventSource(
-      new lambdaEventSources.SqsEventSource(enrichmentQueue, {
-        batchSize: 10,
-        maxBatchingWindow: cdk.Duration.seconds(5),
-        reportBatchItemFailures: true,
-      })
-    );
+    // Skip when concurrency=0 — mirrors the indexer pattern; prevents
+    // the queue from being polled (and potentially DLQ'd) while the
+    // Lambda is fully throttled. Producers can still enqueue messages.
+    if (config.enrichmentWorkerLambdaConcurrency > 0) {
+      enrichmentWorkerFunction.addEventSource(
+        new lambdaEventSources.SqsEventSource(enrichmentQueue, {
+          batchSize: 10,
+          maxBatchingWindow: cdk.Duration.seconds(5),
+          reportBatchItemFailures: true,
+        })
+      );
+    }
     this.enrichmentWorkerFunction = enrichmentWorkerFunction;
 
     // ---------------------

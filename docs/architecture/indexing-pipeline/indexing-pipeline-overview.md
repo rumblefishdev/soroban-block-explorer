@@ -198,7 +198,7 @@ committed in a single atomic DB transaction:
     the 13a UPSERT replaces all dimension fields with real data when the
     real pool is later observed (created/updated/restored, or `state` per
     `extract_liquidity_pools` post-lore-0189). The extractor itself
-    accepts `state` change*type for `liquidity_pool` entries (lore-0189),
+    accepts `state` change\*type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
     snapshot of a referenced-but-unmodified pool. `volume` and
     `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
@@ -214,7 +214,7 @@ committed in a single atomic DB transaction:
     here is the SQS-driven enrichment worker introduced in task 0191
     and documented in [`enrichment.md`](./enrichment.md) — it lives
     outside the Ledger Processor described in §7.1 (which is the only
-    \_ingestion-path* Lambda). Lambda 2 runs off SQS messages emitted
+    _ingestion-path_ Lambda). Lambda 2 runs off SQS messages emitted
     by the Ledger Processor after each ledger commit; the two
     Lambdas share neither code path nor invocation lifecycle.
 14. upsert `accounts` summary and `account_balances_current`
@@ -322,10 +322,24 @@ Its responsibilities are:
 - keep replay of the same ledger idempotent
 - prevent stale backfill writes from overwriting newer live-derived state
 
-The Ledger Processor is the only Lambda worker in the indexing pipeline. It turns raw
-ledger-close artifacts into first-class explorer records. If event enrichment (human-readable
-interpretations of swap, transfer, mint, and burn patterns) is needed in the future, it will
-be done inline within the Ledger Processor rather than in a separate Lambda.
+The Ledger Processor is the only Lambda worker on the **ingestion path** — it turns raw
+ledger-close artifacts into first-class explorer records. **Inline-eligible** event enrichment
+(human-readable interpretations of swap / transfer / mint / burn patterns) stays inside the
+Ledger Processor; the criterion is "derivable purely from the processed ledger".
+
+A second worker — the SQS-driven **enrichment Lambda 2** introduced in task 0191 and
+documented in [`enrichment.md`](./enrichment.md) — runs **off** the ingestion path and handles
+work that fails the inline criterion: oracle lookups (USD prices), per-row HTTP fetches
+(SEP-1 issuer TOML, NFT `token_uri()`), and any expensive or long-running enrichment that
+would push the Ledger Processor past its per-ledger budget. Lambda 2 consumes SQS messages
+emitted by the Ledger Processor after each ledger commit and writes the result back to typed
+columns; the two Lambdas share neither code path nor invocation lifecycle.
+
+Allocation rule (codified by [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md)):
+
+- **On-chain + cheap** → inline in the Ledger Processor.
+- **Off-chain (HTTP / oracle / per-row RPC) + needed by list endpoints** → Lambda 2 (typed-column write).
+- **Detail-only off-chain fields** → runtime type-2 fetch in the API handler (no DB column).
 
 ## 8. Operational Characteristics
 

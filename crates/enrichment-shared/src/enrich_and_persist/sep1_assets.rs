@@ -116,6 +116,7 @@ fn sentinel_name(asset_type: i16) -> Option<String> {
 fn resolve_icon(entry: Option<&Sep1Currency>) -> String {
     let Some(url) = entry
         .and_then(|c| c.image.as_deref())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
         return String::new();
