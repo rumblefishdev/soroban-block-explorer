@@ -3,7 +3,7 @@ id: '0197'
 title: 'DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix'
 type: FEATURE
 status: active
-related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
+related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043', '0044']
 related_tasks: ['0188', '0191', '0194', '0195', '0196']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
 milestone: 2
@@ -29,10 +29,6 @@ history:
 ## Summary
 
 Final verification gate for the 0194-0197 task chain. Audits every list endpoint to confirm every returned field has a DB column that is indexed (where sortable/filterable) and populated (≠ always NULL on a production sample query). Audits every detail endpoint to confirm unique-to-detail fields do **NOT** have dedicated DB columns and are runtime type-2 enrichment instead. Refreshes all `docs/architecture/**` per ADR 0032 evergreen rule. Outputs a one-time snapshot to `docs/audits/`.
-
-## Status: Backlog
-
-Cannot start until **0194, 0195, AND 0196** all merge to develop. This task is purely verification + documentation — its value is exposing remaining gaps after the implementation tasks land. Running it before is wasteful (everything would fail).
 
 ## Context
 
@@ -118,7 +114,7 @@ Output: appended section in same audit md. Flag each anti-pattern with proposed 
 
 Per `lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md`, every PR changing the shape of the system updates `docs/architecture/**`. After 0194/0195/0196 land, the shape has changed substantially. This task picks up any gaps the implementation PRs missed:
 
-- `docs/architecture/database-schema/**` — column matrix, every newly populated column attributed to its source (indexer / Lambda 2 / type-2 handler)
+- `docs/architecture/database-schema/**` — column matrix, every newly populated column attributed to its source (indexer / Lambda 2 / type-2 handler). Includes one signpost paragraph in `database-schema-overview.md` cross-linking the two endpoint-query reference dirs: `endpoint-queries/` (Postgres canonical, source of truth for `/v1/*` handlers) and `endpoint-queries-clickhouse/` (CH parallel reference, owned by task 0207, **not** wired to the API read-path). Audit scope is PG-only; no edits inside `endpoint-queries-clickhouse/`.
 - `docs/architecture/indexing-pipeline/**` — runtime_enrichment umbrella, type-1 SQS model, type-2 runtime model, backfill crate
 - `docs/architecture/backend/**` — list vs detail boundary, type-2 detail enrichment pattern, anti-patterns to avoid
 - `docs/architecture/xdr-parsing/**` — new responsibilities (volume/fee_revenue/holder_count/classic credit `total_supply`); note `name` for classic credit lives in Lambda 2 (0195 2a), NOT indexer
@@ -185,6 +181,6 @@ Verifies the backfill drain at production scale across every kind the `enrich` b
 ## Notes
 
 - **Order in chain**: this task is intentionally LAST. Running it before 0194/0195/0196 land would surface tons of pre-existing failures — wasted effort. Running it after gives a clean baseline.
-- **Skill invocation**: while writing the audit md, follow `/lore-framework` documentation patterns. While committing, follow `/lore-framework-git`. While archiving 0125 (now superseded), follow `/lore-framework-tasks`.
+- **Skill invocation**: while writing the audit md, follow `/lore-framework` documentation patterns. While committing, follow `/lore-framework-git`. For spawned follow-ups, follow `/lore-framework-tasks`. (0125 superseding-archive already landed on develop.)
 - **Sentinel-aware sample queries**: when checking "non-NULL" for `assets.icon_url`, treat both real URL and `''` sentinel as "populated" — see 0191 design decision #12 + sentinel taxonomy from 2026-05-06 session.
 - **Dry-run audit performed 2026-05-06** (during planning session, BEFORE 0194/0195/0196 spawn): confirmed 95% pre-coverage, surfaced 1 misallocation (classic credit `assets.name` was placed in 0194 indexer, should be Lambda 2 — fixed via amendment to 0194 1b + new 0195 2a icon-name extension). Real run of this task should not need to surface that issue again. Other dry-run flags (`AssetDetailResponse.deployed_at_ledger`, `account_balances_current.first_deposit_ledger`) were false positives — first is a legitimate entity-record column read by `/v1/search`, second doesn't exist in that table (subagent confused with `lp_positions.first_deposit_ledger`). Real audit should still verify these independently.

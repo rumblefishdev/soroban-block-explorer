@@ -3,7 +3,7 @@ id: '0191'
 title: 'Type-1 enrichment live path (icon only): SQS-driven worker for assets.icon_url'
 type: FEATURE
 status: completed
-related_adr: ['0029']
+related_adr: ['0029', '0043']
 related_tasks: ['0124', '0187', '0188']
 tags:
   [
