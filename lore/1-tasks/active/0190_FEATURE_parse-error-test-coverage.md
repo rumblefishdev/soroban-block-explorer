@@ -33,6 +33,30 @@ history:
     status: active
     who: karolkow
     note: 'Activated. Bundling with 0193 in a single PR (both effort-small, no shared file surface but combined to reduce lifecycle overhead).'
+  - date: '2026-05-12'
+    status: active
+    who: karolkow
+    note: >
+      Scope expanded after discovering a contract gap in the API
+      archive-overlay path. Step 0 (production fix): explicit
+      `if tx.parse_error { heavy = None }` short-circuit in
+      `crates/api/src/transactions/handlers.rs` so parse_error tx serves
+      `heavy: null + heavy_fields_status: "unavailable"` per the lore-0044 /
+      lore-0046 contract (previously the handler unconditionally re-fetched
+      from S3 and could either mask the DB flag with fresh heavy fields or
+      return a status="ok" envelope with NULL XDR — both violations).
+      Tests: (1) `xdr-parser::transaction::parse_error_tests` — Variant A
+      missing-envelope, Variant B encode-failure via tight Limits, plus a
+      default-limits regression sentinel; (2)
+      `indexer::tests::persist_integration::parse_error_transaction_persists_and_replays_idempotent`
+      — end-to-end persist + replay idempotence; (3)
+      `api::tests_integration::detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact`
+      — locks the API contract. Step 3 observability counter dropped as
+      overkill — the existing `info!(parse_errors = ...)` tracing log in
+      `crates/indexer/src/handler/process.rs:143` already satisfies the
+      spec's optional tier; CloudWatch alarm wiring spawned only if prod
+      ever surfaces a non-zero count. Empty-source persist crash surfaced
+      during fixture work spawned as lore-0209.
 ---
 
 # Test coverage gap: `transactions.parse_error=true` path never exercised
@@ -122,17 +146,34 @@ accumulate silently. Suggested threshold: any non-zero increment in a
 
 ## Acceptance Criteria
 
-- [ ] Unit test in `crates/xdr-parser/` asserts `parse_error=true` for
-      at least one corrupt-input scenario (missing envelope or encode
-      failure).
-- [ ] Integration test in `crates/indexer/tests/persist_integration.rs`
-      covers a `parse_error: true` fixture end-to-end (persist +
-      downstream read).
-- [ ] API `stellar_archive` overlay path verified to gracefully skip
-      enrichment on `parse_error=true` rows.
-- [ ] (Optional) Indexer emits a counter for `parse_error_total`.
-- [ ] **Docs updated** — N/A: pure test + observability addition, no
-      architectural shape change in `docs/architecture/**`.
+- [x] Unit tests in `crates/xdr-parser/src/transaction.rs::parse_error_tests`
+      assert `parse_error=true` for **both** corrupt-input scenarios:
+      Variant A (`variant_a_missing_envelope_marks_parse_error_true_for_unaligned_slot`)
+      and Variant B (`variant_b_encode_failure_marks_parse_error_true_even_with_aligned_envelope`),
+      plus a `default_limits_keep_parse_error_false_for_aligned_envelope`
+      regression sentinel.
+- [x] Integration test in `crates/indexer/tests/persist_integration.rs`
+      (`parse_error_transaction_persists_and_replays_idempotent`) covers a
+      `parse_error: true` fixture end-to-end (persist + replay idempotence + DB row + transaction_hash_index + empty appearance tables for the
+      degraded row).
+- [x] API `stellar_archive` overlay path verified to gracefully skip
+      enrichment on `parse_error=true` rows. Implemented via Step 0
+      production fix in `crates/api/src/transactions/handlers.rs` (explicit
+      short-circuit before S3 fetch) and locked by
+      `crates/api/src/tests_integration.rs::detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact`.
+- [x] (Optional) Indexer emits a counter for `parse_error_total`.
+      **Satisfied via existing tracing field**: `info!(parse_errors = ...)`
+      in `crates/indexer/src/handler/process.rs:143` is scrapable via the
+      Lambda Logs metric-filter declarative path. Explicit CloudWatch
+      MetricDatum emission deferred — recommended only if a non-zero count
+      ever surfaces in production (zero in 10.1M rows today).
+- [x] **Docs updated** — original spec said N/A, but Step 0 changed the
+      handler's archive-fetch behavior for parse_error rows, so per ADR
+      0032 the affected sections of `docs/architecture/**` were refreshed: - `docs/architecture/xdr-parsing/xdr-parsing-overview.md` §7.1 —
+      documents the read-time short-circuit + cross-references the test
+      suite. - `docs/architecture/backend/backend-overview.md` §6 cache-control
+      table — documents the parse_error short-circuit alongside the
+      existing `heavy_fields_status` conditional.
 
 ## Notes
 

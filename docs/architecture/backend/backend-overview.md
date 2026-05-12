@@ -464,7 +464,13 @@ Two endpoints carry **conditional** logic:
 - `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
   archive overlay merged); Short when archive fetch failed
   (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
-  sooner.
+  sooner. The handler also **short-circuits the archive fetch entirely**
+  for any row carrying `parse_error = true` in the DB (task 0190):
+  re-fetching cannot make a degraded row whole, and serving the row through
+  the unavailable-heavy path preserves the lore-0044 / lore-0046 contract
+  (light slice always returned, heavy explicitly absent). The Short TTL
+  applies in this case as well, so a fix that ever re-parses the row
+  cleanly surfaces within one ledger cycle.
 
 The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
 `infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway

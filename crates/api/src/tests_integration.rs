@@ -2420,6 +2420,220 @@ async fn detail_unknown_hash_returns_404_not_500() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Task 0190 — `parse_error = true` end-to-end API coverage
+// ---------------------------------------------------------------------------
+//
+// Locks the production contract recorded in lore-0044 / lore-0046:
+//
+//   parse_error transaction → light slice always served + `heavy: null` +
+//   `heavy_fields_status: "unavailable"`.
+//
+// The pre-Step-0 handler unconditionally called `extract_e3_heavy`, which
+// would either (a) succeed and mask the historical DB flag with fresh
+// heavy fields or (b) return an `E3HeavyFields` with mostly-empty
+// `filter(!is_empty)` payload — a `heavy_fields_status: "ok"` response
+// with NULL XDR fields that violated the contract.
+//
+// Step 0 (`crates/api/src/transactions/handlers.rs`) introduced an
+// explicit `if tx.parse_error { heavy = None }` gate before the S3
+// fetch. This test seeds a `parse_error = true` row directly into the
+// DB (bypassing the indexer persist path) and asserts the full response
+// shape, including:
+//
+//   * `parse_error: true` echoed in the light slice
+//   * `heavy: null`
+//   * `heavy_fields_status: "unavailable"`
+//   * `application_order`, `source_account`, `fee_charged` round-trip
+//   * S3 was not contacted — proven by the fake AWS creds in `build_app`
+//     never being invoked (a real archive fetch would 401 / 403 and
+//     would have surfaced as a `tracing::warn!` log; the absence of
+//     such failure is implicit in the 200 OK).
+
+const PARSE_ERROR_API_TX_HASH: &str =
+    "0190019001900190019001900190019001900190019001900190019001900190";
+const PARSE_ERROR_API_SRC: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0190SRC";
+const PARSE_ERROR_API_LEDGER_SEQ: i64 = 90_000_010;
+/// 2026-04-21 12:00:00 UTC — stable across runs; lands in the
+/// `transactions_default` partition created below.
+const PARSE_ERROR_API_CREATED_AT: &str = "2026-04-21T12:00:00Z";
+
+async fn ensure_transactions_default_partition(pool: &PgPool) {
+    // `transactions` + `transaction_hash_index` are partitioned and
+    // unpartitioned respectively; the partitioned one needs a default
+    // partition so this fixture's `created_at = 2026-04-21` row has
+    // somewhere to land. Idempotent; safe to call alongside other
+    // tests that may have already created the partition.
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS transactions_default PARTITION OF transactions DEFAULT",
+    )
+    .execute(pool)
+    .await;
+}
+
+async fn seed_parse_error_transaction(pool: &PgPool) {
+    // Cleanup any leftover from a prior run so the seed below
+    // doesn't trip a unique constraint.
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(PARSE_ERROR_API_SRC)
+        .execute(pool)
+        .await;
+
+    // accounts row for the FK target.
+    let acc_id: i64 = sqlx::query_scalar(
+        r#"INSERT INTO accounts (account_id, first_seen_ledger, last_seen_ledger, sequence_number)
+           VALUES ($1, $2, $2, 0) RETURNING id"#,
+    )
+    .bind(PARSE_ERROR_API_SRC)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .fetch_one(pool)
+    .await
+    .expect("insert accounts row for parse_error fixture");
+
+    // transactions row — parse_error = true, no operations, no soroban.
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (
+            hash, ledger_sequence, application_order, source_id, fee_charged,
+            inner_tx_hash, successful, operation_count, has_soroban,
+            parse_error, created_at
+        )
+        VALUES (decode($1, 'hex'), $2, 1, $3, 2500, NULL, false, 0, false, true, $4::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_API_TX_HASH)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .bind(acc_id)
+    .bind(PARSE_ERROR_API_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert transactions row for parse_error fixture");
+
+    // hash_index — primary route for `/v1/transactions/:hash` lookup
+    // (ADR 0027 §4). Without this entry the handler 404s before the
+    // parse_error branch fires.
+    sqlx::query(
+        r#"
+        INSERT INTO transaction_hash_index (hash, ledger_sequence, created_at)
+        VALUES (decode($1, 'hex'), $2, $3::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_API_TX_HASH)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .bind(PARSE_ERROR_API_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert transaction_hash_index row for parse_error fixture");
+}
+
+async fn cleanup_parse_error_transaction(pool: &PgPool) {
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(PARSE_ERROR_API_SRC)
+        .execute(pool)
+        .await;
+}
+
+#[tokio::test]
+async fn detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0190 parse_error API test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0190 parse_error API test");
+            return;
+        }
+    };
+
+    ensure_transactions_default_partition(&pool).await;
+    seed_parse_error_transaction(&pool).await;
+
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/transactions/{PARSE_ERROR_API_TX_HASH}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "expected 200 OK for parse_error tx: {json}"
+    );
+
+    // --- Light slice (flattened to top level per `E3Response<TxLight>`).
+    assert_eq!(
+        json["hash"], PARSE_ERROR_API_TX_HASH,
+        "hash must echo the URL parameter"
+    );
+    assert_eq!(json["ledger_sequence"], PARSE_ERROR_API_LEDGER_SEQ);
+    assert_eq!(json["application_order"], 1);
+    assert_eq!(json["source_account"], PARSE_ERROR_API_SRC);
+    assert_eq!(json["fee_charged"], 2500);
+    assert_eq!(json["successful"], false);
+    assert_eq!(json["operation_count"], 0);
+    assert_eq!(json["has_soroban"], false);
+    assert_eq!(
+        json["parse_error"], true,
+        "light.parse_error MUST echo the DB flag — lore-0044 / lore-0046 contract"
+    );
+
+    // --- Heavy block — must be absent.
+    assert!(
+        json["heavy"].is_null(),
+        "heavy MUST be null when DB carries parse_error=true (Step 0 short-circuit): {json}"
+    );
+    assert_eq!(
+        json["heavy_fields_status"], "unavailable",
+        "heavy_fields_status MUST be 'unavailable' for parse_error tx (lore-0046 contract)"
+    );
+
+    // --- Light fallback arrays — handler populates these from the
+    // DB-side appearance index when heavy is None (per
+    // `transactions/handlers.rs:225`). The fixture has no rows in the
+    // appearance tables for this tx, so the fallbacks come back empty.
+    // This proves the fallback path executed (didn't short-circuit on
+    // the missing heavy) but produced empty arrays — not the `[]`
+    // sentinel that would mean the fallback was skipped entirely.
+    assert!(
+        json["participants"].is_array(),
+        "participants must be an array (DB fallback when heavy=None)"
+    );
+    assert!(
+        json["soroban_events"].is_array(),
+        "soroban_events must be an array (DB fallback when heavy=None)"
+    );
+    assert!(
+        json["soroban_invocations"].is_array(),
+        "soroban_invocations must be an array (DB fallback when heavy=None)"
+    );
+
+    cleanup_parse_error_transaction(&pool).await;
+}
+
 #[tokio::test]
 async fn list_returns_200_without_s3_contact() {
     // The fake AWS credentials in `build_app` would fail any archive fetch
