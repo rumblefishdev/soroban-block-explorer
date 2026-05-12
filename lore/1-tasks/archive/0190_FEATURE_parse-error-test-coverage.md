@@ -2,7 +2,7 @@
 id: '0190'
 title: 'Test coverage gap: transactions.parse_error=true path never exercised'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags:
@@ -57,6 +57,18 @@ history:
       spec's optional tier; CloudWatch alarm wiring spawned only if prod
       ever surfaces a non-zero count. Empty-source persist crash surfaced
       during fixture work spawned as lore-0209.
+  - date: '2026-05-12'
+    status: completed
+    who: karolkow
+    note: >
+      All 5 acceptance criteria satisfied (xdr-parser unit ×3, indexer
+      integration, API archive overlay verified via Step 0 short-circuit
+      + integration test, counter via existing tracing log, docs updated
+      per ADR 0032). Branch `feat/0190-0193_parse-error-tests-and-sentinel-pool-filter`,
+      bundled with lore-0193. Live-DB run confirmed all assertions
+      against a clean snapshot. lore-0209 spawned for the empty-source
+      persist crash discovered during fixture work and pushed to
+      develop directly (`chore(lore-0209): spawn BUG task`).
 ---
 
 # Test coverage gap: `transactions.parse_error=true` path never exercised

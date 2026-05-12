@@ -2,7 +2,7 @@
 id: '0193'
 title: 'API endpoints: filter or annotate sentinel placeholder liquidity_pools rows'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0041']
 related_tasks: ['0189']
 tags: ['phase-future', 'effort-small', 'priority-low', 'api', 'liquidity-pools']
@@ -22,6 +22,27 @@ history:
     status: active
     who: karolkow
     note: 'Activated. Bundling with 0190 in a single PR (both effort-small, no shared file surface but combined to reduce lifecycle overhead).'
+  - date: 2026-05-12
+    status: completed
+    who: karolkow
+    note: >
+      All 6 acceptance criteria satisfied. Decision: Option A (hard
+      filter) — selected over B (`is_partial_data` flag) because
+      production indexer never emits sentinels (Galexie/Lambda runs
+      from genesis), so no consumer needs to render the partial state.
+      Implementation is two-layer defense-in-depth: handler-level
+      `pool_exists()` gate (404 on participants/transactions/chart) +
+      inline `lp.created_at_ledger > 0` on queries 18/19 + EXISTS
+      guard against `liquidity_pools` on queries 20/21/23. All five
+      canonical SQL files updated; database-schema-overview.md and
+      backend-overview.md refreshed per ADR 0032. Tests: integration
+      (`lp_sentinel_placeholder_pool_hidden_on_all_endpoints`) with a
+      positive-control real pool seeded alongside the sentinel to
+      prove the filter is selective, plus direct query-level tests
+      (`sentinel_query_tests::sentinel_pool_id_returns_empty_from_all_three_fetchers`)
+      that exercise the EXISTS guard independently of the handler
+      gate. Live-DB run confirmed all assertions. Branch
+      `feat/0190-0193_parse-error-tests-and-sentinel-pool-filter`.
 ---
 
 # API endpoints: filter or annotate sentinel placeholder liquidity_pools rows
