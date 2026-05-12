@@ -98,6 +98,7 @@ Workflow:
 4. Lookup column index status from migrations / `\d` of staging DB
 5. Identify population owner (indexer / Lambda 2 / handler-computed / SQL-computed)
 6. Run sample COUNT-NOT-NULL query on staging or backfill DB
+7. For columns populated by the 0196 backfill-enrichment-runner (`holder_count`, `total_supply`, `icon_url`, NFT `name`/`media_url`), additionally run the sample query restricted to **dormant assets** (no activity in the last N ledgers — exact N TBD at audit time). Catches "live ledgers fine, old rows still NULL" gaps where the drain didn't actually run end-to-end on the dormant set.
 
 Expected outcome: every list endpoint field is a row in the table with no "FAIL" entries. Any FAIL = bug, spawn follow-up task.
 
@@ -109,6 +110,7 @@ For each `:id` detail endpoint:
 - For each, verify NO dedicated DB column (or column is dropped/scheduled to be dropped)
 - For each, verify implementation = runtime fetch in handler OR computed in SQL on detail-only query
 - Flag candidates to drop
+- Flag **UI fallback contracts** that depend on sentinels: e.g. `assets.name = ''` (no SEP-1 TOML available) requires the frontend to render `asset_code` instead of an empty string (0195 §2a). Listing these in the audit doc ensures the contract is documented at the API↔FE boundary even when neither side has explicit code for it.
 
 Output: appended section in same audit md. Flag each anti-pattern with proposed fix (drop column, refactor handler).
 
@@ -124,7 +126,7 @@ Per `lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md`, every PR chan
 ### Step 4: ADR cross-check
 
 - ADR 0043 (field allocation rule, from 0194) — re-affirm without amendment, OR amend if implementation revealed edge cases
-- ADR 0029 (abandon-parsed-artifacts) — read-path ADR, NO amendment from 0194/0195/0196 expected. Confirm no spurious amendment was added.
+- ADR 0029 (abandon-parsed-artifacts) — read-path ADR. After 0188 the `runtime_enrichment` module became an umbrella covering both `stellar_archive` (heavy-field S3 reread, the original 0029 scope) and `sep1` (issuer TOML fetch). 0188's "Out of Scope" explicitly deferred a 0029 amendment until "a unified description across both submodules is worth writing." Decide one of two outcomes during this audit and document the choice in 0197's Implementation Notes: either (a) amend 0029 to describe `runtime_enrichment` as the umbrella concept (preferred if the audit surfaces frontend / docs confusion about the two submodules' relationship), or (b) keep 0029 unchanged and record an explicit "no amendment required because X" rationale. **No silent skip.**
 - ADR 0037 (current-schema-snapshot) — confirm 0194's amendment landed
 - ADR 0044 (ClickHouse pilot — parallel store) — confirm no audit-driven amendment required. Audit scope is Postgres-only (see Step 1 preamble); CH parity audit deferred until CH wired to the API read-path. Any amendment here would be out of 0197 scope.
 
