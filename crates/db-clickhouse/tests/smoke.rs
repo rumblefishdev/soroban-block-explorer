@@ -67,13 +67,12 @@ async fn smoke_inserts_and_reads_each_table() {
         .expect("insert accounts");
     assert_count(&client, "accounts", &format!("id = {SMOKE_LEDGER}"), 1).await;
 
-    // ----- assets (state) -----
+    // ----- assets (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO assets (id, asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
-             VALUES (?, 1, 'USDC', ?, NULL, 'USD Coin', toDecimal128('1000000.0', 7), 5, NULL)",
+            "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
+             VALUES (1, 'USDC', ?, 0, 'USD Coin', toDecimal128('1000000.0', 7), 5, NULL)",
         )
-        .bind(SMOKE_LEDGER as i32)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
@@ -81,7 +80,7 @@ async fn smoke_inserts_and_reads_each_table() {
     assert_count(
         &client,
         "assets",
-        &format!("id = {}", SMOKE_LEDGER as i32),
+        &format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER}"),
         1,
     )
     .await;
@@ -180,13 +179,12 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- operations_appearances (append-only fact) -----
+    // ----- operations_appearances (append-only fact) — no surrogate `id` -----
     client
         .query(
-            "INSERT INTO operations_appearances (id, transaction_id, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_id, amount, ledger_sequence, application_order) \
-             VALUES (?, ?, 1, ?, NULL, NULL, NULL, NULL, NULL, 100, ?, 1)",
+            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_id, amount, ledger_sequence) \
+             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, NULL, 100, ?)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -262,13 +260,12 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- nfts (state) -----
+    // ----- nfts (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO nfts (id, contract_id, token_id, collection_name, name, media_url, minted_at_ledger, current_owner_id, current_owner_ledger) \
-             VALUES (?, ?, 'tok-1', NULL, NULL, NULL, ?, ?, ?)",
+            "INSERT INTO nfts (contract_id, token_id, collection_name, name, media_url, minted_at_ledger, current_owner_id, current_owner_ledger) \
+             VALUES (?, 'tok-1', NULL, NULL, NULL, ?, ?, ?)",
         )
-        .bind(SMOKE_LEDGER as i32)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -276,15 +273,21 @@ async fn smoke_inserts_and_reads_each_table() {
         .execute()
         .await
         .expect("insert nfts");
-    assert_count(&client, "nfts", &format!("id = {}", SMOKE_LEDGER as i32), 1).await;
+    assert_count(
+        &client,
+        "nfts",
+        &format!("contract_id = {SMOKE_LEDGER} AND token_id = 'tok-1'"),
+        1,
+    )
+    .await;
 
-    // ----- nft_ownership (append-only fact) -----
+    // ----- nft_ownership (append-only fact) — composite PK, no `nft_id` -----
     client
         .query(
-            "INSERT INTO nft_ownership (nft_id, ledger_sequence, event_order, transaction_id, owner_id, event_type) \
-             VALUES (?, ?, 0, ?, ?, 0)",
+            "INSERT INTO nft_ownership (contract_id, token_id, ledger_sequence, event_order, transaction_id, owner_id, event_type) \
+             VALUES (?, 'tok-1', ?, 0, ?, ?, 0)",
         )
-        .bind(SMOKE_LEDGER as i32)
+        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -299,11 +302,11 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- liquidity_pools (immutable post-create) -----
+    // ----- liquidity_pools (state) — version=last_updated_ledger (task 0208) -----
     client
         .query(
-            "INSERT INTO liquidity_pools (pool_id, asset_a_type, asset_a_code, asset_a_issuer_id, asset_b_type, asset_b_code, asset_b_issuer_id, fee_bps, created_at_ledger) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), 0, NULL, NULL, 1, 'USDC', ?, 30, ?)",
+            "INSERT INTO liquidity_pools (pool_id, asset_a_type, asset_a_code, asset_a_issuer_id, asset_b_type, asset_b_code, asset_b_issuer_id, fee_bps, last_updated_ledger) \
+             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), 0, '', 0, 1, 'USDC', ?, 30, ?)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -318,13 +321,12 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- liquidity_pool_snapshots (append-only fact) -----
+    // ----- liquidity_pool_snapshots (append-only fact) — no surrogate `id` -----
     client
         .query(
-            "INSERT INTO liquidity_pool_snapshots (id, pool_id, ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue) \
-             VALUES (?, unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('100.0', 7), toDecimal128('200.0', 7), toDecimal128('150.0', 7), NULL, NULL, NULL)",
+            "INSERT INTO liquidity_pool_snapshots (pool_id, ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue) \
+             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('100.0', 7), toDecimal128('200.0', 7), toDecimal128('150.0', 7), NULL, NULL, NULL)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
@@ -403,11 +405,13 @@ async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &s
 /// failed run doesn't poison the next attempt.
 async fn cleanup(client: &clickhouse::Client) {
     let l = SMOKE_LEDGER;
-    let l32 = SMOKE_LEDGER as i32;
     let stmts = [
         format!("ALTER TABLE ledgers DELETE WHERE sequence = {l}"),
         format!("ALTER TABLE accounts DELETE WHERE id = {l}"),
-        format!("ALTER TABLE assets DELETE WHERE id = {l32}"),
+        format!(
+            "ALTER TABLE assets DELETE WHERE asset_type = 1 AND asset_code = 'USDC' \
+             AND issuer_id = {l} AND contract_id = 0"
+        ),
         format!("ALTER TABLE account_balances_current DELETE WHERE account_id = {l}"),
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
@@ -417,7 +421,7 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_invocations_appearances DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE nfts DELETE WHERE id = {l32}"),
+        format!("ALTER TABLE nfts DELETE WHERE contract_id = {l} AND token_id = 'tok-1'"),
         format!("ALTER TABLE nft_ownership DELETE WHERE ledger_sequence = {l}"),
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),
         format!("ALTER TABLE liquidity_pool_snapshots DELETE WHERE ledger_sequence = {l}"),

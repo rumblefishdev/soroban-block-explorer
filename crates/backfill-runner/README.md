@@ -8,8 +8,9 @@ deserializes each ledger, and persists to the ADR 0027 schema via
 contract. No reimplementation of the write path.
 
 Also drives the ClickHouse pilot store (ADR 0044) behind
-`--target clickhouse`; that path is currently a no-op persist (task
-0205) — see [Targets](#targets) below.
+`--target clickhouse`. As of task 0206 that path writes real rows
+into the 17 mirrored CH tables via partition-aligned streaming
+inserts — see [Targets](#targets) below.
 
 ## Prerequisites
 
@@ -68,29 +69,65 @@ aws-public-blockchain workflow) keep working byte-for-byte without edits.
 | Target       | Status              | Required env / flag                                                                        |
 |--------------|---------------------|--------------------------------------------------------------------------------------------|
 | `postgres`   | production          | `--database-url` / `DATABASE_URL`                                                          |
-| `clickhouse` | **stub — no writes**| `--clickhouse-url` / `CLICKHOUSE_URL`, plus `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` (defaults from `db_clickhouse::Config::from_env`) |
+| `clickhouse` | pilot (task 0206)   | `--clickhouse-url` / `CLICKHOUSE_URL`, plus `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` (defaults from `db_clickhouse::Config::from_env`) |
 
-### `--target clickhouse` (stubbed)
+### `--target clickhouse`
 
-The ClickHouse path runs the full parse pipeline end-to-end against
-`aws s3 sync`'d ledgers, but the writer is currently a **no-op stub**
-(`db_clickhouse::persist::persist_ledger_clickhouse`). Per-ledger
-context is emitted via `tracing::info!` and zero rows are persisted.
+The CH path drives a **partition-writer lifecycle** (task 0206):
+`open_partition` → `write_ledger × N` → `commit` (or `abort` on
+error). The CH writer
+(`db_clickhouse::persist::PartitionWriter`) holds one long-lived
+`clickhouse::Insert<RowT>` per CH table across the entire backfill
+partition — the server only sees one `INSERT` statement per table
+per partition, instead of one per ledger.
 
-This intentional half-step (task 0205, ADR 0044 §Decision §6) wires the
-flag-based plumbing — `Sink` enum + dispatch over `preflight`,
-`load_completed`, `persist_ledger` — without the cost of writing real
-INSERTs against a schema that still has open design questions.
-A follow-up task lands the real INSERTs for the 17 mirrored tables and
-removes the stub.
+Per-ledger `INSERT` was an anti-pattern here: `MergeTree` creates
+one "part" per `INSERT` statement, and the CH default
+`parts_to_throw_insert = 3000` (per `(table, CH-partition)`) would
+trip after the first ~3 k ledgers (~0.03 % of an 11 M-ledger
+backfill). Partition-aligned streaming pushes this to ~2 400 total
+parts created over the entire backfill — well within the background
+merger's comfort zone. Full design rationale lives in
+[`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md#writers).
 
 ```bash
-# Stub ClickHouse run — parses every ledger, writes nothing.
+# Real ClickHouse run.
 CLICKHOUSE_URL=http://localhost:8123 \
     cargo run -p backfill-runner -- \
     --target clickhouse \
     run --start 62016000 --end 62016099
 ```
+
+The PG variant of the partition-writer lifecycle is a no-op around
+the existing per-ledger transaction — `--target postgres` behaviour
+is byte-for-byte equivalent to the pre-task-0206 path.
+
+### Parallel partition runs
+
+The CH writer accepts concurrent inserts on the same table without
+coordination — ReplacingMergeTree dedups on the merge side keyed by
+`ORDER BY` (the deterministic surrogate id, derived from the
+natural key). To parallelize an 11 M-ledger backfill across K
+runner processes, invoke each with `--start N --end M` on **disjoint
+ranges**:
+
+```bash
+# Four parallel runners across four disjoint partition ranges.
+for i in 0 1 2 3; do
+    START=$((62016000 + i * 64000))
+    END=$((START + 63999))
+    CLICKHOUSE_URL=http://localhost:8123 \
+        cargo run -p backfill-runner --release -- \
+        --target clickhouse \
+        run --start "$START" --end "$END" &
+done
+wait
+```
+
+CH-side requires no setup. At K ≥ 8 in one process group, raise
+`max_concurrent_queries` from the CH default (100) to ~200 — each
+writer holds 14 long-lived inserts. K = 4 (14 × 4 = 56) is
+comfortable on defaults.
 
 ### Iteration
 

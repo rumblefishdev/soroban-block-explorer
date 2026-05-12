@@ -58,11 +58,19 @@ pub fn client(cfg: &Config) -> Client {
         .with_database(&cfg.database)
 }
 
-/// Errors that can happen while applying the schema.
+/// Errors that can happen while applying the schema or persisting a ledger.
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
+    /// Underlying CH transport / driver failure (`clickhouse::error::Error`
+    /// wraps HTTP, serialization, and server-reported issues).
     #[error("clickhouse query failed: {0}")]
     Query(#[from] clickhouse::error::Error),
+    /// Pre-write staging failure (decode error, overflow, malformed
+    /// parser output, …). Mirrors the `HandlerError::Staging` variant
+    /// used by the PG path so the operator sees the same vocabulary
+    /// regardless of target.
+    #[error("clickhouse staging failed: {0}")]
+    Staging(String),
 }
 
 /// Apply `init.sql` to the given client. Idempotent: every statement is a

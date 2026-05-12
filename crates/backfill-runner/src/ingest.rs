@@ -60,9 +60,15 @@ pub struct PartitionStats {
 /// `partition_start` is passed in explicitly so the structured log event
 /// carries enough context to answer "which partition owned this ledger?"
 /// without re-parsing the filename.
+///
+/// Streams the ledger into `writer` (the open partition writer handle)
+/// rather than the bare sink — task 0206 collapsed per-ledger persist
+/// into the partition-writer lifecycle on the CH side. On PG that
+/// lifecycle is a no-op around per-ledger transactions, so behaviour
+/// is byte-for-byte equivalent to the pre-task path.
 pub async fn ingest_ledger_from_file(
     path: &Path,
-    sink: &Sink,
+    writer: &mut crate::sink::PartitionWriterHandle<'_>,
     seq: u32,
     partition_start: u32,
     classification_cache: &ClassificationCache,
@@ -101,7 +107,7 @@ pub async fn ingest_ledger_from_file(
 
     let persist_start = Instant::now();
     for meta in batch.ledger_close_metas.iter() {
-        sink.persist_ledger(meta, classification_cache).await?;
+        writer.write_ledger(meta, classification_cache).await?;
     }
     let persist_ms = persist_start.elapsed().as_millis();
 
@@ -154,30 +160,57 @@ pub async fn index_partition(
     let wall_start = Instant::now();
     let mut stats = PartitionStats::default();
 
-    for seq in first..=last {
-        if completed.contains(&seq) {
-            stats.skipped_completed += 1;
-            continue;
-        }
-        let path = partition.local_ledger_path(seq, temp_dir);
-        assert!(
-            path.exists(),
-            "ledger file missing post-sync: partition={} seq={} path={}",
-            partition.start,
-            seq,
-            path.display()
-        );
-        let t = ingest_ledger_from_file(&path, sink, seq, partition.start, classification_cache)
+    // Open the partition writer once for the whole loop. On PG this
+    // is a borrow + no-op commit; on CH it holds the 14 long-lived
+    // `Insert<RowT>` handles open across every ledger in the range so
+    // the server only sees one INSERT per table per partition (see
+    // `db_clickhouse::persist::writer::PartitionWriter` docs).
+    let mut writer = sink.open_partition();
+    let loop_result: Result<(), BackfillError> = async {
+        for seq in first..=last {
+            if completed.contains(&seq) {
+                stats.skipped_completed += 1;
+                continue;
+            }
+            let path = partition.local_ledger_path(seq, temp_dir);
+            assert!(
+                path.exists(),
+                "ledger file missing post-sync: partition={} seq={} path={}",
+                partition.start,
+                seq,
+                path.display()
+            );
+            let t = ingest_ledger_from_file(
+                &path,
+                &mut writer,
+                seq,
+                partition.start,
+                classification_cache,
+            )
             .await?;
-        stats.indexed += 1;
-        stats.total_bytes += t.bytes as u64;
-        stats.parse_total_ms += t.parse_ms;
-        stats.persist_total_ms += t.persist_ms;
+            stats.indexed += 1;
+            stats.total_bytes += t.bytes as u64;
+            stats.parse_total_ms += t.parse_ms;
+            stats.persist_total_ms += t.persist_ms;
 
-        let ledger_ms = t.total_ms();
-        stats.min_ledger_ms = Some(stats.min_ledger_ms.map_or(ledger_ms, |m| m.min(ledger_ms)));
-        stats.max_ledger_ms = Some(stats.max_ledger_ms.map_or(ledger_ms, |m| m.max(ledger_ms)));
-        dashboard.record_ledger(t.parse_ms, t.persist_ms);
+            let ledger_ms = t.total_ms();
+            stats.min_ledger_ms = Some(stats.min_ledger_ms.map_or(ledger_ms, |m| m.min(ledger_ms)));
+            stats.max_ledger_ms = Some(stats.max_ledger_ms.map_or(ledger_ms, |m| m.max(ledger_ms)));
+            dashboard.record_ledger(t.parse_ms, t.persist_ms);
+        }
+        Ok(())
+    }
+    .await;
+
+    match loop_result {
+        Ok(()) => writer.commit().await?,
+        Err(err) => {
+            // Abort the writer first — drops in-flight CH inserts
+            // cleanly. PG variant is a no-op (each ledger committed
+            // independently before the failure point).
+            writer.abort().await;
+            return Err(err);
+        }
     }
 
     stats.wall_clock = wall_start.elapsed();
