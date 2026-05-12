@@ -4351,8 +4351,7 @@ async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
         &classification_cache,
     )
     .await
-    .err()
-    .expect("persist_ledger must error for empty source — the BUG this test reproduces");
+    .expect_err("persist_ledger must error for empty source — the BUG this test reproduces");
 
     // Surface the exact failure mode in the panic message so the
     // `should_panic(expected = ...)` literal anchors to the real
