@@ -4,7 +4,7 @@ title: 'DB completeness audit + docs: list/detail field allocation verification,
 type: FEATURE
 status: active
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043', '0044']
-related_tasks: ['0188', '0191', '0194', '0195', '0196']
+related_tasks: ['0188', '0191', '0194', '0195', '0196', '0212']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
 milestone: 2
 links:
@@ -99,6 +99,7 @@ Workflow:
 5. Identify population owner (indexer / Lambda 2 / handler-computed / SQL-computed)
 6. Run sample COUNT-NOT-NULL query on staging or backfill DB
 7. For columns populated by the 0196 backfill-enrichment-runner (`holder_count`, `total_supply`, `icon_url`, NFT `name`/`media_url`), additionally run the sample query restricted to **dormant assets** (no activity in the last N ledgers — exact N TBD at audit time). Catches "live ledgers fine, old rows still NULL" gaps where the drain didn't actually run end-to-end on the dormant set.
+8. **One-time live-smoke check** for the SEP-1 (`sep1_assets`) and NFT (`nft_token_uri`) enrichment kinds: manually fetch one known live issuer's stellar.toml and one known JSON-metadata NFT collection's `token_uri`, run the full `enrich_and_persist::*` flow, and log the resulting row + observed `icon_url` / `media_url` value in the audit md. Purely a one-shot verification during this audit — the persistent `#[ignore]` regression suite that turns this into a recurring CI gate is owned by task **0212** (enrichment live-smoke suite).
 
 Expected outcome: every list endpoint field is a row in the table with no "FAIL" entries. Any FAIL = bug, spawn follow-up task.
 
