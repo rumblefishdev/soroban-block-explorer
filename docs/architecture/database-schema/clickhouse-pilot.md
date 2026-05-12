@@ -267,7 +267,7 @@ deletes in one PR; nothing else has changed.
 ### Writers
 
 Real writes land in task
-[0206](../../../lore/1-tasks/active/0206_FEATURE_clickhouse-persist-real-inserts/README.md),
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md),
 on top of the runner plumbing task
 [0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
 shipped. The writer lives in `crates/db-clickhouse/src/persist/` and
@@ -284,7 +284,7 @@ three structural differences:
    10⁷.
 
 The cross-reference doc at
-[`notes/G-coverage-mapping.md`](../../../lore/1-tasks/active/0206_FEATURE_clickhouse-persist-real-inserts/notes/G-coverage-mapping.md)
+[`notes/G-coverage-mapping.md`](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/notes/G-coverage-mapping.md)
 enumerates every `Extracted*` field with its CH target column (or
 "out of scope — matches PG").
 
@@ -306,17 +306,20 @@ open() → write_ledger() × 64_000 → commit()
 ##### Why per-ledger inserts are wrong here
 
 ClickHouse `MergeTree` creates exactly one "part" per `INSERT`
-statement. With 14 tables × 11 M ledgers the naive per-ledger
-pattern produces ~150 M parts and trips
+statement. The writer streams into 16 non-ledger tables; `ledgers`
+is opened once at commit as the commit marker (17 tables total).
+With 16 streaming tables × 11 M ledgers the naive per-ledger pattern
+produces ~176 M parts and trips
 `parts_to_throw_insert = 3000` (per `(table, CH-partition)`) after
 the first ~3 k ledgers — about 0.03 % of an 11 M backfill. The
 background merger cannot fold parts faster than they're produced at
 parse-bound throughput, so the ingest path stalls.
 
 Partition-aligned streaming holds the request open across the whole
-64 k-ledger backfill partition. ~172 partitions × 14 tables ≈ 2 400
-`INSERT` statements over the entire 11 M-ledger backfill — well
-within the merger's comfort zone.
+64 k-ledger backfill partition. ~172 partitions × 16 streaming
+tables ≈ 2 750 `INSERT` statements over the entire 11 M-ledger
+backfill (plus one `ledgers` INSERT per partition as the commit
+marker) — well within the merger's comfort zone.
 
 Loopback transport is irrelevant to this design choice — server-side
 part economics are the load-bearing constraint, not HTTP round-trip
@@ -339,8 +342,9 @@ merge.
 ##### Memory budget
 
 Each `clickhouse::Insert<T>` buffers 256 KiB and chunk-flushes when
-full. 14 inserts × 256 KiB ≈ 3.5 MiB peak per writer, independent
-of partition row count. Comfortable headroom even at K=16 parallel
+full. 16 streaming inserts × 256 KiB ≈ 4 MiB peak per writer (plus
+the short-lived `ledgers` insert at commit), independent of
+partition row count. Comfortable headroom even at K=16 parallel
 partition runners on a laptop.
 
 ##### Server-side bulk-ingest settings

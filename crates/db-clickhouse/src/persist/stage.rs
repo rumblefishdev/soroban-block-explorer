@@ -119,6 +119,13 @@ pub fn prepare(
     let mut account_keys: HashSet<String> = HashSet::new();
     let mut participants_per_tx: HashMap<String, HashSet<String>> = HashMap::new();
     let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
+    // O(1) per-tx op count lookup. Built once over `operations` so the
+    // transactions loop stays linear in `transactions.len()` rather than
+    // the prior O(tx_count × op_groups) `iter().find()` scan.
+    let op_count_by_tx: HashMap<&str, i16> = operations
+        .iter()
+        .map(|(h, ops)| (h.as_str(), i16::try_from(ops.len()).unwrap_or(i16::MAX)))
+        .collect();
 
     for tx in transactions {
         account_keys.insert(tx.source_account.clone());
@@ -329,11 +336,7 @@ pub fn prepare(
         };
         let app_order =
             i16::try_from(idx + 1).map_err(|_| staging_err("application_order overflow (>i16)"))?;
-        let op_count = operations
-            .iter()
-            .find(|(h, _)| h == &tx.hash)
-            .map(|(_, ops)| i16::try_from(ops.len()).unwrap_or(i16::MAX))
-            .unwrap_or(0);
+        let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
             id: tx_id,

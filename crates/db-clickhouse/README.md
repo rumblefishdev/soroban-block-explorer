@@ -314,11 +314,11 @@ The writer applies these CH settings on every per-table insert:
 | `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunks into 1 M-row blocks before the part-create path.                           |
 | `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                       |
 | `insert_deduplicate`          | `0`           | Rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                           |
-| `http_receive_timeout`        | `1800` (30 m) | CH default 30s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` that fill the client's 256 KiB buffer slowly. Surface: `Network("channel closed")` after ~10 min on a real mainnet partition. |
-| `http_send_timeout`           | `1800` (30 m) | Same axis, response side.                                                                        |
+| `http_receive_timeout`        | `7200` (2 h)  | CH default 30s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` that fill the client's 256 KiB buffer slowly. Surface: `Network("channel closed")` after ~10 min on a real mainnet partition. 2 h covers a 64 k-ledger partition (~80 min wall-clock) with headroom for parallel contention. |
+| `http_send_timeout`           | `7200` (2 h)  | Same axis, response side.                                                                        |
 
 > **Important — split XML config overrides.** CH 26.3 records the
-> per-query `with_setting("http_receive_timeout", "1800")` in
+> per-query `with_setting("http_receive_timeout", "7200")` in
 > `system.query_log.Settings` but does **not** propagate it to the
 > Poco-level socket read timeout that actually fires on the chunked
 > HTTP body. Only **XML config files** take effect for the wire
@@ -326,14 +326,18 @@ The writer applies these CH settings on every per-table insert:
 > `clickhouse` service in `docker-compose.yml`:
 >
 > - [`config.d/timeouts.xml`](config.d/timeouts.xml) → mounted at
->   `/etc/clickhouse-server/config.d/timeouts.xml`. Currently empty
->   (reserved slot — `keep_alive_timeout` was tried here but it's the
->   between-requests HTTP keep-alive timeout, not the in-request
->   socket-read timeout we actually need to bump).
+>   `/etc/clickhouse-server/config.d/timeouts.xml`. Bumps
+>   `merge_tree.parts_to_delay_insert = 1000` and
+>   `parts_to_throw_insert = 5000` so the background merger has
+>   headroom under sustained heavy-insert pressure during the
+>   backfill. RAM cap (`max_server_memory_usage`) is intentionally
+>   not set here — per-query `max_memory_usage` in the user profile
+>   is the only memory ceiling for the pilot.
 > - [`users.d/timeouts.xml`](users.d/timeouts.xml) → mounted at
 >   `/etc/clickhouse-server/users.d/timeouts.xml`. Profile-level
 >   `http_receive_timeout / http_send_timeout / receive_timeout /
->   send_timeout = 1800` on the `default` profile.
+>   send_timeout = 7200` on the `default` profile plus
+>   `max_memory_usage = 6 GB` per-query cap.
 >
 > Both are **file-level** (not directory-level) bind mounts because
 > the official CH docker entrypoint writes its own files into both

@@ -19,8 +19,9 @@
   realistic single-partition workload, including future K=4 parallel
   scenarios where contention slows individual partitions.
 
-  Server-level `keep_alive_timeout` lives in the sibling
-  `config.d/timeouts.xml`. See ADR 0044 history for the full rationale.
+  Sibling server-level `config.d/timeouts.xml` carries the MergeTree
+  part-count thresholds for the same bulk-backfill workload. See
+  ADR 0044 history for the full rationale.
 
   Pilot-only — production deployment needs a narrower posture +
   monitoring.
@@ -33,11 +34,13 @@
             <receive_timeout>7200</receive_timeout>
             <send_timeout>7200</send_timeout>
 
-            <!-- Per-query memory cap. With the server-level
-                 `max_server_memory_usage = 12 GB` (in config.d), this
-                 limits any single INSERT / merge to ~6 GB so two
-                 concurrent operations can't combine to exceed the
-                 server cap. -->
+            <!-- Per-query memory cap. The server-level
+                 `max_server_memory_usage` is intentionally left at
+                 the CH default (unlimited) — see the rationale in
+                 `../config.d/timeouts.xml`. This per-query cap of
+                 ~6 GB is the only memory ceiling for the pilot,
+                 enough to keep a single runaway INSERT or background
+                 merge from monopolising the host. -->
             <max_memory_usage>6000000000</max_memory_usage>
         </default>
     </profiles>

@@ -15,17 +15,20 @@
 //! ## Why one long-lived insert per table per partition
 //!
 //! ClickHouse `MergeTree` creates exactly one "part" per `INSERT`
-//! statement. With 14 tables × 11 M ledgers the naive per-ledger
-//! pattern produces ~150 M parts and trips
+//! statement. The writer streams into 16 non-ledger tables; `ledgers`
+//! is opened once at commit as the commit marker (17 tables total).
+//! With 16 streaming tables × 11 M ledgers the naive per-ledger
+//! pattern produces ~176 M parts and trips
 //! `parts_to_throw_insert = 3000` (per `(table, partition)`) after the
 //! first ~3 k ledgers (≈ 0.03 % of an 11 M backfill). The merger
 //! cannot fold parts faster than they're produced at parse-bound
 //! throughput.
 //!
 //! Partition-aligned streaming inserts hold the request open across the
-//! whole 64 k-ledger partition: ~172 partitions × 14 tables ≈ 2 400
-//! `INSERT` statements over the entire 11 M-ledger backfill. Well
-//! within the merger's comfort zone.
+//! whole 64 k-ledger partition: ~172 partitions × 16 streaming tables
+//! ≈ 2 750 `INSERT` statements over the entire 11 M-ledger backfill
+//! (plus one `ledgers` INSERT per partition as the commit marker).
+//! Well within the merger's comfort zone.
 //!
 //! Loopback transport is irrelevant here — server-side part economics
 //! are the load-bearing constraint, not HTTP round-trips.
@@ -43,9 +46,10 @@
 //! ## Memory budget
 //!
 //! Each `clickhouse::Insert<T>` buffers `BUFFER_SIZE = 256 KiB` and
-//! chunk-flushes when full. 14 inserts × 256 KiB = ~3.5 MiB peak per
-//! writer, independent of partition row count. Comfortable headroom
-//! even at K=16 parallel partitions on a laptop.
+//! chunk-flushes when full. 16 streaming inserts × 256 KiB ≈ 4 MiB
+//! peak per writer (plus the short-lived `ledgers` insert at commit),
+//! independent of partition row count. Comfortable headroom even at
+//! K=16 parallel partitions on a laptop.
 
 use clickhouse::{Client, insert::Insert};
 
@@ -348,7 +352,7 @@ where
 /// * `insert_deduplicate = 0` — we rely on ReplacingMergeTree dedup
 ///   keyed by `ORDER BY`, not on the per-block dedup hash (which
 ///   would consume RAM for our row volumes).
-/// * `http_receive_timeout = 1800` / `http_send_timeout = 1800` —
+/// * `http_receive_timeout = 7200` / `http_send_timeout = 7200` —
 ///   long-running partition-aligned inserts can have multi-minute
 ///   gaps between chunked HTTP body writes on **sparse** tables
 ///   (e.g. `nfts` with ~15 rows/ledger fills the crate's ~256 KiB
@@ -358,10 +362,14 @@ where
 ///   server-side between sparse chunks, surfacing on the client as
 ///   `Network("channel closed")` after about 10 minutes of run on a
 ///   real mainnet partition — observed at ~9.6 k / 10 k ledgers on
-///   the 62016000 smoke. 30 minutes leaves comfortable headroom for
-///   a 64 k-ledger partition even at the lowest per-table fill
-///   rate; the timeout is per-stalled-chunk, not per-request, so
-///   steady-state never approaches it.
+///   the 62016000 smoke. 2 hours covers a 64 k-ledger partition
+///   (~80 min wall-clock) with headroom for future K=4 parallel
+///   contention; the timeout is per-stalled-chunk, not per-request,
+///   so steady-state never approaches it. Note: per-query
+///   `with_setting` does NOT propagate to the Poco socket read on
+///   CH 26.3 — only the profile-level XML in `users.d/timeouts.xml`
+///   takes effect on the wire. The settings here are belt-and-
+///   suspenders for future CH versions that may honour them.
 ///
 /// `enable_http_compression` is left at the CH default (off) for
 /// loopback. Documented in `crates/db-clickhouse/README.md`.

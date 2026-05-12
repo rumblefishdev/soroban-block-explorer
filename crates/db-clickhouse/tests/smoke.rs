@@ -408,7 +408,10 @@ async fn cleanup(client: &clickhouse::Client) {
     let stmts = [
         format!("ALTER TABLE ledgers DELETE WHERE sequence = {l}"),
         format!("ALTER TABLE accounts DELETE WHERE id = {l}"),
-        format!("ALTER TABLE assets DELETE WHERE issuer_id = {l} OR contract_id = {l}"),
+        format!(
+            "ALTER TABLE assets DELETE WHERE asset_type = 1 AND asset_code = 'USDC' \
+             AND issuer_id = {l} AND contract_id = 0"
+        ),
         format!("ALTER TABLE account_balances_current DELETE WHERE account_id = {l}"),
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
@@ -418,7 +421,7 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_invocations_appearances DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE nfts DELETE WHERE contract_id = {l}"),
+        format!("ALTER TABLE nfts DELETE WHERE contract_id = {l} AND token_id = 'tok-1'"),
         format!("ALTER TABLE nft_ownership DELETE WHERE ledger_sequence = {l}"),
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),
         format!("ALTER TABLE liquidity_pool_snapshots DELETE WHERE ledger_sequence = {l}"),

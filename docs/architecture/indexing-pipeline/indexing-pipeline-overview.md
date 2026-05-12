@@ -290,7 +290,7 @@ derived-state guards work without special-casing.
 `backfill-runner` also accepts `--target clickhouse` (task
 [0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
 shipped the runner plumbing; task
-[0206](../../../lore/1-tasks/active/0206_FEATURE_clickhouse-persist-real-inserts/README.md)
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md)
 landed the real writer) to drive the ClickHouse pilot store
 ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
 The CH path uses **partition-aligned streaming inserts** —
