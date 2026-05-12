@@ -4,7 +4,7 @@ title: 'DB completeness audit + docs: list/detail field allocation verification,
 type: FEATURE
 status: active
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043', '0044']
-related_tasks: ['0188', '0191', '0194', '0195', '0196', '0212']
+related_tasks: ['0188', '0191', '0194', '0195', '0196', '0210', '0212', '0213']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
 milestone: 2
 links:
@@ -28,7 +28,11 @@ history:
 
 ## Summary
 
-Final verification gate for the 0194-0197 task chain. Audits every list endpoint to confirm every returned field has a DB column that is indexed (where sortable/filterable) and populated (≠ always NULL on a production sample query). Audits every detail endpoint to confirm unique-to-detail fields do **NOT** have dedicated DB columns and are runtime type-2 enrichment instead. Refreshes all `docs/architecture/**` per ADR 0032 evergreen rule. Outputs a one-time snapshot to `docs/audits/`.
+Final verification gate for the 0194-0197 task chain. Audits every list endpoint to confirm every returned field has a DB column that is indexed (where sortable/filterable) and populated (≠ always NULL on a controlled local sample). Audits every detail endpoint to confirm unique-to-detail fields do **NOT** have dedicated DB columns and are runtime type-2 enrichment instead. Refreshes all `docs/architecture/**` per ADR 0032 evergreen rule. Outputs a one-time snapshot to `docs/audits/`.
+
+**Audit type:** This is **Type A — bulk volumetric** ("does the pipeline fire end-to-end at realistic scale, what are the populated/sentinel/NULL ratios per column?"). The complementary **Type B — fixture-based per-field correctness vs external sources** (Horizon, stellar.expert) is owned by task **0213** (fixture-asset external parity audit). The two are intentionally split: Type A catches "worker not firing / drain incomplete / sentinel emission" classes of bugs; Type B catches "values are wrong / drift vs Horizon / parser returns wrong field" classes. Both must pass for the audited surface to be considered healthy.
+
+**Environment:** All audit work runs **on a local Postgres** (Docker Compose), against a small **controlled mini-backfill** (a few hundred ledgers ingested by `backfill-runner` with `--keep-partitions`, then drained by `backfill-enrichment-runner`). No staging / production access required. Rationale: no real backfill has been run yet on staging or production — the empirical state needed for sample queries does not exist anywhere else. Operating locally also keeps the audit self-contained and re-runnable.
 
 ## Context
 
@@ -76,32 +80,133 @@ The pattern to verify: detail-only fields (e.g. `description`, `home_page` on as
 
 ## Implementation Plan
 
+### Step 0: Local audit environment + initial state snapshot
+
+The audit operates on a self-contained local Postgres populated by a
+small controlled backfill. This step prepares that environment and
+captures the **PRE-enrichment** state for the coverage matrix.
+
+1. **Stand up Postgres locally.** `docker compose up postgres` (or
+   the project's standard local-dev recipe at audit time). Confirm
+   migrations applied via `cargo run -p db-migrate -- migrate`.
+
+2. **Pick a ledger range — start small.** Suggested initial window:
+   ~300 ledgers from recent pubnet activity (e.g.
+   `LEDGER_RANGE=51000000..51000300`). Sized to be ingestable in
+   minutes on a laptop. Rerun with a wider window if Step 0.4
+   diversity check fails.
+
+3. **Run indexing backfill (non-destructive).**
+
+   ```bash
+   cargo run --release -p backfill-runner -- \
+     --start 51000000 --end 51000300 \
+     --keep-partitions \
+     run
+   ```
+
+   The `--keep-partitions` flag preserves the downloaded S3 partition
+   archives so re-runs do not re-download. Critical for iterative
+   audit work.
+
+4. **Diversity check — confirm coverage of the audited entity types.**
+   Small windows may not contain any NFT mint / new LP / SAC asset.
+   Run:
+
+   ```sql
+   SELECT
+     (SELECT COUNT(*) FROM assets)              AS assets,
+     (SELECT COUNT(*) FROM liquidity_pools)     AS lps,
+     (SELECT COUNT(*) FROM nfts)                AS nfts,
+     (SELECT COUNT(*) FROM soroban_contracts)   AS contracts;
+   ```
+
+   Each count > 0 means the matrix has a row to verify against.
+   Any count == 0 → expand the ledger range and re-run Step 0.3.
+   Document the final chosen range in the audit doc.
+
+5. **Capture PRE snapshot.** Run both status commands and save
+   raw output as separate snapshot files:
+
+   ```bash
+   cargo run -p backfill-runner -- status --start 51000000 --end 51000300 \
+     > docs/audits/2026-05-12-pre-indexing-status.txt
+   cargo run -p backfill-enrichment-runner -- status \
+     > docs/audits/2026-05-12-pre-enrichment-status.txt
+   ```
+
+   The `backfill-enrichment-runner status` output is already a
+   markdown table reporting NULL count + sentinel count + total per
+   audited column. This is the empirical baseline.
+
+6. **Run enrichment drain.**
+
+   ```bash
+   cargo run --release -p backfill-enrichment-runner -- sep1-assets
+   cargo run --release -p backfill-enrichment-runner -- nft-metadata
+   ```
+
+   Capture exit codes + any worker-log errors for the audit doc.
+   Permanent errors (TOML 404, IPFS gateway 404, etc.) become
+   sentinels by design — these are expected, not failures.
+
+7. **Capture POST snapshot.**
+   ```bash
+   cargo run -p backfill-enrichment-runner -- status \
+     > docs/audits/2026-05-12-post-enrichment-status.txt
+   ```
+
+PRE vs POST diff is the central empirical evidence: indexer-driven
+columns must be non-NULL already PRE; enrichment-driven columns must
+flip NULL → (populated or sentinel) between PRE and POST.
+
+**Note on the `enrich status` output shape.** The command reports
+NULL count + `''`-sentinel count + total rows per kind. "Populated
+with a real value" is derived implicitly as `total - NULL - sentinel`.
+Auditor should make that derivation explicit when transferring the
+status table into the audit md so the third category is visible
+without arithmetic. (Adding a fourth explicit column to the binary's
+status output is a small follow-up improvement; not blocking this
+audit.)
+
 ### Step 1: Coverage matrix (audit deliverable)
 
-**Scope:** Postgres store only. ClickHouse pilot (ADR 0044, tasks 0204/0206/0207) maintains a parallel store with a separate endpoint-query reference set (`endpoint-queries-clickhouse/`); CH is **not** yet wired to the API read-path. A CH-side equivalence audit is deferred to a follow-up task that runs once CH serves a real `/v1/*` handler — running it now would only verify the 0207 reference SQL against itself.
+**Scope:** Postgres store only, against the local mini-backfill DB
+built in Step 0. ClickHouse pilot (ADR 0044, tasks 0204/0206/0207)
+maintains a parallel store with a separate endpoint-query reference
+set (`endpoint-queries-clickhouse/`); CH is **not** yet wired to the
+API read-path. A CH-side equivalence audit is deferred to a follow-up
+task that runs once CH serves a real `/v1/*` handler — running it now
+would only verify the 0207 reference SQL against itself.
 
-Output `docs/audits/{TIMESTAMP}-list-endpoint-completeness.md` with a single table:
+Output `docs/audits/2026-05-12-list-endpoint-completeness.md` with a single table per endpoint:
 
-| Endpoint              | DTO field         | DB column   | Indexed?     | Populated by               | Sample query result         |
-| --------------------- | ----------------- | ----------- | ------------ | -------------------------- | --------------------------- |
-| `/v1/assets`          | `id`              | `assets.id` | PK           | indexer (insert)           | non-NULL                    |
-| `/v1/assets`          | `asset_type_name` | computed    | n/a          | SQL CASE                   | non-NULL                    |
-| ...                   | ...               | ...         | ...          | ...                        | ...                         |
-| `/v1/liquidity-pools` | `tvl`             | `lps.tvl`   | partial DESC | Lambda 2 (lp_tvl, 0195 2a) | (assert non-NULL on sample) |
-| ...                   | ...               | ...         | ...          | ...                        | ...                         |
+| Endpoint     | DTO field         | DB column         | Indexed? | Populated by           | PRE drain (NULL / sentinel / populated) | POST drain (NULL / sentinel / populated) |
+| ------------ | ----------------- | ----------------- | -------- | ---------------------- | --------------------------------------- | ---------------------------------------- |
+| `/v1/assets` | `id`              | `assets.id`       | PK       | indexer (insert)       | 0 / 0 / N                               | 0 / 0 / N (unchanged)                    |
+| `/v1/assets` | `asset_type_name` | computed          | n/a      | SQL CASE               | 0 / 0 / N                               | 0 / 0 / N (unchanged)                    |
+| `/v1/assets` | `icon_url`        | `assets.icon_url` | btree    | Lambda 2 (sep1_assets) | N / 0 / 0                               | small / some / most                      |
+| ...          | ...               | ...               | ...      | ...                    | ...                                     | ...                                      |
+
+Indexer-driven columns must already be populated at PRE (the indexer
+writes during ingest). Enrichment-driven columns flip NULL → (populated
+or sentinel) between PRE and POST. Any indexer-driven column showing
+NULL at PRE = bug. Any enrichment-driven column showing 0 populated at
+POST (with sentinel only or all NULL) = bug.
 
 Workflow:
 
-1. For each endpoint, read DTO struct from `crates/api/src/{module}/dto.rs`
-2. For each field, trace the SQL query that produces it (canonical SQL files in repo, e.g. `crates/api/src/sql/15_get_assets_list.sql`)
-3. Map to DB column or in-SQL computation
-4. Lookup column index status from migrations / `\d` of staging DB
-5. Identify population owner (indexer / Lambda 2 / handler-computed / SQL-computed)
-6. Run sample COUNT-NOT-NULL query on staging or backfill DB
-7. For columns populated by the 0196 backfill-enrichment-runner (`holder_count`, `total_supply`, `icon_url`, NFT `name`/`media_url`), additionally run the sample query restricted to **dormant assets** (no activity in the last N ledgers — exact N TBD at audit time). Catches "live ledgers fine, old rows still NULL" gaps where the drain didn't actually run end-to-end on the dormant set.
-8. **One-time live-smoke check** for the SEP-1 (`sep1_assets`) and NFT (`nft_token_uri`) enrichment kinds: manually fetch one known live issuer's stellar.toml and one known JSON-metadata NFT collection's `token_uri`, run the full `enrich_and_persist::*` flow, and log the resulting row + observed `icon_url` / `media_url` value in the audit md. Purely a one-shot verification during this audit — the persistent `#[ignore]` regression suite that turns this into a recurring CI gate is owned by task **0212** (enrichment live-smoke suite).
+1. For each endpoint, read DTO struct from `crates/api/src/{module}/dto.rs`.
+2. For each field, trace the SQL query that produces it (canonical SQL files in repo, e.g. `crates/api/src/sql/15_get_assets_list.sql`).
+3. Map to DB column or in-SQL computation.
+4. Lookup column index status from migrations / `\d` of the local DB.
+5. Identify population owner (indexer / Lambda 2 / handler-computed / SQL-computed).
+6. Lift the per-column row from the PRE and POST snapshots captured in Step 0.5 + 0.7 (`backfill-enrichment-runner status` output already gives NULL + sentinel + total per audited column). For columns NOT covered by the status command (anything outside `assets.icon_url` / `assets.name` / `nfts.*` — i.e. indexer-driven columns and LP analytics), run a raw `SELECT COUNT(*) FILTER (...) FROM <table>` query against the local DB and record the same `NULL / sentinel / populated` triple.
+7. **Treat `''` as "populated"** per 0191 Design Decision #12: the sentinel means "fetch attempted, no data published by source" — distinct from NULL ("not yet attempted") and from a real value, but does count as "enrichment wired correctly". The matrix shows all three categories separately so the distinction stays visible; the FAIL rule looks only at "NULL after POST drain on a non-skipped row" for enrichment columns.
+8. **One-time live-smoke check** for the SEP-1 (`sep1_assets`) and NFT (`nft_token_uri`) enrichment kinds: manually fetch one known live issuer's stellar.toml and one known JSON-metadata NFT collection's `token_uri`, run the full `enrich_and_persist::*` flow against the local DB, and log the resulting row + observed `icon_url` / `media_url` value in the audit md. Purely a one-shot verification during this audit — the persistent `#[ignore]` regression suite that turns this into a recurring CI gate is owned by task **0212** (enrichment live-smoke suite).
 
-Expected outcome: every list endpoint field is a row in the table with no "FAIL" entries. Any FAIL = bug, spawn follow-up task.
+Expected outcome: every list endpoint field is a row in the table with no "FAIL" entries. Any FAIL = bug, spawn follow-up task per the
+0210 pattern.
 
 ### Step 2: Detail-endpoint anti-pattern sweep
 
@@ -183,10 +288,13 @@ Verifies the backfill drain at production scale across every kind the `enrich` b
 
 - **Periodic completeness check**: this audit is one-shot. If we want continuous protection, add a CI gate that diffs `docs/architecture/database-schema/**` against actual schema and fails if drift detected. Captured as a separate optional task.
 - **API contract test**: end-to-end test that hits each list endpoint on a sample DB and asserts no NULL fields. More expensive than this audit. Defer until production complaints surface.
+- **Dormant-asset re-verification**: when a real backfill runs on staging (hundreds of millions of pubnet ledgers), re-run the audit and add a per-column sample restricted to assets / contracts that have no activity in the last N ledgers. Catches "live ledgers fine, old rows still NULL" gaps where the drain didn't actually run end-to-end on the dormant set. Deliberately deferred from this task because the local mini-backfill (300 ledgers) is too small to have a meaningful dormant set — every entity present is recent.
+- **Per-field external parity (Type B)**: every audited column compared per-row against Horizon, stellar.expert, and the raw issuer source. Owned by task **0213** (fixture-asset external parity audit). 0213 is the natural follow-up: 0197 surfaces "wired correctly?" gaps, 0213 surfaces "value is correct?" gaps.
 
 ## Notes
 
-- **Order in chain**: this task is intentionally LAST. Running it before 0194/0195/0196 land would surface tons of pre-existing failures — wasted effort. Running it after gives a clean baseline.
+- **Order in chain**: this task is intentionally LAST in the M2 enrichment chain. Running it before 0194/0195/0196 land would surface tons of pre-existing failures — wasted effort. Running it after gives a clean baseline. **0213** (Type B per-field parity) is the natural sibling that runs after this one.
+- **Local mini-backfill iteration**: 300 ledgers is the suggested starting window, sized for laptop ingestion. If the Step 0.4 diversity check finds no NFTs (or LPs, or SAC assets) in the chosen range, **widen the range** until each entity type is represented before running enrichment. Pure indexing on a wider range is cheap; the audit value of a row that's never present is zero.
 - **Skill invocation**: while writing the audit md, follow `/lore-framework` documentation patterns. While committing, follow `/lore-framework-git`. For spawned follow-ups, follow `/lore-framework-tasks`. (0125 superseding-archive already landed on develop.)
 - **Sentinel-aware sample queries**: when checking "non-NULL" for `assets.icon_url`, treat both real URL and `''` sentinel as "populated" — see 0191 design decision #12 + sentinel taxonomy from 2026-05-06 session.
 - **Dry-run audit performed 2026-05-06** (during planning session, BEFORE 0194/0195/0196 spawn): confirmed 95% pre-coverage, surfaced 1 misallocation (classic credit `assets.name` was placed in 0194 indexer, should be Lambda 2 — fixed via amendment to 0194 1b + new 0195 2a icon-name extension). Real run of this task should not need to surface that issue again. Other dry-run flags (`AssetDetailResponse.deployed_at_ledger`, `account_balances_current.first_deposit_ledger`) were false positives — first is a legitimate entity-record column read by `/v1/search`, second doesn't exist in that table (subagent confused with `lp_positions.first_deposit_ledger`). Real audit should still verify these independently.
