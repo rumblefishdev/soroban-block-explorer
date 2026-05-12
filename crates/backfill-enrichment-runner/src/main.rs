@@ -107,12 +107,15 @@ enum Command {
 
 #[derive(Args)]
 struct DrainArgs {
-    /// Concurrent in-flight fetches.
-    #[arg(long, default_value_t = 10)]
+    /// Concurrent in-flight fetches. Must be >= 1 (`Semaphore(0)` would
+    /// deadlock every spawned task on `acquire_owned()`).
+    #[arg(long, default_value_t = 10, value_parser = parse_positive_usize)]
     concurrency: usize,
 
-    /// Rows pulled per SELECT chunk.
-    #[arg(long, default_value_t = 200)]
+    /// Rows pulled per SELECT chunk. Must be >= 1 (Postgres treats
+    /// `LIMIT -1` as "no limit", so a negative or zero value would
+    /// pull the entire table in one chunk).
+    #[arg(long, default_value_t = 200, value_parser = parse_positive_i64)]
     chunk_size: i64,
 
     /// Stop after processing at most N rows. Default: drain everything.
@@ -130,6 +133,26 @@ struct DrainArgs {
     /// sentinels.
     #[arg(long)]
     force_retry: bool,
+}
+
+fn parse_positive_usize(s: &str) -> Result<usize, String> {
+    let v: usize = s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if v < 1 {
+        return Err("must be >= 1".to_owned());
+    }
+    Ok(v)
+}
+
+fn parse_positive_i64(s: &str) -> Result<i64, String> {
+    let v: i64 = s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    if v < 1 {
+        return Err("must be >= 1".to_owned());
+    }
+    Ok(v)
 }
 
 #[tokio::main]
@@ -381,9 +404,10 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // population is owned by task 0199, blocked on the price API. No
     // `enrich` subcommand drains them yet — the rows surface here so the
     // operator has visibility into the gap. Column types are
-    // `NUMERIC(28,7)`; no `''`-sentinel convention applies (0199 plans
-    // `tvl = 0` for permanent-fail, but that's also a legitimate value
-    // for empty pools — distinguishing is out of `enrich status` scope).
+    // `NUMERIC(28,7)`; no `''`-sentinel convention applies. Under the
+    // updated 0199 spec, permanent oracle failure is represented as
+    // per-column NULL, so `enrich status` reports the gap by counting
+    // NULLs in each analytics column.
     let lp_q = sqlx::query(
         r#"
         SELECT
@@ -402,7 +426,7 @@ async fn print_status(db: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     println!("# backfill-enrichment-runner — status\n");
     println!("**Timestamp:** {now}\n");
 
-    println!("## `icon` kind (assets table)\n");
+    println!("## `sep1-assets` kind (assets table)\n");
     print_status_header();
     print_status_row(
         "`assets.icon_url`           ",

@@ -2,9 +2,9 @@
 id: '0125'
 title: 'LP analytics: price oracle, TVL, volume, and fee revenue'
 type: FEATURE
-status: backlog
-related_adr: []
-related_tasks: ['0052', '0077']
+status: superseded
+related_adr: ['0027', '0031', '0043']
+related_tasks: ['0052', '0077', '0191', '0194', '0195', '0199']
 tags: [priority-low, effort-large, layer-indexer, layer-backend, audit-gap]
 milestone: 1
 links:
@@ -14,6 +14,27 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from pipeline audit — LP tvl/volume/fee_revenue columns exist but are likely always NULL without external pricing.'
+  - date: '2026-05-12'
+    status: superseded
+    who: stkrolikiewicz
+    by: ['0199']
+    note: >
+      Replaced by 0199 (LP analytics: TVL + volume + fee_revenue), spawned
+      2026-05-07 by karolkow. 0199 is a strict superset: same target
+      columns, same Classic AMM + Soroban DEX phasing, same fee_revenue
+      formula, AC `GET /liquidity-pools/:id/chart returns non-null time
+      series` carried forward verbatim. 0199 also corrects the
+      snapshot-delta volume flaw (opposite-swap netting) by extracting
+      gross volume from `PathPayment.claimedOffers[].amount_sold`, swaps
+      cron 5min for an insert-hook on `liquidity_pool_snapshots`
+      (sharing the SQS stream with 0195 SEP-1/NFT enrichment built by
+      0191 framework, completed 2026-05-06), and adds bidirectional
+      swap normalization, per-column semantic atomicity, NULL sentinel,
+      and Horizon ≤1% tolerance verification. No residual unique scope
+      remained in 0125. Functional gap (NULL columns) is **not closed**
+      — it is now tracked under 0199, currently blocked on the
+      team-built price API (Oskar). Pre-existing snapshot backfill
+      ownership delegated to 0196.
 ---
 
 # LP analytics: price oracle, TVL, volume, and fee revenue

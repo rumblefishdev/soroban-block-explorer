@@ -2,7 +2,7 @@
 id: '0202'
 title: 'Indexer: wire nft_events → nft_ownership population'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0027', '0029', '0031', '0033']
 related_tasks: ['0051', '0118']
 tags: [layer-indexer, nfts, soroban, priority-medium, effort-small, follow-up]
@@ -13,6 +13,19 @@ links:
   - crates/xdr-parser/src/nft.rs
   - docs/architecture/database-schema/endpoint-queries/17_get_nfts_transfers.sql
 history:
+  - date: '2026-05-12'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged to develop as PR #171 (commit 59e6310). All acceptance criteria
+      checked. `extract_nft_ownership_events` shipped in xdr-parser (~75 prod +
+      ~140 test LOC, 6 new unit tests; total xdr-parser tests 209). Indexer
+      `process.rs:228` stub replaced; integration test
+      `nft_ownership_populated_for_mint_transfer_burn` asserts full
+      parser→staging→write→DB path including ON CONFLICT idempotent replay.
+      E17 endpoint verified empirically via `cargo lambda watch`. 0118 Phase 2
+      filter inherited unchanged (filters both nft_rows and nft_ownership_rows
+      in one pass). 0118 Phase 3 remains separate downstream task.
   - date: '2026-05-08'
     status: active
     who: stkrolikiewicz

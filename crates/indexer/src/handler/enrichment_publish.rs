@@ -5,7 +5,8 @@
 //! publishes SQS messages for every row that needs off-chain enrichment.
 //! Two kinds today:
 //!
-//! - `icon` (SEP-1 issuer TOML) — worker fetches
+//! - `sep1_assets` (SEP-1 issuer TOML; historical wire name was
+//!   `"icon"` — see breaking-change note below) — worker fetches
 //!   `https://{home_domain}/.well-known/stellar.toml` and writes
 //!   `assets.icon_url` (all asset types) plus `assets.name`
 //!   (ClassicCredit + SAC, `asset_type IN (1, 2)`).

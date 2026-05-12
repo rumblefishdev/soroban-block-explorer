@@ -45,6 +45,24 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      # XML config overrides for HTTP / socket timeouts. CH 26.x
+      # defaults (30 s `http_receive_timeout`) close the body socket
+      # on the long-lived bulk-ingest INSERTs the writer holds open
+      # per backfill partition; per-query override via
+      # `with_setting` is recorded in `system.query_log.Settings`
+      # but does NOT propagate to the Poco-level socket timeout.
+      # Profile-level XML override is the only path that takes
+      # effect.
+      #
+      # File-level (not directory-level) mounts because the official
+      # entrypoint writes its own files into both `config.d/` and
+      # `users.d/` based on CLICKHOUSE_USER / CLICKHOUSE_PASSWORD env
+      # — mounting the whole dir read-only breaks startup with
+      # "Read-only file system". Single-file mounts leave the rest of
+      # the directory writable for entrypoint while still pinning our
+      # overrides.
+      - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
+      - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
     ulimits:
       nofile:
         soft: 262144

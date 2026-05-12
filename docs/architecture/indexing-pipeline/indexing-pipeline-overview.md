@@ -288,12 +288,19 @@ byte-for-byte the same rows for a given ledger, and the replay-safe
 derived-state guards work without special-casing.
 
 `backfill-runner` also accepts `--target clickhouse` (task
-[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md))
-to drive the ClickHouse pilot store ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
-That path is currently a **no-op persist stub** (logs only, zero
-rows written); the parse pipeline above is unaffected and the default
-`--target postgres` is unchanged. Real CH INSERTs land in a follow-up
-task — see [`docs/architecture/database-schema/clickhouse-pilot.md#writers-stubbed`](../database-schema/clickhouse-pilot.md#writers-stubbed).
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
+shipped the runner plumbing; task
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md)
+landed the real writer) to drive the ClickHouse pilot store
+([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
+The CH path uses **partition-aligned streaming inserts** —
+`Sink::open_partition` → `write_ledger × N` → `commit` — so the
+server sees one `INSERT` per CH table per backfill partition, not
+per ledger. The default `--target postgres` is unchanged (the
+partition-writer lifecycle is a no-op around the existing per-ledger
+transaction on the PG path). Full design + the `soroban_events` ADR 0044
+§Decision §4a unfold are documented in
+[`docs/architecture/database-schema/clickhouse-pilot.md#writers`](../database-schema/clickhouse-pilot.md#writers).
 
 ### 6.3 Backfill Scope and Execution Model
 

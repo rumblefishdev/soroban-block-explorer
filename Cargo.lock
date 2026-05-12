@@ -1406,7 +1406,13 @@ dependencies = [
 name = "db-clickhouse"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "cityhash-rs",
  "clickhouse",
+ "domain",
+ "hex",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

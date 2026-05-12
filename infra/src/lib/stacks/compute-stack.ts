@@ -271,8 +271,9 @@ export class ComputeStack extends cdk.Stack {
     // SQS event source mapping. ReportBatchItemFailures lets the worker
     // ack only the records it successfully processed — failed records
     // redeliver up to maxReceiveCount and then land in the DLQ.
-    // Skip when concurrency=0 — mirrors the indexer pattern; avoids
-    // queuing events for a fully throttled Lambda.
+    // Skip when concurrency=0 — mirrors the indexer pattern; prevents
+    // the queue from being polled (and potentially DLQ'd) while the
+    // Lambda is fully throttled. Producers can still enqueue messages.
     if (config.enrichmentWorkerLambdaConcurrency > 0) {
       enrichmentWorkerFunction.addEventSource(
         new lambdaEventSources.SqsEventSource(enrichmentQueue, {

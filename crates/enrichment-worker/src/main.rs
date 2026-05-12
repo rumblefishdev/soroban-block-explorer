@@ -241,11 +241,11 @@ mod tests {
     // -- EnrichmentMessage serde -------------------------------------
 
     #[test]
-    fn enrichment_message_parses_icon_variant() {
+    fn enrichment_message_parses_sep1_assets_variant() {
         let json = r#"{"kind":"sep1_assets","asset_id":42}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
         let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
-            panic!("expected Icon variant, got {msg:?}");
+            panic!("expected Sep1Assets variant, got {msg:?}");
         };
         assert_eq!(asset_id, 42);
     }
@@ -310,11 +310,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_message_returns_icon_on_well_formed_body() {
+    fn parse_message_returns_sep1_assets_on_well_formed_body() {
         let r = record(Some("m-1"), Some(r#"{"kind":"sep1_assets","asset_id":7}"#));
         let msg = parse_message(&r).expect("ok");
         let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
-            panic!("expected Icon variant, got {msg:?}");
+            panic!("expected Sep1Assets variant, got {msg:?}");
         };
         assert_eq!(asset_id, 7);
     }
