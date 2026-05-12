@@ -108,7 +108,7 @@ enum Command {
 #[derive(Args)]
 struct DrainArgs {
     /// Concurrent in-flight fetches.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(usize).range(1..))]
     concurrency: usize,
 
     /// Rows pulled per SELECT chunk.
