@@ -414,13 +414,29 @@ impl Staged {
             }
         }
         for ev in nft_events {
-            if let Some(owner) = &ev.owner_account {
-                account_keys_set.insert(owner.clone());
-            }
-            participants_per_tx
+            // Defense-in-depth: NFT events from parser-detected owners
+            // can carry non-account StrKeys when an NFT-shaped event
+            // is emitted by a Liquidity Pool (L-prefix), Claimable
+            // Balance (B-prefix), Contract (C-prefix) etc. — these
+            // are then false-positive NFTs (task 0118 territory) but
+            // staging must not let them leak into `participants`
+            // either way. `accounts` universe filter strips them
+            // later (G-only); applying the same predicate here so
+            // participants stays consistent and the
+            // `unresolved StrKey for participants.account_id`
+            // invariant in `write::insert_participants` holds.
+            //
+            // Matches the same `is_strkey_account` filter applied to
+            // events / invocations / ops participants further up.
+            let participants = participants_per_tx
                 .entry(ev.transaction_hash.clone())
-                .or_default()
-                .extend(ev.owner_account.clone());
+                .or_default();
+            if let Some(owner) = &ev.owner_account
+                && is_strkey_account(owner)
+            {
+                account_keys_set.insert(owner.clone());
+                participants.insert(owner.clone());
+            }
         }
         for lpp in lp_positions {
             account_keys_set.insert(lpp.account_id.clone());
@@ -1661,5 +1677,106 @@ mod tests {
         ];
         let map = merge_account_state_overrides(&states_with_null);
         assert_eq!(map["G1"].home_domain.as_deref(), Some("set.example.com"));
+    }
+
+    /// Regression: NFT events whose parser-detected `owner_account` is
+    /// a non-G StrKey (LiquidityPool L…, ClaimableBalance B…, Contract
+    /// C…, etc. — false-positive NFTs from task 0118 territory) must
+    /// NOT leak into `transaction_participants`. The accounts universe
+    /// filter strips them anyway, so any participant row with such a
+    /// key would later fail `write::insert_participants` with
+    /// `unresolved StrKey for participants.account_id`. Real mainnet
+    /// regression observed on ledger range 62016000–62016099 after
+    /// task 0202 wired `nft_events` into staging.
+    #[test]
+    fn nft_event_with_l_prefix_owner_does_not_leak_into_participants() {
+        use xdr_parser::types::{ExtractedLedger, ExtractedNftEvent, ExtractedTransaction};
+
+        let tx_hash = "aa".repeat(32);
+        let g_source = "G".to_string() + &"A".repeat(55);
+        // Real LP StrKey from the mainnet regression (56 chars, starts with 'L').
+        let l_owner = "LB5LVIUONNMAHTH2KB72Q4NUSVY6G76VUINPGYQ4IMEMYEFD6HFL4J52".to_string();
+        assert_eq!(l_owner.len(), 56);
+        assert!(l_owner.starts_with('L'));
+
+        let ledger = ExtractedLedger {
+            sequence: 1,
+            hash: "00".repeat(32),
+            closed_at: 0,
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        };
+        let tx = ExtractedTransaction {
+            hash: tx_hash.clone(),
+            inner_tx_hash: None,
+            ledger_sequence: 1,
+            source_account: g_source.clone(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".into(),
+            envelope_xdr: String::new(),
+            result_xdr: String::new(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: 0,
+            parse_error: false,
+        };
+        let nft_event = ExtractedNftEvent {
+            transaction_hash: tx_hash.clone(),
+            contract_id: "C".to_string() + &"D".repeat(55),
+            token_id: "tok-1".into(),
+            event_type: NftEventType::Transfer,
+            owner_account: Some(l_owner.clone()),
+            event_order: 0,
+            ledger_sequence: 1,
+            created_at: 0,
+        };
+
+        let staged = Staged::prepare(
+            &ledger,
+            std::slice::from_ref(&tx),
+            &[(tx_hash.clone(), vec![])],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&nft_event),
+            &[],
+            &[],
+        )
+        .expect("staging must not fail on L-prefix nft_event owner");
+
+        // L-prefix owner must NOT appear in participants under any tx —
+        // otherwise `write::insert_participants` would fail with
+        // `unresolved StrKey` because accounts staging strips non-G keys.
+        for p in &staged.participant_rows {
+            assert!(
+                !p.account_str_key.starts_with('L'),
+                "L-prefix StrKey leaked into participants: {p_key}",
+                p_key = p.account_str_key
+            );
+        }
+        // And it must NOT appear in accounts either (defense-in-depth).
+        assert!(
+            !staged.account_keys.iter().any(|k| k.starts_with('L')),
+            "L-prefix StrKey leaked into accounts: {:?}",
+            staged.account_keys
+        );
+        // Sanity: the legitimate G-source still got through.
+        assert!(
+            staged
+                .participant_rows
+                .iter()
+                .any(|p| p.account_str_key == g_source),
+            "G-source dropped from participants — filter was too aggressive"
+        );
     }
 }
