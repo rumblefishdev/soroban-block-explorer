@@ -4,7 +4,7 @@ title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
 status: blocked
 related_adr: ['0027', '0031', '0043']
-related_tasks: ['0125', '0194', '0195']
+related_tasks: ['0125', '0191', '0194', '0195', '0197']
 tags:
   [
     priority-medium,
@@ -34,6 +34,19 @@ history:
       + SQS + DLQ) is in place; gating dependency is solely the price API.
       Move back to active once Oskar's API contract (endpoint shape,
       freshness, no-price-for-asset behavior, latency budget) is finalized.
+  - date: '2026-05-12'
+    status: blocked
+    who: karolkow
+    note: >
+      Scope extended to include `assets.usd_price` +
+      `assets.usd_price_updated_at` columns (Phase 2b). Both populated by
+      the same price-API consumer per ADR 0043 (off-chain, list-endpoint
+      → Lambda 2). Originally surfaced as 0191 / 0194 Future Work; rolled
+      in here rather than spawned as a separate task because (a) shared
+      price-API consumer + cache, (b) markets-list product trigger
+      materialised, (c) single ADR 0043 allocation decision covers both
+      LP analytics and asset prices. Surfaced during 0197 audit-prep
+      punch-list review.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
@@ -51,15 +64,35 @@ This task **consumes** the price API; it does not build it.
 
 Subsumes 0125 (original LP analytics) and absorbs 0195 §2b (LP TVL).
 
+Also adds two new columns on `assets` populated by the same price-API
+consumer per ADR 0043 (off-chain, list-endpoint → Lambda 2):
+
+- `assets.usd_price NUMERIC(28,7)` — latest USD price per asset unit.
+- `assets.usd_price_updated_at TIMESTAMPTZ` — when the price was last
+  refreshed from the API.
+
+Bundled into 0199 (rather than its own task) because (a) the only
+consumer of asset USD price today is LP analytics + the markets list
+view; (b) building two price-API clients is wasteful — single
+`enrichment-shared::price` module serves both LP and asset
+columns; (c) ADR 0043 cleanly assigns these columns to Lambda 2,
+not type-2 runtime fetch.
+
+Originally surfaced as Future Work in 0191 + 0194; re-evaluated in
+the 0197 audit-prep pass (2026-05-12) and rolled into this task
+since a product trigger (markets list parity with stellarchain.io)
+materialised alongside the LP work.
+
 ## Per-lambda ownership
 
 USD denomination → off-chain prices → ADR 0043 forces all three column writes to Lambda 2. Indexer contributes on-chain inputs only (reserves already written; `gross_volume_a` passed in SQS message body, no staging table).
 
-| Column        | Inputs                                                                      | Written by   | Formula                                           |
-| ------------- | --------------------------------------------------------------------------- | ------------ | ------------------------------------------------- |
-| `tvl`         | `reserve_a, reserve_b` (Indexer, on-chain) × USD prices (oracle, off-chain) | **Lambda 2** | `tvl = reserve_a × price_a + reserve_b × price_b` |
-| `volume`      | `gross_volume_a` (Indexer, in SQS msg) × `price_a` (oracle)                 | **Lambda 2** | `volume = gross_volume_a × price_a`               |
-| `fee_revenue` | `volume` × `fee_bps` (Indexer, `liquidity_pools.fee_bps`, on-chain)         | **Lambda 2** | `fee_revenue = volume × fee_bps / 10000`          |
+| Column                                      | Inputs                                                                      | Written by   | Formula                                                                       |
+| ------------------------------------------- | --------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
+| `tvl`                                       | `reserve_a, reserve_b` (Indexer, on-chain) × USD prices (oracle, off-chain) | **Lambda 2** | `tvl = reserve_a × price_a + reserve_b × price_b`                             |
+| `volume`                                    | `gross_volume_a` (Indexer, in SQS msg) × `price_a` (oracle)                 | **Lambda 2** | `volume = gross_volume_a × price_a`                                           |
+| `fee_revenue`                               | `volume` × `fee_bps` (Indexer, `liquidity_pools.fee_bps`, on-chain)         | **Lambda 2** | `fee_revenue = volume × fee_bps / 10000`                                      |
+| `assets.usd_price` + `usd_price_updated_at` | per-asset USD price (oracle, off-chain)                                     | **Lambda 2** | direct write of API response; `updated_at = now()` on each successful refresh |
 
 ## Plan
 
@@ -93,6 +126,25 @@ USD denomination → off-chain prices → ADR 0043 forces all three column write
 - Transient (price-API 5xx, network, rate limit) → `EnrichError::Transient` → SQS retry → DLQ.
 - Backfill of pre-existing snapshots (NULL because they predate this task) → owned by 0196.
 
+### Phase 2b — Assets USD price columns
+
+- Migration: add `assets.usd_price NUMERIC(28,7) NULL` +
+  `assets.usd_price_updated_at TIMESTAMPTZ NULL` + partial DESC index
+  on `usd_price` for markets-style sortable list endpoint.
+- Producer: insert/update hook on `assets` table — new asset row or
+  asset that hasn't been priced in N hours → emit
+  `EnrichmentMessage::AssetUsdPrice { asset_id }`. Refresh policy:
+  periodic janitor sweep (cron-driven SQS publish) for stale rows,
+  same pattern as 0191's icon refresh janitor.
+- Consumer: extend `enrichment-shared::price` module (built for LP)
+  with a per-asset price-API call. Write both columns atomically.
+- Failure modes: permanent fail → leave both NULL (do not retry until
+  next janitor sweep); transient → SQS retry → DLQ. Same matrix
+  shape as Phase 2.
+- Backfill of existing `assets` rows → owned by 0196 (add a new
+  subcommand to the `enrich` binary if not already covered by the
+  janitor model).
+
 ### Phase 3 — Soroban DEX adapters
 
 Soroswap, Phoenix, etc. emit `swap` events with explicit per-swap amounts; no PathPayment. Per-DEX adapter scaffolding. Out of Phases 1+2; gates on Phase 1+2 landing.
@@ -113,6 +165,14 @@ Soroswap, Phoenix, etc. emit `swap` events with explicit per-swap amounts; no Pa
 - [ ] Sample query: non-NULL `tvl` and `volume` on production-region pools with valid oracle data.
 - [ ] Sample query: `volume / price_a` agrees with Horizon `/liquidity_pools/{id}/trades` gross volume **within 1% tolerance** on a known mixed-direction pool. The "≈" comparison is intentional — Horizon and the explorer both use per-operation extraction (Horizon parses `claimedOffers[]` the same way), so the only sources of drift are (a) USD price-snapshot timing (Horizon uses asset units, we multiply by `price_a` then divide back), (b) rounding in `NUMERIC(28,7)` arithmetic, (c) Soroban DEX swap events not yet covered in Phase 1 (Phase 3 scope). Drift > 1% on a classic-only pool indicates an extraction bug and blocks the AC.
 - [ ] `GET /liquidity-pools/:id/chart` returns non-null time series (originally 0125 AC).
+
+**Phase 2b (Assets USD price):**
+
+- [ ] Migration adds `assets.usd_price NUMERIC(28,7)` + `usd_price_updated_at TIMESTAMPTZ` + partial DESC index on `usd_price`.
+- [ ] Producer hook + janitor sweep emit `AssetUsdPrice` SQS messages (test).
+- [ ] Lambda 2 writes both columns atomically from price-API response; permanent fail → both NULL; transient → SQS retry.
+- [ ] Sample query: non-NULL `usd_price` on production-region tradeable assets after Lambda 2 drains the initial backlog.
+- [ ] 0196 backlog updated to capture asset-price backfill subcommand if janitor model is insufficient.
 
 **Phase 3:**
 
