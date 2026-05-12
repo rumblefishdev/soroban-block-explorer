@@ -2,9 +2,10 @@
 id: '0213'
 title: 'FEATURE: fixture-asset external parity audit — per-field correctness vs Horizon + stellar.expert'
 type: FEATURE
-status: backlog
+status: blocked
 related_adr: ['0043']
-related_tasks: ['0188', '0191', '0194', '0195', '0196', '0197', '0210', '0212']
+related_tasks:
+  ['0188', '0191', '0194', '0195', '0196', '0197', '0199', '0210', '0212']
 tags:
   [
     priority-medium,
@@ -12,6 +13,7 @@ tags:
     layer-audit,
     layer-correctness,
     external-parity,
+    blocked-on-lp-analytics,
   ]
 links:
   - https://developers.stellar.org/docs/data/horizon/api-reference/resources/assets
@@ -28,6 +30,22 @@ history:
       substitutes: Type A catches "worker not firing / sentinel emission
       / drain completion" classes; Type B catches "value is wrong /
       drift vs Horizon / parser returns wrong field" classes.
+  - date: '2026-05-13'
+    status: blocked
+    who: karolkow
+    by: ['0199']
+    note: >
+      Promoted backlog → blocked. Scope expanded to cover EVERY audited
+      column reaching the API (indexer-driven + enrichment-driven +
+      Lambda 2-driven + SQL-computed + runtime type-2), not just
+      enrichment-driven. LP analytics columns (`liquidity_pool_snapshots
+      .tvl`, `.volume`, `.fee_revenue`) cannot be parity-checked while
+      they remain always-NULL (owned by 0199, blocked-on-oracle).
+      Running 0213 before 0199 ships would surface LP rows as
+      "drift = 100%" with no actionable cause beyond "0199 not shipped"
+      — useless noise. Blocking 0213 on 0199 sequences the audit
+      correctly: once Lambda 2 populates LP analytics, 0213 runs once
+      and covers the full audited surface in one pass.
 ---
 
 # FEATURE: fixture-asset external parity audit — per-field correctness vs Horizon + stellar.expert
@@ -103,13 +121,26 @@ values to an external source — the assert is `is_some()`, not
 - **One AnchorUSD or similar long-running anchor asset** (different issuer,
   different TOML layout)
 - **One AMM-listed liquidity pool** carrying a tracked asset (verifies
-  LP `reserve_a/b`, future TVL)
+  LP `reserve_a/b`, `total_shares`, `fee_bps`, AND LP analytics `tvl /
+volume / fee_revenue` once 0199 ships)
 - **One Soroban NFT collection** with stable IPFS-hosted JSON metadata
   (verifies `nfts.{name, media_url, collection_name}` parser)
 - **One SAC-wrapped asset** (verifies SAC handling, `assets.name` parser)
 
 Aim 5-7 entities — enough to cover the variety, small enough to diff
 manually in one sitting.
+
+**Audited columns — full coverage map.** Every column reaching the API
+response shape, per ADR 0043 §Scope. Grouped by population owner:
+
+| Owner                                                   | Columns                                                                                                                                                                                                                                                                                                                                   | External reference                                                                                                                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Indexer (on-chain)**                                  | `assets.{asset_type, code, issuer_id, holder_count, total_supply}`, `accounts.{home_domain, sequence_number, ...}`, `liquidity_pools.{reserve_a, reserve_b, fee_bps, total_shares}`, `soroban_contracts.{contract_id, wasm_hash, is_sac, deployer_id}`, `nfts.{contract_id, token_id, owner_id}`, ledger / transaction / operation fields | Horizon `/assets`, `/accounts/{id}`, `/liquidity_pools/{id}`, `/ledgers/{seq}`, `/transactions/{hash}`. Per-field mapping documented in audit md.                                                                                             |
+| **Enrichment Lambda 2 (off-chain via SQS)**             | `assets.{icon_url, name}` (sep1_assets kind), `nfts.{name, media_url, collection_name}` (nft_token_uri kind)                                                                                                                                                                                                                              | Raw `stellar.toml` (issuer `home_domain` → `.well-known/stellar.toml` → `CURRENCIES[].image` / `name`); IPFS gateway resolved metadata JSON. Cross-check with stellar.expert.                                                                 |
+| **Enrichment Lambda 2 (LP analytics, blocked-on-0199)** | `liquidity_pool_snapshots.{tvl, volume, fee_revenue}`                                                                                                                                                                                                                                                                                     | Horizon `/liquidity_pools/{id}/trades` for gross volume in asset units; `tvl` requires Oskar's price API or external recomputation (Reflector / stellar.expert "tvl_usd"); `fee_revenue = volume × fee_bps / 10000` derivable from the above. |
+| **SQL-computed (in handler / query)**                   | `asset_type_name` (CASE), `is_native` (CASE), `last_modified_ledger` (denormalised), full-text search vectors                                                                                                                                                                                                                             | Horizon `asset_type` discriminator + manual case-mapping.                                                                                                                                                                                     |
+| **Runtime type-2 (NOT persisted, served by handler)**   | `assets.{description, home_page}` (SEP-1 runtime fetch); heavy fields E3/E14 via stellar_archive                                                                                                                                                                                                                                          | Raw `stellar.toml` `CURRENCIES[].desc` and `DOCUMENTATION.ORG_URL`.                                                                                                                                                                           |
+| **Skip (out of audit scope per ADR 0043)**              | FK helpers, surrogate ids, watermarks (`first_seen_ledger`, `last_updated_ledger`), GENERATED FTS, appearance index tables                                                                                                                                                                                                                | —                                                                                                                                                                                                                                             |
 
 **External references:**
 
@@ -248,3 +279,18 @@ Type A here; Type B there."
 - **Why no `#[ignore]` test.** This is one-shot audit, not regression
   catch. 0212 owns regression catch (persistent CI gate, non-NULL
   asserts). 0213 owns one-shot value parity. Different lifetimes.
+- **Why blocked on 0199.** Audit scope explicitly includes LP analytics
+  columns (`liquidity_pool_snapshots.{tvl, volume, fee_revenue}`),
+  which are populated by Lambda 2 in 0199. Running 0213 before 0199
+  ships would surface every LP fixture as "drift = 100%" with the
+  only actionable cause being "0199 not shipped" — useless noise that
+  masks any real drift in other columns. Sequencing the task behind
+  0199 ensures one clean pass covers the full audited surface.
+  Alternative considered + rejected: run 0213 twice (once now without
+  LP analytics, once post-0199 for LP analytics). Doubles operator
+  effort, halves the diff doc value, and risks the second pass never
+  happening. Single pass post-0199 is the sane sequencing.
+- **Unblock criterion.** 0199's Phase 2 (`tvl`, `volume`,
+  `fee_revenue` writes from Lambda 2) ships to develop. The Phase 3
+  Soroban DEX adapters are NOT a hard prerequisite for 0213 — Classic
+  AMM coverage alone gives a meaningful LP fixture (e.g. USDC-XLM).
