@@ -4,17 +4,31 @@ import type { radius } from './radius.js';
 
 interface TypeSurface {
   background: string;
+  backgroundAlt: string;
   information: string;
-  primaryHover: string;
-  primaryPressed: string;
   success: string;
   warning: string;
   error: string;
+  primaryMain: string;
+  primaryMainAlt: string;
+  primaryHover: string;
+  primaryPressed: string;
+  primaryDisabled: string;
+  primaryLight: string;
+  grayMain: string;
+  grayMainAlt: string;
+  grayHover: string;
+  grayPressed: string;
+  grayDisabled: string;
+  grayLight: string;
+  grayInverted: string;
 }
 
 interface TypeStroke {
   default: string;
+  defaultHover: string;
   action: string;
+  actionHover: string;
   success: string;
   warning: string;
   error: string;

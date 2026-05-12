@@ -11,17 +11,17 @@ export function createPalette(mode: PaletteMode): PaletteOptions {
     mode,
 
     primary: {
-      main: c.text.accent,
-      light: c.surface.primaryHover,
-      dark: c.surface.primaryPressed,
-      contrastText: mode === 'light' ? c.text.primary : c.base.black,
+      main: c.gray[900],
+      light: c.gray[800],
+      dark: c.gray[950],
+      contrastText: c.base.white,
     },
 
     secondary: {
-      main: c.secondary[600],
-      light: c.secondary[400],
-      dark: c.secondary[800],
-      contrastText: c.base.white,
+      main: c.text.accent,
+      light: c.surface.primaryLight,
+      dark: c.surface.primaryHover,
+      contrastText: c.base.black,
     },
 
     success: {

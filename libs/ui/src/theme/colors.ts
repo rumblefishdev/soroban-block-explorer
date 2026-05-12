@@ -15,6 +15,7 @@ const scales = {
     700: '#404040',
     800: '#272727',
     900: '#1a1a1a',
+    950: '#0f0f0f',
   },
 
   secondary: {
@@ -89,17 +90,31 @@ export const colorsLight = {
 
   surface: {
     background: '#f5f5f5',
+    backgroundAlt: '#ffffff',
     information: '#fffcc2',
-    primaryHover: '#edbe05',
-    primaryPressed: '#cc9302',
     success: '#dcfce7',
     warning: '#fef3c6',
     error: '#ffe2e2',
+    primaryMain: '#fdda24',
+    primaryMainAlt: '#a36905',
+    primaryHover: '#edbe05',
+    primaryPressed: '#cc9302',
+    primaryDisabled: '#fffcc2',
+    primaryLight: '#fffcc2',
+    grayMain: '#ffffff',
+    grayMainAlt: '#fafafa',
+    grayHover: '#fafafa',
+    grayPressed: '#f5f5f5',
+    grayDisabled: '#404040',
+    grayLight: '#e6e6e6',
+    grayInverted: '#0f0f0f',
   },
 
   stroke: {
     default: '#e6e6e6',
+    defaultHover: '#a3a3a3',
     action: '#fdda24',
+    actionHover: '#fff589',
     success: '#00c950',
     warning: '#fe9a00',
     error: '#fb2c36',
@@ -122,21 +137,31 @@ export const colorsDark = {
 
   surface: {
     background: '#212121',
-    // TODO(dark Figma): these 3 weren't referenced in the dark color sheet
-    // query - using light values as fallback until exact dark values land.
-    // - using light fallbacks. (MCP issue)
-    information: '#fffcc2',
-    primaryHover: '#edbe05',
-    primaryPressed: '#cc9302',
+    backgroundAlt: '#0f0f0f',
+    information: '#724311',
     success: '#0d542b',
     warning: '#bb4d00',
     error: '#82181a',
+    primaryMain: '#fdda24',
+    primaryMainAlt: '#fdda24',
+    primaryHover: '#edbe05',
+    primaryPressed: '#a36905',
+    primaryDisabled: '#ffe945',
+    primaryLight: '#fffcc2',
+    grayMain: '#272727',
+    grayMainAlt: '#1a1a1a',
+    grayHover: '#1a1a1a',
+    grayPressed: '#0f0f0f',
+    grayDisabled: '#d3d3d3',
+    grayLight: '#535353',
+    grayInverted: '#fafafa',
   },
 
   stroke: {
     default: '#535353',
+    defaultHover: '#a3a3a3',
     action: '#edbe05',
-    // TODO(dark Figma): not referenced in dark query - using light fallbacks. (MCP issue)
+    actionHover: '#a36905',
     success: '#00c950',
     warning: '#fe9a00',
     error: '#fb2c36',
