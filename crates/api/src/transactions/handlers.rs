@@ -197,25 +197,50 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     // merge_e3_response sets heavy_fields_status = "unavailable" while still
     // returning the light slice from DB. Out-of-range BIGINT → u32 also
     // degrades to heavy = None rather than wrapping silently.
-    let heavy = match u32::try_from(index.ledger_sequence) {
-        Ok(seq) => match state
-            .runtime_enrichment
-            .stellar_archive
-            .fetch_ledger(seq)
-            .await
-        {
-            Ok(meta) => extract_e3_heavy(&meta, &hash, &state.network_id),
-            Err(e) => {
-                tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+    //
+    // Task 0190: when `tx.parse_error = true` in the DB, the indexer
+    // already failed to parse the XDR for this transaction. Re-fetching
+    // and re-parsing from the public archive can either (a) succeed and
+    // produce fresh heavy fields, masking the historical DB flag, or
+    // (b) fail again with the same conditions, in which case
+    // `extract_e3_heavy` returns an `E3HeavyFields` struct with mostly
+    // empty values via `filter(!is_empty)` — which serializes as
+    // `heavy_fields_status: "ok"` with NULL XDR fields, violating the
+    // lore-0046 / lore-0044 contract that parse_error transactions
+    // serve `heavy: null` + `heavy_fields_status: "unavailable"`.
+    //
+    // The DB flag is the ground-truth signal of "we know this tx had
+    // an XDR parsing problem"; surfacing it explicitly via the
+    // `unavailable` status preserves that signal end-to-end and saves
+    // the S3 round-trip on degraded rows.
+    let heavy = if tx.parse_error {
+        tracing::debug!(
+            tx_hash = %hash,
+            "skipping archive fetch for parse_error transaction; \
+             surfacing heavy_fields_status = unavailable per lore-0046 contract"
+        );
+        None
+    } else {
+        match u32::try_from(index.ledger_sequence) {
+            Ok(seq) => match state
+                .runtime_enrichment
+                .stellar_archive
+                .fetch_ledger(seq)
+                .await
+            {
+                Ok(meta) => extract_e3_heavy(&meta, &hash, &state.network_id),
+                Err(e) => {
+                    tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+                    None
+                }
+            },
+            Err(_) => {
+                tracing::warn!(
+                    "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
+                    index.ledger_sequence
+                );
                 None
             }
-        },
-        Err(_) => {
-            tracing::warn!(
-                "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
-                index.ledger_sequence
-            );
-            None
         }
     };
 
