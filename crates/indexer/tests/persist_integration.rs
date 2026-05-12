@@ -4290,6 +4290,7 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
 /// start passing without panic; flip the `#[should_panic]` attribute
 /// off to convert it into a happy-path regression guard.
 #[tokio::test]
+#[ignore = "requires DATABASE_URL — live reproducer for lore-0209 BUG; run via `cargo test -- --ignored parse_error_empty_source`"]
 #[should_panic(expected = "unresolved StrKey for transactions.source")]
 async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
     let database_url = std::env::var("DATABASE_URL")
