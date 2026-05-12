@@ -2,7 +2,7 @@
 id: '0193'
 title: 'API endpoints: filter or annotate sentinel placeholder liquidity_pools rows'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0041']
 related_tasks: ['0189']
 tags: ['phase-future', 'effort-small', 'priority-low', 'api', 'liquidity-pools']
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from 0189 future work. Sentinel placeholder pools (`created_at_ledger=0`) currently surface as garbage rows ("native+native, fee=0, ledger 0") in pool endpoints; needs filter or `is_partial_data` flag in API response.'
+  - date: 2026-05-12
+    status: active
+    who: karolkow
+    note: 'Activated. Bundling with 0190 in a single PR (both effort-small, no shared file surface but combined to reduce lifecycle overhead).'
 ---
 
 # API endpoints: filter or annotate sentinel placeholder liquidity_pools rows
