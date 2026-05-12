@@ -2,7 +2,7 @@
 id: '0197'
 title: 'DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043']
 related_tasks: ['0188', '0191', '0194', '0195', '0196']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
@@ -18,6 +18,10 @@ history:
     status: backlog
     who: karolkow
     note: "Scope expanded to absorb 0196's deferred verification work (the 50K enrichment-drain benchmark + per-subcommand integration tests previously folded into 0196 Future Work). 0196 itself still ships as a prerequisite — this task absorbs only the post-merge verification gate, not the crate implementation. Benchmark covers every kind the `enrich` binary exposes (`sep1-assets` mandatory; `nft-metadata` once 0195 §2d Phase E ships; future kinds added via their own delivery PRs)."
+  - date: '2026-05-12'
+    status: active
+    who: karolkow
+    note: 'Activated. Bundling 0196 work into this branch since needed here.'
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
