@@ -122,12 +122,13 @@ pub async fn enrich_nft_token_uri(
 ///
 /// `image` is additionally re-checked through [`is_safe_media_url`]:
 /// the frontend renders it as `<img src>`, so anything other than
-/// `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
-/// with the empty-string sentinel to avoid mixed-content warnings
-/// and XSS vectors. The fetcher already validates the outer
-/// `token_uri()` URI and is expected to resolve any `ipfs://` form to
-/// HTTPS before exposing it here, so this is defence in depth — same
-/// pattern as `sep1_assets::is_safe_icon_url`.
+/// `https://` (e.g. `http://`, `ipfs://`, `data:`, `javascript:`) is
+/// replaced with the empty-string sentinel to avoid mixed-content
+/// warnings and XSS vectors. The fetcher may validate or normalize the
+/// outer `token_uri()` URI before fetching the JSON metadata, but the
+/// metadata `image` field is validated here as received; if upstream
+/// does not convert `ipfs://` to HTTPS first, it will be rejected.
+/// Same pattern as `sep1_assets::is_safe_icon_url`.
 fn extract_columns(json: &Value) -> (String, String, String) {
     let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
     let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
