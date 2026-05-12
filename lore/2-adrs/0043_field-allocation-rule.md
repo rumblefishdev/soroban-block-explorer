@@ -49,7 +49,7 @@ history:
 The explorer's data surface has three distinct write paths today:
 
 1. **Indexer (Galexie Lambda)** — parses XDR ledger files, writes typed columns into Postgres. Source data is already in the processed ledger.
-2. **Enrichment worker (SQS-driven Lambda, task 0191)** — fetches off-chain data (SEP-1 TOML, oracle prices, NFT metadata via per-token RPC) and persists it to typed columns. Triggered per indexer-emitted message.
+2. **Enrichment worker (SQS-driven Lambda)** — fetches off-chain data (SEP-1 TOML, oracle prices, NFT metadata via per-token RPC) and persists it to typed columns. Triggered per indexer-emitted message. See `related_tasks` frontmatter for the delivery chain.
 3. **Runtime type-2 enrichment in API handler** — per-request, in-process, fail-soft, LRU-cached fetch executed inside `crates/api` (e.g. `runtime_enrichment::sep1` for `assets.description` / `home_page` per task 0188; `runtime_enrichment::stellar_archive` for E3 / E14 heavy fields per ADR 0029). Never persisted.
 
 Without an explicit rule, every new field invites an ad-hoc allocation decision. Recent M2 planning surfaced multiple cases where a field was placed on the wrong path: classic credit `assets.name` was originally drafted into 0194 (indexer) but is off-chain (SEP-1 TOML); LP `volume` / `fee_revenue` was drafted into 0125 (Lambda 2 cron) but is on-chain (PathPayment delta + arithmetic). Migration `20260424000000_drop_assets_sep1_detail_cols.up.sql` removed `assets.description` and `assets.home_page` columns after the team converged on runtime type-2 for detail-only fields. These churns are expensive and avoidable with a stated rule.
