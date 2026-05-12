@@ -71,32 +71,34 @@ docs/architecture files updated for ADR 0032 traceability, and lore.
 ## 3. Schema parity with Postgres
 
 The CH schema mirrors Postgres's logical entity model (same tables,
-same column meanings) but diverges in **column shapes**: no surrogate
-`BIGSERIAL`/`SERIAL` IDs; natural keys (StrKey, hash, composite) act
-as `ORDER BY`. FK columns carry the natural key directly. PG snapshot
-the pilot was sized against:
+same column meanings) but uses a **hybrid key design** post-empirical
+measurement: surrogate `id Int64` on three high-cardinality FK hubs
+(`accounts`, `soroban_contracts`, `transactions`) derived via
+`cityhash64(natural_key)` for cheap integer joins; natural / composite
+primary keys on the other 12 tables where StrKey-hash composites are
+already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
 
-| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                       |
-| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------- |
-| `accounts`                                            | `accounts`                            | state                   | PK = `account_id` (StrKey); version = `last_seen_ledger`                    |
-| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_account, contract_id)` empty-sentinel |
-| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_account)` empty-sentinel  |
-| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                |
-| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)    |
-| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                          |
-| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`               |
-| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                            |
-| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                |
-| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_hash, application_order)`; no surrogate |
-| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | PK = `contract_id`; version = `wasm_uploaded_at_ledger`                     |
-| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols    |
-| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_hash)`                     |
-| `transactions`                                        | `transactions`                        | append-only fact        | PK = `(ledger_sequence, application_order)`; bloom-filter on `hash`         |
-| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`            |
-| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_hash)`                      |
-| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                           |
-| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                           |
+| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                         |
+| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                     |
+| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                   |
+| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                    |
+| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                  |
+| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                      |
+| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                            |
+| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                 |
+| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                              |
+| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                  |
+| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64                         |
+| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`             |
+| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                      |
+| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                         |
+| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash` |
+| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                              |
+| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                |
+| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                             |
+| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                             |
 
 CH net schema: **17 tables + 1 `Dictionary`** (PG had 18; `_sqlx_migrations` dropped).
 
@@ -346,96 +348,114 @@ partition runners on a laptop.
 The writer applies these CH settings on every per-table insert it
 opens (see `db_clickhouse::persist::writer::apply_bulk_ingest_settings`):
 
-| Setting                       | Value         | Why                                                                                                                                                                                                                                                                                                                                  |
-| ----------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `async_insert`                | `0`           | Client-side batching. Server-side async-buffer adds latency variance without gain at our batch size.                                                                                                                                                                                                                                 |
-| `max_insert_block_size`       | `1_048_576`   | Pinned against future CH default drift.                                                                                                                                                                                                                                                                                              |
-| `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunked pieces into 1 M-row blocks before the part-create path.                                                                                                                                                                                                                                                       |
-| `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                                                                                                                                                                                                                                                           |
-| `insert_deduplicate`          | `0`           | We rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                                                                                                                                                                                                                                                            |
-| `http_receive_timeout`        | `1800` (30 m) | CH default 30 s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` whose row rate doesn't fill the client's 256 KiB buffer fast. Without this, `Network("channel closed")` surfaces on real-mainnet partitions after ~10 min — observed on the 62016000 / 10 k-ledger smoke. |
-| `http_send_timeout`           | `1800` (30 m) | Same axis, response side.                                                                                                                                                                                                                                                                                                            |
+| Setting                       | Value         | Why                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `async_insert`                | `0`           | Client-side batching. Server-side async-buffer adds latency variance without gain at our batch size.                                                                                                                                                                                                                                             |
+| `max_insert_block_size`       | `1_048_576`   | Pinned against future CH default drift.                                                                                                                                                                                                                                                                                                          |
+| `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunked pieces into 1 M-row blocks before the part-create path.                                                                                                                                                                                                                                                                   |
+| `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                                                                                                                                                                                                                                                                       |
+| `insert_deduplicate`          | `0`           | We rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                                                                                                                                                                                                                                                                        |
+| `http_receive_timeout`        | `7200` (2 h)  | CH default 30 s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` whose row rate doesn't fill the client's 256 KiB buffer fast. Without this, `Network("channel closed")` surfaces on real-mainnet partitions; 64 k partitions (~80 min wall-clock) needed the bump from 30 min to 2 h. |
+| `http_send_timeout`           | `7200` (2 h)  | Same axis, response side.                                                                                                                                                                                                                                                                                                                        |
 
 `enable_http_compression` stays at the CH default (off) — loopback
 transport, compression CPU on both sides for no measurable gain.
 
-#### Natural-key primary keys (no surrogate IDs)
+#### Hybrid surrogate / natural keys
 
-The production schema deliberately drops all surrogate `Int64`/`Int32`
-`id` columns. Every state and fact table uses its **natural key** as
-the `ORDER BY`:
+After empirical measurement on a 10 k-ledger smoke (full-natural-key
+variant added ~500 MB on-disk + +10 ms persist / ledger), the
+production schema settled on a **hybrid**: surrogate `id Int64` on
+the three central FK hubs, natural / composite primary keys on the
+other 12 tables.
 
-| Table                             | Natural key (ORDER BY)                                          |
-| --------------------------------- | --------------------------------------------------------------- |
-| `accounts`                        | `account_id` (StrKey G…)                                        |
-| `assets`                          | `(asset_type, asset_code, issuer_account, contract_id)`         |
-| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_account)`          |
-| `soroban_contracts`               | `contract_id` (StrKey C…)                                       |
-| `nfts`                            | `(contract_id, token_id)`                                       |
-| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                                |
-| `lp_positions`                    | `(pool_id, account_id)`                                         |
-| `transactions`                    | `(ledger_sequence, application_order)`                          |
-| `transaction_hash_index`          | `hash` (FixedString(32))                                        |
-| `operations_appearances`          | `(ledger_sequence, transaction_hash, application_order)`        |
-| `transaction_participants`        | `(account_id, ledger_sequence, transaction_hash)`               |
-| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_hash, event_index)` |
-| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_hash)`              |
-| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`         |
-| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                    |
+| Table                             | ORDER BY                                                      | Surrogate `id`? |
+| --------------------------------- | ------------------------------------------------------------- | --------------- |
+| `accounts`                        | `account_id` (StrKey G…)                                      | **yes — Int64** |
+| `soroban_contracts`               | `contract_id` (StrKey C…)                                     | **yes — Int64** |
+| `transactions`                    | `(ledger_sequence, application_order)`                        | **yes — Int64** |
+| `assets`                          | `(asset_type, asset_code, issuer_id, contract_id)`            | no              |
+| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_id)`             | no              |
+| `nfts`                            | `(contract_id, token_id)`                                     | no              |
+| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                              | no              |
+| `lp_positions`                    | `(pool_id, account_id)`                                       | no              |
+| `transaction_hash_index`          | `hash` (FixedString(32))                                      | no              |
+| `operations_appearances`          | `(ledger_sequence, transaction_id, application_order)`        | no              |
+| `transaction_participants`        | `(account_id, ledger_sequence, transaction_id)`               | no              |
+| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_id, event_index)` | no              |
+| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_id)`              | no              |
+| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`       | no              |
+| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                  | no              |
 
-FK columns reference natural keys directly — no hash layer needed.
-`transactions.source_account` is the source StrKey,
-`soroban_events.transaction_hash` is the 32-byte hash, etc. Reader
-queries JOIN by raw equality:
+The three surrogate `id` values are deterministic
+`cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).
+All `_id` FK columns across the schema (`source_id`, `contract_id`,
+`transaction_id`, `caller_id`, `issuer_id`, etc.) carry the same
+derived Int64. Cross-table joins are cheap integer equality.
 
-```sql
-SELECT t.hash, a.account_id
-FROM transactions t
-JOIN accounts a ON a.account_id = t.source_account
-WHERE t.ledger_sequence BETWEEN ? AND ?
-```
+ORDER BY on the hub tables uses the natural key (`account_id`,
+`contract_id`, `(ledger_sequence, application_order)`) so direct
+queries like `WHERE account_id = 'GDMOSA…'` granule-prune cheaply.
+The surrogate `id` is for FK joins, not granule pruning.
 
-##### Why no surrogate IDs
+##### Why hybrid, not full-natural or full-surrogate
 
-A pilot revision had surrogate `Int64`/`Int32` columns filled by
-client-side `cityhash` derivation. Production design drops that for
-three reasons:
+Full-natural (StrKey FK columns + `LowCardinality(String)`)
+measured ~500 MB on-disk regression + ~10 ms persist / ledger
+slowdown on the 10 k-ledger smoke vs. surrogate-Int64 FK baseline.
+At 11 M scale that extrapolates to ~550 GB + ~30 h slowdown — too
+expensive for the readability win.
 
-1. **CH-idiomatic.** ClickHouse explicitly avoids `BIGSERIAL`/sequence
-   patterns — they require central coordination, break parallel
-   writers, and don't compress better than `LowCardinality(String)` on
-   repeated StrKeys.
-2. **Readability.** `account_id = 'GDMOSA5OQBOXOBUMRRL3SS5YIU…'` in
-   queries is debuggable; `id = -9_223_179_970_244_583_802` is opaque.
-   No `cityHash64()`-incompatibility footgun either.
-3. **No collision risk.** Surrogate `Int32` columns (assets, nfts)
-   had a 4.3-billion hash space; natural composite keys are
-   collision-free by construction.
+Full-surrogate (all 7 tables originally proposed) brings opaque
+`Int32` collision posture on `assets.id` / `nfts.id` (4.3 B hash
+space, projected 10 M+ unique values long-term) and the
+"our cityhash ≠ CH SQL `cityHash64()`" footgun (different algorithm
+variant). The hybrid drops surrogate IDs from the tables where
+natural composite keys are already cheap (`assets`,
+`liquidity_pool_snapshots`, etc.) and keeps them on the three real
+FK hubs.
 
-##### Compression of repeated StrKeys
+##### Deliberate divergence from CH SQL `cityHash64()`
 
-`LowCardinality(String)` applies to columns where the StrKey repeats
-heavily per block: `transactions.source_account` (same source for
-all txs in a tight ledger range), `soroban_events.contract_id`,
-`soroban_invocations_appearances.contract_id`, `soroban_events.signature`
-(very low cardinality — handful of event names), `asset_code` /
-`issuer_account` (a few thousand unique total). Per-block dictionary
-encoding gives effectively integer-cost storage at the natural
-string-key UX.
+The writer's hash is `cityhash-rs::cityhash_102_128` lower 64 bits.
+CH's built-in `cityHash64()` SQL function is the **64-bit variant**
+of CityHash v1.0.2 — a different algorithm from the lower-half of
+the 128-bit variant. Future CH-side `JOIN ... ON cityHash64(...) =
+id` queries need a UDF wrapping the writer's helper. Documented in
+ADR 0044 history.
+
+##### Compression of repeated StrKeys + low-cardinality columns
+
+`LowCardinality(String)` applies to columns where per-block
+cardinality stays bounded:
+
+- `soroban_events.signature` — handful of event names (transfer,
+  mint, burn, fee, …)
+- `assets.asset_code` / `account_balances_current.asset_code` /
+  `liquidity_pools.asset_*_code` — few thousand unique codes
+- `accounts.home_domain` — handful of unique SEP-1 issuer domains
+  across tens of millions of accounts
 
 State table primary keys (e.g. `accounts.account_id` with tens of
-millions of unique values long-term) use plain `String` — `LowCardinality`
-overhead would dominate at that cardinality scale.
+millions of unique values long-term) use plain `String` —
+`LowCardinality` overhead would dominate at that cardinality scale.
 
-##### Empty-string sentinel for composite-PK "no value"
+##### Empty-string + Int64=0 sentinels for composite-PK "no value"
 
 `assets` and `account_balances_current` have composite primary keys
-that include optional columns (`asset_code`, `issuer_account`,
-`contract_id`). CH `ORDER BY Nullable(String)` requires the
-`allow_nullable_key` setting and is meaningfully slower than plain
-`String`. Convention: `''` (empty string) for "no value". Native XLM
-asset row: all-empty. Classic credit asset: code + issuer set,
-contract_id=''. Soroban-native: contract_id set, others=''.
+that include optional columns. CH `ORDER BY Nullable(*)` requires
+the `allow_nullable_key` setting and is meaningfully slower than
+plain types. Conventions:
+
+- `''` (empty string) for missing `asset_code`
+- `0` (Int64) for missing `issuer_id` / `contract_id` (corresponds
+  to `cityhash64("")`, which is never a real StrKey hash)
+
+Native XLM asset row: `(asset_type=0, asset_code='', issuer_id=0,
+contract_id=0)`. Classic credit asset: `(asset_type=1|2,
+asset_code='USDC', issuer_id=cityhash64('GAB…'), contract_id=0)`.
+Soroban-native: `(asset_type=3, asset_code='', issuer_id=0,
+contract_id=cityhash64('CAB…'))`.
 
 #### Trustline removal model
 
