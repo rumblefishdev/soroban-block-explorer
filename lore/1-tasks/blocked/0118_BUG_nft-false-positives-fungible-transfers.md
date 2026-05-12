@@ -400,3 +400,12 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
   Phase 2's filter (which treats unknown variants conservatively as
   `Nft`-insert — document this default explicitly when extending the
   enum).
+- **Phase 2 classifier hit-rate observation (2026-05-12)**: ad-hoc
+  smoke test on the current 28,742-contract sample (grouped by
+  `soroban_contracts.contract_type` × `wasm_hash IS NOT NULL`) showed
+  that only 2 of 306 wasm-bearing contracts received a definitive
+  `Nft` / `Fungible` verdict; the other 304 stayed `Other`. The 306
+  set is heavily biased — it covers only contracts whose `wasm_upload`
+  happened to land in the indexed window, not the full Soroban-era
+  population. **Re-evaluate after backfill (task 0145)** before
+  treating the low hit-rate as a real classifier bug.
