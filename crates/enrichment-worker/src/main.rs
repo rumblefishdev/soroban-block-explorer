@@ -44,18 +44,22 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum EnrichmentMessage {
-    Icon {
-        asset_id: i32,
-    },
+    /// SEP-1 issuer TOML kind. Wire `"kind": "sep1_assets"` (snake_case
+    /// of the variant name — serde `rename_all = "snake_case"` does the
+    /// mapping). Historical name was `"icon"` (0191, when the kind only
+    /// wrote `assets.icon_url`); 0195 §2a extended the writeback to
+    /// `assets.name` (ClassicCredit + SAC) and 0196 renamed both the
+    /// Rust identifier and the wire string for clarity. **Breaking
+    /// change**: pre-rename SQS messages with `"kind": "icon"` will not
+    /// deserialise — drain the DLQ before deploy if any are present.
+    Sep1Assets { asset_id: i32 },
     /// NFT `token_uri()` kind — task 0195 §2d. Insert-hook driven,
     /// exactly once per `nfts` mint row. Worker fetches `token_uri()`
     /// via Soroban RPC, resolves the URI through the IPFS gateway,
     /// and writes `nfts.{name, media_url, collection_name}` from the
     /// JSON. The `metadata` JSONB column was dropped per ADR 0043 —
     /// the detail blob is served via runtime type-2 in the api crate.
-    NftTokenUri {
-        nft_id: i32,
-    },
+    NftTokenUri { nft_id: i32 },
 }
 
 struct WorkerState {
@@ -169,7 +173,7 @@ fn classify_outcome(
 async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), RecordError> {
     let msg = parse_message(record)?;
     match msg {
-        EnrichmentMessage::Icon { asset_id } => {
+        EnrichmentMessage::Sep1Assets { asset_id } => {
             enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
             Ok(())
         }
@@ -238,9 +242,9 @@ mod tests {
 
     #[test]
     fn enrichment_message_parses_icon_variant() {
-        let json = r#"{"kind":"icon","asset_id":42}"#;
+        let json = r#"{"kind":"sep1_assets","asset_id":42}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::Icon { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
             panic!("expected Icon variant, got {msg:?}");
         };
         assert_eq!(asset_id, 42);
@@ -272,14 +276,14 @@ mod tests {
 
     #[test]
     fn enrichment_message_rejects_missing_asset_id() {
-        let json = r#"{"kind":"icon"}"#;
+        let json = r#"{"kind":"sep1_assets"}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
     #[test]
     fn enrichment_message_rejects_wrong_asset_id_type() {
         // i32 column — float / string asset_id is a producer bug.
-        let json = r#"{"kind":"icon","asset_id":"42"}"#;
+        let json = r#"{"kind":"sep1_assets","asset_id":"42"}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
@@ -307,9 +311,9 @@ mod tests {
 
     #[test]
     fn parse_message_returns_icon_on_well_formed_body() {
-        let r = record(Some("m-1"), Some(r#"{"kind":"icon","asset_id":7}"#));
+        let r = record(Some("m-1"), Some(r#"{"kind":"sep1_assets","asset_id":7}"#));
         let msg = parse_message(&r).expect("ok");
-        let EnrichmentMessage::Icon { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
             panic!("expected Icon variant, got {msg:?}");
         };
         assert_eq!(asset_id, 7);

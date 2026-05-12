@@ -1,10 +1,26 @@
-//! Type-1 enrichment SQS produce path (task 0191).
+//! Type-1 enrichment SQS produce path (task 0191; SEP-1 `name`
+//! writeback added in 0195 §2a; NFT `token_uri` kind added in 0195 §2d).
 //!
 //! After a ledger's persistence transaction commits, the indexer
-//! publishes one SQS message per asset that needs runtime enrichment.
-//! The downstream worker Lambda (`crates/enrichment-worker`) consumes
-//! the queue, fetches the issuer's stellar.toml, and writes
-//! `assets.icon_url`.
+//! publishes SQS messages for every row that needs off-chain enrichment.
+//! Two kinds today:
+//!
+//! - `icon` (SEP-1 issuer TOML) — worker fetches
+//!   `https://{home_domain}/.well-known/stellar.toml` and writes
+//!   `assets.icon_url` (all asset types) plus `assets.name`
+//!   (ClassicCredit + SAC, `asset_type IN (1, 2)`).
+//! - `nft_token_uri` — worker calls Soroban RPC `simulateTransaction`
+//!   on the contract's `token_uri(token_id)` view, fetches the
+//!   resulting URL (HTTP / IPFS gateway) and writes
+//!   `nfts.{name, media_url, collection_name}`.
+//!
+//! Wire `kind` is `"sep1_assets"` (snake_case form of the Rust variant
+//! `EnrichmentMessage::Sep1Assets`). The historical name was `"icon"`
+//! — renamed in 0196 once the kind grew beyond `icon_url` to also
+//! write `assets.name`. **Breaking change**: pre-rename in-flight SQS
+//! messages and DLQ entries with `"kind":"icon"` will not deserialise
+//! against the current worker; drain the DLQ before deploy if any are
+//! present.
 //!
 //! ## Selection criteria
 //!
@@ -12,7 +28,7 @@
 //!
 //! - Match a `(code, issuer_strkey)` tuple or `contract_id` StrKey from
 //!   the parser's `ExtractedAsset` slice for this ledger, AND
-//! - Are missing at least one column the `icon` worker fills:
+//! - Are missing at least one column the `sep1_assets` worker fills:
 //!     - `icon_url IS NULL`, OR
 //!     - `asset_type IN (1, 2) AND name IS NULL` — ClassicCredit + SAC
 //!       rows whose human-readable `name` has not yet been resolved
@@ -115,7 +131,7 @@ impl Publisher {
             return;
         }
 
-        publish_icon_messages(&self.client, &self.queue_url, &asset_ids).await;
+        publish_sep1_assets_messages(&self.client, &self.queue_url, &asset_ids).await;
     }
 
     /// Insert-hook publisher for NFT mints (task 0195 §2d). Looks up
@@ -307,15 +323,19 @@ async fn publish_nft_token_uri_messages(client: &SqsClient, queue_url: &str, nft
     }
 }
 
-async fn publish_icon_messages(client: &SqsClient, queue_url: &str, asset_ids: &[i32]) {
+async fn publish_sep1_assets_messages(client: &SqsClient, queue_url: &str, asset_ids: &[i32]) {
     // SendMessageBatch caps at 10 messages per request.
     for chunk in asset_ids.chunks(10) {
         let mut entries = Vec::with_capacity(chunk.len());
         for (idx, id) in chunk.iter().enumerate() {
             // Build the JSON body via serde so future kinds with
             // string fields can't accidentally introduce injection.
-            let body = serde_json::json!({ "kind": "icon", "asset_id": id }).to_string();
-            debug!(kind = "icon", asset_id = id, "publishing enrichment msg");
+            let body = serde_json::json!({ "kind": "sep1_assets", "asset_id": id }).to_string();
+            debug!(
+                kind = "sep1_assets",
+                asset_id = id,
+                "publishing enrichment msg"
+            );
             let entry = SendMessageBatchRequestEntry::builder()
                 .id(format!("msg-{idx}-{id}"))
                 .message_body(body)

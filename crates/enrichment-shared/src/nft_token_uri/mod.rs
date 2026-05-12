@@ -65,4 +65,3 @@ mod client;
 pub mod errors;
 
 pub use client::NftTokenUriFetcher;
-pub(crate) use client::resolve_ipfs_to_https;

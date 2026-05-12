@@ -20,8 +20,9 @@
 1. [Why type-1 enrichment exists](#1-why-type-1-enrichment-exists)
 2. [Pipeline shape](#2-pipeline-shape)
 3. [Enrichment kinds](#3-enrichment-kinds)
-   - [3.1 `icon` — SEP-1 issuer TOML](#31-icon--sep-1-issuer-toml)
+   - [3.1 `sep1_assets` — SEP-1 issuer TOML](#31-sep1_assets--sep-1-issuer-toml)
    - [3.2 `nft_token_uri` — per-token contract view + IPFS](#32-nft_token_uri--per-token-contract-view--ipfs)
+   - [3.3 Backfill drain — `crates/backfill-enrichment-runner` (task 0196)](#33-backfill-drain--cratesbackfill-enrichment-runner-task-0196)
 4. [Defensive guards](#4-defensive-guards)
 5. [Failure model](#5-failure-model)
 6. [Operational knobs](#6-operational-knobs)
@@ -83,7 +84,17 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 
 ## 3. Enrichment kinds
 
-### 3.1 `icon` — SEP-1 issuer TOML
+### 3.1 `sep1_assets` — SEP-1 issuer TOML
+
+> **Naming:** Rust identifier `Sep1Assets`
+> (`EnrichmentMessage::Sep1Assets`, `Kind::Sep1Assets`, CLI subcommand
+> `sep1-assets`); SQS wire `kind` = `"sep1_assets"` via serde
+> `rename_all = "snake_case"`. **Renamed in 0196 from the historical
+> `"icon"`** — the kind has written both `assets.icon_url` AND
+> `assets.name` since 0195 §2a, so the `icon` name was misleading.
+> **Breaking wire change**: pre-0196 SQS messages or DLQ entries with
+> `"kind":"icon"` will not deserialise against the current worker;
+> drain the DLQ before deploying 0196.
 
 |                     |                                                                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -105,7 +116,30 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 | **Content-Type branch** | `application/json` → parsed JSON used directly. `image/*` → fetcher synthesises `{ "image": "<url>" }` so the worker writes only `media_url` (direct-image convention, e.g. JamesBachini Soroban example). Anything else → `UnsupportedContentType` (permanent)                                                                                                                                                                                                                                                                                                                               |
 | **Columns written**     | `nfts.name`, `nfts.media_url`, `nfts.collection_name`. The dropped `nfts.metadata` JSONB column is served at request time by the API via `runtime_enrichment::nft_token_uri` (per ADR 0043 detail-only carve-out)                                                                                                                                                                                                                                                                                                                                                                             |
 | **Failure mode**        | Fetcher returns `Result<Option<Value>, Arc<NftTokenUriError>>`. Worker classifies via `is_transient` (Http 5xx / connect / timeout, SorobanRpc → transient; everything else → permanent). Transient → `EnrichError::Transient` → SQS retry → DLQ. Permanent → `''` sentinel write + warn log so the row is recorded as "tried, nothing available" and the predicate `name IS NULL` short-circuits next ledger touch. Api detail handler folds errors fail-soft to `null` via `.ok().flatten()` (plus a 3 s wall-clock timeout so a slow IPFS gateway can't approach the API Gateway ceiling). |
-| **UPDATE SQL**          | `COALESCE(NULLIF($n, ''), col, $n)` per column — same shape as the `icon` kind, protects real values from being clobbered by sentinel writes on a flap                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **UPDATE SQL**          | `COALESCE(NULLIF($n, ''), col, $n)` per column — same shape as the `sep1_assets` kind, protects real values from being clobbered by sentinel writes on a flap                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+## 3.3 Backfill drain — `crates/backfill-enrichment-runner` (task 0196)
+
+The worker is **forward-only** — it processes rows the indexer emits onto
+SQS after the queue's deployment. Rows that pre-date the queue are
+covered by a one-shot drain CLI in `crates/backfill-enrichment-runner`:
+single `enrich` binary with `sep1-assets` / `nft-metadata` / `status`
+subcommands. The drain calls the **same**
+`enrichment_shared::enrich_and_persist::*` functions the worker calls,
+so a row enriched via backfill is bit-identical to one enriched via SQS.
+
+|                 |                                                                                                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**     | Operator-on-demand only (never a cron). One-shot after deploying a new kind, plus `--force-retry` re-walks after upstream fixes (issuer fixes TOML).                                                                   |
+| **Drain shape** | Cursor SELECT `WHERE <kind predicate> AND id > $last ORDER BY id LIMIT N` → `tokio::spawn` fan-out bounded by `Semaphore` (default 10) → `enrich_*`                                                                    |
+| **No SQS**      | Direct DB → `enrich_*` → DB. A 50K-row publish would hit SQS rate limits and waste visibility-timeout overhead when we already hold a DB connection.                                                                   |
+| **Predicates**  | `sep1-assets`: producer-aligned (`icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`). `nft-metadata`: stricter than producer (all three NULL — only pre-queue rows). `--force-retry` drops the predicate.   |
+| **Pool**        | `concurrency + 2` for drain, `2` for `status`. Sized at the subcommand boundary so fan-out is not throttled.                                                                                                           |
+| **Exit code**   | `0` on a clean run (every row reached a terminal outcome — real value or `''` sentinel), `1` on transient or DB failure. Operator-chainable (`enrich sep1-assets && enrich nft-metadata`).                             |
+| **Crate split** | Separate from `crates/backfill-runner` (which re-ingests Stellar ledgers from XDR archives). Different data sources, different concerns; task 0191 design decision #8 forbids modifying the ledger-backfill code path. |
+
+See [`crates/backfill-enrichment-runner/README.md`](../../../crates/backfill-enrichment-runner/README.md)
+for the runbook and pre-flight checklist.
 
 ## 4. Defensive guards
 

@@ -3,30 +3,26 @@
 //!
 //! Per task 0195 §2d.
 //!
-//! ### Failure model
+//! ### Failure model — soft-fail downstream of fetcher
 //!
 //! Producer is an insert-hook on `nfts` mint events, so a row is
 //! emitted exactly once per nft_id under normal operation. Inside this
-//! handler `fetcher.resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`:
+//! handler:
 //!
-//! - `Ok(Some(json))` → extract columns, write real values.
-//! - `Ok(None)` → reserved for future "fetched, intentionally empty";
-//!   falls through to sentinel write.
-//! - `Err(arc_err)` classified by [`is_transient`]:
-//!   - transient (Http 5xx / connect / timeout, SorobanRpc) →
-//!     `EnrichError::Transient` → SQS retry → DLQ.
-//!   - permanent (4xx, malformed JSON, unsafe scheme, malformed input,
-//!     XDR codec, …) → sentinel write + warn log so the row records
-//!     "fetch attempted, no value" and the producer predicate
-//!     short-circuits on the next ledger touch. Permanent errors are
-//!     not cached by the fetcher, so a DLQ replay or backfill retry
-//!     re-logs the warn each time — observability over micro-cost.
-//!
-//! Defence-in-depth at column extraction:
-//!
-//! - `is_safe_media_url` re-check on the `image` field replaces unsafe
-//!   schemes (`http://`, `data:`, `javascript:`) with the sentinel `''`
-//!   against a contract smuggling a non-`https://` URL past the fetcher.
+//! - `fetcher.resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`.
+//!   This handler dispatches via `is_transient`: transient errors
+//!   (Http 5xx / connect / timeout, SorobanRpc) bubble as
+//!   `EnrichError::Transient` so SQS retries; permanent errors (4xx,
+//!   malformed JSON, unsafe scheme, malformed input, XDR codec) and
+//!   `Ok(None)` write empty-string sentinels in
+//!   `nfts.{name, media_url, collection_name}` so the row records
+//!   "fetch attempted, no value" and the producer predicate
+//!   `name IS NULL OR media_url IS NULL OR collection_name IS NULL`
+//!   short-circuits on the next ledger touch.
+//! - The `is_safe_media_url` re-check on the `image` field inside JSON
+//!   metadata replaces unsafe schemes (`http://`, `data:`,
+//!   `javascript:`) with the sentinel `''` — defence in depth against
+//!   a contract smuggling a non-`https://` URL past the fetcher.
 //! - `trimmed_string` caps each column at the schema width
 //!   (VARCHAR(256) for `name` / `collection_name`, 1 KB for
 //!   `media_url`) and writes the sentinel on overflow rather than
@@ -55,13 +51,16 @@ use sqlx::{PgPool, Row};
 use tracing::{debug, instrument, warn};
 
 use super::EnrichError;
+use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
-use crate::nft_token_uri::{NftTokenUriFetcher, resolve_ipfs_to_https};
 
-/// `nfts.name VARCHAR(256)`.
-const MAX_NAME_BYTES: usize = 256;
+/// `nfts.name VARCHAR(256)` — Postgres VARCHAR limits character count, not bytes.
+const MAX_NAME_CHARS: usize = 256;
 /// `nfts.collection_name VARCHAR(256)`.
-const MAX_COLLECTION_BYTES: usize = 256;
+const MAX_COLLECTION_CHARS: usize = 256;
+/// `nfts.media_url` is TEXT (no schema cap); the byte cap here just keeps
+/// pathological URLs out of the row body.
+const MAX_MEDIA_URL_BYTES: usize = 1024;
 
 #[instrument(skip(pool, fetcher), fields(nft_id))]
 pub async fn enrich_nft_token_uri(
@@ -106,8 +105,7 @@ pub async fn enrich_nft_token_uri(
                 return Err(EnrichError::Transient(arc_err.to_string()));
             }
             // Permanent (4xx, malformed JSON, unsafe scheme, malformed
-            // input, XDR codec, etc.) → sentinel + warn. Operator can grep
-            // every occurrence; DLQ replay / backfill re-logs on retry.
+            // input, XDR codec, etc.) → sentinel + warn. Operator can grep.
             Err(arc_err) => {
                 warn!(error = %arc_err, "nft token_uri permanent fail; sentinel write");
                 (String::new(), String::new(), String::new())
@@ -122,29 +120,24 @@ pub async fn enrich_nft_token_uri(
 /// Pull `name`, `image`, `collection` from the JSON blob; cap each at
 /// the column width so an oversize value cannot break the UPDATE.
 ///
-/// `image` handling:
-/// 1. `ipfs://...` is resolved to the configured HTTPS gateway URL via
-///    [`resolve_ipfs_to_https`]. Common NFT-metadata convention
-///    (OpenSea / OpenZeppelin) stores `image` as `ipfs://Qm.../1.png`,
-///    so without this step `media_url` would be the empty sentinel for
-///    most real-world collections.
-/// 2. The resolved value is then re-checked through [`is_safe_media_url`]:
-///    the frontend renders it as `<img src>`, so anything other than
-///    `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
-///    with the empty-string sentinel to avoid mixed-content warnings
-///    and XSS vectors. Same defence-in-depth pattern as
-///    `sep1_assets::is_safe_icon_url`.
+/// `image` is additionally re-checked through [`is_safe_media_url`]:
+/// the frontend renders it as `<img src>`, so anything other than
+/// `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
+/// with the empty-string sentinel to avoid mixed-content warnings
+/// and XSS vectors. The fetcher already validates the outer
+/// `token_uri()` URI and is expected to resolve any `ipfs://` form to
+/// HTTPS before exposing it here, so this is defence in depth — same
+/// pattern as `sep1_assets::is_safe_icon_url`.
 fn extract_columns(json: &Value) -> (String, String, String) {
-    let name = trimmed_string(json.get("name"), MAX_NAME_BYTES);
-    let image_raw = trimmed_string(json.get("image"), 1024); // TEXT but cap to keep bodies reasonable
-    let image_resolved = resolve_ipfs_to_https(&image_raw); // empty string passes through
-    let image = if image_resolved.is_empty() || is_safe_media_url(&image_resolved) {
-        image_resolved
+    let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
+    let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
+    let image = if image_raw.is_empty() || is_safe_media_url(&image_raw) {
+        image_raw
     } else {
         warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
         String::new()
     };
-    let collection = trimmed_string(json.get("collection"), MAX_COLLECTION_BYTES);
+    let collection = trimmed_string_chars(json.get("collection"), MAX_COLLECTION_CHARS);
     (name, image, collection)
 }
 
@@ -154,7 +147,33 @@ fn is_safe_media_url(url: &str) -> bool {
     url.trim().to_ascii_lowercase().starts_with("https://")
 }
 
-fn trimmed_string(v: Option<&Value>, max_bytes: usize) -> String {
+/// Postgres `VARCHAR(N)` caps character count, not byte length, so the
+/// `name` and `collection_name` columns must measure with `chars().count()`.
+/// Mismatched units would let a 256-char ASCII value pass and a 256-char
+/// multi-byte value fail (or vice versa).
+fn trimmed_string_chars(v: Option<&Value>, max_chars: usize) -> String {
+    let Some(s) = v.and_then(Value::as_str) else {
+        return String::new();
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let count = trimmed.chars().count();
+    if count > max_chars {
+        warn!(
+            chars = count,
+            max = max_chars,
+            "value too long for VARCHAR; sentinel written"
+        );
+        return String::new();
+    }
+    trimmed.to_owned()
+}
+
+/// Byte-count cap for TEXT columns where the limit is a body-size
+/// safeguard rather than a schema constraint.
+fn trimmed_string_bytes(v: Option<&Value>, max_bytes: usize) -> String {
     let Some(s) = v.and_then(Value::as_str) else {
         return String::new();
     };
@@ -250,33 +269,41 @@ mod tests {
     }
 
     #[test]
-    fn extract_columns_resolves_ipfs_image_to_gateway_url() {
-        // OpenSea / OpenZeppelin convention: `image` is `ipfs://Qm.../...`.
-        // Without resolve_ipfs_to_https the is_safe_media_url check would
-        // reject it and we'd write the sentinel, leaving `nfts.media_url`
-        // empty for most real-world collections.
-        let blob = json!({
-            "name": "Punk #4521",
-            "image": "ipfs://QmFoo/4521.png",
-            "collection": "CryptoPunks",
-        });
-        let (_, image, _) = extract_columns(&blob);
-        assert!(image.starts_with("https://"));
-        assert!(image.ends_with("/ipfs/QmFoo/4521.png"));
-    }
-
-    #[test]
-    fn trimmed_string_caps_oversize_to_sentinel() {
-        let too_long = "x".repeat(MAX_NAME_BYTES + 1);
+    fn trimmed_string_chars_caps_oversize_to_sentinel() {
+        let too_long = "x".repeat(MAX_NAME_CHARS + 1);
         let v = Value::String(too_long);
-        assert_eq!(trimmed_string(Some(&v), MAX_NAME_BYTES), "");
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), "");
     }
 
     #[test]
-    fn trimmed_string_handles_non_string() {
-        assert_eq!(trimmed_string(Some(&json!(42)), 256), "");
-        assert_eq!(trimmed_string(Some(&json!(null)), 256), "");
-        assert_eq!(trimmed_string(None, 256), "");
+    fn trimmed_string_chars_uses_char_count_not_byte_length() {
+        // 256 multi-byte chars (each emoji = 4 bytes) → 1024 bytes but 256 chars.
+        // Char-cap MUST accept this (matches VARCHAR(256) capacity); byte-cap
+        // would have wrongly rejected it.
+        let exactly_max = "🚀".repeat(MAX_NAME_CHARS);
+        assert_eq!(exactly_max.chars().count(), MAX_NAME_CHARS);
+        assert!(exactly_max.len() > MAX_NAME_CHARS); // confirm bytes > chars
+        let v = Value::String(exactly_max.clone());
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), exactly_max);
+
+        // One char over the cap → sentinel.
+        let over = "🚀".repeat(MAX_NAME_CHARS + 1);
+        let v = Value::String(over);
+        assert_eq!(trimmed_string_chars(Some(&v), MAX_NAME_CHARS), "");
+    }
+
+    #[test]
+    fn trimmed_string_chars_handles_non_string() {
+        assert_eq!(trimmed_string_chars(Some(&json!(42)), 256), "");
+        assert_eq!(trimmed_string_chars(Some(&json!(null)), 256), "");
+        assert_eq!(trimmed_string_chars(None, 256), "");
+    }
+
+    #[test]
+    fn trimmed_string_bytes_caps_for_text_columns() {
+        let too_long = "x".repeat(MAX_MEDIA_URL_BYTES + 1);
+        let v = Value::String(too_long);
+        assert_eq!(trimmed_string_bytes(Some(&v), MAX_MEDIA_URL_BYTES), "");
     }
 
     #[test]
