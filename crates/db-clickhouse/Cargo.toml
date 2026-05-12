@@ -13,9 +13,21 @@ path = "src/bin/db-clickhouse-init.rs"
 # Q4). Pinned to the latest stable release at task 0204 implementation time
 # (2026-05-08). Bump deliberately in a follow-up PR if blocked by a bug.
 clickhouse = "=0.15.0"
-# Shared Extracted* types — the CH stub mirrors the PG persist signature
-# without duplicating the type surface (task 0205).
+# Shared Extracted* types — the CH writer consumes the same parser surface
+# the PG persist path does, with the documented `soroban_events` unfold
+# (ADR 0044 §Decision §4a). Domain enums supply the i16 discriminants used
+# in CH SMALLINT columns.
 xdr-parser = { path = "../xdr-parser" }
+domain = { path = "../domain" }
+# Already pulled in transitively by `clickhouse` (lz4/zstd features).
+# Declared directly so `db_clickhouse::persist::ids` can derive
+# surrogate Int64 IDs on the three high-cardinality FK hubs
+# (accounts, soroban_contracts, transactions) — see ids.rs.
+cityhash-rs = "1.0.1"
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
