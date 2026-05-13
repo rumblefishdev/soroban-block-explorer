@@ -2,7 +2,7 @@
 id: '0214'
 title: 'CH writer: initial-snapshot mechanism for account state on backfill start'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0044']
 related_tasks: ['0119', '0194', '0204', '0205', '0207']
 tags:
@@ -32,6 +32,29 @@ history:
       their AccountEntry / TrustLineEntry updated within a 64k-ledger
       window. Same root cause for E08/E09 state-NULL fields on assets
       (also state-side, also depends on LedgerEntry).
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated in parallel with task 0220 (CH writer parity for
+      0217 quarantine routing + 0218 SAC override). Branch
+      `fix/0214_ch-initial-snapshot-account-state` cut from develop.
+      Surfaces are disjoint from PR #181 (0218) and PR #182 (0219)
+      — this task touches `crates/backfill-runner` + new Soroban
+      RPC client integration + CH writer's account-state staging,
+      none of which the other two PRs modify.
+
+      Cross-task dependency note: Karol's pre-audit findings #1
+      (classic credit assets, task 0219), #2 (home_domain backfill
+      gap, this task), and #4 (is_sac pre-existing SAC, task 0218)
+      share a common architectural pattern — the indexer is purely
+      event-driven and entity rows that pre-date the indexed window
+      arrive as skeletons. The fully-general fix is "initial-state
+      RPC enrichment on first observation" (Karol's framing). This
+      task delivers the RPC client + the home_domain / sequence
+      enrichment path; 0218 + 0219 ship cheaper non-RPC layers for
+      their respective domains that catch the common cases
+      without RPC. The trio together = full coverage.
 ---
 
 # CH writer: initial-snapshot mechanism for account state on backfill start
