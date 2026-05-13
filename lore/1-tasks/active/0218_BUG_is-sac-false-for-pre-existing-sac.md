@@ -51,6 +51,43 @@ history:
       (sac.rs + staging contract path + persist post-upsert step vs.
       0217's NFT filter + `_pending` tables), so the two PRs can be
       reviewed independently. 0218 ships after #180 merges.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Implementation shipped on the branch in four phases:
+
+      A. **Parser helper** — `xdr_parser::sac::derive_sac_overrides_from_assets`
+      pure-function helper + `SacOverride { contract_id, identity }`
+      shape. 7 new unit tests pin native XLM SAC and USDC SAC against
+      live mainnet contract_ids; cover skip paths (`Sac` /
+      `Soroban` / missing code / missing issuer / invalid issuer
+      StrKey) so derivation failures never abort a ledger.
+
+      B. **Staging + persist** — `Staged.sac_overrides` populated in
+      `Staged::prepare`. New persist step
+      `apply_sac_overrides_for_skeleton_contracts` runs inside the
+      persist tx between `insert_assets_from_reclassified_contracts`
+      and `upsert_nfts_and_ownership`; the `WHERE is_sac = FALSE`
+      guard makes it idempotent and a no-op on already-classified
+      rows. Network passphrase hardcoded to mainnet — TODO: lift to
+      config when testnet / futurenet ingest ships.
+
+      C. **Integration tests** — two DB-gated tests:
+      `sac_override_flips_is_sac_for_pre_existing_skeleton` (happy
+      path: skeleton → is_sac=true + contract_type=Token) and
+      `sac_override_leaves_already_is_sac_rows_alone` (idempotency:
+      pre-flipped row not touched on replay).
+
+      D. **Docs** — `database-schema-overview.md` §4.6 gains the
+      3-path `is_sac` classification note; `clickhouse-pilot.md`
+      gains a "Writer-only behaviours not yet ported to CH"
+      subsection naming the SAC override as a CH parity follow-up.
+
+      `cargo check --workspace` + `cargo clippy -p indexer -p
+      xdr-parser --all-targets -- -D warnings` clean. Empirical
+      replay (post-merge backfill rerun, count is_sac=true increase)
+      is operational follow-up — not part of the PR.
 ---
 
 # BUG: is_sac=false for pre-existing SAC contracts
@@ -170,22 +207,13 @@ implementation notes.
 
 ## Acceptance Criteria
 
-- [ ] `xdr_parser::sac::derive_sac_overrides_from_assets` public + unit-tested.
-- [ ] `Staged.sac_overrides` populated from the asset staging path.
-- [ ] `apply_sac_overrides_for_skeleton_rows` UPDATEs `soroban_contracts`
-      inside the persist tx; idempotent on replay.
-- [ ] Integration test: pre-existing SAC referenced + observed trustline →
-      `is_sac=true` + `contract_type=Token` + `sac_asset` populated.
-- [ ] **Empirical replay**: re-run a backfill window that previously
-      held pre-existing SACs (e.g. XLM SAC) and verify
-      `SELECT count(*) FILTER (WHERE is_sac = true) FROM soroban_contracts`
-      increases by the expected delta (target: ≥ 5 pre-window SACs in
-      a 10k-ledger window).
-- [ ] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md`
-      §4.6 `soroban_contracts` gains a note about forward-derived SAC
-      overrides; `docs/architecture/database-schema/clickhouse-pilot.md`
-      gains the same note (with CH-side scope clarification).
-- [ ] **API types regenerated** — N/A (no API contract change).
+- [x] `xdr_parser::sac::derive_sac_overrides_from_assets` public + unit-tested. _(7 new tests in `sac::tests`; pins against mainnet XLM SAC `CAS3J7GY…` + USDC SAC `CCW67TSZ…`.)_
+- [x] `Staged.sac_overrides` populated from the asset staging path. _(`crates/indexer/src/handler/persist/staging.rs::Staged::prepare`; mainnet passphrase hardcoded — refactor to config when a testnet/futurenet variant ships.)_
+- [x] `apply_sac_overrides_for_skeleton_contracts` UPDATEs `soroban_contracts` inside the persist tx; idempotent on replay. _(`crates/indexer/src/handler/persist/write.rs`; `WHERE is_sac = FALSE` guard makes the UPDATE a no-op on already-classified rows; wired between `insert_assets_from_reclassified_contracts` and `upsert_nfts_and_ownership` in `run_all_steps`.)_
+- [x] Integration test: pre-existing SAC referenced + observed trustline → `is_sac=true` + `contract_type=Token`. _(Two DB-gated tests: `sac_override_flips_is_sac_for_pre_existing_skeleton` exercises the happy path; `sac_override_leaves_already_is_sac_rows_alone` exercises idempotency. **Note:** the original AC mentioned `sac_asset` populated — there is no `sac_asset` column in `soroban_contracts` (the asset identity lives in the `assets` table via the `(contract_id, asset_code, issuer_id)` row); flipping `is_sac`+`contract_type` is the full schema-side delivery here.)_
+- [ ] **Empirical replay**: re-run a backfill window that previously held pre-existing SACs (e.g. XLM SAC) and verify `SELECT count(*) FILTER (WHERE is_sac = true) FROM soroban_contracts` increases by the expected delta (target: ≥ 5 pre-window SACs in a 10k-ledger window). _(Operational — run after the PR lands and a fresh backfill is kicked.)_
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` §4.6 `soroban_contracts` gains a 3-path classification note (in-window deploy / forward-derive / future RPC fetch); `docs/architecture/database-schema/clickhouse-pilot.md` gains a "Writer-only behaviours not yet ported to CH" subsection that names the SAC override path explicitly as a CH parity follow-up.
+- [x] **API types regenerated** — N/A (no API contract change — `is_sac` already in the contract response shape).
 
 ## Out of Scope
 
