@@ -20,6 +20,7 @@ related_adrs:
     '0036',
     '0038',
     '0039',
+    '0043',
   ]
 tags: [database, schema, snapshot, documentation]
 links: []
@@ -60,8 +61,10 @@ history:
       per 0038/0039). Two migrations have landed since the
       `20260424000000` anchor: (1) `20260507120000_drop_nfts_metadata.up.sql`
       (task 0195 §2d / ADR 0043 detail-only carve-out) dropped the
-      `nfts.metadata JSONB` column shown at §12 line 388 of this
-      snapshot — runtime served via `runtime_enrichment::nft_token_uri`
+      `nfts.metadata JSONB` column in the §12 `nfts` table definition
+      of this snapshot (frozen body retained per the 0038/0039 pattern,
+      marked inline with a "DROPPED" comment) — runtime served via
+      `runtime_enrichment::nft_token_uri`
       (Soroban RPC `token_uri()` + IPFS gateway, 24h LRU, fail-soft);
       (2) `20260428000100_add_endpoint_query_indexes.up.sql` (task 0132,
       already covered by ADR 0039) added the five read-path indexes
@@ -403,7 +406,7 @@ CREATE TABLE nfts (
     collection_name       VARCHAR(256),
     name                  VARCHAR(256),
     media_url             TEXT,
-    metadata              JSONB,
+    metadata              JSONB,    -- DROPPED by 20260507120000_drop_nfts_metadata.up.sql (task 0195 §2d / ADR 0043); served at runtime via runtime_enrichment::nft_token_uri. Body kept here per 0038/0039 frozen-snapshot pattern.
     minted_at_ledger      BIGINT,
     current_owner_id      BIGINT REFERENCES accounts(id),
     current_owner_ledger  BIGINT,

@@ -1132,8 +1132,9 @@ in this repo. Two parallel reference sets exist:
 
 - [`endpoint-queries/`](./endpoint-queries/) — **PostgreSQL** canonical
   source of truth for the live API handlers in
-  [`crates/api/`](../../../crates/api). Every endpoint listed in
-  [§1 Purpose](#1-purpose-and-scope) maps 1:1 to a `NN_*.sql` file here.
+  [`crates/api/`](../../../crates/api). Every endpoint enumerated in
+  [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
+  maps 1:1 to a `NN_*.sql` file here.
   Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
   list-endpoint completeness verified by audit task 0197
   (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
