@@ -252,22 +252,26 @@ fn build_simulate_envelope(
 /// [`is_token_uri_arity_mismatch`] fall back to the zero-arg form.
 /// Any other RPC error propagates unchanged.
 ///
-/// See `docs/audits/2026-05-13-pre-audit-finding-token-uri-signature-mismatch.md`
+/// See `docs/audits/2026-05-13-0197-step0/2026-05-13-pre-audit-finding-token-uri-signature-mismatch.md`
 /// for the audit-time fixture + rationale.
 ///
 /// TODO(audit-0197 follow-up): replace the try/fallback with
 /// WASM-spec-driven dispatch — inspect the contract's interface
-/// (currently in `wasm_interface_metadata.metadata` JSONB, today
-/// **al ways NULL** per a separate gap surfaced in the same audit)
-/// to learn `token_uri`'s arity ahead of time and call the right
-/// variant directly. Saves one RPC round-trip per SEP-39 token
-/// (a SEP-39 collection with N tokens currently spends 2 × N RPC
-/// calls; with spec dispatch it spends N). Prerequisites:
-///   1. Indexer populates `wasm_interface_metadata` reliably
-///      (separate task — table currently empty for ~100% of rows).
-///   2. `xdr-parser::classification` exposes function arity, not
+/// (in `wasm_interface_metadata.metadata` JSONB) to learn
+/// `token_uri`'s arity ahead of time and call the right variant
+/// directly. Saves one RPC round-trip per SEP-39 token (a SEP-39
+/// collection with N tokens currently spends 2 × N RPC calls; with
+/// spec dispatch it spends N). Prerequisites surfaced by 0197 Step 1:
+///   1. `soroban_contracts.wasm_hash` is reliably populated for
+///      non-SAC contracts — currently 99.9 % NULL (Step 1 Finding F9;
+///      same root cause class as Bug #4 SAC-detection gap).
+///   2. `wasm_interface_metadata.metadata` is populated with a real
+///      `functions[]` array — locally 40 % of audited rows store
+///      `{}` because the parser produced no spec from the WASM
+///      bytecode (Step 1 Finding F8).
+///   3. `xdr-parser::classification` exposes function arity, not
 ///      just presence-by-name.
-///   3. Fallback retained for contracts where WASM bytecode is no
+///   4. Fallback retained for contracts where WASM bytecode is no
 ///      longer reachable via RPC (state-pruning past the retention
 ///      window).
 ///

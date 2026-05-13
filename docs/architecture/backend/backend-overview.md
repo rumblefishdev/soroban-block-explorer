@@ -171,6 +171,20 @@ The backend serves data from the block explorer's own database, adding:
     a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
     consumed only by `GET /v1/assets/{id}`; future detail endpoints
     (accounts, etc.) will reuse the same fetcher
+  - **`runtime_enrichment::nft_token_uri`** — drives the detail-only
+    `metadata` field on `GET /v1/nfts/:id` (task 0195 §2d). Per ADR 0043
+    detail-only carve-out — the `nfts.metadata` JSONB column was dropped
+    in migration `20260507120000_drop_nfts_metadata.up.sql`. Flow:
+    Soroban RPC `simulateTransaction` of `token_uri(token_id)`
+    (SEP-50 per-token form, falls back to zero-arg `token_uri()` form
+    for SEP-39 contracts on `MismatchingParameterLen` — see audit 0197
+    Bug #5), then IPFS gateway fetch + JSON parse. Built-in safeguards:
+    3 s wall-clock timeout, 256 KB body cap, scheme/hostname validation
+    (https / ipfs only), 24 h LRU (1024 entries). Fail-soft NULL on any
+    error class. Code is shared with the Lambda 2 write-side worker
+    (`crates/enrichment-shared::nft_token_uri`); only the persistence
+    half differs (handler returns the JSON inline, worker writes
+    `nfts.name` / `media_url` / `collection_name`).
 - **Surrogate-key resolution** — every StrKey that enters a route parameter
   (`G...`, `C...`) is resolved to the `BIGINT` surrogate via the relevant
   `UNIQUE` index at the request boundary
@@ -473,8 +487,12 @@ PostgreSQL database. Heavy-field detail endpoints (E3 `/transactions/:hash`,
 E14 `/contracts/:id/events`) additionally fetch raw `.xdr.zst` from the **public
 Stellar ledger archive** and re-parse it at request time per
 [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md).
-The API does not depend on Horizon, Soroban RPC, or third-party indexers for any
-response.
+Detail-only off-chain fields exempt from persistence per
+[ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) (§4 `runtime_enrichment`
+umbrella) are also fetched at request time — currently the SEP-1 issuer TOML
+(asset `description` / `home_page`, task 0188) and the NFT `token_uri()` JSON
+(`metadata`, task 0195). The API does not depend on Horizon or third-party
+indexers for any response.
 
 ### 7.2 Response Shaping
 
