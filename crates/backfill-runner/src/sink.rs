@@ -200,7 +200,15 @@ impl PartitionWriterHandle<'_> {
                 // reclassification UPDATE path that needs it.
                 let _ = classification_cache;
                 let parsed = indexer::handler::process::parse_ledger(meta);
-                let staged = db_clickhouse::persist::stage::prepare(
+                // Task 0220 — switch to the `_with_sac_overrides` entry
+                // point so the CH writer flips `is_sac=true,
+                // contract_type=Token` on pre-existing SAC skeleton
+                // rows via the forward-derived `ParseOutput.sac_overrides`
+                // list. The legacy `stage::prepare` is kept as a
+                // backwards-compat shim with empty overrides; this is
+                // the production wire-up the PR #186 description called
+                // out as a follow-up.
+                let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                     &parsed.ledger,
                     &parsed.transactions,
                     &parsed.operations,
@@ -216,6 +224,7 @@ impl PartitionWriterHandle<'_> {
                     &parsed.nft_events,
                     &parsed.lp_positions,
                     &parsed.contract_name_writes,
+                    &parsed.sac_overrides,
                 )?;
                 pw.write_ledger(staged).await?;
                 Ok(())
