@@ -251,6 +251,13 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (hash);
 
+-- `amount` is a **fold count** of identity-tuple duplicates (task 0163 /
+-- ADR 0033 PG-side convention; CH inherits same semantic): the number of
+-- on-chain operation envelope ops that collapsed into this single
+-- appearance row by identity. NOT a stroop value or per-op amount. Real
+-- per-op stroop values live in `result_meta_xdr` (Archive XDR overlay
+-- on PG; read-time decode on CH via E03 statement C). API callers MUST
+-- NOT interpret this column as a token amount.
 CREATE TABLE IF NOT EXISTS operations_appearances (
     transaction_id    Int64,
     application_order Int16,
@@ -261,7 +268,7 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     asset_code        LowCardinality(String),
     asset_issuer_id   Nullable(Int64),
     pool_id           Nullable(FixedString(32)),
-    amount            Int64,
+    amount            Int64,   -- fold count, see header comment
     ledger_sequence   Int64
 )
 ENGINE = ReplacingMergeTree
@@ -294,13 +301,20 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, transaction_id, event_index);
 
+-- `amount` is a **fold count of invocation-tree nodes** aggregated into
+-- this (contract, transaction, ledger) trio (per ADR 0034 PG-side
+-- convention; CH inherits same semantic). Multiple invocations of the
+-- same contract within the same tx's call graph collapse into one row
+-- with `amount` = how many call-graph nodes were folded. NOT a token
+-- amount. Real per-invocation `function_name` / `args` / `return_value`
+-- live in the Archive XDR (ADR 0029/0034).
 CREATE TABLE IF NOT EXISTS soroban_invocations_appearances (
     contract_id          Int64,
     transaction_id       Int64,
     ledger_sequence      Int64,
     caller_id            Nullable(Int64),
     caller_contract_id   Nullable(Int64),
-    amount               Int32
+    amount               Int32   -- fold count, see header comment
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

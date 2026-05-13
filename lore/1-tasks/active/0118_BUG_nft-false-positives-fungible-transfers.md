@@ -2,7 +2,7 @@
 id: '0118'
 title: 'BUG: NFT false positives from fungible token transfers'
 type: BUG
-status: blocked
+status: active
 related_adr: ['0027']
 related_tasks: ['0026', '0027', '0149']
 tags: [priority-high, effort-medium, layer-indexer, audit-F9]
@@ -107,6 +107,19 @@ history:
       false-positive rate validation against real mainnet data both
       require the full Soroban-era corpus indexed. Unblocks once
       `backfill-runner` (task 0145) finishes the historical sweep.
+  - date: '2026-05-12'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Reactivated after CH pilot endpoint audit confirmed the false
+      positives manifest empirically on a 64k-ledger backfill: 100% of
+      `nfts` rows = misclassified fungible transfers (XLM SAC = 421k
+      rows alone; top 5 contracts all fungibles). Phase 3 scope
+      expanded: (a) cleanup SQL for both PG and CH stores, (b)
+      ingester filter strengthen for pre-window WASM-less contracts
+      (current `Other` verdict's permissive emit policy produces the
+      observed false positives). See
+      `docs/audits/2026-05-12-ch-pilot-endpoint-audit.md` §E15.
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -129,7 +142,21 @@ contracts legitimately use `i128` as token IDs
 - **Phase 1 (parser)** — can start now, independent of other work.
 - **Phase 2 (integration)** — gated on task 0149 merge (new
   `persist_ledger` signature).
-- **Phase 3 (cleanup)** — operational, after production backfill.
+- **Phase 3 (cleanup + filter strengthen)** — operational, after
+  production backfill. **Reactivated 2026-05-12** after CH pilot audit
+  ([2026-05-12-ch-pilot-endpoint-audit.md](../../../docs/audits/2026-05-12-ch-pilot-endpoint-audit.md))
+  confirmed 100% NFT rows in CH backfill = false positives (XLM SAC
+  contributes 421k rows alone). Scope expanded:
+  - SQL cleanup script for **both PG and CH** stores.
+  - **Ingester filter strengthen** — current `Other` verdict permissive
+    emit produces false positives for pre-window WASM-less contracts
+    (deploy precedes backfill range, no WASM observed in window).
+    Either: (a) stricter "no WASM in window AND not already
+    classified" → drop; (b) post-backfill reclassification pass once
+    WASM observed in later windows.
+  - VACUUM ANALYZE in runbook (PG side). CH equivalent: `OPTIMIZE
+TABLE nfts FINAL` + `OPTIMIZE TABLE nft_ownership FINAL` after
+    cleanup deletes.
 
 ## Context
 
