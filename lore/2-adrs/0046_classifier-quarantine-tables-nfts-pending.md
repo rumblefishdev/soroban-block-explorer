@@ -13,6 +13,19 @@ history:
     status: accepted
     who: stkrolikiewicz
     note: 'ADR created post-factum alongside PR #180 (task 0217 implementation).'
+  - date: 2026-05-13
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Same-day amendment: Alternative 4 (Patch C parser-only whitelist
+      from PR #178) flipped from "ACCEPTED AS COMPLEMENT" to "REJECTED"
+      after the pre-audit re-test discovered a real mainnet SEP-39 NFT
+      (Bachini `CDA5FGE4...`) using `i128` token_id — Patch C would have
+      silently dropped it. Patch C was reverted in the same branch as
+      this PR; the parser is back to its permissive blacklist. The
+      quarantine pattern + WASM-spec-based classifier remain the
+      authoritative discrimination layer. Context and Alternative 4
+      rewritten to reflect the empirical evidence.
 ---
 
 # ADR 0046: Classifier quarantine tables for NFT-candidate rows
@@ -56,13 +69,24 @@ this design on real mainnet data
 - `/v1/nfts*` endpoints returned garbage in production-like load
   because they read the hot tables directly.
 
-PR #178 (task 0118 Patch C) narrowed the parser-side `token_id` type
-whitelist (reject `i128`/`u128`, accept SEP-50 + OpenZeppelin
-canonical shapes), eliminating the bulk of the misclassifications at
-the source. But Patch C does not remove the residual `Other`/NULL
-bucket: pre-window WASM-less contracts can still emit NFT-shape
-events that parse as valid candidates, and we still cannot decide
-their classification until the WASM upload is observed.
+PR #178 (task 0118 Patch C) initially narrowed the parser-side
+`token_id` type whitelist (reject `i128`/`u128`, accept SEP-50 +
+OpenZeppelin canonical shapes), eliminating the bulk of the
+misclassifications at the source. **Patch C was subsequently
+reverted** (PR #180, same branch as this ADR's implementation)
+after a 2026-05-13 pre-audit re-test against live mainnet RPC
+revealed a real SEP-39 NFT
+(`CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY` /
+James Bachini SorobanNFT) using `i128` for `token_id` — the
+whitelist would have silently dropped a legitimate NFT collection.
+See Alternative 4 below for the full rationale.
+
+With Patch C reverted, the parser is back to its pre-2026-05-12
+permissive blacklist (`!void|map|vec|error`). The architectural
+problem this ADR addresses therefore stands unchanged: NFT-shape
+events from contracts whose WASM has not yet been observed parse as
+valid candidates, and we cannot decide their classification until
+the WASM upload is observed.
 
 The decision-shape problem: the `Other`/NULL bucket continues to
 exist by design, and shipping NULL-classified rows into the hot
@@ -236,28 +260,64 @@ by buffering the ledger's NFT rows in memory and retrying later
 **Decision:** REJECTED — solves the "in DB" problem by moving it to
 "in indexer process memory"; no net win.
 
-### Alternative 4: Parser-only filter (Patch C alone, no quarantine)
+### Alternative 4: Parser-only filter (Patch C — payload-type whitelist)
 
-**Description:** Rely solely on the parser-side `token_id` whitelist
-(PR #178 / 0118 Patch C) to cut the bulk of false positives. Accept
-the residual `Other`/NULL contributions as small enough to ignore.
+**Description:** Discriminate NFT vs fungible at the parser layer by
+restricting `looks_like_token_id` to a whitelist of conventional
+`token_id` types (`u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+`address`) and explicitly rejecting `i128` / `u128` (SEP-41 amount
+shape). Shipped in PR #178 (task 0118 Patch C) on the assumption
+that legitimate NFT contracts always use unsigned-integer token_ids
+per SEP-50 + the OpenZeppelin Stellar `NonFungibleToken` trait.
 
-**Pros:**
+**Pros at design time:**
 
-- Smallest change. Already shipped.
-- Cuts the bulk of false positives at the source.
+- Cuts the bulk of false positives at the source (audit-measured
+  XLM SAC volume drops from 421k rows to zero).
+- Smallest change conceptually.
 
-**Cons:**
+**Cons surfaced empirically:**
 
-- Cannot eliminate the `Other`/NULL bucket — that's a function of
-  the indexer's window, not of the parser's emit decision.
-- Even a small absolute count of false-positive rows in
-  production `/v1/nfts*` is user-visible.
+- **Bug #3 deeper finding (pre-audit re-test, 2026-05-13)** — Karol
+  fetched a live mainnet NFT, James Bachini's SEP-39 collection
+  `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`, via
+  `stellar contract fetch`. The contract is a real, fully-functional
+  NFT (`name = "SorobanNFT"`, `symbol = "SBN"`, exports `owner_of`,
+  `token_uri`, `token_image`), and **`owner_of(token_id: i128)`**
+  — i.e. its `token_id` is `i128`. SEP-39 (the older Stellar NFT
+  spec / ERC-721-style) explicitly permitted `i128` token_ids;
+  SEP-50's "unsigned integer" requirement is the newer convention.
+  Both shapes coexist on mainnet.
 
-**Decision:** ACCEPTED AS COMPLEMENT — Patch C shrinks the parser
-emit at the source so the quarantine carries less volume. The
-quarantine isolates whatever residual remains. Both ship together;
-neither standalone matches the goal of clean-by-design hot tables.
+- The 2026-05-12 CH pilot audit sample did **not** contain any
+  SEP-39 NFT — its 15.7k-ledger window was biased to a single
+  protocol-25 slice that happened to have no Bachini-style
+  collections. Patch C's design rested on that sample. The
+  pre-audit re-test against live RPC revealed the false-negative.
+
+- Crucially: Patch C operates **before** the persist-time
+  classifier can see the row. The WASM-spec-based classifier
+  (`classify_contract_from_wasm_spec`, the architecturally correct
+  discrimination point) is bypassed entirely for `i128`-shaped
+  payloads. No amount of downstream sophistication (quarantine,
+  reclassify hook, runbook drains) can recover rows that never
+  reached the parser's emit.
+
+**Decision:** REJECTED. Audit team's stated principle —
+"discrimination MUSI być po WASM signature, NIE po payload type" —
+is correct, and Patch C contradicts it. Patch C was reverted in the
+same branch as PR #180 (this ADR's implementation); the parser
+returned to its pre-Patch-C permissive blacklist
+(`!void|map|vec|error`), and the test
+`parser_emits_i128_transfer_as_nft_candidate` was restored with a
+docstring referencing the SEP-39 mainnet example.
+
+The 99.4% noise-reduction target that motivated Patch C is still
+met by the quarantine pattern itself: `Fungible`/`Token`-classified
+contracts drop at the persist filter (where the classifier verdict
+is authoritative), and `Other`/NULL go to `_pending` (invisible to
+the API). Real SEP-39 NFTs land in `_pending` initially and are
+promoted to hot once their WASM upload is observed.
 
 ---
 
@@ -333,7 +393,7 @@ Per [ADR 0032](./0032_docs-architecture-evergreen-maintenance.md):
 - [ ] `docs/architecture/frontend/frontend-overview.md` updated — N/A (no frontend change; quarantine is transparent to the FE).
 - [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` updated — N/A — the indexing pipeline overview describes the high-level pipeline stages; the per-bucket persist routing is an internal `crates/indexer/src/handler/persist/write.rs` detail, not a pipeline-stage change.
 - [ ] `docs/architecture/infrastructure/infrastructure-overview.md` updated — N/A (no infrastructure change).
-- [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` updated — N/A (parser side unchanged — Patch C lives in PR #178; this PR is purely persist-side + schema).
+- [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` updated — N/A (parser side returns to the pre-2026-05-12 permissive blacklist after the Patch C revert in this PR; no shape change to document beyond the test rename, which is a code-level concern).
 - [x] CH-side counterpart updated in [`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md) §4c-bis (additional to the boilerplate list above).
 - [x] This ADR is linked from each updated doc at the relevant section.
 
@@ -341,8 +401,8 @@ Per [ADR 0032](./0032_docs-architecture-evergreen-maintenance.md):
 
 ## References
 
-- [PR #178 — 0118 Patch C parser whitelist + Phase 3 cleanup runbook](https://github.com/rumblefishdev/soroban-block-explorer/pull/178)
-- [PR #180 — 0217 quarantine implementation](https://github.com/rumblefishdev/soroban-block-explorer/pull/180)
+- [PR #178 — 0118 Patch C parser whitelist + Phase 3 cleanup runbook](https://github.com/rumblefishdev/soroban-block-explorer/pull/178) (Patch C subsequently reverted in PR #180)
+- [PR #180 — 0217 quarantine implementation + 0118 Patch C revert](https://github.com/rumblefishdev/soroban-block-explorer/pull/180)
 - [`docs/audits/2026-05-12-ch-pilot-endpoint-audit.md`](../../docs/audits/2026-05-12-ch-pilot-endpoint-audit.md) — empirical motivation (§E15–E17, 99.4% false positives)
 - SEP-0041 fungible token interface — defines `amount: i128` as the canonical fungible payload type.
 - SEP-0050 NFT interface — defines `token_id` as an unsigned integer.

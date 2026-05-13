@@ -9,7 +9,6 @@
 //! both standard ("transfer") and non-standard ("Transfer") conventions.
 
 use serde_json::Value;
-use tracing::debug;
 
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
@@ -169,66 +168,39 @@ fn try_parse_burn(
     })
 }
 
-/// Check if data looks like a token ID (scalar value, not a complex structure
-/// and not a fungible amount type).
+/// Check if data looks like a token ID (scalar value, not a complex structure).
 ///
 /// Both SEP-0041 (fungible) and SEP-0050 (NFT) use the same `["transfer",
 /// Address(from), Address(to)]` topic pattern for transfer/mint/burn events
-/// — only the data payload differentiates them. Task 0118 Patch C narrows
-/// this filter to a **whitelist** of conventional NFT `token_id` types so
-/// fungible transfers stop emitting NFT candidate events at the source.
+/// — only the data payload differentiates them. The payload type alone
+/// **cannot** reliably tell NFT from fungible: real mainnet NFTs (e.g. the
+/// James Bachini SEP-39 collection `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`
+/// — confirmed live 2026-05-13 via `stellar contract fetch`) use `i128`
+/// for `token_id` (SEP-39 / ERC-721 style), and SEP-41 fungible transfers
+/// use `i128` for `amount`. **Both shapes are observed on mainnet.**
 ///
-/// Spec basis for rejecting `i128` / `u128`:
+/// Task 0118 originally tried a Patch C whitelist (rejecting `i128`/`u128`
+/// at the parser) but that approach silently drops legitimate SEP-39 NFTs
+/// — the 2026-05-12 CH pilot audit sample didn't contain one so the
+/// false-negative wasn't visible in measurement; the 2026-05-13 pre-audit
+/// re-test against live mainnet RPC found one. **Patch C was reverted.**
 ///
-/// - **SEP-41** (token interface): `amount` is consistently `i128` across
-///   `transfer`, `transfer_from`, `balance`, `burn`, `approve`, `allowance`.
-///   No exceptions.
-/// - **SEP-50** (non-fungible tokens): `token_id` is defined as an "unsigned
-///   integer" — explicitly excludes signed `i128`.
-/// - **OpenZeppelin Stellar** (de-facto reference NFT impl): the
-///   `NonFungibleToken` trait uses `u32` for every `token_id` parameter
-///   (`owner_of`, `transfer`, `transfer_from`, `approve`, `get_approved`,
-///   `token_uri`).
-/// - **Stellar Discussion #1674** (SEP-50 design history): debated
-///   `u32` / `u128` / `u256` / `String` — zero arguments for `i128`.
+/// Authoritative NFT-vs-fungible discrimination lives downstream, at
+/// persist time, via the WASM-spec-based classifier
+/// (`xdr_parser::classify_contract_from_wasm_spec` + the persist routing
+/// in `crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`):
 ///
-/// Trade-off: rejects a hypothetical legit NFT contract that uses `i128`
-/// for `token_id` (would be SEP-50-non-compliant). The `debug!` log
-/// (target `xdr_parser::nft`) records every rejection so such cases can
-/// be enumerated on demand without flooding production logs — fungible
-/// transfers are high-volume and warn-level emission would dominate the
-/// log stream. As of the 2026-05-12 CH pilot audit, zero such contracts
-/// observed in the 15.7k-ledger sample (every `i128` token_id was a
-/// fungible amount, 99.4% misclassification rate without the whitelist).
+/// - `Fungible` / `Token` (SAC) verdict → row dropped before INSERT.
+/// - `Nft` verdict → row to hot `nfts` table.
+/// - `Other` / NULL verdict → row to `nfts_pending` quarantine
+///   (task 0217), promoted on later WASM observation.
 ///
-/// Accepts the conventional NFT `token_id` shapes per SEP-50 + OpenZeppelin:
-/// `u32` (OpenZeppelin canonical), `u64` / `i64` / `i32` (collection-scale
-/// numeric ids), `bytes` (hash-style ids), `string` (slug-style ids),
-/// `address` (account-keyed ids).
+/// This function therefore only rejects clearly non-token shapes (void,
+/// maps, vecs, errors). Everything else is forwarded for the classifier
+/// to judge.
 fn looks_like_token_id(data: &Value) -> bool {
     let type_str = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-    // Explicit reject for fungible amount types. Logged at `debug` so the
-    // signal is reachable on demand without flooding production logs —
-    // rejections happen per fungible-transfer event (~hundreds of
-    // thousands per backfill window for SAC alone), and they are the
-    // expected post-Patch-C path, not an anomaly. If a legit
-    // i128-token_id NFT contract ever appears, raise the level with
-    // `RUST_LOG=xdr_parser::nft=debug` to enumerate the contracts and
-    // extend the whitelist.
-    if matches!(type_str, "i128" | "u128") {
-        debug!(
-            target: "xdr_parser::nft",
-            token_id_type = type_str,
-            "rejected i128/u128 token_id candidate — SEP-41 amount type, not a valid SEP-50 NFT id (task 0118 Patch C)"
-        );
-        return false;
-    }
-
-    matches!(
-        type_str,
-        "u32" | "u64" | "i64" | "i32" | "bytes" | "string" | "address"
-    )
+    !matches!(type_str, "void" | "map" | "vec" | "error")
 }
 
 /// Extract a symbol string from a tagged ScVal JSON topic.
@@ -318,21 +290,36 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_i128_transfer_per_patch_c() {
-        // Task 0118 Patch C: the parser now applies a whitelist on the
-        // event data payload — `i128` and `u128` are explicitly rejected
-        // because per SEP-41 they are the canonical fungible `amount`
-        // type, and per SEP-50 + OpenZeppelin the NFT `token_id` is an
-        // unsigned integer (canonically `u32`). The whitelist trades a
-        // theoretical false-negative for a SEP-50-non-compliant NFT
-        // contract using `i128` for `token_id` against the empirically
-        // observed false-positive rate (CH pilot audit 2026-05-12:
-        // 99.4% of `nfts` rows were misclassified fungible transfers,
-        // zero legit `i128`-token_id NFTs in the 15.7k-ledger sample).
+    fn parser_emits_i128_transfer_as_nft_candidate() {
+        // The parser is deliberately permissive on the `i128` payload
+        // because BOTH legit SEP-39 NFTs (e.g. mainnet collection
+        // `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`
+        // — confirmed via `stellar contract fetch` on 2026-05-13) AND
+        // SEP-41 fungible transfers use `i128` as their payload shape.
+        // The two cases cannot be distinguished by the event payload
+        // alone — only by inspecting the contract's WASM interface for
+        // NFT-specific functions (`owner_of`, `token_uri`,
+        // `approve_for_all`, …).
         //
-        // If such a contract ever appears, the `debug!` log (target
-        // `xdr_parser::nft`) records every rejection and the whitelist
-        // can be extended.
+        // The 0118 Patch C whitelist that briefly rejected `i128` /
+        // `u128` at this layer was reverted (2026-05-13) after the
+        // pre-audit re-test against live mainnet RPC found a real
+        // SEP-39 NFT using `i128` for `token_id` — confirming that
+        // discrimination MUST be WASM-signature-based.
+        //
+        // The authoritative NFT-vs-fungible decision lives in the
+        // persist-time filter
+        // (`crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`),
+        // which reads `soroban_contracts.contract_type` populated by
+        // `xdr_parser::classify_contract_from_wasm_spec` when the WASM
+        // upload is observed. A `Fungible` / `Token`-classified contract's
+        // rows are dropped before reaching `nfts`; an `Nft`-classified
+        // contract's rows go to the hot `nfts` table; `Other` / NULL go
+        // to the `nfts_pending` quarantine (task 0217), to be promoted
+        // when a later WASM upload flips the verdict.
+        //
+        // This test guards the parser contract: `i128` data must
+        // produce an `NftEvent` so the filter has something to inspect.
         let event = make_event(
             "CABC123",
             vec![
@@ -344,130 +331,8 @@ mod tests {
         );
 
         let nft_events = detect_nft_events(&[event]);
-        assert!(
-            nft_events.is_empty(),
-            "Patch C must reject i128 transfer payloads at the parser; \
-             found {} events",
-            nft_events.len()
-        );
-    }
-
-    #[test]
-    fn parser_rejects_u128_transfer_per_patch_c() {
-        // Symmetric to `i128` — `u128` is not a SEP-50 token_id shape and
-        // is rejected by the whitelist.
-        let event = make_event(
-            "CABC123",
-            vec![
-                json!({"type": "sym", "value": "transfer"}),
-                json!({"type": "address", "value": "GFROM..."}),
-                json!({"type": "address", "value": "GTO..."}),
-            ],
-            json!({"type": "u128", "value": "5"}),
-        );
-
-        let nft_events = detect_nft_events(&[event]);
-        assert!(nft_events.is_empty());
-    }
-
-    #[test]
-    fn whitelist_accepts_u32_token_id() {
-        // OpenZeppelin Stellar `NonFungibleToken` canonical shape.
-        let event = make_event(
-            "CABC123",
-            vec![
-                json!({"type": "sym", "value": "transfer"}),
-                json!({"type": "address", "value": "GFROM..."}),
-                json!({"type": "address", "value": "GTO..."}),
-            ],
-            json!({"type": "u32", "value": 42}),
-        );
-        let nft_events = detect_nft_events(&[event]);
         assert_eq!(nft_events.len(), 1);
-    }
-
-    #[test]
-    fn whitelist_accepts_u64_token_id() {
-        let event = make_event(
-            "CABC123",
-            vec![
-                json!({"type": "sym", "value": "transfer"}),
-                json!({"type": "address", "value": "GFROM..."}),
-                json!({"type": "address", "value": "GTO..."}),
-            ],
-            json!({"type": "u64", "value": "42"}),
-        );
-        let nft_events = detect_nft_events(&[event]);
-        assert_eq!(nft_events.len(), 1);
-    }
-
-    #[test]
-    fn whitelist_accepts_i32_and_i64_token_ids() {
-        for ty in ["i32", "i64"] {
-            let event = make_event(
-                "CABC123",
-                vec![
-                    json!({"type": "sym", "value": "transfer"}),
-                    json!({"type": "address", "value": "GFROM..."}),
-                    json!({"type": "address", "value": "GTO..."}),
-                ],
-                json!({"type": ty, "value": "42"}),
-            );
-            let nft_events = detect_nft_events(&[event]);
-            assert_eq!(
-                nft_events.len(),
-                1,
-                "{ty} should be accepted as a token_id type"
-            );
-        }
-    }
-
-    #[test]
-    fn whitelist_accepts_bytes_string_address_token_ids() {
-        for data in [
-            json!({"type": "bytes", "value": "deadbeef"}),
-            json!({"type": "string", "value": "token-slug-42"}),
-            json!({"type": "address", "value": "CTOKEN..."}),
-        ] {
-            let ty = data
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap()
-                .to_string();
-            let event = make_event(
-                "CABC123",
-                vec![
-                    json!({"type": "sym", "value": "transfer"}),
-                    json!({"type": "address", "value": "GFROM..."}),
-                    json!({"type": "address", "value": "GTO..."}),
-                ],
-                data,
-            );
-            let nft_events = detect_nft_events(&[event]);
-            assert_eq!(
-                nft_events.len(),
-                1,
-                "{ty} should be accepted as a token_id type"
-            );
-        }
-    }
-
-    #[test]
-    fn whitelist_rejects_unknown_data_types() {
-        // Unknown / unhandled scalar types fall outside the whitelist and
-        // are rejected. `bool` is the canonical example — never a token_id
-        // shape in either SEP-50 or the OpenZeppelin trait.
-        let event = make_event(
-            "CABC123",
-            vec![
-                json!({"type": "sym", "value": "transfer"}),
-                json!({"type": "address", "value": "GFROM..."}),
-                json!({"type": "address", "value": "GTO..."}),
-            ],
-            json!({"type": "bool", "value": true}),
-        );
-        let nft_events = detect_nft_events(&[event]);
-        assert!(nft_events.is_empty());
+        assert_eq!(nft_events[0].event_kind, "transfer");
     }
 
     #[test]

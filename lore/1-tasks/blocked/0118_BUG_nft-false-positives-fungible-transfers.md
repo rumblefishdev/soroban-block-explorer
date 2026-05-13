@@ -185,6 +185,40 @@ history:
       quarantine table — architectural follow-up). After the dry-run
       runs and the sanity probe returns 0 unclassified-with-NFT-rows,
       archive this task.
+  - date: '2026-05-13'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      **Patch C reverted in PR #180** (same branch as 0217 quarantine
+      implementation). The 2026-05-13 pre-audit re-test against live
+      mainnet RPC discovered a real SEP-39 NFT
+      (Bachini `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`,
+      `SorobanNFT`/`SBN`) using `i128` for `token_id` — Patch C's
+      whitelist would have silently dropped this legitimate NFT.
+      Audit team's stated principle ("discrimination MUSI być po WASM
+      signature, NIE po payload type") is correct; Patch C contradicted
+      it.
+
+      Parser `looks_like_token_id` is back to its pre-2026-05-12
+      permissive blacklist (`!void|map|vec|error`). The
+      Patch-C-specific tests (`parser_rejects_i128_transfer_per_patch_c`
+      + the 5 `whitelist_accepts_*` tests) were removed and the
+      original `parser_emits_i128_transfer_as_nft_candidate` was
+      restored with an updated docstring referencing the Bachini
+      mainnet example. The Phase 3 cleanup runbook
+      (`docs/runbooks/0118_phase3_cleanup_nfts.md`) is unchanged — it
+      still drops legacy `Fungible`/`Token`-classified rows from
+      `nfts` post-backfill.
+
+      Implication for this task: the "Phase 1.5" deliverable is
+      retracted. Phase 1 (classifier function, PR #104) + Phase 2
+      (persist cache + filter, PR #110) + Phase 3 SQL cleanup are the
+      shipped deliverables; the architectural follow-up for the
+      `Other`/NULL bucket is **task 0217**'s quarantine pattern
+      (proper WASM-spec-based discrimination at persist time, not
+      payload-type discrimination at parser time). ADR 0046 documents
+      the revert with the empirical evidence (Alternative 4 flipped
+      from "ACCEPTED AS COMPLEMENT" to "REJECTED").
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -470,17 +504,30 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
       and the per-worker cache holds both definitive verdicts after
       the ledger commits.)_
 
-### Phase 1.5 (Patch C — parser whitelist, 2026-05-13)
+### Phase 1.5 (Patch C — parser whitelist, 2026-05-13) — **RETRACTED**
 
-- [x] `looks_like_token_id` narrowed to whitelist of conventional SEP-50 /
-      OpenZeppelin shapes: `u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
-      `address`. _(`crates/xdr-parser/src/nft.rs`)_
-- [x] `i128` and `u128` explicitly rejected with `debug!` log (always
-      SEP-41 fungible amount). Observability path for any future legit
-      i128-token_id NFT contract.
-- [x] Old permissive test `parser_emits_i128_transfer_as_nft_candidate`
-      renamed and inverted → `parser_rejects_i128_transfer_per_patch_c`.
-      Added 5 new whitelist-coverage tests; 16/16 `nft::tests` green.
+Patch C was shipped in PR #178 and reverted on the same day in
+PR #180 after the pre-audit re-test against live mainnet RPC
+discovered a real SEP-39 NFT
+(`CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY` /
+Bachini `SorobanNFT`) using `i128` for `token_id` — the whitelist
+would have silently dropped a legitimate NFT collection. Audit
+team's stated principle ("discrimination MUST be by WASM signature,
+NOT by payload type") is correct; Patch C contradicted it.
+ADR 0046 §Alternative 4 documents the empirical evidence and
+flips the verdict from "ACCEPTED AS COMPLEMENT" to "REJECTED".
+
+The parser is back to its pre-2026-05-12 permissive blacklist
+(`!void|map|vec|error`). The "Phase 1.5" criteria below are
+documented for the historical record only and **do not represent
+the shipped state**.
+
+- [~] ~~`looks_like_token_id` narrowed to whitelist…~~ **REVERTED**
+- [~] ~~`i128` and `u128` explicitly rejected…~~ **REVERTED**
+- [~] ~~Test rename + 5 whitelist-coverage tests…~~ **REVERTED** — the
+  `parser_emits_i128_transfer_as_nft_candidate` test was restored
+  with an updated docstring referencing the Bachini mainnet
+  example as evidence for parser-side permissiveness.
 
 ### Phase 3 (cleanup, 2026-05-13)
 

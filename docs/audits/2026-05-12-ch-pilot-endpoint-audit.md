@@ -71,6 +71,40 @@ Zero `nfts` rows with `name IS NOT NULL`. `token_id` values are amount stroops (
 
 **Frontend impact:** §6.11 NFT list, §6.12 NFT detail/transfers — endpoints unreliable until cleanup + filter strengthen lands.
 
+#### 2026-05-13 follow-up — Bug #3 deeper finding (Patch C revert)
+
+Karol's 2026-05-13 pre-audit re-test against live mainnet RPC
+(via `stellar contract fetch`) found a real, fully-functional NFT
+collection that **uses `i128` for `token_id`**:
+
+- Contract: `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`
+- `name = "SorobanNFT"`, `symbol = "SBN"`
+- Exports `owner_of(token_id: i128)`, `token_uri()`, `token_image()`
+- Author: James Bachini, SEP-39 (older Stellar NFT spec / ERC-721
+  style — `i128` token_ids permitted; SEP-50's
+  "unsigned integer" requirement is the newer convention)
+
+This invalidates the assumption behind PR #178's
+**Patch C parser whitelist** (reject `i128`/`u128` at
+`looks_like_token_id`). The 2026-05-12 audit sample (this document)
+did not contain any SEP-39 NFT — the window was biased to a single
+protocol-25 slice that happened to have no Bachini-style
+collections. Patch C would have silently dropped a legitimate NFT
+collection.
+
+**Revert:** Patch C was reverted in PR #180 (same branch as task
+0217 quarantine implementation). The parser returned to its
+pre-2026-05-12 permissive blacklist (`!void|map|vec|error`). The
+authoritative NFT-vs-fungible discrimination is at persist time, via
+the WASM-spec-based classifier
+(`classify_contract_from_wasm_spec` + `resolve_nft_filter`):
+`Fungible`/`Token` verdicts drop, `Nft` goes to hot tables,
+`Other`/NULL goes to the `nfts_pending` quarantine added by task 0217. ADR 0046 §Alternative 4 documents the full evidence trail.
+
+**Audit team principle (confirmed):** discrimination MUST be by
+WASM signature, NOT by event payload type. The two cases are
+indistinguishable at the payload level.
+
 ## 6 PR #166 anti-patterns confirmed
 
 | #   | Anti-pattern                           | Where manifested                                                                                                                                                                                                                                                                                                                                   |
@@ -98,11 +132,15 @@ Zero `nfts` rows with `name IS NOT NULL`. `token_id` values are amount stroops (
 - ADR 0043 — field allocation rule (indexer vs Lambda 2)
 - ADR 0033 — soroban_events_appearances PG-side fold convention
 - ADR 0034 — soroban_invocations_appearances PG-side fold convention
-- Task 0118 — NFT false positives (Phase 2 done; Phase 3 reactivated 2026-05-12)
+- ADR 0046 — Classifier quarantine tables (spawned 2026-05-13 post-PR-#180; documents the Patch C revert in §Alternative 4)
+- Task 0118 — NFT false positives (Phase 2 done; Phase 3 reactivated 2026-05-12; Patch C shipped + reverted 2026-05-13 — see §E15 follow-up above)
 - Task 0194 — `assets.holder_count` / `total_supply` recompute (PG-only; CH port deferred)
 - Task 0199 — LP analytics (blocked-on-oracle)
 - Task 0207 — CH endpoint queries reference set (this audit's input)
 - Task 0214 — CH initial-snapshot mechanism for account state (spawned 2026-05-12)
 - Task 0215 — LP analytics blocked-endpoint FE-impact doc (spawned 2026-05-12, blocked-by 0199)
+- Task 0217 — `nfts_pending` quarantine tables (spawned 2026-05-13; authoritative architectural fix for the §E15 problem)
 - PR #166 — `/compare-with-stellar-api` skill hardening (6 anti-patterns)
 - PR #175 — CH writer for ADR 0044 pilot schema
+- PR #178 — 0118 Patch C parser whitelist + Phase 3 cleanup runbook (Patch C subsequently reverted in PR #180)
+- PR #180 — 0217 quarantine implementation + 0118 Patch C revert
