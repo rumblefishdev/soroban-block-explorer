@@ -281,6 +281,15 @@ Each anti-pattern or wiring gap discovered → backlog task with `audit-gap` tag
 - [ ] **Docs updated** — this is the task, mark all checked
 - [ ] **API types regenerated** — N/A (audit-only, no code changes expected)
 
+## Step 4 ADR cross-check outcomes
+
+Decision per ADR (recorded here per task plan; full reasoning in audit md §8):
+
+- **ADR 0043 (field allocation):** RE-AFFIRMED without amendment. Per-kind allocation matrix is current; Step 1's 11 list endpoints all trace cleanly through indexer / Lambda 2 / SQL / type-2 paths.
+- **ADR 0029 (abandon parsed-ledger artifacts):** NO AMENDMENT. `runtime_enrichment` umbrella concept lives canonically in `backend-overview.md §4.1` + ADR 0043 Notes (sibling-boundary clause). Amending 0029 would either duplicate that text or stretch its scope unnaturally. Answers 0188's deferred question "until a unified description across both submodules is worth writing" — written, but not in 0029.
+- **ADR 0037 (current schema snapshot):** History entry added (2026-05-13) recording the post-anchor deltas: `20260507120000_drop_nfts_metadata.up.sql` (task 0195 §2d) and `20260428000100_add_endpoint_query_indexes.up.sql` (task 0132, already in ADR 0039). Body left frozen per the 0038 / 0039 delta-not-rewrite pattern.
+- **ADR 0044 (ClickHouse pilot):** NO AMENDMENT. Audit scope Postgres-only; CH parity audit deferred until at least one `/v1/*` handler routes through CH.
+
 ## Step 1 Findings (recorded in-task, not spawned as follow-ups)
 
 Decision 2026-05-13: surface findings here instead of spawning per-finding

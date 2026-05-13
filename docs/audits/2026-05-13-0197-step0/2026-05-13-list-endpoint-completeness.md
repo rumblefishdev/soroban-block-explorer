@@ -458,7 +458,49 @@ For each resource, the detail DTO either **extends** the list DTO (`AssetDetailR
 
 ---
 
-## 8. Outcome
+## 8. Step 4 — ADR cross-check
+
+Per task spec, four ADRs cross-checked against audit findings.
+
+### 8.1 ADR 0043 — field allocation rule
+
+**Verdict:** RE-AFFIRMED without amendment.
+
+- Decision body (§Decision, §Rationale) is current and matches the empirical Step 1 mapping (11/11 list endpoints' field allocation traces correctly to indexer / Lambda 2 / SQL / type-2).
+- Per-kind allocation matrix at §"Per-kind allocation matrix (informative)" (lines 169-187 of the ADR) lists every column-class encountered in Step 1 / 2. No entries need adding or correcting from the audit.
+- Notes §"ADR 0029 boundary" already articulates the sibling boundary between this ADR (write-side type-1 / type-2) and 0029 (read-time XDR fetch). Audit found no docs / code confusion that would warrant re-stating.
+- 0194 §1b / §1c population logic for `assets.total_supply` / `assets.holder_count` confirmed mapping to "List endpoint + on-chain → indexer" (Step 1 Finding F1 is a write-side gap, not an allocation-rule violation).
+
+### 8.2 ADR 0029 — abandon parsed-ledger S3 artifacts, read-time XDR fetch
+
+**Verdict:** NO AMENDMENT required.
+
+Rationale (per task spec "no silent skip"): the umbrella view of `runtime_enrichment` (covering both `stellar_archive`, the original 0029 scope, and `sep1` / `nft_token_uri`, the off-chain detail-only siblings added by tasks 0188 / 0195) is already captured in two evergreen places:
+
+1. **ADR 0043 Notes** explicitly draws the sibling boundary: "ADR 0029 covers the _read-time XDR fetch_ path (E3 / E14 heavy fields from S3). It is a sibling of this ADR's runtime type-2 case, sharing the in-process LRU + fail-soft pattern. ADR 0029 does not need amendment for type-1 write-side concerns; this ADR is the home for those."
+2. **`backend-overview.md` §4.1** lists all three submodules (`stellar_archive`, `sep1`, `nft_token_uri`) under a single "they share the architectural shape (per-request, fail-soft, in-process LRU-cached)" framing — refreshed in this audit (Step 3) to add the `nft_token_uri` submodule and clarify that the API does Soroban RPC at detail time.
+
+The umbrella concept is therefore canonically described at the architecture-doc layer (where any reader looking for the cross-component picture will land first) and pointed to from the field-allocation ADR. Amending 0029 itself would either duplicate that text or stretch the ADR's scope ("abandon parsed-ledger artifacts") into a general type-2 framework, neither of which improves clarity. 0188's original "Out of Scope" deferral ("until a unified description across both submodules is worth writing") is therefore answered: written, but in `backend-overview.md` + ADR 0043, not in 0029.
+
+### 8.3 ADR 0037 — current schema snapshot
+
+**Verdict:** History entry added recording post-anchor deltas (snapshot body unchanged per the 0038 / 0039 frozen-with-delta pattern).
+
+Audit findings reconciled against the 0037 schema dump:
+
+- 0194 introduced **no new columns**: `assets.total_supply` and `assets.holder_count` already exist in `0005_tokens_nfts.sql` (the original schema). 0194 only added the `recompute_asset_aggregates` population logic. No schema-snapshot amendment required.
+- 0195 §2d **dropped** `nfts.metadata JSONB` via migration `20260507120000_drop_nfts_metadata.up.sql`. ADR 0037 §12 (line 388 in this snapshot) still shows the column — recorded as a post-anchor delta in the new history entry rather than rewriting the snapshot body (consistent with the 0038 / 0039 deltas-not-rewrites pattern fmazur left open).
+- 0132 indexes (`20260428000100_add_endpoint_query_indexes.up.sql`) already covered by ADR 0039 delta.
+
+History entry added at 2026-05-13 inside ADR 0037 frontmatter naming both deltas.
+
+### 8.4 ADR 0044 — ClickHouse pilot, parallel store
+
+**Verdict:** NO AMENDMENT required.
+
+Audit scope is **Postgres-only** (Step 1 preamble; CH not wired to the API read-path). The ClickHouse parallel reference set under `endpoint-queries-clickhouse/` (task 0207) was acknowledged in Step 3 via a signpost in `database-schema-overview.md §7.2`. A CH-side equivalence audit is explicitly deferred to a follow-up once at least one `/v1/*` handler routes through ClickHouse; running it now would only verify the 0207 reference SQL against itself.
+
+ADR 0044's "no indexer dual-write, no API read-path changes" framing is intact. No audit-surfaced fact would change its decision.
 
 - **Indexer columns:** 11/11 endpoints pass with three findings (F1, F2, F3) where empirical NULL % deviates from "always populated"; F1 is a known Bug #1 artifact, F2 and F3 are new and recommended for spawn in Step 6.
 - **L2 enrichment columns:** 4/4 wired (`assets.name`, `assets.icon_url`, `nfts.name`, `nfts.media_url` — `nfts.collection_name` reclassified per F4). All flip NULL → sentinel|populated on drain.

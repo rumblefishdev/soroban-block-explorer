@@ -51,6 +51,24 @@ history:
       in the previous entry; matching the 0038 delta-ADR pattern keeps
       that decision deferrable. ADR 0037 §5/§9/§10/§12/§14 record the
       pre-0039 index sets; 0039 §Decision lists the five additions.
+  - date: 2026-05-13
+    status: proposed
+    who: karolkow
+    note: >
+      Audit 0197 Step 4 ADR cross-check — record post-anchor schema
+      deltas not yet captured inline (snapshot-frozen pattern continued
+      per 0038/0039). Two migrations have landed since the
+      `20260424000000` anchor: (1) `20260507120000_drop_nfts_metadata.up.sql`
+      (task 0195 §2d / ADR 0043 detail-only carve-out) dropped the
+      `nfts.metadata JSONB` column shown at §12 line 388 of this
+      snapshot — runtime served via `runtime_enrichment::nft_token_uri`
+      (Soroban RPC `token_uri()` + IPFS gateway, 24h LRU, fail-soft);
+      (2) `20260428000100_add_endpoint_query_indexes.up.sql` (task 0132,
+      already covered by ADR 0039) added the five read-path indexes
+      listed there. No new columns since the anchor — 0194 (`total_supply`,
+      `holder_count` recompute) added population logic only, both
+      columns predate this snapshot (already present in
+      `0005_tokens_nfts.sql`). Body left untouched.
 ---
 
 # ADR 0037: Current schema snapshot — live DB after `operations_appearances` collapse
