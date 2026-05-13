@@ -2,7 +2,7 @@
 id: '0209'
 title: 'Persist crash on parse_error tx with empty source_account'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0190']
 tags: ['indexer', 'persist', 'parse-error', 'robustness']
@@ -22,6 +22,17 @@ history:
       snapshot. The `#[should_panic]` will flip to a happy-path
       assertion once the fix lands. No production occurrences yet
       (0/10.1M rows).
+  - date: 2026-05-13
+    status: active
+    who: karolkow
+    note: >
+      Promoted backlog→active. Reproducer already on
+      `feat/0190-0193` as
+      `persist_integration.rs::parse_error_empty_source_crashes_persist_until_bug_fixed`
+      (DATABASE_URL-gated, asserts exact "unresolved StrKey for
+      transactions.source" message). Plan: Option A sentinel
+      G-strkey in staging.rs; regression test flips reproducer
+      to happy-path assertion.
 ---
 
 # Persist crash on parse_error tx with empty source_account
