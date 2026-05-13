@@ -128,6 +128,26 @@ fn column_order_nfts() {
     );
 }
 
+/// Task 0217 / 0220 — quarantine companion to [`NftRow`]. Same shape;
+/// `clickhouse::Row::COLUMN_NAMES` ordering must stay byte-for-byte in
+/// sync with `init.sql` `nfts_pending` because RowBinary is positional.
+#[test]
+fn column_order_nfts_pending() {
+    assert_columns::<NftPendingRow>(
+        "nfts_pending",
+        &[
+            "contract_id",
+            "token_id",
+            "collection_name",
+            "name",
+            "media_url",
+            "minted_at_ledger",
+            "current_owner_id",
+            "current_owner_ledger",
+        ],
+    );
+}
+
 #[test]
 fn column_order_liquidity_pools() {
     assert_columns::<LiquidityPoolRow>(
@@ -252,6 +272,25 @@ fn column_order_soroban_invocations_appearances() {
 fn column_order_nft_ownership() {
     assert_columns::<NftOwnershipRow>(
         "nft_ownership",
+        &[
+            "contract_id",
+            "token_id",
+            "ledger_sequence",
+            "event_order",
+            "transaction_id",
+            "owner_id",
+            "event_type",
+        ],
+    );
+}
+
+/// Task 0217 / 0220 — quarantine companion to [`NftOwnershipRow`].
+/// Column order must stay byte-for-byte in sync with `init.sql`
+/// `nft_ownership_pending` because RowBinary is positional.
+#[test]
+fn column_order_nft_ownership_pending() {
+    assert_columns::<NftOwnershipPendingRow>(
+        "nft_ownership_pending",
         &[
             "contract_id",
             "token_id",
@@ -731,4 +770,358 @@ fn enum_discriminants_lock_in_with_schema() {
     assert_eq!(ContractEventType::Diagnostic as i16, 2);
     assert_eq!(OperationType::CreateAccount as i16, 0);
     assert_eq!(OperationType::Payment as i16, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Task 0217 / 0220 — NFT routing into hot / pending / drop buckets
+// ---------------------------------------------------------------------------
+
+use domain::NftEventType;
+use xdr_parser::SacOverride;
+use xdr_parser::types::{
+    ContractFunction, ExtractedContractInterface, ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
+};
+
+fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
+    ExtractedNft {
+        contract_id: contract.to_string(),
+        token_id: token.to_string(),
+        collection_name: None,
+        owner_account: None,
+        name: None,
+        media_url: None,
+        minted_at_ledger: Some(10),
+        last_seen_ledger: 10,
+        created_at: 1_700_000_000,
+    }
+}
+
+fn synthetic_nft_event(
+    tx_hash: &str,
+    contract: &str,
+    token: &str,
+    event_order: u16,
+) -> ExtractedNftEvent {
+    ExtractedNftEvent {
+        transaction_hash: tx_hash.to_string(),
+        contract_id: contract.to_string(),
+        token_id: token.to_string(),
+        event_type: NftEventType::Mint,
+        owner_account: None,
+        event_order,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    }
+}
+
+/// Build a minimal `ExtractedContractInterface` that the wasm-spec
+/// classifier reads as `Nft` (OwnerOf is a discriminator function).
+fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
+    ExtractedContractInterface {
+        wasm_hash: wasm_hash_hex.to_string(),
+        functions: vec![ContractFunction {
+            name: "owner_of".into(),
+            doc: String::new(),
+            inputs: vec![],
+            outputs: vec!["Address".into()],
+        }],
+        wasm_byte_len: 256,
+    }
+}
+
+/// Build a minimal `ExtractedContractInterface` that the wasm-spec
+/// classifier reads as `Fungible` (Decimals is a discriminator function).
+fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
+    ExtractedContractInterface {
+        wasm_hash: wasm_hash_hex.to_string(),
+        functions: vec![ContractFunction {
+            name: "decimals".into(),
+            doc: String::new(),
+            inputs: vec![],
+            outputs: vec!["u32".into()],
+        }],
+        wasm_byte_len: 256,
+    }
+}
+
+/// NFT row whose contract was deployed in the same ledger with a
+/// definitive `Nft` wasm-classifier verdict routes into the hot
+/// `nft_rows` bucket and produces zero `nft_pending_rows`.
+#[test]
+fn prepare_routes_nft_classified_contract_to_hot_bucket() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x90);
+    let contract = "C".to_string() + &"A".repeat(55);
+    let wasm_hex = "11".repeat(32);
+
+    let iface = nft_classified_interface(&wasm_hex);
+    let dep = ExtractedContractDeployment {
+        contract_id: contract.clone(),
+        wasm_hash: Some(wasm_hex.clone()),
+        deployer_account: None,
+        deployed_at_ledger: 10,
+        contract_type: ContractType::Other, // parser default; classifier overrides
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    };
+    let nft = synthetic_nft(&contract, "tk1");
+    let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        std::slice::from_ref(&iface),
+        std::slice::from_ref(&dep),
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(
+        staged.nft_rows.len(),
+        1,
+        "Nft-classified contract: row in hot bucket"
+    );
+    assert_eq!(
+        staged.nft_pending_rows.len(),
+        0,
+        "Nft-classified contract: nothing in pending"
+    );
+    assert_eq!(staged.nft_ownership_rows.len(), 1);
+    assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
+
+    // Classifier override visible on the contract row.
+    let contract_row = &staged.contract_rows[0];
+    assert_eq!(contract_row.contract_id, contract);
+    assert_eq!(contract_row.contract_type, Some(ContractType::Nft as i16));
+}
+
+/// NFT row whose contract was deployed in the same ledger with a
+/// definitive `Fungible` verdict is dropped entirely (zero rows in
+/// either bucket). Locks in the filter-time drop semantics.
+#[test]
+fn prepare_drops_nft_row_when_contract_classified_fungible() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x91);
+    let contract = "C".to_string() + &"B".repeat(55);
+    let wasm_hex = "22".repeat(32);
+
+    let iface = fungible_classified_interface(&wasm_hex);
+    let dep = ExtractedContractDeployment {
+        contract_id: contract.clone(),
+        wasm_hash: Some(wasm_hex.clone()),
+        deployer_account: None,
+        deployed_at_ledger: 10,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    };
+    let nft = synthetic_nft(&contract, "tk1");
+    let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        std::slice::from_ref(&iface),
+        std::slice::from_ref(&dep),
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged.nft_rows.is_empty(),
+        "Fungible verdict: NFT row must drop, not route to hot"
+    );
+    assert!(
+        staged.nft_pending_rows.is_empty(),
+        "Fungible verdict: NFT row must drop, not route to pending"
+    );
+    assert!(staged.nft_ownership_rows.is_empty());
+    assert!(staged.nft_ownership_pending_rows.is_empty());
+}
+
+/// NFT row whose contract is NOT deployed in the same ledger (no
+/// classifier verdict accessible at stage time) routes to the
+/// quarantine `nft_pending_rows` bucket. Mirrors PG `Other`/uncached
+/// semantics — CH has no DB access in stage, so prior-ledger
+/// classifications are unreachable here.
+#[test]
+fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x92);
+    let contract = "C".to_string() + &"C".repeat(55);
+    let nft = synthetic_nft(&contract, "tk1");
+    let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert!(
+        staged.nft_rows.is_empty(),
+        "Unclassified contract: nothing in hot"
+    );
+    assert_eq!(
+        staged.nft_pending_rows.len(),
+        1,
+        "Unclassified contract: row in pending bucket"
+    );
+    assert_eq!(staged.nft_ownership_rows.len(), 0);
+    assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Task 0220 — SAC override re-insert (Option A)
+// ---------------------------------------------------------------------------
+
+/// SAC override emits a corrected `SorobanContractRow` with
+/// `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0`. The
+/// matching Pass-2 stub for the same contract_id (would otherwise
+/// arrive via the `assets[].contract_id` reference) is suppressed so
+/// RMT doesn't tie-break nondeterministically on equal version.
+#[test]
+fn prepare_emits_sac_override_contract_row_for_xlm_native() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0xA0);
+
+    // XLM SAC contract_id is the well-known mainnet address; we don't
+    // need to derive it inside the test — `prepare_with_sac_overrides`
+    // receives it ready-made (as the production parse_ledger step
+    // does via `xdr_parser::derive_sac_overrides_from_assets`).
+    let xlm_sac = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+    let overrides = vec![SacOverride {
+        contract_id: xlm_sac.to_string(),
+        identity: SacAssetIdentity::Native,
+    }];
+
+    let staged = stage::prepare_with_sac_overrides(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &overrides,
+    )
+    .expect("prepare_with_sac_overrides");
+
+    // Exactly one row for the SAC contract — the override; no
+    // duplicate Pass-2 stub with the same contract_id.
+    let sac_rows: Vec<&_> = staged
+        .contract_rows
+        .iter()
+        .filter(|r| r.contract_id == xlm_sac)
+        .collect();
+    assert_eq!(sac_rows.len(), 1, "exactly one row emitted for the SAC");
+    let row = sac_rows[0];
+    assert!(row.is_sac, "is_sac flipped to true via override");
+    assert_eq!(row.contract_type, Some(ContractType::Token as i16));
+    assert_eq!(
+        row.wasm_uploaded_at_ledger, 0,
+        "version 0 sentinel — real deploys later win over the stub"
+    );
+}
+
+/// When the same contract is deployed in the current ledger (real
+/// deploy with `is_sac=true` from parser metadata) AND surfaces in
+/// `sac_overrides`, the deploy-time row wins and the override is
+/// suppressed (no duplicate emission). Locks in the dedup precedence.
+#[test]
+fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0xA1);
+
+    let xlm_sac = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+    let dep = ExtractedContractDeployment {
+        contract_id: xlm_sac.to_string(),
+        wasm_hash: None,
+        deployer_account: None,
+        deployed_at_ledger: 10,
+        contract_type: ContractType::Token,
+        is_sac: true,
+        name: None,
+        sac_asset: Some(SacAssetIdentity::Native),
+    };
+    let overrides = vec![SacOverride {
+        contract_id: xlm_sac.to_string(),
+        identity: SacAssetIdentity::Native,
+    }];
+
+    let staged = stage::prepare_with_sac_overrides(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&dep),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &overrides,
+    )
+    .expect("prepare_with_sac_overrides");
+
+    let sac_rows: Vec<&_> = staged
+        .contract_rows
+        .iter()
+        .filter(|r| r.contract_id == xlm_sac)
+        .collect();
+    assert_eq!(sac_rows.len(), 1, "deploy-time row preserved, no duplicate");
+    let row = sac_rows[0];
+    assert!(row.is_sac);
+    assert_eq!(
+        row.wasm_uploaded_at_ledger, 10,
+        "real deploy carries the deploy ledger as version"
+    );
 }

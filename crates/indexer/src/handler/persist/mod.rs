@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use tracing::{info, warn};
+use xdr_parser::SacOverride;
 use xdr_parser::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
@@ -102,6 +103,7 @@ pub async fn persist_ledger(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
+    sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), HandlerError> {
     let stage_start = Instant::now();
@@ -121,6 +123,7 @@ pub async fn persist_ledger(
         nft_events,
         lp_positions,
         contract_name_writes,
+        sac_overrides,
     )?;
     let stage_ms = stage_start.elapsed().as_millis();
 

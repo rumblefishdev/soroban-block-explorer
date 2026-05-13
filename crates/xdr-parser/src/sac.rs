@@ -331,7 +331,6 @@ pub fn extract_sac_identities(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{AccountId, AlphaNum4, Asset, AssetCode4};
 
     /// Mainnet network_id is a well-known hex string; drift in SHA2 or
     /// passphrase definition would be caught here before anything else

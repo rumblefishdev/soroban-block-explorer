@@ -103,22 +103,28 @@ the `Other`/NULL bucket. Promotion / drop is wired into the existing
 `reclassify_contracts_from_wasm` UPDATE so the verdict flip and the
 row migration are atomic from any reader's perspective.
 
-Implemented in PR #180 (task 0217):
+Implemented in PR #180 (task 0217) + task 0220 (CH writer parity):
 
 - **Postgres:** full implementation — schema migration
   ([`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`](../../crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql))
   plus writer-side routing (`resolve_nft_filter` returns 4 buckets,
   12c/12d INSERTs, promotion hook in `reclassify_contracts_from_wasm`).
-- **ClickHouse:** **schema-only** — `nfts_pending` +
-  `nft_ownership_pending` exist in
-  [`crates/db-clickhouse/schema/init.sql`](../../crates/db-clickhouse/schema/init.sql)
-  but the CH writer (`crates/db-clickhouse/src/persist/*`) does NOT yet
-  stage or INSERT into either pending table. The CH writer continues
-  to write `nfts` / `nft_ownership` as before. CH writer parity is a
-  follow-up task — it needs a different atomicity model because
-  `ReplacingMergeTree` doesn't support a per-row UPDATE for the
-  promotion hook (would need `ALTER TABLE … DELETE` + `INSERT` or a
-  scheduled materialized view).
+- **ClickHouse:** **full writer implementation (task 0220)** —
+  `nfts_pending` + `nft_ownership_pending` are populated by
+  `crates/db-clickhouse/src/persist/stage.rs::prepare`. The CH stage
+  builds the per-ledger `wasm_classification` map alongside
+  `wasm_interface_metadata` (same path as PG `Staged::prepare`) and
+  routes NFT-candidate rows: `Nft` verdict → hot bucket; `Fungible` /
+  `Token` → drop; `Other` / uncached (no interface in this ledger) →
+  pending bucket. Writer `crates/db-clickhouse/src/persist/writer.rs`
+  carries `Insert<NftPendingRow>` + `Insert<NftOwnershipPendingRow>`
+  slots that lazy-open only on partitions containing at least one
+  `Other`-classified contract. The promotion-hook atomicity gap that
+  motivated the original schema-only carve-out is bridged via
+  **re-emission on next observation** (when the WASM upload lands in
+  a later ledger, the next event from the same contract is staged
+  with the definitive verdict and routes to hot) plus the
+  post-backfill drain runbook for stragglers.
 
 Routing per classifier verdict (post-0217):
 
