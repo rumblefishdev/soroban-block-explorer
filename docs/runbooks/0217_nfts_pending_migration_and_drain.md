@@ -7,7 +7,7 @@
 - **Postgres** — yes for both flows (Initial migration runs in one
   transaction; Drain uses `ON CONFLICT DO NOTHING` + `TRUNCATE`).
 - **ClickHouse** — yes only **after the trailing `OPTIMIZE TABLE …
-  FINAL`** in each flow collapses duplicate parts via the
+FINAL`** in each flow collapses duplicate parts via the
   `ReplacingMergeTree` semantics. A partial rerun after Step 2
   (copy) but before Step 3 (delete) / Step 5 (OPTIMIZE) leaves
   in-flight duplicate parts. Read paths that issue `… FINAL` (or run
@@ -15,7 +15,8 @@
   correct row set, but storage stays inflated until the final
   `OPTIMIZE`. Operators who abort mid-flow should rerun from the
   current step rather than from Step 1.
-  **Frequency:** initial migration runs once per environment on the deploy that ships task 0217; drain runs once per environment after the full Soroban-era backfill completes
+
+**Frequency:** initial migration runs once per environment on the deploy that ships task 0217; drain runs once per environment after the full Soroban-era backfill completes
 
 ---
 
