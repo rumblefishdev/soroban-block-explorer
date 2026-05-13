@@ -669,5 +669,4 @@ mod tests {
             "USDC mainnet SAC contract_id derived from nested auth invocation"
         );
     }
-
 }

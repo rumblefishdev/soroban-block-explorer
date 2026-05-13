@@ -141,7 +141,6 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -379,7 +378,6 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -463,7 +461,6 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -724,7 +721,6 @@ async fn v4_per_op_events_land_in_appearance_index() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -911,7 +907,6 @@ async fn v4_diag_contract_mirror_does_not_inflate_amount() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -1527,7 +1522,6 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -1609,7 +1603,6 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -1739,7 +1732,6 @@ async fn nft_filter_drops_fungible_classified_contract() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -2043,7 +2035,6 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -2128,7 +2119,6 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -2326,7 +2316,6 @@ async fn soroban_fungible_contract_produces_assets_row() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -2462,7 +2451,6 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -2535,7 +2523,6 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_lp_positions,
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -4151,7 +4138,6 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         /* lp_positions        */ &[],
         /* contract_name_writes*/ &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -4288,7 +4274,6 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -4401,7 +4386,6 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await
@@ -4442,7 +4426,6 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &[],
         &[],
         &[],
-        
         &classification_cache,
     )
     .await

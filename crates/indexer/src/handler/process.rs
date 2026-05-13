@@ -373,10 +373,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     // ships, lift this into config. Pure function; cheap enough to run
     // unconditionally (linear in `all_assets.len()`, ≤2 SHA256 per
     // entry).
-    let sac_overrides = xdr_parser::derive_sac_overrides_from_assets(
-        &all_assets,
-        xdr_parser::MAINNET_PASSPHRASE,
-    );
+    let sac_overrides =
+        xdr_parser::derive_sac_overrides_from_assets(&all_assets, xdr_parser::MAINNET_PASSPHRASE);
 
     let parse_ms = parse_timer.elapsed().as_millis();
 

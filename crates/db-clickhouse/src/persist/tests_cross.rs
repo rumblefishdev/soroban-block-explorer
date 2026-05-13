@@ -779,8 +779,7 @@ fn enum_discriminants_lock_in_with_schema() {
 use domain::NftEventType;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
-    ContractFunction, ExtractedContractInterface, ExtractedNft, ExtractedNftEvent,
-    SacAssetIdentity,
+    ContractFunction, ExtractedContractInterface, ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
 };
 
 fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
