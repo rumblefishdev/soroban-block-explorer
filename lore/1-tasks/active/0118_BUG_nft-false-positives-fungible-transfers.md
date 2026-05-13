@@ -131,8 +131,11 @@ history:
       local prototype; ship both as one PR.
 
       Patch C: `looks_like_token_id` now rejects `i128`/`u128`
-      (always SEP-41 fungible amount per spec) with a `warn!` log for
-      observability, and whitelists conventional SEP-50 + OpenZeppelin
+      (always SEP-41 fungible amount per spec) with a `debug!` log
+      (target `xdr_parser::nft`) for on-demand observability — `warn!`
+      would have flooded production logs because fungible transfers are
+      high-volume (XLM SAC alone ≈ 421k events in the audit window).
+      Whitelists conventional SEP-50 + OpenZeppelin
       token_id shapes (`u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
       `address`). Spec basis: SEP-41 amount=i128, SEP-50 token_id =
       unsigned integer, OpenZeppelin Stellar NonFungibleToken trait =
@@ -449,7 +452,7 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
 - [x] `looks_like_token_id` narrowed to whitelist of conventional SEP-50 /
       OpenZeppelin shapes: `u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
       `address`. _(`crates/xdr-parser/src/nft.rs`)_
-- [x] `i128` and `u128` explicitly rejected with `warn!` log (always
+- [x] `i128` and `u128` explicitly rejected with `debug!` log (always
       SEP-41 fungible amount). Observability path for any future legit
       i128-token_id NFT contract.
 - [x] Old permissive test `parser_emits_i128_transfer_as_nft_candidate`

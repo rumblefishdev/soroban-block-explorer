@@ -16,31 +16,41 @@
 --
 -- Cross-store: equivalent script for ClickHouse lives at
 -- `ops/clickhouse/0118_phase3_cleanup_nfts.sql`.
+--
+-- `soroban_contracts.contract_type` is SMALLINT (per ADR 0031 +
+-- `domain::ContractType`). Discriminant mapping (source of truth:
+-- `crates/domain/src/enums/contract_type.rs`):
+--
+--   0 = Token     (SAC, no WASM)
+--   1 = Other     (no usable WASM observed yet — temporary; do not delete)
+--   2 = Nft       (WASM-classified non-fungible)
+--   3 = Fungible  (WASM-classified fungible)
+--
+-- The numeric form is used below; `contract_type_name(contract_type)`
+-- is available if you want labels in ad-hoc inspection but the helper
+-- only exists in PG, so the script keeps the portable numeric form.
 
 BEGIN;
 
--- 1. Sanity probe — how many contracts are still `Other` AND have
+-- 1. Sanity probe — how many contracts are still `Other` (=1) AND have
 --    `nfts` rows? A high count means backfill has not yet observed
---    those contracts' WASM uploads, so a DELETE would either be a
---    no-op (no rows to drop because the cleanup targets fungible/token,
---    not other) or — if we later loosen the predicate — would risk
---    purging genuine NFTs whose WASM has simply not been classified
---    yet. Inspect this number BEFORE the DELETE.
-\echo '== Sanity: contracts still Other with nft rows (should drop to 0 post-full-backfill) =='
+--    those contracts' WASM uploads. Inspect this number BEFORE the
+--    DELETE; it should be ~0 after a full Soroban-era backfill.
+\echo '== Sanity: contracts still Other(=1) with nft rows (should drop to 0 post-full-backfill) =='
 SELECT COUNT(DISTINCT contract_id) AS unclassified_with_nft_rows
   FROM nfts
  WHERE contract_id IN (
      SELECT contract_id FROM soroban_contracts
-      WHERE contract_type = 'other'
+      WHERE contract_type = 1  -- Other
  );
 
--- 2. Count rows about to be removed (fungible / token classifications).
-\echo '== About to delete (fungible / token-classified contracts) =='
+-- 2. Count rows about to be removed (Fungible=3 / Token=0 classifications).
+\echo '== About to delete (Fungible=3 / Token=0 classified contracts) =='
 SELECT COUNT(*) AS rows_to_delete
   FROM nfts
  WHERE contract_id IN (
      SELECT contract_id FROM soroban_contracts
-      WHERE contract_type IN ('fungible', 'token')
+      WHERE contract_type IN (0, 3)  -- Token, Fungible
  );
 
 -- 3. Delete `nft_ownership` rows first (FK to `nfts` may exist depending
@@ -48,14 +58,14 @@ SELECT COUNT(*) AS rows_to_delete
 DELETE FROM nft_ownership
  WHERE contract_id IN (
      SELECT contract_id FROM soroban_contracts
-      WHERE contract_type IN ('fungible', 'token')
+      WHERE contract_type IN (0, 3)  -- Token, Fungible
  );
 
 -- 4. Delete `nfts` rows.
 DELETE FROM nfts
  WHERE contract_id IN (
      SELECT contract_id FROM soroban_contracts
-      WHERE contract_type IN ('fungible', 'token')
+      WHERE contract_type IN (0, 3)  -- Token, Fungible
  );
 
 COMMIT;

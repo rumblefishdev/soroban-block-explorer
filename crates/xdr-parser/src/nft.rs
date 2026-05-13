@@ -9,7 +9,7 @@
 //! both standard ("transfer") and non-standard ("Transfer") conventions.
 
 use serde_json::Value;
-use tracing::warn;
+use tracing::debug;
 
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
@@ -193,11 +193,13 @@ fn try_parse_burn(
 ///   `u32` / `u128` / `u256` / `String` — zero arguments for `i128`.
 ///
 /// Trade-off: rejects a hypothetical legit NFT contract that uses `i128`
-/// for `token_id` (would be SEP-50-non-compliant). The `warn!` log catches
-/// such cases empirically — whitelist can be extended if one ever appears.
-/// As of the 2026-05-12 CH pilot audit, zero such contracts observed in
-/// the 15.7k-ledger sample (every `i128` token_id was a fungible amount,
-/// 99.4% misclassification rate without the whitelist).
+/// for `token_id` (would be SEP-50-non-compliant). The `debug!` log
+/// (target `xdr_parser::nft`) records every rejection so such cases can
+/// be enumerated on demand without flooding production logs — fungible
+/// transfers are high-volume and warn-level emission would dominate the
+/// log stream. As of the 2026-05-12 CH pilot audit, zero such contracts
+/// observed in the 15.7k-ledger sample (every `i128` token_id was a
+/// fungible amount, 99.4% misclassification rate without the whitelist).
 ///
 /// Accepts the conventional NFT `token_id` shapes per SEP-50 + OpenZeppelin:
 /// `u32` (OpenZeppelin canonical), `u64` / `i64` / `i32` (collection-scale
@@ -206,11 +208,16 @@ fn try_parse_burn(
 fn looks_like_token_id(data: &Value) -> bool {
     let type_str = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-    // Explicit reject for fungible amount types. Surface a warn so any
-    // future legit-i128-token_id NFT contract is observable in logs and
-    // can be whitelisted as needed.
+    // Explicit reject for fungible amount types. Logged at `debug` so the
+    // signal is reachable on demand without flooding production logs —
+    // rejections happen per fungible-transfer event (~hundreds of
+    // thousands per backfill window for SAC alone), and they are the
+    // expected post-Patch-C path, not an anomaly. If a legit
+    // i128-token_id NFT contract ever appears, raise the level with
+    // `RUST_LOG=xdr_parser::nft=debug` to enumerate the contracts and
+    // extend the whitelist.
     if matches!(type_str, "i128" | "u128") {
-        warn!(
+        debug!(
             target: "xdr_parser::nft",
             token_id_type = type_str,
             "rejected i128/u128 token_id candidate — SEP-41 amount type, not a valid SEP-50 NFT id (task 0118 Patch C)"
@@ -323,8 +330,9 @@ mod tests {
         // 99.4% of `nfts` rows were misclassified fungible transfers,
         // zero legit `i128`-token_id NFTs in the 15.7k-ledger sample).
         //
-        // If such a contract ever appears, the `warn!` log on rejection
-        // surfaces it and the whitelist can be extended.
+        // If such a contract ever appears, the `debug!` log (target
+        // `xdr_parser::nft`) records every rejection and the whitelist
+        // can be extended.
         let event = make_event(
             "CABC123",
             vec![
