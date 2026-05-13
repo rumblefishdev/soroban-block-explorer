@@ -16,6 +16,9 @@ function makeMonoSx(linked: boolean, fullWidth: boolean): SxProps<Theme> {
     fontWeight: 500,
     lineHeight: 1.4,
     color: (theme) => theme.palette.text.primary,
+    '&:visited': {
+      color: (theme: Theme) => theme.palette.text.primary,
+    },
     textDecoration: 'none',
     display: 'inline-flex',
     alignItems: 'center',

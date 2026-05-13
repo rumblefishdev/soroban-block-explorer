@@ -21,13 +21,11 @@ const StyledButton = styled(IconButton, {
   transition: theme.transitions.create('background-color', {
     duration: theme.transitions.duration.shortest,
   }),
-  ...(copied
-    ? {}
-    : {
-        '&:hover': {
-          backgroundColor: theme.palette.surface.grayHover,
-        },
-      }),
+  '&:hover': {
+    backgroundColor: copied
+      ? theme.palette.surface.primaryMain
+      : theme.palette.surface.grayHover,
+  },
   '&:focus-visible': {
     outline: `2px solid ${theme.palette.stroke.action}`,
     outlineOffset: 2,
