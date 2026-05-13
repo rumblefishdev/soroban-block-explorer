@@ -4014,3 +4014,419 @@ async fn clean_minimal_test_ledger(pool: &PgPool, tx_hash: &str, ledger_seq: u32
     // ledger / transaction / FK-dependent rows need scoped cleanup; the
     // canonical-fixture cleanup wipes the account rows.
 }
+
+// ---------------------------------------------------------------------------
+// Task 0217 — `nfts_pending` quarantine routing + promotion / drop hooks
+// ---------------------------------------------------------------------------
+//
+// Three scenarios share one fixture skeleton:
+//
+// 1. **Other-classified contract** (`quarantine_routes_other_contract_to_pending`)
+//    — no WASM upload in the test ledger → `Other` verdict → NFT row lands
+//    in `nfts_pending`, NOT `nfts`.
+// 2. **Late-WASM promotion** (`quarantine_promotes_pending_to_hot_on_nft_verdict`)
+//    — ledger 1 plants a pending row (no WASM); ledger 2 includes the
+//    NFT-shape WASM → `reclassify_contracts_from_wasm` flips the verdict
+//    and the promotion hook moves the row into `nfts`.
+// 3. **Late-WASM drop** (`quarantine_drops_pending_on_fungible_verdict`)
+//    — ledger 1 plants a pending row; ledger 2 includes a Fungible-shape
+//    WASM → pending row is dropped without ever entering `nfts`.
+
+const QUAR_LEDGER_SEQ_1: u32 = 90_000_301;
+const QUAR_LEDGER_SEQ_2: u32 = 90_000_302;
+const QUAR_CLOSED_AT_1: i64 = 1_777_120_000;
+const QUAR_CLOSED_AT_2: i64 = 1_777_120_300;
+const QUAR_TX_HASH_1: &str = "aaaa551111111111111111111111111111111111111111111111111111111111";
+const QUAR_TX_HASH_2: &str = "aaaa552222222222222222222222222222222222222222222222222222222222";
+const QUAR_LEDGER_HASH_1: &str = "bbbb551111111111111111111111111111111111111111111111111111111111";
+const QUAR_LEDGER_HASH_2: &str = "bbbb552222222222222222222222222222222222222222222222222222222222";
+const QUAR_OTHER_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUAROTHER";
+const QUAR_PROMOTE_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUARPROMOT";
+const QUAR_DROP_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUARDROP";
+const QUAR_OTHER_WASM_HASH: &str =
+    "eeee111111111111111111111111111111111111111111111111111111111111";
+const QUAR_PROMOTE_WASM_HASH: &str =
+    "eeee222222222222222222222222222222222222222222222222222222222222";
+const QUAR_DROP_WASM_HASH: &str =
+    "eeee333333333333333333333333333333333333333333333333333333333333";
+
+/// Test 1 — verdict `Other` (no WASM upload) routes NFT-candidate rows to
+/// `nfts_pending` instead of the hot `nfts` table.
+#[tokio::test]
+async fn quarantine_routes_other_contract_to_pending() {
+    let Some(pool) = connect_or_skip("quarantine routing").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    let (ledger, tx) = quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    // Deploy without including a wasm interface in this ledger → staging
+    // leaves contract_type at the parser's `Other` default.
+    let deployments = vec![deploy_quar(QUAR_OTHER_CONTRACT, QUAR_OTHER_WASM_HASH)];
+    let nfts = vec![nft_row_quar(QUAR_OTHER_CONTRACT, "1", QUAR_LEDGER_SEQ_1)];
+
+    persist_quar(&pool, &ledger, &tx, &[], &deployments, &nfts).await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_OTHER_CONTRACT).await,
+        1,
+        "Other-classified contract → row lands in nfts_pending",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_OTHER_CONTRACT).await,
+        0,
+        "Other-classified contract → no row in hot nfts",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+/// Test 2 — `Other → Nft` verdict flip on a later ledger's WASM upload
+/// promotes the quarantined row into `nfts`.
+#[tokio::test]
+async fn quarantine_promotes_pending_to_hot_on_nft_verdict() {
+    let Some(pool) = connect_or_skip("quarantine promotion").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    // Ledger 1 — deploy without WASM interface → Other → pending.
+    let (ledger1, tx1) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    persist_quar(
+        &pool,
+        &ledger1,
+        &tx1,
+        &[],
+        &[deploy_quar(QUAR_PROMOTE_CONTRACT, QUAR_PROMOTE_WASM_HASH)],
+        &[nft_row_quar(QUAR_PROMOTE_CONTRACT, "1", QUAR_LEDGER_SEQ_1)],
+    )
+    .await;
+    assert_eq!(
+        count_pending_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        1,
+        "ledger 1: pending populated for the future-NFT contract",
+    );
+
+    // Ledger 2 — include the NFT-shape WASM interface so
+    // `reclassify_contracts_from_wasm` flips the verdict; the
+    // promotion hook should move the pending row to `nfts`.
+    let (ledger2, tx2) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_2, QUAR_LEDGER_HASH_2, QUAR_TX_HASH_2);
+    persist_quar(
+        &pool,
+        &ledger2,
+        &tx2,
+        &[iface_with(
+            QUAR_PROMOTE_WASM_HASH,
+            &["owner_of", "transfer"],
+        )],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        0,
+        "ledger 2: pending drained on Other→Nft promotion",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        1,
+        "ledger 2: row promoted into hot nfts",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+/// Test 3 — `Other → Fungible` verdict flip on a later ledger's WASM
+/// upload drops the quarantined row (no promotion to hot).
+#[tokio::test]
+async fn quarantine_drops_pending_on_fungible_verdict() {
+    let Some(pool) = connect_or_skip("quarantine drop").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    // Ledger 1 — Other → pending.
+    let (ledger1, tx1) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    persist_quar(
+        &pool,
+        &ledger1,
+        &tx1,
+        &[],
+        &[deploy_quar(QUAR_DROP_CONTRACT, QUAR_DROP_WASM_HASH)],
+        &[nft_row_quar(QUAR_DROP_CONTRACT, "1", QUAR_LEDGER_SEQ_1)],
+    )
+    .await;
+    assert_eq!(
+        count_pending_for(&pool, QUAR_DROP_CONTRACT).await,
+        1,
+        "ledger 1: pending populated for the future-fungible contract",
+    );
+
+    // Ledger 2 — Fungible-shape interface → reclassify Fungible → drop pending.
+    let (ledger2, tx2) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_2, QUAR_LEDGER_HASH_2, QUAR_TX_HASH_2);
+    persist_quar(
+        &pool,
+        &ledger2,
+        &tx2,
+        &[iface_with(
+            QUAR_DROP_WASM_HASH,
+            &["decimals", "allowance", "transfer"],
+        )],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_DROP_CONTRACT).await,
+        0,
+        "ledger 2: pending dropped on Other→Fungible reclassify",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_DROP_CONTRACT).await,
+        0,
+        "ledger 2: no hot insert — fungible rows are confirmed false positives",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+// --- Task 0217 helpers ----------------------------------------------------
+
+async fn connect_or_skip(label: &str) -> Option<PgPool> {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping {label} test");
+        return None;
+    };
+    match PgPool::connect(&database_url).await {
+        Ok(p) => Some(p),
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping {label} test");
+            None
+        }
+    }
+}
+
+fn quarantine_ledger_tx(
+    seq: u32,
+    ledger_hash: &str,
+    tx_hash: &str,
+) -> (ExtractedLedger, ExtractedTransaction) {
+    let closed_at = if seq == QUAR_LEDGER_SEQ_1 {
+        QUAR_CLOSED_AT_1
+    } else {
+        QUAR_CLOSED_AT_2
+    };
+    (
+        ExtractedLedger {
+            sequence: seq,
+            hash: ledger_hash.to_string(),
+            closed_at,
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        },
+        ExtractedTransaction {
+            hash: tx_hash.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: seq,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: closed_at,
+            parse_error: false,
+        },
+    )
+}
+
+fn deploy_quar(contract_id: &str, wasm_hash: &str) -> ExtractedContractDeployment {
+    ExtractedContractDeployment {
+        contract_id: contract_id.to_string(),
+        wasm_hash: Some(wasm_hash.to_string()),
+        deployer_account: Some(SRC_STRKEY.to_string()),
+        // Re-use ledger-1 seq for the deploy on both passes; the row is
+        // upsert-keyed on contract_id, so the second persist sees the
+        // existing row and only updates contract_type via the reclassify
+        // UPDATE rather than re-inserting.
+        deployed_at_ledger: QUAR_LEDGER_SEQ_1,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    }
+}
+
+fn nft_row_quar(contract_id: &str, token_id: &str, ledger_seq: u32) -> ExtractedNft {
+    ExtractedNft {
+        contract_id: contract_id.to_string(),
+        token_id: token_id.to_string(),
+        collection_name: None,
+        owner_account: Some(DST_STRKEY.to_string()),
+        name: None,
+        media_url: None,
+        minted_at_ledger: Some(ledger_seq),
+        last_seen_ledger: ledger_seq,
+        created_at: QUAR_CLOSED_AT_1,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_quar(
+    pool: &PgPool,
+    ledger: &ExtractedLedger,
+    tx: &ExtractedTransaction,
+    interfaces: &[ExtractedContractInterface],
+    deployments: &[ExtractedContractDeployment],
+    nfts: &[ExtractedNft],
+) {
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_assets: Vec<ExtractedAsset> = Vec::new();
+    let no_nft_events: Vec<ExtractedNftEvent> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        pool,
+        ledger,
+        std::slice::from_ref(tx),
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        interfaces,
+        deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        nfts,
+        &no_nft_events,
+        &no_lp_positions,
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger under quarantine fixture must succeed");
+}
+
+async fn count_pending_for(pool: &PgPool, contract_strkey: &str) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM nfts_pending np
+          JOIN soroban_contracts sc ON sc.id = np.contract_id
+         WHERE sc.contract_id = $1
+        "#,
+    )
+    .bind(contract_strkey)
+    .fetch_one(pool)
+    .await
+    .expect("count nfts_pending")
+}
+
+async fn count_hot_for(pool: &PgPool, contract_strkey: &str) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM nfts n
+          JOIN soroban_contracts sc ON sc.id = n.contract_id
+         WHERE sc.contract_id = $1
+        "#,
+    )
+    .bind(contract_strkey)
+    .fetch_one(pool)
+    .await
+    .expect("count nfts")
+}
+
+async fn clean_quarantine_test(pool: &PgPool) {
+    let contracts = vec![
+        QUAR_OTHER_CONTRACT.to_string(),
+        QUAR_PROMOTE_CONTRACT.to_string(),
+        QUAR_DROP_CONTRACT.to_string(),
+    ];
+    let wasm_hashes: Vec<Vec<u8>> = [
+        QUAR_OTHER_WASM_HASH,
+        QUAR_PROMOTE_WASM_HASH,
+        QUAR_DROP_WASM_HASH,
+    ]
+    .iter()
+    .filter_map(|h| hex::decode(h).ok())
+    .collect();
+    let tx_hashes = [QUAR_TX_HASH_1, QUAR_TX_HASH_2];
+    let ledger_seqs = [QUAR_LEDGER_SEQ_1, QUAR_LEDGER_SEQ_2];
+
+    // Drop NFT-bearing rows first (FK fan-out from the contracts), then
+    // ledger/tx scaffold, then the contracts + wasm metadata.
+    let _ = sqlx::query(
+        r#"DELETE FROM nft_ownership_pending WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        r#"DELETE FROM nfts_pending WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        r#"DELETE FROM nfts WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = ANY($1)")
+        .bind(&contracts)
+        .execute(pool)
+        .await;
+    if !wasm_hashes.is_empty() {
+        let _ =
+            sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = ANY($1::BYTEA[])")
+                .bind(&wasm_hashes)
+                .execute(pool)
+                .await;
+    }
+}

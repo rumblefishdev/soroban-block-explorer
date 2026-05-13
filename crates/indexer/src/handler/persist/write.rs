@@ -241,10 +241,17 @@ pub(super) async fn reclassify_contracts_from_wasm(
     }
     let mut hashes: Vec<Vec<u8>> = Vec::new();
     let mut types: Vec<ContractType> = Vec::new();
+    let mut hashes_nft: Vec<Vec<u8>> = Vec::new();
+    let mut hashes_fungible: Vec<Vec<u8>> = Vec::new();
     for (hash, &ty) in &staged.wasm_classification {
         if matches!(ty, ContractType::Nft | ContractType::Fungible) {
             hashes.push(hash.to_vec());
             types.push(ty);
+            match ty {
+                ContractType::Nft => hashes_nft.push(hash.to_vec()),
+                ContractType::Fungible => hashes_fungible.push(hash.to_vec()),
+                _ => unreachable!("matched above"),
+            }
         }
     }
     if hashes.is_empty() {
@@ -265,6 +272,168 @@ pub(super) async fn reclassify_contracts_from_wasm(
     .bind(&types)
     .execute(&mut **db_tx)
     .await?;
+
+    // Task 0217 — quarantine promotion / drop.
+    //
+    // The UPDATE above just flipped some contracts' verdicts from
+    // whatever they were (typically `Other`) to a definitive `Nft` /
+    // `Fungible`. Any rows we previously routed to the quarantine for
+    // those contracts must now move:
+    //
+    // - `Nft`      → promote `nfts_pending` / `nft_ownership_pending`
+    //                rows into the hot tables (`nfts` / `nft_ownership`).
+    // - `Fungible` → drop the pending rows; they were never NFTs.
+    //
+    // We over-select slightly (contracts whose verdict was *already* Nft
+    // before this ledger also come back from the SELECT), but for those
+    // contracts the quarantine is empty by construction — the helpers
+    // are no-ops in that case. Cheaper than carrying a per-row
+    // "was changed" bit out of the UPDATE.
+    if !hashes_nft.is_empty() {
+        let nft_ids: Vec<i64> = sqlx::query_scalar(
+            r#"
+            SELECT sc.id FROM soroban_contracts sc
+             WHERE sc.wasm_hash = ANY($1::BYTEA[])
+               AND sc.contract_type = 2  -- Nft
+            "#,
+        )
+        .bind(&hashes_nft)
+        .fetch_all(&mut **db_tx)
+        .await?;
+        promote_pending_nfts_to_hot(db_tx, &nft_ids).await?;
+    }
+    if !hashes_fungible.is_empty() {
+        let fungible_ids: Vec<i64> = sqlx::query_scalar(
+            r#"
+            SELECT sc.id FROM soroban_contracts sc
+             WHERE sc.wasm_hash = ANY($1::BYTEA[])
+               AND sc.contract_type = 3  -- Fungible
+            "#,
+        )
+        .bind(&hashes_fungible)
+        .fetch_all(&mut **db_tx)
+        .await?;
+        drop_pending_nfts_for_contracts(db_tx, &fungible_ids).await?;
+    }
+
+    Ok(())
+}
+
+/// Task 0217 — move quarantined rows for `contract_ids` into the hot
+/// `nfts` / `nft_ownership` tables. Called after
+/// [`reclassify_contracts_from_wasm`] flips a contract's verdict to
+/// `Nft` and the pending rows are now known to be legitimate NFTs.
+///
+/// Ordering matters: insert `nfts` first, then `nft_ownership` (which
+/// joins on the just-inserted `nfts.id`), then delete from the
+/// `_pending` tables (ownership first to keep the natural-key join
+/// well-defined throughout). All four statements run inside the caller's
+/// transaction.
+async fn promote_pending_nfts_to_hot(
+    db_tx: &mut Transaction<'_, Postgres>,
+    contract_ids: &[i64],
+) -> Result<(), HandlerError> {
+    if contract_ids.is_empty() {
+        return Ok(());
+    }
+
+    // 1. Move nfts_pending → nfts. Mirrors the hot-path 12a upsert so
+    //    a contract that already had Nft rows (e.g. partial replay)
+    //    gets a consistent merge instead of a row-skip.
+    sqlx::query(
+        r#"
+        INSERT INTO nfts (
+            contract_id, token_id, collection_name, name, media_url,
+            minted_at_ledger, current_owner_id, current_owner_ledger
+        )
+        SELECT contract_id, token_id, collection_name, name, media_url,
+               minted_at_ledger, current_owner_id, current_owner_ledger
+          FROM nfts_pending
+         WHERE contract_id = ANY($1::BIGINT[])
+        ON CONFLICT (contract_id, token_id) DO UPDATE SET
+          collection_name = COALESCE(EXCLUDED.collection_name, nfts.collection_name),
+          name            = COALESCE(EXCLUDED.name, nfts.name),
+          media_url       = COALESCE(EXCLUDED.media_url, nfts.media_url),
+          minted_at_ledger = COALESCE(nfts.minted_at_ledger, EXCLUDED.minted_at_ledger),
+          current_owner_id = CASE
+              WHEN EXCLUDED.current_owner_ledger > COALESCE(nfts.current_owner_ledger, 0)
+              THEN EXCLUDED.current_owner_id
+              ELSE nfts.current_owner_id
+          END,
+          current_owner_ledger = GREATEST(
+              COALESCE(nfts.current_owner_ledger, 0), COALESCE(EXCLUDED.current_owner_ledger, 0)
+          )
+        "#,
+    )
+    .bind(contract_ids)
+    .execute(&mut **db_tx)
+    .await?;
+
+    // 2. Move nft_ownership_pending → nft_ownership. Adopts the freshly
+    //    inserted nfts.id via natural-key join on (contract_id,
+    //    token_id). ON CONFLICT covers the partial-replay case where
+    //    the same ownership row was previously persisted.
+    sqlx::query(
+        r#"
+        INSERT INTO nft_ownership (
+            nft_id, transaction_id, owner_id, event_type,
+            ledger_sequence, event_order, created_at
+        )
+        SELECT n.id, op.transaction_id, op.owner_id, op.event_type,
+               op.ledger_sequence, op.event_order, op.created_at
+          FROM nft_ownership_pending op
+          JOIN nfts n ON n.contract_id = op.contract_id AND n.token_id = op.token_id
+         WHERE op.contract_id = ANY($1::BIGINT[])
+        ON CONFLICT (nft_id, created_at, ledger_sequence, event_order) DO NOTHING
+        "#,
+    )
+    .bind(contract_ids)
+    .execute(&mut **db_tx)
+    .await?;
+
+    // 3. Drop the promoted rows from the quarantine. Ownership first
+    //    so the natural-key join on step 2 was still well-defined
+    //    above (irrelevant here because step 2 already ran — but the
+    //    pattern matches the 0118 cleanup runbook for consistency).
+    sqlx::query(
+        r#"
+        DELETE FROM nft_ownership_pending WHERE contract_id = ANY($1::BIGINT[])
+        "#,
+    )
+    .bind(contract_ids)
+    .execute(&mut **db_tx)
+    .await?;
+    sqlx::query(r#"DELETE FROM nfts_pending WHERE contract_id = ANY($1::BIGINT[])"#)
+        .bind(contract_ids)
+        .execute(&mut **db_tx)
+        .await?;
+
+    Ok(())
+}
+
+/// Task 0217 — drop quarantined rows for contracts that just got
+/// classified as `Fungible` (so the pending rows are confirmed false
+/// positives). Mirrors the second half of `promote_pending_nfts_to_hot`
+/// but without the INSERT INTO hot step.
+async fn drop_pending_nfts_for_contracts(
+    db_tx: &mut Transaction<'_, Postgres>,
+    contract_ids: &[i64],
+) -> Result<(), HandlerError> {
+    if contract_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        DELETE FROM nft_ownership_pending WHERE contract_id = ANY($1::BIGINT[])
+        "#,
+    )
+    .bind(contract_ids)
+    .execute(&mut **db_tx)
+    .await?;
+    sqlx::query(r#"DELETE FROM nfts_pending WHERE contract_id = ANY($1::BIGINT[])"#)
+        .bind(contract_ids)
+        .execute(&mut **db_tx)
+        .await?;
     Ok(())
 }
 
@@ -1415,29 +1584,57 @@ async fn upsert_assets_contract_keyed(
 // 12. nfts + nft_ownership
 // ---------------------------------------------------------------------------
 
-/// Task 0118 Phase 2 — resolve every NFT-candidate contract's
-/// classification and decide which `nft_rows` / `nft_ownership_rows`
-/// survive the filter. Returns index vectors into the staged slices.
+/// Result of the persist-time NFT-classification filter (tasks 0118 + 0217).
+///
+/// Indices reference rows in `staged.nft_rows` (the `nfts_*` buckets) and
+/// `staged.nft_ownership_rows` (the `nft_ownership_*` buckets). `hot_*`
+/// indices feed the API-facing `nfts` / `nft_ownership` tables; `pending_*`
+/// indices feed the `nfts_pending` / `nft_ownership_pending` quarantine
+/// tables (task 0217).
+///
+/// Lifecycle clarification:
+///
+/// - Definitive `Fungible` / `Token` verdicts at filter time → row is
+///   dropped here, never enters any bucket.
+/// - Definitive `Nft` → `hot_*` bucket.
+/// - `Other` / uncached → `pending_*` bucket; awaits the
+///   `reclassify_contracts_from_wasm` UPDATE.
+/// - On `Other → Nft` reclassification, the row is promoted to hot.
+/// - On `Other → Fungible` reclassification, the row is dropped from
+///   pending. `Token` (SAC) is classified at deploy time and is **not**
+///   reachable via WASM reclassification, so the promotion hook never
+///   produces an `Other → Token` transition. `Token` contracts are
+///   handled exclusively by the filter-time drop above.
+struct NftFilterDecision {
+    hot_nfts: Vec<usize>,
+    pending_nfts: Vec<usize>,
+    hot_ownership: Vec<usize>,
+    pending_ownership: Vec<usize>,
+}
+
+/// Task 0118 Phase 2 + task 0217 — resolve every NFT-candidate contract's
+/// classification and split `nft_rows` / `nft_ownership_rows` into
+/// hot / pending / drop buckets.
 ///
 /// Flow:
 ///   1. Collect distinct contract_ids referenced by either slice.
 ///   2. Read the per-worker cache; anything it doesn't know needs a DB lookup.
 ///   3. Batch SELECT the misses from `soroban_contracts`.
 ///   4. Populate the cache with definitive non-NULL verdicts; NULL/invalid
-///      rows stay uncached and therefore fall through as "keep" (same as
-///      an `Other` verdict, cleaned up by Phase 3 SQL).
+///      rows stay uncached and therefore fall through as "pending" (same
+///      as an `Other` verdict, drained or promoted in Phase 3 / by the
+///      `reclassify_contracts_from_wasm` promotion hook).
 ///   5. Take one cache snapshot for the candidate set so the per-row
-///      filter loop is lock-free.
-///   6. Decide insert vs skip per-row:
-///      * `Nft`     → insert.
-///      * `Other`   → insert (temporary false positive; Phase 3 SQL
-///        cleans up once backfill has observed every WASM).
-///      * `Token` / `Fungible` → skip.
+///      classification loop is lock-free.
+///   6. Decide bucket per-row:
+///      * `Nft`                 → `hot_*` (API-facing tables).
+///      * `Other` / uncached    → `pending_*` (quarantine; awaits promote).
+///      * `Token` / `Fungible`  → drop (no bucket).
 async fn resolve_nft_filter(
     db_tx: &mut Transaction<'_, Postgres>,
     staged: &Staged,
     cache: &ClassificationCache,
-) -> Result<(Vec<usize>, Vec<usize>), HandlerError> {
+) -> Result<NftFilterDecision, HandlerError> {
     let mut candidate_ids: HashSet<&str> = HashSet::new();
     for r in &staged.nft_rows {
         candidate_ids.insert(r.contract_id.as_str());
@@ -1476,28 +1673,50 @@ async fn resolve_nft_filter(
     // the shared mutex.
     let snapshot = cache.snapshot_for(candidate_ids.iter().copied());
 
-    let keep = |id: &str| -> bool {
+    // 3-way bucket per contract verdict. Definitive `Nft` is the only path
+    // to the hot tables; `Other` / uncached (NULL DB row) goes to the
+    // quarantine tables introduced in task 0217. `Fungible` / `Token`
+    // contracts produce no rows in any bucket.
+    enum Bucket {
+        Hot,
+        Pending,
+        Drop,
+    }
+
+    let bucket = |id: &str| -> Bucket {
         match snapshot.get(id) {
-            Some(ContractType::Token) | Some(ContractType::Fungible) => false,
-            // Nft / Other / uncached → insert. Uncached covers NULL DB rows
-            // and `Other` verdicts we deliberately don't cache.
-            _ => true,
+            Some(ContractType::Token) | Some(ContractType::Fungible) => Bucket::Drop,
+            Some(ContractType::Nft) => Bucket::Hot,
+            // `Other` (cached or just-fetched) and uncached (NULL DB row)
+            // both go to quarantine — `Other` is deliberately not cached
+            // so a later WASM observation can flip the verdict.
+            _ => Bucket::Pending,
         }
     };
 
-    let nft_indices: Vec<usize> = staged
-        .nft_rows
-        .iter()
-        .enumerate()
-        .filter_map(|(i, r)| keep(r.contract_id.as_str()).then_some(i))
-        .collect();
-    let ownership_indices: Vec<usize> = staged
-        .nft_ownership_rows
-        .iter()
-        .enumerate()
-        .filter_map(|(i, r)| keep(r.contract_id.as_str()).then_some(i))
-        .collect();
-    Ok((nft_indices, ownership_indices))
+    let mut decision = NftFilterDecision {
+        hot_nfts: Vec::new(),
+        pending_nfts: Vec::new(),
+        hot_ownership: Vec::new(),
+        pending_ownership: Vec::new(),
+    };
+
+    for (i, r) in staged.nft_rows.iter().enumerate() {
+        match bucket(r.contract_id.as_str()) {
+            Bucket::Hot => decision.hot_nfts.push(i),
+            Bucket::Pending => decision.pending_nfts.push(i),
+            Bucket::Drop => {}
+        }
+    }
+    for (i, r) in staged.nft_ownership_rows.iter().enumerate() {
+        match bucket(r.contract_id.as_str()) {
+            Bucket::Hot => decision.hot_ownership.push(i),
+            Bucket::Pending => decision.pending_ownership.push(i),
+            Bucket::Drop => {}
+        }
+    }
+
+    Ok(decision)
 }
 
 pub(super) async fn upsert_nfts_and_ownership(
@@ -1508,21 +1727,25 @@ pub(super) async fn upsert_nfts_and_ownership(
     tx_ids: &HashMap<String, i64>,
     classification_cache: &ClassificationCache,
 ) -> Result<(), HandlerError> {
-    // Task 0118 Phase 2 — classify every contract referenced by an
-    // NFT-candidate row, dropping rows whose contract is a known
-    // `Fungible` or `Token` (SAC). `Other` rows are preserved (inserted
-    // temporarily; the Phase 3 cleanup SQL sweeps them once a backfill
-    // has observed every WASM upload).
-    let (nft_indices, ownership_indices) =
-        resolve_nft_filter(db_tx, staged, classification_cache).await?;
+    // Task 0118 Phase 2 + task 0217 — classify every contract referenced
+    // by an NFT-candidate row, splitting rows into hot / pending / drop:
+    //
+    // - `Fungible` / `Token` → dropped (no DB write).
+    // - `Nft`                → hot tables (`nfts` / `nft_ownership`).
+    // - `Other` / uncached   → quarantine tables (`nfts_pending` /
+    //                          `nft_ownership_pending`); promoted to hot
+    //                          by `reclassify_contracts_from_wasm` when
+    //                          the WASM upload arrives, or drained by
+    //                          the Phase 3 runbook post-full-backfill.
+    let filter = resolve_nft_filter(db_tx, staged, classification_cache).await?;
 
     // 12a. nfts (watermark-guarded on current_owner_ledger)
     //
     // Iterate the surviving index vector directly — avoids the
     // `Vec<&NftRow>` intermediate allocation proportional to the
     // survivor count.
-    if !nft_indices.is_empty() {
-        for idx_chunk in nft_indices.chunks(CHUNK_SIZE) {
+    if !filter.hot_nfts.is_empty() {
+        for idx_chunk in filter.hot_nfts.chunks(CHUNK_SIZE) {
             let mut contracts: Vec<i64> = Vec::with_capacity(idx_chunk.len());
             let mut token_ids: Vec<String> = Vec::with_capacity(idx_chunk.len());
             let mut collections: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
@@ -1593,8 +1816,8 @@ pub(super) async fn upsert_nfts_and_ownership(
     // 12b. nft_ownership (empty until parser catches up)
     //
     // Iterate surviving indices directly (same allocation win as 12a).
-    if !ownership_indices.is_empty() {
-        for idx_chunk in ownership_indices.chunks(CHUNK_SIZE) {
+    if !filter.hot_ownership.is_empty() {
+        for idx_chunk in filter.hot_ownership.chunks(CHUNK_SIZE) {
             let mut contracts: Vec<i64> = Vec::with_capacity(idx_chunk.len());
             let mut token_ids: Vec<String> = Vec::with_capacity(idx_chunk.len());
             let mut tx_id_vec: Vec<i64> = Vec::with_capacity(idx_chunk.len());
@@ -1644,6 +1867,153 @@ pub(super) async fn upsert_nfts_and_ownership(
                   ) AS t(contract_id, token_id, tx_id, owner_id, event_type, ls, event_order, ca)
                   JOIN nfts n ON n.contract_id = t.contract_id AND n.token_id = t.token_id
                 ON CONFLICT (nft_id, created_at, ledger_sequence, event_order) DO NOTHING
+                "#,
+            )
+            .bind(&contracts)
+            .bind(&token_ids)
+            .bind(&tx_id_vec)
+            .bind(&owners)
+            .bind(&types)
+            .bind(&ls_vec)
+            .bind(&order_vec)
+            .bind(&ca_vec)
+            .execute(&mut **db_tx)
+            .await?;
+        }
+    }
+
+    // 12c. nfts_pending — task 0217 quarantine.
+    //
+    // Same shape as 12a but writes to the `nfts_pending` table and
+    // uses the natural identity `(contract_id, token_id)` directly as
+    // the PK (no SERIAL `id`, no FK to `soroban_contracts` — see the
+    // migration header for rationale). Watermark-guarded same as 12a
+    // so out-of-order events do not overwrite a newer owner.
+    if !filter.pending_nfts.is_empty() {
+        for idx_chunk in filter.pending_nfts.chunks(CHUNK_SIZE) {
+            let mut contracts: Vec<i64> = Vec::with_capacity(idx_chunk.len());
+            let mut token_ids: Vec<String> = Vec::with_capacity(idx_chunk.len());
+            let mut collections: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
+            let mut names: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
+            let mut medias: Vec<Option<String>> = Vec::with_capacity(idx_chunk.len());
+            let mut minted: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
+            let mut owners: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
+            let mut owner_ledgers: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
+
+            for &i in idx_chunk {
+                let r = &staged.nft_rows[i];
+                contracts.push(resolve_contract_id(
+                    contract_ids,
+                    &r.contract_id,
+                    "nft.contract",
+                )?);
+                token_ids.push(r.token_id.clone());
+                collections.push(r.collection_name.clone());
+                names.push(r.name.clone());
+                medias.push(r.media_url.clone());
+                minted.push(r.minted_at_ledger);
+                owners.push(resolve_opt_id(
+                    account_ids,
+                    r.current_owner_str_key.as_deref(),
+                    "nft.owner",
+                )?);
+                owner_ledgers.push(r.current_owner_ledger);
+            }
+
+            sqlx::query(
+                r#"
+                INSERT INTO nfts_pending (
+                    contract_id, token_id, collection_name, name, media_url,
+                    minted_at_ledger, current_owner_id, current_owner_ledger
+                )
+                SELECT * FROM UNNEST(
+                    $1::BIGINT[], $2::VARCHAR[], $3::VARCHAR[], $4::VARCHAR[], $5::TEXT[],
+                    $6::BIGINT[], $7::BIGINT[], $8::BIGINT[]
+                )
+                ON CONFLICT (contract_id, token_id) DO UPDATE SET
+                  collection_name = COALESCE(EXCLUDED.collection_name, nfts_pending.collection_name),
+                  name            = COALESCE(EXCLUDED.name, nfts_pending.name),
+                  media_url       = COALESCE(EXCLUDED.media_url, nfts_pending.media_url),
+                  minted_at_ledger = COALESCE(nfts_pending.minted_at_ledger, EXCLUDED.minted_at_ledger),
+                  current_owner_id = CASE
+                      WHEN EXCLUDED.current_owner_ledger > COALESCE(nfts_pending.current_owner_ledger, 0)
+                      THEN EXCLUDED.current_owner_id
+                      ELSE nfts_pending.current_owner_id
+                  END,
+                  current_owner_ledger = GREATEST(
+                      COALESCE(nfts_pending.current_owner_ledger, 0), COALESCE(EXCLUDED.current_owner_ledger, 0)
+                  )
+                "#,
+            )
+            .bind(&contracts)
+            .bind(&token_ids)
+            .bind(&collections)
+            .bind(&names)
+            .bind(&medias)
+            .bind(&minted)
+            .bind(&owners)
+            .bind(&owner_ledgers)
+            .execute(&mut **db_tx)
+            .await?;
+        }
+    }
+
+    // 12d. nft_ownership_pending — task 0217 quarantine.
+    //
+    // Unlike 12b, the quarantine ownership table uses the natural key
+    // `(contract_id, token_id, ledger_sequence, event_order, created_at)`
+    // directly — no `nft_id` FK to resolve, so no `JOIN nfts` is
+    // required (and would not work anyway: pending ownership rows
+    // belong to contracts that have no row in `nfts`).
+    if !filter.pending_ownership.is_empty() {
+        for idx_chunk in filter.pending_ownership.chunks(CHUNK_SIZE) {
+            let mut contracts: Vec<i64> = Vec::with_capacity(idx_chunk.len());
+            let mut token_ids: Vec<String> = Vec::with_capacity(idx_chunk.len());
+            let mut tx_id_vec: Vec<i64> = Vec::with_capacity(idx_chunk.len());
+            let mut owners: Vec<Option<i64>> = Vec::with_capacity(idx_chunk.len());
+            let mut types: Vec<NftEventType> = Vec::with_capacity(idx_chunk.len());
+            let mut ls_vec: Vec<i64> = Vec::with_capacity(idx_chunk.len());
+            let mut order_vec: Vec<i16> = Vec::with_capacity(idx_chunk.len());
+            let mut ca_vec: Vec<DateTime<Utc>> = Vec::with_capacity(idx_chunk.len());
+
+            for &i in idx_chunk {
+                let r = &staged.nft_ownership_rows[i];
+                let Some(tx_id) = tx_ids.get(&r.tx_hash_hex).copied() else {
+                    continue;
+                };
+                contracts.push(resolve_contract_id(
+                    contract_ids,
+                    &r.contract_id,
+                    "nft_ownership.contract",
+                )?);
+                token_ids.push(r.token_id.clone());
+                tx_id_vec.push(tx_id);
+                owners.push(resolve_opt_id(
+                    account_ids,
+                    r.owner_str_key.as_deref(),
+                    "nft_ownership.owner",
+                )?);
+                types.push(r.event_type);
+                ls_vec.push(r.ledger_sequence);
+                order_vec.push(r.event_order);
+                ca_vec.push(r.created_at);
+            }
+            if contracts.is_empty() {
+                continue;
+            }
+
+            sqlx::query(
+                r#"
+                INSERT INTO nft_ownership_pending (
+                    contract_id, token_id, transaction_id, owner_id,
+                    event_type, ledger_sequence, event_order, created_at
+                )
+                SELECT * FROM UNNEST(
+                    $1::BIGINT[], $2::VARCHAR[], $3::BIGINT[], $4::BIGINT[],
+                    $5::SMALLINT[], $6::BIGINT[], $7::SMALLINT[], $8::TIMESTAMPTZ[]
+                )
+                ON CONFLICT (contract_id, token_id, created_at, ledger_sequence, event_order)
+                  DO NOTHING
                 "#,
             )
             .bind(&contracts)

@@ -801,6 +801,82 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
   `transactions` and a direct FK to `nfts`
 
+### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
+
+```sql
+CREATE TABLE nfts_pending (
+    contract_id           BIGINT       NOT NULL,  -- no FK to soroban_contracts
+    token_id              VARCHAR(256) NOT NULL,
+    collection_name       VARCHAR(256),
+    name                  VARCHAR(256),
+    media_url             TEXT,
+    minted_at_ledger      BIGINT,
+    current_owner_id      BIGINT,                  -- no FK to accounts
+    current_owner_ledger  BIGINT,
+    PRIMARY KEY (contract_id, token_id)
+);
+CREATE INDEX idx_nfts_pending_contract ON nfts_pending(contract_id);
+
+CREATE TABLE nft_ownership_pending (
+    contract_id      BIGINT       NOT NULL,
+    token_id         VARCHAR(256) NOT NULL,
+    transaction_id   BIGINT       NOT NULL,         -- no FK
+    owner_id         BIGINT,                         -- no FK
+    event_type       SMALLINT     NOT NULL,         -- ADR 0031 NftEventType
+    ledger_sequence  BIGINT       NOT NULL,
+    event_order      SMALLINT     NOT NULL,
+    created_at       TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (contract_id, token_id, created_at, ledger_sequence, event_order),
+    CONSTRAINT ck_nft_own_pending_event_type_range CHECK (event_type BETWEEN 0 AND 15)
+);
+CREATE INDEX idx_nft_ownership_pending_contract ON nft_ownership_pending(contract_id);
+```
+
+Purpose:
+
+- isolate NFT-candidate rows whose contract has not yet been definitively
+  classified (verdict `Other` or NULL — no usable WASM observed in any indexed
+  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership`) stay
+  clean by design.
+
+Persist routing (task 0217 Phase B, see
+[`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)):
+
+| Classifier verdict   | Target tables                            |
+| -------------------- | ---------------------------------------- |
+| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                    |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+
+Promotion is wired through the existing `reclassify_contracts_from_wasm`
+UPDATE path (originally task 0118 Phase 2). When a contract's verdict flips
+`Other → Nft`, the quarantine rows move into the hot tables in the same
+transaction; on `Other → Fungible`/`Token` they are dropped without an
+intermediate hot insert. API endpoints (`/v1/nfts*`) never read the
+`_pending` tables.
+
+Design notes:
+
+- **No FKs to `soroban_contracts` / `accounts` / `transactions` / `nfts`** —
+  rows arrive transient and the FK lookup churn has no read-side payoff
+  (the only read is the per-`contract_id` promotion lookup).
+- **No partitioning** — pending is transient; the by-`created_at` range
+  pattern that drives `nft_ownership`'s partitioning has no read-side
+  payoff here.
+- **Minimal indexing** — single `(contract_id)` btree on each table.
+- Natural-key PKs (`(contract_id, token_id)` and
+  `(contract_id, token_id, created_at, ledger_sequence, event_order)`)
+  enable column-projection promotion via `INSERT INTO nfts SELECT …`
+  without needing to resolve a SERIAL `nfts.id`.
+
+Operational lifecycle: see
+[`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)
+for the one-shot migration of existing `Other`/NULL hot rows into the
+quarantine and the post-backfill drain procedure. The decision record
+for the quarantine pattern (alternatives considered, design rationale,
+consequences) lives in
+[ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
+
 ### 4.14 Liquidity Pools
 
 ```sql
