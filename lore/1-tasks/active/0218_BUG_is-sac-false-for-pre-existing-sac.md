@@ -45,6 +45,57 @@ history:
     status: active
     who: stkrolikiewicz
     note: >
+      Cross-reference: Karol's 0197 audit branch carries an
+      independent finding doc for this same bug at
+      `docs/audits/2026-05-13-pre-audit-finding-sac-detection-misses-pre-existing-contracts.md`
+      (will land in the 0197 PR merge). Empirical pin in his doc:
+      pubnet ledgers 50944000..50955110 backfill, contracts
+      `CAS3J7GY…` (XLM SAC), `CCW67TSZ…` (USDC), `CB2XMFB6…` (yBTC),
+      `CDOFW7HN…` (yUSDC) all carried `is_sac=false` until fixed.
+
+      Karol's proposed fix differs in approach: he proposes a single
+      RPC `getLedgerEntry { LedgerKey::ContractData(contract_id,
+      ScVal::LedgerKeyContractInstance) }` per never-before-seen
+      contract, decoded to extract the `ContractIdPreimage::FromAsset`
+      preimage — same plumbing reused for bugs #1, #2, and #4. This
+      task's forward-derive path is **complementary, not alternative**:
+
+      - **Forward-derive (this task)** — free, no RPC. Catches every
+        SAC whose underlying classic / native asset is observed
+        in-window (most SACs in production: XLM, USDC, AQUA, EURC,
+        every asset that ever touches a trustline change in the
+        range).
+      - **RPC fallback (future task)** — one call per first-seen
+        contract that the forward-derive missed. Layered on top so
+        we don't pay RPC cost for the common case.
+
+      **Dependency on Bug #1 fix (task 0219, spawned in the same
+      commit cluster)**: the helper consumes `ExtractedAsset`
+      entries; production `detect_assets` emits only `Sac` +
+      `Soroban` variants today (Karol's Bug #1) — classic-credit
+      assets are never produced from observed trustlines. Until
+      0219 lands, this task's production effect is **zero** (the
+      helper has no input). The integration test passes because the
+      fixture manually injects a `ClassicCredit` ExtractedAsset.
+
+      Sequence to full end-to-end:
+
+      1. Ship this PR (helper + persist routing + tests + docs).
+         Production-inert until step 2.
+      2. Ship 0219 — classic-credit ExtractedAsset emission from
+         trustline observations.
+      3. Production effect kicks in automatically: every observed
+         trustline → classic-credit asset → forward-derived SAC
+         contract_id → skeleton row flipped.
+      4. (Future) RPC fallback for residual SACs whose classic
+         asset never appears via trustlines in-window — separate
+         task, coordinated with the 0214 RPC infrastructure
+         (CH initial-snapshot account state) since both need the
+         same Soroban RPC client layer.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
       Activated parallel to PR #180 (0217 quarantine + 0118 Patch C
       revert). Branch `fix/0218_is-sac-false-for-pre-existing-sac` cut
       from develop. Files touched are disjoint from PR #180's surface
