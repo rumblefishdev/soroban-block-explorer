@@ -125,4 +125,4 @@ Paths that drive through operations / events / pools / assets stay as plain `JOI
 
 - Source: `crates/xdr-parser/src/transaction.rs:115-131` envelope-missing branch of `extract_envelopes` mismatch with `tx_processing`.
 - Other parse_error variants (`envelope_xdr.is_empty()`, `result_xdr.is_empty()`) keep source filled — not affected.
-- Prefer Option A unless wider NULL-source semantics are wanted for other reasons.
+- Final implementation chose Option B (nullable `source_id`) over the originally preferred Option A; see the `Design Decisions › Emerged` entry above for the rationale (semantic accuracy + arch contract from `technical-design-general-overview §5.4` and `xdr-parsing-overview §7.1`).

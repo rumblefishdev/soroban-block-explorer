@@ -41,8 +41,8 @@ Add two `#[ignore]` integration tests that exercise the live enrichment paths
 end-to-end against real-world data:
 
 1. **SEP-1 smoke** — Fetch a known live issuer's stellar.toml, run the full
-   `enrich_and_persist::sep1_assets` flow, assert non-NULL `description`,
-   `home_page`, `icon_url` on the resulting `assets` row.
+   `enrich_and_persist::sep1_assets` flow, assert non-NULL `icon_url` and
+   `name` on the resulting `assets` row.
 2. **NFT metadata smoke** — Fetch a known live NFT collection's
    `token_uri()` metadata, run the full
    `enrich_and_persist::nft_token_uri` flow, assert non-NULL `name`,
@@ -102,8 +102,10 @@ the regression risk doesn't snap back.
   - Picks a known stable issuer (suggestion: `ultrastellar.com` or a
     similarly long-running anchor; final choice during implementation
     after a stability sanity check on a few candidates).
-  - Calls the full `enrich_and_persist::sep1_assets::enrich_asset_icon`
-    (or equivalent public entry point at the time of implementation).
+  - Calls the full `enrich_and_persist::sep1_assets::enrich_asset`
+    (canonical entry point; the example in Step 2 uses the same symbol —
+    if the public function is renamed during implementation, both
+    references update together).
   - Asserts non-NULL `assets.icon_url` and `assets.name` on the resulting
     row.
 - `crates/enrichment-shared/tests/nft_token_uri_real_collection_smoke.rs`
@@ -145,8 +147,9 @@ Spend ~30 min looking at:
   AnchorUSD, MoneyGram — pick one with stable `stellar.toml` and stable
   on-chain footprint).
 - Long-running Soroban NFT collections (look for collections with > 100
-  mints and TOML-listed `image` field; verify the IPFS gateway resolution
-  works for 3-5 random tokens before committing to the choice).
+  mints and a stable `image` field inside the JSON metadata returned by
+  `token_uri()`; verify the IPFS gateway resolution works for 3-5 random
+  tokens before committing to the choice).
 
 Document the choice + rotation policy in the test file headers.
 

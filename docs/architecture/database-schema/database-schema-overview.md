@@ -939,8 +939,9 @@ Design notes:
   **API filter (task 0193):** every pool-surfacing endpoint excludes sentinels
   at two layers. (1) The handler-level `pool_exists()` gate carries
   `created_at_ledger > 0` so per-pool look-ups of a sentinel return 404 before
-  the per-endpoint query runs. (2) Each of the five canonical SQL queries
-  (`18_*.sql` … `23_*.sql`) carries its own sentinel predicate: `18` / `19`
+  the per-endpoint query runs. (2) Each of the five canonical LP SQL queries
+  (`18_*.sql`, `19_*.sql`, `20_*.sql`, `21_*.sql`, `23_*.sql`; `22_*.sql` is
+  `get_search` and unrelated) carries its own sentinel predicate: `18` / `19`
   filter `lp.created_at_ledger > 0` inline (they read `liquidity_pools`
   directly); `20` / `21` / `23` add an `EXISTS (SELECT 1 FROM liquidity_pools
 … WHERE created_at_ledger > 0)` guard. The redundancy is defense-in-depth —

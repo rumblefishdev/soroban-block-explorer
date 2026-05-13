@@ -65,7 +65,7 @@ This is the **per-field correctness** half of the audit pair:
   command output. Answers: "does the pipeline fire end-to-end at
   realistic scale?"
 - **0213 (this task) = Type B (fixture parity)** — manual ingest of
-  5-10 specific known entities, per-field comparison with external
+  5-7 specific known entities, per-field comparison with external
   references. Answers: "are the values correct?"
 
 A passing 0197 with a failing 0213 means: pipeline works, but values are

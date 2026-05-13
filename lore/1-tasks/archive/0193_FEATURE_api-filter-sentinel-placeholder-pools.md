@@ -108,13 +108,13 @@ Frontend lead input recommended.
 
 ## Acceptance Criteria
 
-- [ ] Decision recorded — A vs B
-- [ ] All 5 endpoint queries updated
-- [ ] DTOs updated if option B
-- [ ] Integration tests cover sentinel pool behavior
-- [ ] **Docs updated** per ADR 0032 — endpoint-queries/\*.sql + relevant
+- [x] Decision recorded — A vs B (Option A: hard filter — see history)
+- [x] All 5 endpoint queries updated
+- [x] DTOs updated if option B (N/A — Option A chosen)
+- [x] Integration tests cover sentinel pool behavior
+- [x] **Docs updated** per ADR 0032 — endpoint-queries/\*.sql + relevant
       backend overview sections
-- [ ] No regression on real pool queries
+- [x] No regression on real pool queries
 
 ## Notes
 
