@@ -270,6 +270,7 @@ fn build_simulate_envelope(
 ///   3. Fallback retained for contracts where WASM bytecode is no
 ///      longer reachable via RPC (state-pruning past the retention
 ///      window).
+///
 /// Priority: low — fallback is functional. Optimisation, not
 /// correctness.
 async fn simulate_token_uri_with_fallback(
