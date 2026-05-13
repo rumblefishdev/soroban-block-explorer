@@ -239,6 +239,15 @@ entities:
 - classic LP state → `liquidity_pools` row + `liquidity_pool_snapshots` row +
   `lp_positions` upsert per participating account (asset pair modeled as typed
   `asset_*_type SMALLINT` + code + issuer_id, not JSONB)
+- **classic-credit + native asset entity rows** → `assets` row per distinct
+  `(asset_code, issuer)` pair observed in a `trustline` LedgerEntryChange
+  (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
+  per-ledger singleton emit (`xdr_parser::native_asset_singleton`) — the
+  persist `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.
+  These two paths complement `detect_assets`, which only emits SAC + Soroban
+  variants from observed contract deployments. Without the dedicated
+  classic-credit producer, `account_balances_current` would carry the
+  balances but the entity row never existed (Karol's pre-audit Bug #1).
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.

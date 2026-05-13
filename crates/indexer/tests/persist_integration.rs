@@ -4852,3 +4852,309 @@ async fn clean_quarantine_test(pool: &PgPool) {
                 .await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task 0219 — classic-credit assets + native singleton bootstrap
+// ---------------------------------------------------------------------------
+//
+// Three scenarios:
+//
+// 1. A `ClassicCredit` ExtractedAsset (the shape `detect_classic_credit_assets`
+//    emits for an observed trustline) lands in the `assets` table as
+//    `asset_type=1` keyed on `(asset_code, issuer_id)`.
+// 2. The `native_asset_singleton()` row lands as the unique `asset_type=0`
+//    row; a second persist pass leaves it idempotent (one row total).
+// 3. Pool-share trustlines never produce an asset row — but that
+//    guarantee lives in the parser-side helper, so this file only
+//    exercises the persist contract (1) and (2).
+
+const CC_LEDGER_SEQ: u32 = 90_000_501;
+const CC_CLOSED_AT: i64 = 1_777_122_000;
+const CC_TX_HASH: &str = "aaaa771111111111111111111111111111111111111111111111111111111111";
+const CC_LEDGER_HASH: &str = "bbbb771111111111111111111111111111111111111111111111111111111111";
+// **Synthetic** issuer StrKey + asset code. Earlier drafts of these
+// fixtures pinned the real mainnet USDC issuer
+// (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`) but the
+// per-fixture cleanup runs `DELETE FROM accounts WHERE account_id = $1`,
+// which on a non-ephemeral dev DB would nuke the real-issuer row. The
+// "GAAAAAA…0219ISSUER" StrKey is structurally a valid public-key
+// StrKey (56 chars, `G` prefix) but is never assigned on mainnet,
+// matching the convention the rest of this file uses for synthetic
+// fixtures (see `SRC_STRKEY`, `DST_STRKEY`, `ISSUER_STRKEY`).
+const CC_TEST_ISSUER: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0219ISSUER";
+const CC_TEST_ASSET_CODE: &str = "T0219";
+
+#[tokio::test]
+async fn classic_credit_extracted_asset_lands_in_assets_table() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping classic-credit persist test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping classic-credit persist test");
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_classic_credit_test(&pool).await;
+
+    let ledger = ExtractedLedger {
+        sequence: CC_LEDGER_SEQ,
+        hash: CC_LEDGER_HASH.to_string(),
+        closed_at: CC_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: CC_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: CC_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: CC_CLOSED_AT,
+        parse_error: false,
+    };
+    // Exactly what `detect_classic_credit_assets` would emit for a
+    // single in-window USDC trustline observation.
+    let usdc = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(CC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(CC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+    let native = ExtractedAsset {
+        asset_type: TokenAssetType::Native,
+        asset_code: None,
+        issuer_address: None,
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let cache = ClassificationCache::new();
+    persist_ledger(
+        &pool,
+        &ledger,
+        std::slice::from_ref(&tx),
+        &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+        &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+        &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+        &Vec::<(String, Value)>::new(),
+        &Vec::<ExtractedContractInterface>::new(),
+        &Vec::<ExtractedContractDeployment>::new(),
+        &Vec::<ExtractedAccountState>::new(),
+        &Vec::<ExtractedLiquidityPool>::new(),
+        &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+        &[usdc, native.clone()],
+        &Vec::<ExtractedNft>::new(),
+        &Vec::<ExtractedNftEvent>::new(),
+        &Vec::<ExtractedLpPosition>::new(),
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must accept the classic-credit + native fixture");
+
+    // ── Classic-credit row landed in `assets` with the right identity ──
+    let cc_row: (i16, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT a.asset_type, a.asset_code, acc.account_id
+           FROM assets a
+           LEFT JOIN accounts acc ON acc.id = a.issuer_id
+          WHERE a.asset_type = 1 AND a.asset_code = $1",
+    )
+    .bind(CC_TEST_ASSET_CODE)
+    .fetch_one(&pool)
+    .await
+    .expect("classic-credit row must exist after persist");
+
+    assert_eq!(cc_row.0, 1, "asset_type must be ClassicCredit (=1)");
+    assert_eq!(cc_row.1.as_deref(), Some(CC_TEST_ASSET_CODE));
+    assert_eq!(
+        cc_row.2.as_deref(),
+        Some(CC_TEST_ISSUER),
+        "issuer_id must FK back to the issuer account"
+    );
+
+    // ── Native singleton row landed exactly once ──
+    let native_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
+        .fetch_one(&pool)
+        .await
+        .expect("count native assets");
+    assert_eq!(
+        native_count, 1,
+        "native asset singleton must be present exactly once",
+    );
+
+    clean_classic_credit_test(&pool).await;
+}
+
+#[tokio::test]
+async fn native_singleton_idempotent_across_repeat_persist() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping native singleton idempotency test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!(
+                "DATABASE_URL unreachable ({err}) — skipping native singleton idempotency test"
+            );
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_classic_credit_test(&pool).await;
+
+    let native_only = ExtractedAsset {
+        asset_type: TokenAssetType::Native,
+        asset_code: None,
+        issuer_address: None,
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    // Two persist passes with two different ledger sequences, each
+    // emitting the native singleton. After both, exactly one native
+    // row exists.
+    for (seq, hash, tx_hash) in [
+        (
+            CC_LEDGER_SEQ + 10,
+            "bbbb772222222222222222222222222222222222222222222222222222222222",
+            "aaaa772222222222222222222222222222222222222222222222222222222222",
+        ),
+        (
+            CC_LEDGER_SEQ + 11,
+            "bbbb773333333333333333333333333333333333333333333333333333333333",
+            "aaaa773333333333333333333333333333333333333333333333333333333333",
+        ),
+    ] {
+        let ledger = ExtractedLedger {
+            sequence: seq,
+            hash: hash.to_string(),
+            closed_at: CC_CLOSED_AT + i64::from(seq - CC_LEDGER_SEQ),
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        };
+        let tx = ExtractedTransaction {
+            hash: tx_hash.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: seq,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: CC_CLOSED_AT + i64::from(seq - CC_LEDGER_SEQ),
+            parse_error: false,
+        };
+        let cache = ClassificationCache::new();
+        persist_ledger(
+            &pool,
+            &ledger,
+            std::slice::from_ref(&tx),
+            &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+            &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+            &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+            &Vec::<(String, Value)>::new(),
+            &Vec::<ExtractedContractInterface>::new(),
+            &Vec::<ExtractedContractDeployment>::new(),
+            &Vec::<ExtractedAccountState>::new(),
+            &Vec::<ExtractedLiquidityPool>::new(),
+            &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+            std::slice::from_ref(&native_only),
+            &Vec::<ExtractedNft>::new(),
+            &Vec::<ExtractedNftEvent>::new(),
+            &Vec::<ExtractedLpPosition>::new(),
+            &[],
+            &cache,
+        )
+        .await
+        .expect("persist_ledger must accept the native-singleton fixture");
+    }
+
+    let native_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
+        .fetch_one(&pool)
+        .await
+        .expect("count native assets");
+    assert_eq!(
+        native_count, 1,
+        "two persist passes must still leave exactly one native row",
+    );
+
+    clean_classic_credit_test(&pool).await;
+}
+
+async fn clean_classic_credit_test(pool: &PgPool) {
+    let tx_hashes = [
+        CC_TX_HASH,
+        "aaaa772222222222222222222222222222222222222222222222222222222222",
+        "aaaa773333333333333333333333333333333333333333333333333333333333",
+    ];
+    let ledger_seqs = [CC_LEDGER_SEQ, CC_LEDGER_SEQ + 10, CC_LEDGER_SEQ + 11];
+
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    // Drop just the rows this fixture introduces. Crucially:
+    //
+    // - **Do NOT delete `assets WHERE asset_type = 0`** — the native
+    //   singleton is a persistent fixture seeded by migration
+    //   `20260428000000_seed_native_asset_singleton`; other integration
+    //   tests in this file rely on it. Our parser-side
+    //   `native_asset_singleton()` UPSERTs against `uidx_assets_native`
+    //   on every persist pass, so even if we did remove it, the next
+    //   persist call would reinsert it — but it's safer not to touch
+    //   a shared fixture row at all.
+    // - **Scope the issuer-account cleanup** to the *synthetic* test
+    //   StrKey only (`CC_TEST_ISSUER`); never delete an account by an
+    //   externally-known address.
+    let _ = sqlx::query(
+        "DELETE FROM assets WHERE asset_type = 1 AND asset_code = $1
+                                     AND issuer_id = (SELECT id FROM accounts WHERE account_id = $2)",
+    )
+    .bind(CC_TEST_ASSET_CODE)
+    .bind(CC_TEST_ISSUER)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(CC_TEST_ISSUER)
+        .execute(pool)
+        .await;
+}
