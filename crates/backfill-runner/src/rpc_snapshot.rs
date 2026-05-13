@@ -186,9 +186,9 @@ impl RpcClient {
                 message: err.message,
             });
         }
-        let result = parsed.result.ok_or_else(|| {
-            RpcError::Decode("response missing both `result` and `error`".into())
-        })?;
+        let result = parsed
+            .result
+            .ok_or_else(|| RpcError::Decode("response missing both `result` and `error`".into()))?;
 
         let entries = result.entries.unwrap_or_default();
         let mut out = Vec::with_capacity(entries.len());
@@ -268,10 +268,7 @@ pub fn account_ledger_key(strkey: &str) -> Option<LedgerKey> {
 /// follow-up trustline + asset-aggregate task (Phase 3 in the
 /// 0214 task body) can reuse it.
 #[allow(dead_code)]
-pub fn trustline_ledger_key(
-    account_strkey: &str,
-    asset: TrustLineAsset,
-) -> Option<LedgerKey> {
+pub fn trustline_ledger_key(account_strkey: &str, asset: TrustLineAsset) -> Option<LedgerKey> {
     let pk = match stellar_strkey::ed25519::PublicKey::from_string(account_strkey) {
         Ok(pk) => pk,
         Err(err) => {
@@ -280,7 +277,10 @@ pub fn trustline_ledger_key(
         }
     };
     let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
-    Some(LedgerKey::Trustline(LedgerKeyTrustLine { account_id, asset }))
+    Some(LedgerKey::Trustline(LedgerKeyTrustLine {
+        account_id,
+        asset,
+    }))
 }
 
 /// Pure decoder: shape a `LedgerEntryData::Account` into the three

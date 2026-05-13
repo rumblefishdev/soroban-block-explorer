@@ -106,8 +106,7 @@ pub async fn bootstrap_account_state(
     let Some(rpc_url) = rpc_url else {
         info!(
             start,
-            end,
-            "bootstrap_account_state skipped — no --soroban-rpc-url configured"
+            end, "bootstrap_account_state skipped — no --soroban-rpc-url configured"
         );
         return Ok(BootstrapStats::default());
     };
@@ -124,9 +123,7 @@ pub async fn bootstrap_account_state(
     let discovered = accounts.len();
     info!(
         start,
-        end,
-        discovered,
-        "bootstrap_account_state: discovered skeleton accounts"
+        end, discovered, "bootstrap_account_state: discovered skeleton accounts"
     );
     if discovered == 0 {
         return Ok(BootstrapStats {
@@ -145,7 +142,9 @@ pub async fn bootstrap_account_state(
         .iter()
         .filter_map(|a| account_ledger_key(a))
         .collect();
-    stats.rpc_batches = keys.len().div_ceil(crate::rpc_snapshot::MAX_KEYS_PER_REQUEST);
+    stats.rpc_batches = keys
+        .len()
+        .div_ceil(crate::rpc_snapshot::MAX_KEYS_PER_REQUEST);
 
     match rpc.get_ledger_entries(&keys).await {
         Ok(entries) => {
@@ -383,8 +382,16 @@ mod tests {
                 .query(&format!(
                     "ALTER TABLE {tbl} DELETE WHERE \
                      ({} = ? OR {} = ?) {}",
-                    if tbl == "accounts" { "id" } else { "account_id" },
-                    if tbl == "accounts" { "id" } else { "account_id" },
+                    if tbl == "accounts" {
+                        "id"
+                    } else {
+                        "account_id"
+                    },
+                    if tbl == "accounts" {
+                        "id"
+                    } else {
+                        "account_id"
+                    },
                     if tbl == "transaction_participants" {
                         format!("AND ledger_sequence BETWEEN {ledger} AND {ledger}")
                     } else {
@@ -469,8 +476,16 @@ mod tests {
                 .query(&format!(
                     "ALTER TABLE {tbl} DELETE WHERE \
                      ({} = ? OR {} = ?)",
-                    if tbl == "accounts" { "id" } else { "account_id" },
-                    if tbl == "accounts" { "id" } else { "account_id" },
+                    if tbl == "accounts" {
+                        "id"
+                    } else {
+                        "account_id"
+                    },
+                    if tbl == "accounts" {
+                        "id"
+                    } else {
+                        "account_id"
+                    },
                 ))
                 .bind(skel_id)
                 .bind(filled_id)
@@ -529,9 +544,7 @@ mod tests {
             home_domain: Option<String>,
         }
         let acct: AcctReadback = client
-            .query(
-                "SELECT sequence_number, home_domain FROM accounts FINAL WHERE id = ? LIMIT 1",
-            )
+            .query("SELECT sequence_number, home_domain FROM accounts FINAL WHERE id = ? LIMIT 1")
             .bind(id)
             .fetch_one()
             .await
