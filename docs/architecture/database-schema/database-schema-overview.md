@@ -930,6 +930,15 @@ Design notes:
   any subsequent ledger, the 13a UPSERT replaces every dimension field with real
   data. Detection: `WHERE created_at_ledger = 0`. Audit-harness invariant
   `15_liquidity_pools.sql:I6` reports the count as a partial-backfill thermometer.
+  **API filter (task 0193):** every pool-surfacing endpoint excludes sentinels
+  at two layers. (1) The handler-level `pool_exists()` gate carries
+  `created_at_ledger > 0` so per-pool look-ups of a sentinel return 404 before
+  the per-endpoint query runs. (2) Each of the five canonical SQL queries
+  (`18_*.sql` … `23_*.sql`) carries its own sentinel predicate: `18` / `19`
+  filter `lp.created_at_ledger > 0` inline (they read `liquidity_pools`
+  directly); `20` / `21` / `23` add an `EXISTS (SELECT 1 FROM liquidity_pools
+… WHERE created_at_ledger > 0)` guard. The redundancy is defense-in-depth —
+  a future caller bypassing the handler still gets an empty result.
 
 ### 4.15 Liquidity Pool Snapshots
 

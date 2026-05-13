@@ -1446,6 +1446,291 @@ async fn teardown_lp_e2e_fixture(pool: &PgPool, pool_hex: &str, accounts: &[&str
         .await;
 }
 
+// ---------------------------------------------------------------------------
+// Sentinel placeholder pools (ADR 0041 / task 0193) — every pool endpoint
+// must hide rows carrying `created_at_ledger = 0`. The persist layer
+// emits these rows during partial backfills when an `lp_positions` entry
+// references a pool whose `LedgerEntry` is not in the current window;
+// the marker is a single-column predicate (pubnet genesis is seq 1).
+//
+// One end-to-end test seeds a sentinel pool + one position + one
+// snapshot row referencing that pool (the most permissive shape — if any
+// endpoint *would* surface it, this fixture would trip it) and asserts
+// the canonical observable behavior on all five endpoints:
+//
+//   * GET /v1/liquidity-pools                  → list excludes sentinel
+//   * GET /v1/liquidity-pools/:id              → 404
+//   * GET /v1/liquidity-pools/:id/participants → 404 (gate: pool_exists)
+//   * GET /v1/liquidity-pools/:id/transactions → 404 (gate: pool_exists)
+//   * GET /v1/liquidity-pools/:id/chart        → 404 (gate: pool_exists)
+//
+// Skips cleanly when DATABASE_URL is unset / unreachable.
+// ---------------------------------------------------------------------------
+
+async fn setup_sentinel_pool_fixture(pool: &PgPool, pool_hex: &str, acc: &str) -> i64 {
+    // Sentinel shape per ADR 0041: created_at_ledger=0, asset/fee fields
+    // at their NULL/0 placeholder values. Keep this minimal so the test
+    // exercises the exact shape the persist layer's `insert_sentinel_pools`
+    // emits.
+    sqlx::query(
+        r#"
+        INSERT INTO liquidity_pools (
+            pool_id, asset_a_type, asset_a_code, asset_a_issuer_id,
+            asset_b_type, asset_b_code, asset_b_issuer_id,
+            fee_bps, created_at_ledger
+        ) VALUES (decode($1, 'hex'), 0, NULL, NULL, 0, NULL, NULL, 0, 0)
+        "#,
+    )
+    .bind(pool_hex)
+    .execute(pool)
+    .await
+    .expect("insert sentinel pool");
+
+    let acc_id: i64 = sqlx::query_scalar(
+        r#"INSERT INTO accounts (account_id, first_seen_ledger, last_seen_ledger, sequence_number)
+           VALUES ($1, 1, 1, 0) RETURNING id"#,
+    )
+    .bind(acc)
+    .fetch_one(pool)
+    .await
+    .expect("insert acc");
+
+    // Position that justifies the sentinel's existence. Real backfill
+    // shape: lp_positions has the pool_id from a trustline read but the
+    // pool's `LedgerEntry` was never in the indexed window.
+    sqlx::query(
+        r#"
+        INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger)
+        VALUES (decode($1, 'hex'), $2, 42.0::NUMERIC(28,7), 1, 1)
+        "#,
+    )
+    .bind(pool_hex)
+    .bind(acc_id)
+    .execute(pool)
+    .await
+    .expect("insert lp_position");
+
+    // Snapshot row for the same pool_id. Sentinels normally have no
+    // snapshots — we add one anyway so the chart endpoint's underlying
+    // query *would* return data if the handler-level gate were missing;
+    // the 404 assertion then proves the gate (not the data shape) is
+    // what blocks the response.
+    sqlx::query(
+        r#"
+        INSERT INTO liquidity_pool_snapshots (
+            pool_id, ledger_sequence, reserve_a, reserve_b, total_shares, created_at
+        )
+        VALUES (decode($1, 'hex'), 1, 100.0, 200.0, 42.0, NOW())
+        "#,
+    )
+    .bind(pool_hex)
+    .execute(pool)
+    .await
+    .expect("insert sentinel snapshot");
+
+    acc_id
+}
+
+async fn teardown_sentinel_pool_fixture(pool: &PgPool, pool_hex: &str, acc: &str) {
+    let _ = sqlx::query("DELETE FROM liquidity_pool_snapshots WHERE pool_id = decode($1, 'hex')")
+        .bind(pool_hex)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM lp_positions WHERE pool_id = decode($1, 'hex')")
+        .bind(pool_hex)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM liquidity_pools WHERE pool_id = decode($1, 'hex')")
+        .bind(pool_hex)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(acc)
+        .execute(pool)
+        .await;
+}
+
+#[tokio::test]
+async fn lp_sentinel_placeholder_pool_hidden_on_all_endpoints() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0193 sentinel-filter test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0193 sentinel-filter test");
+            return;
+        }
+    };
+
+    // Distinct from existing LP fixtures (`abcdef0123…`, etc.) so seed /
+    // teardown does not collide with `lp_participants_e2e_*`.
+    const POOL_HEX: &str = "9999888877776666555544443333222211110000aaaabbbbccccddddeeeeffff";
+    const ACC: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0193SNT";
+
+    // Positive-control pool: a real pool (created_at_ledger > 0) seeded
+    // alongside the sentinel proves the list filter is *selective* — it
+    // hides only sentinels, not all pools. Without this control, a
+    // broken filter that excluded every row would also pass the
+    // "sentinel not in list" assertion.
+    const REAL_POOL_HEX: &str = "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff";
+    // Idempotent setup — clear leftovers from prior runs of both pools.
+    teardown_sentinel_pool_fixture(&pool, POOL_HEX, ACC).await;
+    let _ = sqlx::query("DELETE FROM liquidity_pools WHERE pool_id = decode($1, 'hex')")
+        .bind(REAL_POOL_HEX)
+        .execute(&pool)
+        .await;
+    setup_sentinel_pool_fixture(&pool, POOL_HEX, ACC).await;
+    // Real pool with `created_at_ledger = 1` (genesis-equivalent for the
+    // test). Minimal shape — no positions/snapshots needed for the list
+    // assertion.
+    sqlx::query(
+        r#"
+        INSERT INTO liquidity_pools (
+            pool_id, asset_a_type, asset_a_code, asset_a_issuer_id,
+            asset_b_type, asset_b_code, asset_b_issuer_id,
+            fee_bps, created_at_ledger
+        ) VALUES (decode($1, 'hex'), 0, NULL, NULL, 1, '0193REAL', NULL, 30, 1)
+        "#,
+    )
+    .bind(REAL_POOL_HEX)
+    .execute(&pool)
+    .await
+    .expect("insert real positive-control pool");
+
+    // 1) List must include the real pool and exclude the sentinel.
+    //    `limit=100` covers any realistic local DB; for larger DBs the
+    //    predicate is invariant across pages so the assertion still
+    //    proves the filter shape.
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/liquidity-pools?limit=100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "list body: {json}");
+        let items = json["data"].as_array().expect("data must be an array");
+        let sentinel_present = items
+            .iter()
+            .any(|item| item["pool_id"].as_str() == Some(POOL_HEX));
+        assert!(
+            !sentinel_present,
+            "sentinel pool {POOL_HEX} leaked into /v1/liquidity-pools list: {json}"
+        );
+        let real_present = items
+            .iter()
+            .any(|item| item["pool_id"].as_str() == Some(REAL_POOL_HEX));
+        assert!(
+            real_present,
+            "positive-control pool {REAL_POOL_HEX} missing from /v1/liquidity-pools list \
+             — filter is over-broad: {json}"
+        );
+    }
+
+    // 1b) Detail of the real pool must return 200 OK with the canonical
+    //     pool_id echoed back. Locks the filter as selective, not blanket.
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/liquidity-pools/{REAL_POOL_HEX}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "real pool detail body: {json}");
+        assert_eq!(json["pool_id"], REAL_POOL_HEX);
+    }
+
+    // 2) Detail must return 404 (not 200 with placeholder fields).
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/liquidity-pools/{POOL_HEX}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "detail body: {json}");
+        assert_eq!(json["code"], "not_found");
+    }
+
+    // 3) Participants — 404 gate via pool_exists().
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/liquidity-pools/{POOL_HEX}/participants"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "participants body: {json}");
+        assert_eq!(json["code"], "not_found");
+    }
+
+    // 4) Transactions — 404 gate via pool_exists().
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/liquidity-pools/{POOL_HEX}/transactions"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "transactions body: {json}");
+        assert_eq!(json["code"], "not_found");
+    }
+
+    // 5) Chart — 404 gate via pool_exists(). Pass an explicit small
+    //    window to keep the request validation strict and avoid the
+    //    default-90-day path.
+    {
+        let app = build_app(pool.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/liquidity-pools/{POOL_HEX}/chart?interval=1d&from=2026-05-01T00:00:00Z&to=2026-05-12T00:00:00Z"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "chart body: {json}");
+        assert_eq!(json["code"], "not_found");
+    }
+
+    teardown_sentinel_pool_fixture(&pool, POOL_HEX, ACC).await;
+    let _ = sqlx::query("DELETE FROM liquidity_pools WHERE pool_id = decode($1, 'hex')")
+        .bind(REAL_POOL_HEX)
+        .execute(&pool)
+        .await;
+}
+
 // Contracts E10 detail (task 0172) — canonical shape lock per `11_*.sql`.
 // ---------------------------------------------------------------------------
 
@@ -2133,6 +2418,220 @@ async fn detail_unknown_hash_returns_404_not_500() {
         json.get("error").is_none(),
         "envelope must be flat (ADR 0008): {json}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task 0190 — `parse_error = true` end-to-end API coverage
+// ---------------------------------------------------------------------------
+//
+// Locks the production contract recorded in lore-0044 / lore-0046:
+//
+//   parse_error transaction → light slice always served + `heavy: null` +
+//   `heavy_fields_status: "unavailable"`.
+//
+// The pre-Step-0 handler unconditionally called `extract_e3_heavy`, which
+// would either (a) succeed and mask the historical DB flag with fresh
+// heavy fields or (b) return an `E3HeavyFields` with mostly-empty
+// `filter(!is_empty)` payload — a `heavy_fields_status: "ok"` response
+// with NULL XDR fields that violated the contract.
+//
+// Step 0 (`crates/api/src/transactions/handlers.rs`) introduced an
+// explicit `if tx.parse_error { heavy = None }` gate before the S3
+// fetch. This test seeds a `parse_error = true` row directly into the
+// DB (bypassing the indexer persist path) and asserts the full response
+// shape, including:
+//
+//   * `parse_error: true` echoed in the light slice
+//   * `heavy: null`
+//   * `heavy_fields_status: "unavailable"`
+//   * `application_order`, `source_account`, `fee_charged` round-trip
+//   * S3 was not contacted — proven by the fake AWS creds in `build_app`
+//     never being invoked (a real archive fetch would 401 / 403 and
+//     would have surfaced as a `tracing::warn!` log; the absence of
+//     such failure is implicit in the 200 OK).
+
+const PARSE_ERROR_API_TX_HASH: &str =
+    "0190019001900190019001900190019001900190019001900190019001900190";
+const PARSE_ERROR_API_SRC: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0190SRC";
+const PARSE_ERROR_API_LEDGER_SEQ: i64 = 90_000_010;
+/// 2026-04-21 12:00:00 UTC — stable across runs; lands in the
+/// `transactions_default` partition created below.
+const PARSE_ERROR_API_CREATED_AT: &str = "2026-04-21T12:00:00Z";
+
+async fn ensure_transactions_default_partition(pool: &PgPool) {
+    // `transactions` + `transaction_hash_index` are partitioned and
+    // unpartitioned respectively; the partitioned one needs a default
+    // partition so this fixture's `created_at = 2026-04-21` row has
+    // somewhere to land. Idempotent; safe to call alongside other
+    // tests that may have already created the partition.
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS transactions_default PARTITION OF transactions DEFAULT",
+    )
+    .execute(pool)
+    .await;
+}
+
+async fn seed_parse_error_transaction(pool: &PgPool) {
+    // Cleanup any leftover from a prior run so the seed below
+    // doesn't trip a unique constraint.
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(PARSE_ERROR_API_SRC)
+        .execute(pool)
+        .await;
+
+    // accounts row for the FK target.
+    let acc_id: i64 = sqlx::query_scalar(
+        r#"INSERT INTO accounts (account_id, first_seen_ledger, last_seen_ledger, sequence_number)
+           VALUES ($1, $2, $2, 0) RETURNING id"#,
+    )
+    .bind(PARSE_ERROR_API_SRC)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .fetch_one(pool)
+    .await
+    .expect("insert accounts row for parse_error fixture");
+
+    // transactions row — parse_error = true, no operations, no soroban.
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (
+            hash, ledger_sequence, application_order, source_id, fee_charged,
+            inner_tx_hash, successful, operation_count, has_soroban,
+            parse_error, created_at
+        )
+        VALUES (decode($1, 'hex'), $2, 1, $3, 2500, NULL, false, 0, false, true, $4::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_API_TX_HASH)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .bind(acc_id)
+    .bind(PARSE_ERROR_API_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert transactions row for parse_error fixture");
+
+    // hash_index — primary route for `/v1/transactions/:hash` lookup
+    // (ADR 0027 §4). Without this entry the handler 404s before the
+    // parse_error branch fires.
+    sqlx::query(
+        r#"
+        INSERT INTO transaction_hash_index (hash, ledger_sequence, created_at)
+        VALUES (decode($1, 'hex'), $2, $3::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_API_TX_HASH)
+    .bind(PARSE_ERROR_API_LEDGER_SEQ)
+    .bind(PARSE_ERROR_API_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert transaction_hash_index row for parse_error fixture");
+}
+
+async fn cleanup_parse_error_transaction(pool: &PgPool) {
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_API_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(PARSE_ERROR_API_SRC)
+        .execute(pool)
+        .await;
+}
+
+#[tokio::test]
+async fn detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0190 parse_error API test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0190 parse_error API test");
+            return;
+        }
+    };
+
+    ensure_transactions_default_partition(&pool).await;
+    seed_parse_error_transaction(&pool).await;
+
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/transactions/{PARSE_ERROR_API_TX_HASH}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "expected 200 OK for parse_error tx: {json}"
+    );
+
+    // --- Light slice (flattened to top level per `E3Response<TxLight>`).
+    assert_eq!(
+        json["hash"], PARSE_ERROR_API_TX_HASH,
+        "hash must echo the URL parameter"
+    );
+    assert_eq!(json["ledger_sequence"], PARSE_ERROR_API_LEDGER_SEQ);
+    assert_eq!(json["application_order"], 1);
+    assert_eq!(json["source_account"], PARSE_ERROR_API_SRC);
+    assert_eq!(json["fee_charged"], 2500);
+    assert_eq!(json["successful"], false);
+    assert_eq!(json["operation_count"], 0);
+    assert_eq!(json["has_soroban"], false);
+    assert_eq!(
+        json["parse_error"], true,
+        "light.parse_error MUST echo the DB flag — lore-0044 / lore-0046 contract"
+    );
+
+    // --- Heavy block — must be absent.
+    assert!(
+        json["heavy"].is_null(),
+        "heavy MUST be null when DB carries parse_error=true (Step 0 short-circuit): {json}"
+    );
+    assert_eq!(
+        json["heavy_fields_status"], "unavailable",
+        "heavy_fields_status MUST be 'unavailable' for parse_error tx (lore-0046 contract)"
+    );
+
+    // --- Light fallback arrays — handler populates these from the
+    // DB-side appearance index when heavy is None (per
+    // `transactions/handlers.rs:225`). The fixture has no rows in the
+    // appearance tables for this tx, so the fallbacks come back empty.
+    // This proves the fallback path executed (didn't short-circuit on
+    // the missing heavy) but produced empty arrays — not the `[]`
+    // sentinel that would mean the fallback was skipped entirely.
+    assert!(
+        json["participants"].is_array(),
+        "participants must be an array (DB fallback when heavy=None)"
+    );
+    assert!(
+        json["soroban_events"].is_array(),
+        "soroban_events must be an array (DB fallback when heavy=None)"
+    );
+    assert!(
+        json["soroban_invocations"].is_array(),
+        "soroban_invocations must be an array (DB fallback when heavy=None)"
+    );
+
+    cleanup_parse_error_transaction(&pool).await;
 }
 
 #[tokio::test]

@@ -397,6 +397,19 @@ inventory.
 These endpoints combine factual current-state reads with historical aggregate reads, so the
 backend should keep raw pool state and chart-series generation concerns clearly separated.
 
+**Sentinel placeholder pools.** During partial / mid-stream backfills, the persist
+layer can emit placeholder rows in `liquidity_pools` to satisfy the
+`lp_positions.pool_id` FK when the parent pool's `LedgerEntry` is not in the
+indexed window — see [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md)
+and the database-schema overview §4.14 "Sentinel placeholder rows". Marker:
+`created_at_ledger = 0` (no real Stellar pool can carry this value — pubnet
+genesis seq is 1). Every pool-surfacing endpoint above hides sentinel rows at
+two layers: the handler-level `pool_exists()` gate filters them (so per-pool
+endpoints return 404), and each of the five canonical SQL queries carries its
+own sentinel predicate (`18` / `19` inline `lp.created_at_ledger > 0`,
+`20` / `21` / `23` an `EXISTS` guard) for defense-in-depth against callers that
+bypass the handler. Task 0193 implements this filter.
+
 #### Search
 
 **`GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`** - Generic
@@ -451,7 +464,13 @@ Two endpoints carry **conditional** logic:
 - `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
   archive overlay merged); Short when archive fetch failed
   (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
-  sooner.
+  sooner. The handler also **short-circuits the archive fetch entirely**
+  for any row carrying `parse_error = true` in the DB (task 0190):
+  re-fetching cannot make a degraded row whole, and serving the row through
+  the unavailable-heavy path preserves the lore-0044 / lore-0046 contract
+  (light slice always returned, heavy explicitly absent). The Short TTL
+  applies in this case as well, so a fix that ever re-parses the row
+  cleanly surfaces within one ledger cycle.
 
 The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
 `infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway

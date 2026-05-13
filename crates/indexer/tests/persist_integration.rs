@@ -3993,6 +3993,391 @@ async fn application_order_min_fold_for_duplicate_identity() {
     clean_minimal_test_ledger(&pool, FOLD_TX_HASH, FOLD_LEDGER_SEQ).await;
 }
 
+// ===========================================================================
+// Task 0190 — `parse_error = true` end-to-end persist coverage
+// ===========================================================================
+//
+// `crates/xdr-parser/src/transaction.rs:115-133` produces partial records
+// with `parse_error = true` when:
+//   (A) `envelope.is_none()` — alignment with `tx_processing` failed;
+//   (B) `envelope_xdr.is_empty()` — `encode_xdr(env, limits)` returned `""`;
+//   (C) `result_xdr.is_empty()` — same shape on the result blob.
+//
+// Variants B + C leave `source_account` populated (envelope was inspected
+// before re-encoding failed). Variant A leaves it empty and currently
+// crashes the persist staging path — tracked in [lore-0209](
+// ../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
+// A live-DB reproducer for the crash lives below as
+// `parse_error_empty_source_crashes_persist_until_bug_fixed`; it
+// asserts the exact staging-layer error message and skips cleanly
+// when `DATABASE_URL` is unset.
+//
+// This test exercises the populated-source path (Variants B / C) so the
+// `parse_error` flag is proven to round-trip from `ExtractedTransaction`
+// into the `transactions.parse_error` BOOLEAN end-to-end, and the per-tx
+// support tables (`participants`, `operations_appearances`, etc.) stay
+// empty for a degraded row. The empty-source variant is left for 0209 to
+// land independently — once 0209 fixes the staging crash, a second test
+// here can exercise the `source_account: ""` shape.
+
+const PARSE_ERROR_LEDGER_SEQ: u32 = 90_000_009;
+const PARSE_ERROR_TX_HASH: &str =
+    "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f00190";
+const PARSE_ERROR_LEDGER_HASH: &str =
+    "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e10190";
+
+fn make_parse_error_ledger() -> ExtractedLedger {
+    ExtractedLedger {
+        sequence: PARSE_ERROR_LEDGER_SEQ,
+        hash: PARSE_ERROR_LEDGER_HASH.to_string(),
+        closed_at: TEST_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    }
+}
+
+/// Shape mirrors the parser output for a Variant B / C parse failure:
+/// envelope was present and inspected (so `source_account` is populated)
+/// but `to_xdr` failed for either the envelope or the result blob, so
+/// both `envelope_xdr` and `result_xdr` are empty. `memo_*` and
+/// `inner_tx_hash` stay populated / `None` per their normal Variant B
+/// path semantics (inspection succeeded; only retention failed).
+///
+/// `parse_ledger` in production skips per-tx parsing (operations, events,
+/// invocations, ledger-entry-change derivation) for `parse_error = true`
+/// — see `crates/indexer/src/handler/process.rs:206-214`. The fixture
+/// here mirrors that contract: no operations / events / invocations /
+/// downstream-derived slices are produced for the degraded tx.
+fn make_parse_error_transaction() -> ExtractedTransaction {
+    ExtractedTransaction {
+        hash: PARSE_ERROR_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: PARSE_ERROR_LEDGER_SEQ,
+        // Non-empty per the 0209 gap noted at the top of this section.
+        // SRC_STRKEY rides through the same accounts staging path as the
+        // canonical fixture (its cleanup keeps the row available across
+        // parallel test runs).
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 2_500,
+        // `is_successful(&info.result.result)` is independent of
+        // parse_error. A `txFailed` result code is the plausible runtime
+        // value paired with a malformed envelope.
+        successful: false,
+        result_code: "txFailed".to_string(),
+        // Critical — both empty per the encode-failure branch.
+        envelope_xdr: String::new(),
+        result_xdr: String::new(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT,
+        parse_error: true,
+    }
+}
+
+#[tokio::test]
+async fn parse_error_transaction_persists_and_replays_idempotent() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0190 persist test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0190 persist test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_minimal_test_ledger(&pool, PARSE_ERROR_TX_HASH, PARSE_ERROR_LEDGER_SEQ).await;
+
+    let ledger = make_parse_error_ledger();
+    let transactions = vec![make_parse_error_transaction()];
+    let classification_cache = ClassificationCache::new();
+
+    // --- First persist ---
+    persist_ledger(
+        &pool,
+        &ledger,
+        &transactions,
+        /* operations          */ &[],
+        /* events              */ &[],
+        /* invocations         */ &[],
+        /* operation_trees     */ &[],
+        /* contract_interfaces */ &[],
+        /* contract_deployments*/ &[],
+        /* account_states      */ &[],
+        /* liquidity_pools     */ &[],
+        /* pool_snapshots      */ &[],
+        /* assets              */ &[],
+        /* nfts                */ &[],
+        /* nft_events          */ &[],
+        /* lp_positions        */ &[],
+        /* contract_name_writes*/ &[],
+        &classification_cache,
+    )
+    .await
+    .expect("first persist_ledger for parse_error tx failed");
+
+    // Assert: the row landed with parse_error=true and the supporting
+    // columns reflect the degraded-tx contract (no ops, no soroban
+    // flag). hash + source must round-trip; the FK to `accounts` must
+    // resolve via the SRC_STRKEY staging path.
+    let row: (bool, bool, i16, bool, i64, Option<Vec<u8>>) = sqlx::query_as(
+        r#"
+        SELECT t.parse_error,
+               t.successful,
+               t.operation_count,
+               t.has_soroban,
+               t.fee_charged,
+               t.inner_tx_hash
+          FROM transactions t
+         WHERE t.hash = decode($1, 'hex')
+        "#,
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("transactions row missing for parse_error fixture");
+
+    assert!(row.0, "transactions.parse_error must be true");
+    assert!(!row.1, "successful must mirror the fixture (txFailed)");
+    assert_eq!(
+        row.2, 0,
+        "operation_count must be 0 — parse_error tx emits no operations \
+         (see process.rs:206-214)"
+    );
+    assert!(
+        !row.3,
+        "has_soroban must be false (no ops → no soroban flag)"
+    );
+    assert_eq!(row.4, 2_500, "fee_charged round-trips from TxInfo");
+    assert!(
+        row.5.is_none(),
+        "inner_tx_hash None survives persist as NULL"
+    );
+
+    // The source FK must resolve to the SRC_STRKEY account row.
+    let (resolved_src,): (String,) = sqlx::query_as(
+        r#"
+        SELECT a.account_id
+          FROM transactions t
+          JOIN accounts a ON a.id = t.source_id
+         WHERE t.hash = decode($1, 'hex')
+        "#,
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("source FK must resolve for parse_error tx with populated source_account");
+    assert_eq!(resolved_src, SRC_STRKEY);
+
+    // transaction_hash_index also gets the row — read path uses this
+    // first (ADR 0027 §4). Without the index entry, the API's
+    // `/v1/transactions/:hash` lookup would 404 the degraded tx.
+    let (idx_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_hash_index WHERE hash = decode($1, 'hex')",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("hash_index lookup");
+    assert_eq!(idx_count, 1, "transaction_hash_index row missing");
+
+    // No operations_appearances, no events, no invocations — those
+    // tables are populated by per-tx parsing (`parse_ledger`
+    // `process.rs:206-214`), which the degraded-tx fast-path skips, so
+    // they stay empty. `transaction_participants` IS populated even
+    // for parse_error rows: the persist staging path always inserts
+    // the tx source as a participant (`staging.rs:317-321`,
+    // unconditional `participants_per_tx.insert(tx.source_account)`),
+    // so the source account stays queryable on the participant index
+    // for a degraded tx. The empty-source variant (lore-0209) sidesteps
+    // this branch entirely with no participant row; the populated-
+    // source variant tested here lands one — the SRC_STRKEY row.
+    let (participants_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_participants \
+         WHERE transaction_id = (SELECT id FROM transactions WHERE hash = decode($1, 'hex'))",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("transaction_participants count");
+    assert_eq!(
+        participants_count, 1,
+        "transaction_participants must carry exactly one row — the tx source — for \
+         a populated-source parse_error tx (staging.rs:317 unconditional insert)"
+    );
+
+    for table in [
+        "operations_appearances",
+        "soroban_events_appearances",
+        "soroban_invocations_appearances",
+    ] {
+        let sql = format!(
+            "SELECT COUNT(*) FROM {table} \
+             WHERE transaction_id = (SELECT id FROM transactions WHERE hash = decode($1, 'hex'))"
+        );
+        let (cnt,): (i64,) = sqlx::query_as(&sql)
+            .bind(PARSE_ERROR_TX_HASH)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("count from {table} failed: {e}"));
+        assert_eq!(
+            cnt, 0,
+            "{table} must be empty for parse_error tx — `parse_ledger` skipped per-tx \
+             parsing for the degraded row, so no appearance rows should land downstream"
+        );
+    }
+
+    // --- Replay — counts must not change ---
+    persist_ledger(
+        &pool,
+        &ledger,
+        &transactions,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("replay persist_ledger for parse_error tx failed");
+
+    let (tx_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(PARSE_ERROR_TX_HASH)
+            .fetch_one(&pool)
+            .await
+            .expect("post-replay tx count");
+    assert_eq!(
+        tx_count, 1,
+        "replay must be idempotent — exactly one transactions row for the fixture"
+    );
+
+    let (replay_idx,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_hash_index WHERE hash = decode($1, 'hex')",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("post-replay hash_index count");
+    assert_eq!(replay_idx, 1, "transaction_hash_index replay idempotent");
+
+    clean_minimal_test_ledger(&pool, PARSE_ERROR_TX_HASH, PARSE_ERROR_LEDGER_SEQ).await;
+}
+
+/// Live-DB reproducer for the empty-source persist crash documented in
+/// [lore-0209](../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
+///
+/// `make_parse_error_transaction` pins the populated-source shape because
+/// the empty-source path crashes the staging layer at
+/// `staging.rs:317-321` + `:454` + `write.rs:643`. This test asserts
+/// `persist_ledger` returns the exact staging error literal
+/// `"unresolved StrKey for transactions.source"` so the BUG stays
+/// observable until the referenced task lands. Once the BUG fix lands,
+/// this test will fail (the call will succeed and `expect_err` will
+/// panic), prompting the fix author to flip the assertion into a
+/// happy-path regression guard.
+///
+/// Skips cleanly when `DATABASE_URL` is unset / unreachable — matches
+/// the pattern used by every other DB-gated test in this file. No
+/// `#[should_panic]` or `#[ignore]` needed: the error-message
+/// assertion does the same locking work while keeping the test
+/// runnable through the normal `cargo test` flow.
+#[tokio::test]
+async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0209 reproducer");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0209 reproducer");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    let tx_hash = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0209bbb";
+    let ledger_seq: u32 = 90_000_099;
+    clean_minimal_test_ledger(&pool, tx_hash, ledger_seq).await;
+
+    let ledger = ExtractedLedger {
+        sequence: ledger_seq,
+        hash: "abcdef00abcdef00abcdef00abcdef00abcdef00abcdef00abcdef0020900aaa".to_string(),
+        closed_at: TEST_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: tx_hash.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: ledger_seq,
+        source_account: String::new(), // ← empty, Variant A real shape
+        fee_charged: 2_500,
+        successful: false,
+        result_code: "txFailed".to_string(),
+        envelope_xdr: String::new(),
+        result_xdr: String::new(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT,
+        parse_error: true,
+    };
+    let classification_cache = ClassificationCache::new();
+
+    let err = persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect_err(
+        "lore-0209 BUG: persist_ledger must error for empty source until the fix lands — \
+         if this `expect_err` panics, the BUG is gone and the assertion below should \
+         flip into a happy-path regression guard",
+    );
+
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unresolved StrKey for transactions.source"),
+        "expected lore-0209 staging-layer error message, got: {msg}"
+    );
+}
+
 /// Minimal scoped cleanup for the task-0192 ordering / fold tests. These
 /// fixtures only touch transactions + operations_appearances + accounts;
 /// no liquidity_pools / soroban_contracts / assets to clear.

@@ -450,9 +450,24 @@ If `stellar-xdr` returns an error during ingestion:
 - `transactions.parse_error = true` is set on the affected row
 - the transaction remains visible with all non-failed fields available
 
-At read time, E3 retries the archive fetch and re-parse on its own retry budget.
-If that also fails, the detail endpoint returns a decode-failure marker in the
-response; list endpoints are not affected because they do not call the archive.
+At read time, the transaction detail handler reads `transactions.parse_error`
+from the DB and **short-circuits** the archive fetch + re-parse for any row
+where the flag is `true` (task 0190 — `crates/api/src/transactions/handlers.rs`).
+The response carries `heavy: null` + `heavy_fields_status: "unavailable"` so
+the lore-0044 / lore-0046 contract holds: the light slice is always served,
+the heavy block is explicitly unavailable. Skipping the archive call on
+known-degraded rows also avoids a wasted S3 round-trip per request. List
+endpoints are unaffected because they do not call the archive.
+
+The three reachable triggers for `parse_error = true` — `envelope.is_none()`,
+`envelope_xdr.is_empty()`, `result_xdr.is_empty()` — are exercised by
+synthetic-fixture unit tests in
+`crates/xdr-parser/src/transaction.rs::parse_error_tests` (Variant A,
+Variant B, plus a default-limits regression sentinel). End-to-end
+persist coverage lives in `crates/indexer/tests/persist_integration.rs`
+(`parse_error_transaction_persists_and_replays_idempotent`); the API
+overlay contract is locked in
+`crates/api/src/tests_integration.rs::detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact`.
 
 ### 7.2 Unknown Operation Types
 

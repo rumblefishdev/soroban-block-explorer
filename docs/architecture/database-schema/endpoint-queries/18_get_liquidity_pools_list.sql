@@ -42,6 +42,15 @@
 --     the API validates inputs upstream.
 --   • Issuer StrKeys resolve via a CTE with the `accounts.account_id`
 --     UNIQUE index, then are surfaced via final joins.
+--   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
+--     via `lp.created_at_ledger > 0`. The persist layer emits these
+--     rows (`created_at_ledger = 0`, NULL/0 asset/fee fields) to
+--     satisfy the `lp_positions.pool_id` FK during partial backfills
+--     when the parent pool was created in a pre-window ledger and
+--     never touched in the current one; they self-heal on the next
+--     ledger touch via the 13a UPSERT. The list endpoint hides them
+--     until they carry real data. Pubnet genesis seq is 1, so `> 0`
+--     excludes every sentinel without rejecting any real pool.
 
 WITH issuer_a AS (
     SELECT id FROM accounts WHERE $5::varchar IS NOT NULL AND account_id = $5
@@ -91,7 +100,9 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) s ON TRUE
 WHERE
-    ($2::bigint IS NULL OR (lp.created_at_ledger, lp.pool_id) < ($2, $3))
+    -- Sentinel filter (ADR 0041 / task 0193).
+    lp.created_at_ledger > 0
+    AND ($2::bigint IS NULL OR (lp.created_at_ledger, lp.pool_id) < ($2, $3))
     AND ($4::varchar IS NULL OR lp.asset_a_code = $4)
     AND ($5::varchar IS NULL OR lp.asset_a_issuer_id = (SELECT id FROM issuer_a))
     AND ($6::varchar IS NULL OR lp.asset_b_code = $6)
