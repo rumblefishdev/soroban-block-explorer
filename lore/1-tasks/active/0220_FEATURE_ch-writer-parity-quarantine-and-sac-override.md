@@ -2,7 +2,7 @@
 id: '0220'
 title: 'CH writer parity: nfts_pending routing + is_sac override UPDATE'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0027', '0030', '0044', '0046']
 related_tasks: ['0118', '0217', '0218']
 tags:
@@ -51,6 +51,19 @@ history:
       down the parity work now keeps the CH writer in lockstep with
       every PG-side architectural change in 0217 / 0218 so we don't
       accumulate divergence.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated immediately after spawn — runs in parallel with task
+      0214 (CH initial-snapshot account state). Branch
+      `fix/0220_ch-writer-parity-quarantine-and-sac-override` cut
+      from develop. Surfaces touched by this task
+      (`crates/db-clickhouse/src/persist/{stage,writer,rows,tests_cross}.rs`
+      + shared promotion of `derive_sac_overrides_from_assets` to
+      `ParseOutput`) are disjoint from 0214's surface
+      (`crates/backfill-runner` + Soroban RPC client + account state
+      staging), so the two PRs can be reviewed independently.
 ---
 
 # CH writer parity: nfts_pending routing + is_sac override UPDATE
