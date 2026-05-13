@@ -135,8 +135,8 @@ async fn fetch_uncached(
             value: token_id.to_owned(),
         })?;
 
-    let envelope_b64 = build_simulate_envelope(contract_id, token_u32)?;
-    let result_xdr_b64 = simulate_transaction(client, rpc_url, &envelope_b64).await?;
+    let result_xdr_b64 =
+        simulate_token_uri_with_fallback(client, rpc_url, contract_id, token_u32).await?;
     let uri = decode_token_uri_result(&result_xdr_b64)?;
 
     validate_uri(&uri)?;
@@ -184,11 +184,13 @@ async fn fetch_uncached(
     }
 }
 
-/// Build base64-encoded `TransactionEnvelope` for `token_uri(token_id_u32)`.
+/// Build base64-encoded `TransactionEnvelope` for `token_uri(token_id_u32)`
+/// (SEP-50 / OpenZeppelin convention) or `token_uri()` (SEP-39 /
+/// ERC-721 collection-wide convention) when `token_id_u32` is `None`.
 /// Source account, fee, seq_num are dummy — simulate path ignores them.
 fn build_simulate_envelope(
     contract_id: &str,
-    token_id_u32: u32,
+    token_id_u32: Option<u32>,
 ) -> Result<String, NftTokenUriError> {
     let contract = stellar_strkey::Contract::from_string(contract_id).map_err(|_| {
         NftTokenUriError::MalformedInput {
@@ -198,7 +200,10 @@ fn build_simulate_envelope(
     })?;
     let contract_address = ScAddress::Contract(ContractId(Hash(contract.0)));
     let function_name = ScSymbol(StringM::try_from(TOKEN_URI_FN.as_bytes().to_vec())?);
-    let args: VecM<ScVal> = vec![ScVal::U32(token_id_u32)].try_into()?;
+    let args: VecM<ScVal> = match token_id_u32 {
+        Some(id) => vec![ScVal::U32(id)].try_into()?,
+        None => VecM::default(),
+    };
 
     let op = Operation {
         source_account: None,
@@ -229,6 +234,77 @@ fn build_simulate_envelope(
 
     let xdr = envelope.to_xdr(Limits::none())?;
     Ok(BASE64.encode(xdr))
+}
+
+/// Invoke `token_uri` and return the raw base64 ScVal XDR.
+///
+/// Real-world Soroban NFTs split between two conventions for the
+/// function signature:
+///
+/// - **SEP-50 / OpenZeppelin**: `token_uri(token_id) -> String` —
+///   per-token URI. Most modern contracts.
+/// - **SEP-39 / ERC-721 style**: `token_uri() -> String` —
+///   collection-wide URI. Older contracts (e.g. the James Bachini
+///   `SorobanNFT` contract found on pubnet during the 2026-05-13
+///   audit, Bug #5).
+///
+/// Try the per-token form first; on
+/// [`is_token_uri_arity_mismatch`] fall back to the zero-arg form.
+/// Any other RPC error propagates unchanged.
+///
+/// See `docs/audits/2026-05-13-0197-step0/2026-05-13-pre-audit-finding-token-uri-signature-mismatch.md`
+/// for the audit-time fixture + rationale.
+///
+/// TODO(audit-0197 follow-up): replace the try/fallback with
+/// WASM-spec-driven dispatch — inspect the contract's interface
+/// (in `wasm_interface_metadata.metadata` JSONB) to learn
+/// `token_uri`'s arity ahead of time and call the right variant
+/// directly. Saves one RPC round-trip per SEP-39 token (a SEP-39
+/// collection with N tokens currently spends 2 × N RPC calls; with
+/// spec dispatch it spends N). Prerequisites surfaced by 0197 Step 1:
+///   1. `soroban_contracts.wasm_hash` is reliably populated for
+///      non-SAC contracts — currently 99.9 % NULL (Step 1 Finding F9;
+///      same root cause class as Bug #4 SAC-detection gap).
+///   2. `wasm_interface_metadata.metadata` is populated with a real
+///      `functions[]` array — locally 40 % of audited rows store
+///      `{}` because the parser produced no spec from the WASM
+///      bytecode (Step 1 Finding F8).
+///   3. `xdr-parser::classification` exposes function arity, not
+///      just presence-by-name.
+///   4. Fallback retained for contracts where WASM bytecode is no
+///      longer reachable via RPC (state-pruning past the retention
+///      window).
+///
+/// Priority: low — fallback is functional. Optimisation, not
+/// correctness.
+async fn simulate_token_uri_with_fallback(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    contract_id: &str,
+    token_id_u32: u32,
+) -> Result<String, NftTokenUriError> {
+    let per_token_envelope = build_simulate_envelope(contract_id, Some(token_id_u32))?;
+    match simulate_transaction(client, rpc_url, &per_token_envelope).await {
+        Ok(xdr) => Ok(xdr),
+        Err(NftTokenUriError::SorobanRpc(msg)) if is_token_uri_arity_mismatch(&msg) => {
+            debug!(
+                contract_id = %contract_id,
+                "token_uri(token_id) returned arity mismatch; retrying zero-arg token_uri() (SEP-39 contracts)"
+            );
+            let collection_envelope = build_simulate_envelope(contract_id, None)?;
+            simulate_transaction(client, rpc_url, &collection_envelope).await
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Soroban VM signals "function exists but arity differs from the
+/// caller" via `Func(MismatchingParameterLen)` inside the RPC
+/// HostError. That is the signal we use to drop to the SEP-39
+/// zero-arg variant. Other RPC errors do **not** trigger the
+/// fallback — they propagate.
+fn is_token_uri_arity_mismatch(rpc_error_msg: &str) -> bool {
+    rpc_error_msg.contains("MismatchingParameterLen")
 }
 
 /// POST `simulateTransaction`, return base64 `result.results[0].xdr`.
@@ -568,7 +644,7 @@ mod tests {
         // the same InvokeContract args. Uses a synthetic strkey so the
         // test doesn't depend on any live contract id.
         let contract = stellar_strkey::Contract([0xAB; 32]).to_string();
-        let envelope_b64 = build_simulate_envelope(&contract, 4521).expect("build ok");
+        let envelope_b64 = build_simulate_envelope(&contract, Some(4521)).expect("build ok");
         let raw = BASE64.decode(&envelope_b64).expect("base64 decode");
         let env = TransactionEnvelope::from_xdr(&raw, Limits::none()).expect("xdr roundtrip");
         let TransactionEnvelope::Tx(v1) = env else {

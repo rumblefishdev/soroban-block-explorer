@@ -252,6 +252,30 @@ entities:
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.
 
+**Post-parse derivations not produced by the XDR parser itself** (covered in
+[`indexing-pipeline-overview.md`](../indexing-pipeline/indexing-pipeline-overview.md) §5.2
+step 14, called out here so the parser/indexer boundary stays explicit):
+
+- `assets.total_supply` / `assets.holder_count` — computed by
+  `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`
+  from `account_balances_current` _after_ the parser writes the balance rows.
+  Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
+  on-chain-derivable, hence indexer-owned. The parser only produces the
+  per-trustline / per-balance rows; the aggregate is a downstream rollup.
+- `liquidity_pool_snapshots.volume` / `fee_revenue` / `tvl` — per-op extraction
+  half is on-chain (parser provides PathPayment `claimedOffers[].amount_sold`),
+  USD denomination half is off-chain (Lambda 2 / price oracle). Consolidated
+  under task 0199. The parser does NOT compute these aggregates today —
+  columns stay NULL until 0199 ships.
+- `assets.name` for classic credit — extracted from issuer's SEP-1 TOML by
+  Lambda 2 (`sep1_assets` kind, task 0195 §2a). Parser produces only
+  `asset_code` / `issuer_id` for classic credits; the human-readable name is
+  off-chain and lives outside parser scope.
+- `nfts.name` / `nfts.media_url` / `nfts.collection_name` — extracted from the
+  NFT contract's `token_uri()` JSON by Lambda 2 (`nft_token_uri` kind,
+  task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
+  `current_owner_id`) tuple — see §5.1 NFT pattern.
+
 ## 5. Soroban-Specific Handling
 
 ### 5.1 CAP-67 Events
