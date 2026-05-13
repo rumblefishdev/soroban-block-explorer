@@ -4,11 +4,13 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
+mod bootstrap;
 mod dashboard;
 mod error;
 mod ingest;
 mod partition;
 mod resume;
+mod rpc_snapshot;
 mod run;
 mod sink;
 mod status;
@@ -55,6 +57,16 @@ struct Cli {
     /// are picked up by `db_clickhouse::Config::from_env()` as usual.
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
+
+    /// Soroban RPC endpoint (e.g.
+    /// `https://soroban-rpc.mainnet.stellar.gateway.fm`). Used by the
+    /// CH bootstrap step (task 0214, audit §E06) to fetch live
+    /// `AccountEntry` state for accounts referenced in the window
+    /// but never updated inside it. Optional — when unset, the
+    /// bootstrap step is skipped and accounts persist as the
+    /// participants-driven skeleton rows. PG target ignores this flag.
+    #[arg(long, env = "SOROBAN_RPC_URL")]
+    soroban_rpc_url: Option<String>,
 
     /// Local scratch directory for `aws s3 sync` output. Each partition
     /// lands under `<temp-dir>/<HEX>--<start>-<end>/` and (by default)
@@ -141,11 +153,17 @@ async fn main() {
     );
 
     match cli.command {
-        Command::Run { start, end } => {
-            run::execute(&sink, &cli.temp_dir, start, end, cli.keep_partitions, &mp)
-                .await
-                .expect("backfill run failed")
-        }
+        Command::Run { start, end } => run::execute(
+            &sink,
+            &cli.temp_dir,
+            start,
+            end,
+            cli.keep_partitions,
+            cli.soroban_rpc_url.as_deref(),
+            &mp,
+        )
+        .await
+        .expect("backfill run failed"),
         Command::Status { start, end } => status::execute(&sink, start, end)
             .await
             .expect("status failed"),

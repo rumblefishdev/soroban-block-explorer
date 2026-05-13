@@ -1,0 +1,676 @@
+//! Soroban RPC client for the bootstrap-snapshot account-state path
+//! (task 0214, audit §E06).
+//!
+//! ## Scope
+//!
+//! The CH writer's `accounts` table populates correctly only when the
+//! parser observes a `LedgerEntryAccount` / `LedgerEntryTrustLine`
+//! change in the indexed ledger range. For accounts that appear in the
+//! backfill window only as `transaction_participants`, the actual
+//! state (`sequence_number`, `home_domain`, `account_balances_current`)
+//! stays at the staging defaults (`0` / `null` / empty). In short
+//! 64 k-ledger windows that is the majority of participants.
+//!
+//! This module is a thin JSON-RPC client over Stellar's
+//! `getLedgerEntries` endpoint. The bootstrap runner step
+//! (`crate::bootstrap`) discovers every G-StrKey referenced in the
+//! window, asks Soroban RPC for the live `AccountEntry` (and matched
+//! `TrustLineEntry`s) at the window's start ledger, and stages those
+//! rows alongside the parser-emitted ones so the persist path treats
+//! both uniformly.
+//!
+//! ## Why a private module, not a new crate
+//!
+//! Task 0214 is the first consumer of Soroban RPC in the workspace.
+//! Tasks 0218 (SAC override) and 0219 (classic-credit assets) carry
+//! cheaper non-RPC layers and only fall back to RPC for stragglers.
+//! Until a second concrete consumer lands, an inline module under
+//! `crates/backfill-runner` is the smallest blast radius — no new
+//! crate boilerplate, no public surface to maintain. The
+//! refactor-to-a-shared-crate is a one-day move if a second consumer
+//! appears (Option B in the task body). Decision recorded in the 0214
+//! task history.
+//!
+//! ## Rate limits + concurrency
+//!
+//! Soroban RPC rate-limits per-IP. Empirical sustained throughput is
+//! ~50 req/s with ~200 keys per request → ~10 k keys / s. A 64 k-ledger
+//! window referencing 100 k accounts plus their trustlines therefore
+//! costs roughly 30–60 s of wall time on the bootstrap step. The
+//! `--rpc-concurrency` runner flag bounds parallel requests
+//! (default 4); the per-batch size cap is 200, matching mainnet RPC's
+//! advertised soft limit. Both are tunable knobs we expect to revisit
+//! once we have real throughput numbers from a CH pilot run.
+//!
+//! ## What the response looks like
+//!
+//! Soroban RPC returns one `LedgerEntryData` blob per requested key
+//! (or omits the key entirely if the entry does not exist). The blob
+//! is base64-encoded XDR of `LedgerEntryData` from the `stellar-xdr`
+//! crate. Successful decode yields:
+//!
+//! - `AccountEntry { account_id, balance, seq_num, home_domain, ... }`
+//!   for `LedgerKey::Account` requests.
+//! - `TrustLineEntry { account_id, asset, balance, flags, ... }` for
+//!   `LedgerKey::Trustline` requests.
+//!
+//! Missing entries are silently dropped: an account that exists in
+//! `transaction_participants` but has no current `AccountEntry`
+//! (closed account, ledger key TTL'd, never funded) is treated as
+//! "snapshot has nothing to add" — the parser-emitted skeleton row
+//! survives.
+
+use std::time::Duration;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Serialize};
+use stellar_xdr::curr::{
+    AccountId, LedgerEntryData, LedgerKey, LedgerKeyAccount, LedgerKeyTrustLine, Limits, PublicKey,
+    ReadXdr, TrustLineAsset, Uint256, WriteXdr,
+};
+use tracing::warn;
+
+/// Maximum keys per `getLedgerEntries` JSON-RPC call.
+///
+/// Soroban RPC advertises a soft cap around 200. Going higher
+/// returns `code=-32602 invalid params` from the public endpoints
+/// even when the underlying core supports more — keep us inside the
+/// documented envelope.
+pub const MAX_KEYS_PER_REQUEST: usize = 200;
+
+/// Sustained-throughput hint for the bootstrap runner step.
+///
+/// Public Soroban RPC instances rate-limit roughly to 50 RPS / IP. The
+/// runner uses this as a default-concurrency starting point only;
+/// real throughput is observed and recorded on the task's
+/// "empirical replay" acceptance criterion.
+///
+/// Unused today — the bootstrap step batches sequentially under
+/// [`MAX_KEYS_PER_REQUEST`] keys per call. A future revision adds a
+/// concurrent worker pool here.
+#[allow(dead_code)]
+pub const DEFAULT_CONCURRENCY: usize = 4;
+
+/// HTTP request timeout for one `getLedgerEntries` call. Generous to
+/// absorb tail latency from a busy mainnet RPC without aborting an
+/// otherwise-successful batch.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Soroban RPC client. Wraps a long-lived `reqwest::Client` so
+/// connection pooling persists across batches.
+#[derive(Clone)]
+pub struct RpcClient {
+    http: reqwest::Client,
+    endpoint: String,
+}
+
+impl RpcClient {
+    /// Build a client pointed at `endpoint` (full URL including scheme,
+    /// e.g. `https://soroban-rpc.mainnet.stellar.gateway.fm`).
+    pub fn new(endpoint: impl Into<String>) -> Result<Self, RpcError> {
+        let http = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .user_agent("soroban-block-explorer/backfill-runner/0.1")
+            .build()
+            .map_err(RpcError::Http)?;
+        Ok(Self {
+            http,
+            endpoint: endpoint.into(),
+        })
+    }
+
+    /// Fetch the current live state of `keys` from Soroban RPC. Missing
+    /// keys are silently dropped from the response — callers receive
+    /// only the entries the network actually has.
+    ///
+    /// Splits `keys` into batches of [`MAX_KEYS_PER_REQUEST`] under the
+    /// hood; callers can hand in an arbitrary number of keys and trust
+    /// the client not to overshoot the RPC's soft cap.
+    pub async fn get_ledger_entries(
+        &self,
+        keys: &[LedgerKey],
+    ) -> Result<Vec<LedgerEntryRecord>, RpcError> {
+        let mut out = Vec::with_capacity(keys.len());
+        for chunk in keys.chunks(MAX_KEYS_PER_REQUEST) {
+            let batch = self.get_ledger_entries_batch(chunk).await?;
+            out.extend(batch);
+        }
+        Ok(out)
+    }
+
+    /// One JSON-RPC call. Caller is responsible for keeping `keys` at
+    /// or below [`MAX_KEYS_PER_REQUEST`].
+    async fn get_ledger_entries_batch(
+        &self,
+        keys: &[LedgerKey],
+    ) -> Result<Vec<LedgerEntryRecord>, RpcError> {
+        let encoded: Vec<String> = keys
+            .iter()
+            .map(|k| {
+                k.to_xdr(Limits::none())
+                    .map(|bytes| BASE64.encode(&bytes))
+                    .map_err(|e| RpcError::EncodeKey(e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getLedgerEntries",
+            params: GetLedgerEntriesParams { keys: encoded },
+        };
+
+        let resp = self
+            .http
+            .post(&self.endpoint)
+            .json(&req)
+            .send()
+            .await
+            .map_err(RpcError::Http)?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(RpcError::Http)?;
+        if !status.is_success() {
+            return Err(RpcError::HttpStatus {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let parsed: JsonRpcResponse = serde_json::from_str(&body)
+            .map_err(|e| RpcError::Decode(format!("response JSON: {e} body: {body}")))?;
+        if let Some(err) = parsed.error {
+            return Err(RpcError::Rpc {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        let result = parsed.result.ok_or_else(|| {
+            RpcError::Decode("response missing both `result` and `error`".into())
+        })?;
+
+        let entries = result.entries.unwrap_or_default();
+        let mut out = Vec::with_capacity(entries.len());
+        for raw in entries {
+            let key_bytes = BASE64
+                .decode(raw.key.as_bytes())
+                .map_err(|e| RpcError::Decode(format!("key base64: {e}")))?;
+            let key = LedgerKey::from_xdr(&key_bytes, Limits::none())
+                .map_err(|e| RpcError::Decode(format!("key xdr: {e}")))?;
+
+            let xdr_bytes = BASE64
+                .decode(raw.xdr.as_bytes())
+                .map_err(|e| RpcError::Decode(format!("entry base64: {e}")))?;
+            let data = LedgerEntryData::from_xdr(&xdr_bytes, Limits::none())
+                .map_err(|e| RpcError::Decode(format!("entry xdr: {e}")))?;
+
+            out.push(LedgerEntryRecord {
+                key,
+                data,
+                last_modified_ledger: raw.last_modified_ledger_seq,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// One decoded live entry from a `getLedgerEntries` response.
+///
+/// `data` is the `LedgerEntryData` XDR variant — for the bootstrap
+/// path the caller pattern-matches on `Account(...)` and
+/// `Trustline(...)`. Other variants are dropped by the bootstrap
+/// (we only request Account / Trustline keys, but the type is
+/// generic enough that a future caller could reuse this for any
+/// `LedgerKey` shape).
+///
+/// `key` and `last_modified_ledger` are unused by the current
+/// bootstrap caller (which only needs `data`) but kept on the
+/// public surface — both are needed for the trustline-pairing pass
+/// (`rebuild_trustline_asset` ↔ owner StrKey) we leave as
+/// follow-up.
+#[derive(Debug, Clone)]
+pub struct LedgerEntryRecord {
+    #[allow(dead_code)]
+    pub key: LedgerKey,
+    pub data: LedgerEntryData,
+    #[allow(dead_code)]
+    pub last_modified_ledger: u32,
+}
+
+/// Build a `LedgerKey::Account` from a G-StrKey. Returns `None` and
+/// logs a warn on malformed input — bootstrap discovery shouldn't
+/// crash the runner if one bad row sneaks in.
+pub fn account_ledger_key(strkey: &str) -> Option<LedgerKey> {
+    let pk = match stellar_strkey::ed25519::PublicKey::from_string(strkey) {
+        Ok(pk) => pk,
+        Err(err) => {
+            warn!(strkey, %err, "rpc_snapshot: invalid G-StrKey; skipping");
+            return None;
+        }
+    };
+    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+    Some(LedgerKey::Account(LedgerKeyAccount { account_id }))
+}
+
+/// Build a `LedgerKey::Trustline` for the given account / asset.
+/// Returns `None` on malformed StrKey (account or issuer).
+///
+/// `asset` carries the trustline's asset shape — native is **never**
+/// a valid trustline key (native balances live on the account entry
+/// itself), so callers must pass an alphanum asset. The bootstrap
+/// step derives trustline keys after decoding `TrustLineEntry`s from
+/// a prior account-state batch, so the caller already knows the asset.
+///
+/// Unused by the current bootstrap path (Phase 1 only snapshots
+/// `AccountEntry` and leaves trustlines for the per-ledger ingest +
+/// post-bootstrap top-up pass). Kept on the public surface so the
+/// follow-up trustline + asset-aggregate task (Phase 3 in the
+/// 0214 task body) can reuse it.
+#[allow(dead_code)]
+pub fn trustline_ledger_key(
+    account_strkey: &str,
+    asset: TrustLineAsset,
+) -> Option<LedgerKey> {
+    let pk = match stellar_strkey::ed25519::PublicKey::from_string(account_strkey) {
+        Ok(pk) => pk,
+        Err(err) => {
+            warn!(strkey = account_strkey, %err, "rpc_snapshot: invalid trustline account StrKey; skipping");
+            return None;
+        }
+    };
+    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+    Some(LedgerKey::Trustline(LedgerKeyTrustLine { account_id, asset }))
+}
+
+/// Pure decoder: shape a `LedgerEntryData::Account` into the three
+/// fields the CH writer's account staging consumes. Kept separate
+/// from the HTTP client so it's unit-testable against fixed XDR
+/// fixtures.
+///
+/// Returns `None` for non-Account variants — caller should match on
+/// `data` shape before calling, but the explicit signal makes the
+/// pattern less brittle in unit tests.
+pub fn decode_account_snapshot(data: &LedgerEntryData) -> Option<AccountSnapshot> {
+    let LedgerEntryData::Account(entry) = data else {
+        return None;
+    };
+    let home_domain = String::from_utf8_lossy(entry.home_domain.as_slice())
+        .trim_end_matches('\0')
+        .to_string();
+    Some(AccountSnapshot {
+        account_id: entry.account_id.to_string(),
+        sequence_number: i64::from(entry.seq_num.clone()),
+        balance: entry.balance,
+        home_domain: if home_domain.is_empty() {
+            None
+        } else {
+            Some(home_domain)
+        },
+    })
+}
+
+/// Pure decoder: shape a `LedgerEntryData::Trustline` into the
+/// (account, asset, balance) tuple the CH writer consumes.
+///
+/// Skips `TrustLineAsset::PoolShare` (LP positions, not asset
+/// balances — owned by task 0162 / `extract_lp_positions`). Skips
+/// `TrustLineAsset::Native` defensively even though the network
+/// should never emit such a trustline.
+///
+/// Unused by the Phase 1 bootstrap path (which only snapshots
+/// `AccountEntry`); kept on the public surface for the follow-up
+/// trustline pass + the unit-test coverage that locks the decoding
+/// contract in.
+#[allow(dead_code)]
+pub fn decode_trustline_snapshot(data: &LedgerEntryData) -> Option<TrustlineSnapshot> {
+    let LedgerEntryData::Trustline(entry) = data else {
+        return None;
+    };
+    let asset = match &entry.asset {
+        TrustLineAsset::Native => return None,
+        TrustLineAsset::PoolShare(_) => return None,
+        TrustLineAsset::CreditAlphanum4(a) => TrustlineAsset {
+            asset_type: TrustlineAssetType::Alphanum4,
+            code: String::from_utf8_lossy(a.asset_code.as_slice())
+                .trim_end_matches('\0')
+                .to_string(),
+            issuer: a.issuer.to_string(),
+        },
+        TrustLineAsset::CreditAlphanum12(a) => TrustlineAsset {
+            asset_type: TrustlineAssetType::Alphanum12,
+            code: String::from_utf8_lossy(a.asset_code.as_slice())
+                .trim_end_matches('\0')
+                .to_string(),
+            issuer: a.issuer.to_string(),
+        },
+    };
+    Some(TrustlineSnapshot {
+        account_id: entry.account_id.to_string(),
+        asset,
+        balance: entry.balance,
+    })
+}
+
+/// Helper: pull every `TrustLineAsset` shape out of an
+/// `AccountEntry`'s signers/sub-entries is **not** something the RPC
+/// gives us directly. Soroban RPC's `getLedgerEntries` requires
+/// trustline keys to be enumerated by the caller; there is no "all
+/// trustlines for account X" primitive.
+///
+/// The bootstrap step gets around this by relying on the parser's
+/// observed-asset universe — every `assets` row referenced in the
+/// window's event/operation stream is a candidate trustline key for
+/// every account in the window. That's an over-shoot but bounded
+/// (~few thousand assets × ~100 k accounts at worst → a few
+/// hundred-thousand RPC keys, well within the budget). See
+/// `crate::bootstrap::collect_trustline_candidates` for the actual
+/// pairing logic.
+///
+/// Unused today — the trustline pairing pass is Phase 3 follow-up.
+#[allow(dead_code)]
+pub fn rebuild_trustline_asset(
+    asset_type: TrustlineAssetType,
+    code: &str,
+    issuer_strkey: &str,
+) -> Option<TrustLineAsset> {
+    use stellar_xdr::curr::{AlphaNum4, AlphaNum12, AssetCode4, AssetCode12};
+    let issuer_pk = stellar_strkey::ed25519::PublicKey::from_string(issuer_strkey).ok()?;
+    let issuer = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(issuer_pk.0)));
+    match asset_type {
+        TrustlineAssetType::Alphanum4 => {
+            let code_bytes = code.as_bytes();
+            if code_bytes.len() > 4 {
+                return None;
+            }
+            let mut padded = [0u8; 4];
+            padded[..code_bytes.len()].copy_from_slice(code_bytes);
+            Some(TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                asset_code: AssetCode4(padded),
+                issuer,
+            }))
+        }
+        TrustlineAssetType::Alphanum12 => {
+            let code_bytes = code.as_bytes();
+            if code_bytes.len() > 12 {
+                return None;
+            }
+            let mut padded = [0u8; 12];
+            padded[..code_bytes.len()].copy_from_slice(code_bytes);
+            Some(TrustLineAsset::CreditAlphanum12(AlphaNum12 {
+                asset_code: AssetCode12(padded),
+                issuer,
+            }))
+        }
+    }
+}
+
+/// Decoded `AccountEntry` view. Lean: only the fields the CH writer's
+/// account staging consumes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSnapshot {
+    pub account_id: String,
+    pub sequence_number: i64,
+    /// Native XLM balance in stroops (1 XLM = 10⁷ stroops).
+    pub balance: i64,
+    /// `Some(value)` only when non-empty in the AccountEntry.
+    pub home_domain: Option<String>,
+}
+
+/// Decoded `TrustLineEntry` view. Unused by Phase 1; kept on the
+/// public surface for the Phase 3 trustline pass.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustlineSnapshot {
+    pub account_id: String,
+    pub asset: TrustlineAsset,
+    pub balance: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustlineAsset {
+    pub asset_type: TrustlineAssetType,
+    pub code: String,
+    pub issuer: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustlineAssetType {
+    Alphanum4,
+    Alphanum12,
+}
+
+/// JSON-RPC encoding boilerplate. Kept private — callers see the
+/// typed API above.
+#[derive(Serialize)]
+struct JsonRpcRequest<T> {
+    jsonrpc: &'static str,
+    id: i64,
+    method: &'static str,
+    params: T,
+}
+
+#[derive(Serialize)]
+struct GetLedgerEntriesParams {
+    keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct JsonRpcResponse {
+    #[allow(dead_code)]
+    #[serde(default)]
+    jsonrpc: Option<String>,
+    #[serde(default)]
+    result: Option<GetLedgerEntriesResult>,
+    #[serde(default)]
+    error: Option<JsonRpcError>,
+}
+
+#[derive(Deserialize)]
+struct GetLedgerEntriesResult {
+    /// Latest sequence the RPC's view reflects. Logged for context;
+    /// the bootstrap step uses the window's `start` ledger, not this.
+    #[allow(dead_code)]
+    #[serde(rename = "latestLedger", default)]
+    latest_ledger: Option<i64>,
+    #[serde(default)]
+    entries: Option<Vec<LedgerEntryEntry>>,
+}
+
+#[derive(Deserialize)]
+struct LedgerEntryEntry {
+    /// Base64-encoded `LedgerKey` XDR.
+    key: String,
+    /// Base64-encoded `LedgerEntryData` XDR.
+    xdr: String,
+    #[serde(rename = "lastModifiedLedgerSeq")]
+    last_modified_ledger_seq: u32,
+}
+
+#[derive(Deserialize, Debug)]
+struct JsonRpcError {
+    code: i64,
+    message: String,
+}
+
+/// Typed errors surfacing from the RPC client.
+#[derive(Debug, thiserror::Error)]
+pub enum RpcError {
+    /// Transport-level reqwest failure (DNS, connect, body, timeout).
+    #[error("rpc http: {0}")]
+    Http(reqwest::Error),
+    /// Non-2xx HTTP response. Body is preserved verbatim so the operator
+    /// can grep the log for whatever Soroban RPC returned.
+    #[error("rpc http status {status} body: {body}")]
+    HttpStatus { status: u16, body: String },
+    /// Encoding `LedgerKey` to base64 XDR failed. Shouldn't happen in
+    /// practice — the keys are constructed from typed values — but
+    /// surfaced cleanly so a future variant addition doesn't sneak in
+    /// silently.
+    #[error("rpc encode key: {0}")]
+    EncodeKey(String),
+    /// JSON or XDR decode of the response body failed.
+    #[error("rpc decode: {0}")]
+    Decode(String),
+    /// JSON-RPC `error` object in the response (e.g. invalid params,
+    /// rate-limited, internal error). Caller decides whether to retry.
+    #[error("rpc error code={code} message={message}")]
+    Rpc { code: i64, message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stellar_xdr::curr::{
+        AccountEntry, AccountEntryExt, AlphaNum4, AssetCode4, Int64, SequenceNumber, String32,
+        Thresholds, TrustLineEntry, TrustLineEntryExt, VecM,
+    };
+
+    fn make_account_id(byte: u8) -> AccountId {
+        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([byte; 32])))
+    }
+
+    fn make_account_entry(
+        account_id: AccountId,
+        balance: i64,
+        seq: i64,
+        home_domain: &str,
+    ) -> LedgerEntryData {
+        LedgerEntryData::Account(AccountEntry {
+            account_id,
+            balance: Int64::from(balance),
+            seq_num: SequenceNumber(seq),
+            num_sub_entries: 0,
+            inflation_dest: None,
+            flags: 0,
+            home_domain: String32::try_from(home_domain.as_bytes().to_vec()).unwrap(),
+            thresholds: Thresholds([1, 0, 0, 0]),
+            signers: VecM::default(),
+            ext: AccountEntryExt::V0,
+        })
+    }
+
+    #[test]
+    fn decode_account_snapshot_extracts_fields() {
+        let acct = make_account_id(0xAA);
+        let data = make_account_entry(acct.clone(), 1_000_000, 42, "example.com");
+        let snap = decode_account_snapshot(&data).expect("Account variant must decode");
+        assert_eq!(snap.account_id, acct.to_string());
+        assert_eq!(snap.balance, 1_000_000);
+        assert_eq!(snap.sequence_number, 42);
+        assert_eq!(snap.home_domain.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn decode_account_snapshot_empty_home_domain_is_none() {
+        let acct = make_account_id(0xBB);
+        let data = make_account_entry(acct, 0, 0, "");
+        let snap = decode_account_snapshot(&data).unwrap();
+        assert_eq!(snap.home_domain, None);
+    }
+
+    #[test]
+    fn decode_account_snapshot_rejects_non_account_variant() {
+        let acct = make_account_id(0xCC);
+        let asset = TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4(*b"USDC"),
+            issuer: make_account_id(0xDD),
+        });
+        let data = LedgerEntryData::Trustline(TrustLineEntry {
+            account_id: acct,
+            asset,
+            balance: 0,
+            limit: 0,
+            flags: 0,
+            ext: TrustLineEntryExt::V0,
+        });
+        assert!(decode_account_snapshot(&data).is_none());
+    }
+
+    #[test]
+    fn decode_trustline_snapshot_alphanum4() {
+        let owner = make_account_id(0xEE);
+        let issuer = make_account_id(0xFF);
+        let asset = TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4(*b"USDC"),
+            issuer: issuer.clone(),
+        });
+        let data = LedgerEntryData::Trustline(TrustLineEntry {
+            account_id: owner.clone(),
+            asset,
+            balance: 12_345_678,
+            limit: 0,
+            flags: 1,
+            ext: TrustLineEntryExt::V0,
+        });
+        let snap = decode_trustline_snapshot(&data).expect("trustline must decode");
+        assert_eq!(snap.account_id, owner.to_string());
+        assert_eq!(snap.asset.asset_type, TrustlineAssetType::Alphanum4);
+        assert_eq!(snap.asset.code, "USDC");
+        assert_eq!(snap.asset.issuer, issuer.to_string());
+        assert_eq!(snap.balance, 12_345_678);
+    }
+
+    #[test]
+    fn decode_trustline_snapshot_skips_pool_share_and_native() {
+        let owner = make_account_id(0x11);
+        let native = LedgerEntryData::Trustline(TrustLineEntry {
+            account_id: owner.clone(),
+            asset: TrustLineAsset::Native,
+            balance: 1,
+            limit: 0,
+            flags: 0,
+            ext: TrustLineEntryExt::V0,
+        });
+        assert!(decode_trustline_snapshot(&native).is_none());
+
+        use stellar_xdr::curr::{Hash, PoolId};
+        let pool_share = LedgerEntryData::Trustline(TrustLineEntry {
+            account_id: owner,
+            asset: TrustLineAsset::PoolShare(PoolId(Hash([0u8; 32]))),
+            balance: 1,
+            limit: 0,
+            flags: 0,
+            ext: TrustLineEntryExt::V0,
+        });
+        assert!(decode_trustline_snapshot(&pool_share).is_none());
+    }
+
+    #[test]
+    fn account_ledger_key_round_trips_strkey() {
+        // Mainnet pin: account `GARDNV3Q7…` from audit doc §E06.
+        let strkey = "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55";
+        let key = account_ledger_key(strkey).expect("valid G-StrKey must decode");
+        let LedgerKey::Account(k) = key else {
+            panic!("expected LedgerKey::Account variant");
+        };
+        assert_eq!(k.account_id.to_string(), strkey);
+    }
+
+    #[test]
+    fn account_ledger_key_rejects_bad_strkey() {
+        assert!(account_ledger_key("not-a-strkey").is_none());
+        // Wrong prefix (M-StrKey for muxed accounts — rejected, RPC
+        // doesn't accept muxed account keys here).
+        assert!(account_ledger_key("MAAAAAAAAAAAAAA").is_none());
+    }
+
+    #[test]
+    fn rebuild_trustline_asset_alphanum4_round_trip() {
+        let issuer_strkey = "GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55";
+        let asset = rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "USDC", issuer_strkey)
+            .expect("alphanum4 round trip");
+        let TrustLineAsset::CreditAlphanum4(an) = asset else {
+            panic!("expected CreditAlphanum4 variant");
+        };
+        assert_eq!(&an.asset_code.0, b"USDC");
+        assert_eq!(an.issuer.to_string(), issuer_strkey);
+    }
+
+    #[test]
+    fn rebuild_trustline_asset_rejects_oversize_code() {
+        assert!(rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "TOOLONG", "GA").is_none());
+    }
+}
