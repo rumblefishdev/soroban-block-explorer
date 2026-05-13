@@ -120,6 +120,46 @@ history:
       (current `Other` verdict's permissive emit policy produces the
       observed false positives). See
       `docs/audits/2026-05-12-ch-pilot-endpoint-audit.md` §E15.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 1.5 (Patch C — parser-side whitelist in
+      `crates/xdr-parser/src/nft.rs::looks_like_token_id`) +
+      Phase 3 (cleanup SQL for PG + CH) implemented on branch
+      `fix/0118_nft-false-positives-phase-c`. Picked up from Karol's
+      local prototype; ship both as one PR.
+
+      Patch C: `looks_like_token_id` now rejects `i128`/`u128`
+      (always SEP-41 fungible amount per spec) with a `warn!` log for
+      observability, and whitelists conventional SEP-50 + OpenZeppelin
+      token_id shapes (`u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+      `address`). Spec basis: SEP-41 amount=i128, SEP-50 token_id =
+      unsigned integer, OpenZeppelin Stellar NonFungibleToken trait =
+      u32, Stellar Discussion #1674 = zero argument for i128. Trade-off:
+      hypothetical false-negative for SEP-50-non-compliant NFT using
+      i128 token_id — zero such contracts observed in the audit sample,
+      warn-log surfaces any future case for whitelist extension.
+
+      Test refresh: renamed `parser_emits_i128_transfer_as_nft_candidate`
+      → `parser_rejects_i128_transfer_per_patch_c` (inverted assertion).
+      Added `parser_rejects_u128_transfer_per_patch_c`,
+      `whitelist_accepts_u32_token_id`, `whitelist_accepts_u64_token_id`,
+      `whitelist_accepts_i32_and_i64_token_ids`,
+      `whitelist_accepts_bytes_string_address_token_ids`,
+      `whitelist_rejects_unknown_data_types`. 16/16 `nft::tests` green.
+
+      Phase 3 cleanup SQL committed under `ops/sql/` (PG) and
+      `ops/clickhouse/` (CH); both idempotent, both run only AFTER the
+      Soroban-era backfill has populated WASM verdicts. CH script
+      tracks mutation completion via `system.mutations` before
+      `OPTIMIZE TABLE nfts FINAL`.
+
+      Ingester filter strengthen for the `Other`/NULL bucket
+      DEFERRED to task 0217 (nfts quarantine table) — proper
+      architectural fix routes `Other`/NULL to dedicated
+      `nfts_pending` instead of permissive-inserting into the
+      API-facing hot table.
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -404,12 +444,34 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
       and the per-worker cache holds both definitive verdicts after
       the ledger commits.)_
 
-### Phase 3 (cleanup)
+### Phase 1.5 (Patch C — parser whitelist, 2026-05-13)
 
-- [ ] SQL cleanup script committed to the repo; reviewable.
+- [x] `looks_like_token_id` narrowed to whitelist of conventional SEP-50 /
+      OpenZeppelin shapes: `u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+      `address`. _(`crates/xdr-parser/src/nft.rs`)_
+- [x] `i128` and `u128` explicitly rejected with `warn!` log (always
+      SEP-41 fungible amount). Observability path for any future legit
+      i128-token_id NFT contract.
+- [x] Old permissive test `parser_emits_i128_transfer_as_nft_candidate`
+      renamed and inverted → `parser_rejects_i128_transfer_per_patch_c`.
+      Added 5 new whitelist-coverage tests; 16/16 `nft::tests` green.
+
+### Phase 3 (cleanup, 2026-05-13)
+
+- [x] SQL cleanup script committed to the repo; reviewable.
+      _(`ops/sql/0118_phase3_cleanup_nfts.sql` for PG;
+      `ops/clickhouse/0118_phase3_cleanup_nfts.sql` for CH.)_
 - [ ] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
-- [ ] `VACUUM ANALYZE nfts` in the operational runbook.
+      _(Operational — run after task 0145 completes full Soroban-era
+      backfill.)_
+- [x] `VACUUM ANALYZE nfts` (PG) / `OPTIMIZE TABLE nfts FINAL` (CH) in
+      the cleanup script. CH script tracks `system.mutations` to ensure
+      mutations complete before OPTIMIZE.
+- [ ] Ingester filter strengthen for `Other`/NULL bucket — DEFERRED to
+      task 0217 (`nfts_pending` quarantine table). 0118 ships Patch C +
+      cleanup SQL; 0217 lands the proper architectural fix
+      (Other/NULL → quarantine, hot table stays clean by design).
 
 ## Risks / Notes
 
