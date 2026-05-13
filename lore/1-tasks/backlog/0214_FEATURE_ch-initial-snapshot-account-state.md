@@ -90,7 +90,7 @@ Empirical example from audit:
 
 ### Phase 2 — Incremental top-up on later windows
 
-If the backfill window slides forward in time (resume after pause), subsequent windows that re-encounter the same account should NOT re-fetch state if already populated. Cheapest gate: `WHERE account_id NOT IN (SELECT id FROM accounts FINAL WHERE sequence_number > 0)` — i.e. only top up accounts that are still skeletons.
+If the backfill window slides forward in time (resume after pause), subsequent windows that re-encounter the same account should NOT re-fetch state if already populated. Cheapest gate: `WHERE id NOT IN (SELECT id FROM accounts FINAL WHERE sequence_number > 0)` — i.e. only top up accounts that are still skeletons. (Both sides use the `Int64` surrogate `id` from the hub table; do not mix with the `String` `account_id` column.)
 
 ### Phase 3 — Trustline + asset aggregate hookup
 
@@ -99,7 +99,7 @@ Trustlines populate `account_balances_current` rows. **Once Phase 1 lands, E08/E
 ## Acceptance Criteria
 
 - [ ] New `bootstrap_account_state` step in `backfill-runner` (CH target).
-- [ ] Empirical test: re-run 64k-ledger backfill, then `SELECT count() FILTER (WHERE sequence_number > 0)` on `accounts` is > 50% of total rows (instead of ~0% today).
+- [ ] Empirical test: re-run 64k-ledger backfill, then `SELECT countIf(sequence_number > 0) FROM accounts FINAL` is > 50% of total rows (instead of ~0% today). (ClickHouse: use `countIf` — `count() FILTER (WHERE ...)` is Postgres-only.)
 - [ ] Empirical E06 verification: account `GARDNV3Q7...` shows real `sequence_number`, `home_domain`, and at least the native XLM balance row in `account_balances_current`.
 - [ ] `account_balances_current` row count > 0 (today: 0 in the 64k window for most accounts).
 - [ ] **Docs updated** — audit doc §E06 marked resolved; `docs/architecture/database-schema/clickhouse-pilot.md` gains a §State-side ingestion paragraph.

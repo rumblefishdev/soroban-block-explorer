@@ -147,6 +147,7 @@ contracts legitimately use `i128` as token IDs
   ([2026-05-12-ch-pilot-endpoint-audit.md](../../../docs/audits/2026-05-12-ch-pilot-endpoint-audit.md))
   confirmed 100% NFT rows in CH backfill = false positives (XLM SAC
   contributes 421k rows alone). Scope expanded:
+
   - SQL cleanup script for **both PG and CH** stores.
   - **Ingester filter strengthen** — current `Other` verdict permissive
     emit produces false positives for pre-window WASM-less contracts
@@ -154,9 +155,13 @@ contracts legitimately use `i128` as token IDs
     Either: (a) stricter "no WASM in window AND not already
     classified" → drop; (b) post-backfill reclassification pass once
     WASM observed in later windows.
-  - VACUUM ANALYZE in runbook (PG side). CH equivalent: `OPTIMIZE
-TABLE nfts FINAL` + `OPTIMIZE TABLE nft_ownership FINAL` after
-    cleanup deletes.
+  - VACUUM ANALYZE in runbook (PG side). CH equivalent after cleanup
+    deletes:
+
+    ```sql
+    OPTIMIZE TABLE nfts FINAL;
+    OPTIMIZE TABLE nft_ownership FINAL;
+    ```
 
 ## Context
 
