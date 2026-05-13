@@ -2,7 +2,7 @@
 id: '0062'
 title: 'UI lib: identifier display, copy button, linked identifiers'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-shared]
@@ -17,6 +17,20 @@ history:
     status: active
     who: karolkow
     note: 'Activated — implementing from Figma DS (siumLgKOc9LLepEfbimyp3): Copy button (8938:982) + Table cell (8938:1082)'
+  - date: 2026-05-13
+    status: completed
+    who: karolkow
+    note: >
+      Implemented 8 files in libs/ui/src/identifiers/ (~350 lines) +
+      monoFontFamily token in theme. 8/10 acceptance criteria met as
+      written, 2 deviated (identifier full-value tooltip omitted —
+      not in Figma; "Copied!" tooltip kept per Figma 8956:2020).
+      Commits f26aa79 + 91e7a69. Verified via Playwright (Claude
+      Preview) across idle / hover / copied / visited states. Live
+      verification surfaced two regressions fixed in 91e7a69
+      (browser :visited override, MUI IconButton hover overlay
+      bleeding through copied yellow bg). Pushed to
+      origin/feat/0062_ui-identifier-display-copy.
 ---
 
 # UI lib: identifier display, copy button, linked identifiers
@@ -25,9 +39,9 @@ history:
 
 Implement identifier display components in `libs/ui/src/identifiers/` that provide consistent rendering, truncation, copy-to-clipboard, and deep linking for all entity identifiers across the explorer. Every hash, account ID, contract ID, token ID, pool ID, and ledger sequence in the app must look and behave identically.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** Implementation done; tooltips removed per design lead decision (see Emerged below). Pending review + commit.
+**Current state:** Shipped on `feat/0062_ui-identifier-display-copy`. Awaiting merge to `develop` (depends on lore-0058 theme work, also not yet on develop).
 
 ## Context
 
