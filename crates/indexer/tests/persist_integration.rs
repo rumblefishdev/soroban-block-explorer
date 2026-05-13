@@ -5158,3 +5158,299 @@ async fn clean_classic_credit_test(pool: &PgPool) {
         .execute(pool)
         .await;
 }
+
+// ---------------------------------------------------------------------------
+// Task 0218 — forward-derived SAC overrides
+// ---------------------------------------------------------------------------
+//
+// Two scenarios:
+//
+// 1. A `soroban_contracts` row exists as a pre-existing-SAC skeleton
+//    (`is_sac=false`, `contract_type=NULL`). A classic-credit asset with
+//    a matching `(asset_code, issuer)` is observed in this ledger. The
+//    persist step flips `is_sac=true` + `contract_type=0` (Token).
+// 2. A row that already has `is_sac=true` (e.g. flipped by an earlier
+//    pass, or set by the in-window `extract_contract_deployments` path)
+//    is NOT modified by the override — the `is_sac=false` guard
+//    short-circuits.
+
+const SAC_LEDGER_SEQ: u32 = 90_000_401;
+const SAC_CLOSED_AT: i64 = 1_777_121_000;
+const SAC_TX_HASH: &str = "aaaa661111111111111111111111111111111111111111111111111111111111";
+const SAC_LEDGER_HASH: &str = "bbbb661111111111111111111111111111111111111111111111111111111111";
+// Real mainnet USDC SAC + its issuer — the pin used in the
+// 2026-05-12 audit's `/compare-with-stellar-api` cross-check.
+const SAC_TEST_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const SAC_TEST_ASSET_CODE: &str = "USDC";
+const SAC_TEST_DERIVED_CONTRACT: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+
+#[tokio::test]
+async fn sac_override_flips_is_sac_for_pre_existing_skeleton() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping SAC override test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping SAC override test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_sac_override_test(&pool).await;
+
+    // Pre-seed a skeleton row exactly as the driver path would: row
+    // exists, `is_sac=false`, `contract_type=NULL`.
+    sqlx::query(
+        "INSERT INTO soroban_contracts (contract_id, is_sac)
+         VALUES ($1, FALSE)
+         ON CONFLICT (contract_id) DO NOTHING",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(&pool)
+    .await
+    .expect("seed pre-existing SAC skeleton");
+
+    let ledger = ExtractedLedger {
+        sequence: SAC_LEDGER_SEQ,
+        hash: SAC_LEDGER_HASH.to_string(),
+        closed_at: SAC_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: SAC_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: SAC_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: SAC_CLOSED_AT,
+        parse_error: false,
+    };
+    let usdc_asset = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(SAC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_interfaces: Vec<ExtractedContractInterface> = Vec::new();
+    let no_deployments: Vec<ExtractedContractDeployment> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_nfts: Vec<ExtractedNft> = Vec::new();
+    let no_nft_events: Vec<ExtractedNftEvent> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &no_interfaces,
+        &no_deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &[usdc_asset],
+        &no_nfts,
+        &no_nft_events,
+        &no_lp_positions,
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must succeed under the SAC override fixture");
+
+    let row: (bool, Option<i16>) = sqlx::query_as(
+        "SELECT is_sac, contract_type FROM soroban_contracts WHERE contract_id = $1",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("derived SAC row must exist post-persist");
+
+    assert!(
+        row.0,
+        "pre-existing SAC skeleton must flip is_sac=true after forward-derive override",
+    );
+    assert_eq!(
+        row.1.and_then(|v| ContractType::try_from(v).ok()),
+        Some(ContractType::Token),
+        "pre-existing SAC skeleton must classify as Token (contract_type=0)",
+    );
+
+    clean_sac_override_test(&pool).await;
+}
+
+#[tokio::test]
+async fn sac_override_leaves_already_is_sac_rows_alone() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping SAC idempotency test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping SAC idempotency test");
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_sac_override_test(&pool).await;
+
+    // Pre-seed with is_sac ALREADY true (simulates either an in-window
+    // SAC deploy or a replay of this same step). The override must not
+    // touch the row.
+    sqlx::query(
+        "INSERT INTO soroban_contracts (contract_id, is_sac, contract_type)
+         VALUES ($1, TRUE, 0)
+         ON CONFLICT (contract_id) DO NOTHING",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(&pool)
+    .await
+    .expect("seed already-classified SAC row");
+
+    let ledger = ExtractedLedger {
+        sequence: SAC_LEDGER_SEQ + 1,
+        hash: "bbbb662222222222222222222222222222222222222222222222222222222222".to_string(),
+        closed_at: SAC_CLOSED_AT + 5,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: "aaaa662222222222222222222222222222222222222222222222222222222222".to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: SAC_LEDGER_SEQ + 1,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: SAC_CLOSED_AT + 5,
+        parse_error: false,
+    };
+    let usdc_asset = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(SAC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let cache = ClassificationCache::new();
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+        &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+        &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+        &Vec::<(String, Value)>::new(),
+        &Vec::<ExtractedContractInterface>::new(),
+        &Vec::<ExtractedContractDeployment>::new(),
+        &Vec::<ExtractedAccountState>::new(),
+        &Vec::<ExtractedLiquidityPool>::new(),
+        &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+        &[usdc_asset],
+        &Vec::<ExtractedNft>::new(),
+        &Vec::<ExtractedNftEvent>::new(),
+        &Vec::<ExtractedLpPosition>::new(),
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must succeed on second pass");
+
+    let row: (bool, Option<i16>) = sqlx::query_as(
+        "SELECT is_sac, contract_type FROM soroban_contracts WHERE contract_id = $1",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("already-classified row must still exist");
+
+    assert!(row.0, "is_sac must remain TRUE — idempotency");
+    assert_eq!(
+        row.1.and_then(|v| ContractType::try_from(v).ok()),
+        Some(ContractType::Token),
+        "contract_type must remain Token — idempotency",
+    );
+
+    clean_sac_override_test(&pool).await;
+}
+
+async fn clean_sac_override_test(pool: &PgPool) {
+    let tx_hashes = [
+        SAC_TX_HASH,
+        "aaaa662222222222222222222222222222222222222222222222222222222222",
+    ];
+    let ledger_seqs = [SAC_LEDGER_SEQ, SAC_LEDGER_SEQ + 1];
+
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    let _ = sqlx::query(
+        "DELETE FROM assets WHERE contract_id IN (
+             SELECT id FROM soroban_contracts WHERE contract_id = $1
+         )",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+        .bind(SAC_TEST_DERIVED_CONTRACT)
+        .execute(pool)
+        .await;
+    // ISSUER_STRKEY is shared fixture; canonical cleanup wipes the
+    // account row. Don't touch it here.
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(SAC_TEST_ISSUER)
+        .execute(pool)
+        .await;
+}
