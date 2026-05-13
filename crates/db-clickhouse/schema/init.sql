@@ -190,6 +190,25 @@ CREATE TABLE IF NOT EXISTS nfts (
 ENGINE = ReplacingMergeTree(current_owner_ledger)
 ORDER BY (contract_id, token_id);
 
+-- Task 0217 — quarantine for NFT-candidate rows whose contract is still
+-- `Other`/NULL-classified (WASM not observed in the current backfill
+-- window). Same row shape as `nfts` so promotion is a column-projection
+-- INSERT. API endpoints never read this table — production sees only
+-- definitive `Nft`-classified rows in `nfts`. Promoted to `nfts` on
+-- `Other → Nft` reclassification, dropped on `Other → Fungible`/`Token`.
+CREATE TABLE IF NOT EXISTS nfts_pending (
+    contract_id           Int64,
+    token_id              String,
+    collection_name       Nullable(String),
+    name                  Nullable(String),
+    media_url             Nullable(String),
+    minted_at_ledger      Nullable(Int64),
+    current_owner_id      Nullable(Int64),
+    current_owner_ledger  Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
 -- liquidity_pools (task 0208 Path 2 folded inline): RMT(last_updated_ledger),
 -- `created_at_ledger` dropped (derive read-time from
 -- `MIN(ledger_sequence) FROM liquidity_pool_snapshots GROUP BY pool_id`).
@@ -321,6 +340,22 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, transaction_id);
 
 CREATE TABLE IF NOT EXISTS nft_ownership (
+    contract_id      Int64,
+    token_id         String,
+    ledger_sequence  Int64,
+    event_order      Int16,
+    transaction_id   Int64,
+    owner_id         Nullable(Int64),
+    event_type       Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, event_order);
+
+-- Task 0217 — quarantine companion to `nft_ownership`. Same row shape +
+-- partitioning so promotion (`INSERT … SELECT FROM nft_ownership_pending`)
+-- copies parts cleanly. API endpoints never read this table.
+CREATE TABLE IF NOT EXISTS nft_ownership_pending (
     contract_id      Int64,
     token_id         String,
     ledger_sequence  Int64,
