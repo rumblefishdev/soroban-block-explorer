@@ -2,7 +2,7 @@
 id: '0218'
 title: 'BUG: is_sac=false for pre-existing SAC contracts (forward-derive from observed assets)'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0027', '0030']
 related_tasks: ['0118']
 tags:
@@ -41,6 +41,16 @@ history:
       the live SAC contract_id. This task wires that derivation into
       the indexer as a one-way "forward-derive from observed asset"
       pass during persist.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated parallel to PR #180 (0217 quarantine + 0118 Patch C
+      revert). Branch `fix/0218_is-sac-false-for-pre-existing-sac` cut
+      from develop. Files touched are disjoint from PR #180's surface
+      (sac.rs + staging contract path + persist post-upsert step vs.
+      0217's NFT filter + `_pending` tables), so the two PRs can be
+      reviewed independently. 0218 ships after #180 merges.
 ---
 
 # BUG: is_sac=false for pre-existing SAC contracts
