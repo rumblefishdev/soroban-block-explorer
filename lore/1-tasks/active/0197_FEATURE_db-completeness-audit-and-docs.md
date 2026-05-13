@@ -153,9 +153,9 @@ captures the **PRE-enrichment** state for the coverage matrix.
 
    ```bash
    cargo run -p backfill-runner -- status --start 51000000 --end 51000300 \
-     > docs/audits/2026-05-13-pre-indexing-status.txt
+     > docs/audits/2026-05-13-0197-step0/2026-05-13-pre-indexing-status.txt
    cargo run -p backfill-enrichment-runner -- status \
-     > docs/audits/2026-05-13-pre-enrichment-status.txt
+     > docs/audits/2026-05-13-0197-step0/2026-05-13-pre-enrichment-status.txt
    ```
 
    The `backfill-enrichment-runner status` output is already a
@@ -176,7 +176,7 @@ captures the **PRE-enrichment** state for the coverage matrix.
 7. **Capture POST snapshot.**
    ```bash
    cargo run -p backfill-enrichment-runner -- status \
-     > docs/audits/2026-05-13-post-enrichment-status.txt
+     > docs/audits/2026-05-13-0197-step0/2026-05-13-post-enrichment-status.txt
    ```
 
 PRE vs POST diff is the central empirical evidence: indexer-driven
@@ -202,7 +202,7 @@ API read-path. A CH-side equivalence audit is deferred to a follow-up
 task that runs once CH serves a real `/v1/*` handler — running it now
 would only verify the 0207 reference SQL against itself.
 
-Output `docs/audits/2026-05-13-list-endpoint-completeness.md` with a single table per endpoint:
+Output `docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md` with a single table per endpoint:
 
 | Endpoint     | DTO field         | DB column         | Indexed? | Populated by           | PRE drain (NULL / sentinel / populated) | POST drain (NULL / sentinel / populated) |
 | ------------ | ----------------- | ----------------- | -------- | ---------------------- | --------------------------------------- | ---------------------------------------- |
