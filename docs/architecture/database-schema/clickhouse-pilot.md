@@ -151,6 +151,65 @@ denormalization at full Stellar scale.
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
 
+### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217)
+
+CH carries the same `_pending` quarantine pair as PG so the routing
+semantics defined in
+[`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)
+behave identically across both writers.
+
+Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
+which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):
+
+| Classifier verdict   | Target tables                            |
+| -------------------- | ---------------------------------------- |
+| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                    |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+
+CH-side schema (see [`init.sql`](../../../crates/db-clickhouse/schema/init.sql)):
+
+```sql
+CREATE TABLE IF NOT EXISTS nfts_pending (
+    contract_id           Int64,
+    token_id              String,
+    collection_name       Nullable(String),
+    name                  Nullable(String),
+    media_url             Nullable(String),
+    minted_at_ledger      Nullable(Int64),
+    current_owner_id      Nullable(Int64),
+    current_owner_ledger  Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
+CREATE TABLE IF NOT EXISTS nft_ownership_pending (
+    contract_id      Int64,
+    token_id         String,
+    ledger_sequence  Int64,
+    event_order      Int16,
+    transaction_id   Int64,
+    owner_id         Nullable(Int64),
+    event_type       Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, event_order);
+```
+
+Notes:
+
+- The shape is identical to `nfts` / `nft_ownership`; promotion is a
+  column-projection `INSERT INTO nfts SELECT … FROM nfts_pending`. The
+  partition layout on `nft_ownership_pending` matches `nft_ownership`
+  so promotion can move whole parts cleanly under a future part-level
+  optimization (not done in the pilot — promotion currently uses a
+  row-level INSERT/DELETE pair).
+- API endpoints never read the `_pending` tables.
+- Operational lifecycle (initial migration + post-backfill drain) is
+  documented in
+  [`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md).
+
 ### 4d. `_sqlx_migrations` dropped
 
 The pilot uses an idempotent `init.sql` (every statement is

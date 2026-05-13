@@ -44,6 +44,52 @@ history:
       runbook). Patch C shrinks parser emit at source; this task lands
       the architectural follow-up — schema migration + persist routing
       + promotion hook for the `Other` / NULL residual bucket.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Implementation shipped on branch
+      `feat/0217_nfts-quarantine-table` in six phases:
+
+      A. Schema migrations — `nfts_pending` + `nft_ownership_pending`
+      added in both PG (timestamped migration
+      `20260513130000_nfts_pending_quarantine`) and CH
+      (`init.sql` diff). No FKs, minimal indexing, natural-key PKs.
+
+      B. Persist routing split — `resolve_nft_filter` now returns a
+      4-bucket `NftFilterDecision` (`hot_nfts`, `pending_nfts`,
+      `hot_ownership`, `pending_ownership`); the previous "permissive
+      insert for `Other`" path is gone. `upsert_nfts_and_ownership`
+      gains 12c/12d INSERT blocks for the quarantine tables.
+
+      C. Promotion hook — `reclassify_contracts_from_wasm` now drives
+      `promote_pending_nfts_to_hot` (Other→Nft) and
+      `drop_pending_nfts_for_contracts` (Other→Fungible) in the same
+      transaction as the contract-type UPDATE, so the type flip and
+      the row migration are atomic from any reader's perspective.
+
+      D. Integration tests — three new DATABASE_URL-gated tests in
+      `crates/indexer/tests/persist_integration.rs`
+      (`quarantine_routes_other_contract_to_pending`,
+      `quarantine_promotes_pending_to_hot_on_nft_verdict`,
+      `quarantine_drops_pending_on_fungible_verdict`). Shared fixture
+      helpers keep each test body small.
+
+      E. Operational runbook —
+      `docs/runbooks/0217_nfts_pending_migration_and_drain.md` with
+      two parts: (1) one-shot migration of existing `Other`/NULL rows
+      out of the hot tables on the 0217 deploy, and (2) post-
+      Soroban-backfill drain of the residual pending (promote
+      stragglers, TRUNCATE).
+
+      F. Architecture docs — `database-schema-overview.md` gains
+      §4.13.1 quarantine subsection; `clickhouse-pilot.md` gains
+      §4c-bis with CH-side schema + routing table. Both link to the
+      runbook for the operational lifecycle.
+
+      `cargo check --workspace` clean.
+      `cargo clippy -p indexer --all-targets -- -D warnings` clean.
+      Integration tests pending DB-bound CI verification.
 ---
 
 # PG+CH: nfts_pending quarantine table for unclassified NFT candidates
@@ -176,16 +222,16 @@ Reviewable in `ops/sql/` (PG) and `ops/clickhouse/` (CH).
 
 ## Acceptance Criteria
 
-- [ ] PG migration adds `nfts_pending` + `nft_ownership_pending` with same row shape as hot tables, minimal indexes (only `contract_id`).
-- [ ] CH equivalent in `init.sql`, same partitioning key.
-- [ ] `resolve_nft_filter` routes `Other` / NULL to pending tables; `Nft` to hot tables; `Fungible` / `Token` dropped (unchanged).
-- [ ] Promotion hook in `reclassify_contracts_from_wasm`: `Other → Nft` promotes pending rows; `Other → Fungible / Token` deletes them.
-- [ ] Integration test: ingest unclassified contract → row lands in `nfts_pending`, NOT `nfts`.
-- [ ] Integration test: late `wasm_upload` reclassifies → row moves to `nfts`.
-- [ ] One-shot migration script for existing `Other`-classified rows committed to `ops/sql/`.
-- [ ] Phase 3 drain script (post-backfill) committed for PG + CH.
-- [ ] **Docs updated** — ADR 0027 schema diagram, ADR 0044 CH pilot schema diff, `docs/architecture/database-schema/*.md` gain `_pending` paragraph.
-- [ ] **API types regenerated** — N/A (no API change; endpoints still read `nfts` / `nft_ownership`).
+- [x] PG migration adds `nfts_pending` + `nft_ownership_pending` with same row shape as hot tables, minimal indexes (only `contract_id`). _(`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`)_
+- [x] CH equivalent in `init.sql`, same partitioning key on the ownership table. _(no partitioning on PG side — pending is transient; CH keeps `intDiv(ledger_sequence, 500000)` for part-copy symmetry with `nft_ownership`.)_
+- [x] `resolve_nft_filter` routes `Other` / NULL to pending tables; `Nft` to hot tables; `Fungible` / `Token` dropped (unchanged). _(returns `NftFilterDecision` with 4 buckets in `crates/indexer/src/handler/persist/write.rs`.)_
+- [x] Promotion hook in `reclassify_contracts_from_wasm`: `Other → Nft` promotes pending rows; `Other → Fungible / Token` deletes them. _(`promote_pending_nfts_to_hot` + `drop_pending_nfts_for_contracts`, both run inside the caller's transaction.)_
+- [x] Integration test: ingest unclassified contract → row lands in `nfts_pending`, NOT `nfts`. _(`quarantine_routes_other_contract_to_pending` in `crates/indexer/tests/persist_integration.rs`.)_
+- [x] Integration test: late `wasm_upload` reclassifies → row moves to `nfts`. _(`quarantine_promotes_pending_to_hot_on_nft_verdict`; companion test `quarantine_drops_pending_on_fungible_verdict` covers the Fungible drop path.)_
+- [x] One-shot migration script for existing `Other`-classified rows. _(Embedded in the operator runbook `docs/runbooks/0217_nfts_pending_migration_and_drain.md` §Part 1, PG and CH sections side-by-side — same form-factor as the 0118 cleanup runbook for consistency.)_
+- [x] Post-backfill drain procedure (PG + CH). _(Runbook §Part 2 — straggler promotion + TRUNCATE.)_
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` gains §4.13.1 quarantine subsection (PG schema); `docs/architecture/database-schema/clickhouse-pilot.md` gains §4c-bis (CH schema + routing table). No ADR amendment required — schema is additive, not a shape break.
+- [x] **API types regenerated** — N/A (no API change; endpoints still read `nfts` / `nft_ownership`).
 
 ## Out of Scope
 
