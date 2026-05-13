@@ -2,7 +2,7 @@
 id: '0217'
 title: 'PG+CH: nfts_pending quarantine table for unclassified NFT candidates (defer-then-promote)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0027', '0044']
 related_tasks: ['0118']
 tags:
@@ -36,6 +36,14 @@ history:
       `nft_ownership_pending` quarantine so the hot, API-facing tables stay
       clean by design. Phase 3 of 0118 redefined as drain-quarantine, not
       delete-from-hot.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated after PR #178 merged (0118 Patch C + Phase 3 cleanup
+      runbook). Patch C shrinks parser emit at source; this task lands
+      the architectural follow-up — schema migration + persist routing
+      + promotion hook for the `Other` / NULL residual bucket.
 ---
 
 # PG+CH: nfts_pending quarantine table for unclassified NFT candidates
