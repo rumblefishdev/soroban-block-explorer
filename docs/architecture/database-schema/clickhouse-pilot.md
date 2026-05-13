@@ -257,6 +257,21 @@ collection so the credential is not version-controlled.
 
 PG keeps all of these.
 
+### Writer-only behaviours not yet ported to CH
+
+- **`soroban_contracts.is_sac` forward-derivation (task 0218)** — the
+  PG writer flips `is_sac=true` + `contract_type=Token` on pre-existing
+  SAC skeleton rows by deriving the SAC contract_id from every
+  observed classic / native asset and running an UPDATE inside the
+  persist transaction
+  (`crates/indexer/src/handler/persist/write.rs::apply_sac_overrides_for_skeleton_contracts`).
+  The CH writer does not yet apply the same override; CH `is_sac` for
+  pre-window SACs therefore remains `false` until parity work lands
+  (different atomicity model — `ReplacingMergeTree` has no per-row
+  UPDATE, so the path is either an `ALTER TABLE … UPDATE` mutation
+  or a re-insert that relies on `wasm_uploaded_at_ledger` version
+  semantics to absorb the corrected row).
+
 ## 5. Engine, partitioning, and ordering
 
 Resolved in

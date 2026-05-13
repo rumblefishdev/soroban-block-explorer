@@ -232,6 +232,11 @@ pub(super) async fn stub_unknown_wasm_interfaces(
 ///
 /// Idempotent on replay: the WHERE `contract_type <> …EXCLUDED…` guard
 /// short-circuits no-op writes.
+///
+/// Companion: see [`apply_sac_overrides_for_skeleton_contracts`] for the
+/// SAC counterpart — that function flips `is_sac` on pre-existing SAC
+/// rows from forward-derived asset overrides (task 0218), not from
+/// observed WASM uploads.
 pub(super) async fn reclassify_contracts_from_wasm(
     db_tx: &mut Transaction<'_, Postgres>,
     staged: &Staged,
@@ -452,6 +457,56 @@ pub(super) fn populate_cache_from_staged(staged: &Staged, cache: &Classification
             .iter()
             .map(|r| (r.contract_id.clone(), r.contract_type)),
     );
+}
+
+/// Task 0218 — flip `is_sac=true` + `contract_type=Token` on
+/// `soroban_contracts` skeleton rows for SAC contracts deployed before
+/// the indexed window.
+///
+/// Inputs come from `staged.sac_overrides`, populated by
+/// [`xdr_parser::derive_sac_overrides_from_assets`] over every observed
+/// classic / native asset in this ledger.
+///
+/// **Idempotent**: the `WHERE is_sac = FALSE` guard short-circuits no-op
+/// writes on replay. The UPDATE never touches a row that already has
+/// `is_sac=true` (whether from a prior pass of this function or from the
+/// in-window `extract_contract_deployments` SAC path). A contract cannot
+/// be both a SAC (no WASM) and carry a WASM-derived `Nft`/`Fungible`
+/// verdict, so flipping `contract_type` to `Token` for a row that hit
+/// `is_sac=false` is safe.
+///
+/// Runs inside the persist transaction between `upsert_assets` and
+/// `upsert_nfts_and_ownership` so the NFT filter step downstream sees
+/// the corrected `contract_type` and drops the SAC contracts at filter
+/// time (not via the 0217 quarantine).
+pub(super) async fn apply_sac_overrides_for_skeleton_contracts(
+    db_tx: &mut Transaction<'_, Postgres>,
+    staged: &Staged,
+) -> Result<(), HandlerError> {
+    if staged.sac_overrides.is_empty() {
+        return Ok(());
+    }
+
+    let contract_ids: Vec<String> = staged
+        .sac_overrides
+        .iter()
+        .map(|o| o.contract_id.clone())
+        .collect();
+
+    sqlx::query(
+        r#"
+        UPDATE soroban_contracts
+           SET is_sac = TRUE,
+               contract_type = 0  -- Token (domain::ContractType::Token)
+         WHERE contract_id = ANY($1::VARCHAR[])
+           AND is_sac = FALSE
+        "#,
+    )
+    .bind(&contract_ids)
+    .execute(&mut **db_tx)
+    .await?;
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

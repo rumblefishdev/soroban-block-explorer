@@ -37,8 +37,8 @@ pub use ledger_entry_changes::extract_ledger_entry_changes;
 pub use nft::detect_nft_events;
 pub use operation::extract_operations;
 pub use sac::{
-    MAINNET_PASSPHRASE, TESTNET_PASSPHRASE, derive_sac_contract_id, extract_sac_identities,
-    network_id, passphrase_for,
+    MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id,
+    derive_sac_overrides_from_assets, extract_sac_identities, network_id, passphrase_for,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{
