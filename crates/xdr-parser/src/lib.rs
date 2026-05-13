@@ -42,9 +42,9 @@ pub use sac::{
 };
 pub use scval::scval_to_typed_json;
 pub use state::{
-    detect_assets, detect_nfts, extract_account_states, extract_contract_data_name_writes,
-    extract_contract_deployments, extract_liquidity_pools, extract_lp_positions,
-    extract_nft_ownership_events,
+    detect_assets, detect_classic_credit_assets, detect_nfts, extract_account_states,
+    extract_contract_data_name_writes, extract_contract_deployments, extract_liquidity_pools,
+    extract_lp_positions, extract_nft_ownership_events, native_asset_singleton,
 };
 pub use transaction::extract_transactions;
 pub use types::{

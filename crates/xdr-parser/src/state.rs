@@ -856,6 +856,123 @@ pub fn detect_assets(
     assets
 }
 
+/// Detect **classic-credit** assets from observed trustline
+/// `LedgerEntryChange`s (task 0219 — Karol's pre-audit Bug #1).
+///
+/// `detect_assets` above only emits SAC + Soroban-fungible rows from
+/// observed contract deployments. Classic credits (USDC, AQUA, EURC,
+/// every asset issued by a G-account) need their own producer because
+/// no deployment-shaped observation carries their identity — the
+/// authoritative carrier is the `trustline` `LedgerEntryChange`'s
+/// `data.asset` field, which holds `{type, code, issuer}` for every
+/// `credit_alphanum4` / `credit_alphanum12` asset.
+///
+/// Flow:
+///
+/// 1. Walk `changes` looking for `entry_type == "trustline"` with
+///    `change_type ∈ {created, updated, restored, state}` (removed
+///    trustlines carry only the key, no asset data).
+/// 2. Skip `asset.type == "pool_share"` — those are LP positions,
+///    handled by `extract_lp_positions`.
+/// 3. Extract `(code, issuer)`; emit one `ExtractedAsset { asset_type:
+///    ClassicCredit, asset_code: code, issuer_address: issuer }` per
+///    distinct pair (dedup within this call).
+///
+/// `name` / `total_supply` / `holder_count` are left `None`:
+///
+/// - `name` for classic credits lands via Lambda 2's `sep1_assets`
+///   enrichment path (task 0195 §2a) — runtime SEP-1 stellar.toml
+///   fetch keyed on the `(code, issuer)` pair.
+/// - `total_supply` + `holder_count` come from task 0194's
+///   `recompute_asset_aggregates` post-write step, which UPDATEs the
+///   row this producer just inserted.
+///
+/// The function is pure (no I/O, no DB) and idempotent on replay.
+/// Downstream dedup in
+/// `crates/indexer/src/handler/persist/staging.rs::asset_rows`
+/// already collapses same `(code, issuer)` from multiple sources to
+/// one row before the `upsert_assets_classic_like` INSERT fires.
+pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> Vec<ExtractedAsset> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut assets: Vec<ExtractedAsset> = Vec::new();
+
+    for change in changes {
+        if change.entry_type != "trustline" {
+            continue;
+        }
+        // Only "live" change types carry the asset payload. Removed
+        // trustlines have key-only data; skipping them never loses an
+        // asset row because the create/update that originally
+        // established the trustline already emitted one.
+        if !matches!(
+            change.change_type.as_str(),
+            "created" | "updated" | "restored" | "state"
+        ) {
+            continue;
+        }
+
+        let Some(ref data) = change.data else {
+            continue;
+        };
+        let Some(asset) = data.get("asset").and_then(Value::as_object) else {
+            continue;
+        };
+        let asset_type = asset.get("type").and_then(Value::as_str).unwrap_or("");
+        // `pool_share` trustlines are LP positions, not asset balances —
+        // handled by `extract_lp_positions`. Skipping here is intentional,
+        // not a data drop.
+        if asset_type == "pool_share" {
+            continue;
+        }
+        let code = asset.get("code").and_then(Value::as_str).unwrap_or("");
+        let issuer = asset.get("issuer").and_then(Value::as_str).unwrap_or("");
+        if code.is_empty() || issuer.is_empty() {
+            // Malformed trustline (shouldn't happen on mainnet); skip
+            // rather than fabricate a partial-identity row.
+            continue;
+        }
+
+        let key = (code.to_string(), issuer.to_string());
+        if !seen.insert(key) {
+            continue;
+        }
+        assets.push(ExtractedAsset {
+            asset_type: TokenAssetType::ClassicCredit,
+            asset_code: Some(code.to_string()),
+            issuer_address: Some(issuer.to_string()),
+            contract_id: None,
+            name: None,
+            total_supply: None,
+            holder_count: None,
+        });
+    }
+
+    assets
+}
+
+/// Native XLM singleton bootstrap (task 0219 — Karol's pre-audit Bug #1).
+///
+/// Returns a single `ExtractedAsset { asset_type: Native }` row. The
+/// indexer emits this once per ledger; the persist path
+/// (`upsert_assets_native`) inserts via `WHERE NOT EXISTS` against
+/// `uidx_assets_native`, so every call after the first is a no-op.
+///
+/// `name` / `total_supply` / `holder_count` are intentionally `None`
+/// — the operator can backfill metadata via a manual seed if desired,
+/// but no on-chain producer surfaces these for native XLM.
+pub fn native_asset_singleton() -> ExtractedAsset {
+    ExtractedAsset {
+        asset_type: TokenAssetType::Native,
+        asset_code: None,
+        issuer_address: None,
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Step 6: NFT Detection
 // ---------------------------------------------------------------------------
@@ -2487,5 +2604,166 @@ mod tests {
         );
         assert_eq!(out.first().unwrap().event_order, 0);
         assert_eq!(out.last().unwrap().event_order, i16::MAX as u16);
+    }
+
+    // ----------------------------------------------------------------------
+    // Task 0219 — detect_classic_credit_assets + native_asset_singleton
+    // ----------------------------------------------------------------------
+
+    fn trustline_change(change_type: &str, code: &str, issuer: &str) -> ExtractedLedgerEntryChange {
+        make_change(
+            "trustline",
+            change_type,
+            json!({
+                "account_id": "GHOLDER",
+                "asset": { "type": "credit_alphanum4", "code": code, "issuer": issuer },
+            }),
+            Some(json!({
+                "account_id": "GHOLDER",
+                "asset": { "type": "credit_alphanum4", "code": code, "issuer": issuer },
+                "balance": 10_000_000,
+                "limit": 1_000_000_000,
+            })),
+        )
+    }
+
+    #[test]
+    fn classic_credit_assets_emitted_from_trustline_created() {
+        let changes = vec![trustline_change(
+            "created",
+            "USDC",
+            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        )];
+        let assets = detect_classic_credit_assets(&changes);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(assets[0].asset_code.as_deref(), Some("USDC"));
+        assert_eq!(
+            assets[0].issuer_address.as_deref(),
+            Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+        );
+        assert!(assets[0].contract_id.is_none());
+        assert!(assets[0].name.is_none());
+    }
+
+    #[test]
+    fn classic_credit_emitted_for_updated_restored_state_changes() {
+        let issuer = "GISSUER";
+        let changes = vec![
+            trustline_change("created", "AQUA", issuer),
+            trustline_change("updated", "AQUA", issuer),
+            trustline_change("restored", "AQUA", issuer),
+            trustline_change("state", "AQUA", issuer),
+        ];
+        let assets = detect_classic_credit_assets(&changes);
+        // Same (code, issuer) across 4 change types → 1 row after dedup.
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].asset_code.as_deref(), Some("AQUA"));
+    }
+
+    #[test]
+    fn classic_credit_removed_trustlines_skipped() {
+        // Removed trustlines carry only the key; data is None. We rely on
+        // the create/update that originally established the trustline to
+        // have already emitted the asset row, so removed-only emission is
+        // not needed and not safe (no asset payload).
+        let mut change = trustline_change(
+            "removed",
+            "USDC",
+            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        );
+        change.data = None;
+        let assets = detect_classic_credit_assets(&[change]);
+        assert!(assets.is_empty());
+    }
+
+    #[test]
+    fn classic_credit_dedups_same_code_issuer_across_changes() {
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let changes = vec![
+            trustline_change("created", "USDC", issuer),
+            trustline_change("updated", "USDC", issuer),
+            trustline_change("created", "EURC", issuer),
+        ];
+        let assets = detect_classic_credit_assets(&changes);
+        // USDC dedups across two changes; EURC stands alone → 2 rows.
+        assert_eq!(assets.len(), 2);
+        let mut codes: Vec<_> = assets
+            .iter()
+            .map(|a| a.asset_code.as_deref().unwrap_or(""))
+            .collect();
+        codes.sort();
+        assert_eq!(codes, vec!["EURC", "USDC"]);
+    }
+
+    #[test]
+    fn classic_credit_skips_pool_share_trustlines() {
+        let change = make_change(
+            "trustline",
+            "created",
+            json!({"account_id": "GHOLDER", "asset": {"type": "pool_share"}}),
+            Some(json!({
+                "account_id": "GHOLDER",
+                "asset": { "type": "pool_share" },
+                "balance": 1_000,
+            })),
+        );
+        let assets = detect_classic_credit_assets(&[change]);
+        assert!(
+            assets.is_empty(),
+            "pool_share trustlines belong to extract_lp_positions, not asset rows"
+        );
+    }
+
+    #[test]
+    fn classic_credit_skips_non_trustline_entries() {
+        let change = make_change(
+            "account",
+            "created",
+            json!({"account_id": "GACCOUNT"}),
+            Some(json!({"account_id": "GACCOUNT", "balance": 10_000_000})),
+        );
+        let assets = detect_classic_credit_assets(&[change]);
+        assert!(assets.is_empty());
+    }
+
+    #[test]
+    fn classic_credit_skips_malformed_asset_object() {
+        // Asset object missing `code` or `issuer` should be skipped rather
+        // than producing a partial-identity row.
+        let no_code = make_change(
+            "trustline",
+            "created",
+            json!({"account_id": "GHOLDER", "asset": {"type": "credit_alphanum4"}}),
+            Some(json!({
+                "account_id": "GHOLDER",
+                "asset": { "type": "credit_alphanum4", "issuer": "GISSUER" },
+                "balance": 0,
+            })),
+        );
+        let no_issuer = make_change(
+            "trustline",
+            "created",
+            json!({"account_id": "GHOLDER", "asset": {"type": "credit_alphanum4"}}),
+            Some(json!({
+                "account_id": "GHOLDER",
+                "asset": { "type": "credit_alphanum4", "code": "USDC" },
+                "balance": 0,
+            })),
+        );
+        let assets = detect_classic_credit_assets(&[no_code, no_issuer]);
+        assert!(assets.is_empty());
+    }
+
+    #[test]
+    fn native_singleton_returns_native_asset_no_identity() {
+        let asset = native_asset_singleton();
+        assert_eq!(asset.asset_type, TokenAssetType::Native);
+        assert!(asset.asset_code.is_none());
+        assert!(asset.issuer_address.is_none());
+        assert!(asset.contract_id.is_none());
+        assert!(asset.name.is_none());
+        assert!(asset.total_supply.is_none());
+        assert!(asset.holder_count.is_none());
     }
 }

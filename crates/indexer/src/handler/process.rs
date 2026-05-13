@@ -310,6 +310,15 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         // them.
         let assets = xdr_parser::detect_assets(&deployments, &all_contract_interfaces);
         all_assets.extend(assets);
+        // Task 0219 — classic-credit asset rows from observed trustline
+        // changes. `detect_assets` above covers SAC + Soroban-fungible
+        // deployments only; classic credits (USDC, AQUA, EURC, …) need
+        // their own producer because the authoritative carrier is the
+        // `trustline` LedgerEntryChange's `data.asset` field, not a
+        // contract deployment shape. Dedup within the ledger happens at
+        // staging time.
+        let classic_credits = xdr_parser::detect_classic_credit_assets(changes);
+        all_assets.extend(classic_credits);
         all_contract_deployments.extend(deployments);
 
         let accounts = xdr_parser::extract_account_states(changes);
@@ -332,6 +341,12 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let name_writes = xdr_parser::extract_contract_data_name_writes(changes);
         all_contract_name_writes.extend(name_writes);
     }
+
+    // Task 0219 — native XLM singleton bootstrap. Emit one
+    // `ExtractedAsset { asset_type: Native }` per ledger; the persist
+    // path's `upsert_assets_native` uses `WHERE NOT EXISTS` against
+    // `uidx_assets_native`, so subsequent ledgers are no-ops.
+    all_assets.push(xdr_parser::native_asset_singleton());
 
     let all_nfts = xdr_parser::detect_nfts(&all_nft_events);
 
