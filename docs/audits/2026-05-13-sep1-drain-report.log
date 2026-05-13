@@ -1,0 +1,25 @@
+    Finished `release` profile [optimized] target(s) in 0.15s
+     Running `target/release/enrich sep1-assets`
+# backfill-enrichment-runner — sep1_assets drain report
+
+**Timestamp:** 2026-05-13T07:34:03.995645+00:00
+**Processed:** 10369
+**Succeeded (incl. sentinel writes):** 9624
+**Unreachable (transient, retry candidate):** 745
+**DB failures:** 0
+**Duration:** 22736 ms
+
+## Sample transient errors (first 10)
+
+| id | error |
+| --- | --- |
+| 6 | HTTP error fetching stellar.toml from pendulum-guardian.pw: error sending request for url (https://pendulum-guardian.pw/.well-known/stellar.toml) |
+| 20 | HTTP error fetching stellar.toml from minerals.indus.exchange: error sending request for url (https://minerals.indus.exchange/.well-known/stellar.toml) |
+| 30 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |
+| 34 | HTTP error fetching stellar.toml from etoro-stellar.org: error sending request for url (https://etoro-stellar.org/.well-known/stellar.toml) |
+| 43 | HTTP error fetching stellar.toml from stellar-daed.com: error sending request for url (https://stellar-daed.com/.well-known/stellar.toml) |
+| 54 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |
+| 71 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |
+| 81 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |
+| 144 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |
+| 152 | HTTP error fetching stellar.toml from au.indus.exchange: error sending request for url (https://au.indus.exchange/.well-known/stellar.toml) |

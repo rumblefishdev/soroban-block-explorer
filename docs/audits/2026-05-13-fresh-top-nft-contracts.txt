@@ -1,0 +1,3 @@
+ERROR:  column reference "contract_id" is ambiguous
+LINE 2: SELECT contract_id, COUNT(*) AS nft_rows
+               ^

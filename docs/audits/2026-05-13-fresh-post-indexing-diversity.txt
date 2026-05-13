@@ -1,0 +1,14 @@
+        table_name        |   rows   | min_seq  | max_seq  
+--------------------------+----------+----------+----------
+ assets                   |        7 |          |         
+ liquidity_pools          |    11985 |          |         
+ soroban_contracts        |    11926 |          |         
+ ledgers                  |    23332 | 50944000 | 50967331
+ accounts                 |   180612 |          |         
+ account_balances_current |   329367 |          |         
+ liquidity_pool_snapshots |   392256 |          |         
+ nfts                     |  1088584 |          |         
+ transactions             |  8683448 |          |         
+ operations_appearances   | 10276654 |          |         
+(10 rows)
+
