@@ -383,6 +383,78 @@ The cross-reference doc at
 enumerates every `Extracted*` field with its CH target column (or
 "out of scope — matches PG").
 
+#### State-side ingestion (initial-snapshot mechanism)
+
+The CH writer inherits the parser's emit-on-observed-change pattern
+for state-side tables (`accounts`, `account_balances_current`,
+`assets`, `liquidity_pools`, `lp_positions`, `soroban_contracts`).
+That pattern is bullet-proof when the indexed range happens to
+contain every entity's `LedgerEntry*` update — which it usually
+doesn't for short backfill windows. The 2026-05-12 CH pilot audit
+([§E06](../../audits/2026-05-12-ch-pilot-endpoint-audit.md))
+quantified the gap:
+
+- Most accounts that appear in `transaction_participants` over a
+  64 k-ledger window are referenced **only** as participants — their
+  `AccountEntry` is never touched in the same range. The CH `accounts`
+  row therefore persists as a skeleton: `sequence_number = 0,
+  home_domain = null, account_balances_current rows = 0`.
+- Example from the audit: `GARDNV3Q7…` shows skeleton state in CH
+  while Horizon reports `seqnum = 148e15, home_domain =
+  "ultracapital.xyz", balance = 12 861 XLM`.
+
+Task 0214 closes the gap with an **initial-snapshot mechanism** that
+runs once per backfill window in
+`crates/backfill-runner/src/{rpc_snapshot,bootstrap}.rs`:
+
+1. **Discovery** — JOIN `transaction_participants` (window-filtered)
+   against `accounts FINAL` and keep rows where `sequence_number =
+   0`. The Phase 2 incremental top-up gate is intrinsic to the JOIN:
+   already-populated rows are skipped, so a window re-run only
+   touches the rows that still need it.
+2. **RPC fetch** — batch `LedgerKey::Account(...)` keys (≤ 200 per
+   call) and POST `getLedgerEntries` to Soroban RPC. Decode each
+   returned `AccountEntry` into `(account_id, sequence_number,
+   balance, home_domain)`.
+3. **Stage** — INSERT into `accounts` (overwriting the skeleton via
+   `ReplacingMergeTree(last_seen_ledger)`) and into
+   `account_balances_current` for the native XLM row. Snapshot rows
+   carry `last_seen_ledger = window_start` as their watermark; a
+   per-ledger parser emit at a higher sequence inside the same window
+   overwrites the snapshot naturally on the next background merge.
+4. **Skip-and-warn** — RPC failure downgrades to a warn-and-return
+   instead of failing the run. Bootstrap is opportunistic enrichment;
+   the per-ledger ingest path is the load-bearing one.
+
+The runner CLI gates this step on `--soroban-rpc-url` /
+`SOROBAN_RPC_URL`. PG-target runs always skip the bootstrap (PG's
+account-state coverage is handled by task 0119 + ADR 0027 §7 via a
+different path). CH-target runs without the URL log
+`bootstrap_account_state skipped — no --soroban-rpc-url configured`
+and proceed; the accounts that need enrichment stay as skeletons
+until the operator re-runs with the flag set.
+
+##### Why the RPC client lives inside `crates/backfill-runner`
+
+Task 0214 is the first concrete consumer of Soroban RPC. Adjacent
+tasks 0218 (SAC override) and 0219 (classic-credit assets) ship
+cheaper non-RPC layers and only fall back to RPC for stragglers, so
+they don't drive a shared-crate decision yet. The inline module
+keeps the blast radius small; the refactor to a
+`crates/soroban-rpc-client` crate is a one-day move once a second
+concrete consumer lands.
+
+##### What this does not cover (yet)
+
+The Phase 1 implementation snapshots `AccountEntry` only — including
+the native XLM balance. The trustline pass
+(`LedgerKey::Trustline(...)` for each `(account, asset)` pair
+referenced in the window) is left as a Phase 3 follow-up; the
+`decode_trustline_snapshot` and `rebuild_trustline_asset` helpers
+are already on the public surface of `rpc_snapshot.rs` ready to wire
+in when the asset-aggregate port of PG task 0194's
+`recompute_asset_aggregates` lands on the CH side.
+
 #### Partition-aligned streaming inserts
 
 `db_clickhouse::persist::writer::PartitionWriter` holds one

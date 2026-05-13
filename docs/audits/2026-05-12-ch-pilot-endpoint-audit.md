@@ -51,6 +51,29 @@ See per-row XDR verdicts. Fee-bump inner-source semantics correct, app_order=1-b
 
 **Resolution:** in CH pilot scope — needs **initial-snapshot mechanism** on backfill start (read live state via Soroban RPC `getLedgerEntries` for all observed accounts at the backfill window's start ledger). Task spawned: **0214**.
 
+**Status 2026-05-13 (Phase 1 implementation shipped):** Task 0214
+Phase 1 + Phase 2 implementation merged in branch
+`fix/0214_ch-initial-snapshot-account-state`. New `bootstrap_account_state`
+runner step (gated on `--soroban-rpc-url`) discovers skeleton accounts
+via `transaction_participants ⋈ accounts FINAL WHERE
+sequence_number = 0`, batches `LedgerKey::Account(...)` keys to
+Soroban RPC `getLedgerEntries` (≤ 200 keys per call), decodes the
+returned `AccountEntry` for `seqnum / home_domain / native balance`,
+and stages into `accounts` + `account_balances_current` with
+`last_seen_ledger = window_start` as the snapshot watermark.
+ReplacingMergeTree dedup keeps the parser-emitted higher-watermark
+rows authoritative when a later ledger updates the same account.
+Phase 3 (trustline pass + asset-aggregate recompute port) deferred —
+the public decoder + key-construction helpers are already on the
+`rpc_snapshot.rs` module surface ready to wire in.
+
+The empirical-verification ACs (re-run the 64 k window with
+`--soroban-rpc-url` set, confirm `countIf(sequence_number > 0) > 50 %`,
+confirm `GARDNV3Q7…` shows real state) stay open as operational
+follow-up — the implementation is gated on a live mainnet Soroban
+RPC endpoint we don't yet have in CI. See task 0214 ACs for the
+explicit follow-up list.
+
 ### E15/E16/E17 — DATA UNUSABLE (0118 false positives)
 
 **Top 5 "NFT" contracts in CH = all fungibles:**
