@@ -653,10 +653,34 @@ Design notes:
   SAC, native XLM-SAC, and Soroban-native assets all dedupe by `contract_id`
   via `uidx_assets_soroban`
 - the native XLM singleton (`asset_type = 0`, name `"Stellar Lumen"`, all
-  identity columns NULL) is bootstrapped by the
-  `20260428000000_seed_native_asset_singleton` migration, not by the parser —
-  there is no native branch in `detect_assets`. Operator deletion of this row
-  breaks the `/assets` listing and any future FK that targets it.
+  identity columns NULL) is bootstrapped on **two paths** that both rely on
+  `uidx_assets_native`'s `WHERE NOT EXISTS` no-op semantics:
+  - **Migration `20260428000000_seed_native_asset_singleton`** seeds the row
+    on a clean DB (name = `"Stellar Lumen"`).
+  - **Parser path** (task 0219) — `xdr_parser::native_asset_singleton()`
+    emits one `ExtractedAsset { asset_type: Native, … }` per ledger from
+    `crates/indexer/src/handler/process.rs`; the persist step
+    `upsert_assets_native` UPSERTs idempotently against `uidx_assets_native`.
+    Belt-and-suspenders coverage for environments where the migration
+    seed never ran (e.g. mid-stream restart from a manual schema apply).
+- producers per `asset_type`:
+  - `0 = Native` → migration seed + `native_asset_singleton()` (above).
+  - `1 = ClassicCredit` → `xdr_parser::detect_classic_credit_assets(changes)`
+    walks every `trustline` `LedgerEntryChange` (`change_type ∈ {created,
+updated, restored, state}`), extracts `(asset.code, asset.issuer)` from
+    the change's `data.asset` field, dedupes within the ledger, emits one
+    row per distinct pair. `pool_share` trustlines are intentionally
+    skipped — those are LP positions, handled by `extract_lp_positions`.
+    Producer added in task 0219 to close Karol's pre-audit Bug #1
+    (classic credits had no producer; the persist branch fired only in
+    tests).
+  - `2 = Sac` → `xdr_parser::detect_assets` (`crates/xdr-parser/src/state.rs`)
+    on every observed SAC contract deployment. SAC identity carried via
+    the deployment's `sac_asset` field (`SacAssetIdentity::Credit` or
+    `Native`).
+  - `3 = Soroban` → `xdr_parser::detect_assets` for non-SAC deployments
+    whose WASM interface classifies as `Fungible` via
+    `xdr_parser::classify_contract_from_wasm_spec`.
 - `icon_url` is the only SEP-1 enrichment field on the DB row — it serves the
   list-page thumbnail (per-row), and is populated by the **type-1 enrichment
   worker Lambda** (`crates/enrichment-worker`, task 0191): the indexer Lambda

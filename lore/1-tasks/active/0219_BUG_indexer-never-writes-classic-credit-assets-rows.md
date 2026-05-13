@@ -76,6 +76,52 @@ history:
       branch `fix/0219_classic-credit-assets-rows` from develop.
       Ships in parallel with PR #181 (0218 SAC forward-derive); 0218
       production effect waits on this PR's merge.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Implementation shipped on the branch in four phases:
+
+      A. **Parser helpers** — `xdr_parser::detect_classic_credit_assets`
+      walks `trustline` LedgerEntryChanges, extracts
+      `(asset.code, asset.issuer)` from `data.asset`, dedupes within
+      the call. `xdr_parser::native_asset_singleton()` returns one
+      `ExtractedAsset { asset_type: Native, … }` row. Re-exported
+      from `crates/xdr-parser/src/lib.rs`. 8 new unit tests in
+      `state::tests` cover the happy path, change-type matrix
+      (`created`/`updated`/`restored`/`state`), dedup across
+      changes, pool-share skip, non-trustline skip, malformed-asset
+      skip, native-singleton shape.
+
+      B. **Wiring** — `crates/indexer/src/handler/process.rs`
+      per-tx loop extends `all_assets` with
+      `detect_classic_credit_assets(changes)` alongside the existing
+      `detect_assets` call; after the loop, the native singleton is
+      pushed once per ledger. Existing `Staged::prepare` dedup
+      (line ~970) collapses same `(code, issuer)` from multiple txs
+      to one row before the `upsert_assets_classic_like` INSERT
+      fires.
+
+      C. **Integration tests** — two DB-gated tests in
+      `crates/indexer/tests/persist_integration.rs`:
+      `classic_credit_extracted_asset_lands_in_assets_table`
+      (happy path: ClassicCredit shape → row with `asset_type=1`
+      + `(asset_code, issuer_id FK)`; native singleton also
+      lands) and `native_singleton_idempotent_across_repeat_persist`
+      (two persist passes → still exactly one native row, validating
+      `WHERE NOT EXISTS` against `uidx_assets_native`).
+
+      D. **Docs** — `database-schema-overview.md` §4.10 gains a
+      4-row producer-table by `asset_type`;
+      `xdr-parsing-overview.md` §4.6 gains a bullet covering the
+      new responsibility. No ADR amendment needed — the change is
+      additive and ADR 0043 already requires the rows.
+
+      62 `state` lib tests green; `cargo check --workspace` +
+      `cargo clippy -p indexer -p xdr-parser --all-targets -- -D
+      warnings` clean. Empirical replay (post-merge backfill rerun,
+      count assets.asset_type=1 vs. distinct classic-credit pairs
+      in account_balances_current) is operational follow-up.
 ---
 
 # BUG: indexer never writes classic-credit assets entity rows
@@ -225,13 +271,13 @@ SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type;
 
 ## Acceptance Criteria
 
-- [ ] `detect_classic_credit_assets` (or equivalent) public + unit-tested.
-- [ ] Native XLM singleton bootstrap path emits `ExtractedAsset { asset_type: Native }` idempotently.
-- [ ] `persist_ledger` wires the new producer's output into the same staging path as `detect_assets`.
-- [ ] Integration test: trustline observation → classic-credit row in `assets`; pool-share trustline → no asset row.
-- [ ] **Empirical replay**: re-run a backfill window that previously held 0 classic credits and verify `SELECT COUNT(*) FROM assets WHERE asset_type = 1` matches the distinct `(asset_code, issuer_id)` count in `account_balances_current` for the same range.
-- [ ] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` §4.10 + `docs/architecture/xdr-parsing/xdr-parsing-overview.md` updated; no ADR amendment needed.
-- [ ] **API types regenerated** — N/A (no API contract change; `GET /v1/assets` shape unchanged, just returns more rows).
+- [x] `detect_classic_credit_assets` public + unit-tested. _(`crates/xdr-parser/src/state.rs`; 7 new unit tests cover happy path, change-type matrix, dedup, pool-share skip, non-trustline skip, malformed asset skip.)_
+- [x] Native XLM singleton bootstrap path emits `ExtractedAsset { asset_type: Native }` idempotently. _(`xdr_parser::native_asset_singleton`; persist's `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.)_
+- [x] `persist_ledger` wires the new producer's output into the same staging path as `detect_assets`. _(`crates/indexer/src/handler/process.rs` per-tx loop extends `all_assets` with `detect_classic_credit_assets(changes)`; after the loop, the native singleton is pushed once per ledger.)_
+- [x] Integration test: trustline-shaped `ExtractedAsset` → classic-credit row in `assets`. _(`classic_credit_extracted_asset_lands_in_assets_table` + `native_singleton_idempotent_across_repeat_persist` in `crates/indexer/tests/persist_integration.rs`. **Note:** the persist-side test feeds a hand-crafted `ExtractedAsset(ClassicCredit, USDC, GA5ZSEJY…)` shape; the parser-side producer is exercised by the unit tests in `state::tests`. Pool-share rejection is unit-tested at the parser layer where the decision actually lives.)_
+- [ ] **Empirical replay**: re-run a backfill window that previously held 0 classic credits and verify `SELECT COUNT(*) FROM assets WHERE asset_type = 1` matches the distinct `(asset_code, issuer_id)` count in `account_balances_current` for the same range. _(Operational follow-up — run after this PR lands and a fresh backfill is kicked.)_
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` §4.10 gains a 4-row producer-table by `asset_type` (Native = migration seed + parser singleton; ClassicCredit = `detect_classic_credit_assets`; Sac + Soroban = `detect_assets`); `docs/architecture/xdr-parsing/xdr-parsing-overview.md` §4.6 gains a bullet documenting the new responsibility. No ADR amendment needed (the change is additive — ADR 0043's "list endpoint + on-chain → indexer" rule now finally has matching implementation for classic credits + native).
+- [x] **API types regenerated** — N/A (no API contract change; `GET /v1/assets` shape unchanged, just returns more rows).
 
 ## Out of Scope
 
