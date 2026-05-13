@@ -4,6 +4,16 @@
 **Author:** stkrolikiewicz  
 **Scope:** Full pipeline data correctness audit + Deliverable 1 readiness assessment
 
+> **⚠ Partially superseded by [2026-05-13 list-endpoint completeness audit](./2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)** (task 0197).
+>
+> Specifically:
+>
+> - **§8 (Third-Pass Audit Findings F18-F25)** and **§9 (Enrichment Pipeline Gap)** are superseded by the empirical PRE/POST coverage matrix in the 2026-05-13 audit. The 0194 / 0195 / 0196 work + ADR 0043 (field allocation rule) collectively replaced the "write-only columns" + "no Lambda 2 / no drain crate" framings used in those sections. Findings from those sections that are still live were either folded into Bug #1-#6 of the 2026-05-13 audit or migrated to the F1-F10 finding set there.
+> - **§9.3 (cron-based off-chain enrichment proposal)** was explicitly overridden by ADR 0043 — see ADR §Rationale point 5 and Alternative 3 rejection. LP `volume` / `fee_revenue` are on-chain → indexer (task 0199), not cron.
+> - **§5 (Nullable Fields Analysis)** is now obsolete; per-column NULL / sentinel / populated counts live in the 2026-05-13 audit §2 with sentinel-aware accounting per 0191 Design Decision #12.
+>
+> Sections outside the supersession scope (§1-§4, §6-§7, §10-§11) remain authoritative as written, modulo the substitutions above. Read the 2026-05-13 audit for the post-0194/0195/0196 state of the surface.
+
 ---
 
 ## Table of Contents
