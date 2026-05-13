@@ -2,7 +2,7 @@
 id: '0219'
 title: 'BUG: indexer never writes classic-credit assets entity rows'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0027', '0030', '0031', '0043']
 related_tasks: ['0118', '0119', '0188', '0191', '0194', '0195', '0214', '0218']
 tags:
@@ -68,6 +68,14 @@ history:
       (integration test passes only because the fixture manually
       injects a `ClassicCredit` asset). 0219 unblocks 0218's
       production effect.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated immediately after spawn — implementation starts on
+      branch `fix/0219_classic-credit-assets-rows` from develop.
+      Ships in parallel with PR #181 (0218 SAC forward-derive); 0218
+      production effect waits on this PR's merge.
 ---
 
 # BUG: indexer never writes classic-credit assets entity rows
