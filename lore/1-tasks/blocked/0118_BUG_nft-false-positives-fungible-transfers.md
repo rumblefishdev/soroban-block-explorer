@@ -2,9 +2,9 @@
 id: '0118'
 title: 'BUG: NFT false positives from fungible token transfers'
 type: BUG
-status: active
+status: blocked
 related_adr: ['0027']
-related_tasks: ['0026', '0027', '0149']
+related_tasks: ['0026', '0027', '0149', '0217']
 tags: [priority-high, effort-medium, layer-indexer, audit-F9]
 milestone: 1
 links:
@@ -120,6 +120,71 @@ history:
       (current `Other` verdict's permissive emit policy produces the
       observed false positives). See
       `docs/audits/2026-05-12-ch-pilot-endpoint-audit.md` §E15.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 1.5 (Patch C — parser-side whitelist in
+      `crates/xdr-parser/src/nft.rs::looks_like_token_id`) +
+      Phase 3 (cleanup SQL for PG + CH) implemented on branch
+      `fix/0118_nft-false-positives-phase-c`. Picked up from Karol's
+      local prototype; ship both as one PR.
+
+      Patch C: `looks_like_token_id` now rejects `i128`/`u128`
+      (always SEP-41 fungible amount per spec) with a `debug!` log
+      (target `xdr_parser::nft`) for on-demand observability — `warn!`
+      would have flooded production logs because fungible transfers are
+      high-volume (XLM SAC alone ≈ 421k events in the audit window).
+      Whitelists conventional SEP-50 + OpenZeppelin
+      token_id shapes (`u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+      `address`). Spec basis: SEP-41 amount=i128, SEP-50 token_id =
+      unsigned integer, OpenZeppelin Stellar NonFungibleToken trait =
+      u32, Stellar Discussion #1674 = zero argument for i128. Trade-off:
+      hypothetical false-negative for SEP-50-non-compliant NFT using
+      i128 token_id — zero such contracts observed in the audit sample,
+      warn-log surfaces any future case for whitelist extension.
+
+      Test refresh: renamed `parser_emits_i128_transfer_as_nft_candidate`
+      → `parser_rejects_i128_transfer_per_patch_c` (inverted assertion).
+      Added `parser_rejects_u128_transfer_per_patch_c`,
+      `whitelist_accepts_u32_token_id`, `whitelist_accepts_u64_token_id`,
+      `whitelist_accepts_i32_and_i64_token_ids`,
+      `whitelist_accepts_bytes_string_address_token_ids`,
+      `whitelist_rejects_unknown_data_types`. 16/16 `nft::tests` green.
+
+      Phase 3 cleanup SQL embedded in operator runbook
+      `docs/runbooks/0118_phase3_cleanup_nfts.md` (PG + CH sections
+      side-by-side, with preconditions / sanity probes / verification
+      steps and ContractType discriminant mapping). Both flows
+      idempotent, both run only AFTER the Soroban-era backfill has
+      populated WASM verdicts. CH section tracks mutation completion
+      via `system.mutations` before `OPTIMIZE TABLE nfts FINAL`.
+
+      Ingester filter strengthen for the `Other`/NULL bucket
+      DEFERRED to task 0217 (nfts quarantine table) — proper
+      architectural fix routes `Other`/NULL to dedicated
+      `nfts_pending` instead of permissive-inserting into the
+      API-facing hot table.
+  - date: '2026-05-13'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      External blocker: full Soroban-era backfill run on a prod-like
+      DB required for the Phase 3 empirical dry-run AC. Code-side
+      delivery is complete after PR #178 (Patch C parser whitelist +
+      Phase 3 cleanup runbook for both PG and CH). Operator runbook
+      lives at `docs/runbooks/0118_phase3_cleanup_nfts.md` — one
+      markdown with PG and CH sections side-by-side, embedded SQL,
+      preconditions / sanity probes / verification queries, and a
+      ContractType discriminant mapping table. The cleanup is
+      idempotent and only has effect once
+      `soroban_contracts.contract_type` is populated with
+      WASM-derived verdicts (i.e. after the full Soroban-era backfill
+      has indexed every `wasm_upload` op). Ingester filter strengthen
+      for the `Other`/NULL bucket split to task 0217 (`nfts_pending`
+      quarantine table — architectural follow-up). After the dry-run
+      runs and the sanity probe returns 0 unclassified-with-NFT-rows,
+      archive this task.
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -318,9 +383,10 @@ COMMIT;
 VACUUM ANALYZE nfts;
 ```
 
-Script committed to the repo (e.g.
-`crates/db/migrations/` or a dedicated `ops/sql/` folder) so it is
-reviewable and re-runnable.
+Cleanup procedure shipped as an operator runbook at
+`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH sections
+side-by-side, embedded SQL, preconditions / sanity probes /
+verification queries, and a ContractType discriminant mapping table.
 
 ## Acceptance Criteria
 
@@ -404,12 +470,35 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
       and the per-worker cache holds both definitive verdicts after
       the ledger commits.)_
 
-### Phase 3 (cleanup)
+### Phase 1.5 (Patch C — parser whitelist, 2026-05-13)
 
-- [ ] SQL cleanup script committed to the repo; reviewable.
+- [x] `looks_like_token_id` narrowed to whitelist of conventional SEP-50 /
+      OpenZeppelin shapes: `u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+      `address`. _(`crates/xdr-parser/src/nft.rs`)_
+- [x] `i128` and `u128` explicitly rejected with `debug!` log (always
+      SEP-41 fungible amount). Observability path for any future legit
+      i128-token_id NFT contract.
+- [x] Old permissive test `parser_emits_i128_transfer_as_nft_candidate`
+      renamed and inverted → `parser_rejects_i128_transfer_per_patch_c`.
+      Added 5 new whitelist-coverage tests; 16/16 `nft::tests` green.
+
+### Phase 3 (cleanup, 2026-05-13)
+
+- [x] SQL cleanup script committed to the repo; reviewable.
+      _(`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH
+      sections side-by-side with embedded SQL, preconditions,
+      sanity probes, and verification queries.)_
 - [ ] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
-- [ ] `VACUUM ANALYZE nfts` in the operational runbook.
+      _(Operational — run after task 0145 completes full Soroban-era
+      backfill.)_
+- [x] `VACUUM ANALYZE nfts` (PG) / `OPTIMIZE TABLE nfts FINAL` (CH) in
+      the cleanup script. CH script tracks `system.mutations` to ensure
+      mutations complete before OPTIMIZE.
+- [ ] Ingester filter strengthen for `Other`/NULL bucket — DEFERRED to
+      task 0217 (`nfts_pending` quarantine table). 0118 ships Patch C +
+      cleanup SQL; 0217 lands the proper architectural fix
+      (Other/NULL → quarantine, hot table stays clean by design).
 
 ## Risks / Notes
 
