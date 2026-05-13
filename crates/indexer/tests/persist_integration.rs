@@ -140,6 +140,8 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -376,6 +378,8 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -458,6 +462,8 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -717,6 +723,8 @@ async fn v4_per_op_events_land_in_appearance_index() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -902,6 +910,8 @@ async fn v4_diag_contract_mirror_does_not_inflate_amount() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -1516,6 +1526,8 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -1596,6 +1608,8 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -1724,6 +1738,8 @@ async fn nft_filter_drops_fungible_classified_contract() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2026,6 +2042,8 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2109,6 +2127,8 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2305,6 +2325,8 @@ async fn soroban_fungible_contract_produces_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2439,6 +2461,8 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2510,6 +2534,8 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -2577,6 +2603,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache2,
     )
@@ -2853,6 +2880,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -2989,6 +3017,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3025,6 +3054,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache2,
     )
@@ -3372,6 +3402,7 @@ async fn orphan_position_emits_sentinel_pool() {
         &Vec::new(),
         &lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3488,6 +3519,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &lp_positions_t1,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3536,6 +3568,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &Vec::new(),
         &Vec::new(),
+        &[],
         &[],
         &cache,
     )
@@ -3630,6 +3663,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3668,6 +3702,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &lp_positions_t2,
+        &[],
         &[],
         &cache,
     )
@@ -3824,6 +3859,7 @@ async fn application_order_preserves_apply_order_not_alphabetic() {
         &[],
         &[],
         &[],
+        &[],
         &ClassificationCache::new(),
     )
     .await
@@ -3938,6 +3974,7 @@ async fn application_order_min_fold_for_duplicate_identity() {
         &ledger,
         &[transaction],
         &operations,
+        &[],
         &[],
         &[],
         &[],
@@ -4113,6 +4150,8 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         /* nft_events          */ &[],
         /* lp_positions        */ &[],
         /* contract_name_writes*/ &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -4248,6 +4287,8 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -4359,6 +4400,8 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -4398,6 +4441,8 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &[],
         &[],
         &[],
+        &[],
+        
         &classification_cache,
     )
     .await
@@ -4747,6 +4792,7 @@ async fn persist_quar(
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -4965,6 +5011,7 @@ async fn classic_credit_extracted_asset_lands_in_assets_table() {
         &Vec::<ExtractedNftEvent>::new(),
         &Vec::<ExtractedLpPosition>::new(),
         &[],
+        &[],
         &cache,
     )
     .await
@@ -5089,6 +5136,7 @@ async fn native_singleton_idempotent_across_repeat_persist() {
             &Vec::<ExtractedNft>::new(),
             &Vec::<ExtractedNftEvent>::new(),
             &Vec::<ExtractedLpPosition>::new(),
+            &[],
             &[],
             &cache,
         )
@@ -5280,6 +5328,7 @@ async fn sac_override_flips_is_sac_for_pre_existing_skeleton() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -5388,6 +5437,7 @@ async fn sac_override_leaves_already_is_sac_rows_alone() {
         &Vec::<ExtractedNft>::new(),
         &Vec::<ExtractedNftEvent>::new(),
         &Vec::<ExtractedLpPosition>::new(),
+        &[],
         &[],
         &cache,
     )

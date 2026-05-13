@@ -64,18 +64,12 @@ pub struct ParseOutput {
     /// * **PG** (task 0218) — `Staged::prepare` reads this slice to drive
     ///   the idempotent `UPDATE soroban_contracts SET is_sac=TRUE,
     ///   contract_type=Token` step on pre-window SAC skeletons.
-    /// * **CH** (task 0220) — `db_clickhouse::persist::stage::prepare_with_sac_overrides`
+    /// * **CH** (task 0220) —
+    ///   `db_clickhouse::persist::stage::prepare_with_sac_overrides`
     ///   re-emits a corrected `SorobanContractRow` per override with
     ///   `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0`
     ///   so RMT collapses by `ORDER BY (contract_id)` keeping the
     ///   SAC-flagged version as the latest.
-    ///
-    /// `#[allow(dead_code)]` while the CH backfill path still uses the
-    /// override-unaware `stage::prepare` (task 0214's parallel branch
-    /// owns the `crates/backfill-runner` switch from `prepare` to
-    /// `prepare_with_sac_overrides`). The PG persist path consumes
-    /// the slice through `Staged::prepare` once task 0218 merges.
-    #[allow(dead_code)]
     pub sac_overrides: Vec<xdr_parser::SacOverride>,
 }
 
@@ -154,6 +148,7 @@ pub async fn process_ledger(
         &parsed.nft_events,
         &parsed.lp_positions,
         &parsed.contract_name_writes,
+        &parsed.sac_overrides,
         classification_cache,
     )
     .await?;

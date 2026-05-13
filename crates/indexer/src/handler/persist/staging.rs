@@ -23,7 +23,7 @@ use xdr_parser::types::{
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
 };
-use xdr_parser::{MAINNET_PASSPHRASE, SacOverride, derive_sac_overrides_from_assets};
+use xdr_parser::SacOverride;
 
 use super::HandlerError;
 
@@ -317,6 +317,7 @@ impl Staged {
         nft_events: &[ExtractedNftEvent],
         lp_positions: &[ExtractedLpPosition],
         contract_name_writes: &[(String, String)],
+        sac_overrides: &[SacOverride],
     ) -> Result<Self, HandlerError> {
         let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
         let ledger_closed_at = ts_from_unix(ledger.closed_at)?;
@@ -1205,13 +1206,11 @@ impl Staged {
             }
         }
 
-        // Task 0218 — forward-derive SAC contract_ids from every observed
-        // classic / native asset. The persist path consumes this list to
-        // flip `is_sac=true` + `contract_type=Token` on pre-existing SAC
-        // skeleton rows. Hardcoded to mainnet for now — the indexer runs
-        // exclusively against pubnet; refactor to config when a testnet
-        // / futurenet variant ships.
-        let sac_overrides = derive_sac_overrides_from_assets(assets, MAINNET_PASSPHRASE);
+        // Task 0218 / 0220 — SAC overrides forwarded in from the shared
+        // parser layer (`ParseOutput.sac_overrides`). Previously
+        // computed locally here; promoted to `parse_ledger` so the CH
+        // writer can consume the same slice without re-deriving it.
+        let sac_overrides = sac_overrides.to_vec();
 
         Ok(Self {
             ledger_sequence: ledger.sequence,
@@ -1793,6 +1792,7 @@ mod tests {
             &[],
             &[],
             std::slice::from_ref(&nft_event),
+            &[],
             &[],
             &[],
         )
