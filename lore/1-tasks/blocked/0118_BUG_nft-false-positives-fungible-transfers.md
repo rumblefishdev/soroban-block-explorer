@@ -2,9 +2,9 @@
 id: '0118'
 title: 'BUG: NFT false positives from fungible token transfers'
 type: BUG
-status: active
+status: blocked
 related_adr: ['0027']
-related_tasks: ['0026', '0027', '0149']
+related_tasks: ['0026', '0027', '0149', '0217']
 tags: [priority-high, effort-medium, layer-indexer, audit-F9]
 milestone: 1
 links:
@@ -163,6 +163,24 @@ history:
       architectural fix routes `Other`/NULL to dedicated
       `nfts_pending` instead of permissive-inserting into the
       API-facing hot table.
+  - date: '2026-05-13'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      External blocker: full Soroban-era backfill run on a prod-like
+      DB required for the Phase 3 empirical dry-run AC. Code-side
+      delivery is complete after PR #178 (Patch C parser whitelist +
+      Phase 3 cleanup SQL for both PG and CH). Cleanup scripts live
+      at `ops/sql/0118_phase3_cleanup_nfts.sql` (PG) and
+      `ops/clickhouse/0118_phase3_cleanup_nfts.sql` (CH); both are
+      idempotent and only have effect once
+      `soroban_contracts.contract_type` is populated with
+      WASM-derived verdicts (i.e. after the full Soroban-era backfill
+      has indexed every `wasm_upload` op). Ingester filter strengthen
+      for the `Other`/NULL bucket split to task 0217 (`nfts_pending`
+      quarantine table — architectural follow-up). After the dry-run
+      runs and the sanity probe returns 0 unclassified-with-NFT-rows,
+      archive this task.
 ---
 
 # BUG: NFT false positives from fungible token transfers
