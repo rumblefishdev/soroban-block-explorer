@@ -8,9 +8,13 @@
 -- `/v1/nfts*` endpoints never read `_pending`.
 --
 -- Promotion is wired through the existing `reclassify_contracts_from_wasm`
--- UPDATE path (task 0118 Phase 2): when a contract's verdict changes
--- `Other → Nft`, pending rows are moved to the hot tables; when it
--- changes `Other → Fungible`/`Token`, pending rows are dropped.
+-- UPDATE path (task 0118 Phase 2). The reclassify path only flips
+-- contract_type via WASM observation, so the only verdict transitions
+-- it handles are `Other → Nft` (promotes pending rows to hot) and
+-- `Other → Fungible` (drops pending rows). `Token` (SAC) is classified
+-- at deploy time and never re-evaluated via WASM, so it never reaches
+-- the promotion hook; `Token`-classified contracts are dropped at
+-- persist-filter time before they ever enter pending in the first place.
 --
 -- Design choices documented in the task notes
 -- (`lore/1-tasks/active/0217_FEATURE_nfts-quarantine-table.md`):

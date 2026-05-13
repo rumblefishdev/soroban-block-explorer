@@ -195,7 +195,14 @@ ORDER BY (contract_id, token_id);
 -- window). Same row shape as `nfts` so promotion is a column-projection
 -- INSERT. API endpoints never read this table — production sees only
 -- definitive `Nft`-classified rows in `nfts`. Promoted to `nfts` on
--- `Other → Nft` reclassification, dropped on `Other → Fungible`/`Token`.
+-- `Other → Nft` reclassification, dropped on `Other → Fungible`
+-- reclassification. `Token` (SAC) is classified at deploy time and not
+-- reachable via WASM reclassification — `Token`-classified contracts are
+-- dropped at persist-filter time and never enter pending.
+--
+-- Note: CH-side writer-driven routing into `*_pending` is not implemented
+-- in PR #180; tables ship as schema-only on CH. PG writer drives the
+-- persist-time routing today. CH writer parity is a follow-up task.
 CREATE TABLE IF NOT EXISTS nfts_pending (
     contract_id           Int64,
     token_id              String,

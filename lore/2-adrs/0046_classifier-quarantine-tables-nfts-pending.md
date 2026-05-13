@@ -103,12 +103,22 @@ the `Other`/NULL bucket. Promotion / drop is wired into the existing
 `reclassify_contracts_from_wasm` UPDATE so the verdict flip and the
 row migration are atomic from any reader's perspective.
 
-Implemented in PR #180 (task 0217) for both stores:
+Implemented in PR #180 (task 0217):
 
-- **Postgres:** `nfts_pending` + `nft_ownership_pending`, see
-  [`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`](../../crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql).
-- **ClickHouse:** identical row shape in `init.sql`, see
-  [`crates/db-clickhouse/schema/init.sql`](../../crates/db-clickhouse/schema/init.sql).
+- **Postgres:** full implementation — schema migration
+  ([`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`](../../crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql))
+  - writer-side routing (`resolve_nft_filter` returns 4 buckets, 12c/12d
+    INSERTs, promotion hook in `reclassify_contracts_from_wasm`).
+- **ClickHouse:** **schema-only** — `nfts_pending` +
+  `nft_ownership_pending` exist in
+  [`crates/db-clickhouse/schema/init.sql`](../../crates/db-clickhouse/schema/init.sql)
+  but the CH writer (`crates/db-clickhouse/src/persist/*`) does NOT yet
+  stage or INSERT into either pending table. The CH writer continues
+  to write `nfts` / `nft_ownership` as before. CH writer parity is a
+  follow-up task — it needs a different atomicity model because
+  `ReplacingMergeTree` doesn't support a per-row UPDATE for the
+  promotion hook (would need `ALTER TABLE … DELETE` + `INSERT` or a
+  scheduled materialized view).
 
 Routing per classifier verdict (post-0217):
 

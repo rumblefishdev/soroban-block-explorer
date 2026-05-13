@@ -223,7 +223,7 @@ Reviewable in `ops/sql/` (PG) and `ops/clickhouse/` (CH).
 ## Acceptance Criteria
 
 - [x] PG migration adds `nfts_pending` + `nft_ownership_pending` with same row shape as hot tables, minimal indexes (only `contract_id`). _(`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`)_
-- [x] CH equivalent in `init.sql`, same partitioning key on the ownership table. _(no partitioning on PG side — pending is transient; CH keeps `intDiv(ledger_sequence, 500000)` for part-copy symmetry with `nft_ownership`.)_
+- [x] CH equivalent in `init.sql`, same partitioning key on the ownership table. _(no partitioning on PG side — pending is transient; CH keeps `intDiv(ledger_sequence, 500000)` for part-copy symmetry with `nft_ownership`. **Schema-only on CH for PR #180**: the CH writer does not yet stage or INSERT into either pending table — follow-up task tracked for CH writer parity.)_
 - [x] `resolve_nft_filter` routes `Other` / NULL to pending tables; `Nft` to hot tables; `Fungible` / `Token` dropped (unchanged). _(returns `NftFilterDecision` with 4 buckets in `crates/indexer/src/handler/persist/write.rs`.)_
 - [x] Promotion hook in `reclassify_contracts_from_wasm`: `Other → Nft` promotes pending rows; `Other → Fungible / Token` deletes them. _(`promote_pending_nfts_to_hot` + `drop_pending_nfts_for_contracts`, both run inside the caller's transaction.)_
 - [x] Integration test: ingest unclassified contract → row lands in `nfts_pending`, NOT `nfts`. _(`quarantine_routes_other_contract_to_pending` in `crates/indexer/tests/persist_integration.rs`.)_

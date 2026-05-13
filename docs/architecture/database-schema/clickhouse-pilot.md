@@ -156,7 +156,17 @@ it unchanged.
 CH carries the same `_pending` quarantine pair as PG so the routing
 semantics defined in
 [`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)
-behave identically across both writers.
+can land symmetrically on both writers.
+
+> **Scope in PR #180:** CH ships the **schema only**. The CH writer
+> (`crates/db-clickhouse/src/persist/*`) does NOT yet route NFT-candidate
+> rows into `nfts_pending` / `nft_ownership_pending` — it continues to
+> stage / write the existing `nfts` and `nft_ownership` tables. The
+> verdict-based routing described below is the PG writer's behaviour
+> today; the CH writer parity follow-up is tracked as a separate task
+> (it needs a different atomicity model because CH's
+> `ReplacingMergeTree` doesn't support per-row UPDATE for the
+> promotion hook).
 
 Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
 which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):

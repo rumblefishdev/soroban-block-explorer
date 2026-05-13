@@ -1590,11 +1590,21 @@ async fn upsert_assets_contract_keyed(
 /// `staged.nft_ownership_rows` (the `nft_ownership_*` buckets). `hot_*`
 /// indices feed the API-facing `nfts` / `nft_ownership` tables; `pending_*`
 /// indices feed the `nfts_pending` / `nft_ownership_pending` quarantine
-/// tables (task 0217) — quarantined rows are promoted to the hot tables
-/// when the contract's WASM is later classified as `Nft`, or dropped when
-/// it is classified as `Fungible` / `Token`. Rows for contracts already
-/// classified as `Fungible` / `Token` are not represented in any bucket
-/// (i.e. dropped at filter time).
+/// tables (task 0217).
+///
+/// Lifecycle clarification:
+///
+/// - Definitive `Fungible` / `Token` verdicts at filter time → row is
+///   dropped here, never enters any bucket.
+/// - Definitive `Nft` → `hot_*` bucket.
+/// - `Other` / uncached → `pending_*` bucket; awaits the
+///   `reclassify_contracts_from_wasm` UPDATE.
+/// - On `Other → Nft` reclassification, the row is promoted to hot.
+/// - On `Other → Fungible` reclassification, the row is dropped from
+///   pending. `Token` (SAC) is classified at deploy time and is **not**
+///   reachable via WASM reclassification, so the promotion hook never
+///   produces an `Other → Token` transition. `Token` contracts are
+///   handled exclusively by the filter-time drop above.
 struct NftFilterDecision {
     hot_nfts: Vec<usize>,
     pending_nfts: Vec<usize>,
