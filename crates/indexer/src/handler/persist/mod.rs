@@ -303,6 +303,15 @@ async fn run_all_steps(
     // Handles the two-ledger deploy pattern (contract deployed earlier,
     // WASM uploaded now) that `detect_assets` cannot observe in-memory.
     write::insert_assets_from_reclassified_contracts(db_tx, staged).await?;
+    // Task 0218 — forward-derive SAC contract_ids from every observed
+    // classic / native asset and flip `is_sac=true` + `contract_type=Token`
+    // on any pre-existing SAC skeleton rows. Runs after `upsert_assets`
+    // (the override list reads from `staged.sac_overrides`, derived
+    // at stage time from `staged.asset_rows`) and before
+    // `upsert_nfts_and_ownership` so the NFT filter sees the corrected
+    // `contract_type` and drops the SAC contracts at filter time instead
+    // of routing them into the 0217 quarantine.
+    write::apply_sac_overrides_for_skeleton_contracts(db_tx, staged).await?;
     timings.assets_ms = t.elapsed().as_millis();
 
     let t = Instant::now();

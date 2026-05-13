@@ -23,6 +23,7 @@ use xdr_parser::types::{
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
 };
+use xdr_parser::{MAINNET_PASSPHRASE, SacOverride, derive_sac_overrides_from_assets};
 
 use super::HandlerError;
 
@@ -266,6 +267,17 @@ pub(super) struct Staged {
     /// a spec at all" — only the definitive variants are forwarded to the
     /// DB UPDATE or the per-worker cache.
     pub wasm_classification: HashMap<[u8; 32], ContractType>,
+    /// Task 0218 — forward-derived SAC `(contract_id, identity)` pairs.
+    ///
+    /// Built from every observed `ExtractedAsset` whose `asset_type` is
+    /// `Native` or `ClassicCredit` by walking the asset list through
+    /// `xdr_parser::derive_sac_overrides_from_assets`. The persist step
+    /// `apply_sac_overrides_for_skeleton_contracts` consumes this list
+    /// to flip `is_sac=true` + `contract_type=Token` on
+    /// `soroban_contracts` rows that were inserted as skeletons (because
+    /// the SAC's `create_contract` op happened before the indexed window).
+    /// Idempotent: the UPDATE guards on `is_sac = FALSE`.
+    pub sac_overrides: Vec<SacOverride>,
 
     pub tx_rows: Vec<TxRow>,
 
@@ -1193,6 +1205,14 @@ impl Staged {
             }
         }
 
+        // Task 0218 — forward-derive SAC contract_ids from every observed
+        // classic / native asset. The persist path consumes this list to
+        // flip `is_sac=true` + `contract_type=Token` on pre-existing SAC
+        // skeleton rows. Hardcoded to mainnet for now — the indexer runs
+        // exclusively against pubnet; refactor to config when a testnet
+        // / futurenet variant ships.
+        let sac_overrides = derive_sac_overrides_from_assets(assets, MAINNET_PASSPHRASE);
+
         Ok(Self {
             ledger_sequence: ledger.sequence,
             ledger_sequence_i64,
@@ -1209,6 +1229,7 @@ impl Staged {
             contract_rows,
             contract_name_writes: contract_name_writes.to_vec(),
             wasm_classification,
+            sac_overrides,
             tx_rows,
             participant_rows,
             op_rows,
