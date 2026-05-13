@@ -14,10 +14,15 @@
 //! This module is a thin JSON-RPC client over Stellar's
 //! `getLedgerEntries` endpoint. The bootstrap runner step
 //! (`crate::bootstrap`) discovers every G-StrKey referenced in the
-//! window, asks Soroban RPC for the live `AccountEntry` (and matched
-//! `TrustLineEntry`s) at the window's start ledger, and stages those
-//! rows alongside the parser-emitted ones so the persist path treats
-//! both uniformly.
+//! window, asks Soroban RPC for the **live (current-ledger)**
+//! `AccountEntry` (and matched `TrustLineEntry`s) of each account,
+//! and stages those rows alongside the parser-emitted ones so the
+//! persist path treats both uniformly. Note: `getLedgerEntries` does
+//! not accept a ledger boundary — it returns whatever the RPC node's
+//! current head is at request time. The bootstrap is therefore best
+//! run shortly after the window completes; for backfill replays of
+//! older windows, the snapshot will be "newer than window", which is
+//! still strictly better than the parser-only skeleton.
 //!
 //! ## Why a private module, not a new crate
 //!
@@ -36,11 +41,13 @@
 //! Soroban RPC rate-limits per-IP. Empirical sustained throughput is
 //! ~50 req/s with ~200 keys per request → ~10 k keys / s. A 64 k-ledger
 //! window referencing 100 k accounts plus their trustlines therefore
-//! costs roughly 30–60 s of wall time on the bootstrap step. The
-//! `--rpc-concurrency` runner flag bounds parallel requests
-//! (default 4); the per-batch size cap is 200, matching mainnet RPC's
-//! advertised soft limit. Both are tunable knobs we expect to revisit
-//! once we have real throughput numbers from a CH pilot run.
+//! costs roughly 30–60 s of wall time on the bootstrap step. **Today
+//! the client batches sequentially** (one in-flight RPC at a time) —
+//! the per-batch size cap is [`MAX_KEYS_PER_REQUEST`] (200, matching
+//! mainnet RPC's advertised soft limit). A parallel-request knob
+//! (`--rpc-concurrency`) is a likely future refinement once we have
+//! real throughput numbers from a CH pilot run; the task body §"Out
+//! of Scope" tracks it.
 //!
 //! ## What the response looks like
 //!
@@ -671,6 +678,13 @@ mod tests {
 
     #[test]
     fn rebuild_trustline_asset_rejects_oversize_code() {
-        assert!(rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "TOOLONG", "GA").is_none());
+        // Use a valid issuer StrKey so the test specifically exercises
+        // the oversize-code branch — an invalid issuer would return
+        // None regardless of the code length and mask the regression
+        // we want to catch.
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        assert!(
+            rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "TOOLONG", issuer).is_none()
+        );
     }
 }

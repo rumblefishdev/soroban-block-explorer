@@ -20,23 +20,40 @@
 //!
 //! ## What this does
 //!
-//! Runs **once per backfill window** (Phase 1, Step 1 of the task)
-//! before the per-ledger ingest loop. Steps:
+//! Runs **once per backfill window**, **after** the per-ledger ingest
+//! loop has populated `transaction_participants` (so the discovery
+//! query has rows to scan). Steps:
 //!
-//! 1. Discover the set of G-StrKey accounts referenced in the window.
-//!    Phase 1 source: scan the CH `transaction_participants` table for
-//!    distinct `account_id` rows in `[start, end]`. (In a fresh
-//!    backfill that table is empty — Phase 1 logs `discovered=0` and
-//!    returns; the runner then proceeds to per-ledger ingest, after
-//!    which a Phase 2 top-up pass could re-run this step. Phase 2 is
-//!    a future refinement, gated on operational need.)
+//! 1. Discover the set of G-StrKey accounts referenced in the window
+//!    and currently sitting as skeletons (`sequence_number = 0`) in
+//!    the CH `accounts` hub. Discovery joins `transaction_participants`
+//!    against `accounts FINAL`, surfacing both the StrKey and the
+//!    existing `first_seen_ledger` so the snapshot row can preserve
+//!    the earliest observation rather than overwrite it.
 //! 2. For each batch of ≤ [`crate::rpc_snapshot::MAX_KEYS_PER_REQUEST`]
 //!    accounts, build `LedgerKey::Account` keys and POST to Soroban
 //!    RPC's `getLedgerEntries`. Decode each returned `AccountEntry`
 //!    via [`crate::rpc_snapshot::decode_account_snapshot`].
 //! 3. Stage the decoded `AccountSnapshot`s into the CH writer's
-//!    `accounts` / `account_balances_current` insert paths, tagged
-//!    with `from_snapshot = true` provenance for telemetry.
+//!    `accounts` / `account_balances_current` insert paths.
+//!
+//! ## How the snapshot wins under `ReplacingMergeTree`
+//!
+//! `accounts` is `ReplacingMergeTree(last_seen_ledger)` — the
+//! background merger keeps the row with the highest version per
+//! `ORDER BY (account_id)`. The parser-driven path on the per-ledger
+//! ingest loop stamps `last_seen_ledger = participant_ledger`
+//! (`participant_ledger ∈ [start, end]`). To guarantee the snapshot
+//! row wins under `FINAL` reads, we stamp it with
+//! `last_seen_ledger = end + 1` — strictly greater than any in-window
+//! stub, while still inside the contiguous ledger range (the next
+//! window starts at `end + 1` and its participant rows are at
+//! `≥ end + 1` too, so subsequent snapshots / parser writes for the
+//! same account take over naturally as the indexer marches forward).
+//!
+//! `first_seen_ledger` is carried through from the existing skeleton
+//! row — overwriting it with the window watermark would erase the
+//! earliest observation of the account in this CH dataset.
 //!
 //! ## Phase 2 incremental top-up gate
 //!
@@ -137,10 +154,17 @@ pub async fn bootstrap_account_state(
         ..BootstrapStats::default()
     };
     let mut snapshots: Vec<AccountSnapshot> = Vec::with_capacity(discovered);
+    // Build per-account `first_seen_ledger` lookup so the snapshot row
+    // can preserve the existing earliest observation rather than reset
+    // it to the window watermark.
+    let first_seen_by_account: std::collections::HashMap<String, i64> = accounts
+        .iter()
+        .map(|a| (a.account_id.clone(), a.first_seen_ledger))
+        .collect();
     // Build the keys, dropping any malformed StrKeys early.
     let keys: Vec<_> = accounts
         .iter()
-        .filter_map(|a| account_ledger_key(a))
+        .filter_map(|a| account_ledger_key(&a.account_id))
         .collect();
     stats.rpc_batches = keys
         .len()
@@ -163,7 +187,8 @@ pub async fn bootstrap_account_state(
         }
     }
 
-    stats.staged_accounts = stage_account_snapshots(client, &snapshots, start).await?;
+    stats.staged_accounts =
+        stage_account_snapshots(client, &snapshots, &first_seen_by_account, end).await?;
     info!(
         discovered = stats.discovered,
         fetched = stats.fetched,
@@ -175,11 +200,13 @@ pub async fn bootstrap_account_state(
     Ok(stats)
 }
 
-/// Row shape for the discovery query against CH
-/// `transaction_participants`. Private to this module.
+/// Row shape for the discovery query — pairs each skeleton account's
+/// StrKey with its existing `first_seen_ledger` so the snapshot row can
+/// preserve the earliest observation. Private to this module.
 #[derive(Debug, Deserialize, clickhouse::Row)]
-struct ParticipantRow {
+struct AccountSkeletonRow {
     account_id: String,
+    first_seen_ledger: i64,
 }
 
 /// Discover G-StrKey accounts that are referenced in the window but
@@ -199,58 +226,89 @@ async fn collect_skeleton_accounts(
     client: &ClickhouseClient,
     start: u32,
     end: u32,
-) -> Result<Vec<String>, BackfillError> {
+) -> Result<Vec<AccountSkeletonRow>, BackfillError> {
     // The participants table holds Int64 surrogate IDs; the natural
     // G-StrKey lives on the `accounts` hub. Join them to recover the
-    // StrKey, with a `WHERE` clause that picks only skeletons.
+    // StrKey + the existing `first_seen_ledger` (so the snapshot row
+    // can preserve the earliest observation), with a `WHERE` clause
+    // that picks only skeletons.
     //
     // `FINAL` on `accounts` ensures we read the most-recent
-    // sequence_number / home_domain (RMT(last_seen_ledger)). Without
-    // it the JOIN can see a stale skeleton even though a newer
-    // populated row exists.
+    // sequence_number / home_domain / first_seen_ledger
+    // (RMT(last_seen_ledger)). Without it the JOIN can see a stale
+    // skeleton even though a newer populated row exists.
+    //
+    // `min(a.first_seen_ledger)` defends against the (rare) case where
+    // FINAL has not yet collapsed a duplicate skeleton — we still keep
+    // the earliest observation.
     let query = "
-        SELECT DISTINCT a.account_id AS account_id
+        SELECT a.account_id AS account_id,
+               min(a.first_seen_ledger) AS first_seen_ledger
           FROM transaction_participants AS tp
           JOIN accounts FINAL AS a ON a.id = tp.account_id
          WHERE tp.ledger_sequence BETWEEN ? AND ?
            AND a.sequence_number = 0
+         GROUP BY a.account_id
     ";
     let rows = client
         .query(query)
         .bind(i64::from(start))
         .bind(i64::from(end))
-        .fetch_all::<ParticipantRow>()
+        .fetch_all::<AccountSkeletonRow>()
         .await
         .map_err(BackfillError::Ch)?;
-    let mut set: HashSet<String> = HashSet::with_capacity(rows.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(rows.len());
+    let mut out: Vec<AccountSkeletonRow> = Vec::with_capacity(rows.len());
     for r in rows {
-        if !r.account_id.is_empty() && r.account_id.starts_with('G') {
-            set.insert(r.account_id);
+        if r.account_id.is_empty() || !r.account_id.starts_with('G') {
+            continue;
+        }
+        if seen.insert(r.account_id.clone()) {
+            out.push(r);
         }
     }
-    Ok(set.into_iter().collect())
+    Ok(out)
 }
 
 /// Insert one row per decoded `AccountSnapshot` into the `accounts`
-/// hub (RMT, so the newest `last_seen_ledger` wins on background
-/// merge). `last_seen_ledger` is fixed to the window's `start` —
-/// snapshot reflects state at that ledger boundary by RPC contract.
+/// hub (RMT(last_seen_ledger), so the newest version wins on
+/// background merge).
+///
+/// Key choices:
+///
+/// - **`last_seen_ledger = end + 1`** — strictly greater than any
+///   in-window participant skeleton (which carry
+///   `last_seen_ledger ∈ [start, end]`), so the snapshot wins under
+///   `FINAL` reads and on the background merge. The `+1` is still
+///   inside the contiguous ledger range — the next backfill window
+///   starts at `end + 1` and its rows are also at `≥ end + 1`, so
+///   subsequent snapshots / parser writes take over naturally as the
+///   indexer marches forward.
+/// - **`first_seen_ledger` carried through from the existing skeleton
+///   row** (passed in via `first_seen_by_account`) — overwriting it
+///   with the window watermark would erase the earliest observation
+///   of the account in this CH dataset.
 ///
 /// Companion native-balance rows land in `account_balances_current`
 /// keyed on `(account_id, asset_type=Native, '', 0)` so reads see
-/// the snapshot's native XLM balance.
+/// the snapshot's native XLM balance. The balance row uses
+/// `last_updated_ledger = end + 1` for the same RMT-version reason.
 ///
 /// Returns the count of `accounts` rows written. Per-batch insert
 /// errors propagate as `BackfillError::Ch`.
 async fn stage_account_snapshots(
     client: &ClickhouseClient,
     snapshots: &[AccountSnapshot],
-    start: u32,
+    first_seen_by_account: &std::collections::HashMap<String, i64>,
+    end: u32,
 ) -> Result<usize, BackfillError> {
     if snapshots.is_empty() {
         return Ok(0);
     }
-    let watermark = i64::from(start);
+    // `end + 1` keeps us above every participant skeleton in this
+    // window while staying inside the contiguous ledger range. Cast
+    // through u64 so we never overflow `u32 + 1`.
+    let watermark: i64 = i64::try_from(u64::from(end) + 1).unwrap_or(i64::MAX);
 
     // accounts insert
     let mut accounts_insert = client
@@ -259,11 +317,19 @@ async fn stage_account_snapshots(
         .map_err(BackfillError::Ch)?;
     for s in snapshots {
         let id = db_clickhouse::persist::ids::account_id(&s.account_id);
+        // Preserve the existing earliest observation. If we somehow
+        // staged a snapshot for an account the discovery query didn't
+        // surface (defensive — should never happen because keys are
+        // built from `accounts`), fall back to the watermark.
+        let first_seen_ledger = first_seen_by_account
+            .get(&s.account_id)
+            .copied()
+            .unwrap_or(watermark);
         accounts_insert
             .write(&db_clickhouse::persist::rows::AccountRow {
                 id,
                 account_id: s.account_id.clone(),
-                first_seen_ledger: watermark,
+                first_seen_ledger,
                 last_seen_ledger: watermark,
                 sequence_number: s.sequence_number,
                 home_domain: s.home_domain.clone(),
@@ -461,13 +527,26 @@ mod tests {
         let got = collect_skeleton_accounts(client, ledger, ledger)
             .await
             .expect("discovery must succeed");
+        let got_strkeys: Vec<String> = got.iter().map(|r| r.account_id.clone()).collect();
         assert!(
-            got.contains(&strkey.to_string()),
-            "skeleton account must be discovered; got={got:?}"
+            got_strkeys.contains(&strkey.to_string()),
+            "skeleton account must be discovered; got={got_strkeys:?}"
         );
         assert!(
-            !got.contains(&already_filled_strkey.to_string()),
-            "already-filled account must be skipped (Phase 2 gate); got={got:?}"
+            !got_strkeys.contains(&already_filled_strkey.to_string()),
+            "already-filled account must be skipped (Phase 2 gate); got={got_strkeys:?}"
+        );
+        // The skeleton's first_seen_ledger comes back through the
+        // discovery query — bootstrap relies on it to preserve the
+        // earliest observation on snapshot insert.
+        let skel = got
+            .iter()
+            .find(|r| r.account_id == strkey)
+            .expect("skeleton row present");
+        assert_eq!(
+            skel.first_seen_ledger,
+            i64::from(ledger),
+            "discovery must carry skeleton's first_seen_ledger through",
         );
 
         // Cleanup.
@@ -532,25 +611,50 @@ mod tests {
             balance: 7_500_000_000, // 750 XLM in stroops
             home_domain: Some("ultracapital.xyz".into()),
         };
-        let staged = stage_account_snapshots(client, &[snap], watermark)
+        // Mirror production: pre-populate the `first_seen_by_account`
+        // map so the staged row preserves the existing observation
+        // ledger rather than collapsing it onto the watermark.
+        let pre_existing_first_seen = i64::from(watermark - 5);
+        let mut first_seen_by_account = std::collections::HashMap::new();
+        first_seen_by_account.insert(strkey.to_string(), pre_existing_first_seen);
+        let staged = stage_account_snapshots(client, &[snap], &first_seen_by_account, watermark)
             .await
             .expect("stage must succeed");
         assert_eq!(staged, 1);
 
-        // Read back the account row.
+        // Read back the account row with the four fields the
+        // bootstrap is responsible for: sequence + home_domain come
+        // from the snapshot; first_seen_ledger preserves the existing
+        // skeleton's value; last_seen_ledger is the RMT version stamp.
         #[derive(Deserialize, clickhouse::Row)]
         struct AcctReadback {
             sequence_number: i64,
             home_domain: Option<String>,
+            first_seen_ledger: i64,
+            last_seen_ledger: i64,
         }
         let acct: AcctReadback = client
-            .query("SELECT sequence_number, home_domain FROM accounts FINAL WHERE id = ? LIMIT 1")
+            .query(
+                "SELECT sequence_number, home_domain, first_seen_ledger, last_seen_ledger
+                   FROM accounts FINAL WHERE id = ? LIMIT 1",
+            )
             .bind(id)
             .fetch_one()
             .await
             .expect("read account row");
         assert_eq!(acct.sequence_number, 123_456_789);
         assert_eq!(acct.home_domain.as_deref(), Some("ultracapital.xyz"));
+        assert_eq!(
+            acct.first_seen_ledger, pre_existing_first_seen,
+            "snapshot must preserve the existing earliest observation",
+        );
+        // RMT-version stamp: `end + 1`, not `start`, so the snapshot
+        // beats any in-window participant skeleton under FINAL.
+        let expected_last_seen = i64::from(watermark) + 1;
+        assert_eq!(
+            acct.last_seen_ledger, expected_last_seen,
+            "snapshot last_seen_ledger must be `end + 1` to win RMT version",
+        );
 
         // Read back the native balance row.
         #[derive(Deserialize, clickhouse::Row)]
