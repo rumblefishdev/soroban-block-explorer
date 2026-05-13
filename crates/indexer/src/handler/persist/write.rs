@@ -796,7 +796,7 @@ pub(super) async fn insert_transactions(
         let mut hashes: Vec<Vec<u8>> = Vec::with_capacity(chunk.len());
         let mut ledger_seqs: Vec<i64> = Vec::with_capacity(chunk.len());
         let mut app_orders: Vec<i16> = Vec::with_capacity(chunk.len());
-        let mut source_ids: Vec<i64> = Vec::with_capacity(chunk.len());
+        let mut source_ids: Vec<Option<i64>> = Vec::with_capacity(chunk.len());
         let mut fees: Vec<i64> = Vec::with_capacity(chunk.len());
         let mut inner_hashes: Vec<Option<Vec<u8>>> = Vec::with_capacity(chunk.len());
         let mut successes: Vec<bool> = Vec::with_capacity(chunk.len());
@@ -809,9 +809,13 @@ pub(super) async fn insert_transactions(
             hashes.push(r.hash.to_vec());
             ledger_seqs.push(r.ledger_sequence);
             app_orders.push(r.application_order);
-            source_ids.push(resolve_id(
+            // lore-0209: `source_str_key` is `None` on Variant A parse_error
+            // (envelope-missing) transactions; the column is nullable so
+            // unknown source is represented as SQL NULL rather than a
+            // synthetic sentinel account.
+            source_ids.push(resolve_opt_id(
                 account_ids,
-                &r.source_str_key,
+                r.source_str_key.as_deref(),
                 "transactions.source",
             )?);
             fees.push(r.fee_charged);

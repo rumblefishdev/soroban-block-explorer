@@ -60,7 +60,9 @@ pub struct LedgerTxRow {
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub source_account: String,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209).
+    pub source_account: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<String>,
     pub successful: bool,
@@ -213,7 +215,7 @@ pub async fn fetch_transactions(
             COALESCE(ctr.contract_ids,    ARRAY[]::text[]) AS contract_ids, \
             t.created_at \
         FROM transactions t \
-        JOIN accounts a ON a.id = t.source_id \
+        LEFT JOIN accounts a ON a.id = t.source_id \
         LEFT JOIN LATERAL ( \
             SELECT array_agg(DISTINCT op_type_name(oa.type) ORDER BY op_type_name(oa.type)) AS operation_types \
             FROM operations_appearances oa \

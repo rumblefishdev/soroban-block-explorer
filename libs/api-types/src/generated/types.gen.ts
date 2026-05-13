@@ -296,7 +296,11 @@ export type E3ResponseTransactionDetailLight = {
    * as `participants`. Full call hierarchy lives in `heavy.operation_tree`.
    */
   soroban_invocations: Array<InvocationAppearanceItem>;
-  source_account: string;
+  /**
+   * `null` for Variant A `parse_error` transactions whose envelope
+   * could not be decoded (lore-0209).
+   */
+  source_account?: string | null;
   successful: boolean;
 } & {
   heavy?: null | E3HeavyFields;
@@ -1072,7 +1076,12 @@ export type PaginatedTransactionListItem = {
      * (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
      */
     operation_types: Array<string>;
-    source_account: string;
+    /**
+     * `null` for Variant A `parse_error` transactions whose envelope
+     * could not be decoded (lore-0209). Always populated for ordinary
+     * (successful or failed-but-decoded) transactions.
+     */
+    source_account?: string | null;
     successful: boolean;
   }>;
   page: PageInfo;
@@ -1307,7 +1316,11 @@ export type TransactionDetailLight = {
    * as `participants`. Full call hierarchy lives in `heavy.operation_tree`.
    */
   soroban_invocations: Array<InvocationAppearanceItem>;
-  source_account: string;
+  /**
+   * `null` for Variant A `parse_error` transactions whose envelope
+   * could not be decoded (lore-0209).
+   */
+  source_account?: string | null;
   successful: boolean;
 };
 
@@ -1348,7 +1361,12 @@ export type TransactionListItem = {
    * (e.g. `["INVOKE_HOST_FUNCTION", "PAYMENT"]`).
    */
   operation_types: Array<string>;
-  source_account: string;
+  /**
+   * `null` for Variant A `parse_error` transactions whose envelope
+   * could not be decoded (lore-0209). Always populated for ordinary
+   * (successful or failed-but-decoded) transactions.
+   */
+  source_account?: string | null;
   successful: boolean;
 };
 

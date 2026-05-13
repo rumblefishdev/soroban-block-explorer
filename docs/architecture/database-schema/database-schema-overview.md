@@ -223,7 +223,7 @@ CREATE TABLE transactions (
     hash              BYTEA       NOT NULL,                          -- 32-byte tx hash (ADR 0024)
     ledger_sequence   BIGINT      NOT NULL,
     application_order SMALLINT    NOT NULL,
-    source_id         BIGINT      NOT NULL REFERENCES accounts(id),  -- ADR 0026 surrogate
+    source_id         BIGINT               REFERENCES accounts(id),  -- ADR 0026 surrogate; NULLable for Variant A parse_error tx (lore-0209)
     fee_charged       BIGINT      NOT NULL,
     inner_tx_hash     BYTEA,                                         -- fee-bump inner hash
     successful        BOOLEAN     NOT NULL,
@@ -260,7 +260,13 @@ Design notes:
   per [ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md)
 - `source_id` is the `accounts.id` surrogate
   ([ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)); the
-  displayed `G...` StrKey is obtained via JOIN back to `accounts.account_id`
+  displayed `G...` StrKey is obtained via JOIN back to `accounts.account_id`.
+  The column is `NULL`able to accommodate Variant A `parse_error` transactions
+  whose envelope was not decodable and therefore carry no known source
+  (lore-0209). Query paths that surface such rows (transaction list/detail,
+  ledger-scoped transaction listing) use `LEFT JOIN accounts`; paths that
+  drive through operations / events / liquidity pools / assets never match
+  parse_error tx (no rows in those tables) and keep plain `JOIN`.
 - `application_order`, `operation_count`, `has_soroban` support the transaction
   list/detail renderers and Soroban-filtered indexing
 - **no raw XDR stored on the row**: envelope / result / result-meta XDR for

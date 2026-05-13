@@ -2171,7 +2171,6 @@
               "hash",
               "ledger_sequence",
               "application_order",
-              "source_account",
               "fee_charged",
               "successful",
               "operation_count",
@@ -2249,7 +2248,8 @@
                 "description": "Soroban invocation appearance index rows. Same fallback semantics\nas `participants`. Full call hierarchy lives in `heavy.operation_tree`."
               },
               "source_account": {
-                "type": "string"
+                "type": ["string", "null"],
+                "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
               },
               "successful": {
                 "type": "boolean"
@@ -3465,7 +3465,6 @@
                 "hash",
                 "ledger_sequence",
                 "application_order",
-                "source_account",
                 "fee_charged",
                 "successful",
                 "operation_count",
@@ -3524,7 +3523,8 @@
                   "description": "All distinct operation type names in the transaction\n(e.g. `[\"INVOKE_HOST_FUNCTION\", \"PAYMENT\"]`)."
                 },
                 "source_account": {
-                  "type": "string"
+                  "type": ["string", "null"],
+                  "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209). Always populated for ordinary\n(successful or failed-but-decoded) transactions."
                 },
                 "successful": {
                   "type": "boolean"
@@ -3853,7 +3853,6 @@
           "hash",
           "ledger_sequence",
           "application_order",
-          "source_account",
           "fee_charged",
           "successful",
           "operation_count",
@@ -3931,7 +3930,8 @@
             "description": "Soroban invocation appearance index rows. Same fallback semantics\nas `participants`. Full call hierarchy lives in `heavy.operation_tree`."
           },
           "source_account": {
-            "type": "string"
+            "type": ["string", "null"],
+            "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
           },
           "successful": {
             "type": "boolean"
@@ -3945,7 +3945,6 @@
           "hash",
           "ledger_sequence",
           "application_order",
-          "source_account",
           "fee_charged",
           "successful",
           "operation_count",
@@ -4004,7 +4003,8 @@
             "description": "All distinct operation type names in the transaction\n(e.g. `[\"INVOKE_HOST_FUNCTION\", \"PAYMENT\"]`)."
           },
           "source_account": {
-            "type": "string"
+            "type": ["string", "null"],
+            "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209). Always populated for ordinary\n(successful or failed-but-decoded) transactions."
           },
           "successful": {
             "type": "boolean"

@@ -31,13 +31,15 @@ use super::HandlerError;
 // ---------------------------------------------------------------------------
 
 /// `transactions` row, ready for UNNEST. `source_str_key` is resolved to
-/// `accounts.id` by the write layer.
+/// `accounts.id` by the write layer. `None` when the upstream transaction
+/// carries no source (Variant A `parse_error` envelope-missing branch,
+/// lore-0209); the column is `NULL`-able in DB since the same task.
 pub(super) struct TxRow {
     pub hash_hex: String,
     pub hash: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub source_str_key: String,
+    pub source_str_key: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<[u8; 32]>,
     pub successful: bool,
@@ -314,11 +316,32 @@ impl Staged {
         let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
 
         for tx in transactions {
-            account_keys_set.insert(tx.source_account.clone());
-            participants_per_tx
-                .entry(tx.hash.clone())
-                .or_default()
-                .insert(tx.source_account.clone());
+            // lore-0209: empty `source_account` only appears on Variant A
+            // `parse_error` (envelope-missing) transactions — corrupt
+            // upstream `LedgerCloseMeta` where the `tx_processing` slot
+            // hash had no match in `tx_set`. Skip the empty key entirely:
+            //
+            //   * `account_keys_set` would drop it anyway via the
+            //     `starts_with('G')` filter further below;
+            //   * `participants_per_tx` MUST skip it — otherwise
+            //     `write::insert_participants` aborts with
+            //     `"unresolved StrKey for participants.account_id"` (the
+            //     hard-resolve invariant in `participants.account_id`
+            //     mirrors the original `transactions.source` failure).
+            //
+            // The write layer maps the resulting `None` to SQL NULL on
+            // `transactions.source_id` (nullable since the accompanying
+            // migration). No operations / events / invocations are emitted
+            // for Variant A (no envelope ⇒ no decoded ops_xdr), so the
+            // tx ends up with zero participants — semantically correct
+            // for "source unknown".
+            if !tx.source_account.is_empty() {
+                account_keys_set.insert(tx.source_account.clone());
+                participants_per_tx
+                    .entry(tx.hash.clone())
+                    .or_default()
+                    .insert(tx.source_account.clone());
+            }
         }
 
         // operations: source override + destinations + issuers + callers + poolIds
@@ -601,7 +624,7 @@ impl Staged {
                 application_order: app_order
                     .try_into()
                     .map_err(|_| staging_err("tx application_order overflow"))?,
-                source_str_key: tx.source_account.clone(),
+                source_str_key: (!tx.source_account.is_empty()).then(|| tx.source_account.clone()),
                 fee_charged: tx.fee_charged,
                 inner_tx_hash,
                 successful: tx.successful,
