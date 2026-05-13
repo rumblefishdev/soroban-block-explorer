@@ -268,8 +268,16 @@ implementation notes.
 
 ## Out of Scope
 
-- CH writer parity beyond the schema-side documentation note — same
-  follow-up bucket as task 0217's CH writer parity for `_pending` routing.
+- CH writer parity — `apply_sac_overrides_for_skeleton_contracts`
+  runs in `crates/indexer/src/handler/persist/write.rs` (PG path) and
+  is **not** mirrored in the CH writer (`crates/db-clickhouse/src/persist/*`).
+  Pre-window SAC `soroban_contracts` rows in CH stay `is_sac=false`
+  until CH writer parity lands. Tracked as task **0220** (together
+  with the CH `_pending` routing for task 0217). Note: task 0219's
+  classic-credit producer **does** flow through to the CH sink
+  because it's wired in the shared `parse_ledger` step
+  (`crates/indexer/src/handler/process.rs`), so 0220's scope is
+  limited to 0217's routing + 0218's SAC override UPDATE — not 0219.
 - Backfilling existing skeleton rows on already-indexed environments —
   separate operational runbook (analog to the 0217 initial-migration
   runbook); spawn alongside or after Phase 1–3 ship.
