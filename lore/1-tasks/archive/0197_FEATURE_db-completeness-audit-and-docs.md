@@ -2,7 +2,7 @@
 id: '0197'
 title: 'DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix'
 type: FEATURE
-status: active
+status: done
 related_adr: ['0007', '0022', '0023', '0029', '0032', '0037', '0043', '0044']
 related_tasks: ['0188', '0191', '0194', '0195', '0196', '0210', '0212', '0213']
 tags: [priority-medium, effort-medium, layer-docs, layer-audit]
@@ -36,6 +36,31 @@ history:
       The `< 30 min` target in `backfill-enrichment-runner` README
       stays unverified; if/when a real staging benchmark is wanted
       it'll be its own task, not a 0197 acceptance criterion.
+  - date: '2026-05-13'
+    status: done
+    who: karolkow
+    note: >
+      All five executable steps completed end-to-end against a fresh
+      local backfill (full partition FCF6A7FF, 23 332 ledgers,
+      8.68 M txs / 1.09 M NFTs / 11 985 LPs / 12 900 assets after
+      seed workaround). Step 0 surfaced six bugs (Bug #1-#6); #5/#6
+      were fixed worker-side in this branch, #1-#4 routed into
+      Stanisław's indexer queue. Step 1 produced an 11-endpoint
+      coverage matrix with empirical NULL/sentinel/populated counts
+      per column + one-time live-smoke (USDC SEP-1, Bachini SorobanNFT
+      `token_uri`). Step 2 walked 10 detail endpoints — 0 drop
+      candidates; ADR 0043 carve-out applied consistently. Step 3
+      refreshed `docs/architecture/{database-schema,backend,xdr-parsing}/**`
+      and fixed an inaccurate TODO in `enrichment-shared/nft_token_uri/client.rs`.
+      Step 4 re-affirmed ADR 0043, recorded "no amendment" rationale
+      for ADR 0029, added a thin-delta history entry to ADR 0037
+      (drop_nfts_metadata + add_endpoint_query_indexes post-anchor
+      migrations), and confirmed no amendment for ADR 0044.
+      Step 5 added a supersession header to the 2026-04-10 audit
+      forward-linking the new doc. 10 findings recorded F1-F10
+      (1 retracted, 2 fixed in-task, 3 info-only, 4 folded into
+      Stanisław's queue). No follow-up tasks spawned per the
+      "fold not spawn" decision.
 ---
 
 # DB completeness audit + docs: list/detail field allocation verification, schema coverage matrix
@@ -269,17 +294,17 @@ Each anti-pattern or wiring gap discovered → backlog task with `audit-gap` tag
 
 ## Acceptance Criteria
 
-- [ ] `docs/audits/{TIMESTAMP}-list-endpoint-completeness.md` committed
-- [ ] Every list endpoint field has a row in the matrix with non-FAIL status (or follow-up task spawned for each FAIL)
-- [ ] Every detail endpoint anti-pattern flagged with proposed fix (or no anti-patterns found)
-- [ ] `docs/architecture/database-schema/**` refreshed
-- [ ] `docs/architecture/indexing-pipeline/**` refreshed
-- [ ] `docs/architecture/backend/**` refreshed
-- [ ] `docs/architecture/xdr-parsing/**` refreshed
-- [ ] ADR 0043/0029/0037 cross-checked
-- [ ] Audit doc 2026-04-10 supersession header added
-- [ ] **Docs updated** — this is the task, mark all checked
-- [ ] **API types regenerated** — N/A (audit-only, no code changes expected)
+- [x] `docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md` committed (commit `ae5d37c` Step 1+2+3; §8 added in `a8b1e06` Step 4)
+- [x] Every list endpoint field has a row in the matrix with non-FAIL status (or follow-up task spawned for each FAIL) — F1/F2/F3 FAILs folded into Stanisław's indexer queue (Bug #1/#3/#4 paths) instead of spawning, per the 2026-05-13 "no spawn" decision recorded in §Step 1 Findings.
+- [x] Every detail endpoint anti-pattern flagged with proposed fix (or no anti-patterns found) — 0 drop candidates; F7 reclassified as multi-consumer-planned keep.
+- [x] `docs/architecture/database-schema/**` refreshed — §7.2 canonical-query-references signpost added in `ae5d37c`.
+- [x] `docs/architecture/indexing-pipeline/**` refreshed — verified current after 0194/0195/0196; no further edits needed.
+- [x] `docs/architecture/backend/**` refreshed — `runtime_enrichment::nft_token_uri` submodule added in §4.1; §7.1 source-of-data clarification (Soroban RPC at detail time).
+- [x] `docs/architecture/xdr-parsing/**` refreshed — §4.6 post-parse derivations note added (rollup aggregates, Lambda 2 boundary, LP analytics 0199 deferral).
+- [x] ADR 0043/0029/0037 cross-checked — see §"Step 4 ADR cross-check outcomes" above. ADR 0044 (CH pilot) also checked, no amendment required.
+- [x] Audit doc 2026-04-10 supersession header added — commit `e5c8ee2`, §5/§8/§9 marked superseded, forward-link added.
+- [x] **Docs updated** — all evergreen docs touched by the audit refreshed in same branch per ADR 0032; no `docs/architecture/**` file left stale relative to the audit findings.
+- [x] **API types regenerated** — N/A (audit-only, no API/handler code changes).
 
 ## Step 4 ADR cross-check outcomes
 
