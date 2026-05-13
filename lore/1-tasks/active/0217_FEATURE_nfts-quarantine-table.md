@@ -3,7 +3,7 @@ id: '0217'
 title: 'PG+CH: nfts_pending quarantine table for unclassified NFT candidates (defer-then-promote)'
 type: FEATURE
 status: active
-related_adr: ['0027', '0044']
+related_adr: ['0027', '0044', '0046']
 related_tasks: ['0118']
 tags:
   [
@@ -230,7 +230,7 @@ Reviewable in `ops/sql/` (PG) and `ops/clickhouse/` (CH).
 - [x] Integration test: late `wasm_upload` reclassifies → row moves to `nfts`. _(`quarantine_promotes_pending_to_hot_on_nft_verdict`; companion test `quarantine_drops_pending_on_fungible_verdict` covers the Fungible drop path.)_
 - [x] One-shot migration script for existing `Other`-classified rows. _(Embedded in the operator runbook `docs/runbooks/0217_nfts_pending_migration_and_drain.md` §Part 1, PG and CH sections side-by-side — same form-factor as the 0118 cleanup runbook for consistency.)_
 - [x] Post-backfill drain procedure (PG + CH). _(Runbook §Part 2 — straggler promotion + TRUNCATE.)_
-- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` gains §4.13.1 quarantine subsection (PG schema); `docs/architecture/database-schema/clickhouse-pilot.md` gains §4c-bis (CH schema + routing table). No ADR amendment required — schema is additive, not a shape break.
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` gains §4.13.1 quarantine subsection (PG schema); `docs/architecture/database-schema/clickhouse-pilot.md` gains §4c-bis (CH schema + routing table). Decision record captured in [ADR 0046](../../2-adrs/0046_classifier-quarantine-tables-nfts-pending.md) — alternatives considered, design rationale, consequences — linked from both architecture docs per ADR 0032.
 - [x] **API types regenerated** — N/A (no API change; endpoints still read `nfts` / `nft_ownership`).
 
 ## Out of Scope

@@ -209,6 +209,9 @@ Notes:
 - Operational lifecycle (initial migration + post-backfill drain) is
   documented in
   [`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md).
+- The architectural decision record for the quarantine pattern
+  (alternatives considered, design rationale, consequences) lives in
+  [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4d. `_sqlx_migrations` dropped
 

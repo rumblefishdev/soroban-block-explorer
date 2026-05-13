@@ -872,7 +872,10 @@ Design notes:
 Operational lifecycle: see
 [`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)
 for the one-shot migration of existing `Other`/NULL hot rows into the
-quarantine and the post-backfill drain procedure.
+quarantine and the post-backfill drain procedure. The decision record
+for the quarantine pattern (alternatives considered, design rationale,
+consequences) lives in
+[ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4.14 Liquidity Pools
 
