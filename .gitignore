@@ -68,10 +68,3 @@ target/
 # Local Docker compose overrides (perf tunings, env-specific paths)
 docker-compose.override.yml
 docker-compose.override.yaml
-
-# Audit run logs — heavy per-ledger backfill stdout (10s of MB),
-# captured locally during one-off audits and intentionally not
-# committed. Smaller status / drain / sample artefacts (KB-range)
-# live alongside the findings inside docs/audits/<audit-id>/.
-docs/audits/**/*backfill-full-partition*.log
-docs/audits/**/*backfill-300-ledger*.log
