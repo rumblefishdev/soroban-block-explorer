@@ -107,8 +107,8 @@ Implemented in PR #180 (task 0217):
 
 - **Postgres:** full implementation — schema migration
   ([`crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql`](../../crates/db/migrations/20260513130000_nfts_pending_quarantine.up.sql))
-  - writer-side routing (`resolve_nft_filter` returns 4 buckets, 12c/12d
-    INSERTs, promotion hook in `reclassify_contracts_from_wasm`).
+  plus writer-side routing (`resolve_nft_filter` returns 4 buckets,
+  12c/12d INSERTs, promotion hook in `reclassify_contracts_from_wasm`).
 - **ClickHouse:** **schema-only** — `nfts_pending` +
   `nft_ownership_pending` exist in
   [`crates/db-clickhouse/schema/init.sql`](../../crates/db-clickhouse/schema/init.sql)
