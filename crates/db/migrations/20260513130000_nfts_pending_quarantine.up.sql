@@ -20,7 +20,7 @@
 -- * **No FK to `nfts.id` on the ownership side** — pending ownership rows
 --   carry their own natural identity (contract_id, token_id, …) and only
 --   adopt the hot `nft_id` on promotion. Avoids a SERIAL gap pile-up.
--- * **No partitioning** — pending is transient; the by-create_at range
+-- * **No partitioning** — pending is transient; the by-created_at range
 --   pattern that drives `nft_ownership`'s partitioning has no
 --   read-side payoff here (the only read is the per-contract_id
 --   promotion lookup).

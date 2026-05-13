@@ -130,11 +130,12 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 17 CREATE TABLE + 1 CREATE DICTIONARY = 18.
+        // 19 CREATE TABLE + 1 CREATE DICTIONARY = 20. Task 0217 added
+        // `nfts_pending` + `nft_ownership_pending` to the 17-table base.
         assert_eq!(
             stmts.len(),
-            18,
-            "expected 17 tables + 1 dictionary, got {}",
+            20,
+            "expected 19 tables + 1 dictionary, got {}",
             stmts.len()
         );
     }
