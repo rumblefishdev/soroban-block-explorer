@@ -152,11 +152,13 @@ history:
       `whitelist_accepts_bytes_string_address_token_ids`,
       `whitelist_rejects_unknown_data_types`. 16/16 `nft::tests` green.
 
-      Phase 3 cleanup SQL committed under `ops/sql/` (PG) and
-      `ops/clickhouse/` (CH); both idempotent, both run only AFTER the
-      Soroban-era backfill has populated WASM verdicts. CH script
-      tracks mutation completion via `system.mutations` before
-      `OPTIMIZE TABLE nfts FINAL`.
+      Phase 3 cleanup SQL embedded in operator runbook
+      `docs/runbooks/0118_phase3_cleanup_nfts.md` (PG + CH sections
+      side-by-side, with preconditions / sanity probes / verification
+      steps and ContractType discriminant mapping). Both flows
+      idempotent, both run only AFTER the Soroban-era backfill has
+      populated WASM verdicts. CH section tracks mutation completion
+      via `system.mutations` before `OPTIMIZE TABLE nfts FINAL`.
 
       Ingester filter strengthen for the `Other`/NULL bucket
       DEFERRED to task 0217 (nfts quarantine table) — proper
@@ -170,10 +172,12 @@ history:
       External blocker: full Soroban-era backfill run on a prod-like
       DB required for the Phase 3 empirical dry-run AC. Code-side
       delivery is complete after PR #178 (Patch C parser whitelist +
-      Phase 3 cleanup SQL for both PG and CH). Cleanup scripts live
-      at `ops/sql/0118_phase3_cleanup_nfts.sql` (PG) and
-      `ops/clickhouse/0118_phase3_cleanup_nfts.sql` (CH); both are
-      idempotent and only have effect once
+      Phase 3 cleanup runbook for both PG and CH). Operator runbook
+      lives at `docs/runbooks/0118_phase3_cleanup_nfts.md` — one
+      markdown with PG and CH sections side-by-side, embedded SQL,
+      preconditions / sanity probes / verification queries, and a
+      ContractType discriminant mapping table. The cleanup is
+      idempotent and only has effect once
       `soroban_contracts.contract_type` is populated with
       WASM-derived verdicts (i.e. after the full Soroban-era backfill
       has indexed every `wasm_upload` op). Ingester filter strengthen
@@ -379,9 +383,10 @@ COMMIT;
 VACUUM ANALYZE nfts;
 ```
 
-Script committed to the repo (e.g.
-`crates/db/migrations/` or a dedicated `ops/sql/` folder) so it is
-reviewable and re-runnable.
+Cleanup procedure shipped as an operator runbook at
+`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH sections
+side-by-side, embedded SQL, preconditions / sanity probes /
+verification queries, and a ContractType discriminant mapping table.
 
 ## Acceptance Criteria
 
@@ -480,8 +485,9 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
 ### Phase 3 (cleanup, 2026-05-13)
 
 - [x] SQL cleanup script committed to the repo; reviewable.
-      _(`ops/sql/0118_phase3_cleanup_nfts.sql` for PG;
-      `ops/clickhouse/0118_phase3_cleanup_nfts.sql` for CH.)_
+      _(`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH
+      sections side-by-side with embedded SQL, preconditions,
+      sanity probes, and verification queries.)_
 - [ ] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
       _(Operational — run after task 0145 completes full Soroban-era
