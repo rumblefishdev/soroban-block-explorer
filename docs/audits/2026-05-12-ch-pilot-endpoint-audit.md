@@ -73,14 +73,14 @@ Zero `nfts` rows with `name IS NOT NULL`. `token_id` values are amount stroops (
 
 ## 6 PR #166 anti-patterns confirmed
 
-| #   | Anti-pattern                           | Where manifested                                                                                           |
-| --- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 1   | CAP-67 fee event semantics             | E14 — events in `TransactionMetaV4.events[]` w stages BEFORE/AFTER_ALL_TXS                                 |
-| 2   | WebFetch hallucinations                | E05 — fabricated source/fee values caught; switched to curl + python3 json.load                            |
-| 3   | StrKey CRC                             | E08 — 100% valid; SAC derivation byte-for-byte cross-check bonus                                           |
-| 4   | `parameters[0]` positional             | E10 — XDR `invoke_contract.contract_address` = target contract; `[2]` = first call arg                     |
-| 5   | stellar.expert /contract field surface | E11 — 9 fields, no ledger_seq, `invocations=null` ≠ 0                                                      |
-| 6   | Caller-tree auth vs auth-less          | E13 — protocol 25 mainnet DOES emit diagnostic events (PR #166 #6 note potentially stale post-protocol-22) |
+| #   | Anti-pattern                           | Where manifested                                                                                                                                                                                                                                                                                                                                   |
+| --- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | CAP-67 fee event semantics             | E14 — events in `TransactionMetaV4.events[]` w stages BEFORE/AFTER_ALL_TXS                                                                                                                                                                                                                                                                         |
+| 2   | WebFetch hallucinations                | E05 — fabricated source/fee values caught; switched to curl + python3 json.load                                                                                                                                                                                                                                                                    |
+| 3   | StrKey CRC                             | E08 — 100% valid; SAC derivation byte-for-byte cross-check bonus                                                                                                                                                                                                                                                                                   |
+| 4   | `parameters[0]` positional             | E10 — XDR `invoke_contract.contract_address` = target contract; `[2]` = first call arg                                                                                                                                                                                                                                                             |
+| 5   | stellar.expert /contract field surface | E11 — 9 fields, no ledger_seq, `invocations=null` ≠ 0                                                                                                                                                                                                                                                                                              |
+| 6   | Caller-tree auth vs auth-less          | E13 — diagnostic events present in protocol-25 archive XDR for our backfill range (read via S3 / Galexie-style archive stream where diagnostics are emitted; not a guarantee about public Horizon nodes, where diagnostics depend on core config). PR #166 #6 note "no diagnostics post-protocol-22" is at least incomplete for archive consumers. |
 
 ## Method insights (for skill notes)
 
