@@ -1,0 +1,201 @@
+---
+id: '0218'
+title: 'BUG: is_sac=false for pre-existing SAC contracts (forward-derive from observed assets)'
+type: BUG
+status: backlog
+related_adr: ['0027', '0030']
+related_tasks: ['0118']
+tags:
+  [
+    layer-indexer,
+    postgres,
+    clickhouse,
+    pre-audit-2026-05-13,
+    priority-high,
+    effort-medium,
+  ]
+milestone: 2
+links:
+  - crates/xdr-parser/src/sac.rs
+  - crates/xdr-parser/src/state.rs
+history:
+  - date: '2026-05-13'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Spawned from Karol's 2026-05-13 pre-audit Bug #4: pre-existing
+      Stellar Asset Contracts (SAC = built-in host contract for
+      wrapping classic Stellar assets like XLM, USDC) whose
+      `create_contract` op happened BEFORE the indexed window persist
+      as skeleton `soroban_contracts` rows with `is_sac=false`. The
+      existing detection path (`extract_contract_deployments` in
+      `crates/xdr-parser/src/state.rs`) only fires when an in-window
+      `LedgerEntryChange` carries `executable=stellar_asset`; pre-window
+      SACs never produce such a change in the indexed range, so they
+      land as skeletons (driver creates the row when the contract is
+      referenced as a `transaction_participant`).
+
+      Audit team's note in `docs/audits/2026-05-12-ch-pilot-endpoint-audit.md`
+      §Method-insights #5 already records the cross-check trick:
+      `stellar_sdk.Asset(code, issuer).contract_id(PUBLIC)` byte-matches
+      the live SAC contract_id. This task wires that derivation into
+      the indexer as a one-way "forward-derive from observed asset"
+      pass during persist.
+---
+
+# BUG: is_sac=false for pre-existing SAC contracts
+
+## Summary
+
+`crates/xdr-parser/src/state.rs::extract_contract_deployments` infers
+`is_sac=true` only when it observes an in-window `LedgerEntryChange`
+for a contract whose `executable.type == "stellar_asset"`. SAC contracts
+deployed BEFORE the indexed window never produce such a change in the
+range, so they get default `is_sac=false` skeleton rows from the
+driver path (`accounts` → `soroban_contracts` row creation on first
+`transaction_participants` reference).
+
+Empirically: 100% of pre-window SACs in the audit DB land as
+`is_sac=false, contract_type=Other, sac_asset=NULL` — they look
+indistinguishable from genuinely-unknown contracts even though their
+classification is deterministic and re-derivable from observed asset
+metadata.
+
+## Fix strategy
+
+**Forward-derive SAC contract_ids from observed classic assets.** Every
+classic asset observed in the indexed range (native XLM, classic-credit
+trustlines, payments, offers, etc.) has a deterministic SAC contract_id
+computed from `(asset_code, issuer, network_passphrase)`. The
+derivation function already exists:
+`xdr_parser::sac::derive_sac_contract_id` (verified during the
+2026-05-12 audit's SAC byte-for-byte cross-check).
+
+Persist-time UPDATE flips `is_sac=true, sac_asset=...` on any
+`soroban_contracts` skeleton row whose `contract_id` matches a derived
+SAC. Idempotent and additive — only flips rows that are currently
+`is_sac=false` (so a re-classified `Token` row from the existing path
+is left alone).
+
+## Implementation plan
+
+### Phase 1 — parser helper
+
+New public surface in `crates/xdr-parser/src/sac.rs`:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct SacOverride {
+    pub contract_id: String,         // StrKey
+    pub asset: Asset,                // XDR Asset enum
+}
+
+#[instrument(skip(assets), fields(asset_count = assets.len()))]
+pub fn derive_sac_overrides_from_assets(
+    assets: &[ExtractedAsset],
+    network_passphrase: &str,
+) -> Vec<SacOverride>;
+```
+
+Pure function: takes the staged `ExtractedAsset` list, derives the
+SAC contract_id per asset via `derive_sac_contract_id(
+ContractIdPreimage::Asset(asset.to_xdr()), &network_id)`, returns
+the override list. No I/O, no DB.
+
+Unit tests (in `sac.rs::tests`):
+
+- Native XLM → CAS3J7GY (known mainnet SAC for XLM).
+- Classic credit asset (USDC issued by `GA5ZSEJYB3...`) → derived
+  contract_id byte-matches mainnet wrapper.
+- Soroban-only asset (`asset_type=3`, no SAC) → not emitted (or emitted
+  with `sac_asset=None`; decide in impl).
+
+### Phase 2 — staging + persist integration
+
+`Staged` struct gains `sac_overrides: Vec<SacOverride>`. Populated
+during the contract-deployment staging path alongside the existing
+`contract_rows` build.
+
+`crates/indexer/src/handler/persist/write.rs` gets a new step
+`apply_sac_overrides_for_skeleton_rows` invoked between
+`upsert_contracts` and the NFT filter:
+
+```sql
+UPDATE soroban_contracts sc
+   SET is_sac = TRUE,
+       sac_asset = t.asset_xdr,
+       contract_type = COALESCE(sc.contract_type, 0)  -- Token = 0
+  FROM UNNEST($1::VARCHAR[], $2::BYTEA[]) AS t(cid, asset_xdr)
+ WHERE sc.contract_id = t.cid
+   AND sc.is_sac = FALSE
+```
+
+Idempotent on replay (`is_sac = FALSE` guard short-circuits no-op
+writes). Runs inside the persist transaction so the NFT filter step
+that follows sees the corrected `is_sac` / `contract_type` and drops
+those rows before they hit the quarantine.
+
+### Phase 3 — integration test
+
+`crates/indexer/tests/persist_integration.rs`:
+
+- Fixture: known classic credit asset (USDC-like with a fixed test
+  issuer) observed via a trustline change; no `create_contract` op
+  in the test ledger for the corresponding SAC.
+- Expectation: post-persist, `SELECT is_sac, contract_type, sac_asset
+FROM soroban_contracts WHERE contract_id = $derived_sac` returns
+  `(true, Token, <asset xdr>)`.
+- Negative case: a Soroban-only asset (no SAC mapping) produces no
+  override and the corresponding contract row is left alone.
+
+### Phase 4 — CH writer parity
+
+Decide alongside the CH writer parity follow-up for task 0217 (CH
+`_pending` routing). The same `SacOverride` list can drive a CH
+`ALTER TABLE ... UPDATE` mutation, but RMT semantics suggest the
+cleaner path is to merge the override into the `ContractRow` at stage
+time and rely on the `ReplacingMergeTree(wasm_uploaded_at_ledger)`
+version semantics to absorb the corrected row. Document in the task's
+implementation notes.
+
+## Acceptance Criteria
+
+- [ ] `xdr_parser::sac::derive_sac_overrides_from_assets` public + unit-tested.
+- [ ] `Staged.sac_overrides` populated from the asset staging path.
+- [ ] `apply_sac_overrides_for_skeleton_rows` UPDATEs `soroban_contracts`
+      inside the persist tx; idempotent on replay.
+- [ ] Integration test: pre-existing SAC referenced + observed trustline →
+      `is_sac=true` + `contract_type=Token` + `sac_asset` populated.
+- [ ] **Empirical replay**: re-run a backfill window that previously
+      held pre-existing SACs (e.g. XLM SAC) and verify
+      `SELECT count(*) FILTER (WHERE is_sac = true) FROM soroban_contracts`
+      increases by the expected delta (target: ≥ 5 pre-window SACs in
+      a 10k-ledger window).
+- [ ] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md`
+      §4.6 `soroban_contracts` gains a note about forward-derived SAC
+      overrides; `docs/architecture/database-schema/clickhouse-pilot.md`
+      gains the same note (with CH-side scope clarification).
+- [ ] **API types regenerated** — N/A (no API contract change).
+
+## Out of Scope
+
+- CH writer parity beyond the schema-side documentation note — same
+  follow-up bucket as task 0217's CH writer parity for `_pending` routing.
+- Backfilling existing skeleton rows on already-indexed environments —
+  separate operational runbook (analog to the 0217 initial-migration
+  runbook); spawn alongside or after Phase 1–3 ship.
+- Bug #1 / #5 / #6 from Karol's pre-audit (different scope — classic
+  credit asset rows, enricher worker signature, transient classifier).
+
+## Notes
+
+- Side-effect on task 0217 quarantine: with this fix, pre-existing SACs
+  classify as `Token` at first reference instead of staying `Other`, so
+  they drop at filter time and never enter `nfts_pending`. The 0217
+  post-backfill drain runbook §Part 2 therefore stops needing to TRUNCATE
+  SAC stragglers; only true `Other` (genuinely unknown) contracts
+  remain in pending pre-drain.
+- `derive_sac_contract_id` is pure Rust (no external deps beyond
+  `stellar-xdr` already in the crate). The function panics only on
+  malformed `ContractIdPreimage`; the wrapping helper should `warn!`
+  - skip on derivation failure rather than abort the ledger persist.
