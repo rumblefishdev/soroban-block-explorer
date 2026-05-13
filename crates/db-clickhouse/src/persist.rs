@@ -29,6 +29,7 @@
 //!   lifecycle.
 
 use clickhouse::Client;
+use xdr_parser::SacOverride;
 use xdr_parser::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
@@ -76,8 +77,9 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
+    sac_overrides: &[SacOverride],
 ) -> Result<(), SchemaError> {
-    let staged = stage::prepare(
+    let staged = stage::prepare_with_sac_overrides(
         ledger,
         transactions,
         operations,
@@ -93,6 +95,7 @@ pub async fn persist_ledger_clickhouse(
         nft_events,
         lp_positions,
         contract_name_writes,
+        sac_overrides,
     )?;
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
@@ -132,6 +135,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

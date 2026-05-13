@@ -15,20 +15,24 @@
 //! ## Why one long-lived insert per table per partition
 //!
 //! ClickHouse `MergeTree` creates exactly one "part" per `INSERT`
-//! statement. The writer streams into 16 non-ledger tables; `ledgers`
-//! is opened once at commit as the commit marker (17 tables total).
-//! With 16 streaming tables × 11 M ledgers the naive per-ledger
-//! pattern produces ~176 M parts and trips
+//! statement. The writer streams into 18 non-ledger tables; `ledgers`
+//! is opened once at commit as the commit marker (19 tables total).
+//! With 18 streaming tables × 11 M ledgers the naive per-ledger
+//! pattern produces ~200 M parts and trips
 //! `parts_to_throw_insert = 3000` (per `(table, partition)`) after the
 //! first ~3 k ledgers (≈ 0.03 % of an 11 M backfill). The merger
 //! cannot fold parts faster than they're produced at parse-bound
 //! throughput.
 //!
 //! Partition-aligned streaming inserts hold the request open across the
-//! whole 64 k-ledger partition: ~172 partitions × 16 streaming tables
-//! ≈ 2 750 `INSERT` statements over the entire 11 M-ledger backfill
+//! whole 64 k-ledger partition: ~172 partitions × 18 streaming tables
+//! ≈ 3 100 `INSERT` statements over the entire 11 M-ledger backfill
 //! (plus one `ledgers` INSERT per partition as the commit marker).
-//! Well within the merger's comfort zone.
+//! Well within the merger's comfort zone. The two new pending tables
+//! (`nfts_pending`, `nft_ownership_pending`, task 0217 / 0220) only
+//! open when the partition contains at least one `Other`-classified
+//! NFT-candidate contract, so partitions with full classifier coverage
+//! still see exactly the 16 prior inserts.
 //!
 //! Loopback transport is irrelevant here — server-side part economics
 //! are the load-bearing constraint, not HTTP round-trips.
@@ -46,10 +50,10 @@
 //! ## Memory budget
 //!
 //! Each `clickhouse::Insert<T>` buffers `BUFFER_SIZE = 256 KiB` and
-//! chunk-flushes when full. 16 streaming inserts × 256 KiB ≈ 4 MiB
-//! peak per writer (plus the short-lived `ledgers` insert at commit),
-//! independent of partition row count. Comfortable headroom even at
-//! K=16 parallel partitions on a laptop.
+//! chunk-flushes when full. Up to 18 streaming inserts × 256 KiB ≈
+//! 4.5 MiB peak per writer (plus the short-lived `ledgers` insert at
+//! commit), independent of partition row count. Comfortable headroom
+//! even at K=16 parallel partitions on a laptop.
 
 use clickhouse::{Client, insert::Insert};
 
@@ -91,6 +95,13 @@ struct TableInserts {
     assets: Option<Insert<AssetRow>>,
     nfts: Option<Insert<NftRow>>,
     nft_ownership: Option<Insert<NftOwnershipRow>>,
+    /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
+    /// `stage::prepare` routing actually produces pending rows for the
+    /// partition (any contract still classified `Other` / NULL at the
+    /// time of staging). Empty `Other`-free partitions never open the
+    /// HTTP request, keeping the part economy unchanged from PR #180.
+    nfts_pending: Option<Insert<NftPendingRow>>,
+    nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
     balances: Option<Insert<AccountBalanceRow>>,
 }
 
@@ -227,6 +238,23 @@ impl PartitionWriter {
             &staged.nft_ownership_rows,
         )
         .await?;
+        // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
+        // the HTTP request never opens) on partitions where every
+        // NFT-candidate contract has a definitive `Nft` verdict.
+        write_rows(
+            &self.client,
+            &mut self.inserts.nfts_pending,
+            "nfts_pending",
+            &staged.nft_pending_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.nft_ownership_pending,
+            "nft_ownership_pending",
+            &staged.nft_ownership_pending_rows,
+        )
+        .await?;
         write_rows(
             &self.client,
             &mut self.inserts.balances,
@@ -268,6 +296,14 @@ impl PartitionWriter {
         end(self.inserts.assets).await?;
         end(self.inserts.nfts).await?;
         end(self.inserts.nft_ownership).await?;
+        // Task 0217 / 0220 — drain quarantine inserts in the same
+        // pre-`ledgers` step. They share the commit-marker guarantee:
+        // a partial commit that fails between any of these and the
+        // final `ledgers` write produces no `ledgers` row for the
+        // partition, so the resume path re-does it cleanly. RMT
+        // dedupes the orphan rows on the next merge.
+        end(self.inserts.nfts_pending).await?;
+        end(self.inserts.nft_ownership_pending).await?;
         end(self.inserts.balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every

@@ -41,8 +41,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use domain::{AssetType, OperationType};
+use domain::{AssetType, ContractType, OperationType};
 use serde_json::Value;
+use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
@@ -74,6 +75,15 @@ pub struct StagedLedger {
     pub asset_rows: Vec<AssetRow>,
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
+    /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
+    /// contract is still `Other` / NULL-classified at staging time.
+    /// Routed alongside `nft_rows` via the per-contract verdict
+    /// computed from observed WASM interfaces in this ledger plus the
+    /// parser-emitted `contract_type` on each deployment. CH has no
+    /// per-row UPDATE, so promotion happens only via the post-backfill
+    /// drain runbook.
+    pub nft_pending_rows: Vec<NftPendingRow>,
+    pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
     pub balance_rows: Vec<AccountBalanceRow>,
 }
 
@@ -94,6 +104,58 @@ pub fn prepare(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
+) -> Result<StagedLedger, SchemaError> {
+    prepare_with_sac_overrides(
+        ledger,
+        transactions,
+        operations,
+        events,
+        invocations,
+        contract_interfaces,
+        contract_deployments,
+        account_states,
+        liquidity_pools,
+        pool_snapshots,
+        assets,
+        nfts,
+        nft_events,
+        lp_positions,
+        contract_name_writes,
+        &[],
+    )
+}
+
+/// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
+/// for every `(contract_id, identity)` pair in `sac_overrides` (task
+/// 0220 Part 2). Each override row carries `is_sac=true,
+/// contract_type=Token, wasm_uploaded_at_ledger=0` so RMT collapses by
+/// `ORDER BY (contract_id)` keeping the SAC-flagged version over the
+/// `is_sac=false` Pass-2 stub that would otherwise be emitted for the
+/// same contract.
+///
+/// Production callers that have a `ParseOutput.sac_overrides` slice
+/// (PG-side bridge for task 0218 + the CH backfill path) call this
+/// directly; legacy callers via [`prepare`] get a no-op override list
+/// and behave exactly as before — the override mechanism stays opt-in
+/// at the call site, so the addition is fully backward-compatible.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_with_sac_overrides(
+    ledger: &ExtractedLedger,
+    transactions: &[ExtractedTransaction],
+    operations: &[(String, Vec<ExtractedOperation>)],
+    events: &[(String, Vec<ExtractedEvent>)],
+    invocations: &[(String, Vec<ExtractedInvocation>)],
+    contract_interfaces: &[ExtractedContractInterface],
+    contract_deployments: &[ExtractedContractDeployment],
+    account_states: &[ExtractedAccountState],
+    liquidity_pools: &[ExtractedLiquidityPool],
+    pool_snapshots: &[ExtractedLiquidityPoolSnapshot],
+    assets: &[ExtractedAsset],
+    nfts: &[ExtractedNft],
+    nft_events: &[ExtractedNftEvent],
+    lp_positions: &[ExtractedLpPosition],
+    contract_name_writes: &[(String, String)],
+    sac_overrides: &[SacOverride],
 ) -> Result<StagedLedger, SchemaError> {
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
@@ -268,12 +330,27 @@ pub fn prepare(
     }
 
     // ---- wasm_interface_metadata (deduped by wasm_hash) ----
+    //
+    // Task 0118 Phase 2 (PG-side mirror) — run the wasm-spec classifier
+    // alongside the metadata dedup. The resulting per-hash verdict
+    // feeds two downstream consumers in this same `prepare` call:
+    //   * `contract_rows.contract_type` override for non-SAC deploys
+    //     whose WASM is uploaded in the same ledger (matches PG
+    //     `Staged::prepare` behaviour at staging.rs:578-585).
+    //   * NFT-candidate routing (`nft_rows` / `nft_pending_rows`,
+    //     task 0217 / 0220) — `Other`/NULL verdict routes to
+    //     quarantine; `Fungible` / `Token` drops the row entirely.
     let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
+    let mut wasm_classification: HashMap<[u8; 32], ContractType> =
+        HashMap::with_capacity(contract_interfaces.len());
     for iface in contract_interfaces {
         let hash = decode_hash(&iface.wasm_hash, "wasm_hash")?;
         if !wasm_seen.insert(hash) {
             continue;
         }
+        let classification = xdr_parser::classify_contract_from_wasm_spec(&iface.functions);
+        wasm_classification.insert(hash, classification.into());
+
         let metadata = serde_json::json!({
             "functions": iface.functions,
             "wasm_byte_len": iface.wasm_byte_len,
@@ -296,6 +373,20 @@ pub fn prepare(
             None => None,
         };
         let deployed = i64::from(dep.deployed_at_ledger);
+        // Task 0118 Phase 2 (PG-side mirror) — if this deployment's
+        // wasm was classified in the same ledger and carries a
+        // definitive `Nft` / `Fungible` verdict, override the parser
+        // default (`Other` for non-SAC) before the row reaches CH.
+        // SAC deploys stay `Token` (is_sac short-circuits WASM
+        // classification — SACs have no WASM).
+        let mut contract_type = dep.contract_type;
+        if !dep.is_sac
+            && let Some(hash) = wasm_hash
+            && let Some(&classified) = wasm_classification.get(&hash)
+            && matches!(classified, ContractType::Nft | ContractType::Fungible)
+        {
+            contract_type = classified;
+        }
         out.contract_rows.push(SorobanContractRow {
             id: ids::contract_id(&dep.contract_id),
             contract_id: dep.contract_id.clone(),
@@ -303,7 +394,7 @@ pub fn prepare(
             wasm_uploaded_at_ledger: deployed,
             deployer_id: dep.deployer_account.as_deref().map(ids::account_id),
             deployed_at_ledger: Some(deployed),
-            contract_type: Some(dep.contract_type as i16),
+            contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
             name: dep.name.clone(),
         });
@@ -321,6 +412,49 @@ pub fn prepare(
             is_sac: false,
             name: Some(name.clone()),
         });
+    }
+
+    // Task 0220 — SAC override re-insert. For every observed classic
+    // asset (Native / ClassicCredit), the parser already derived the
+    // SAC contract_id (see `xdr_parser::derive_sac_overrides_from_assets`).
+    // Re-insert a corrected `SorobanContractRow` with
+    // `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0` so
+    // RMT collapses by `ORDER BY (contract_id)` keeping the override
+    // version when the original deploy lived outside our backfill
+    // window and persisted as `is_sac=false`. Skips contracts already
+    // emitted from `contract_deployments` (no point in writing twice
+    // in the same partition).
+    {
+        let mut override_seen: HashSet<&str> = HashSet::new();
+        for cid in &contract_seen {
+            override_seen.insert(cid.as_str());
+        }
+        for ov in sac_overrides {
+            if !override_seen.insert(ov.contract_id.as_str()) {
+                continue;
+            }
+            out.contract_rows.push(SorobanContractRow {
+                id: ids::contract_id(&ov.contract_id),
+                contract_id: ov.contract_id.clone(),
+                wasm_hash: None,
+                // RMT version = 0 sentinel: every real deploy (which
+                // carries `wasm_uploaded_at_ledger = deployed_at_ledger
+                // >= window_start`) wins over this override, so a
+                // future in-window deploy of the same contract won't
+                // be downgraded back to a stub. But the override
+                // _does_ win over the existing `is_sac=false` skeleton
+                // RMT-merged from referenced-only Pass-2 emits which
+                // also carry `wasm_uploaded_at_ledger = 0` — the new
+                // row dedupes by `(contract_id)` ORDER BY and the
+                // freshly-written `is_sac=true` is the one kept.
+                wasm_uploaded_at_ledger: 0,
+                deployer_id: None,
+                deployed_at_ledger: None,
+                contract_type: Some(ContractType::Token as i16),
+                is_sac: true,
+                name: None,
+            });
+        }
     }
 
     // ---- transactions + transaction_hash_index ----
@@ -742,66 +876,178 @@ pub fn prepare(
         },
     );
 
-    // ---- nfts (dedup by (contract_id, token_id), latest watermark) ----
-    let mut nft_indices: HashMap<(i64, String), usize> = HashMap::new();
-    for nft in nfts {
-        let contract_id_int = ids::contract_id(&nft.contract_id);
-        let watermark = i64::from(nft.last_seen_ledger);
-        let key = (contract_id_int, nft.token_id.clone());
-        match nft_indices.get(&key).copied() {
-            Some(idx) => {
-                let existing = &mut out.nft_rows[idx];
-                if watermark >= existing.current_owner_ledger {
-                    existing.current_owner_id = nft.owner_account.as_deref().map(ids::account_id);
-                    existing.current_owner_ledger = watermark;
-                }
-                existing.minted_at_ledger = match (
-                    existing.minted_at_ledger,
-                    nft.minted_at_ledger.map(i64::from),
-                ) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (Some(a), None) => Some(a),
-                    (None, b) => b,
-                };
-                existing.collection_name = existing
-                    .collection_name
-                    .clone()
-                    .or_else(|| nft.collection_name.clone());
-                existing.name = existing.name.clone().or_else(|| nft.name.clone());
-                existing.media_url = existing.media_url.clone().or_else(|| nft.media_url.clone());
-            }
-            None => {
-                nft_indices.insert(key, out.nft_rows.len());
-                out.nft_rows.push(NftRow {
-                    contract_id: contract_id_int,
-                    token_id: nft.token_id.clone(),
-                    collection_name: nft.collection_name.clone(),
-                    name: nft.name.clone(),
-                    media_url: nft.media_url.clone(),
-                    minted_at_ledger: nft.minted_at_ledger.map(i64::from),
-                    current_owner_id: nft.owner_account.as_deref().map(ids::account_id),
-                    current_owner_ledger: watermark,
-                });
-            }
+    // ---- NFT routing verdict map (task 0217 / 0220) -------------------
+    //
+    // Build a per-contract verdict map keyed by strkey. Sources, in
+    // precedence order:
+    //   1. Same-ledger `contract_rows` carrying a definitive
+    //      `contract_type` (Token / Nft / Fungible). Either:
+    //        - SAC deploy (`is_sac=true` → Token).
+    //        - WASM-classified deploy (the override applied above).
+    //   2. SAC overrides (also Token) — these were skipped from Pass-2
+    //      stubs, so they're in `out.contract_rows` already.
+    // Contracts with NO entry → treat as `Other`/uncached → route to
+    // pending. CH has no DB access in the stage, so prior-ledger
+    // classifications are not visible here; this is the same semantic
+    // PG would produce for a worker with an empty `ClassificationCache`
+    // — pending now, drained / promoted later via the runbook.
+    let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
+    for row in &out.contract_rows {
+        if let Some(ty_i16) = row.contract_type
+            && let Ok(ty) = ContractType::try_from(ty_i16)
+        {
+            verdict_by_contract.insert(row.contract_id.as_str(), ty);
         }
     }
 
-    // ---- nft_ownership ----
+    // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    enum NftRoute {
+        Hot,
+        Pending,
+        Drop,
+    }
+    let route_for = |strkey: &str| -> NftRoute {
+        match verdict_by_contract.get(strkey).copied() {
+            Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
+            Some(ContractType::Nft) => NftRoute::Hot,
+            // `Other` (cached or just-fetched) and uncached (no entry)
+            // both go to quarantine — same semantic as PG-side
+            // `resolve_nft_filter`.
+            _ => NftRoute::Pending,
+        }
+    };
+
+    // ---- nfts / nfts_pending (dedup by (contract_id, token_id),
+    //                            latest watermark) ----
+    //
+    // Each `(contract_id, token_id)` row lives in exactly one bucket
+    // (hot OR pending) per partition — picked by the per-contract
+    // verdict above. Dedup keys are per-bucket so a contract that
+    // somehow appeared with mixed verdicts within the same ledger
+    // (impossible today, defensive) would have separate slots.
+    let mut nft_hot_indices: HashMap<(i64, String), usize> = HashMap::new();
+    let mut nft_pending_indices: HashMap<(i64, String), usize> = HashMap::new();
+    for nft in nfts {
+        let route = route_for(nft.contract_id.as_str());
+        if matches!(route, NftRoute::Drop) {
+            continue;
+        }
+        let contract_id_int = ids::contract_id(&nft.contract_id);
+        let watermark = i64::from(nft.last_seen_ledger);
+        let key = (contract_id_int, nft.token_id.clone());
+        let owner_id = nft.owner_account.as_deref().map(ids::account_id);
+        let minted = nft.minted_at_ledger.map(i64::from);
+
+        match route {
+            NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
+                Some(idx) => {
+                    let existing = &mut out.nft_rows[idx];
+                    if watermark >= existing.current_owner_ledger {
+                        existing.current_owner_id = owner_id;
+                        existing.current_owner_ledger = watermark;
+                    }
+                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (Some(a), None) => Some(a),
+                        (None, b) => b,
+                    };
+                    existing.collection_name = existing
+                        .collection_name
+                        .clone()
+                        .or_else(|| nft.collection_name.clone());
+                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
+                    existing.media_url =
+                        existing.media_url.clone().or_else(|| nft.media_url.clone());
+                }
+                None => {
+                    nft_hot_indices.insert(key, out.nft_rows.len());
+                    out.nft_rows.push(NftRow {
+                        contract_id: contract_id_int,
+                        token_id: nft.token_id.clone(),
+                        collection_name: nft.collection_name.clone(),
+                        name: nft.name.clone(),
+                        media_url: nft.media_url.clone(),
+                        minted_at_ledger: minted,
+                        current_owner_id: owner_id,
+                        current_owner_ledger: watermark,
+                    });
+                }
+            },
+            NftRoute::Pending => match nft_pending_indices.get(&key).copied() {
+                Some(idx) => {
+                    let existing = &mut out.nft_pending_rows[idx];
+                    if watermark >= existing.current_owner_ledger {
+                        existing.current_owner_id = owner_id;
+                        existing.current_owner_ledger = watermark;
+                    }
+                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (Some(a), None) => Some(a),
+                        (None, b) => b,
+                    };
+                    existing.collection_name = existing
+                        .collection_name
+                        .clone()
+                        .or_else(|| nft.collection_name.clone());
+                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
+                    existing.media_url =
+                        existing.media_url.clone().or_else(|| nft.media_url.clone());
+                }
+                None => {
+                    nft_pending_indices.insert(key, out.nft_pending_rows.len());
+                    out.nft_pending_rows.push(NftPendingRow {
+                        contract_id: contract_id_int,
+                        token_id: nft.token_id.clone(),
+                        collection_name: nft.collection_name.clone(),
+                        name: nft.name.clone(),
+                        media_url: nft.media_url.clone(),
+                        minted_at_ledger: minted,
+                        current_owner_id: owner_id,
+                        current_owner_ledger: watermark,
+                    });
+                }
+            },
+            NftRoute::Drop => unreachable!("filtered above"),
+        }
+    }
+
+    // ---- nft_ownership / nft_ownership_pending ----
     for ev in nft_events {
+        let route = route_for(ev.contract_id.as_str());
+        if matches!(route, NftRoute::Drop) {
+            continue;
+        }
         let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
             continue;
         };
         let event_order =
             i16::try_from(ev.event_order).map_err(|_| staging_err("nft event_order overflow"))?;
-        out.nft_ownership_rows.push(NftOwnershipRow {
-            contract_id: ids::contract_id(&ev.contract_id),
-            token_id: ev.token_id.clone(),
-            ledger_sequence: i64::from(ev.ledger_sequence),
-            event_order,
-            transaction_id: tx_id,
-            owner_id: ev.owner_account.as_deref().map(ids::account_id),
-            event_type: ev.event_type as i16,
-        });
+        let contract_id = ids::contract_id(&ev.contract_id);
+        let ledger_sequence = i64::from(ev.ledger_sequence);
+        let owner_id = ev.owner_account.as_deref().map(ids::account_id);
+        let event_type = ev.event_type as i16;
+
+        match route {
+            NftRoute::Hot => out.nft_ownership_rows.push(NftOwnershipRow {
+                contract_id,
+                token_id: ev.token_id.clone(),
+                ledger_sequence,
+                event_order,
+                transaction_id: tx_id,
+                owner_id,
+                event_type,
+            }),
+            NftRoute::Pending => out.nft_ownership_pending_rows.push(NftOwnershipPendingRow {
+                contract_id,
+                token_id: ev.token_id.clone(),
+                ledger_sequence,
+                event_order,
+                transaction_id: tx_id,
+                owner_id,
+                event_type,
+            }),
+            NftRoute::Drop => unreachable!("filtered above"),
+        }
     }
 
     // ---- account_balances_current ----
@@ -916,6 +1162,16 @@ pub fn prepare(
         }
         for (cid, _) in contract_name_writes {
             emitted.insert(cid.as_str());
+        }
+        // Task 0220 — exclude SAC-override contracts. The override row
+        // (emitted earlier with `is_sac=true`) and a Pass-2 stub
+        // (`is_sac=false`) would both carry `wasm_uploaded_at_ledger=0`;
+        // CH RMT tie-breaks nondeterministically on equal version, so
+        // emitting both could clobber the override on merge. Suppress
+        // the stub here — the override carries enough fields
+        // (`contract_id`, `id`) to satisfy the FK-by-id read path.
+        for ov in sac_overrides {
+            emitted.insert(ov.contract_id.as_str());
         }
 
         let mut referenced: HashSet<String> = HashSet::new();
