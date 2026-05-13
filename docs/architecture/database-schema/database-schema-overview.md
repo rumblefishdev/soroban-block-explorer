@@ -666,14 +666,14 @@ Design notes:
 - producers per `asset_type`:
   - `0 = Native` → migration seed + `native_asset_singleton()` (above).
   - `1 = ClassicCredit` → `xdr_parser::detect_classic_credit_assets(changes)`
-    walks every `trustline` `LedgerEntryChange` (`change_type ∈ {created,
-updated, restored, state}`), extracts `(asset.code, asset.issuer)` from
-    the change's `data.asset` field, dedupes within the ledger, emits one
-    row per distinct pair. `pool_share` trustlines are intentionally
-    skipped — those are LP positions, handled by `extract_lp_positions`.
-    Producer added in task 0219 to close Karol's pre-audit Bug #1
-    (classic credits had no producer; the persist branch fired only in
-    tests).
+    walks every `trustline` `LedgerEntryChange`, extracts
+    `(asset.code, asset.issuer)` from `data.asset` for live changes or
+    falls back to `key.asset` for removed changes, dedupes within the
+    ledger, and emits one row per distinct pair. `pool_share`
+    trustlines are intentionally skipped — those are LP positions,
+    handled by `extract_lp_positions`. Producer added in task 0219 to
+    close Karol's pre-audit Bug #1 (classic credits had no producer;
+    the persist branch fired only in tests).
   - `2 = Sac` → `xdr_parser::detect_assets` (`crates/xdr-parser/src/state.rs`)
     on every observed SAC contract deployment. SAC identity carried via
     the deployment's `sac_asset` field (`SacAssetIdentity::Credit` or

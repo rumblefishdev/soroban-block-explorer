@@ -869,12 +869,16 @@ pub fn detect_assets(
 ///
 /// Flow:
 ///
-/// 1. Walk `changes` looking for `entry_type == "trustline"` with
-///    `change_type ∈ {created, updated, restored, state}` (removed
-///    trustlines carry only the key, no asset data).
-/// 2. Skip `asset.type == "pool_share"` — those are LP positions,
+/// 1. Walk `changes` looking for `entry_type == "trustline"`.
+/// 2. Read the asset payload from `data.asset` (live changes) or
+///    fall back to `key.asset` (removed changes — `data` is `None`,
+///    but the change's key still carries `{type, code, issuer}` per
+///    `format_trustline_asset_key` on the ingest side). The fallback
+///    matters for partial-window backfills whose first observation
+///    of a `(code, issuer)` pair is a trustline removal.
+/// 3. Skip `asset.type == "pool_share"` — those are LP positions,
 ///    handled by `extract_lp_positions`.
-/// 3. Extract `(code, issuer)`; emit one `ExtractedAsset { asset_type:
+/// 4. Extract `(code, issuer)`; emit one `ExtractedAsset { asset_type:
 ///    ClassicCredit, asset_code: code, issuer_address: issuer }` per
 ///    distinct pair (dedup within this call).
 ///
@@ -888,8 +892,9 @@ pub fn detect_assets(
 ///   row this producer just inserted.
 ///
 /// The function is pure (no I/O, no DB) and idempotent on replay.
-/// Downstream dedup in
-/// `crates/indexer/src/handler/persist/staging.rs::asset_rows`
+/// Downstream dedup in `Staged::prepare`
+/// (`crates/indexer/src/handler/persist/staging.rs`, local
+/// `asset_rows` accumulator keyed by the per-`asset_type` fingerprint)
 /// already collapses same `(code, issuer)` from multiple sources to
 /// one row before the `upsert_assets_classic_like` INSERT fires.
 pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> Vec<ExtractedAsset> {
@@ -901,21 +906,18 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
         if change.entry_type != "trustline" {
             continue;
         }
-        // Only "live" change types carry the asset payload. Removed
-        // trustlines have key-only data; skipping them never loses an
-        // asset row because the create/update that originally
-        // established the trustline already emitted one.
-        if !matches!(
-            change.change_type.as_str(),
-            "created" | "updated" | "restored" | "state"
-        ) {
-            continue;
-        }
 
-        let Some(ref data) = change.data else {
-            continue;
-        };
-        let Some(asset) = data.get("asset").and_then(Value::as_object) else {
+        // Live changes (created / updated / restored / state) carry the
+        // asset on `data.asset`. Removed changes have `data: None`, but
+        // the change's `key.asset` still carries `{type, code, issuer}`
+        // — so a partial-window backfill whose first observation is a
+        // trustline removal still emits the asset row.
+        let asset_source = change
+            .data
+            .as_ref()
+            .and_then(|d| d.get("asset"))
+            .or_else(|| change.key.get("asset"));
+        let Some(asset) = asset_source.and_then(Value::as_object) else {
             continue;
         };
         let asset_type = asset.get("type").and_then(Value::as_str).unwrap_or("");
@@ -2662,17 +2664,34 @@ mod tests {
     }
 
     #[test]
-    fn classic_credit_removed_trustlines_skipped() {
-        // Removed trustlines carry only the key; data is None. We rely on
-        // the create/update that originally established the trustline to
-        // have already emitted the asset row, so removed-only emission is
-        // not needed and not safe (no asset payload).
+    fn classic_credit_removed_trustlines_use_key_asset_fallback() {
+        // Removed trustlines carry `data: None`, but the change's
+        // `key.asset` still holds `{type, code, issuer}`. A
+        // partial-window backfill whose first observation of a
+        // `(code, issuer)` pair is the trustline removal should still
+        // emit the asset row — falling back to `key` covers that case.
         let mut change = trustline_change(
             "removed",
             "USDC",
             "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
         );
         change.data = None;
+        let assets = detect_classic_credit_assets(&[change]);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].asset_code.as_deref(), Some("USDC"));
+        assert_eq!(
+            assets[0].issuer_address.as_deref(),
+            Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
+        );
+    }
+
+    #[test]
+    fn classic_credit_removed_trustline_without_key_asset_is_skipped() {
+        // Truly key-less removed change (key carries account_id only) —
+        // we have no asset identity to emit; skip safely.
+        let mut change = trustline_change("removed", "USDC", "GISSUER");
+        change.data = None;
+        change.key = json!({"account_id": "GHOLDER"}); // no `asset` field
         let assets = detect_classic_credit_assets(&[change]);
         assert!(assets.is_empty());
     }

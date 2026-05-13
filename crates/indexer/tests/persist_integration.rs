@@ -4835,9 +4835,17 @@ const CC_LEDGER_SEQ: u32 = 90_000_501;
 const CC_CLOSED_AT: i64 = 1_777_122_000;
 const CC_TX_HASH: &str = "aaaa771111111111111111111111111111111111111111111111111111111111";
 const CC_LEDGER_HASH: &str = "bbbb771111111111111111111111111111111111111111111111111111111111";
-// Real mainnet USDC + issuer pin from Karol's pre-audit doc.
-const CC_TEST_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-const CC_TEST_ASSET_CODE: &str = "USDC";
+// **Synthetic** issuer StrKey + asset code. Earlier drafts of these
+// fixtures pinned the real mainnet USDC issuer
+// (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`) but the
+// per-fixture cleanup runs `DELETE FROM accounts WHERE account_id = $1`,
+// which on a non-ephemeral dev DB would nuke the real-issuer row. The
+// "GAAAAAA…0219ISSUER" StrKey is structurally a valid public-key
+// StrKey (56 chars, `G` prefix) but is never assigned on mainnet,
+// matching the convention the rest of this file uses for synthetic
+// fixtures (see `SRC_STRKEY`, `DST_STRKEY`, `ISSUER_STRKEY`).
+const CC_TEST_ISSUER: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0219ISSUER";
+const CC_TEST_ASSET_CODE: &str = "T0219";
 
 #[tokio::test]
 async fn classic_credit_extracted_asset_lands_in_assets_table() {
@@ -5087,8 +5095,19 @@ async fn clean_classic_credit_test(pool: &PgPool) {
             .execute(pool)
             .await;
     }
-    // Drop just the rows this fixture introduces. The canonical fixture
-    // cleanup wipes shared accounts (SRC_STRKEY) and the native row.
+    // Drop just the rows this fixture introduces. Crucially:
+    //
+    // - **Do NOT delete `assets WHERE asset_type = 0`** — the native
+    //   singleton is a persistent fixture seeded by migration
+    //   `20260428000000_seed_native_asset_singleton`; other integration
+    //   tests in this file rely on it. Our parser-side
+    //   `native_asset_singleton()` UPSERTs against `uidx_assets_native`
+    //   on every persist pass, so even if we did remove it, the next
+    //   persist call would reinsert it — but it's safer not to touch
+    //   a shared fixture row at all.
+    // - **Scope the issuer-account cleanup** to the *synthetic* test
+    //   StrKey only (`CC_TEST_ISSUER`); never delete an account by an
+    //   externally-known address.
     let _ = sqlx::query(
         "DELETE FROM assets WHERE asset_type = 1 AND asset_code = $1
                                      AND issuer_id = (SELECT id FROM accounts WHERE account_id = $2)",
@@ -5097,9 +5116,6 @@ async fn clean_classic_credit_test(pool: &PgPool) {
     .bind(CC_TEST_ISSUER)
     .execute(pool)
     .await;
-    let _ = sqlx::query("DELETE FROM assets WHERE asset_type = 0")
-        .execute(pool)
-        .await;
     let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
         .bind(CC_TEST_ISSUER)
         .execute(pool)
