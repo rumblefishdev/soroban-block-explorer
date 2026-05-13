@@ -910,6 +910,7 @@ dependencies = [
 name = "backfill-runner"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "clap",
  "clickhouse",
@@ -917,8 +918,11 @@ dependencies = [
  "db-clickhouse",
  "indexer",
  "indicatif",
+ "reqwest",
  "serde",
+ "serde_json",
  "sqlx",
+ "stellar-strkey 0.0.16",
  "stellar-xdr",
  "tempfile",
  "thiserror",

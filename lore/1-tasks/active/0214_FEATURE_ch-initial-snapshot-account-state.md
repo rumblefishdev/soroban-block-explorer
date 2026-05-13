@@ -55,6 +55,58 @@ history:
       enrichment path; 0218 + 0219 ship cheaper non-RPC layers for
       their respective domains that catch the common cases
       without RPC. The trio together = full coverage.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 1 (parser-side RPC client + bootstrap module + runner
+      wiring) implemented on branch
+      `fix/0214_ch-initial-snapshot-account-state`. Phase 2's
+      incremental top-up gate landed as part of the discovery query
+      (`WHERE sequence_number = 0` on the `accounts FINAL` join) —
+      cheaper than a separate post-pass and self-idempotent on
+      window re-runs.
+
+      **Design decision (RPC client location)** — Option A: embed the
+      Soroban RPC client inline in `crates/backfill-runner` as a
+      private module (`src/rpc_snapshot.rs`). Rationale:
+      - This task is the only consumer of `getLedgerEntries` today.
+      - Tasks 0218 (SAC override) and 0219 (classic-credit assets)
+        ship cheaper non-RPC layers; their RPC fallbacks are open
+        backlog and may never need the full RPC surface.
+      - Smallest blast radius; no new crate scaffolding, no public
+        API surface to maintain.
+      - The refactor to a shared `crates/soroban-rpc-client` crate
+        (Option B) is a one-day move if a second concrete consumer
+        appears.
+
+      **Other emergent decisions:**
+      - Bootstrap runs **after** the per-ledger ingest loop, not
+        before (task body §"Implementation Plan §1" suggested
+        before). Reason: the discovery query reads CH's
+        `transaction_participants`, which on a fresh database is
+        empty until ingest populates it. Running bootstrap after
+        ingest lets us scan the just-populated participants table.
+        Phase 2 incremental top-up gate makes the post-ingest
+        position natural — a window re-run only fixes the rows
+        that still need it.
+      - `from_snapshot: true` provenance tag — implementation
+        adopts the simpler convention of using `last_seen_ledger =
+        window_start` as the snapshot watermark. RMT
+        deduplication on `last_seen_ledger` lets a per-ledger
+        parser emit at a higher sequence overwrite the snapshot
+        row naturally. A dedicated `from_snapshot: true` boolean
+        column would require a schema migration for one telemetry
+        bit; the watermark convention captures the same audit
+        signal (SELECT count(*) FROM accounts FINAL WHERE
+        last_seen_ledger = <window_start>) without schema churn.
+      - Trustline + native-balance staging — Phase 1 ships the
+        `AccountEntry` snapshot path only (native XLM balance
+        included). The trustline RPC pass is left as a follow-up
+        note in the bootstrap module's docstring; the
+        `decode_trustline_snapshot` / `rebuild_trustline_asset`
+        helpers are on the public module surface ready to wire in
+        when Phase 3 lands.
 ---
 
 # CH writer: initial-snapshot mechanism for account state on backfill start
@@ -121,12 +173,32 @@ Trustlines populate `account_balances_current` rows. **Once Phase 1 lands, E08/E
 
 ## Acceptance Criteria
 
-- [ ] New `bootstrap_account_state` step in `backfill-runner` (CH target).
+- [x] New `bootstrap_account_state` step in `backfill-runner` (CH target).
+      _(Phase 1 shipped in this branch:
+      `crates/backfill-runner/src/{rpc_snapshot,bootstrap}.rs`,
+      wired into `run::execute` via the new `--soroban-rpc-url`
+      CLI flag. PG target short-circuits; CH target without the
+      URL logs and skips; CH target with the URL discovers
+      skeleton accounts via the `transaction_participants` JOIN
+      `accounts FINAL WHERE sequence_number = 0`, fetches via
+      Soroban RPC `getLedgerEntries`, and stages into `accounts` +
+      `account_balances_current` with `last_seen_ledger =
+      window_start` as the snapshot watermark.)_
 - [ ] Empirical test: re-run 64k-ledger backfill, then `SELECT countIf(sequence_number > 0) FROM accounts FINAL` is > 50% of total rows (instead of ~0% today). (ClickHouse: use `countIf` — `count() FILTER (WHERE ...)` is Postgres-only.)
+      _(Open — operational follow-up. Needs a live Soroban RPC
+      endpoint + a CH instance with backfill data. The implementation
+      is gated on `--soroban-rpc-url` so this AC can be verified by
+      re-running an already-backfilled window with the flag set.)_
 - [ ] Empirical E06 verification: account `GARDNV3Q7...` shows real `sequence_number`, `home_domain`, and at least the native XLM balance row in `account_balances_current`.
+      _(Open — same operational gate as above. Decoder is
+      unit-tested against the audit-pinned StrKey shape, but the
+      live-RPC round trip is a follow-up.)_
 - [ ] `account_balances_current` row count > 0 (today: 0 in the 64k window for most accounts).
-- [ ] **Docs updated** — audit doc §E06 marked resolved; `docs/architecture/database-schema/clickhouse-pilot.md` gains a §State-side ingestion paragraph.
-- [ ] **API types regenerated** — N/A (no API change).
+      _(Open — same operational gate.)_
+- [x] **Docs updated** — audit doc §E06 marked resolved;
+      `docs/architecture/database-schema/clickhouse-pilot.md` gains
+      a §State-side ingestion paragraph.
+- [x] **API types regenerated** — N/A (no API change).
 
 ## Out of Scope
 

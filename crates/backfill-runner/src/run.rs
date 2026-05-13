@@ -21,6 +21,7 @@ use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tracing::info;
 
+use crate::bootstrap::bootstrap_account_state;
 use crate::dashboard::{Dashboard, install_panic_hook};
 use crate::error::BackfillError;
 use crate::ingest::{PartitionStats, index_partition};
@@ -28,12 +29,14 @@ use crate::partition::{Partition, partitions_for_range};
 use crate::sink::Sink;
 use crate::sync::sync_partition;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     sink: &Sink,
     temp_dir: &Path,
     start: u32,
     end: u32,
     keep_partitions: bool,
+    soroban_rpc_url: Option<&str>,
     mp: &MultiProgress,
 ) -> Result<(), BackfillError> {
     assert!(
@@ -190,6 +193,47 @@ pub async fn execute(
     }
 
     dashboard.finish_and_clear();
+
+    // ---- Bootstrap account state (task 0214, audit §E06) ----------------
+    //
+    // The task body proposed running this **before** the per-ledger
+    // ingest loop, but the discovery query reads CH's
+    // `transaction_participants` — which on a fresh database is empty
+    // until ingest populates it. Running the bootstrap **after** the
+    // loop instead lets us scan the just-populated participants table,
+    // identify skeleton accounts that the parser-emitted state never
+    // touched in this window, and top up via Soroban RPC's
+    // `getLedgerEntries`. Phase 2's incremental top-up gate
+    // (sequence_number = 0 filter) is intrinsic to the discovery
+    // query, so a re-run of the same window only fixes the rows that
+    // still need it. On CH targets without `--soroban-rpc-url` the
+    // step short-circuits with a single info log; on PG targets the
+    // step is a no-op (PG's account-state path is independent — task
+    // 0119 + ADR 0027 §7 cover it).
+    match bootstrap_account_state(sink, soroban_rpc_url, start, end).await {
+        Ok(stats) if stats.discovered > 0 || stats.staged_accounts > 0 => {
+            info!(
+                discovered = stats.discovered,
+                fetched = stats.fetched,
+                staged = stats.staged_accounts,
+                batches = stats.rpc_batches,
+                rpc_errors = stats.rpc_errors,
+                "bootstrap account-state snapshot complete"
+            );
+        }
+        Ok(_) => {
+            // discovered=0 either means CH/PG target without RPC or
+            // no skeletons to top up — already logged inside
+            // `bootstrap_account_state`.
+        }
+        Err(err) => {
+            // Don't fail the whole run on bootstrap failure — the
+            // per-ledger ingest already succeeded and the rows are in
+            // CH; bootstrap is opportunistic enrichment that the
+            // operator can re-run by invoking the same range.
+            tracing::warn!(%err, "bootstrap_account_state failed; continuing");
+        }
+    }
 
     let elapsed = run_start.elapsed();
     print_run_summary(todo.len(), &totals, elapsed);

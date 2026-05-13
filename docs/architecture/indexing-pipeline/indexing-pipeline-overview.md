@@ -302,6 +302,20 @@ transaction on the PG path). Full design + the `soroban_events` ADR 0044
 §Decision §4a unfold are documented in
 [`docs/architecture/database-schema/clickhouse-pilot.md#writers`](../database-schema/clickhouse-pilot.md#writers).
 
+CH-target runs additionally accept an optional `--soroban-rpc-url` /
+`SOROBAN_RPC_URL` flag (task
+[0214](../../../lore/1-tasks/active/0214_FEATURE_ch-initial-snapshot-account-state.md))
+that turns on the **initial-snapshot mechanism** for account state.
+After the per-ledger ingest loop finishes, the runner discovers
+skeleton accounts (`accounts FINAL WHERE sequence_number = 0`)
+referenced by `transaction_participants` in the window, fetches
+their live `AccountEntry` via Soroban RPC `getLedgerEntries`, and
+tops up `accounts` + `account_balances_current` so they no longer
+look like skeletons. Without the flag the bootstrap step is skipped
+(participants-driven skeleton rows persist as-is). The mechanism
+closes the 2026-05-12 CH-pilot audit §E06 gap and is documented in
+[`docs/architecture/database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism`](../database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism).
+
 ### 6.3 Backfill Scope and Execution Model
 
 - scope: from Soroban mainnet activation in late 2023 to the present
