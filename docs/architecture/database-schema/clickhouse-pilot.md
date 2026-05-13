@@ -151,22 +151,30 @@ denormalization at full Stellar scale.
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
 
-### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217)
+### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217 + 0220)
 
 CH carries the same `_pending` quarantine pair as PG so the routing
 semantics defined in
 [`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)
-can land symmetrically on both writers.
+land symmetrically on both writers.
 
-> **Scope in PR #180:** CH ships the **schema only**. The CH writer
-> (`crates/db-clickhouse/src/persist/*`) does NOT yet route NFT-candidate
-> rows into `nfts_pending` / `nft_ownership_pending` — it continues to
-> stage / write the existing `nfts` and `nft_ownership` tables. The
-> verdict-based routing described below is the PG writer's behaviour
-> today; the CH writer parity follow-up is tracked as a separate task
-> (it needs a different atomicity model because CH's
-> `ReplacingMergeTree` doesn't support per-row UPDATE for the
-> promotion hook).
+> **Writer parity status:** Task 0217 (PR #180) shipped the CH schema
+> + PG writer routing. Task 0220 ships the **CH writer parity** for the
+> routing — `crates/db-clickhouse/src/persist/stage.rs` now reads the
+> per-contract WASM classifier verdict (built alongside
+> `wasm_interface_metadata` staging) and routes NFT-candidate rows
+> into hot vs. pending vs. drop buckets in lockstep with PG.
+>
+> **Atomicity asymmetry that remains:** PG runs a promotion hook
+> (`reclassify_contracts_from_wasm` + `promote_pending_nfts_to_hot`)
+> inside the persist tx when an `Other → Nft` transition is observed.
+> CH `ReplacingMergeTree` has no per-row UPDATE, so the CH promotion
+> path is **re-emission on next observation** plus the post-backfill
+> drain runbook for stragglers
+> ([`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)).
+> In short: PG promotes inline; CH promotes when the contract is
+> observed again with a definitive verdict, with the runbook as the
+> long-tail catch-all.
 
 Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
 which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):

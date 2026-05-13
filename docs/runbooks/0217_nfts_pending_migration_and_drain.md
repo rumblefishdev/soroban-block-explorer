@@ -160,6 +160,22 @@ SELECT COUNT(*) FROM nfts
 CH mutations are asynchronous (track via `system.mutations`). Run in
 order: copy first, then delete; OPTIMIZE last.
 
+> **Task 0220 note — re-insert is preferred to a hand-run migration.**
+> If the indexer hasn't yet re-run over the affected ledger range
+> with the task-0220 stage routing in place, the cheaper path is:
+>
+> 1. Force a backfill replay of the affected range with the new
+>    writer build (the CH writer-parity routing emits NFT-candidate
+>    rows into `nfts_pending` / `nft_ownership_pending` automatically
+>    for any `Other`/uncached verdict, including the pre-0220 hot-table
+>    pollution).
+> 2. Run only Step 3 (`ALTER TABLE … DELETE`) on the legacy pollution
+>    that remains in `nfts` / `nft_ownership` from the pre-0220 writer.
+>
+> Use the manual copy flow below only when a backfill replay is
+> impractical (e.g. very large window, no Galexie source still
+> available). Both paths converge on the same end state.
+
 #### Step 1 — pre-migration sanity
 
 ```sql
@@ -320,6 +336,26 @@ SELECT COUNT(*) FROM nft_ownership_pending; -- 0
 
 Mirror of the PG flow. Use `INSERT INTO … SELECT … FROM` for the
 straggler promotion, then `TRUNCATE TABLE` on both pending tables.
+
+> **Task 0220 note — CH drain is the only path for non-`Nft`
+> stragglers.** PG has the persist-time `reclassify_contracts_from_wasm`
+> promotion hook: when an `Other → Fungible` / `Other → Nft`
+> transition is observed, the matching pending rows get
+> promoted or dropped **inside the same persist tx**. CH has no
+> per-row UPDATE, so the equivalent CH path is **re-emission on the
+> next observation of the same contract** (the new stage routing
+> emits a hot-bucket row when the verdict has flipped) plus
+> **post-backfill drain (this Part 2)** for stragglers whose
+> contracts flipped to a non-`Nft` verdict but were never re-emitted
+> (no later ledger touched them).
+>
+> Run Part 2 once the full Soroban-era backfill has indexed every
+> `wasm_upload` op AND a reasonable cooldown has elapsed so the
+> re-emission path can do its work. Anything still in
+> `nfts_pending` after that is either truly `Other` (drain by
+> TRUNCATE below) or has a definitive non-`Nft` verdict that needs
+> manual promotion via the `INSERT … SELECT … WHERE contract_type =
+> 2` step below.
 
 ```sql
 -- Straggler promotion (mirror of PG Step 2).
