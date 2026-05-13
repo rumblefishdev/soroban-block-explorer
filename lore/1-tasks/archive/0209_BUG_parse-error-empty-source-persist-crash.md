@@ -2,7 +2,7 @@
 id: '0209'
 title: 'Persist crash on parse_error tx with empty source_account'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0190']
 tags: ['indexer', 'persist', 'parse-error', 'robustness']
@@ -33,6 +33,19 @@ history:
       transactions.source" message). Plan: Option A sentinel
       G-strkey in staging.rs; regression test flips reproducer
       to happy-path assertion.
+  - date: 2026-05-13
+    status: completed
+    who: karolkow
+    note: >
+      Option B (nullable source_id) implemented instead of Option A.
+      Migration drops NOT NULL; staging skips empty source from both
+      `account_keys_set` and `participants_per_tx` (latter critical —
+      `insert_participants` hard-resolves); write layer routes via
+      `resolve_opt_id`. API DTO + 3 query sites (transactions list/detail,
+      ledger tx list) moved to `Option<String>` + LEFT JOIN. Reproducer
+      flipped to happy-path: persist OK, `source_id IS NULL`, replay
+      idempotent. Arch docs (schema-overview + technical-design)
+      updated. Types regenerated.
 ---
 
 # Persist crash on parse_error tx with empty source_account
@@ -78,15 +91,38 @@ Update preamble of existing test: remove empty-source gap caveat.
 
 ## Acceptance Criteria
 
-- [ ] Persist path no longer aborts on `ExtractedTransaction { parse_error: true, source_account: "", ... }`
-- [ ] Replay of same ledger is idempotent
-- [ ] New test in `persist_integration.rs` covers empty-source variant end-to-end
-- [ ] Existing `parse_error_transaction_persists_and_replays_idempotent` preamble updated (no more gap caveat)
-- [ ] **Docs updated** — N/A unless schema changes (Option B). Option A = no schema/API doc change.
-- [ ] **API types regenerated** — N/A (indexer-internal, no `crates/api/**` touch)
+- [x] Persist path no longer aborts on `ExtractedTransaction { parse_error: true, source_account: "", ... }`
+- [x] Replay of same ledger is idempotent
+- [x] New test in `persist_integration.rs` covers empty-source variant end-to-end (`parse_error_empty_source_persists_with_null_source_id`)
+- [x] Existing `parse_error_transaction_persists_and_replays_idempotent` preamble updated (no more gap caveat)
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` + `docs/architecture/technical-design-general-overview.md` reflect nullable `source_id` + LEFT JOIN rule
+- [x] **API types regenerated** — `libs/api-types/src/{openapi.json,generated/types.gen.ts}` updated; `source_account` now `Option<String>` on `TransactionListItem` + `TransactionDetailLight`
+
+## Implementation Notes
+
+**Chosen approach**: Option B (nullable `source_id`), not Option A as originally planned.
+
+Changes (12 files):
+
+- Migration `20260513090000_transactions_source_id_nullable.{up,down}.sql` — `DROP NOT NULL` on `transactions.source_id`
+- `crates/indexer/src/handler/persist/staging.rs` — `TxRow.source_str_key: Option<String>`; skip empty source from `account_keys_set` AND `participants_per_tx` (latter critical: `insert_participants` hard-resolves and would crash with the same kind of error as the original bug)
+- `crates/indexer/src/handler/persist/write.rs` — `source_ids: Vec<Option<i64>>` via `resolve_opt_id`
+- `crates/api/src/transactions/{queries,dto}.rs` — `TxListRow`/`TxDetailRow`/`TransactionListItem`/`TransactionDetailLight.source_account: Option<String>`; 2× `JOIN` → `LEFT JOIN` (unfiltered list + detail by hash)
+- `crates/api/src/ledgers/queries.rs` — `LedgerTxRow.source_account: Option<String>`; 1× `JOIN` → `LEFT JOIN`
+- `crates/indexer/tests/persist_integration.rs` — reproducer flipped to happy-path; preamble of populated-source test updated
+- 2 arch docs (schema-overview, technical-design)
+- API types regen
+
+Paths that drive through operations / events / pools / assets stay as plain `JOIN` — parse_error tx never has rows in those tables, so the inner join silently excludes them which is the desired behaviour.
+
+## Design Decisions
+
+### Emerged
+
+1. **Option B over A**: Original task recommended Option A (sentinel G-strkey). Reversed during implementation after deeper analysis — sentinel pollutes `accounts` table and introduces theoretical collision with real all-zero ed25519 keypair. NULL is semantically correct ("source unknown"), respects arch-doc contract from `technical-design-general-overview §5.4` + `xdr-parsing-overview §7.1` ("transaction still displayed with partial columns"), and frontend already differentiates via the `parse_error` flag.
 
 ## Notes
 
 - Source: `crates/xdr-parser/src/transaction.rs:115-131` envelope-missing branch of `extract_envelopes` mismatch with `tx_processing`.
 - Other parse_error variants (`envelope_xdr.is_empty()`, `result_xdr.is_empty()`) keep source filled — not affected.
-- Prefer Option A unless wider NULL-source semantics are wanted for other reasons.
+- Final implementation chose Option B (nullable `source_id`) over the originally preferred Option A; see the `Design Decisions › Emerged` entry above for the rationale (semantic accuracy + arch contract from `technical-design-general-overview §5.4` and `xdr-parsing-overview §7.1`).

@@ -166,7 +166,7 @@ The 0206 writer's quick-fix attempt (`ReplacingMergeTree(created_at_ledger)`
   - Path-specific: cache hit behaviour (Path 1) OR identity-content
     invariant for same pool across emits (Path 2).
 - [ ] Re-run 10k smoke at 62016000–62025999: post-`OPTIMIZE TABLE
-  liquidity_pools FINAL`, `count() = uniqExact(pool_id) ≈ 10761`
+liquidity_pools FINAL`, `count() = uniqExact(pool_id) ≈ 10761`
       (was 217k pre-fix). Read-time query without `LIMIT 1 BY`
       returns one row per pool.
 - [ ] ADR 0044 history entry documenting the choice + the schema

@@ -2458,6 +2458,19 @@ const PARSE_ERROR_API_LEDGER_SEQ: i64 = 90_000_010;
 /// `transactions_default` partition created below.
 const PARSE_ERROR_API_CREATED_AT: &str = "2026-04-21T12:00:00Z";
 
+/// Variant A fixture for lore-0209 — empty source on a parse_error tx
+/// surfaces in the API as `source_account: null`. Distinct hash + ledger
+/// from the populated-source fixture above so both can coexist when the
+/// suite runs serially against a shared DB.
+const PARSE_ERROR_NULL_SRC_TX_HASH: &str =
+    "0209020902090209020902090209020902090209020902090209020902090209";
+const PARSE_ERROR_NULL_SRC_LEDGER_SEQ: i64 = 90_000_011;
+/// 2099-12-31 23:59:59 UTC — sorts ahead of every realistic fixture in
+/// `transactions.created_at DESC` lists so the parse_error row is reliably
+/// reachable with a small `limit` even when other tests have seeded
+/// fixtures into the same partition.
+const PARSE_ERROR_NULL_SRC_CREATED_AT: &str = "2099-12-31T23:59:59Z";
+
 async fn ensure_transactions_default_partition(pool: &PgPool) {
     // `transactions` + `transaction_hash_index` are partitioned and
     // unpartitioned respectively; the partitioned one needs a default
@@ -2549,6 +2562,62 @@ async fn cleanup_parse_error_transaction(pool: &PgPool) {
         .await;
 }
 
+/// Seed a Variant A `parse_error` row with `source_id = NULL` — the
+/// lore-0209 shape that the indexer now produces for envelope-missing
+/// transactions. No `accounts` row is touched (none exists for the
+/// unknown source). Idempotent.
+async fn seed_parse_error_tx_null_source(pool: &PgPool) {
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+        .execute(pool)
+        .await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (
+            hash, ledger_sequence, application_order, source_id, fee_charged,
+            inner_tx_hash, successful, operation_count, has_soroban,
+            parse_error, created_at
+        )
+        VALUES (decode($1, 'hex'), $2, 1, NULL, 2500, NULL, false, 0, false, true, $3::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+    .bind(PARSE_ERROR_NULL_SRC_LEDGER_SEQ)
+    .bind(PARSE_ERROR_NULL_SRC_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert NULL-source parse_error transactions row");
+
+    sqlx::query(
+        r#"
+        INSERT INTO transaction_hash_index (hash, ledger_sequence, created_at)
+        VALUES (decode($1, 'hex'), $2, $3::timestamptz)
+        "#,
+    )
+    .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+    .bind(PARSE_ERROR_NULL_SRC_LEDGER_SEQ)
+    .bind(PARSE_ERROR_NULL_SRC_CREATED_AT)
+    .execute(pool)
+    .await
+    .expect("insert NULL-source parse_error transaction_hash_index row");
+}
+
+async fn cleanup_parse_error_tx_null_source(pool: &PgPool) {
+    let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+        .bind(PARSE_ERROR_NULL_SRC_TX_HASH)
+        .execute(pool)
+        .await;
+}
+
 #[tokio::test]
 async fn detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
@@ -2632,6 +2701,80 @@ async fn detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact() {
     );
 
     cleanup_parse_error_transaction(&pool).await;
+}
+
+/// lore-0209 — Variant A `parse_error` transactions land in the DB with
+/// `transactions.source_id = NULL`. The unfiltered transaction list
+/// must serve such rows with `source_account: null` instead of
+/// dropping them (the path uses `LEFT JOIN accounts` per
+/// `transactions/queries.rs`, branch `(None, None)`).
+///
+/// Locks the end-to-end DTO round-trip for lore-0209:
+///
+///   * row reaches the response with `parse_error: true`
+///   * `source_account` serialises as JSON `null`
+///   * `application_order`, `fee_charged`, `successful`, `has_soroban`
+///     round-trip cleanly even though the FK target is absent
+#[tokio::test]
+async fn list_returns_parse_error_tx_with_null_source_account() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0209 list-NULL-source test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!(
+                "DATABASE_URL unreachable ({err}) — skipping lore-0209 list-NULL-source test"
+            );
+            return;
+        }
+    };
+
+    ensure_transactions_default_partition(&pool).await;
+    seed_parse_error_tx_null_source(&pool).await;
+
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/transactions?limit=5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "expected 200 OK from list endpoint: {json}"
+    );
+
+    let data = json["data"].as_array().expect("data array");
+    let row = data
+        .iter()
+        .find(|r| r["hash"] == PARSE_ERROR_NULL_SRC_TX_HASH)
+        .unwrap_or_else(|| {
+            panic!(
+                "NULL-source parse_error row missing from list response (seeded created_at \
+                 2099-12-31 should sort to the top with limit=5): {json}"
+            )
+        });
+
+    assert!(
+        row["source_account"].is_null(),
+        "source_account MUST serialise as JSON null for NULL source_id (lore-0209): {row}"
+    );
+    assert_eq!(row["ledger_sequence"], PARSE_ERROR_NULL_SRC_LEDGER_SEQ);
+    assert_eq!(row["application_order"], 1);
+    assert_eq!(row["fee_charged"], 2500);
+    assert_eq!(row["successful"], false);
+    assert_eq!(row["operation_count"], 0);
+    assert_eq!(row["has_soroban"], false);
+
+    cleanup_parse_error_tx_null_source(&pool).await;
 }
 
 #[tokio::test]

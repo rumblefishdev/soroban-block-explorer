@@ -141,6 +141,6 @@ The research is complete when we have all of:
   acknowledge the fast-change off-chain category explicitly.
 - **0199 stays out of this.** 0199 Phase 2b was reverted in commit
   `7f7ca42`. The LP analytics task does not depend on asset USD price
-  exposure — LP TVL/volume/fee_revenue use price _as a multiplier at
-  snapshot moment_, not as a persisted asset attribute. The two concerns
+  exposure — LP TVL/volume/fee*revenue use price \_as a multiplier at
+  snapshot moment*, not as a persisted asset attribute. The two concerns
   share Oskar's API but solve different problems.

@@ -4004,21 +4004,17 @@ async fn application_order_min_fold_for_duplicate_identity() {
 //   (C) `result_xdr.is_empty()` — same shape on the result blob.
 //
 // Variants B + C leave `source_account` populated (envelope was inspected
-// before re-encoding failed). Variant A leaves it empty and currently
-// crashes the persist staging path — tracked in [lore-0209](
-// ../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
-// A live-DB reproducer for the crash lives below as
-// `parse_error_empty_source_crashes_persist_until_bug_fixed`; it
-// asserts the exact staging-layer error message and skips cleanly
-// when `DATABASE_URL` is unset.
+// before re-encoding failed). Variant A leaves it empty; the persist path
+// represents the unknown source as SQL `NULL` on `transactions.source_id`
+// (lore-0209 — column made nullable, write layer routes through
+// `resolve_opt_id`). A dedicated regression guard for Variant A lives
+// below as `parse_error_empty_source_persists_with_null_source_id`.
 //
 // This test exercises the populated-source path (Variants B / C) so the
 // `parse_error` flag is proven to round-trip from `ExtractedTransaction`
 // into the `transactions.parse_error` BOOLEAN end-to-end, and the per-tx
 // support tables (`participants`, `operations_appearances`, etc.) stay
-// empty for a degraded row. The empty-source variant is left for 0209 to
-// land independently — once 0209 fixes the staging crash, a second test
-// here can exercise the `source_account: ""` shape.
+// empty for a degraded row.
 
 const PARSE_ERROR_LEDGER_SEQ: u32 = 90_000_009;
 const PARSE_ERROR_TX_HASH: &str =
@@ -4280,34 +4276,35 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
     clean_minimal_test_ledger(&pool, PARSE_ERROR_TX_HASH, PARSE_ERROR_LEDGER_SEQ).await;
 }
 
-/// Live-DB reproducer for the empty-source persist crash documented in
-/// [lore-0209](../../../lore/1-tasks/backlog/0209_BUG_parse-error-empty-source-persist-crash.md).
+/// Regression guard for lore-0209 — Variant A `parse_error` transactions
+/// (envelope-missing branch of `xdr_parser::transaction::extract`) reach
+/// staging with `source_account = ""`. Before the fix this aborted the
+/// whole persist envelope with `"unresolved StrKey for transactions.source"`
+/// because the empty key failed the `len <= 56 && starts_with('G')` filter
+/// on `account_keys_set`, leaving the FK from `transactions.source_id`
+/// unresolvable. The fix represents "source unknown" as `NULL`
+/// (`transactions.source_id` is nullable since the accompanying migration)
+/// rather than synthesising a sentinel `accounts` row.
 ///
-/// `make_parse_error_transaction` pins the populated-source shape because
-/// the empty-source path crashes the staging layer at
-/// `staging.rs:317-321` + `:454` + `write.rs:643`. This test asserts
-/// `persist_ledger` returns the exact staging error literal
-/// `"unresolved StrKey for transactions.source"` so the BUG stays
-/// observable until the referenced task lands. Once the BUG fix lands,
-/// this test will fail (the call will succeed and `expect_err` will
-/// panic), prompting the fix author to flip the assertion into a
-/// happy-path regression guard.
+/// The test asserts:
+///   1. `persist_ledger` succeeds on an empty-source parse_error tx.
+///   2. A `transactions` row lands with `parse_error = true` and
+///      `source_id IS NULL`.
+///   3. Replaying the same ledger is idempotent (no duplication, no
+///      `accounts` churn).
 ///
 /// Skips cleanly when `DATABASE_URL` is unset / unreachable — matches
-/// the pattern used by every other DB-gated test in this file. No
-/// `#[should_panic]` or `#[ignore]` needed: the error-message
-/// assertion does the same locking work while keeping the test
-/// runnable through the normal `cargo test` flow.
+/// the pattern used by every other DB-gated test in this file.
 #[tokio::test]
-async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
+async fn parse_error_empty_source_persists_with_null_source_id() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        eprintln!("DATABASE_URL unset — skipping lore-0209 reproducer");
+        eprintln!("DATABASE_URL unset — skipping lore-0209 regression guard");
         return;
     };
     let pool = match PgPool::connect(&database_url).await {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0209 reproducer");
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0209 regression guard");
             return;
         }
     };
@@ -4344,7 +4341,46 @@ async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
     };
     let classification_cache = ClassificationCache::new();
 
-    let err = persist_ledger(
+    persist_ledger(
+        &pool,
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("persist_ledger must accept empty-source parse_error tx with NULL source_id");
+
+    let (tx_count, parse_error_flag, source_id_is_null): (i64, bool, bool) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT, \
+                BOOL_AND(parse_error), \
+                BOOL_AND(source_id IS NULL) \
+         FROM transactions WHERE hash = decode($1, 'hex')",
+    )
+    .bind(tx_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("post-persist tx state");
+
+    assert_eq!(tx_count, 1, "exactly one transactions row landed");
+    assert!(parse_error_flag, "tx row carries parse_error = true");
+    assert!(source_id_is_null, "source_id is NULL for empty-source tx");
+
+    // Replay — must be idempotent end-to-end.
+    persist_ledger(
         &pool,
         &ledger,
         &[tx],
@@ -4365,17 +4401,18 @@ async fn parse_error_empty_source_crashes_persist_until_bug_fixed() {
         &classification_cache,
     )
     .await
-    .expect_err(
-        "lore-0209 BUG: persist_ledger must error for empty source until the fix lands — \
-         if this `expect_err` panics, the BUG is gone and the assertion below should \
-         flip into a happy-path regression guard",
-    );
+    .expect("replay must remain idempotent");
 
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("unresolved StrKey for transactions.source"),
-        "expected lore-0209 staging-layer error message, got: {msg}"
-    );
+    let replay_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM transactions WHERE hash = decode($1, 'hex')",
+    )
+    .bind(tx_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("post-replay count");
+    assert_eq!(replay_count, 1, "replay must not duplicate the tx row");
+
+    clean_minimal_test_ledger(&pool, tx_hash, ledger_seq).await;
 }
 
 /// Minimal scoped cleanup for the task-0192 ordering / fold tests. These

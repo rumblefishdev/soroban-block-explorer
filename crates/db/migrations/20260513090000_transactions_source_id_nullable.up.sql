@@ -1,0 +1,35 @@
+-- lore-0209 — drop NOT NULL from `transactions.source_id`.
+--
+-- Variant A `parse_error` transactions (envelope-missing branch of
+-- `xdr_parser::transaction::extract`, see lore-0209) reach the indexer
+-- with `source_account = ""`. Before this change the persist path aborted
+-- because the empty key failed the `len <= 56 && starts_with('G')` filter
+-- on `account_keys_set`, leaving the FK from `transactions.source_id`
+-- unresolvable.
+--
+-- The fix represents "source unknown" as `NULL` rather than a synthetic
+-- sentinel `accounts` row. Reasons:
+--
+--   * Semantically correct — no real account claim is being made for
+--     a transaction whose envelope we could not decode.
+--   * Avoids polluting `accounts` with a ghost row that leaks into every
+--     `JOIN accounts ON src.id = t.source_id` aggregate query.
+--   * Avoids a theoretical collision with a real account derived from
+--     an all-zero ed25519 seed.
+--
+-- Existing queries that surface parse_error transactions (transaction
+-- list/detail by hash, ledger-scoped transaction listing) migrate from
+-- `JOIN` to `LEFT JOIN`. Queries that walk through operations / events /
+-- pools / assets to reach `transactions` never match parse_error rows
+-- (no operations, no events, no LP ops, no asset writes are emitted for
+-- parse_error tx) and stay as plain `JOIN`.
+--
+-- Partitioning: PostgreSQL ≥ 14 cascades the DROP NOT NULL across all
+-- attached child partitions atomically — no per-partition loop needed.
+--
+-- The `idx_tx_source_created (source_id, created_at DESC)` index keeps
+-- working unchanged; NULL values are simply absent from it (default
+-- B-tree behavior).
+
+ALTER TABLE transactions
+    ALTER COLUMN source_id DROP NOT NULL;
