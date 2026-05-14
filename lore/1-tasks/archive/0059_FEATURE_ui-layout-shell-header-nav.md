@@ -9,11 +9,11 @@ tags: [priority-high, effort-medium, layer-frontend-shared]
 milestone: 2
 links: []
 history:
-  - date: 2026-03-24
+  - date: '2026-03-24'
     status: backlog
     who: fmazur
     note: 'Task created'
-  - date: 2026-05-14
+  - date: '2026-05-14'
     status: active
     who: karolkow
     note: 'Task activated'
