@@ -14,8 +14,18 @@ export interface NavButtonProps {
 }
 
 const activeSx = {
-  borderBottom: (theme: Theme) => `2px solid ${theme.palette.stroke.action}`,
+  position: 'relative',
   color: (theme: Theme) => theme.palette.text.primary,
+  '&::after': {
+    content: '""',
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '2px',
+    backgroundColor: (theme: Theme) => theme.palette.stroke.action,
+    borderRadius: 0,
+  },
 };
 
 const hoverSx = {
