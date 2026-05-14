@@ -112,13 +112,16 @@ export function AppShell() {
     void navigate(href);
   };
 
-  const FOOTER_NAV_ITEMS = NAV_ITEMS.map((item) => ({
-    ...item,
-    onClick: item.href
-      ? (e: React.MouseEvent<HTMLAnchorElement>) =>
-          handleFooterNavClick(item.href!, e)
-      : undefined,
-  }));
+  const FOOTER_NAV_ITEMS = NAV_ITEMS.map((item) => {
+    const href = item.href;
+    return {
+      ...item,
+      onClick: href
+        ? (e: React.MouseEvent<HTMLAnchorElement>) =>
+            handleFooterNavClick(href, e)
+        : undefined,
+    };
+  });
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
