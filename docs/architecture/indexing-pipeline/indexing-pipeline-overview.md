@@ -198,7 +198,7 @@ committed in a single atomic DB transaction:
     the 13a UPSERT replaces all dimension fields with real data when the
     real pool is later observed (created/updated/restored, or `state` per
     `extract_liquidity_pools` post-lore-0189). The extractor itself
-    accepts `state` change*type for `liquidity_pool` entries (lore-0189),
+    accepts `state` change\*type for `liquidity_pool` entries (lore-0189),
     capturing the common case where Stellar Core writes a read-only
     snapshot of a referenced-but-unmodified pool. `volume` and
     `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
@@ -214,7 +214,7 @@ committed in a single atomic DB transaction:
     here is the SQS-driven enrichment worker introduced in task 0191
     and documented in [`enrichment.md`](./enrichment.md) — it lives
     outside the Ledger Processor described in §7.1 (which is the only
-    \_ingestion-path* Lambda). Lambda 2 runs off SQS messages emitted
+    _ingestion-path_ Lambda). Lambda 2 runs off SQS messages emitted
     by the Ledger Processor after each ledger commit; the two
     Lambdas share neither code path nor invocation lifecycle.
 14. upsert `accounts` summary and `account_balances_current`
@@ -288,12 +288,33 @@ byte-for-byte the same rows for a given ledger, and the replay-safe
 derived-state guards work without special-casing.
 
 `backfill-runner` also accepts `--target clickhouse` (task
-[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md))
-to drive the ClickHouse pilot store ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
-That path is currently a **no-op persist stub** (logs only, zero
-rows written); the parse pipeline above is unaffected and the default
-`--target postgres` is unchanged. Real CH INSERTs land in a follow-up
-task — see [`docs/architecture/database-schema/clickhouse-pilot.md#writers-stubbed`](../database-schema/clickhouse-pilot.md#writers-stubbed).
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
+shipped the runner plumbing; task
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md)
+landed the real writer) to drive the ClickHouse pilot store
+([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
+The CH path uses **partition-aligned streaming inserts** —
+`Sink::open_partition` → `write_ledger × N` → `commit` — so the
+server sees one `INSERT` per CH table per backfill partition, not
+per ledger. The default `--target postgres` is unchanged (the
+partition-writer lifecycle is a no-op around the existing per-ledger
+transaction on the PG path). Full design + the `soroban_events` ADR 0044
+§Decision §4a unfold are documented in
+[`docs/architecture/database-schema/clickhouse-pilot.md#writers`](../database-schema/clickhouse-pilot.md#writers).
+
+CH-target runs additionally accept an optional `--soroban-rpc-url` /
+`SOROBAN_RPC_URL` flag (task
+[0214](../../../lore/1-tasks/active/0214_FEATURE_ch-initial-snapshot-account-state.md))
+that turns on the **initial-snapshot mechanism** for account state.
+After the per-ledger ingest loop finishes, the runner discovers
+skeleton accounts (`accounts FINAL WHERE sequence_number = 0`)
+referenced by `transaction_participants` in the window, fetches
+their live `AccountEntry` via Soroban RPC `getLedgerEntries`, and
+tops up `accounts` + `account_balances_current` so they no longer
+look like skeletons. Without the flag the bootstrap step is skipped
+(participants-driven skeleton rows persist as-is). The mechanism
+closes the 2026-05-12 CH-pilot audit §E06 gap and is documented in
+[`docs/architecture/database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism`](../database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism).
 
 ### 6.3 Backfill Scope and Execution Model
 
@@ -322,10 +343,24 @@ Its responsibilities are:
 - keep replay of the same ledger idempotent
 - prevent stale backfill writes from overwriting newer live-derived state
 
-The Ledger Processor is the only Lambda worker in the indexing pipeline. It turns raw
-ledger-close artifacts into first-class explorer records. If event enrichment (human-readable
-interpretations of swap, transfer, mint, and burn patterns) is needed in the future, it will
-be done inline within the Ledger Processor rather than in a separate Lambda.
+The Ledger Processor is the only Lambda worker on the **ingestion path** — it turns raw
+ledger-close artifacts into first-class explorer records. **Inline-eligible** event enrichment
+(human-readable interpretations of swap / transfer / mint / burn patterns) stays inside the
+Ledger Processor; the criterion is "derivable purely from the processed ledger".
+
+A second worker — the SQS-driven **enrichment Lambda 2** introduced in task 0191 and
+documented in [`enrichment.md`](./enrichment.md) — runs **off** the ingestion path and handles
+work that fails the inline criterion: oracle lookups (USD prices), per-row HTTP fetches
+(SEP-1 issuer TOML, NFT `token_uri()`), and any expensive or long-running enrichment that
+would push the Ledger Processor past its per-ledger budget. Lambda 2 consumes SQS messages
+emitted by the Ledger Processor after each ledger commit and writes the result back to typed
+columns; the two Lambdas share neither code path nor invocation lifecycle.
+
+Allocation rule (codified by [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md)):
+
+- **On-chain + cheap** → inline in the Ledger Processor.
+- **Off-chain (HTTP / oracle / per-row RPC) + needed by list endpoints** → Lambda 2 (typed-column write).
+- **Detail-only off-chain fields** → runtime type-2 fetch in the API handler (no DB column).
 
 ## 8. Operational Characteristics
 

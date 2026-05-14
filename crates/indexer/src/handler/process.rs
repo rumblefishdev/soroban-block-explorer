@@ -55,6 +55,22 @@ pub struct ParseOutput {
     pub parse_ms: u128,
     /// Per-tx indices skipped due to `parse_error`. Surfaced for diagnostic logs.
     pub tx_parse_errors: Vec<usize>,
+    /// Task 0218 / 0220 — SAC overrides derived from the classic-asset
+    /// slice (`assets`) via `xdr_parser::derive_sac_overrides_from_assets`.
+    /// One entry per observed `Native` / `ClassicCredit` asset; pins the
+    /// deterministic SAC contract_id to its underlying asset identity.
+    ///
+    /// Consumers:
+    /// * **PG** (task 0218) — `Staged::prepare` reads this slice to drive
+    ///   the idempotent `UPDATE soroban_contracts SET is_sac=TRUE,
+    ///   contract_type=Token` step on pre-window SAC skeletons.
+    /// * **CH** (task 0220) —
+    ///   `db_clickhouse::persist::stage::prepare_with_sac_overrides`
+    ///   re-emits a corrected `SorobanContractRow` per override with
+    ///   `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0`
+    ///   so RMT collapses by `ORDER BY (contract_id)` keeping the
+    ///   SAC-flagged version as the latest.
+    pub sac_overrides: Vec<xdr_parser::SacOverride>,
 }
 
 /// Network identifier hash, derived lazily from the
@@ -132,6 +148,7 @@ pub async fn process_ledger(
         &parsed.nft_events,
         &parsed.lp_positions,
         &parsed.contract_name_writes,
+        &parsed.sac_overrides,
         classification_cache,
     )
     .await?;
@@ -310,6 +327,15 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         // them.
         let assets = xdr_parser::detect_assets(&deployments, &all_contract_interfaces);
         all_assets.extend(assets);
+        // Task 0219 — classic-credit asset rows from observed trustline
+        // changes. `detect_assets` above covers SAC + Soroban-fungible
+        // deployments only; classic credits (USDC, AQUA, EURC, …) need
+        // their own producer because the authoritative carrier is the
+        // `trustline` LedgerEntryChange's `data.asset` field, not a
+        // contract deployment shape. Dedup within the ledger happens at
+        // staging time.
+        let classic_credits = xdr_parser::detect_classic_credit_assets(changes);
+        all_assets.extend(classic_credits);
         all_contract_deployments.extend(deployments);
 
         let accounts = xdr_parser::extract_account_states(changes);
@@ -333,7 +359,22 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         all_contract_name_writes.extend(name_writes);
     }
 
+    // Task 0219 — native XLM singleton bootstrap. Emit one
+    // `ExtractedAsset { asset_type: Native }` per ledger; the persist
+    // path's `upsert_assets_native` uses `WHERE NOT EXISTS` against
+    // `uidx_assets_native`, so subsequent ledgers are no-ops.
+    all_assets.push(xdr_parser::native_asset_singleton());
+
     let all_nfts = xdr_parser::detect_nfts(&all_nft_events);
+
+    // Task 0218 / 0220 — derive SAC overrides from the observed
+    // classic-asset slice. Pinned to MAINNET_PASSPHRASE because the
+    // indexer runs only against pubnet today; if/when a testnet variant
+    // ships, lift this into config. Pure function; cheap enough to run
+    // unconditionally (linear in `all_assets.len()`, ≤2 SHA256 per
+    // entry).
+    let sac_overrides =
+        xdr_parser::derive_sac_overrides_from_assets(&all_assets, xdr_parser::MAINNET_PASSPHRASE);
 
     let parse_ms = parse_timer.elapsed().as_millis();
 
@@ -364,6 +405,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         operation_trees: all_operation_trees,
         parse_ms,
         tx_parse_errors,
+        sac_overrides,
     }
 }
 

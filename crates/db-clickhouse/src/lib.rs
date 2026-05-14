@@ -58,11 +58,19 @@ pub fn client(cfg: &Config) -> Client {
         .with_database(&cfg.database)
 }
 
-/// Errors that can happen while applying the schema.
+/// Errors that can happen while applying the schema or persisting a ledger.
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
+    /// Underlying CH transport / driver failure (`clickhouse::error::Error`
+    /// wraps HTTP, serialization, and server-reported issues).
     #[error("clickhouse query failed: {0}")]
     Query(#[from] clickhouse::error::Error),
+    /// Pre-write staging failure (decode error, overflow, malformed
+    /// parser output, …). Mirrors the `HandlerError::Staging` variant
+    /// used by the PG path so the operator sees the same vocabulary
+    /// regardless of target.
+    #[error("clickhouse staging failed: {0}")]
+    Staging(String),
 }
 
 /// Apply `init.sql` to the given client. Idempotent: every statement is a
@@ -122,11 +130,18 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 17 CREATE TABLE + 1 CREATE DICTIONARY = 18.
+        // 19 CREATE TABLE + 1 CREATE DICTIONARY = 20. Task 0217 added
+        // `nfts_pending` + `nft_ownership_pending` to the 17-table base
+        // as schema-only landing zones. The CH writer
+        // (`crates/db-clickhouse/src/persist/*`) does NOT yet stage or
+        // INSERT into either pending table — that parity work is a
+        // follow-up to PR #180 (different atomicity model required:
+        // no per-row UPDATE on RMT). Row structs + column-order tests
+        // for the pending tables will land alongside the writer work.
         assert_eq!(
             stmts.len(),
-            18,
-            "expected 17 tables + 1 dictionary, got {}",
+            20,
+            "expected 19 tables + 1 dictionary, got {}",
             stmts.len()
         );
     }

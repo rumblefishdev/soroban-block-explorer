@@ -1,0 +1,73 @@
+# backfill-enrichment-runner — nft_token_uri drain report
+
+**Timestamp:** 2026-05-13T11:19:13.137290+00:00
+**Processed:** 1000
+**Succeeded (incl. sentinel writes):** 931
+**Unreachable (transient, retry candidate):** 69
+**DB failures:** 0
+**Duration:** 2348 ms
+
+## Sample transient errors (first 10)
+
+| id | error |
+| --- | --- |
+| 1 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CDCKFBZYF2AQCSM3JOF2ZM27O3Y6AJAI4OTCQKAFNZ3FHBYUTFOKICIY, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CDCKFBZYF2AQCSM3JOF2ZM27O3Y6AJAI4OTCQKAFNZ3FHBYUTFOKICIY, token_uri], data:1034300000
+ |
+| 2 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75, token_uri], data:112000000
+ |
+| 3 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:246
+ |
+| 4 | soroban rpc: HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   1: [Diagnostic Event] topics:[fn_call, CCS7O3TWVFRUIJIQBQS7RBOH7OMHCCQVE6SRQM7OR5DMA26Q75LUSJTA, token_uri], data:123
+ |
+| 5 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:129001
+ |
+| 6 | soroban rpc: HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   1: [Diagnostic Event] topics:[fn_call, CDOUQCZRH7XTUBM57523HCXBOGHPLMTV3JQDW65LXQLTMSRSGY552S74, token_uri], data:123
+ |
+| 7 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:123
+ |
+| 8 | soroban rpc: HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   1: [Diagnostic Event] topics:[fn_call, CAC3QHHG534EUUYMIG4MR5OQ4A3D532NVOP7E5D6IUX5TH3EZMRXFKAH, token_uri], data:123
+ |
+| 9 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:638
+ |
+| 10 | soroban rpc: HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   1: [Diagnostic Event] topics:[fn_call, CAKJNR26JJIM4QRPTL72ANFZPGDXBXN2PQRK6WCNACFU76NB4MT4GRDR, token_uri], data:123
+ |

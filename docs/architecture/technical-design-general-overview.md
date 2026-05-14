@@ -974,7 +974,7 @@ CREATE TABLE transactions (
     hash              BYTEA       NOT NULL,                    -- 32-byte (ADR 0024)
     ledger_sequence   BIGINT      NOT NULL,
     application_order SMALLINT    NOT NULL,
-    source_id         BIGINT      NOT NULL REFERENCES accounts(id),  -- ADR 0026 surrogate
+    source_id         BIGINT               REFERENCES accounts(id),  -- ADR 0026 surrogate; NULLable for Variant A parse_error tx (lore-0209)
     fee_charged       BIGINT      NOT NULL,
     inner_tx_hash     BYTEA,                                   -- fee-bump inner, 32-byte
     successful        BOOLEAN     NOT NULL,

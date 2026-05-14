@@ -140,6 +140,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -376,6 +377,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -451,6 +453,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &[],
         &[],
         &[removal_state],
+        &[],
         &[],
         &[],
         &[],
@@ -717,6 +720,7 @@ async fn v4_per_op_events_land_in_appearance_index() {
         &[],
         &[],
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -890,6 +894,7 @@ async fn v4_diag_contract_mirror_does_not_inflate_amount() {
         &[tx],
         &[],
         &events,
+        &[],
         &[],
         &[],
         &[],
@@ -1516,6 +1521,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -1595,6 +1601,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -1723,6 +1730,7 @@ async fn nft_filter_drops_fungible_classified_contract() {
         &nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2026,6 +2034,7 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -2108,6 +2117,7 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nfts,
         &nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2305,6 +2315,7 @@ async fn soroban_fungible_contract_produces_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -2439,6 +2450,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -2510,6 +2522,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -2577,6 +2590,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache2,
     )
@@ -2853,6 +2867,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -2989,6 +3004,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3025,6 +3041,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache2,
     )
@@ -3372,6 +3389,7 @@ async fn orphan_position_emits_sentinel_pool() {
         &Vec::new(),
         &lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3488,6 +3506,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &lp_positions_t1,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3536,6 +3555,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &Vec::new(),
         &Vec::new(),
+        &[],
         &[],
         &cache,
     )
@@ -3630,6 +3650,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3668,6 +3689,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &lp_positions_t2,
+        &[],
         &[],
         &cache,
     )
@@ -3824,6 +3846,7 @@ async fn application_order_preserves_apply_order_not_alphabetic() {
         &[],
         &[],
         &[],
+        &[],
         &ClassificationCache::new(),
     )
     .await
@@ -3951,6 +3974,7 @@ async fn application_order_min_fold_for_duplicate_identity() {
         &[],
         &[],
         &[],
+        &[],
         &ClassificationCache::new(),
     )
     .await
@@ -3993,6 +4017,432 @@ async fn application_order_min_fold_for_duplicate_identity() {
     clean_minimal_test_ledger(&pool, FOLD_TX_HASH, FOLD_LEDGER_SEQ).await;
 }
 
+// ===========================================================================
+// Task 0190 — `parse_error = true` end-to-end persist coverage
+// ===========================================================================
+//
+// `crates/xdr-parser/src/transaction.rs:115-133` produces partial records
+// with `parse_error = true` when:
+//   (A) `envelope.is_none()` — alignment with `tx_processing` failed;
+//   (B) `envelope_xdr.is_empty()` — `encode_xdr(env, limits)` returned `""`;
+//   (C) `result_xdr.is_empty()` — same shape on the result blob.
+//
+// Variants B + C leave `source_account` populated (envelope was inspected
+// before re-encoding failed). Variant A leaves it empty; the persist path
+// represents the unknown source as SQL `NULL` on `transactions.source_id`
+// (lore-0209 — column made nullable, write layer routes through
+// `resolve_opt_id`). A dedicated regression guard for Variant A lives
+// below as `parse_error_empty_source_persists_with_null_source_id`.
+//
+// This test exercises the populated-source path (Variants B / C) so the
+// `parse_error` flag is proven to round-trip from `ExtractedTransaction`
+// into the `transactions.parse_error` BOOLEAN end-to-end, and the per-tx
+// support tables (`participants`, `operations_appearances`, etc.) stay
+// empty for a degraded row.
+
+const PARSE_ERROR_LEDGER_SEQ: u32 = 90_000_009;
+const PARSE_ERROR_TX_HASH: &str =
+    "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f00190";
+const PARSE_ERROR_LEDGER_HASH: &str =
+    "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e10190";
+
+fn make_parse_error_ledger() -> ExtractedLedger {
+    ExtractedLedger {
+        sequence: PARSE_ERROR_LEDGER_SEQ,
+        hash: PARSE_ERROR_LEDGER_HASH.to_string(),
+        closed_at: TEST_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    }
+}
+
+/// Shape mirrors the parser output for a Variant B / C parse failure:
+/// envelope was present and inspected (so `source_account` is populated)
+/// but `to_xdr` failed for either the envelope or the result blob, so
+/// both `envelope_xdr` and `result_xdr` are empty. `memo_*` and
+/// `inner_tx_hash` stay populated / `None` per their normal Variant B
+/// path semantics (inspection succeeded; only retention failed).
+///
+/// `parse_ledger` in production skips per-tx parsing (operations, events,
+/// invocations, ledger-entry-change derivation) for `parse_error = true`
+/// — see `crates/indexer/src/handler/process.rs:206-214`. The fixture
+/// here mirrors that contract: no operations / events / invocations /
+/// downstream-derived slices are produced for the degraded tx.
+fn make_parse_error_transaction() -> ExtractedTransaction {
+    ExtractedTransaction {
+        hash: PARSE_ERROR_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: PARSE_ERROR_LEDGER_SEQ,
+        // Non-empty per the 0209 gap noted at the top of this section.
+        // SRC_STRKEY rides through the same accounts staging path as the
+        // canonical fixture (its cleanup keeps the row available across
+        // parallel test runs).
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 2_500,
+        // `is_successful(&info.result.result)` is independent of
+        // parse_error. A `txFailed` result code is the plausible runtime
+        // value paired with a malformed envelope.
+        successful: false,
+        result_code: "txFailed".to_string(),
+        // Critical — both empty per the encode-failure branch.
+        envelope_xdr: String::new(),
+        result_xdr: String::new(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT,
+        parse_error: true,
+    }
+}
+
+#[tokio::test]
+async fn parse_error_transaction_persists_and_replays_idempotent() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0190 persist test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0190 persist test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_minimal_test_ledger(&pool, PARSE_ERROR_TX_HASH, PARSE_ERROR_LEDGER_SEQ).await;
+
+    let ledger = make_parse_error_ledger();
+    let transactions = vec![make_parse_error_transaction()];
+    let classification_cache = ClassificationCache::new();
+
+    // --- First persist ---
+    persist_ledger(
+        &pool,
+        &ledger,
+        &transactions,
+        /* operations          */ &[],
+        /* events              */ &[],
+        /* invocations         */ &[],
+        /* operation_trees     */ &[],
+        /* contract_interfaces */ &[],
+        /* contract_deployments*/ &[],
+        /* account_states      */ &[],
+        /* liquidity_pools     */ &[],
+        /* pool_snapshots      */ &[],
+        /* assets              */ &[],
+        /* nfts                */ &[],
+        /* nft_events          */ &[],
+        /* lp_positions        */ &[],
+        /* contract_name_writes*/ &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("first persist_ledger for parse_error tx failed");
+
+    // Assert: the row landed with parse_error=true and the supporting
+    // columns reflect the degraded-tx contract (no ops, no soroban
+    // flag). hash + source must round-trip; the FK to `accounts` must
+    // resolve via the SRC_STRKEY staging path.
+    let row: (bool, bool, i16, bool, i64, Option<Vec<u8>>) = sqlx::query_as(
+        r#"
+        SELECT t.parse_error,
+               t.successful,
+               t.operation_count,
+               t.has_soroban,
+               t.fee_charged,
+               t.inner_tx_hash
+          FROM transactions t
+         WHERE t.hash = decode($1, 'hex')
+        "#,
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("transactions row missing for parse_error fixture");
+
+    assert!(row.0, "transactions.parse_error must be true");
+    assert!(!row.1, "successful must mirror the fixture (txFailed)");
+    assert_eq!(
+        row.2, 0,
+        "operation_count must be 0 — parse_error tx emits no operations \
+         (see process.rs:206-214)"
+    );
+    assert!(
+        !row.3,
+        "has_soroban must be false (no ops → no soroban flag)"
+    );
+    assert_eq!(row.4, 2_500, "fee_charged round-trips from TxInfo");
+    assert!(
+        row.5.is_none(),
+        "inner_tx_hash None survives persist as NULL"
+    );
+
+    // The source FK must resolve to the SRC_STRKEY account row.
+    let (resolved_src,): (String,) = sqlx::query_as(
+        r#"
+        SELECT a.account_id
+          FROM transactions t
+          JOIN accounts a ON a.id = t.source_id
+         WHERE t.hash = decode($1, 'hex')
+        "#,
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("source FK must resolve for parse_error tx with populated source_account");
+    assert_eq!(resolved_src, SRC_STRKEY);
+
+    // transaction_hash_index also gets the row — read path uses this
+    // first (ADR 0027 §4). Without the index entry, the API's
+    // `/v1/transactions/:hash` lookup would 404 the degraded tx.
+    let (idx_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_hash_index WHERE hash = decode($1, 'hex')",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("hash_index lookup");
+    assert_eq!(idx_count, 1, "transaction_hash_index row missing");
+
+    // No operations_appearances, no events, no invocations — those
+    // tables are populated by per-tx parsing (`parse_ledger`
+    // `process.rs:206-214`), which the degraded-tx fast-path skips, so
+    // they stay empty. `transaction_participants` IS populated even
+    // for parse_error rows: the persist staging path always inserts
+    // the tx source as a participant (`staging.rs:317-321`,
+    // unconditional `participants_per_tx.insert(tx.source_account)`),
+    // so the source account stays queryable on the participant index
+    // for a degraded tx. The empty-source variant (lore-0209) sidesteps
+    // this branch entirely with no participant row; the populated-
+    // source variant tested here lands one — the SRC_STRKEY row.
+    let (participants_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_participants \
+         WHERE transaction_id = (SELECT id FROM transactions WHERE hash = decode($1, 'hex'))",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("transaction_participants count");
+    assert_eq!(
+        participants_count, 1,
+        "transaction_participants must carry exactly one row — the tx source — for \
+         a populated-source parse_error tx (staging.rs:317 unconditional insert)"
+    );
+
+    for table in [
+        "operations_appearances",
+        "soroban_events_appearances",
+        "soroban_invocations_appearances",
+    ] {
+        let sql = format!(
+            "SELECT COUNT(*) FROM {table} \
+             WHERE transaction_id = (SELECT id FROM transactions WHERE hash = decode($1, 'hex'))"
+        );
+        let (cnt,): (i64,) = sqlx::query_as(&sql)
+            .bind(PARSE_ERROR_TX_HASH)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("count from {table} failed: {e}"));
+        assert_eq!(
+            cnt, 0,
+            "{table} must be empty for parse_error tx — `parse_ledger` skipped per-tx \
+             parsing for the degraded row, so no appearance rows should land downstream"
+        );
+    }
+
+    // --- Replay — counts must not change ---
+    persist_ledger(
+        &pool,
+        &ledger,
+        &transactions,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("replay persist_ledger for parse_error tx failed");
+
+    let (tx_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(PARSE_ERROR_TX_HASH)
+            .fetch_one(&pool)
+            .await
+            .expect("post-replay tx count");
+    assert_eq!(
+        tx_count, 1,
+        "replay must be idempotent — exactly one transactions row for the fixture"
+    );
+
+    let (replay_idx,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transaction_hash_index WHERE hash = decode($1, 'hex')",
+    )
+    .bind(PARSE_ERROR_TX_HASH)
+    .fetch_one(&pool)
+    .await
+    .expect("post-replay hash_index count");
+    assert_eq!(replay_idx, 1, "transaction_hash_index replay idempotent");
+
+    clean_minimal_test_ledger(&pool, PARSE_ERROR_TX_HASH, PARSE_ERROR_LEDGER_SEQ).await;
+}
+
+/// Regression guard for lore-0209 — Variant A `parse_error` transactions
+/// (envelope-missing branch of `xdr_parser::transaction::extract`) reach
+/// staging with `source_account = ""`. Before the fix this aborted the
+/// whole persist envelope with `"unresolved StrKey for transactions.source"`
+/// because the empty key failed the `len <= 56 && starts_with('G')` filter
+/// on `account_keys_set`, leaving the FK from `transactions.source_id`
+/// unresolvable. The fix represents "source unknown" as `NULL`
+/// (`transactions.source_id` is nullable since the accompanying migration)
+/// rather than synthesising a sentinel `accounts` row.
+///
+/// The test asserts:
+///   1. `persist_ledger` succeeds on an empty-source parse_error tx.
+///   2. A `transactions` row lands with `parse_error = true` and
+///      `source_id IS NULL`.
+///   3. Replaying the same ledger is idempotent (no duplication, no
+///      `accounts` churn).
+///
+/// Skips cleanly when `DATABASE_URL` is unset / unreachable — matches
+/// the pattern used by every other DB-gated test in this file.
+#[tokio::test]
+async fn parse_error_empty_source_persists_with_null_source_id() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping lore-0209 regression guard");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping lore-0209 regression guard");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    let tx_hash = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0209bbb";
+    let ledger_seq: u32 = 90_000_099;
+    clean_minimal_test_ledger(&pool, tx_hash, ledger_seq).await;
+
+    let ledger = ExtractedLedger {
+        sequence: ledger_seq,
+        hash: "abcdef00abcdef00abcdef00abcdef00abcdef00abcdef00abcdef0020900aaa".to_string(),
+        closed_at: TEST_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: tx_hash.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: ledger_seq,
+        source_account: String::new(), // ← empty, Variant A real shape
+        fee_charged: 2_500,
+        successful: false,
+        result_code: "txFailed".to_string(),
+        envelope_xdr: String::new(),
+        result_xdr: String::new(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: TEST_CLOSED_AT,
+        parse_error: true,
+    };
+    let classification_cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("persist_ledger must accept empty-source parse_error tx with NULL source_id");
+
+    let (tx_count, parse_error_flag, source_id_is_null): (i64, bool, bool) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT, \
+                BOOL_AND(parse_error), \
+                BOOL_AND(source_id IS NULL) \
+         FROM transactions WHERE hash = decode($1, 'hex')",
+    )
+    .bind(tx_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("post-persist tx state");
+
+    assert_eq!(tx_count, 1, "exactly one transactions row landed");
+    assert!(parse_error_flag, "tx row carries parse_error = true");
+    assert!(source_id_is_null, "source_id is NULL for empty-source tx");
+
+    // Replay — must be idempotent end-to-end.
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &classification_cache,
+    )
+    .await
+    .expect("replay must remain idempotent");
+
+    let replay_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM transactions WHERE hash = decode($1, 'hex')",
+    )
+    .bind(tx_hash)
+    .fetch_one(&pool)
+    .await
+    .expect("post-replay count");
+    assert_eq!(replay_count, 1, "replay must not duplicate the tx row");
+
+    clean_minimal_test_ledger(&pool, tx_hash, ledger_seq).await;
+}
+
 /// Minimal scoped cleanup for the task-0192 ordering / fold tests. These
 /// fixtures only touch transactions + operations_appearances + accounts;
 /// no liquidity_pools / soroban_contracts / assets to clear.
@@ -4013,4 +4463,1027 @@ async fn clean_minimal_test_ledger(pool: &PgPool, tx_hash: &str, ledger_seq: u32
     // canonical fixture and may be touched by parallel tests. Only the
     // ledger / transaction / FK-dependent rows need scoped cleanup; the
     // canonical-fixture cleanup wipes the account rows.
+}
+
+// ---------------------------------------------------------------------------
+// Task 0217 — `nfts_pending` quarantine routing + promotion / drop hooks
+// ---------------------------------------------------------------------------
+//
+// Three scenarios share one fixture skeleton:
+//
+// 1. **Other-classified contract** (`quarantine_routes_other_contract_to_pending`)
+//    — no WASM upload in the test ledger → `Other` verdict → NFT row lands
+//    in `nfts_pending`, NOT `nfts`.
+// 2. **Late-WASM promotion** (`quarantine_promotes_pending_to_hot_on_nft_verdict`)
+//    — ledger 1 plants a pending row (no WASM); ledger 2 includes the
+//    NFT-shape WASM → `reclassify_contracts_from_wasm` flips the verdict
+//    and the promotion hook moves the row into `nfts`.
+// 3. **Late-WASM drop** (`quarantine_drops_pending_on_fungible_verdict`)
+//    — ledger 1 plants a pending row; ledger 2 includes a Fungible-shape
+//    WASM → pending row is dropped without ever entering `nfts`.
+
+const QUAR_LEDGER_SEQ_1: u32 = 90_000_301;
+const QUAR_LEDGER_SEQ_2: u32 = 90_000_302;
+const QUAR_CLOSED_AT_1: i64 = 1_777_120_000;
+const QUAR_CLOSED_AT_2: i64 = 1_777_120_300;
+const QUAR_TX_HASH_1: &str = "aaaa551111111111111111111111111111111111111111111111111111111111";
+const QUAR_TX_HASH_2: &str = "aaaa552222222222222222222222222222222222222222222222222222222222";
+const QUAR_LEDGER_HASH_1: &str = "bbbb551111111111111111111111111111111111111111111111111111111111";
+const QUAR_LEDGER_HASH_2: &str = "bbbb552222222222222222222222222222222222222222222222222222222222";
+const QUAR_OTHER_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUAROTHER";
+const QUAR_PROMOTE_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUARPROMOT";
+const QUAR_DROP_CONTRACT: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUARDROP";
+const QUAR_OTHER_WASM_HASH: &str =
+    "eeee111111111111111111111111111111111111111111111111111111111111";
+const QUAR_PROMOTE_WASM_HASH: &str =
+    "eeee222222222222222222222222222222222222222222222222222222222222";
+const QUAR_DROP_WASM_HASH: &str =
+    "eeee333333333333333333333333333333333333333333333333333333333333";
+
+/// Test 1 — verdict `Other` (no WASM upload) routes NFT-candidate rows to
+/// `nfts_pending` instead of the hot `nfts` table.
+#[tokio::test]
+async fn quarantine_routes_other_contract_to_pending() {
+    let Some(pool) = connect_or_skip("quarantine routing").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    let (ledger, tx) = quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    // Deploy without including a wasm interface in this ledger → staging
+    // leaves contract_type at the parser's `Other` default.
+    let deployments = vec![deploy_quar(QUAR_OTHER_CONTRACT, QUAR_OTHER_WASM_HASH)];
+    let nfts = vec![nft_row_quar(QUAR_OTHER_CONTRACT, "1", QUAR_LEDGER_SEQ_1)];
+
+    persist_quar(&pool, &ledger, &tx, &[], &deployments, &nfts).await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_OTHER_CONTRACT).await,
+        1,
+        "Other-classified contract → row lands in nfts_pending",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_OTHER_CONTRACT).await,
+        0,
+        "Other-classified contract → no row in hot nfts",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+/// Test 2 — `Other → Nft` verdict flip on a later ledger's WASM upload
+/// promotes the quarantined row into `nfts`.
+#[tokio::test]
+async fn quarantine_promotes_pending_to_hot_on_nft_verdict() {
+    let Some(pool) = connect_or_skip("quarantine promotion").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    // Ledger 1 — deploy without WASM interface → Other → pending.
+    let (ledger1, tx1) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    persist_quar(
+        &pool,
+        &ledger1,
+        &tx1,
+        &[],
+        &[deploy_quar(QUAR_PROMOTE_CONTRACT, QUAR_PROMOTE_WASM_HASH)],
+        &[nft_row_quar(QUAR_PROMOTE_CONTRACT, "1", QUAR_LEDGER_SEQ_1)],
+    )
+    .await;
+    assert_eq!(
+        count_pending_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        1,
+        "ledger 1: pending populated for the future-NFT contract",
+    );
+
+    // Ledger 2 — include the NFT-shape WASM interface so
+    // `reclassify_contracts_from_wasm` flips the verdict; the
+    // promotion hook should move the pending row to `nfts`.
+    let (ledger2, tx2) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_2, QUAR_LEDGER_HASH_2, QUAR_TX_HASH_2);
+    persist_quar(
+        &pool,
+        &ledger2,
+        &tx2,
+        &[iface_with(
+            QUAR_PROMOTE_WASM_HASH,
+            &["owner_of", "transfer"],
+        )],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        0,
+        "ledger 2: pending drained on Other→Nft promotion",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_PROMOTE_CONTRACT).await,
+        1,
+        "ledger 2: row promoted into hot nfts",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+/// Test 3 — `Other → Fungible` verdict flip on a later ledger's WASM
+/// upload drops the quarantined row (no promotion to hot).
+#[tokio::test]
+async fn quarantine_drops_pending_on_fungible_verdict() {
+    let Some(pool) = connect_or_skip("quarantine drop").await else {
+        return;
+    };
+    ensure_default_partitions(&pool).await;
+    clean_quarantine_test(&pool).await;
+
+    // Ledger 1 — Other → pending.
+    let (ledger1, tx1) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_1, QUAR_LEDGER_HASH_1, QUAR_TX_HASH_1);
+    persist_quar(
+        &pool,
+        &ledger1,
+        &tx1,
+        &[],
+        &[deploy_quar(QUAR_DROP_CONTRACT, QUAR_DROP_WASM_HASH)],
+        &[nft_row_quar(QUAR_DROP_CONTRACT, "1", QUAR_LEDGER_SEQ_1)],
+    )
+    .await;
+    assert_eq!(
+        count_pending_for(&pool, QUAR_DROP_CONTRACT).await,
+        1,
+        "ledger 1: pending populated for the future-fungible contract",
+    );
+
+    // Ledger 2 — Fungible-shape interface → reclassify Fungible → drop pending.
+    let (ledger2, tx2) =
+        quarantine_ledger_tx(QUAR_LEDGER_SEQ_2, QUAR_LEDGER_HASH_2, QUAR_TX_HASH_2);
+    persist_quar(
+        &pool,
+        &ledger2,
+        &tx2,
+        &[iface_with(
+            QUAR_DROP_WASM_HASH,
+            &["decimals", "allowance", "transfer"],
+        )],
+        &[],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        count_pending_for(&pool, QUAR_DROP_CONTRACT).await,
+        0,
+        "ledger 2: pending dropped on Other→Fungible reclassify",
+    );
+    assert_eq!(
+        count_hot_for(&pool, QUAR_DROP_CONTRACT).await,
+        0,
+        "ledger 2: no hot insert — fungible rows are confirmed false positives",
+    );
+
+    clean_quarantine_test(&pool).await;
+}
+
+// --- Task 0217 helpers ----------------------------------------------------
+
+async fn connect_or_skip(label: &str) -> Option<PgPool> {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping {label} test");
+        return None;
+    };
+    match PgPool::connect(&database_url).await {
+        Ok(p) => Some(p),
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping {label} test");
+            None
+        }
+    }
+}
+
+fn quarantine_ledger_tx(
+    seq: u32,
+    ledger_hash: &str,
+    tx_hash: &str,
+) -> (ExtractedLedger, ExtractedTransaction) {
+    let closed_at = if seq == QUAR_LEDGER_SEQ_1 {
+        QUAR_CLOSED_AT_1
+    } else {
+        QUAR_CLOSED_AT_2
+    };
+    (
+        ExtractedLedger {
+            sequence: seq,
+            hash: ledger_hash.to_string(),
+            closed_at,
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        },
+        ExtractedTransaction {
+            hash: tx_hash.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: seq,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: closed_at,
+            parse_error: false,
+        },
+    )
+}
+
+fn deploy_quar(contract_id: &str, wasm_hash: &str) -> ExtractedContractDeployment {
+    ExtractedContractDeployment {
+        contract_id: contract_id.to_string(),
+        wasm_hash: Some(wasm_hash.to_string()),
+        deployer_account: Some(SRC_STRKEY.to_string()),
+        // Re-use ledger-1 seq for the deploy on both passes; the row is
+        // upsert-keyed on contract_id, so the second persist sees the
+        // existing row and only updates contract_type via the reclassify
+        // UPDATE rather than re-inserting.
+        deployed_at_ledger: QUAR_LEDGER_SEQ_1,
+        contract_type: ContractType::Other,
+        is_sac: false,
+        name: None,
+        sac_asset: None,
+    }
+}
+
+fn nft_row_quar(contract_id: &str, token_id: &str, ledger_seq: u32) -> ExtractedNft {
+    ExtractedNft {
+        contract_id: contract_id.to_string(),
+        token_id: token_id.to_string(),
+        collection_name: None,
+        owner_account: Some(DST_STRKEY.to_string()),
+        name: None,
+        media_url: None,
+        minted_at_ledger: Some(ledger_seq),
+        last_seen_ledger: ledger_seq,
+        created_at: QUAR_CLOSED_AT_1,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_quar(
+    pool: &PgPool,
+    ledger: &ExtractedLedger,
+    tx: &ExtractedTransaction,
+    interfaces: &[ExtractedContractInterface],
+    deployments: &[ExtractedContractDeployment],
+    nfts: &[ExtractedNft],
+) {
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_assets: Vec<ExtractedAsset> = Vec::new();
+    let no_nft_events: Vec<ExtractedNftEvent> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        pool,
+        ledger,
+        std::slice::from_ref(tx),
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        interfaces,
+        deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &no_assets,
+        nfts,
+        &no_nft_events,
+        &no_lp_positions,
+        &[],
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger under quarantine fixture must succeed");
+}
+
+async fn count_pending_for(pool: &PgPool, contract_strkey: &str) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM nfts_pending np
+          JOIN soroban_contracts sc ON sc.id = np.contract_id
+         WHERE sc.contract_id = $1
+        "#,
+    )
+    .bind(contract_strkey)
+    .fetch_one(pool)
+    .await
+    .expect("count nfts_pending")
+}
+
+async fn count_hot_for(pool: &PgPool, contract_strkey: &str) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM nfts n
+          JOIN soroban_contracts sc ON sc.id = n.contract_id
+         WHERE sc.contract_id = $1
+        "#,
+    )
+    .bind(contract_strkey)
+    .fetch_one(pool)
+    .await
+    .expect("count nfts")
+}
+
+async fn clean_quarantine_test(pool: &PgPool) {
+    let contracts = vec![
+        QUAR_OTHER_CONTRACT.to_string(),
+        QUAR_PROMOTE_CONTRACT.to_string(),
+        QUAR_DROP_CONTRACT.to_string(),
+    ];
+    let wasm_hashes: Vec<Vec<u8>> = [
+        QUAR_OTHER_WASM_HASH,
+        QUAR_PROMOTE_WASM_HASH,
+        QUAR_DROP_WASM_HASH,
+    ]
+    .iter()
+    .filter_map(|h| hex::decode(h).ok())
+    .collect();
+    let tx_hashes = [QUAR_TX_HASH_1, QUAR_TX_HASH_2];
+    let ledger_seqs = [QUAR_LEDGER_SEQ_1, QUAR_LEDGER_SEQ_2];
+
+    // Drop NFT-bearing rows first (FK fan-out from the contracts), then
+    // ledger/tx scaffold, then the contracts + wasm metadata.
+    let _ = sqlx::query(
+        r#"DELETE FROM nft_ownership_pending WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        r#"DELETE FROM nfts_pending WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        r#"DELETE FROM nfts WHERE contract_id IN (
+               SELECT id FROM soroban_contracts WHERE contract_id = ANY($1)
+           )"#,
+    )
+    .bind(&contracts)
+    .execute(pool)
+    .await;
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = ANY($1)")
+        .bind(&contracts)
+        .execute(pool)
+        .await;
+    if !wasm_hashes.is_empty() {
+        let _ =
+            sqlx::query("DELETE FROM wasm_interface_metadata WHERE wasm_hash = ANY($1::BYTEA[])")
+                .bind(&wasm_hashes)
+                .execute(pool)
+                .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 0219 — classic-credit assets + native singleton bootstrap
+// ---------------------------------------------------------------------------
+//
+// Three scenarios:
+//
+// 1. A `ClassicCredit` ExtractedAsset (the shape `detect_classic_credit_assets`
+//    emits for an observed trustline) lands in the `assets` table as
+//    `asset_type=1` keyed on `(asset_code, issuer_id)`.
+// 2. The `native_asset_singleton()` row lands as the unique `asset_type=0`
+//    row; a second persist pass leaves it idempotent (one row total).
+// 3. Pool-share trustlines never produce an asset row — but that
+//    guarantee lives in the parser-side helper, so this file only
+//    exercises the persist contract (1) and (2).
+
+const CC_LEDGER_SEQ: u32 = 90_000_501;
+const CC_CLOSED_AT: i64 = 1_777_122_000;
+const CC_TX_HASH: &str = "aaaa771111111111111111111111111111111111111111111111111111111111";
+const CC_LEDGER_HASH: &str = "bbbb771111111111111111111111111111111111111111111111111111111111";
+// **Synthetic** issuer StrKey + asset code. Earlier drafts of these
+// fixtures pinned the real mainnet USDC issuer
+// (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`) but the
+// per-fixture cleanup runs `DELETE FROM accounts WHERE account_id = $1`,
+// which on a non-ephemeral dev DB would nuke the real-issuer row. The
+// "GAAAAAA…0219ISSUER" StrKey is structurally a valid public-key
+// StrKey (56 chars, `G` prefix) but is never assigned on mainnet,
+// matching the convention the rest of this file uses for synthetic
+// fixtures (see `SRC_STRKEY`, `DST_STRKEY`, `ISSUER_STRKEY`).
+const CC_TEST_ISSUER: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0219ISSUER";
+const CC_TEST_ASSET_CODE: &str = "T0219";
+
+#[tokio::test]
+async fn classic_credit_extracted_asset_lands_in_assets_table() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping classic-credit persist test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping classic-credit persist test");
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_classic_credit_test(&pool).await;
+
+    let ledger = ExtractedLedger {
+        sequence: CC_LEDGER_SEQ,
+        hash: CC_LEDGER_HASH.to_string(),
+        closed_at: CC_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: CC_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: CC_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: CC_CLOSED_AT,
+        parse_error: false,
+    };
+    // Exactly what `detect_classic_credit_assets` would emit for a
+    // single in-window USDC trustline observation.
+    let usdc = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(CC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(CC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+    let native = ExtractedAsset {
+        asset_type: TokenAssetType::Native,
+        asset_code: None,
+        issuer_address: None,
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let cache = ClassificationCache::new();
+    persist_ledger(
+        &pool,
+        &ledger,
+        std::slice::from_ref(&tx),
+        &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+        &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+        &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+        &Vec::<(String, Value)>::new(),
+        &Vec::<ExtractedContractInterface>::new(),
+        &Vec::<ExtractedContractDeployment>::new(),
+        &Vec::<ExtractedAccountState>::new(),
+        &Vec::<ExtractedLiquidityPool>::new(),
+        &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+        &[usdc, native.clone()],
+        &Vec::<ExtractedNft>::new(),
+        &Vec::<ExtractedNftEvent>::new(),
+        &Vec::<ExtractedLpPosition>::new(),
+        &[],
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must accept the classic-credit + native fixture");
+
+    // ── Classic-credit row landed in `assets` with the right identity ──
+    let cc_row: (i16, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT a.asset_type, a.asset_code, acc.account_id
+           FROM assets a
+           LEFT JOIN accounts acc ON acc.id = a.issuer_id
+          WHERE a.asset_type = 1 AND a.asset_code = $1",
+    )
+    .bind(CC_TEST_ASSET_CODE)
+    .fetch_one(&pool)
+    .await
+    .expect("classic-credit row must exist after persist");
+
+    assert_eq!(cc_row.0, 1, "asset_type must be ClassicCredit (=1)");
+    assert_eq!(cc_row.1.as_deref(), Some(CC_TEST_ASSET_CODE));
+    assert_eq!(
+        cc_row.2.as_deref(),
+        Some(CC_TEST_ISSUER),
+        "issuer_id must FK back to the issuer account"
+    );
+
+    // ── Native singleton row landed exactly once ──
+    let native_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
+        .fetch_one(&pool)
+        .await
+        .expect("count native assets");
+    assert_eq!(
+        native_count, 1,
+        "native asset singleton must be present exactly once",
+    );
+
+    clean_classic_credit_test(&pool).await;
+}
+
+#[tokio::test]
+async fn native_singleton_idempotent_across_repeat_persist() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping native singleton idempotency test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!(
+                "DATABASE_URL unreachable ({err}) — skipping native singleton idempotency test"
+            );
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_classic_credit_test(&pool).await;
+
+    let native_only = ExtractedAsset {
+        asset_type: TokenAssetType::Native,
+        asset_code: None,
+        issuer_address: None,
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    // Two persist passes with two different ledger sequences, each
+    // emitting the native singleton. After both, exactly one native
+    // row exists.
+    for (seq, hash, tx_hash) in [
+        (
+            CC_LEDGER_SEQ + 10,
+            "bbbb772222222222222222222222222222222222222222222222222222222222",
+            "aaaa772222222222222222222222222222222222222222222222222222222222",
+        ),
+        (
+            CC_LEDGER_SEQ + 11,
+            "bbbb773333333333333333333333333333333333333333333333333333333333",
+            "aaaa773333333333333333333333333333333333333333333333333333333333",
+        ),
+    ] {
+        let ledger = ExtractedLedger {
+            sequence: seq,
+            hash: hash.to_string(),
+            closed_at: CC_CLOSED_AT + i64::from(seq - CC_LEDGER_SEQ),
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        };
+        let tx = ExtractedTransaction {
+            hash: tx_hash.to_string(),
+            inner_tx_hash: None,
+            ledger_sequence: seq,
+            source_account: SRC_STRKEY.to_string(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".to_string(),
+            envelope_xdr: "AAAAAA...".to_string(),
+            result_xdr: "AAAAAA...".to_string(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: CC_CLOSED_AT + i64::from(seq - CC_LEDGER_SEQ),
+            parse_error: false,
+        };
+        let cache = ClassificationCache::new();
+        persist_ledger(
+            &pool,
+            &ledger,
+            std::slice::from_ref(&tx),
+            &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+            &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+            &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+            &Vec::<(String, Value)>::new(),
+            &Vec::<ExtractedContractInterface>::new(),
+            &Vec::<ExtractedContractDeployment>::new(),
+            &Vec::<ExtractedAccountState>::new(),
+            &Vec::<ExtractedLiquidityPool>::new(),
+            &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+            std::slice::from_ref(&native_only),
+            &Vec::<ExtractedNft>::new(),
+            &Vec::<ExtractedNftEvent>::new(),
+            &Vec::<ExtractedLpPosition>::new(),
+            &[],
+            &[],
+            &cache,
+        )
+        .await
+        .expect("persist_ledger must accept the native-singleton fixture");
+    }
+
+    let native_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
+        .fetch_one(&pool)
+        .await
+        .expect("count native assets");
+    assert_eq!(
+        native_count, 1,
+        "two persist passes must still leave exactly one native row",
+    );
+
+    clean_classic_credit_test(&pool).await;
+}
+
+async fn clean_classic_credit_test(pool: &PgPool) {
+    let tx_hashes = [
+        CC_TX_HASH,
+        "aaaa772222222222222222222222222222222222222222222222222222222222",
+        "aaaa773333333333333333333333333333333333333333333333333333333333",
+    ];
+    let ledger_seqs = [CC_LEDGER_SEQ, CC_LEDGER_SEQ + 10, CC_LEDGER_SEQ + 11];
+
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    // Drop just the rows this fixture introduces. Crucially:
+    //
+    // - **Do NOT delete `assets WHERE asset_type = 0`** — the native
+    //   singleton is a persistent fixture seeded by migration
+    //   `20260428000000_seed_native_asset_singleton`; other integration
+    //   tests in this file rely on it. Our parser-side
+    //   `native_asset_singleton()` UPSERTs against `uidx_assets_native`
+    //   on every persist pass, so even if we did remove it, the next
+    //   persist call would reinsert it — but it's safer not to touch
+    //   a shared fixture row at all.
+    // - **Scope the issuer-account cleanup** to the *synthetic* test
+    //   StrKey only (`CC_TEST_ISSUER`); never delete an account by an
+    //   externally-known address.
+    let _ = sqlx::query(
+        "DELETE FROM assets WHERE asset_type = 1 AND asset_code = $1
+                                     AND issuer_id = (SELECT id FROM accounts WHERE account_id = $2)",
+    )
+    .bind(CC_TEST_ASSET_CODE)
+    .bind(CC_TEST_ISSUER)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(CC_TEST_ISSUER)
+        .execute(pool)
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Task 0218 — forward-derived SAC overrides
+// ---------------------------------------------------------------------------
+//
+// Two scenarios:
+//
+// 1. A `soroban_contracts` row exists as a pre-existing-SAC skeleton
+//    (`is_sac=false`, `contract_type=NULL`). A classic-credit asset with
+//    a matching `(asset_code, issuer)` is observed in this ledger. The
+//    persist step flips `is_sac=true` + `contract_type=0` (Token).
+// 2. A row that already has `is_sac=true` (e.g. flipped by an earlier
+//    pass, or set by the in-window `extract_contract_deployments` path)
+//    is NOT modified by the override — the `is_sac=false` guard
+//    short-circuits.
+
+const SAC_LEDGER_SEQ: u32 = 90_000_401;
+const SAC_CLOSED_AT: i64 = 1_777_121_000;
+const SAC_TX_HASH: &str = "aaaa661111111111111111111111111111111111111111111111111111111111";
+const SAC_LEDGER_HASH: &str = "bbbb661111111111111111111111111111111111111111111111111111111111";
+// Real mainnet USDC SAC + its issuer — the pin used in the
+// 2026-05-12 audit's `/compare-with-stellar-api` cross-check.
+const SAC_TEST_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const SAC_TEST_ASSET_CODE: &str = "USDC";
+const SAC_TEST_DERIVED_CONTRACT: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+
+#[tokio::test]
+async fn sac_override_flips_is_sac_for_pre_existing_skeleton() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping SAC override test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping SAC override test");
+            return;
+        }
+    };
+
+    ensure_default_partitions(&pool).await;
+    clean_sac_override_test(&pool).await;
+
+    // Pre-seed a skeleton row exactly as the driver path would: row
+    // exists, `is_sac=false`, `contract_type=NULL`.
+    sqlx::query(
+        "INSERT INTO soroban_contracts (contract_id, is_sac)
+         VALUES ($1, FALSE)
+         ON CONFLICT (contract_id) DO NOTHING",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(&pool)
+    .await
+    .expect("seed pre-existing SAC skeleton");
+
+    let ledger = ExtractedLedger {
+        sequence: SAC_LEDGER_SEQ,
+        hash: SAC_LEDGER_HASH.to_string(),
+        closed_at: SAC_CLOSED_AT,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: SAC_TX_HASH.to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: SAC_LEDGER_SEQ,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: SAC_CLOSED_AT,
+        parse_error: false,
+    };
+    let usdc_asset = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(SAC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let empty_operations: Vec<(String, Vec<ExtractedOperation>)> = Vec::new();
+    let empty_events: Vec<(String, Vec<ExtractedEvent>)> = Vec::new();
+    let empty_invocations: Vec<(String, Vec<ExtractedInvocation>)> = Vec::new();
+    let empty_trees: Vec<(String, Value)> = Vec::new();
+    let no_interfaces: Vec<ExtractedContractInterface> = Vec::new();
+    let no_deployments: Vec<ExtractedContractDeployment> = Vec::new();
+    let no_account_states: Vec<ExtractedAccountState> = Vec::new();
+    let no_pools: Vec<ExtractedLiquidityPool> = Vec::new();
+    let no_snapshots: Vec<ExtractedLiquidityPoolSnapshot> = Vec::new();
+    let no_nfts: Vec<ExtractedNft> = Vec::new();
+    let no_nft_events: Vec<ExtractedNftEvent> = Vec::new();
+    let no_lp_positions: Vec<ExtractedLpPosition> = Vec::new();
+    let cache = ClassificationCache::new();
+
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &empty_operations,
+        &empty_events,
+        &empty_invocations,
+        &empty_trees,
+        &no_interfaces,
+        &no_deployments,
+        &no_account_states,
+        &no_pools,
+        &no_snapshots,
+        &[usdc_asset],
+        &no_nfts,
+        &no_nft_events,
+        &no_lp_positions,
+        &[],
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must succeed under the SAC override fixture");
+
+    let row: (bool, Option<i16>) = sqlx::query_as(
+        "SELECT is_sac, contract_type FROM soroban_contracts WHERE contract_id = $1",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("derived SAC row must exist post-persist");
+
+    assert!(
+        row.0,
+        "pre-existing SAC skeleton must flip is_sac=true after forward-derive override",
+    );
+    assert_eq!(
+        row.1.and_then(|v| ContractType::try_from(v).ok()),
+        Some(ContractType::Token),
+        "pre-existing SAC skeleton must classify as Token (contract_type=0)",
+    );
+
+    clean_sac_override_test(&pool).await;
+}
+
+#[tokio::test]
+async fn sac_override_leaves_already_is_sac_rows_alone() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping SAC idempotency test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping SAC idempotency test");
+            return;
+        }
+    };
+    ensure_default_partitions(&pool).await;
+    clean_sac_override_test(&pool).await;
+
+    // Pre-seed with is_sac ALREADY true (simulates either an in-window
+    // SAC deploy or a replay of this same step). The override must not
+    // touch the row.
+    sqlx::query(
+        "INSERT INTO soroban_contracts (contract_id, is_sac, contract_type)
+         VALUES ($1, TRUE, 0)
+         ON CONFLICT (contract_id) DO NOTHING",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(&pool)
+    .await
+    .expect("seed already-classified SAC row");
+
+    let ledger = ExtractedLedger {
+        sequence: SAC_LEDGER_SEQ + 1,
+        hash: "bbbb662222222222222222222222222222222222222222222222222222222222".to_string(),
+        closed_at: SAC_CLOSED_AT + 5,
+        protocol_version: 22,
+        transaction_count: 1,
+        base_fee: 100,
+    };
+    let tx = ExtractedTransaction {
+        hash: "aaaa662222222222222222222222222222222222222222222222222222222222".to_string(),
+        inner_tx_hash: None,
+        ledger_sequence: SAC_LEDGER_SEQ + 1,
+        source_account: SRC_STRKEY.to_string(),
+        fee_charged: 100,
+        successful: true,
+        result_code: "txSuccess".to_string(),
+        envelope_xdr: "AAAAAA...".to_string(),
+        result_xdr: "AAAAAA...".to_string(),
+        result_meta_xdr: None,
+        operation_tree: None,
+        memo_type: None,
+        memo: None,
+        created_at: SAC_CLOSED_AT + 5,
+        parse_error: false,
+    };
+    let usdc_asset = ExtractedAsset {
+        asset_type: TokenAssetType::ClassicCredit,
+        asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
+        issuer_address: Some(SAC_TEST_ISSUER.to_string()),
+        contract_id: None,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let cache = ClassificationCache::new();
+    persist_ledger(
+        &pool,
+        &ledger,
+        &[tx],
+        &Vec::<(String, Vec<ExtractedOperation>)>::new(),
+        &Vec::<(String, Vec<ExtractedEvent>)>::new(),
+        &Vec::<(String, Vec<ExtractedInvocation>)>::new(),
+        &Vec::<(String, Value)>::new(),
+        &Vec::<ExtractedContractInterface>::new(),
+        &Vec::<ExtractedContractDeployment>::new(),
+        &Vec::<ExtractedAccountState>::new(),
+        &Vec::<ExtractedLiquidityPool>::new(),
+        &Vec::<ExtractedLiquidityPoolSnapshot>::new(),
+        &[usdc_asset],
+        &Vec::<ExtractedNft>::new(),
+        &Vec::<ExtractedNftEvent>::new(),
+        &Vec::<ExtractedLpPosition>::new(),
+        &[],
+        &[],
+        &cache,
+    )
+    .await
+    .expect("persist_ledger must succeed on second pass");
+
+    let row: (bool, Option<i16>) = sqlx::query_as(
+        "SELECT is_sac, contract_type FROM soroban_contracts WHERE contract_id = $1",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("already-classified row must still exist");
+
+    assert!(row.0, "is_sac must remain TRUE — idempotency");
+    assert_eq!(
+        row.1.and_then(|v| ContractType::try_from(v).ok()),
+        Some(ContractType::Token),
+        "contract_type must remain Token — idempotency",
+    );
+
+    clean_sac_override_test(&pool).await;
+}
+
+async fn clean_sac_override_test(pool: &PgPool) {
+    let tx_hashes = [
+        SAC_TX_HASH,
+        "aaaa662222222222222222222222222222222222222222222222222222222222",
+    ];
+    let ledger_seqs = [SAC_LEDGER_SEQ, SAC_LEDGER_SEQ + 1];
+
+    for h in &tx_hashes {
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transaction_hash_index WHERE hash = decode($1, 'hex')")
+            .bind(h)
+            .execute(pool)
+            .await;
+    }
+    for &s in &ledger_seqs {
+        let _ = sqlx::query("DELETE FROM ledgers WHERE sequence = $1")
+            .bind(i64::from(s))
+            .execute(pool)
+            .await;
+    }
+    let _ = sqlx::query(
+        "DELETE FROM assets WHERE contract_id IN (
+             SELECT id FROM soroban_contracts WHERE contract_id = $1
+         )",
+    )
+    .bind(SAC_TEST_DERIVED_CONTRACT)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM soroban_contracts WHERE contract_id = $1")
+        .bind(SAC_TEST_DERIVED_CONTRACT)
+        .execute(pool)
+        .await;
+    // ISSUER_STRKEY is shared fixture; canonical cleanup wipes the
+    // account row. Don't touch it here.
+    let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+        .bind(SAC_TEST_ISSUER)
+        .execute(pool)
+        .await;
 }

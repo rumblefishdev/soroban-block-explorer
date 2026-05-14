@@ -26,6 +26,15 @@
 --     liquidity_pool_withdraw; trade op types: path_payment_*, manage_*,
 --     create_passive_sell_offer, etc.). Categorization is policy, not SQL —
 --     the frontend owns the "is this a trade" rule.
+--   • Sentinel placeholder pools (ADR 0041 / task 0193) are filtered at
+--     two layers: (1) the handler-level `pool_exists()` gate returns
+--     404 for sentinel pool ids before this query runs; (2) an EXISTS
+--     subquery against `liquidity_pools` inside `matched_ops` provides
+--     defense-in-depth so any future caller that bypasses the handler
+--     still gets an empty result. Sentinels have no
+--     `operations_appearances` rows by construction (they exist only to
+--     satisfy the `lp_positions.pool_id` FK), so the guard is
+--     belt-and-suspenders but cheap (uncorrelated PK seek).
 
 WITH matched_ops AS (
     -- DISTINCT ON / ORDER BY aligned with newest-first so LIMIT truncates
@@ -38,6 +47,12 @@ WITH matched_ops AS (
         oa.id AS op_appearance_id
     FROM operations_appearances oa
     WHERE oa.pool_id = $1
+      -- Sentinel filter (ADR 0041 / task 0193) — defense-in-depth.
+      AND EXISTS (
+          SELECT 1 FROM liquidity_pools lp
+           WHERE lp.pool_id = $1
+             AND lp.created_at_ledger > 0
+      )
       AND ($3::timestamptz IS NULL OR (oa.created_at, oa.transaction_id) < ($3, $4))
     ORDER BY oa.created_at DESC, oa.transaction_id DESC, oa.id
     LIMIT $2 * 4

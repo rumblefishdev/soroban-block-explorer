@@ -25,6 +25,10 @@ history:
     status: accepted
     who: karolkow
     note: 'ADR created and accepted to codify the rule locked during the M2 enrichment planning session. Lands independently on develop before tasks 0194-0197 reference it.'
+  - date: 2026-05-11
+    status: accepted
+    who: karolkow
+    note: 'Amended Notes section to record the type-1 "drain path" — task 0196 introduces `crates/backfill-enrichment-runner`, a one-shot CLI that calls the same `enrich_and_persist::*` functions as the live worker to fill rows that pre-date the SQS queue. No decision change — the rule already permitted multiple execution paths for type-1, this just names the second path.'
 ---
 
 # ADR 0043: How new fields reach the API — indexer column / enrichment Lambda column / runtime fetch (no column)
@@ -45,7 +49,7 @@ history:
 The explorer's data surface has three distinct write paths today:
 
 1. **Indexer (Galexie Lambda)** — parses XDR ledger files, writes typed columns into Postgres. Source data is already in the processed ledger.
-2. **Enrichment worker (SQS-driven Lambda, task 0191)** — fetches off-chain data (SEP-1 TOML, oracle prices, NFT metadata via per-token RPC) and persists it to typed columns. Triggered per indexer-emitted message.
+2. **Enrichment worker (SQS-driven Lambda)** — fetches off-chain data (SEP-1 TOML, oracle prices, NFT metadata via per-token RPC) and persists it to typed columns. Triggered per indexer-emitted message. See `related_tasks` frontmatter for the delivery chain.
 3. **Runtime type-2 enrichment in API handler** — per-request, in-process, fail-soft, LRU-cached fetch executed inside `crates/api` (e.g. `runtime_enrichment::sep1` for `assets.description` / `home_page` per task 0188; `runtime_enrichment::stellar_archive` for E3 / E14 heavy fields per ADR 0029). Never persisted.
 
 Without an explicit rule, every new field invites an ad-hoc allocation decision. Recent M2 planning surfaced multiple cases where a field was placed on the wrong path: classic credit `assets.name` was originally drafted into 0194 (indexer) but is off-chain (SEP-1 TOML); LP `volume` / `fee_revenue` was drafted into 0125 (Lambda 2 cron) but is on-chain (PathPayment delta + arithmetic). Migration `20260424000000_drop_assets_sep1_detail_cols.up.sql` removed `assets.description` and `assets.home_page` columns after the team converged on runtime type-2 for detail-only fields. These churns are expensive and avoidable with a stated rule.
@@ -188,6 +192,7 @@ Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 
 
 - **Independence from tasks:** this ADR lands directly on develop as a standalone commit, before tasks 0194 / 0195 / 0196 / 0197 start implementation. Governance docs land independently of the code that references them so the rule is canonical at the time of code review.
 - **ADR 0029 boundary:** ADR 0029 covers the _read-time XDR fetch_ path (E3 / E14 heavy fields from S3). It is a sibling of this ADR's runtime type-2 case, sharing the in-process LRU + fail-soft pattern. ADR 0029 does not need amendment for type-1 write-side concerns; this ADR is the home for those.
+- **Type-1 drain path (task 0196):** type-1 has two execution paths sharing the same `enrich_and_persist::*` library functions: the live SQS-driven worker (forward-only, per-row, task 0191) and the one-shot backfill CLI ([`crates/backfill-enrichment-runner`](../../crates/backfill-enrichment-runner), task 0196) that drains rows pre-dating the queue. Both write the same columns under the same `COALESCE(NULLIF($n, ''), col, $n)` priority — a row enriched via backfill is bit-identical to one enriched via SQS. The CLI lives in a separate crate (not a `backfill-runner` subcommand) per task 0191 design decision #8: the ledger-backfill code path must not be modified.
 
 ---
 

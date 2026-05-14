@@ -31,14 +31,24 @@ pub(super) struct ParticipantRow {
 }
 
 /// Look up a pool by its hex `pool_id`. Returns `Ok(true)` if the pool
-/// exists, `Ok(false)` otherwise. Used to gate 404 vs 200-empty-list on
-/// the participants endpoint.
+/// exists and is a real (non-sentinel) pool, `Ok(false)` otherwise. Used
+/// to gate 404 vs 200-empty-list on the participants / transactions /
+/// chart endpoints.
+///
+/// `created_at_ledger > 0` filters sentinel placeholder rows emitted by
+/// the persist layer during partial backfills (per ADR 0041 / task 0193):
+/// these rows carry `created_at_ledger = 0` and minimum-data NULL/0
+/// asset/fee fields, and should not be surfaced as real pools by any API
+/// endpoint. The detection criterion is single-column and uses
+/// `idx_pools_created_at_ledger` for the look-up.
 pub async fn pool_exists(db: &PgPool, pool_id_hex: &str) -> Result<bool, sqlx::Error> {
-    let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM liquidity_pools WHERE pool_id = decode($1, 'hex')")
-            .bind(pool_id_hex)
-            .fetch_optional(db)
-            .await?;
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM liquidity_pools \
+         WHERE pool_id = decode($1, 'hex') AND created_at_ledger > 0",
+    )
+    .bind(pool_id_hex)
+    .fetch_optional(db)
+    .await?;
     Ok(row.is_some())
 }
 
@@ -99,6 +109,15 @@ pub(super) async fn fetch_participants(
           LEFT JOIN latest_snap snap  ON TRUE
          WHERE lpp.pool_id = decode($1, 'hex')
            AND lpp.shares > 0
+           -- Sentinel filter (ADR 0041 / task 0193). Defense-in-depth
+           -- alongside the handler-level `pool_exists()` gate: an EXISTS
+           -- guard at the query body protects future callers that bypass
+           -- the handler. Uncorrelated subquery, one PK seek per call.
+           AND EXISTS (
+               SELECT 1 FROM liquidity_pools lp
+                WHERE lp.pool_id = decode($1, 'hex')
+                  AND lp.created_at_ledger > 0
+           )
            AND ($3::numeric IS NULL
                 OR (lpp.shares, lpp.account_id) < ($3::numeric, $4::BIGINT))
          ORDER BY lpp.shares DESC, lpp.account_id DESC
@@ -255,7 +274,11 @@ pub async fn fetch_pool_list(
             LIMIT 1
         ) s ON TRUE
         WHERE
-            ($2::bigint IS NULL
+            -- Filter sentinel placeholder pools (ADR 0041 / task 0193).
+            -- Pubnet genesis seq is 1, so `created_at_ledger > 0` excludes
+            -- every sentinel row without rejecting any real pool.
+            lp.created_at_ledger > 0
+            AND ($2::bigint IS NULL
              OR (lp.created_at_ledger, lp.pool_id) < ($2, decode($3::varchar, 'hex')))
             AND ($4::varchar IS NULL OR lp.asset_a_code = $4)
             AND ($5::varchar IS NULL OR lp.asset_a_issuer_id = (SELECT id FROM issuer_a))
@@ -329,6 +352,10 @@ pub async fn fetch_pool_by_id(
             LIMIT 1
         ) s ON TRUE
         WHERE lp.pool_id = decode($1::varchar, 'hex')
+          -- Sentinel placeholder pools (ADR 0041 / task 0193) carry
+          -- `created_at_ledger = 0`; `> 0` excludes them so this
+          -- look-up returns `None` and the handler surfaces 404.
+          AND lp.created_at_ledger > 0
         "#,
     )
     .bind(pool_id_hex)
@@ -384,6 +411,17 @@ pub async fn fetch_pool_transactions(
                 oa.id AS op_appearance_id
             FROM operations_appearances oa
             WHERE oa.pool_id = decode($1::varchar, 'hex')
+              -- Sentinel filter (ADR 0041 / task 0193). Defense-in-depth
+              -- alongside the handler-level `pool_exists()` gate: an
+              -- EXISTS guard at the query body protects future callers
+              -- that bypass the handler. Sentinels have no
+              -- `operations_appearances` rows by construction, so this
+              -- is belt-and-suspenders but cheap (uncorrelated PK seek).
+              AND EXISTS (
+                  SELECT 1 FROM liquidity_pools lp
+                   WHERE lp.pool_id = decode($1::varchar, 'hex')
+                     AND lp.created_at_ledger > 0
+              )
               AND ($3::timestamptz IS NULL
                    OR (oa.created_at, oa.transaction_id) < ($3, $4))
             ORDER BY oa.created_at DESC, oa.transaction_id DESC, oa.id
@@ -482,6 +520,15 @@ pub async fn fetch_pool_chart(
         WHERE lps.pool_id     = decode($1::varchar, 'hex')
           AND lps.created_at >= $3
           AND lps.created_at <  $4
+          -- Sentinel filter (ADR 0041 / task 0193). Defense-in-depth
+          -- alongside the handler-level `pool_exists()` gate. Sentinels
+          -- have no snapshots by construction, but the guard protects
+          -- callers that bypass the handler.
+          AND EXISTS (
+              SELECT 1 FROM liquidity_pools lp
+               WHERE lp.pool_id = decode($1::varchar, 'hex')
+                 AND lp.created_at_ledger > 0
+          )
         GROUP BY date_trunc((SELECT kw FROM bucket_keyword), lps.created_at)
         ORDER BY bucket ASC
         "#,
@@ -503,4 +550,229 @@ pub async fn fetch_pool_chart(
             samples_in_bucket: r.get("samples_in_bucket"),
         })
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// Sentinel-filter direct query tests (ADR 0041 / task 0193)
+//
+// The integration tests in `tests_integration.rs` exercise the full
+// handler stack, where `pool_exists()` short-circuits sentinel pool ids
+// to 404 *before* the per-endpoint query runs. That means the
+// defense-in-depth `EXISTS` guards inside `fetch_participants`,
+// `fetch_pool_transactions`, and `fetch_pool_chart` never fire in those
+// tests — they have zero coverage from the handler path.
+//
+// These tests call those three functions directly with a sentinel
+// `pool_id` against a fixture that seeds *real* supporting rows
+// (lp_position, snapshot, op_appearance) for the sentinel pool. Without
+// the EXISTS guard, each function would return non-empty results. With
+// the guard, each returns an empty `Vec`. The assertion proves the SQL
+// predicate fires — not just the handler-level gate.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod sentinel_query_tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    const SENTINEL_HEX: &str = "7777666655554444333322221111000099998888aaaabbbbccccddddeeeeffff";
+    const ACC: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0193QRY";
+    const TX_HASH_HEX: &str = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef01930001";
+
+    /// Try to obtain a connection. Returns `None` when `DATABASE_URL` is
+    /// unset / unreachable — the test then skips cleanly, matching the
+    /// pattern used elsewhere in this crate's integration tests.
+    async fn try_connect() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        match PgPool::connect(&url).await {
+            Ok(p) => Some(p),
+            Err(err) => {
+                eprintln!("DATABASE_URL unreachable ({err}) — skipping sentinel query test");
+                None
+            }
+        }
+    }
+
+    /// Seed: sentinel pool + 1 account + 1 lp_position + 1 snapshot +
+    /// 1 transaction + 1 op_appearance pointing at the sentinel pool.
+    /// All supporting rows reference the sentinel `pool_id` so the
+    /// per-endpoint queries *would* return non-empty results if the
+    /// EXISTS guard were missing.
+    ///
+    /// Returns the account surrogate id (kept for symmetry; not used by
+    /// the assertions but required for downstream FK).
+    async fn seed(pool: &PgPool) -> i64 {
+        // Sentinel pool (created_at_ledger = 0 — the marker).
+        sqlx::query(
+            r#"
+            INSERT INTO liquidity_pools (
+                pool_id, asset_a_type, asset_a_code, asset_a_issuer_id,
+                asset_b_type, asset_b_code, asset_b_issuer_id,
+                fee_bps, created_at_ledger
+            ) VALUES (decode($1, 'hex'), 0, NULL, NULL, 0, NULL, NULL, 0, 0)
+            "#,
+        )
+        .bind(SENTINEL_HEX)
+        .execute(pool)
+        .await
+        .expect("insert sentinel pool");
+
+        let acc_id: i64 = sqlx::query_scalar(
+            r#"INSERT INTO accounts (account_id, first_seen_ledger, last_seen_ledger, sequence_number)
+               VALUES ($1, 1, 1, 0) RETURNING id"#,
+        )
+        .bind(ACC)
+        .fetch_one(pool)
+        .await
+        .expect("insert acc");
+
+        // Position would be returned by `fetch_participants` without the
+        // guard.
+        sqlx::query(
+            r#"
+            INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger)
+            VALUES (decode($1, 'hex'), $2, 42.0::NUMERIC(28,7), 1, 1)
+            "#,
+        )
+        .bind(SENTINEL_HEX)
+        .bind(acc_id)
+        .execute(pool)
+        .await
+        .expect("insert lp_position");
+
+        // Snapshot would surface as a chart bucket without the guard.
+        // `created_at = NOW()` lands in the live `_default` partition.
+        sqlx::query(
+            r#"
+            INSERT INTO liquidity_pool_snapshots (
+                pool_id, ledger_sequence, reserve_a, reserve_b, total_shares, created_at
+            )
+            VALUES (decode($1, 'hex'), 1, 100.0, 200.0, 42.0, NOW())
+            "#,
+        )
+        .bind(SENTINEL_HEX)
+        .execute(pool)
+        .await
+        .expect("insert snapshot");
+
+        // Transaction + op_appearance: without the EXISTS guard,
+        // `fetch_pool_transactions` would return this tx.
+        sqlx::query(
+            r#"
+            INSERT INTO transactions (
+                hash, ledger_sequence, application_order, source_id,
+                fee_charged, successful, operation_count, has_soroban,
+                parse_error, created_at
+            ) VALUES (decode($1, 'hex'), 1, 1, $2, 100, true, 1, false, false, NOW())
+            "#,
+        )
+        .bind(TX_HASH_HEX)
+        .bind(acc_id)
+        .execute(pool)
+        .await
+        .expect("insert transaction");
+
+        sqlx::query(
+            r#"
+            INSERT INTO operations_appearances (
+                transaction_id, type, source_id, pool_id,
+                amount, ledger_sequence, created_at
+            )
+            SELECT t.id, 22, $2, decode($1, 'hex'), 1, 1, t.created_at
+              FROM transactions t
+             WHERE t.hash = decode($3, 'hex')
+             LIMIT 1
+            "#,
+        )
+        .bind(SENTINEL_HEX)
+        .bind(acc_id)
+        .bind(TX_HASH_HEX)
+        .execute(pool)
+        .await
+        .expect("insert op_appearance");
+
+        acc_id
+    }
+
+    async fn teardown(pool: &PgPool) {
+        // Order matters: drop dependents (op_appearance, tx, snapshot,
+        // position) before the pool / account.
+        let _ = sqlx::query("DELETE FROM operations_appearances WHERE pool_id = decode($1, 'hex')")
+            .bind(SENTINEL_HEX)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM transactions WHERE hash = decode($1, 'hex')")
+            .bind(TX_HASH_HEX)
+            .execute(pool)
+            .await;
+        let _ =
+            sqlx::query("DELETE FROM liquidity_pool_snapshots WHERE pool_id = decode($1, 'hex')")
+                .bind(SENTINEL_HEX)
+                .execute(pool)
+                .await;
+        let _ = sqlx::query("DELETE FROM lp_positions WHERE pool_id = decode($1, 'hex')")
+            .bind(SENTINEL_HEX)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM liquidity_pools WHERE pool_id = decode($1, 'hex')")
+            .bind(SENTINEL_HEX)
+            .execute(pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+            .bind(ACC)
+            .execute(pool)
+            .await;
+    }
+
+    /// All three EXISTS-guarded fetchers must return an empty `Vec` for
+    /// a sentinel `pool_id`, *even though* the underlying tables
+    /// (lp_positions, liquidity_pool_snapshots, operations_appearances)
+    /// carry rows that would otherwise match. Proves the SQL-level
+    /// guard fires independently of the handler-level `pool_exists()`
+    /// gate.
+    #[tokio::test]
+    async fn sentinel_pool_id_returns_empty_from_all_three_fetchers() {
+        let Some(pool) = try_connect().await else {
+            return;
+        };
+
+        // Idempotent setup.
+        teardown(&pool).await;
+        seed(&pool).await;
+
+        // 1) fetch_participants — would surface the lp_position row.
+        let parts = fetch_participants(&pool, SENTINEL_HEX, None, 10)
+            .await
+            .expect("fetch_participants for sentinel");
+        assert!(
+            parts.is_empty(),
+            "fetch_participants leaked {} row(s) for sentinel pool — EXISTS guard not firing",
+            parts.len()
+        );
+
+        // 2) fetch_pool_chart — would surface a bucket from the
+        //    seeded snapshot. Use a wide window so any `created_at=NOW()`
+        //    snapshot falls inside.
+        let to = Utc::now() + Duration::days(1);
+        let from = to - Duration::days(7);
+        let buckets = fetch_pool_chart(&pool, SENTINEL_HEX, "1d", from, to)
+            .await
+            .expect("fetch_pool_chart for sentinel");
+        assert!(
+            buckets.is_empty(),
+            "fetch_pool_chart leaked {} bucket(s) for sentinel pool — EXISTS guard not firing",
+            buckets.len()
+        );
+
+        // 3) fetch_pool_transactions — would surface the seeded tx.
+        let txs = fetch_pool_transactions(&pool, SENTINEL_HEX, 10, None)
+            .await
+            .expect("fetch_pool_transactions for sentinel");
+        assert!(
+            txs.is_empty(),
+            "fetch_pool_transactions leaked {} row(s) for sentinel pool — EXISTS guard not firing",
+            txs.len()
+        );
+
+        teardown(&pool).await;
+    }
 }

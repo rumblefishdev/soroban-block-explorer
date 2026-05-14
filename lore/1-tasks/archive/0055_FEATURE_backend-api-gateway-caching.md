@@ -157,7 +157,7 @@ Document the API Gateway stage-level cache configuration needed to respect the C
 ## Acceptance Criteria
 
 - [x] Cache-Control headers set correctly per endpoint
-- [x] Long TTL (300s+) for closed ledgers and finalized transactions
+- [x] Long TTL (3600s) for closed ledgers and finalized transactions (`GET /ledgers/:sequence`, `GET /transactions/:hash`)
 - [x] Short TTL (5-15s) for lists, stats, and frequently changing detail
 - [x] Medium TTL (60-120s) for contract/token/NFT metadata
 - [x] No cache for search endpoint

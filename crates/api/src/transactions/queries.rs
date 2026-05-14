@@ -12,7 +12,10 @@ pub struct TxListRow {
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub source_account: String,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209). The accompanying `parse_error: true` flag
+    /// signals to consumers that other fields may be incomplete too.
+    pub source_account: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<String>,
     pub successful: bool,
@@ -29,7 +32,9 @@ pub struct TxDetailRow {
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub source_account: String,
+    /// `None` for Variant A `parse_error` transactions whose envelope was
+    /// unavailable (lore-0209).
+    pub source_account: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<String>,
     pub successful: bool,
@@ -257,7 +262,12 @@ pub async fn fetch_list(
 
         (None, None) => {
             qb.push(LIST_PROJECTION);
-            qb.push(" FROM transactions t JOIN accounts src ON src.id = t.source_id ");
+            // lore-0209: LEFT JOIN so Variant A `parse_error` transactions
+            // (NULL `source_id`) surface in the unfiltered list. Filtered
+            // branches above keep the inner JOIN because their CTE drivers
+            // (operations / events / invocations) never match parse_error
+            // rows in the first place.
+            qb.push(" FROM transactions t LEFT JOIN accounts src ON src.id = t.source_id ");
             qb.push(LIST_LATERAL_BLOCKS);
 
             let mut has_where = false;
@@ -345,7 +355,7 @@ pub async fn fetch_detail(
             t.created_at, \
             t.parse_error \
          FROM transactions t \
-         JOIN accounts a ON a.id = t.source_id \
+         LEFT JOIN accounts a ON a.id = t.source_id \
          WHERE t.hash = $1 AND t.created_at = $2",
     )
     .bind(hash_bytes)

@@ -1,0 +1,23 @@
+# backfill-enrichment-runner — sep1_assets drain report
+
+**Timestamp:** 2026-05-13T11:19:09.797317+00:00
+**Processed:** 12900
+**Succeeded (incl. sentinel writes):** 10741
+**Unreachable (transient, retry candidate):** 2159
+**DB failures:** 0
+**Duration:** 40225 ms
+
+## Sample transient errors (first 10)
+
+| id | error |
+| --- | --- |
+| 6 | HTTP error fetching stellar.toml from pendulum-guardian.pw: error sending request for url (https://pendulum-guardian.pw/.well-known/stellar.toml) |
+| 9 | HTTP error fetching stellar.toml from stellarusa.digital: error sending request for url (https://stellarusa.digital/.well-known/stellar.toml) |
+| 10 | HTTP error fetching stellar.toml from quantinuum-stellar.com: error sending request for url (https://quantinuum-stellar.com/.well-known/stellar.toml) |
+| 12 | HTTP error fetching stellar.toml from digital.stellarassets.org: error sending request for url (https://digital.stellarassets.org/.well-known/stellar.toml) |
+| 28 | HTTP error fetching stellar.toml from imfstellar.com: error sending request for url (https://imfstellar.com/.well-known/stellar.toml) |
+| 32 | HTTP error fetching stellar.toml from quantumsystemfinancial.com: error sending request for url (https://quantumsystemfinancial.com/.well-known/stellar.toml) |
+| 40 | HTTP error fetching stellar.toml from russia.stellar-dex.io: error sending request for url (https://russia.stellar-dex.io/.well-known/stellar.toml) |
+| 46 | HTTP error fetching stellar.toml from etoro.market: error sending request for url (https://etoro.market/.well-known/stellar.toml) |
+| 62 | HTTP error fetching stellar.toml from digital.stellarassets.org: error sending request for url (https://digital.stellarassets.org/.well-known/stellar.toml) |
+| 64 | HTTP error fetching stellar.toml from coin-peddler.org: error sending request for url (https://coin-peddler.org/.well-known/stellar.toml) |

@@ -20,6 +20,9 @@ clickhouse = "=0.15.0"
 # (task 0205). Already in the workspace via `indexer` and `xdr-parser`.
 stellar-xdr = { workspace = true }
 serde = { workspace = true }
+# Task 0214: JSON-RPC encoding for the Soroban RPC `getLedgerEntries`
+# bootstrap call (E06 critical gap from the 2026-05-12 CH pilot audit).
+serde_json = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
     "rt-multi-thread",
@@ -37,6 +40,16 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 indicatif = "0.18"
 tracing-indicatif = "0.3"
+# Task 0214: HTTP client for the Soroban RPC bootstrap call. Same
+# defaults the audit-harness uses (rustls-tls + json, no native-tls).
+reqwest = { workspace = true }
+# Task 0214: base64-encode `LedgerKey` XDR bytes for the JSON-RPC
+# request body, and decode `LedgerEntryData` XDR bytes from the
+# response. Workspace baseline.
+base64 = { workspace = true }
+# Task 0214: StrKey decode for `G…` → 32-byte ed25519 public key
+# when constructing `LedgerKey::Account` keys to request.
+stellar-strkey = "0.0.16"
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture

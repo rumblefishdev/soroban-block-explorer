@@ -108,12 +108,45 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
                     .unwrap_or(false)
         }
         // Soroban RPC errors collapse a wide surface (network, 5xx,
-        // contract revert). Treat as transient by default — a
-        // contract-revert distinction can be added when the RPC client
-        // lands and surfaces the JSON-RPC error code.
-        NftTokenUriError::SorobanRpc(_) => true,
+        // contract revert). Discriminate by error message content:
+        // some known patterns are fundamentally permanent (contract
+        // function signature mismatches, missing symbols) — these
+        // would burn SQS retry budget forever if classified as
+        // transient. Audit 2026-05-13 (Bug #6) identified the
+        // patterns below.
+        NftTokenUriError::SorobanRpc(msg) => !is_permanent_soroban_rpc_pattern(msg),
         _ => false,
     }
+}
+
+/// Heuristic — Soroban RPC error messages that are fundamentally
+/// permanent (function signature won't change, missing function won't
+/// appear, archived contract instance won't return). Adding patterns
+/// is safe and additive.
+fn is_permanent_soroban_rpc_pattern(msg: &str) -> bool {
+    // `Func(MismatchingParameterLen)` — function exists but arity mismatch.
+    // Real Soroban NFTs split between SEP-50 (1-arg `token_uri(token_id)`)
+    // and SEP-39 (0-arg `token_uri()`). Either signature is fixed once
+    // the contract is deployed.
+    msg.contains("MismatchingParameterLen")
+        // `"symbol not found in slice of strs"` — contract simply does
+        // not export the function we tried to call. Common for the
+        // Bug #3 false-positive NFTs (SAC contracts wrongly flagged).
+        || msg.contains("symbol not found in slice of strs")
+        // Generic "Error(WasmVm, UnexpectedSize)" — emitted alongside
+        // MismatchingParameterLen and similar permanent VM contract
+        // shape mismatches.
+        || msg.contains("Error(WasmVm, UnexpectedSize)")
+        // `Error(Storage, MissingValue)` —
+        // "trying to get non-existing value for contract instance".
+        // The contract instance entry has been pruned from live state
+        // and won't return without re-deployment. Treated as permanent:
+        // any future activity on that contract would push the instance
+        // back to live state, at which point a fresh enrichment trigger
+        // will run anyway. Retrying meanwhile is pure SQS retry budget
+        // waste. Audit 2026-05-13 measured 23/1000 transient-classified
+        // errors of this shape in the false-positive NFT population.
+        || msg.contains("Error(Storage, MissingValue)")
 }
 
 #[cfg(test)]
@@ -142,5 +175,27 @@ mod tests {
     #[test]
     fn soroban_rpc_is_transient() {
         assert!(is_transient(&NftTokenUriError::SorobanRpc("5xx".into())));
+    }
+
+    #[test]
+    fn soroban_rpc_mismatching_parameter_len_is_permanent() {
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(WasmVm, UnexpectedSize) … MismatchingParameterLen … token_uri".into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_symbol_not_found_is_permanent() {
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(Value, InvalidInput) … symbol not found in slice of strs … token_uri"
+                .into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_storage_missing_value_is_permanent() {
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(Storage, MissingValue) … trying to get non-existing value for contract instance".into()
+        )));
     }
 }

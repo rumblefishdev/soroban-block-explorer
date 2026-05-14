@@ -70,41 +70,35 @@ docs/architecture files updated for ADR 0032 traceability, and lore.
 
 ## 3. Schema parity with Postgres
 
-The pilot copies the Postgres logical shape table-for-table, sharing
-column names and surrogate-key conventions so the two stores are mentally
-1:1 wherever possible. The PG snapshot the pilot mirrors lives in the
-task directory:
+The CH schema mirrors Postgres's logical entity model (same tables,
+same column meanings) but uses a **hybrid key design** post-empirical
+measurement: surrogate `id Int64` on three high-cardinality FK hubs
+(`accounts`, `soroban_contracts`, `transactions`) derived via
+`cityhash64(natural_key)` for cheap integer joins; natural / composite
+primary keys on the other 12 tables where StrKey-hash composites are
+already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
 
-Every PG table from the snapshot that survived the divergences in §4
-appears in the CH schema with the same name, the same column set (modulo
-type translation in §6), and the same composite identity columns
-(`ORDER BY` substitutes for `PRIMARY KEY`).
-
-The full ER diagram and table-by-table ENGINE / PARTITION BY / ORDER BY
-matrix lives in the task notes:
-[`notes/G-clickhouse-schema-er.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md).
-
-| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                      |
-| ----------------------------------------------------- | ------------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
-| `accounts`                                            | `accounts`                            | state                   | natural version: `last_seen_ledger`                                        |
-| `assets`                                              | `assets`                              | state                   | no natural version                                                         |
-| `account_balances_current`                            | `account_balances_current`            | state                   | `allow_nullable_key=1` for nullable issuer/code in ORDER BY                |
-| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)               |
-| `liquidity_pools`                                     | `liquidity_pools`                     | immutable post-create   | unpartitioned                                                              |
-| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | partitioned                                                                |
-| `lp_positions`                                        | `lp_positions`                        | state                   | natural version: `last_updated_ledger`                                     |
-| `nfts`                                                | `nfts`                                | state                   | drops `metadata`; coerces `current_owner_ledger` to `Int64 DFLT 0`         |
-| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | partitioned                                                                |
-| `operations_appearances`                              | `operations_appearances`              | append-only fact        | partitioned                                                                |
-| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | drops `search_vector`; coerces `wasm_uploaded_at_ledger` to `Int64 DFLT 0` |
-| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row                                                 |
-| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | partitioned                                                                |
-| `transactions`                                        | `transactions`                        | append-only fact        | partitioned; bloom-filter skip index on `hash`                             |
-| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`           |
-| `transaction_participants`                            | `transaction_participants`            | append-only fact        | partitioned                                                                |
-| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String` (was JSONB)                                         |
-| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                          |
+| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                         |
+| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                     |
+| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                   |
+| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                    |
+| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                  |
+| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                      |
+| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                            |
+| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                 |
+| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                              |
+| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                  |
+| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64                         |
+| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`             |
+| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                      |
+| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                         |
+| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash` |
+| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                              |
+| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                |
+| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                             |
+| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                             |
 
 CH net schema: **17 tables + 1 `Dictionary`** (PG had 18; `_sqlx_migrations` dropped).
 
@@ -125,6 +119,22 @@ The CH `soroban_events` table holds: `contract_id`, `transaction_id`,
 event_index)` matches the PG primary key with `created_at` substituted by
 `ledger_sequence`. PG keeps `soroban_events_appearances` exactly as today.
 
+**Codec:** `topics_xdr` and `data_xdr` use `CODEC(ZSTD(3))` (every other
+`String` column in the schema stays on CH-default LZ4). The two event
+columns carry ScVal-decoded JSON
+(`[{"type":"sym","value":"transfer"},{"type":"address","value":"G…"},…]`).
+The repeated `"type":` / `"value":` wrapper plus shared address
+prefixes give a long-range dictionary pattern that LZ4's 64 KiB
+sliding window cannot exploit. Measured on the first 100 mainnet
+ledgers post-writer landing: `topics_xdr` LZ4 ratio was 6.29×; ZSTD(3)
+reaches ~20–40× on the same shape. `data_xdr` is lighter on
+redundancy (LZ4 already 11.12×) but carries the codec for symmetry —
+zero downside, marginal positive gain. ZSTD(3) was picked as the
+default-encode CH ships with; bump to ZSTD(9) only if measurement
+warrants (one-time write CPU, identical read-path cost). Documented
+in the [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
+history.
+
 ### 4b. `created_at` dropped from every CH table except `ledgers`
 
 CH partitions by `ledger_sequence`, not by wall-clock time. The
@@ -140,6 +150,87 @@ denormalization at full Stellar scale.
 
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
+
+### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217 + 0220)
+
+CH carries the same `_pending` quarantine pair as PG so the routing
+semantics defined in
+[`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)
+land symmetrically on both writers.
+
+> **Writer parity status:** Task 0217 (PR #180) shipped the CH schema
+>
+> - PG writer routing. Task 0220 ships the **CH writer parity** for the
+>   routing — `crates/db-clickhouse/src/persist/stage.rs` now reads the
+>   per-contract WASM classifier verdict (built alongside
+>   `wasm_interface_metadata` staging) and routes NFT-candidate rows
+>   into hot vs. pending vs. drop buckets in lockstep with PG.
+>
+> **Atomicity asymmetry that remains:** PG runs a promotion hook
+> (`reclassify_contracts_from_wasm` + `promote_pending_nfts_to_hot`)
+> inside the persist tx when an `Other → Nft` transition is observed.
+> CH `ReplacingMergeTree` has no per-row UPDATE, so the CH promotion
+> path is **re-emission on next observation** plus the post-backfill
+> drain runbook for stragglers
+> ([`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)).
+> In short: PG promotes inline; CH promotes when the contract is
+> observed again with a definitive verdict, with the runbook as the
+> long-tail catch-all.
+
+Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
+which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):
+
+| Classifier verdict   | Target tables                            |
+| -------------------- | ---------------------------------------- |
+| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                    |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+
+CH-side schema (see [`init.sql`](../../../crates/db-clickhouse/schema/init.sql)):
+
+```sql
+CREATE TABLE IF NOT EXISTS nfts_pending (
+    contract_id           Int64,
+    token_id              String,
+    collection_name       Nullable(String),
+    name                  Nullable(String),
+    media_url             Nullable(String),
+    minted_at_ledger      Nullable(Int64),
+    current_owner_id      Nullable(Int64),
+    current_owner_ledger  Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
+CREATE TABLE IF NOT EXISTS nft_ownership_pending (
+    contract_id      Int64,
+    token_id         String,
+    ledger_sequence  Int64,
+    event_order      Int16,
+    transaction_id   Int64,
+    owner_id         Nullable(Int64),
+    event_type       Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, event_order);
+```
+
+Notes:
+
+- The shape is identical to `nfts` / `nft_ownership`; promotion is a
+  column-projection `INSERT INTO nfts SELECT … FROM nfts_pending`. The
+  partition layout on `nft_ownership_pending` matches `nft_ownership`
+  so promotion can move whole parts cleanly under a future part-level
+  optimization (not done in the pilot — promotion currently uses a
+  row-level INSERT/DELETE pair).
+- API endpoints never read the `_pending` tables.
+- Operational lifecycle (initial migration + post-backfill drain) is
+  documented in
+  [`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md).
+- The architectural decision record for the quarantine pattern
+  (alternatives considered, design rationale, consequences) lives in
+  [ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
 
 ### 4d. `_sqlx_migrations` dropped
 
@@ -174,6 +265,21 @@ collection so the credential is not version-controlled.
 - CHECK constraints — omitted for the pilot
 
 PG keeps all of these.
+
+### Writer-only behaviours not yet ported to CH
+
+- **`soroban_contracts.is_sac` forward-derivation (task 0218)** — the
+  PG writer flips `is_sac=true` + `contract_type=Token` on pre-existing
+  SAC skeleton rows by deriving the SAC contract_id from every
+  observed classic / native asset and running an UPDATE inside the
+  persist transaction
+  (`crates/indexer/src/handler/persist/write.rs::apply_sac_overrides_for_skeleton_contracts`).
+  The CH writer does not yet apply the same override; CH `is_sac` for
+  pre-window SACs therefore remains `false` until parity work lands
+  (different atomicity model — `ReplacingMergeTree` has no per-row
+  UPDATE, so the path is either an `ALTER TABLE … UPDATE` mutation
+  or a re-insert that relies on `wasm_uploaded_at_ledger` version
+  semantics to absorb the corrected row).
 
 ## 5. Engine, partitioning, and ordering
 
@@ -254,23 +360,333 @@ If the pilot fails to outperform Postgres on storage and query latency
 once measurements exist, the whole crate plus the compose service
 deletes in one PR; nothing else has changed.
 
-### Writers (stubbed)
+### Writers
 
-[`crates/backfill-runner`](../../../crates/backfill-runner/README.md)
-accepts `--target {postgres,clickhouse}` (task
-[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)).
-The CH path runs the full parse pipeline against `aws s3 sync`'d
-ledgers but **writes nothing**: `db_clickhouse::persist::persist_ledger_clickhouse`
-is a no-op stub that logs per-ledger context and returns `Ok`.
+Real writes land in task
+[0206](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/README.md),
+on top of the runner plumbing task
+[0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
+shipped. The writer lives in `crates/db-clickhouse/src/persist/` and
+consumes the same `Extracted*` slices the PG persist path does, with
+three structural differences:
 
-The stub-driven phase is intentional. It validates the flag-based
-plumbing — `Sink` enum, dispatch across preflight / load_completed /
-persist — and lets us compare parse-side timings between the two
-targets without committing to a write-shape that still has open design
-questions. Real INSERTs for the 17 mirrored tables land in a follow-up
-task gated on this path being green end-to-end.
+1. **No surrogate-ID resolution against a table.** PG resolves
+   StrKey → BIGSERIAL via `accounts.id` lookup; CH derives every
+   surrogate ID inline (see §"Surrogate ID derivation" below).
+2. **`soroban_events` is unfolded** per ADR 0044 §Decision §4a — one
+   CH row per `ExtractedEvent`, not per `(contract, tx, ledger)` trio.
+3. **`Decimal128(7)` scaling happens at staging time.** PG accepts
+   NUMERIC text; CH RowBinary takes the underlying `i128` scaled by
+   10⁷.
+
+The cross-reference doc at
+[`notes/G-coverage-mapping.md`](../../../lore/1-tasks/archive/0206_FEATURE_clickhouse-persist-real-inserts/notes/G-coverage-mapping.md)
+enumerates every `Extracted*` field with its CH target column (or
+"out of scope — matches PG").
+
+#### State-side ingestion (initial-snapshot mechanism)
+
+The CH writer inherits the parser's emit-on-observed-change pattern
+for state-side tables (`accounts`, `account_balances_current`,
+`assets`, `liquidity_pools`, `lp_positions`, `soroban_contracts`).
+That pattern is bullet-proof when the indexed range happens to
+contain every entity's `LedgerEntry*` update — which it usually
+doesn't for short backfill windows. The 2026-05-12 CH pilot audit
+([§E06](../../audits/2026-05-12-ch-pilot-endpoint-audit.md))
+quantified the gap:
+
+- Most accounts that appear in `transaction_participants` over a
+  64 k-ledger window are referenced **only** as participants — their
+  `AccountEntry` is never touched in the same range. The CH `accounts`
+  row therefore persists as a skeleton: `sequence_number = 0,
+home_domain = null, account_balances_current rows = 0`.
+- Example from the audit: `GARDNV3Q7…` shows skeleton state in CH
+  while Horizon reports `seqnum = 148e15, home_domain =
+"ultracapital.xyz", balance = 12 861 XLM`.
+
+Task 0214 closes the gap with an **initial-snapshot mechanism** that
+runs once per backfill window in
+`crates/backfill-runner/src/{rpc_snapshot,bootstrap}.rs`:
+
+1. **Discovery** — JOIN `transaction_participants` (window-filtered)
+   against `accounts FINAL` and keep rows where `sequence_number =
+0`. The Phase 2 incremental top-up gate is intrinsic to the JOIN:
+   already-populated rows are skipped, so a window re-run only
+   touches the rows that still need it.
+2. **RPC fetch** — batch `LedgerKey::Account(...)` keys (≤ 200 per
+   call) and POST `getLedgerEntries` to Soroban RPC. Decode each
+   returned `AccountEntry` into `(account_id, sequence_number,
+balance, home_domain)`.
+3. **Stage** — INSERT into `accounts` (overwriting the skeleton via
+   `ReplacingMergeTree(last_seen_ledger)`) and into
+   `account_balances_current` for the native XLM row. Snapshot rows
+   carry `last_seen_ledger = window_start` as their watermark; a
+   per-ledger parser emit at a higher sequence inside the same window
+   overwrites the snapshot naturally on the next background merge.
+4. **Skip-and-warn** — RPC failure downgrades to a warn-and-return
+   instead of failing the run. Bootstrap is opportunistic enrichment;
+   the per-ledger ingest path is the load-bearing one.
+
+The runner CLI gates this step on `--soroban-rpc-url` /
+`SOROBAN_RPC_URL`. PG-target runs always skip the bootstrap (PG's
+account-state coverage is handled by task 0119 + ADR 0027 §7 via a
+different path). CH-target runs without the URL log
+`bootstrap_account_state skipped — no --soroban-rpc-url configured`
+and proceed; the accounts that need enrichment stay as skeletons
+until the operator re-runs with the flag set.
+
+##### Why the RPC client lives inside `crates/backfill-runner`
+
+Task 0214 is the first concrete consumer of Soroban RPC. Adjacent
+tasks 0218 (SAC override) and 0219 (classic-credit assets) ship
+cheaper non-RPC layers and only fall back to RPC for stragglers, so
+they don't drive a shared-crate decision yet. The inline module
+keeps the blast radius small; the refactor to a
+`crates/soroban-rpc-client` crate is a one-day move once a second
+concrete consumer lands.
+
+##### What this does not cover (yet)
+
+The Phase 1 implementation snapshots `AccountEntry` only — including
+the native XLM balance. The trustline pass
+(`LedgerKey::Trustline(...)` for each `(account, asset)` pair
+referenced in the window) is left as a Phase 3 follow-up; the
+`decode_trustline_snapshot` and `rebuild_trustline_asset` helpers
+are already on the public surface of `rpc_snapshot.rs` ready to wire
+in when the asset-aggregate port of PG task 0194's
+`recompute_asset_aggregates` lands on the CH side.
+
+#### Partition-aligned streaming inserts
+
+`db_clickhouse::persist::writer::PartitionWriter` holds one
+long-lived `clickhouse::Insert<RowT>` per table, lazy-initialised on
+the first row written to that table within a backfill partition, and
+ended once at `commit()`. The shape is:
+
+```text
+open() → write_ledger() × 64_000 → commit()
+                                     └─ ends every non-`ledgers` insert
+                                        in PG-FK order, THEN opens +
+                                        writes + ends the `ledgers`
+                                        insert as the commit marker.
+```
+
+##### Why per-ledger inserts are wrong here
+
+ClickHouse `MergeTree` creates exactly one "part" per `INSERT`
+statement. The writer streams into 16 non-ledger tables; `ledgers`
+is opened once at commit as the commit marker (17 tables total).
+With 16 streaming tables × 11 M ledgers the naive per-ledger pattern
+produces ~176 M parts and trips
+`parts_to_throw_insert = 3000` (per `(table, CH-partition)`) after
+the first ~3 k ledgers — about 0.03 % of an 11 M backfill. The
+background merger cannot fold parts faster than they're produced at
+parse-bound throughput, so the ingest path stalls.
+
+Partition-aligned streaming holds the request open across the whole
+64 k-ledger backfill partition. ~172 partitions × 16 streaming
+tables ≈ 2 750 `INSERT` statements over the entire 11 M-ledger
+backfill (plus one `ledgers` INSERT per partition as the commit
+marker) — well within the merger's comfort zone.
+
+Loopback transport is irrelevant to this design choice — server-side
+part economics are the load-bearing constraint, not HTTP round-trip
+count. (See the
+[`Buffer` engine vs. `async_insert` rejection notes](#alternatives-considered)
+below for the alternatives we ruled out.)
+
+##### Commit-marker pattern
+
+`ledgers` rows are buffered in RAM during `write_ledger()`. At
+`commit()` every other table's `Insert::end()` is awaited first;
+only after every one ack's does the `ledgers` insert open and end.
+
+Mid-partition failure ⇒ no `ledgers` rows ⇒ `Sink::load_completed`
+returns nothing for this partition's range ⇒ resume re-does the
+whole partition cleanly. Orphan rows (if any) from the partial first
+attempt dedupe under `ReplacingMergeTree` on the next background
+merge.
+
+##### Memory budget
+
+Each `clickhouse::Insert<T>` buffers 256 KiB and chunk-flushes when
+full. 16 streaming inserts × 256 KiB ≈ 4 MiB peak per writer (plus
+the short-lived `ledgers` insert at commit), independent of
+partition row count. Comfortable headroom even at K=16 parallel
+partition runners on a laptop.
+
+##### Server-side bulk-ingest settings
+
+The writer applies these CH settings on every per-table insert it
+opens (see `db_clickhouse::persist::writer::apply_bulk_ingest_settings`):
+
+| Setting                       | Value         | Why                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `async_insert`                | `0`           | Client-side batching. Server-side async-buffer adds latency variance without gain at our batch size.                                                                                                                                                                                                                                             |
+| `max_insert_block_size`       | `1_048_576`   | Pinned against future CH default drift.                                                                                                                                                                                                                                                                                                          |
+| `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunked pieces into 1 M-row blocks before the part-create path.                                                                                                                                                                                                                                                                   |
+| `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                                                                                                                                                                                                                                                                       |
+| `insert_deduplicate`          | `0`           | We rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                                                                                                                                                                                                                                                                        |
+| `http_receive_timeout`        | `7200` (2 h)  | CH default 30 s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` whose row rate doesn't fill the client's 256 KiB buffer fast. Without this, `Network("channel closed")` surfaces on real-mainnet partitions; 64 k partitions (~80 min wall-clock) needed the bump from 30 min to 2 h. |
+| `http_send_timeout`           | `7200` (2 h)  | Same axis, response side.                                                                                                                                                                                                                                                                                                                        |
+
+`enable_http_compression` stays at the CH default (off) — loopback
+transport, compression CPU on both sides for no measurable gain.
+
+#### Hybrid surrogate / natural keys
+
+After empirical measurement on a 10 k-ledger smoke (full-natural-key
+variant added ~500 MB on-disk + +10 ms persist / ledger), the
+production schema settled on a **hybrid**: surrogate `id Int64` on
+the three central FK hubs, natural / composite primary keys on the
+other 12 tables.
+
+| Table                             | ORDER BY                                                      | Surrogate `id`? |
+| --------------------------------- | ------------------------------------------------------------- | --------------- |
+| `accounts`                        | `account_id` (StrKey G…)                                      | **yes — Int64** |
+| `soroban_contracts`               | `contract_id` (StrKey C…)                                     | **yes — Int64** |
+| `transactions`                    | `(ledger_sequence, application_order)`                        | **yes — Int64** |
+| `assets`                          | `(asset_type, asset_code, issuer_id, contract_id)`            | no              |
+| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_id)`             | no              |
+| `nfts`                            | `(contract_id, token_id)`                                     | no              |
+| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                              | no              |
+| `lp_positions`                    | `(pool_id, account_id)`                                       | no              |
+| `transaction_hash_index`          | `hash` (FixedString(32))                                      | no              |
+| `operations_appearances`          | `(ledger_sequence, transaction_id, application_order)`        | no              |
+| `transaction_participants`        | `(account_id, ledger_sequence, transaction_id)`               | no              |
+| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_id, event_index)` | no              |
+| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_id)`              | no              |
+| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`       | no              |
+| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                  | no              |
+
+The three surrogate `id` values are deterministic
+`cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).
+All `_id` FK columns across the schema (`source_id`, `contract_id`,
+`transaction_id`, `caller_id`, `issuer_id`, etc.) carry the same
+derived Int64. Cross-table joins are cheap integer equality.
+
+ORDER BY on the hub tables uses the natural key (`account_id`,
+`contract_id`, `(ledger_sequence, application_order)`) so direct
+queries like `WHERE account_id = 'GDMOSA…'` granule-prune cheaply.
+The surrogate `id` is for FK joins, not granule pruning.
+
+##### Why hybrid, not full-natural or full-surrogate
+
+Full-natural (StrKey FK columns + `LowCardinality(String)`)
+measured ~500 MB on-disk regression + ~10 ms persist / ledger
+slowdown on the 10 k-ledger smoke vs. surrogate-Int64 FK baseline.
+At 11 M scale that extrapolates to ~550 GB + ~30 h slowdown — too
+expensive for the readability win.
+
+Full-surrogate (all 7 tables originally proposed) brings opaque
+`Int32` collision posture on `assets.id` / `nfts.id` (4.3 B hash
+space, projected 10 M+ unique values long-term) and the
+"our cityhash ≠ CH SQL `cityHash64()`" footgun (different algorithm
+variant). The hybrid drops surrogate IDs from the tables where
+natural composite keys are already cheap (`assets`,
+`liquidity_pool_snapshots`, etc.) and keeps them on the three real
+FK hubs.
+
+##### Deliberate divergence from CH SQL `cityHash64()`
+
+The writer's hash is `cityhash-rs::cityhash_102_128` lower 64 bits.
+CH's built-in `cityHash64()` SQL function is the **64-bit variant**
+of CityHash v1.0.2 — a different algorithm from the lower-half of
+the 128-bit variant. Future CH-side `JOIN ... ON cityHash64(...) =
+id` queries need a UDF wrapping the writer's helper. Documented in
+ADR 0044 history.
+
+##### Compression of repeated StrKeys + low-cardinality columns
+
+`LowCardinality(String)` applies to columns where per-block
+cardinality stays bounded:
+
+- `soroban_events.signature` — handful of event names (transfer,
+  mint, burn, fee, …)
+- `assets.asset_code` / `account_balances_current.asset_code` /
+  `liquidity_pools.asset_*_code` — few thousand unique codes
+- `accounts.home_domain` — handful of unique SEP-1 issuer domains
+  across tens of millions of accounts
+
+State table primary keys (e.g. `accounts.account_id` with tens of
+millions of unique values long-term) use plain `String` —
+`LowCardinality` overhead would dominate at that cardinality scale.
+
+##### Empty-string + Int64=0 sentinels for composite-PK "no value"
+
+`assets` and `account_balances_current` have composite primary keys
+that include optional columns. CH `ORDER BY Nullable(*)` requires
+the `allow_nullable_key` setting and is meaningfully slower than
+plain types. Conventions:
+
+- `''` (empty string) for missing `asset_code`
+- `0` (Int64) for missing `issuer_id` / `contract_id` (corresponds
+  to `cityhash64("")`, which is never a real StrKey hash)
+
+Native XLM asset row: `(asset_type=0, asset_code='', issuer_id=0,
+contract_id=0)`. Classic credit asset: `(asset_type=1|2,
+asset_code='USDC', issuer_id=cityhash64('GAB…'), contract_id=0)`.
+Soroban-native: `(asset_type=3, asset_code='', issuer_id=0,
+contract_id=cityhash64('CAB…'))`.
+
+#### Trustline removal model
+
+`account_balances_current` is `ReplacingMergeTree(last_updated_ledger)`
+with no tombstone semantics. The writer translates each
+`ExtractedAccountState.removed_trustlines` entry into a
+`balance = 0` row at the current ledger. RMT keeps the zero-balance
+row (newest version wins). Read-time convention:
+
+```sql
+SELECT * FROM account_balances_current
+WHERE account_id = ? AND balance > 0
+```
+
+`OPTIMIZE TABLE account_balances_current FINAL` collapses superseded
+zero-balance rows on demand; background merge handles it
+asynchronously otherwise. No `CollapsingMergeTree` / engine change
+needed.
+
+#### Alternatives considered
+
+- **Per-ledger `Buffer` engine target** — rejected. Buffer tables
+  hold rows in CH server memory until flushed, doubling RAM
+  pressure during heavy backfills. The pilot's measurement intent
+  is to see real on-disk part shapes, which Buffer obscures.
+  Modern CH best practice favours client-side batching for bulk
+  ingest.
+- **`async_insert = 1` server-side batching** — rejected for the
+  backfill path. Pushes batching decisions into CH server memory
+  and adds latency variance that hides parse-vs-write timing
+  analysis. Documented as a candidate for the indexer Lambda
+  hot-path (which has different per-ledger constraints).
+- **`clickhouse::Inserter` with auto-flush** — rejected. The
+  crate's auto-flush re-opens a new HTTP request each flush, which
+  defeats the part-count target. The manual lifecycle (open once
+  per partition, close once per partition) is the only way to
+  guarantee one INSERT per table per partition.
+
+#### Concurrency
+
+Each open `PartitionWriter` holds 14 long-lived inserts in flight
+against CH. Default `max_concurrent_queries = 100` is comfortable
+for K=4 parallel runners (14 × 4 = 56). Scaling to K=8+ bumps the
+budget; raise `max_concurrent_queries` to ~200 in
+`docker-compose.yml`'s `clickhouse` service config when
+testing K=8+ in one process group. Loopback transport itself never
+bottlenecks.
 
 The indexer Lambda is unchanged — no ClickHouse dual-write yet.
+
+### Read queries (reference set)
+
+[`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
+the canonical reference set of CH-side read queries for the 23 public REST
+endpoints, parallel to the PG [`endpoint-queries/`](./endpoint-queries/README.md)
+set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
+`FINAL` on `ReplacingMergeTree` reads, partition-prunes via
+`intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
+`ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
 
 ---
 
@@ -280,5 +696,7 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 - [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) — folded events design that this pilot deliberately reverses on the CH side
 - [ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md) — evergreen docs maintenance policy
 - [Task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md) — implementation task
+- [Task 0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md) — CH endpoint queries reference set
 - [`crates/db-clickhouse/README.md`](../../../crates/db-clickhouse/README.md) — crate-level README with translation table and dev workflow
+- [`endpoint-queries-clickhouse/README.md`](./endpoint-queries-clickhouse/README.md) — 23 CH-side endpoint queries + FINAL/Dict/§5 conventions
 - [`notes/G-clickhouse-schema-er.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md) — full ER diagram + ENGINE/PARTITION BY/ORDER BY matrix

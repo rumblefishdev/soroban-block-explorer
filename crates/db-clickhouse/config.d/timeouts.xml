@@ -1,0 +1,37 @@
+<!--
+  Server-level CH overrides for the bulk-backfill workload.
+  Mounted at /etc/clickhouse-server/config.d/timeouts.xml.
+
+  MergeTree part-economy at sustained heavy-insert load. Defaults
+  (`parts_to_delay_insert = 150`, `parts_to_throw_insert = 3000`)
+  are sized for steady-state ingest. During the 11M-ledger backfill,
+  ~172 partitions × 16 streaming tables emit ~2750 active parts
+  before the background merger consolidates them. If the merger
+  lags (CPU-bound on laptop), parts pile up — `parts_to_delay_insert`
+  trips first and CH starts artificially slowing INSERTs, then
+  `parts_to_throw_insert` aborts them. Bumping both protects against
+  this stall mode at one-time backfill scale.
+
+  RAM cap (`max_server_memory_usage`) was considered here but
+  dropped: empirically it correlated with a +10 ms / ledger persist
+  regression on the 10 k smoke and didn't prevent any observed
+  failure mode. Per-query `max_memory_usage` in the user profile
+  is sufficient for the pilot — see `../users.d/timeouts.xml`.
+
+  Pilot-only — production deployment should re-tune per real
+  workload + monitoring.
+
+  Companion profile-level overrides (per-query memory + http
+  timeouts) live in `../users.d/timeouts.xml`.
+-->
+<clickhouse>
+
+    <!-- MergeTree part-count limits per (table, CH-partition). Lifts
+         the artificial-slowdown threshold + the hard error threshold
+         to give background merger more headroom under sustained
+         heavy insert pressure during the backfill. -->
+    <merge_tree>
+        <parts_to_delay_insert>1000</parts_to_delay_insert>
+        <parts_to_throw_insert>5000</parts_to_throw_insert>
+    </merge_tree>
+</clickhouse>

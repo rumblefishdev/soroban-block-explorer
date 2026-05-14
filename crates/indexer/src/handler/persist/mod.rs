@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use tracing::{info, warn};
+use xdr_parser::SacOverride;
 use xdr_parser::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
@@ -102,6 +103,7 @@ pub async fn persist_ledger(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
+    sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), HandlerError> {
     let stage_start = Instant::now();
@@ -121,6 +123,7 @@ pub async fn persist_ledger(
         nft_events,
         lp_positions,
         contract_name_writes,
+        sac_overrides,
     )?;
     let stage_ms = stage_start.elapsed().as_millis();
 
@@ -303,6 +306,15 @@ async fn run_all_steps(
     // Handles the two-ledger deploy pattern (contract deployed earlier,
     // WASM uploaded now) that `detect_assets` cannot observe in-memory.
     write::insert_assets_from_reclassified_contracts(db_tx, staged).await?;
+    // Task 0218 — forward-derive SAC contract_ids from every observed
+    // classic / native asset and flip `is_sac=true` + `contract_type=Token`
+    // on any pre-existing SAC skeleton rows. Runs after `upsert_assets`
+    // (the override list reads from `staged.sac_overrides`, derived
+    // at stage time from `staged.asset_rows`) and before
+    // `upsert_nfts_and_ownership` so the NFT filter sees the corrected
+    // `contract_type` and drops the SAC contracts at filter time instead
+    // of routing them into the 0217 quarantine.
+    write::apply_sac_overrides_for_skeleton_contracts(db_tx, staged).await?;
     timings.assets_ms = t.elapsed().as_millis();
 
     let t = Instant::now();

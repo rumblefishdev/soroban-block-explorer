@@ -31,6 +31,14 @@
 --     range on created_at; the CASE-derived bucket expression is a
 --     constant within one call, not a per-row-evaluated function on the
 --     indexed column, so it doesn't break index usability.
+--   • Sentinel placeholder pools (ADR 0041 / task 0193) are filtered at
+--     two layers: (1) the handler-level `pool_exists()` gate returns
+--     404 for sentinel pool ids before this query runs; (2) an EXISTS
+--     subquery against `liquidity_pools` in the main WHERE provides
+--     defense-in-depth so any future caller that bypasses the handler
+--     still gets an empty result. Sentinels have no snapshots by
+--     construction; the guard is belt-and-suspenders but cheap
+--     (uncorrelated PK seek).
 
 WITH bucket_keyword AS (
     SELECT CASE $2
@@ -64,5 +72,11 @@ FROM liquidity_pool_snapshots lps
 WHERE lps.pool_id     = $1
   AND lps.created_at >= $3
   AND lps.created_at <  $4
+  -- Sentinel filter (ADR 0041 / task 0193) — defense-in-depth.
+  AND EXISTS (
+      SELECT 1 FROM liquidity_pools lp
+       WHERE lp.pool_id = $1
+         AND lp.created_at_ledger > 0
+  )
 GROUP BY date_trunc((SELECT kw FROM bucket_keyword), lps.created_at)
 ORDER BY bucket ASC;

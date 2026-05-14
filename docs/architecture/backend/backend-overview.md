@@ -171,6 +171,20 @@ The backend serves data from the block explorer's own database, adding:
     a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
     consumed only by `GET /v1/assets/{id}`; future detail endpoints
     (accounts, etc.) will reuse the same fetcher
+  - **`runtime_enrichment::nft_token_uri`** — drives the detail-only
+    `metadata` field on `GET /v1/nfts/:id` (task 0195 §2d). Per ADR 0043
+    detail-only carve-out — the `nfts.metadata` JSONB column was dropped
+    in migration `20260507120000_drop_nfts_metadata.up.sql`. Flow:
+    Soroban RPC `simulateTransaction` of `token_uri(token_id)`
+    (SEP-50 per-token form, falls back to zero-arg `token_uri()` form
+    for SEP-39 contracts on `MismatchingParameterLen` — see audit 0197
+    Bug #5), then IPFS gateway fetch + JSON parse. Built-in safeguards:
+    3 s wall-clock timeout, 256 KB body cap, scheme/hostname validation
+    (https / ipfs only), 24 h LRU (1024 entries). Fail-soft NULL on any
+    error class. Code is shared with the Lambda 2 write-side worker
+    (`crates/enrichment-shared::nft_token_uri`); only the persistence
+    half differs (handler returns the JSON inline, worker writes
+    `nfts.name` / `media_url` / `collection_name`).
 - **Surrogate-key resolution** — every StrKey that enters a route parameter
   (`G...`, `C...`) is resolved to the `BIGINT` surrogate via the relevant
   `UNIQUE` index at the request boundary
@@ -397,6 +411,19 @@ inventory.
 These endpoints combine factual current-state reads with historical aggregate reads, so the
 backend should keep raw pool state and chart-series generation concerns clearly separated.
 
+**Sentinel placeholder pools.** During partial / mid-stream backfills, the persist
+layer can emit placeholder rows in `liquidity_pools` to satisfy the
+`lp_positions.pool_id` FK when the parent pool's `LedgerEntry` is not in the
+indexed window — see [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md)
+and the database-schema overview §4.14 "Sentinel placeholder rows". Marker:
+`created_at_ledger = 0` (no real Stellar pool can carry this value — pubnet
+genesis seq is 1). Every pool-surfacing endpoint above hides sentinel rows at
+two layers: the handler-level `pool_exists()` gate filters them (so per-pool
+endpoints return 404), and each of the five canonical SQL queries carries its
+own sentinel predicate (`18` / `19` inline `lp.created_at_ledger > 0`,
+`20` / `21` / `23` an `EXISTS` guard) for defense-in-depth against callers that
+bypass the handler. Task 0193 implements this filter.
+
 #### Search
 
 **`GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`** - Generic
@@ -451,7 +478,13 @@ Two endpoints carry **conditional** logic:
 - `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
   archive overlay merged); Short when archive fetch failed
   (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
-  sooner.
+  sooner. The handler also **short-circuits the archive fetch entirely**
+  for any row carrying `parse_error = true` in the DB (task 0190):
+  re-fetching cannot make a degraded row whole, and serving the row through
+  the unavailable-heavy path preserves the lore-0044 / lore-0046 contract
+  (light slice always returned, heavy explicitly absent). The Short TTL
+  applies in this case as well, so a fix that ever re-parses the row
+  cleanly surfaces within one ledger cycle.
 
 The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
 `infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
@@ -473,8 +506,12 @@ PostgreSQL database. Heavy-field detail endpoints (E3 `/transactions/:hash`,
 E14 `/contracts/:id/events`) additionally fetch raw `.xdr.zst` from the **public
 Stellar ledger archive** and re-parse it at request time per
 [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md).
-The API does not depend on Horizon, Soroban RPC, or third-party indexers for any
-response.
+Detail-only off-chain fields exempt from persistence per
+[ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) (§4 `runtime_enrichment`
+umbrella) are also fetched at request time — currently the SEP-1 issuer TOML
+(asset `description` / `home_page`, task 0188) and the NFT `token_uri()` JSON
+(`metadata`, task 0195). The API does not depend on Horizon or third-party
+indexers for any response.
 
 ### 7.2 Response Shaping
 
