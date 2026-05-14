@@ -22,7 +22,7 @@ export function PageStub({ title, path, rows, body }: PageStubProps) {
         </Typography>
       </Box>
       {body}
-      {!body && rows && rows.length > 0 && (
+      {body === undefined && rows && rows.length > 0 && (
         <Stack spacing={0.5}>
           {rows.map(({ label, value }) => (
             <Stack
@@ -47,7 +47,7 @@ export function PageStub({ title, path, rows, body }: PageStubProps) {
           ))}
         </Stack>
       )}
-      {!body && (!rows || rows.length === 0) && (
+      {body === undefined && (!rows || rows.length === 0) && (
         <Typography variant="bodyRegular" sx={{ color: 'text.tertiary' }}>
           Page implementation pending. Routing skeleton only.
         </Typography>

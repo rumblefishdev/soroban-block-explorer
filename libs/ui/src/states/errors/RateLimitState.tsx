@@ -32,7 +32,7 @@ export function RateLimitState({
   }, [retryAfterSeconds, onRetry]);
 
   const countdown =
-    retryAfterSeconds && remaining > 0
+    retryAfterSeconds && onRetry && remaining > 0
       ? `Retrying in ${remaining}s…`
       : undefined;
 

@@ -36,10 +36,14 @@ function subscribe(intervalMs: number, cb: (d: Date) => void): () => void {
   };
 }
 
+const MIN_INTERVAL_MS = 500;
+
 export function useNow(intervalMs = 30_000): Date {
-  const [now, setNow] = useState(
-    () => tickers.get(intervalMs)?.now ?? new Date()
-  );
-  useEffect(() => subscribe(intervalMs, setNow), [intervalMs]);
+  const safe =
+    Number.isFinite(intervalMs) && intervalMs >= MIN_INTERVAL_MS
+      ? intervalMs
+      : MIN_INTERVAL_MS;
+  const [now, setNow] = useState(() => tickers.get(safe)?.now ?? new Date());
+  useEffect(() => subscribe(safe, setNow), [safe]);
   return now;
 }
