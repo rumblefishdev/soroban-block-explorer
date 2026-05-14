@@ -116,6 +116,28 @@ enum Command {
         #[arg(long)]
         end: u32,
     },
+
+    /// Run only the account-state bootstrap RPC pass on an existing CH
+    /// dataset. Top-ups `sequence_number = 0` skeletons via Soroban RPC
+    /// `getLedgerEntries`. Idempotent — skips accounts where the
+    /// in-window parser path already filled real state. Useful when an
+    /// earlier `Run` was invoked without `--soroban-rpc-url` and left
+    /// the dataset with elevated skeleton counts.
+    ///
+    /// CH-only — Postgres target short-circuits with an info log
+    /// (PG's account-state population is independent per task 0119).
+    Bootstrap {
+        /// First ledger sequence (inclusive). Used by the discovery
+        /// query's `transaction_participants` JOIN.
+        #[arg(long)]
+        start: u32,
+
+        /// Last ledger sequence (inclusive). The snapshot stamp is
+        /// `end + 1` to win under RMT(last_seen_ledger) — matches the
+        /// per-window `Run` behaviour.
+        #[arg(long)]
+        end: u32,
+    },
 }
 
 #[tokio::main]
@@ -167,6 +189,25 @@ async fn main() {
         Command::Status { start, end } => status::execute(&sink, start, end)
             .await
             .expect("status failed"),
+        Command::Bootstrap { start, end } => {
+            let rpc_url = cli.soroban_rpc_url.as_deref().unwrap_or_else(|| {
+                panic!("bootstrap subcommand requires --soroban-rpc-url (or SOROBAN_RPC_URL env)")
+            });
+            let stats = bootstrap::bootstrap_account_state(&sink, Some(rpc_url), start, end)
+                .await
+                .expect("bootstrap failed");
+            // Print one-line summary on stdout so operators piping into
+            // shell scripts see the result without grep'ing tracing
+            // output.
+            println!(
+                "bootstrap completed: discovered={} fetched={} staged={} rpc_batches={} rpc_errors={}",
+                stats.discovered,
+                stats.fetched,
+                stats.staged_accounts,
+                stats.rpc_batches,
+                stats.rpc_errors,
+            );
+        }
     }
 }
 
