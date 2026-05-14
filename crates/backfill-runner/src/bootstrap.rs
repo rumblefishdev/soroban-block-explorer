@@ -245,7 +245,7 @@ async fn collect_skeleton_accounts(
         SELECT a.account_id AS account_id,
                min(a.first_seen_ledger) AS first_seen_ledger
           FROM transaction_participants AS tp
-          JOIN accounts FINAL AS a ON a.id = tp.account_id
+          JOIN accounts AS a FINAL ON a.id = tp.account_id
          WHERE tp.ledger_sequence BETWEEN ? AND ?
            AND a.sequence_number = 0
          GROUP BY a.account_id
