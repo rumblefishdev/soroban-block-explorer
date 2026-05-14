@@ -5,8 +5,15 @@ import { formatRelative } from './formatRelative.js';
 import { useNow } from './useNow.js';
 
 interface PollingIndicatorProps {
-  lastUpdated: Date | string | number;
+  lastUpdated?: Date | string | number;
   intervalMs?: number;
+}
+
+function isReady(value: Date | string | number | undefined): boolean {
+  if (value == null) return false;
+  const ms =
+    value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isFinite(ms) && ms > 0;
 }
 
 export function PollingIndicator({
@@ -14,6 +21,7 @@ export function PollingIndicator({
   intervalMs = 5_000,
 }: PollingIndicatorProps) {
   const now = useNow(intervalMs);
+  const ready = isReady(lastUpdated);
   return (
     <Stack
       direction="row"
@@ -23,7 +31,9 @@ export function PollingIndicator({
     >
       <RefreshIcon sx={{ fontSize: 14 }} />
       <Typography variant="bodyXsRegular" component="span">
-        Updated {formatRelative(lastUpdated, now)}
+        {ready
+          ? `Updated ${formatRelative(lastUpdated!, now)}`
+          : 'Not updated yet'}
       </Typography>
     </Stack>
   );

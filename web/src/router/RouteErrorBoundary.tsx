@@ -11,11 +11,13 @@ import {
   NotFoundState,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from './routes.js';
+
 export function RouteErrorBoundary() {
   const error = useRouteError();
   const navigate = useNavigate();
 
-  const goHome = () => navigate('/');
+  const goHome = () => navigate(routes.home);
 
   if (isRouteErrorResponse(error) && error.status === 404) {
     return (

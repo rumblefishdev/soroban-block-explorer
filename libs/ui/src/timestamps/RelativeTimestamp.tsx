@@ -9,26 +9,31 @@ interface RelativeTimestampProps {
   variant?: TypographyProps['variant'];
 }
 
+const FALLBACK = '—';
+
+function toIso(value: Date | string | number): string | null {
+  const d = value instanceof Date ? value : new Date(value);
+  const ms = d.getTime();
+  return Number.isFinite(ms) && ms > 0 ? d.toISOString() : null;
+}
+
 export function RelativeTimestamp({
   timestamp,
   intervalMs = 30_000,
   variant = 'bodySmRegular',
 }: RelativeTimestampProps) {
   const now = useNow(intervalMs);
-  const iso =
-    timestamp instanceof Date
-      ? timestamp.toISOString()
-      : typeof timestamp === 'number'
-      ? new Date(timestamp).toISOString()
-      : timestamp;
+  const iso = toIso(timestamp);
+  const label = iso ? formatRelative(timestamp, now) : FALLBACK;
+
   return (
-    <Tooltip title={iso} arrow>
+    <Tooltip title={iso ?? FALLBACK} arrow disableHoverListener={!iso}>
       <Typography
         component="span"
         variant={variant}
-        sx={{ color: 'text.secondary', cursor: 'help' }}
+        sx={{ color: 'text.secondary' }}
       >
-        {formatRelative(timestamp, now)}
+        {label}
       </Typography>
     </Tooltip>
   );

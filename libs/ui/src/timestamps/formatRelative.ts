@@ -1,3 +1,5 @@
+const FALLBACK = '—';
+
 export function formatRelative(
   then: Date | string | number,
   now: Date
@@ -8,6 +10,9 @@ export function formatRelative(
       : typeof then === 'string'
       ? new Date(then).getTime()
       : then;
+
+  if (!Number.isFinite(thenMs) || thenMs <= 0) return FALLBACK;
+
   const deltaMs = now.getTime() - thenMs;
   const absMs = Math.abs(deltaMs);
   const future = deltaMs < 0;
