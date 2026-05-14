@@ -49,6 +49,13 @@ export interface IdentifierDisplayProps {
   'aria-label'?: string;
 }
 
+function formatForDisplay(type: EntityType, value: string): string {
+  if (type === 'ledger' && /^\d+$/.test(value)) {
+    return Number(value).toLocaleString('en-US');
+  }
+  return value;
+}
+
 export function IdentifierDisplay({
   value,
   type,
@@ -60,7 +67,8 @@ export function IdentifierDisplay({
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
   const cfg = truncation ?? getDefaultTruncation(type);
-  const displayText = truncate ? truncateMiddle(value, cfg) : value;
+  const formatted = formatForDisplay(type, value);
+  const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;
   const sx = useMemo(() => makeMonoSx(linked, !truncate), [linked, truncate]);
 
   return (
