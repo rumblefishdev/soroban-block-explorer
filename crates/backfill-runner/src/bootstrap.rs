@@ -245,7 +245,7 @@ async fn collect_skeleton_accounts(
         SELECT a.account_id AS account_id,
                min(a.first_seen_ledger) AS first_seen_ledger
           FROM transaction_participants AS tp
-          JOIN accounts FINAL AS a ON a.id = tp.account_id
+          JOIN accounts AS a FINAL ON a.id = tp.account_id
          WHERE tp.ledger_sequence BETWEEN ? AND ?
            AND a.sequence_number = 0
          GROUP BY a.account_id
@@ -305,10 +305,38 @@ async fn stage_account_snapshots(
     if snapshots.is_empty() {
         return Ok(0);
     }
-    // `end + 1` keeps us above every participant skeleton in this
-    // window while staying inside the contiguous ledger range. Cast
-    // through u64 so we never overflow `u32 + 1`.
-    let watermark: i64 = i64::try_from(u64::from(end) + 1).unwrap_or(i64::MAX);
+    // Stamp the snapshot rows with a `last_seen_ledger` that beats
+    // every existing version in the `accounts` hub, so the bootstrap
+    // row wins under `FINAL` (`ReplacingMergeTree(last_seen_ledger)`).
+    //
+    // Naive `end + 1` is insufficient when ingest committed rows past
+    // `end` — e.g. a partial-partition crash leaves
+    // `accounts.last_seen_ledger > end` for some rows because the
+    // parser also writes from `LedgerEntryChange::Account` events that
+    // can be present in tx state-meta beyond the last committed tx.
+    // (Empirically observed on a 9-partition pilot: `tx_max = 62551778`
+    // but `accounts max(last_seen_ledger) = 62552885` and
+    // `transaction_participants max = 62554128`.) In that case bootstrap
+    // stamps at `end + 1` and loses the RMT race → seq=0 skeletons
+    // persist despite a successful RPC fetch + insert.
+    //
+    // Fix: take `max(CLI end + 1, current max(last_seen_ledger) + 1)`.
+    // On a clean run `end` is already the highest watermark and the
+    // DB query returns `≤ end`, so the CLI value wins (no change in
+    // behaviour). On a partial-commit / crash-recovery run the DB max
+    // wins. The query is one scalar read, negligible cost.
+    let cli_watermark: i64 = i64::try_from(u64::from(end) + 1).unwrap_or(i64::MAX);
+    // `FINAL` is redundant here — `max(last_seen_ledger)` on a
+    // `ReplacingMergeTree(last_seen_ledger)` is invariant under RMT
+    // collapse (the version column IS the value being maxed), so the
+    // un-deduped scan returns the same scalar at a fraction of the
+    // read-amplification cost.
+    let db_max: i64 = client
+        .query("SELECT max(last_seen_ledger) FROM accounts")
+        .fetch_one::<i64>()
+        .await
+        .map_err(BackfillError::Ch)?;
+    let watermark: i64 = cli_watermark.max(db_max.saturating_add(1));
 
     // accounts insert
     let mut accounts_insert = client
