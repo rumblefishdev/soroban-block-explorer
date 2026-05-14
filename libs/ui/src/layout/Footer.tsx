@@ -32,7 +32,7 @@ function FooterLink({ label, href }: FooterNavItem) {
   return (
     <Box
       component={href ? 'a' : 'span'}
-      href={href}
+      {...(href ? { href } : {})}
       sx={(theme) => ({
         px: 1,
         py: 0.5,
@@ -143,7 +143,8 @@ export function Footer({ logo, navItems, network }: FooterProps) {
       <Box display="flex" alignItems="center" gap={4}>
         <Box flex={1} minWidth={0}>
           <Typography variant="bodySmMedium" color="text.tertiary" noWrap>
-            © 2026 Stellar Explorer. Built on the Stellar network.
+            © {new Date().getFullYear()} Stellar Explorer. Built on the Stellar
+            network.
           </Typography>
         </Box>
         {network && (

@@ -128,6 +128,8 @@ export function SearchInput({
             {value && (
               <Box
                 component="button"
+                type="button"
+                aria-label="Clear search"
                 onClick={() => {
                   onChange('');
                   onClear?.();

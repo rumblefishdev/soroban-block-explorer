@@ -1,4 +1,5 @@
 import Box from '@mui/material/Box';
+import type { Theme } from '@mui/material';
 import Typography from '@mui/material/Typography';
 
 export type NavButtonSize = 'md' | 'lg';
@@ -12,6 +13,23 @@ export interface NavButtonProps {
   onClick?: () => void;
 }
 
+const activeSx = {
+  borderBottom: (theme: Theme) => `2px solid ${theme.palette.stroke.action}`,
+  color: (theme: Theme) => theme.palette.text.primary,
+};
+
+const hoverSx = {
+  '&:hover': {
+    backgroundColor: (theme: Theme) => theme.palette.surface.background,
+    borderRadius: '8px',
+    color: (theme: Theme) => theme.palette.text.secondary,
+  },
+};
+
+const defaultSx = {
+  color: (theme: Theme) => theme.palette.text.tertiary,
+};
+
 export function NavButton({
   label,
   active = false,
@@ -24,27 +42,6 @@ export function NavButton({
   const px = 1; // 8px
   const py = isLg ? 1 : 0.5; // 8px / 4px
   const textVariant = isLg ? 'bodyMedium' : 'bodySmMedium';
-
-  const activeSx = {
-    borderBottom: (theme: import('@mui/material').Theme) =>
-      `2px solid ${theme.palette.stroke.action}`,
-    color: (theme: import('@mui/material').Theme) => theme.palette.text.primary,
-  };
-
-  const hoverSx = {
-    '&:hover': {
-      backgroundColor: (theme: import('@mui/material').Theme) =>
-        theme.palette.surface.background,
-      borderRadius: '8px',
-      color: (theme: import('@mui/material').Theme) =>
-        theme.palette.text.secondary,
-    },
-  };
-
-  const defaultSx = {
-    color: (theme: import('@mui/material').Theme) =>
-      theme.palette.text.tertiary,
-  };
 
   const handleClick =
     href && onClick

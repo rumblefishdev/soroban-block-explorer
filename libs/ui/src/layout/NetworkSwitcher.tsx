@@ -45,8 +45,11 @@ function NetworkTab({ label, active, variant, onClick }: NetworkTabProps) {
   return (
     <Box
       component={onClick ? 'button' : 'span'}
+      {...(onClick ? { type: 'button' as const } : {})}
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
-      sx={{
+      sx={(theme) => ({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 1,
@@ -58,7 +61,22 @@ function NetworkTab({ label, active, variant, onClick }: NetworkTabProps) {
         fontFamily: 'inherit',
         ...(active ? activeSx : inactiveSx),
         transition: 'background-color 0.15s, border-color 0.15s',
-      }}
+        ...(onClick && !active
+          ? {
+              '&:hover': {
+                backgroundColor: theme.palette.surface.background,
+              },
+            }
+          : {}),
+        ...(onClick
+          ? {
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 1,
+              },
+            }
+          : {}),
+      })}
     >
       <Typography variant="bodySmMedium" color="inherit" noWrap>
         {label}
@@ -73,6 +91,8 @@ export function NetworkSwitcher({
 }: NetworkSwitcherProps) {
   return (
     <Box
+      role="tablist"
+      aria-label="Network"
       sx={(theme) => ({
         display: 'inline-flex',
         alignItems: 'center',
