@@ -34,8 +34,8 @@ export function NavButton({
   const hoverSx = {
     '&:hover': {
       backgroundColor: (theme: import('@mui/material').Theme) =>
-        theme.palette.surface.grayLight,
-      borderRadius: 1,
+        theme.palette.surface.background,
+      borderRadius: '8px',
       color: (theme: import('@mui/material').Theme) =>
         theme.palette.text.secondary,
     },
@@ -46,11 +46,19 @@ export function NavButton({
       theme.palette.text.tertiary,
   };
 
+  const handleClick =
+    href && onClick
+      ? (e: React.MouseEvent) => {
+          e.preventDefault();
+          onClick();
+        }
+      : onClick;
+
   return (
     <Box
       component={href ? 'a' : 'button'}
       href={href}
-      onClick={onClick}
+      onClick={handleClick}
       sx={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -63,7 +71,7 @@ export function NavButton({
         textDecoration: 'none',
         fontFamily: 'inherit',
         ...(active ? activeSx : { ...defaultSx, ...hoverSx }),
-        transition: 'background-color 0.15s, color 0.15s',
+        transition: 'background-color 0.15s, border-radius 0.15s, color 0.15s',
       }}
     >
       <Box display="inline-flex" alignItems="center">
