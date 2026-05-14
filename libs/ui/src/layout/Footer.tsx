@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
+import type { Network } from './NetworkSwitcher.js';
+
 export interface FooterNavItem {
   label: string;
   href?: string;
@@ -10,6 +12,7 @@ export interface FooterNavItem {
 export interface FooterProps {
   logo: ReactNode;
   navItems: FooterNavItem[];
+  network?: Network;
 }
 
 const RESOURCES: FooterNavItem[] = [
@@ -45,7 +48,7 @@ function FooterLink({ label, href }: FooterNavItem) {
   );
 }
 
-export function Footer({ logo, navItems }: FooterProps) {
+export function Footer({ logo, navItems, network }: FooterProps) {
   return (
     <Box
       component="footer"
@@ -136,13 +139,50 @@ export function Footer({ logo, navItems }: FooterProps) {
         })}
       />
 
-      {/* Bottom: copyright + legal */}
+      {/* Bottom: copyright + legal + network badge */}
       <Box display="flex" alignItems="center" gap={4}>
         <Box flex={1} minWidth={0}>
           <Typography variant="bodySmMedium" color="text.tertiary" noWrap>
             © 2026 Stellar Explorer. Built on the Stellar network.
           </Typography>
         </Box>
+        {network && (
+          <Box
+            sx={(theme) => ({
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.5,
+              px: 1,
+              py: 0.25,
+              borderRadius: '8px',
+              backgroundColor:
+                network === 'mainnet'
+                  ? theme.palette.surface.success
+                  : theme.palette.surface.warning,
+              flexShrink: 0,
+            })}
+          >
+            <Box
+              sx={(theme) => ({
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                backgroundColor:
+                  network === 'mainnet'
+                    ? theme.palette.text.success
+                    : theme.palette.text.warning,
+                flexShrink: 0,
+              })}
+            />
+            <Typography
+              variant="bodyXsMedium"
+              color={network === 'mainnet' ? 'text.success' : 'text.warning'}
+              noWrap
+            >
+              {network === 'mainnet' ? 'Mainnet' : 'Testnet'}
+            </Typography>
+          </Box>
+        )}
         <Box display="flex" alignItems="center">
           {LEGAL.map((item) => (
             <FooterLink key={item.label} {...item} />
