@@ -1,0 +1,115 @@
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+
+export type NavButtonSize = 'md' | 'lg';
+
+export interface NavButtonProps {
+  label: string;
+  active?: boolean;
+  size?: NavButtonSize;
+  badge?: number;
+  href?: string;
+  onClick?: () => void;
+}
+
+export function NavButton({
+  label,
+  active = false,
+  size = 'md',
+  badge,
+  href,
+  onClick,
+}: NavButtonProps) {
+  const isLg = size === 'lg';
+  const px = 1; // 8px
+  const py = isLg ? 1 : 0.5; // 8px / 4px
+  const textVariant = isLg ? 'bodyMedium' : 'bodySmMedium';
+
+  const activeSx = {
+    borderBottom: (theme: import('@mui/material').Theme) =>
+      `2px solid ${theme.palette.stroke.action}`,
+    color: (theme: import('@mui/material').Theme) => theme.palette.text.primary,
+  };
+
+  const hoverSx = {
+    '&:hover': {
+      backgroundColor: (theme: import('@mui/material').Theme) =>
+        theme.palette.surface.grayLight,
+      borderRadius: 1,
+      color: (theme: import('@mui/material').Theme) =>
+        theme.palette.text.secondary,
+    },
+  };
+
+  const defaultSx = {
+    color: (theme: import('@mui/material').Theme) =>
+      theme.palette.text.tertiary,
+  };
+
+  return (
+    <Box
+      component={href ? 'a' : 'button'}
+      href={href}
+      onClick={onClick}
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 1,
+        px,
+        py,
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        textDecoration: 'none',
+        fontFamily: 'inherit',
+        ...(active ? activeSx : { ...defaultSx, ...hoverSx }),
+        transition: 'background-color 0.15s, color 0.15s',
+      }}
+    >
+      <Box display="inline-flex" alignItems="center">
+        <Typography variant={textVariant} color="inherit" noWrap>
+          {label}
+        </Typography>
+      </Box>
+
+      {badge !== undefined && (
+        <Box
+          sx={(theme) =>
+            active
+              ? {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: 20,
+                  minWidth: 20,
+                  px: 0.5,
+                  py: 0.25,
+                  borderRadius: 9999,
+                  backgroundColor: theme.palette.common.black,
+                }
+              : {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: 20,
+                  minWidth: 20,
+                  px: 0.5,
+                  py: 0.25,
+                  borderRadius: 9999,
+                  backgroundColor: theme.palette.surface.grayLight,
+                }
+          }
+        >
+          <Typography
+            variant="bodyXsMedium"
+            color={active ? 'text.accent' : 'text.tertiary'}
+            noWrap
+            textAlign="center"
+          >
+            {badge}
+          </Typography>
+        </Box>
+      )}
+    </Box>
+  );
+}

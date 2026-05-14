@@ -44,6 +44,27 @@ export {
 } from './timestamps/index.js';
 
 export {
+  NetworkSwitcher,
+  type Network,
+  type NetworkSwitcherProps,
+  NavButton,
+  type NavButtonProps,
+  type NavButtonSize,
+  SearchInput,
+  type SearchInputProps,
+  type SearchInputSize,
+  TopNav,
+  type TopNavProps,
+  type NetworkStats,
+  SecondaryNav,
+  type SecondaryNavProps,
+  type NavItem,
+  Footer,
+  type FooterProps,
+  type FooterNavItem,
+} from './layout/index.js';
+
+export {
   CopyButton,
   type CopyButtonProps,
   IdentifierDisplay,

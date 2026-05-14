@@ -2,7 +2,7 @@
 id: '0059'
 title: 'UI lib: layout shell, header, navigation, network indicator'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0058']
 tags: [priority-high, effort-medium, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-14
+    status: active
+    who: karolkow
+    note: 'Task activated'
 ---
 
 # UI lib: layout shell, header, navigation, network indicator
@@ -21,9 +25,9 @@ history:
 
 Implement the persistent layout shell for the explorer frontend in `libs/ui/src/layout/`. This includes the header (logo, global search bar slot, network indicator), primary navigation, environment banner, and the content area wrapper. The shell remains stable across route transitions -- only the content area updates on navigation.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** In progress.
 
 ## Context
 
@@ -67,17 +71,26 @@ Create `libs/ui/src/layout/NetworkIndicator.tsx`:
 - Renders mainnet/testnet badge using MUI theme palette from task 0058
 - Always visible in header
 
-### Step 5: Integration and exports
+### Step 5: Footer component
+
+Create `libs/ui/src/layout/Footer.tsx`:
+
+- Copyright line + project name
+- Links: docs, GitHub, network status
+- Network indicator echo (mainnet/testnet badge) for bottom-of-page confirmation
+
+### Step 6: Integration and exports
 
 Export all layout components from `libs/ui` barrel. Ensure the shell works with React Router `<Outlet>` for content area rendering.
 
 ## Acceptance Criteria
 
-- [ ] AppShell renders header, navigation, and content area using semantic HTML (`<header>`, `<nav>`, `<main>`)
+- [ ] AppShell renders header, navigation, footer, and content area using semantic HTML (`<header>`, `<nav>`, `<main>`, `<footer>`)
 - [ ] Header displays logo, search bar slot, and network indicator
 - [ ] Navigation contains links to all seven top-level routes with active state
 - [ ] Network indicator shows mainnet or testnet and is always visible
 - [ ] Environment banner renders for non-production environments
+- [ ] Footer renders copyright, links, and network badge
 - [ ] Route transitions update only the content area; shell does not unmount/remount
 - [ ] Navigation is keyboard-accessible with proper tab order
 - [ ] Components use MUI theme from task 0058
