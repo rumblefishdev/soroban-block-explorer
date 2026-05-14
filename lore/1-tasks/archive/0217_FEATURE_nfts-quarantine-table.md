@@ -2,7 +2,7 @@
 id: '0217'
 title: 'PG+CH: nfts_pending quarantine table for unclassified NFT candidates (defer-then-promote)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0027', '0044', '0046']
 related_tasks: ['0118']
 tags:
@@ -90,6 +90,18 @@ history:
       `cargo check --workspace` clean.
       `cargo clippy -p indexer --all-targets -- -D warnings` clean.
       Integration tests pending DB-bound CI verification.
+  - date: '2026-05-14'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed after empirical verification. Quarantine routing
+      validated on 64k + 512k CH pilots — hot `nfts` table = 0 rows
+      (post-0118 revert), `nfts_pending` correctly populated with
+      `Other`/NULL-classified contracts. CH writer parity for the
+      pending tables shipped in PR #186 (task 0220) and the SAC leak
+      into `nfts_pending` is structurally captured (task 0221) with a
+      committed drain runbook empirically validated at -25.7% row
+      reduction.
 ---
 
 # PG+CH: nfts_pending quarantine table for unclassified NFT candidates

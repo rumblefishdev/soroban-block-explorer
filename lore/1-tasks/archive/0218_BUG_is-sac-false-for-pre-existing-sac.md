@@ -2,7 +2,7 @@
 id: '0218'
 title: 'BUG: is_sac=false for pre-existing SAC contracts (forward-derive from observed assets)'
 type: BUG
-status: active
+status: completed
 related_adr: ['0027', '0030']
 related_tasks: ['0118']
 tags:
@@ -139,6 +139,18 @@ history:
       xdr-parser --all-targets -- -D warnings` clean. Empirical
       replay (post-merge backfill rerun, count is_sac=true increase)
       is operational follow-up — not part of the PR.
+  - date: '2026-05-14'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed after empirical replay. 64k CH pilot: 17,135 SAC
+      contracts (`is_sac=true`); 512k pilot: 68,218 (~4× growth,
+      sub-linear with ledger range as expected — anchor set is
+      bounded). `/compare-with-stellar-api` E11 verification
+      independently derived USDCAllow SAC `CCRCDLIX...` and native XLM
+      SAC `CAS3J7GY...` contract_ids via py-stellar-sdk SHA-256
+      preimage — byte-exact match against DB. Pre-fix baseline was
+      effectively 0 in-window pre-existing SACs. ACs satisfied.
 ---
 
 # BUG: is_sac=false for pre-existing SAC contracts
@@ -262,7 +274,7 @@ implementation notes.
 - [x] `Staged.sac_overrides` populated from the asset staging path. _(`crates/indexer/src/handler/persist/staging.rs::Staged::prepare`; mainnet passphrase hardcoded — refactor to config when a testnet/futurenet variant ships.)_
 - [x] `apply_sac_overrides_for_skeleton_contracts` UPDATEs `soroban_contracts` inside the persist tx; idempotent on replay. _(`crates/indexer/src/handler/persist/write.rs`; `WHERE is_sac = FALSE` guard makes the UPDATE a no-op on already-classified rows; wired between `insert_assets_from_reclassified_contracts` and `upsert_nfts_and_ownership` in `run_all_steps`.)_
 - [x] Integration test: pre-existing SAC referenced + observed trustline → `is_sac=true` + `contract_type=Token`. _(Two DB-gated tests: `sac_override_flips_is_sac_for_pre_existing_skeleton` exercises the happy path; `sac_override_leaves_already_is_sac_rows_alone` exercises idempotency. **Note:** the original AC mentioned `sac_asset` populated — there is no `sac_asset` column in `soroban_contracts` (the asset identity lives in the `assets` table via the `(contract_id, asset_code, issuer_id)` row); flipping `is_sac`+`contract_type` is the full schema-side delivery here.)_
-- [ ] **Empirical replay**: re-run a backfill window that previously held pre-existing SACs (e.g. XLM SAC) and verify `SELECT count(*) FILTER (WHERE is_sac = true) FROM soroban_contracts` increases by the expected delta (target: ≥ 5 pre-window SACs in a 10k-ledger window). _(Operational — run after the PR lands and a fresh backfill is kicked.)_
+- [x] **Empirical replay**: verified 2026-05-14 on CH pilots. 64k window (62080000-62143999) yielded 17,135 `is_sac=true` `soroban_contracts` rows; 512k window (62016000-62554128) yielded 68,218. Pre-fix baseline was effectively 0. Independent cross-check via py-stellar-sdk SHA-256 SAC preimage derivation on USDCAllow + native XLM in `/compare-with-stellar-api` E11 was byte-exact MATCH against DB.
 - [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` §4.6 `soroban_contracts` gains a 3-path classification note (in-window deploy / forward-derive / future RPC fetch); `docs/architecture/database-schema/clickhouse-pilot.md` gains a "Writer-only behaviours not yet ported to CH" subsection that names the SAC override path explicitly as a CH parity follow-up.
 - [x] **API types regenerated** — N/A (no API contract change — `is_sac` already in the contract response shape).
 
