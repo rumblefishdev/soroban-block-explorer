@@ -5,6 +5,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardReturnIcon from '@mui/icons-material/KeyboardReturn';
 
+import { monoFontFamily } from '../theme/typography.js';
+
 export type SearchInputSize = 'md' | 'lg';
 
 export interface SearchInputProps {
@@ -105,6 +107,7 @@ export function SearchInput({
               onBlur={() => setFocused(false)}
               onKeyDown={handleKeyDown}
               autoFocus
+              aria-label={placeholder}
               sx={(theme) => ({
                 flex: 1,
                 border: 'none',
@@ -231,7 +234,7 @@ export function SearchInput({
               variant="bodyXsMedium"
               color="text.tertiary"
               noWrap
-              sx={{ fontFamily: 'JetBrains Mono, monospace' }}
+              sx={{ fontFamily: monoFontFamily }}
             >
               CTRL + F
             </Typography>

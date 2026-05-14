@@ -18,6 +18,10 @@ const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
   href: link.to,
 }));
 
+function isModifiedClick(e: React.MouseEvent): boolean {
+  return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
+}
+
 const MOCK_STATS = {
   tps: 0,
   ledger: 0,
@@ -25,21 +29,29 @@ const MOCK_STATS = {
   contracts: 0,
 };
 
-const LogoSm = () => (
-  <img
-    src="/rumblefish-logo.svg"
-    alt="Rumblefish"
-    style={{ height: 32, display: 'block' }}
-  />
-);
-
-const LogoLg = () => (
-  <img
-    src="/rumblefish-logo.svg"
-    alt="Rumblefish"
-    style={{ height: 47, display: 'block' }}
-  />
-);
+function HomeLogo({
+  height,
+  onClick,
+}: {
+  height: number;
+  onClick: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  return (
+    <Box
+      component="a"
+      href={routes.home}
+      aria-label="Stellar Explorer — home"
+      onClick={onClick}
+      sx={{ display: 'inline-flex', lineHeight: 0 }}
+    >
+      <img
+        src="/rumblefish-logo.svg"
+        alt="Rumblefish"
+        style={{ height, display: 'block' }}
+      />
+    </Box>
+  );
+}
 
 function TestnetBanner() {
   return (
@@ -85,6 +97,29 @@ export function AppShell() {
     if (item.href) void navigate(item.href);
   };
 
+  const handleHomeClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (isModifiedClick(e)) return;
+    e.preventDefault();
+    void navigate(routes.home);
+  };
+
+  const handleFooterNavClick = (
+    href: string,
+    e: React.MouseEvent<HTMLAnchorElement>
+  ) => {
+    if (isModifiedClick(e)) return;
+    e.preventDefault();
+    void navigate(href);
+  };
+
+  const FOOTER_NAV_ITEMS = NAV_ITEMS.map((item) => ({
+    ...item,
+    onClick: item.href
+      ? (e: React.MouseEvent<HTMLAnchorElement>) =>
+          handleFooterNavClick(item.href!, e)
+      : undefined,
+  }));
+
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {network === 'testnet' && <TestnetBanner />}
@@ -98,15 +133,19 @@ export function AppShell() {
         onSearchClear={() => setSearchValue('')}
       />
       <SecondaryNav
-        logo={<LogoSm />}
+        logo={<HomeLogo height={32} onClick={handleHomeClick} />}
         navItems={NAV_ITEMS}
         activePage={activePage}
         onNavClick={handleNavClick}
       />
-      <Box component="main" sx={{ flex: 1 }}>
+      <Box component="main" sx={{ flex: 1, px: 10, py: 4 }}>
         <Outlet />
       </Box>
-      <Footer logo={<LogoLg />} navItems={NAV_ITEMS} network={network} />
+      <Footer
+        logo={<HomeLogo height={47} onClick={handleHomeClick} />}
+        navItems={FOOTER_NAV_ITEMS}
+        network={network}
+      />
     </Box>
   );
 }

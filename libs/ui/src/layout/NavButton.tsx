@@ -56,6 +56,7 @@ export function NavButton({
   const handleClick =
     href && onClick
       ? (e: React.MouseEvent) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
           e.preventDefault();
           onClick();
         }
@@ -64,7 +65,7 @@ export function NavButton({
   return (
     <Box
       component={href ? 'a' : 'button'}
-      href={href}
+      {...(href ? { href } : { type: 'button' as const })}
       onClick={handleClick}
       sx={{
         display: 'inline-flex',

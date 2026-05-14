@@ -46,8 +46,8 @@ function NetworkTab({ label, active, variant, onClick }: NetworkTabProps) {
     <Box
       component={onClick ? 'button' : 'span'}
       {...(onClick ? { type: 'button' as const } : {})}
-      role="tab"
-      aria-selected={active}
+      aria-pressed={onClick ? active : undefined}
+      aria-label={`Switch to ${label}`}
       onClick={onClick}
       sx={(theme) => ({
         display: 'inline-flex',
@@ -91,8 +91,8 @@ export function NetworkSwitcher({
 }: NetworkSwitcherProps) {
   return (
     <Box
-      role="tablist"
-      aria-label="Network"
+      role="group"
+      aria-label="Network selector"
       sx={(theme) => ({
         display: 'inline-flex',
         alignItems: 'center',

@@ -7,6 +7,7 @@ import type { Network } from './NetworkSwitcher.js';
 export interface FooterNavItem {
   label: string;
   href?: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 }
 
 export interface FooterProps {
@@ -16,7 +17,7 @@ export interface FooterProps {
 }
 
 const RESOURCES: FooterNavItem[] = [
-  { label: 'Github' },
+  { label: 'GitHub' },
   { label: 'Stellar docs' },
   { label: 'Soroban docs' },
   { label: 'Stellar dashboard' },
@@ -28,11 +29,12 @@ const LEGAL: FooterNavItem[] = [
   { label: 'Cookies' },
 ];
 
-function FooterLink({ label, href }: FooterNavItem) {
+function FooterLink({ label, href, onClick }: FooterNavItem) {
   return (
     <Box
       component={href ? 'a' : 'span'}
       {...(href ? { href } : {})}
+      {...(onClick ? { onClick } : {})}
       sx={(theme) => ({
         px: 1,
         py: 0.5,
@@ -147,6 +149,11 @@ export function Footer({ logo, navItems, network }: FooterProps) {
             network.
           </Typography>
         </Box>
+        <Box display="flex" alignItems="center">
+          {LEGAL.map((item) => (
+            <FooterLink key={item.label} {...item} />
+          ))}
+        </Box>
         {network && (
           <Box
             sx={(theme) => ({
@@ -184,11 +191,6 @@ export function Footer({ logo, navItems, network }: FooterProps) {
             </Typography>
           </Box>
         )}
-        <Box display="flex" alignItems="center">
-          {LEGAL.map((item) => (
-            <FooterLink key={item.label} {...item} />
-          ))}
-        </Box>
       </Box>
     </Box>
   );
