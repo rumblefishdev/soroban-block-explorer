@@ -41,3 +41,19 @@ export {
   formatRelative,
   useNow,
 } from './timestamps/index.js';
+
+export {
+  ExplorerTable,
+  PaginationControls,
+  TableSectionHeader,
+  TableEmptyState,
+} from './table/index.js';
+export type {
+  ExplorerTableColumn,
+  ExplorerTableProps,
+  SortDirection,
+  PaginationControlsProps,
+  TableSectionHeaderProps,
+  TableEmptyStateProps,
+  TableEmptyKind,
+} from './table/index.js';
