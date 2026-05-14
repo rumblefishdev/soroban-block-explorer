@@ -2,7 +2,7 @@
 id: '0061'
 title: 'UI lib: explorer table, pagination controls, cursor pagination adapter'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-medium, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-14
+    status: active
+    who: karolkow
+    note: 'Promoted to active — parallel frontend lib work on separate worktree'
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
