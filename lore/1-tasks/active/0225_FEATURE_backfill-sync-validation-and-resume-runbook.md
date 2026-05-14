@@ -11,7 +11,7 @@ tags:
     'backfill-runner',
     'reliability',
     'phase-pre-backfill',
-    'effort-small',
+    'effort-medium',
     'priority-high',
   ]
 links:

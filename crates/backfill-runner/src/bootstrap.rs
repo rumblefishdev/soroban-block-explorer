@@ -326,8 +326,13 @@ async fn stage_account_snapshots(
     // behaviour). On a partial-commit / crash-recovery run the DB max
     // wins. The query is one scalar read, negligible cost.
     let cli_watermark: i64 = i64::try_from(u64::from(end) + 1).unwrap_or(i64::MAX);
+    // `FINAL` is redundant here — `max(last_seen_ledger)` on a
+    // `ReplacingMergeTree(last_seen_ledger)` is invariant under RMT
+    // collapse (the version column IS the value being maxed), so the
+    // un-deduped scan returns the same scalar at a fraction of the
+    // read-amplification cost.
     let db_max: i64 = client
-        .query("SELECT max(last_seen_ledger) FROM accounts FINAL")
+        .query("SELECT max(last_seen_ledger) FROM accounts")
         .fetch_one::<i64>()
         .await
         .map_err(BackfillError::Ch)?;

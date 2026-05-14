@@ -132,9 +132,11 @@ enum Command {
         #[arg(long)]
         start: u32,
 
-        /// Last ledger sequence (inclusive). The snapshot stamp is
-        /// `end + 1` to win under RMT(last_seen_ledger) — matches the
-        /// per-window `Run` behaviour.
+        /// Last ledger sequence (inclusive). Snapshot stamp is
+        /// `max(end + 1, current SELECT max(last_seen_ledger) FROM
+        /// accounts + 1)` to win the RMT(last_seen_ledger) race even
+        /// after partial-commit crash recovery (where parser writes
+        /// can land beyond the last committed tx ledger).
         #[arg(long)]
         end: u32,
     },

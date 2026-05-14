@@ -157,9 +157,21 @@ Math checks: 1,288,888 - 331,273 = 957,615 ✓ exact.
   future regression seeds the hot bucket with SACs, copy this runbook
   and swap `nfts_pending` → `nfts`.
 - **`nft_ownership_pending`** — same 0220 routing path emits ownership
-  events through `route_for`. If `nft_ownership_pending` carries the
-  same leak (verify with a count query), repeat Steps 1-5 with
-  `nfts_pending` → `nft_ownership_pending`.
+  events through `route_for`. Verify whether it carries the same leak
+  with:
+
+  ```sql
+  SELECT
+      count() AS pending_total,
+      countIf(sc.is_sac = true OR sc.contract_type IN (0, 3))
+          AS leaked_drop_candidates
+  FROM nft_ownership_pending nop FINAL
+  LEFT JOIN soroban_contracts sc FINAL ON sc.id = nop.contract_id;
+  ```
+
+  If `leaked_drop_candidates > 0`, repeat Steps 1–5 with
+  `nfts_pending` → `nft_ownership_pending` in the DDL.
+
 - **Postgres side** — PG has DB-lookup via `ClassificationCache` in
   `resolve_nft_filter` (`crates/indexer/src/handler/persist/write.rs:1436-1500`)
   so this leak is structurally absent on PG. No drain needed there.
