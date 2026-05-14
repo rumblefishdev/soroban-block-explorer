@@ -2,6 +2,7 @@ import type { TypographyVariantsOptions } from '@mui/material/styles';
 
 const headingFontFamily = '"Mona Sans", system-ui, sans-serif';
 const bodyFontFamily = '"Inter", system-ui, sans-serif';
+const monoFontFamily = '"JetBrains Mono", ui-monospace, monospace';
 
 type Weight = 400 | 500 | 600 | 700;
 
@@ -36,6 +37,16 @@ function makeBody(size: number, weight: Weight, lineHeight: number) {
     fontWeight: weight,
     lineHeight,
     letterSpacing: '-0.02em',
+  };
+}
+
+function makeMono(size: number, weight: Weight, lineHeight: number) {
+  return {
+    fontFamily: monoFontFamily,
+    fontSize: size,
+    fontWeight: weight,
+    lineHeight,
+    letterSpacing: 0,
   };
 }
 
@@ -79,7 +90,6 @@ export const typography: TypographyVariantsOptions = {
   }),
 
   heading5Bold: makeHeading({ desktopSize: 24, mobileSize: 18, weight: 700 }),
-  // Figma value: hardcoded 24px regardless of viewport (mirrors source).
   heading5SemiBold: makeHeading({ desktopSize: 24, weight: 600 }),
   heading5Medium: makeHeading({ desktopSize: 24, mobileSize: 18, weight: 500 }),
   heading5Regular: makeHeading({
@@ -94,7 +104,6 @@ export const typography: TypographyVariantsOptions = {
     mobileSize: 16,
     weight: 600,
   }),
-  // Figma value: lineHeight 1.22 (outlier vs other h6 weights' 1.2).
   heading6Medium: makeHeading({
     desktopSize: 20,
     mobileSize: 16,
@@ -126,4 +135,15 @@ export const typography: TypographyVariantsOptions = {
   bodyXsBold: makeBody(12, 700, 1.4),
   bodyXsMedium: makeBody(12, 500, 1.4),
   bodyXsRegular: makeBody(12, 400, 1.4),
+
+  bodyMonoLgBold: makeMono(20, 700, 1.5),
+  bodyMonoLgRegular: makeMono(20, 400, 1.5),
+  bodyMonoMdBold: makeMono(18, 700, 1.5),
+  bodyMonoMdRegular: makeMono(18, 400, 1.5),
+  bodyMonoBold: makeMono(16, 700, 1.5),
+  bodyMonoRegular: makeMono(16, 400, 1.5),
+  bodyMonoSmBold: makeMono(14, 700, 1.4),
+  bodyMonoSmRegular: makeMono(14, 400, 1.4),
+  bodyMonoXsBold: makeMono(12, 700, 1.4),
+  bodyMonoXsRegular: makeMono(12, 400, 1.4),
 };

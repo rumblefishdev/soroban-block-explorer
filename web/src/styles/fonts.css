@@ -1,7 +1,8 @@
 /* Mona Sans — headings. Variable font, covers weights 100-900. */
 @font-face {
   font-family: 'Mona Sans';
-  src: url('/fonts/MonaSans-Variable.ttf') format('truetype');
+  src: url('/fonts/MonaSans-Variable.ttf') format('truetype-variations'),
+    url('/fonts/MonaSans-Variable.ttf') format('truetype');
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
@@ -10,8 +11,20 @@
 /* Inter — body. Variable font, covers weights 100-900. */
 @font-face {
   font-family: 'Inter';
-  src: url('/fonts/Inter-Variable.ttf') format('truetype');
+  src: url('/fonts/Inter-Variable.ttf') format('truetype-variations'),
+    url('/fonts/Inter-Variable.ttf') format('truetype');
   font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* JetBrains Mono — monospace identifiers (hashes, addresses, contract IDs,
+   XDR). Variable font, covers weights 100-800. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype-variations'),
+    url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+  font-weight: 100 800;
   font-style: normal;
   font-display: swap;
 }

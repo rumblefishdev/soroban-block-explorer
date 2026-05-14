@@ -79,6 +79,19 @@ interface ExplorerBodyVariants {
   bodyXsRegular: CSSProperties;
 }
 
+interface ExplorerMonoVariants {
+  bodyMonoLgBold: CSSProperties;
+  bodyMonoLgRegular: CSSProperties;
+  bodyMonoMdBold: CSSProperties;
+  bodyMonoMdRegular: CSSProperties;
+  bodyMonoBold: CSSProperties;
+  bodyMonoRegular: CSSProperties;
+  bodyMonoSmBold: CSSProperties;
+  bodyMonoSmRegular: CSSProperties;
+  bodyMonoXsBold: CSSProperties;
+  bodyMonoXsRegular: CSSProperties;
+}
+
 declare module '@mui/material/styles' {
   interface TypeText {
     tertiary: string;
@@ -101,11 +114,13 @@ declare module '@mui/material/styles' {
 
   interface TypographyVariants
     extends ExplorerHeadingVariants,
-      ExplorerBodyVariants {}
+      ExplorerBodyVariants,
+      ExplorerMonoVariants {}
 
   interface TypographyVariantsOptions
     extends Partial<ExplorerHeadingVariants>,
-      Partial<ExplorerBodyVariants> {}
+      Partial<ExplorerBodyVariants>,
+      Partial<ExplorerMonoVariants> {}
 
   interface Shape {
     radius: typeof radius;
@@ -113,6 +128,48 @@ declare module '@mui/material/styles' {
 
   interface ShapeOptions {
     radius?: typeof radius;
+  }
+}
+
+declare module '@mui/material/Switch' {
+  interface SwitchPropsSizeOverrides {
+    lg: true;
+    md: true;
+    sm: true;
+  }
+}
+
+declare module '@mui/material/Checkbox' {
+  interface CheckboxPropsSizeOverrides {
+    lg: true;
+    md: true;
+    sm: true;
+  }
+}
+
+declare module '@mui/material/Radio' {
+  interface RadioPropsSizeOverrides {
+    lg: true;
+    md: true;
+    sm: true;
+  }
+}
+
+declare module '@mui/material/Chip' {
+  interface ChipPropsColorOverrides {
+    blue: true;
+    violet: true;
+    emerald: true;
+    neutral: true;
+    subtle: true;
+    brown: true;
+    accent: true;
+  }
+
+  interface ChipPropsSizeOverrides {
+    lg: true;
+    md: true;
+    sm: true;
   }
 }
 
@@ -157,5 +214,15 @@ declare module '@mui/material/Typography' {
     bodyXsBold: true;
     bodyXsMedium: true;
     bodyXsRegular: true;
+    bodyMonoLgBold: true;
+    bodyMonoLgRegular: true;
+    bodyMonoMdBold: true;
+    bodyMonoMdRegular: true;
+    bodyMonoBold: true;
+    bodyMonoRegular: true;
+    bodyMonoSmBold: true;
+    bodyMonoSmRegular: true;
+    bodyMonoXsBold: true;
+    bodyMonoXsRegular: true;
   }
 }

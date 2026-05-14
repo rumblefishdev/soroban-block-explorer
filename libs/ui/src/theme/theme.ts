@@ -4,6 +4,7 @@ import {
   type Theme,
 } from '@mui/material/styles';
 
+import { overrides } from './overrides.js';
 import { createPalette } from './palette.js';
 import { radius } from './radius.js';
 import { muiShadows } from './shadows.js';
@@ -18,5 +19,6 @@ export function createExplorerTheme(mode: PaletteMode): Theme {
       radius,
     },
     shadows: muiShadows,
+    components: overrides,
   });
 }

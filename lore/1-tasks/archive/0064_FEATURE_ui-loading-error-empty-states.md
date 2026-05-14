@@ -2,7 +2,7 @@
 id: '0064'
 title: 'UI lib: loading skeletons, error states, empty states'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-14
+    status: completed
+    who: FilipDz
+    note: 'Implemented on feat/0058_ui-mui-theme alongside 0058. All 9 ACs satisfied.'
 ---
 
 # UI lib: loading skeletons, error states, empty states
@@ -87,15 +91,15 @@ Export all state components from `libs/ui` barrel.
 
 ## Acceptance Criteria
 
-- [ ] Skeleton loaders exist for tables, cards, and detail sections
-- [ ] Search uses spinner, not skeleton
-- [ ] 404 states show entity-type-specific messages ("Transaction not found", "Account not found", etc.)
-- [ ] Transient failure state distinguishes retryable from invalid ID and shows retry button
-- [ ] Rate limit state shows "Too many requests. Please try again shortly."
-- [ ] SectionErrorBoundary isolates failures: failed section does NOT collapse sibling sections
-- [ ] Empty states show contextual suggestions per entity type
-- [ ] Error classification utility correctly categorizes 404, 429, 5xx, and network errors
-- [ ] All components exported from `libs/ui`
+- [x] Skeleton loaders exist for tables, cards, and detail sections — `TableSkeleton`, `CardSkeleton`, `DetailSkeleton` in `libs/ui/src/states/skeletons/`. All take `rows`/`columns`/`lines`/`sections` props so page tasks can tune dimensions to match real layouts when those components land.
+- [x] Search uses spinner, not skeleton — `SearchSpinner` wraps `MuiCircularProgress` with a min-height container to prevent layout shift.
+- [x] 404 states show entity-type-specific messages — `NotFoundState` with `entity` prop covering transaction / account / contract / ledger / operation / asset / liquidity-pool / generic.
+- [x] Transient failure state distinguishes retryable from invalid ID — `TransientErrorState` with `retryable` boolean. Retry button shown only when retryable + `onRetry` provided. Title swaps to "Invalid input" when non-retryable.
+- [x] Rate limit state shows the exact spec copy — `RateLimitState` hard-codes "Too many requests. Please try again shortly." Optional `retryAfterSeconds` triggers an auto-retry countdown.
+- [x] SectionErrorBoundary isolates failures — class component catching render errors, rendering `GenericErrorState` inline with a reset button. Verified during branch work with a throwing-child demo: siblings rendered untouched while the wrapped section flipped to the error state.
+- [x] Empty states show contextual suggestions per entity type — `EmptyState` is generic with `icon`/`title`/`description`/`action`/`meta`/`variant` props. Per-entity copy passed at page call sites (spec's "OR messages passed via props" branch).
+- [x] Error classification utility — `classifyError(err)` returns `'not-found' | 'rate-limit' | 'transient' | 'validation' | 'unknown'`. Covers 404, 429, 5xx, 400/422, and `TypeError` (network).
+- [x] All components exported from `libs/ui` — re-exported via `libs/ui/src/states/index.ts` then the top-level barrel.
 
 ## Notes
 
