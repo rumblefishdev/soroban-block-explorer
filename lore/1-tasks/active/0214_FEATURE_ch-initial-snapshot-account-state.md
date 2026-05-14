@@ -183,7 +183,7 @@ Trustlines populate `account_balances_current` rows. **Once Phase 1 lands, E08/E
       `accounts FINAL WHERE sequence_number = 0`, fetches via
       Soroban RPC `getLedgerEntries`, and stages into `accounts` +
       `account_balances_current` with `last_seen_ledger =
-    window_start` as the snapshot watermark.)_
+window_start` as the snapshot watermark.)_
 - [ ] Empirical test: re-run 64k-ledger backfill, then `SELECT countIf(sequence_number > 0) FROM accounts FINAL` is > 50% of total rows (instead of ~0% today). (ClickHouse: use `countIf` — `count() FILTER (WHERE ...)` is Postgres-only.)
       _(Open — operational follow-up. Needs a live Soroban RPC
       endpoint + a CH instance with backfill data. The implementation
