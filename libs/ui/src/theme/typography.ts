@@ -41,6 +41,16 @@ function makeBody(size: number, weight: Weight, lineHeight: number) {
   };
 }
 
+function makeMono(size: number, weight: Weight, lineHeight: number) {
+  return {
+    fontFamily: monoFontFamily,
+    fontSize: size,
+    fontWeight: weight,
+    lineHeight,
+    letterSpacing: 0,
+  };
+}
+
 export const typography: TypographyVariantsOptions = {
   fontFamily: bodyFontFamily,
 
@@ -128,4 +138,15 @@ export const typography: TypographyVariantsOptions = {
   bodyXsBold: makeBody(12, 700, 1.4),
   bodyXsMedium: makeBody(12, 500, 1.4),
   bodyXsRegular: makeBody(12, 400, 1.4),
+
+  bodyMonoLgBold: makeMono(20, 700, 1.5),
+  bodyMonoLgRegular: makeMono(20, 400, 1.5),
+  bodyMonoMdBold: makeMono(18, 700, 1.5),
+  bodyMonoMdRegular: makeMono(18, 400, 1.5),
+  bodyMonoBold: makeMono(16, 700, 1.5),
+  bodyMonoRegular: makeMono(16, 400, 1.5),
+  bodyMonoSmBold: makeMono(14, 700, 1.4),
+  bodyMonoSmRegular: makeMono(14, 400, 1.4),
+  bodyMonoXsBold: makeMono(12, 700, 1.4),
+  bodyMonoXsRegular: makeMono(12, 400, 1.4),
 };

@@ -1,4 +1,4 @@
-const scales = {
+export const scales = {
   base: {
     white: '#ffffff',
     black: '#000000',
@@ -72,6 +72,12 @@ const scales = {
     900: '#7b3306',
     950: '#461901',
   },
+
+  blue: { 100: '#dbeafe', 600: '#155dfc', 900: '#1c398e' },
+  violet: { 100: '#ede9fe', 600: '#7f22fe', 900: '#4d179a' },
+  emerald: { 100: '#d0fae5', 600: '#009966', 900: '#004f3b' },
+
+  primary: { 100: '#fffcc2', 900: '#724311' },
 } as const;
 
 export const colorsLight = {

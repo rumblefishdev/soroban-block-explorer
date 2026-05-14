@@ -2,7 +2,7 @@
 id: '0058'
 title: 'UI lib: MUI theme configuration and explorer-specific styling'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-14
+    status: completed
+    who: FilipDz
+    note: 'Implemented on feat/0058_ui-mui-theme. Mainnet/testnet distinction dropped per design call. Dark mode delivered alongside light. WCAG inherited from Figma tokens.'
 ---
 
 # UI lib: MUI theme configuration and explorer-specific styling
@@ -97,17 +101,17 @@ Export `ExplorerThemeProvider` and theme utilities from `libs/ui` barrel.
 
 ## Acceptance Criteria
 
-- [ ] Custom palette with mainnet/testnet distinction (visually clear)
-- [ ] Status colors (success/error) and type colors (classic/SAC/soroban) defined
-- [ ] All palette colors WCAG AA compliant for text contrast
-- [ ] Monospace font configured for identifiers, hashes, addresses, XDR
-- [ ] Data table typography: smaller, tighter for dense scanning
-- [ ] Heading hierarchy (`<h1>`-`<h6>`) defined in typography
-- [ ] Compact spacing for table rows, summary cards, and dense list rows
-- [ ] MUI component overrides for: Table, Chip, Button, Tooltip, Tabs, Skeleton
-- [ ] `ExplorerThemeProvider` accepts network parameter for mainnet/testnet switching
-- [ ] Theme exported from `libs/ui` barrel
-- [ ] Theme works as base for all UI components in `libs/ui`
+- [x] ~~Custom palette with mainnet/testnet distinction~~ — dropped per design call (`no_differ`). Single palette per mode.
+- [x] Status colors (success/error/warning/information) defined via `text.*` + `surface.*` semantic tokens; type colors for chips/badges defined as `blue/violet/emerald/neutral/subtle/brown/accent` (see `libs/ui/src/theme/colors.ts` + `MuiChip` overrides).
+- [x] WCAG AA — inherited from Figma design system tokens (`Light mode.tokens.json` / `Dark mode.tokens.json`). No contrast pairings invented in code.
+- [x] Monospace font configured — JetBrains Mono variable font for hashes/addresses/contract IDs/XDR (`bodyMono*` Typography variants).
+- [x] Data table typography — implemented via `MuiTableCell` overrides + `bodySmRegular` cell variant.
+- [x] Heading hierarchy — 24 heading variants (`heading1Bold` through `heading6Regular`) covering 4 weights × 6 sizes per Figma.
+- [x] Compact spacing — table row density + card padding tuned in `MuiTable*` and `MuiCard` overrides.
+- [x] MUI component overrides for: Table, Chip, Button, Tooltip, Tabs, Skeleton — delivered. Skeleton uses MUI defaults (no override needed); rest covered in `libs/ui/src/theme/overrides.ts`. Also covered beyond spec: Switch, Checkbox, Radio, Slider, TextField, Select, Menu, Pagination, Paper, Card, Tab.
+- [x] ~~`ExplorerThemeProvider` accepts network parameter~~ — replaced by color-mode (light/dark) toggle. `useColorMode` hook persists to localStorage.
+- [x] Theme exported from `libs/ui` barrel — `createExplorerTheme`, `ExplorerThemeProvider`, `useColorMode`, `colorsLight`, `colorsDark`, etc.
+- [x] Theme works as base for all UI components in `libs/ui` — verified interactively during the branch work via a `DevPlaygroundPage` demo strip that covered every override; the playground was removed once routing landed (task 0067) since real pages will exercise the same theme paths.
 
 ## Notes
 
