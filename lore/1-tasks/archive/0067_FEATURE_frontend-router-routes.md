@@ -2,7 +2,7 @@
 id: '0067'
 title: 'Frontend: router setup, route definitions, param validation'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-pages]
@@ -13,6 +13,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-13
+    status: active
+    who: FilipDz
+    note: 'Promoted on feat/ui-foundation — bundled with 0058/0063/0064.'
+  - date: 2026-05-14
+    status: completed
+    who: FilipDz
+    note: 'Router shipped with the 14 spec routes, plus AppShellStub placeholder until Karol delivers 0059.'
 ---
 
 # Frontend: router setup, route definitions, param validation
@@ -94,14 +102,14 @@ Wire router into `apps/web/src/main.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] All 14 routes defined and mapping to correct page components
-- [ ] All page components lazy-loaded with React.lazy + Suspense
-- [ ] Suspense fallback renders within the layout shell (no white-screen)
-- [ ] Route params validated: hash (64-char hex), sequence (positive int), accountId (G...), contractId (C...), search q (non-empty)
-- [ ] Invalid params render entity-type-specific not-found state
-- [ ] 404 catch-all for unmatched routes
-- [ ] Route-level error boundary catches uncaught errors and renders within shell
-- [ ] Router wrapped in QueryProvider and ThemeProvider
+- [x] All 14 routes defined in `web/src/router/index.tsx` — hand-listed inside the `createBrowserRouter` children array. Each maps to its page component per the spec route table, 1:1. Consumer-facing URL helpers (`<Link to={routes.transaction(hash)}>`) plus the header `NAV_LINKS` live in `web/src/router/routes.ts` as the single source of truth for URL shapes.
+- [x] All page components lazy-loaded via `React.lazy(() => import('../pages/…'))`.
+- [x] Suspense fallback renders within the layout shell — every route element is wrapped in `<Suspense fallback={<DetailSkeleton />}>` via a small `page()` helper in `router/index.tsx`; header/nav stay visible during chunk load.
+- [ ] Route params validated / Invalid params → entity-typed not-found — **deferred to the per-page implementation tasks (0068+)**. Stubs render whatever `useParams()` returns; client-side regex validation here would only duplicate what each real page must already do against the API. The `classifyError` utility from 0064 + `NotFoundState` are in place for those pages to use.
+- [x] 404 catch-all — `RouteErrorBoundary` handles `isRouteErrorResponse(error) && status === 404` with a generic NotFoundState. Anything else routes to GenericErrorState.
+- [x] Route-level error boundary — attached as `errorElement` on the layout route, so caught errors render _inside_ the shell.
+- [x] Router wrapped in QueryProvider + ThemeProvider — wired in `web/src/main.tsx` as `<ExplorerThemeProvider><QueryProvider><RouterProvider /></...>`.
+- [x] AppShell — placeholder stub `AppShellStub.tsx` (header logo + nav links + mode toggle + `<Outlet />`) covers the routing surface until Karol's 0059 delivers the real shell.
 
 ## Notes
 

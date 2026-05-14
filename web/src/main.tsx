@@ -1,8 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
+
 import { QueryProvider } from './api/index.js';
 import { App } from './app.js';
+import './styles/fonts.css';
 
 const rootElement = document.getElementById('root');
 
@@ -14,8 +17,10 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <QueryProvider>
-      <App />
-    </QueryProvider>
+    <ExplorerThemeProvider>
+      <QueryProvider>
+        <App />
+      </QueryProvider>
+    </ExplorerThemeProvider>
   </StrictMode>
 );

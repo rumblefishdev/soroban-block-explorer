@@ -355,7 +355,7 @@ straggler promotion, then `TRUNCATE TABLE` on both pending tables.
 > `nfts_pending` after that is either truly `Other` (drain by
 > TRUNCATE below) or has a definitive non-`Nft` verdict that needs
 > manual promotion via the `INSERT … SELECT … WHERE contract_type =
-> 2` step below.
+2` step below.
 
 ```sql
 -- Straggler promotion (mirror of PG Step 2).

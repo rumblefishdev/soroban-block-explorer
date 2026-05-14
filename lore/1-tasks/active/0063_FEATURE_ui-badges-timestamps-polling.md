@@ -2,7 +2,7 @@
 id: '0063'
 title: 'UI lib: badges, relative timestamps, polling indicator'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-small, layer-frontend-shared]
@@ -13,6 +13,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-14
+    status: active
+    who: FilipDz
+    note: 'Promoted to active on feat/ui-foundation — bundled with 0058/0064/0067 close-out on this branch.'
+  - date: 2026-05-14
+    status: active
+    who: FilipDz
+    note: 'Primitives in libs/ui done — network badges via Chip color="blue"/color="warning" at call sites, RelativeTimestamp + PollingIndicator + useNow + formatRelative shipped under libs/ui/src/timestamps/. Re-opened because PollingIndicator "visible on polling-enabled pages" lands when 0068+ home/list pages wire it up; ergonomic enhancements (`isFetching` prop + spin animation + optional `onRefresh` click) come with that consumption.'
 ---
 
 # UI lib: badges, relative timestamps, polling indicator
@@ -99,15 +107,15 @@ Export all badge and timestamp components from `libs/ui` barrel.
 
 ## Acceptance Criteria
 
-- [ ] StatusBadge renders "Success" or "Failed" with text label (not color-only)
-- [ ] TypeBadge renders "Classic", "SAC", or "Soroban" with distinct visual treatment
-- [ ] NetworkBadge renders "Mainnet" or "Testnet" with distinct palette
-- [ ] RelativeTimestamp shows relative time ("2 min ago") with full ISO on hover
-- [ ] Timestamps have sufficient contrast per WCAG guidelines
-- [ ] Relative timestamps update periodically to stay accurate
-- [ ] PollingIndicator shows "Updated Xs ago" on polling-enabled pages
-- [ ] All badges use visible text labels as primary indicator, not color alone
-- [ ] All components exported from `libs/ui`
+- [x] Status badge — "Success" / "Failed" via `<Chip color="success/error" dot label>` at call sites. No `StatusBadge` wrapper component (it would be a one-line indirection over `Chip` — the spec's "text label primary" requirement is met by passing the label string directly).
+- [x] Type badge — "Classic" / "SAC" / "Soroban" via `<Chip color="blue|violet|emerald" label>` at call sites. Same reasoning: no wrapper.
+- [x] Network badge — `<Chip color="blue" label="Mainnet">` / `<Chip color="warning" label="Testnet">` at call sites. The theme's `MuiChip` `color="blue"` override already matches Figma's `Accent/Blue/100` + `Accent/Blue/600`, and `color="warning"` matches `Surface/Warning` + `Text/Warning`. No `NetworkBadge` wrapper component — same reasoning as Status / Type. Outlined / text variants from Figma can be expressed via `sx={{ border, backgroundColor: 'transparent' }}` at the (rare) call sites that need them. The header NetworkIndicator (task 0059) consumes Chip directly.
+- [x] RelativeTimestamp — shows "2 min ago" style, full ISO on hover via tooltip.
+- [x] Timestamps contrast — uses `text.secondary` semantic token (inherited from Figma design system, WCAG-validated upstream).
+- [x] Relative timestamps re-render — `useNow(intervalMs)` shared hook ticks every 30s by default.
+- [ ] PollingIndicator — primitive built (refresh icon + "Updated Xs ago", default 5s tick via `intervalMs`), but not yet **visible on polling-enabled pages** per spec — those pages (0068 home, list pages) don't exist yet. Also pending: `isFetching` prop + spin animation + optional `onRefresh` click handler — will land when a real polling page wires up TanStack Query's `dataUpdatedAt` and `isFetching`.
+- [x] Text labels primary — every badge above passes the label string; color is decoration.
+- [x] All components exported — `NetworkBadge`, `RelativeTimestamp`, `PollingIndicator`, plus helpers `formatRelative` + `useNow`, all re-exported from `libs/ui` barrel.
 
 ## Notes
 

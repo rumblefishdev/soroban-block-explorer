@@ -159,11 +159,12 @@ semantics defined in
 land symmetrically on both writers.
 
 > **Writer parity status:** Task 0217 (PR #180) shipped the CH schema
-> + PG writer routing. Task 0220 ships the **CH writer parity** for the
-> routing — `crates/db-clickhouse/src/persist/stage.rs` now reads the
-> per-contract WASM classifier verdict (built alongside
-> `wasm_interface_metadata` staging) and routes NFT-candidate rows
-> into hot vs. pending vs. drop buckets in lockstep with PG.
+>
+> - PG writer routing. Task 0220 ships the **CH writer parity** for the
+>   routing — `crates/db-clickhouse/src/persist/stage.rs` now reads the
+>   per-contract WASM classifier verdict (built alongside
+>   `wasm_interface_metadata` staging) and routes NFT-candidate rows
+>   into hot vs. pending vs. drop buckets in lockstep with PG.
 >
 > **Atomicity asymmetry that remains:** PG runs a promotion hook
 > (`reclassify_contracts_from_wasm` + `promote_pending_nfts_to_hot`)
@@ -398,10 +399,10 @@ quantified the gap:
   64 k-ledger window are referenced **only** as participants — their
   `AccountEntry` is never touched in the same range. The CH `accounts`
   row therefore persists as a skeleton: `sequence_number = 0,
-  home_domain = null, account_balances_current rows = 0`.
+home_domain = null, account_balances_current rows = 0`.
 - Example from the audit: `GARDNV3Q7…` shows skeleton state in CH
   while Horizon reports `seqnum = 148e15, home_domain =
-  "ultracapital.xyz", balance = 12 861 XLM`.
+"ultracapital.xyz", balance = 12 861 XLM`.
 
 Task 0214 closes the gap with an **initial-snapshot mechanism** that
 runs once per backfill window in
@@ -409,13 +410,13 @@ runs once per backfill window in
 
 1. **Discovery** — JOIN `transaction_participants` (window-filtered)
    against `accounts FINAL` and keep rows where `sequence_number =
-   0`. The Phase 2 incremental top-up gate is intrinsic to the JOIN:
+0`. The Phase 2 incremental top-up gate is intrinsic to the JOIN:
    already-populated rows are skipped, so a window re-run only
    touches the rows that still need it.
 2. **RPC fetch** — batch `LedgerKey::Account(...)` keys (≤ 200 per
    call) and POST `getLedgerEntries` to Soroban RPC. Decode each
    returned `AccountEntry` into `(account_id, sequence_number,
-   balance, home_domain)`.
+balance, home_domain)`.
 3. **Stage** — INSERT into `accounts` (overwriting the skeleton via
    `ReplacingMergeTree(last_seen_ledger)`) and into
    `account_balances_current` for the native XLM row. Snapshot rows
