@@ -2,7 +2,7 @@
 id: '0225'
 title: 'FEATURE: backfill-runner sync validation pre-parse + crash-recovery runbook'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0204', '0205', '0214', '0220']
 tags:
@@ -35,6 +35,16 @@ history:
       ReplacingMergeTree on partition re-run. But: panic-then-no-resume
       leaves orphan tx until operator manually re-runs. Better to
       prevent the panic entirely + document operator recovery.
+  - date: 2026-05-14
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active — identified as the last pre-backfill blocker
+      after the 512k pilot verification round. Crash recovery runbook
+      shipped in PR #189; implementation of pre-parse sync validation
+      remains as the active work. Bootstrap subcommand + watermark
+      race fix already merged in the same PR mitigate the cascade
+      effects (skeleton accounts after partial-partition crash).
 ---
 
 # FEATURE: backfill-runner sync validation pre-parse + crash-recovery runbook

@@ -1,6 +1,6 @@
 # Runbook: 0225 — backfill-runner crash recovery
 
-**Task:** [0225 — backfill-runner sync validation + crash recovery](../../lore/1-tasks/backlog/0225_FEATURE_backfill-sync-validation-and-resume-runbook.md)
+**Task:** [0225 — backfill-runner sync validation + crash recovery](../../lore/1-tasks/active/0225_FEATURE_backfill-sync-validation-and-resume-runbook.md)
 **Target:** PostgreSQL or ClickHouse backfill (CH-focused below; PG is structurally simpler)
 **Idempotent:** yes — `ALTER DELETE … WHERE` matches 0 rows on second pass; CH `ReplacingMergeTree` dedupes resume rows on next merge
 **Frequency:** as needed — fires when `backfill-runner` panics mid-partition
@@ -214,6 +214,6 @@ documented design trade-off, recoverable via this runbook.
 - `crates/backfill-runner/src/sync.rs` — `aws s3 sync` driver
 - `crates/backfill-runner/src/ingest.rs:170-200` — per-ledger ingest
   loop where panics typically surface
-- [task 0225](../../lore/1-tasks/backlog/0225_FEATURE_backfill-sync-validation-and-resume-runbook.md)
+- [task 0225](../../lore/1-tasks/active/0225_FEATURE_backfill-sync-validation-and-resume-runbook.md)
   — pre-emptive sync validation work (reduces frequency of this runbook
   firing)
