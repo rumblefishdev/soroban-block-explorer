@@ -170,13 +170,34 @@ fn try_parse_burn(
 
 /// Check if data looks like a token ID (scalar value, not a complex structure).
 ///
-/// Both SEP-0041 (fungible) and SEP-0050 (NFT) use the same topic pattern
-/// for transfer/mint events. The data type alone cannot reliably distinguish
-/// them — some NFT contracts (e.g. jamesbachini) use i128 for token IDs.
+/// Both SEP-0041 (fungible) and SEP-0050 (NFT) use the same `["transfer",
+/// Address(from), Address(to)]` topic pattern for transfer/mint/burn events
+/// — only the data payload differentiates them. The payload type alone
+/// **cannot** reliably tell NFT from fungible: real mainnet NFTs (e.g. the
+/// James Bachini SEP-39 collection `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`
+/// — confirmed live 2026-05-13 via `stellar contract fetch`) use `i128`
+/// for `token_id` (SEP-39 / ERC-721 style), and SEP-41 fungible transfers
+/// use `i128` for `amount`. **Both shapes are observed on mainnet.**
 ///
-/// This check only rejects clearly non-token data (void, maps, vecs).
-/// Definitive NFT vs fungible classification should use WASM spec analysis
-/// from `contract.rs` (task 0027 responsibility).
+/// Task 0118 originally tried a Patch C whitelist (rejecting `i128`/`u128`
+/// at the parser) but that approach silently drops legitimate SEP-39 NFTs
+/// — the 2026-05-12 CH pilot audit sample didn't contain one so the
+/// false-negative wasn't visible in measurement; the 2026-05-13 pre-audit
+/// re-test against live mainnet RPC found one. **Patch C was reverted.**
+///
+/// Authoritative NFT-vs-fungible discrimination lives downstream, at
+/// persist time, via the WASM-spec-based classifier
+/// (`xdr_parser::classify_contract_from_wasm_spec` + the persist routing
+/// in `crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`):
+///
+/// - `Fungible` / `Token` (SAC) verdict → row dropped before INSERT.
+/// - `Nft` verdict → row to hot `nfts` table.
+/// - `Other` / NULL verdict → row to `nfts_pending` quarantine
+///   (task 0217), promoted on later WASM observation.
+///
+/// This function therefore only rejects clearly non-token shapes (void,
+/// maps, vecs, errors). Everything else is forwarded for the classifier
+/// to judge.
 fn looks_like_token_id(data: &Value) -> bool {
     let type_str = data.get("type").and_then(|v| v.as_str()).unwrap_or("");
     !matches!(type_str, "void" | "map" | "vec" | "error")
@@ -270,21 +291,35 @@ mod tests {
 
     #[test]
     fn parser_emits_i128_transfer_as_nft_candidate() {
-        // Task 0118 Phase 2: the parser is deliberately permissive on the
-        // `i128` payload because SEP-0041 fungible transfers and some
-        // SEP-0050 NFT contracts (e.g. jamesbachini) use the same
-        // topic/data shape. The authoritative NFT-vs-fungible decision
-        // lives in the persist-time filter, which reads
-        // `soroban_contracts.contract_type` populated by
-        // `xdr_parser::classify_contract_from_wasm_spec` when the wasm
-        // upload is observed. A fungible-classified contract's rows are
-        // dropped before reaching `nfts`; a dual-interface contract is
-        // kept (precedence prefers false positives over false negatives).
+        // The parser is deliberately permissive on the `i128` payload
+        // because BOTH legit SEP-39 NFTs (e.g. mainnet collection
+        // `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`
+        // — confirmed via `stellar contract fetch` on 2026-05-13) AND
+        // SEP-41 fungible transfers use `i128` as their payload shape.
+        // The two cases cannot be distinguished by the event payload
+        // alone — only by inspecting the contract's WASM interface for
+        // NFT-specific functions (`owner_of`, `token_uri`,
+        // `approve_for_all`, …).
         //
-        // This test guards the parser contract: `i128` data must still
+        // The 0118 Patch C whitelist that briefly rejected `i128` /
+        // `u128` at this layer was reverted (2026-05-13) after the
+        // pre-audit re-test against live mainnet RPC found a real
+        // SEP-39 NFT using `i128` for `token_id` — confirming that
+        // discrimination MUST be WASM-signature-based.
+        //
+        // The authoritative NFT-vs-fungible decision lives in the
+        // persist-time filter
+        // (`crates/indexer/src/handler/persist/write.rs::resolve_nft_filter`),
+        // which reads `soroban_contracts.contract_type` populated by
+        // `xdr_parser::classify_contract_from_wasm_spec` when the WASM
+        // upload is observed. A `Fungible` / `Token`-classified contract's
+        // rows are dropped before reaching `nfts`; an `Nft`-classified
+        // contract's rows go to the hot `nfts` table; `Other` / NULL go
+        // to the `nfts_pending` quarantine (task 0217), to be promoted
+        // when a later WASM upload flips the verdict.
+        //
+        // This test guards the parser contract: `i128` data must
         // produce an `NftEvent` so the filter has something to inspect.
-        // Removing the event here would re-introduce the old
-        // false-negative gap for legitimate NFT contracts.
         let event = make_event(
             "CABC123",
             vec![

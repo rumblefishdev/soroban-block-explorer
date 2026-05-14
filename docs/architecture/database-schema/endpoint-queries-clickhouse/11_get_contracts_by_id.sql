@@ -1,0 +1,70 @@
+-- Endpoint:     GET /contracts/:contract_id
+-- Purpose:      Contract detail: header (deployer, WASM hash, type, SAC flag,
+--               name) + lightweight stats (recent invocations and unique
+--               callers in the last N days, NOT a full-history count).
+-- Source:       backend-overview.md §6.3 / frontend-overview.md §6.10
+-- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037 + ADR 0042/0156
+-- Data sources: DB-only.
+-- Inputs:
+--   $1  :contract_strkey  String   C-form contract ID
+--   $2  :stats_window_days Int     stats window in days (e.g. 7)
+-- Indexes:      soroban_contracts ORDER BY (id) — StrKey resolve walks FINAL.
+--               soroban_invocations_appearances ORDER BY (contract_id,
+--                 ledger_sequence, transaction_id) — contract-leading scan.
+--               ledgers ORDER BY (sequence) — JOIN for closed_at filter.
+-- CH Engine:    soroban_contracts — Replacing(wasm_uploaded_at_ledger) (FINAL).
+--               soroban_invocations_appearances — Replacing partitioned (FINAL).
+--               accounts — Replacing (FINAL).
+--               ledgers — MergeTree (no FINAL).
+-- CH Pattern:   2 statements; B uses uniqExact for distinct-caller count;
+--               window filter applied via JOIN to ledgers (§5.2 closed_at
+--               not on appearances table) + intDiv partition prune.
+-- ADR 0044 §:   §4.2/§4.3 (Replacing partitioned), §4.5 (Replacing state),
+--               §5.2 (closed_at via ledgers JOIN).
+-- Notes:
+--   • Two statements, mirroring PG E11.
+--   • Statement A: same shape as PG, minus the legacy `metadata JSONB`
+--     column (already absent post-ADR-0042/0156 in PG too).
+--   • Statement B: PG uses `created_at >= NOW() - INTERVAL`. CH-side
+--     `soroban_invocations_appearances` has no closed_at (§5.2). We JOIN
+--     `ledgers` on `ledger_sequence` and filter on `ledgers.closed_at`.
+--     The window param is a day count (`$2 = 7`) interpreted as
+--     `INTERVAL $2 DAY` to keep the CH grammar simple — PG uses an
+--     INTERVAL literal but CH variants of `now() - INTERVAL $2 DAY`
+--     accept the integer cleanly.
+--   • `uniqExact` returns exact distinct count; `uniq` would be HLL-
+--     approximate. For a stats card we want exact (small N expected),
+--     and `uniqExact` is O(N) memory but bounded by the per-window result.
+
+-- ============================================================================
+-- A. Contract header.
+-- ============================================================================
+SELECT
+    sc.id                              AS contract_pk,
+    sc.contract_id,
+    lower(hex(sc.wasm_hash))           AS wasm_hash_hex,
+    sc.wasm_uploaded_at_ledger,
+    deployer.account_id                AS deployer,
+    sc.deployed_at_ledger,
+    sc.contract_type                   AS contract_type,
+    sc.is_sac,
+    sc.name
+FROM soroban_contracts sc FINAL
+LEFT JOIN accounts deployer FINAL ON deployer.id = sc.deployer_id
+WHERE sc.contract_id = $1;
+
+-- @@ split @@
+
+-- ============================================================================
+-- B. Recent-window stats.
+--    Inputs: $1 = soroban_contracts.id (Int64, from A.contract_pk),
+--            $2 = window in days (Int).
+-- ============================================================================
+SELECT
+    count()                            AS recent_invocations,
+    uniqExact(sia.caller_id)           AS recent_unique_callers,
+    toInt32($2)                        AS stats_window_days
+FROM soroban_invocations_appearances sia FINAL
+JOIN ledgers l ON l.sequence = sia.ledger_sequence
+WHERE sia.contract_id = $1
+  AND l.closed_at >= now64() - INTERVAL $2 DAY;

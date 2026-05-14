@@ -30,7 +30,10 @@ pub struct TransactionListItem {
     pub ledger_sequence: i64,
     /// 1-based position of this transaction within its ledger.
     pub application_order: i16,
-    pub source_account: String,
+    /// `null` for Variant A `parse_error` transactions whose envelope
+    /// could not be decoded (lore-0209). Always populated for ordinary
+    /// (successful or failed-but-decoded) transactions.
+    pub source_account: Option<String>,
     /// Fee charged in stroops.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.
@@ -68,7 +71,9 @@ pub struct TransactionDetailLight {
     pub ledger_sequence: i64,
     /// 1-based position of this transaction within its ledger.
     pub application_order: i16,
-    pub source_account: String,
+    /// `null` for Variant A `parse_error` transactions whose envelope
+    /// could not be decoded (lore-0209).
+    pub source_account: Option<String>,
     /// Fee charged in stroops.
     pub fee_charged: i64,
     /// Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise.

@@ -223,7 +223,7 @@ CREATE TABLE transactions (
     hash              BYTEA       NOT NULL,                          -- 32-byte tx hash (ADR 0024)
     ledger_sequence   BIGINT      NOT NULL,
     application_order SMALLINT    NOT NULL,
-    source_id         BIGINT      NOT NULL REFERENCES accounts(id),  -- ADR 0026 surrogate
+    source_id         BIGINT               REFERENCES accounts(id),  -- ADR 0026 surrogate; NULLable for Variant A parse_error tx (lore-0209)
     fee_charged       BIGINT      NOT NULL,
     inner_tx_hash     BYTEA,                                         -- fee-bump inner hash
     successful        BOOLEAN     NOT NULL,
@@ -260,7 +260,13 @@ Design notes:
   per [ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md)
 - `source_id` is the `accounts.id` surrogate
   ([ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)); the
-  displayed `G...` StrKey is obtained via JOIN back to `accounts.account_id`
+  displayed `G...` StrKey is obtained via JOIN back to `accounts.account_id`.
+  The column is `NULL`able to accommodate Variant A `parse_error` transactions
+  whose envelope was not decodable and therefore carry no known source
+  (lore-0209). Query paths that surface such rows (transaction list/detail,
+  ledger-scoped transaction listing) use `LEFT JOIN accounts`; paths that
+  drive through operations / events / liquidity pools / assets never match
+  parse_error tx (no rows in those tables) and keep plain `JOIN`.
 - `application_order`, `operation_count`, `has_soroban` support the transaction
   list/detail renderers and Soroban-filtered indexing
 - **no raw XDR stored on the row**: envelope / result / result-meta XDR for
@@ -477,6 +483,26 @@ Design notes:
   established in ADR 0023 and codified in ADR 0037
 - `search_vector` combines the typed `name` and the StrKey, enabling
   contract search on both the friendly name and the canonical identifier
+- `is_sac` is set to `true` for every SAC contract observed in scope.
+  Three classification paths land here:
+  1. **In-window SAC deploy** — `extract_contract_deployments` reads
+     `LedgerEntryChange` with `executable=stellar_asset` and stages
+     `is_sac=true` directly on the contract row.
+  2. **Forward-derive from observed asset (task 0218)** — every
+     classic-credit or native asset observed in the ledger is run
+     through `xdr_parser::derive_sac_overrides_from_assets`, which
+     applies the stellar-core SAC derivation
+     (`SHA256(XDR.serialize(HashIdPreimage::ContractId{network_id,
+Asset(code, issuer)}))`) to compute the deterministic SAC
+     contract_id. The persist step `apply_sac_overrides_for_skeleton_contracts`
+     then UPDATEs `is_sac=TRUE, contract_type=0` on any
+     `soroban_contracts` skeleton row matching a derived SAC — this
+     is how **pre-existing SACs** (deployed before the indexed window)
+     get classified. Idempotent on replay via `WHERE is_sac=FALSE`.
+  3. **(Future)** Soroban RPC `getLedgerEntries` fetch on first
+     reference for stragglers neither in-window-deployed nor
+     forward-derivable — not implemented; mentioned only to mark
+     the design space.
 
 ### 4.7 WASM Interface Metadata
 
@@ -653,10 +679,34 @@ Design notes:
   SAC, native XLM-SAC, and Soroban-native assets all dedupe by `contract_id`
   via `uidx_assets_soroban`
 - the native XLM singleton (`asset_type = 0`, name `"Stellar Lumen"`, all
-  identity columns NULL) is bootstrapped by the
-  `20260428000000_seed_native_asset_singleton` migration, not by the parser —
-  there is no native branch in `detect_assets`. Operator deletion of this row
-  breaks the `/assets` listing and any future FK that targets it.
+  identity columns NULL) is bootstrapped on **two paths** that both rely on
+  `uidx_assets_native`'s `WHERE NOT EXISTS` no-op semantics:
+  - **Migration `20260428000000_seed_native_asset_singleton`** seeds the row
+    on a clean DB (name = `"Stellar Lumen"`).
+  - **Parser path** (task 0219) — `xdr_parser::native_asset_singleton()`
+    emits one `ExtractedAsset { asset_type: Native, … }` per ledger from
+    `crates/indexer/src/handler/process.rs`; the persist step
+    `upsert_assets_native` UPSERTs idempotently against `uidx_assets_native`.
+    Belt-and-suspenders coverage for environments where the migration
+    seed never ran (e.g. mid-stream restart from a manual schema apply).
+- producers per `asset_type`:
+  - `0 = Native` → migration seed + `native_asset_singleton()` (above).
+  - `1 = ClassicCredit` → `xdr_parser::detect_classic_credit_assets(changes)`
+    walks every `trustline` `LedgerEntryChange`, extracts
+    `(asset.code, asset.issuer)` from `data.asset` for live changes or
+    falls back to `key.asset` for removed changes, dedupes within the
+    ledger, and emits one row per distinct pair. `pool_share`
+    trustlines are intentionally skipped — those are LP positions,
+    handled by `extract_lp_positions`. Producer added in task 0219 to
+    close Karol's pre-audit Bug #1 (classic credits had no producer;
+    the persist branch fired only in tests).
+  - `2 = Sac` → `xdr_parser::detect_assets` (`crates/xdr-parser/src/state.rs`)
+    on every observed SAC contract deployment. SAC identity carried via
+    the deployment's `sac_asset` field (`SacAssetIdentity::Credit` or
+    `Native`).
+  - `3 = Soroban` → `xdr_parser::detect_assets` for non-SAC deployments
+    whose WASM interface classifies as `Fungible` via
+    `xdr_parser::classify_contract_from_wasm_spec`.
 - `icon_url` is the only SEP-1 enrichment field on the DB row — it serves the
   list-page thumbnail (per-row), and is populated by the **type-1 enrichment
   worker Lambda** (`crates/enrichment-worker`, task 0191): the indexer Lambda
@@ -801,6 +851,82 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
   `transactions` and a direct FK to `nfts`
 
+### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
+
+```sql
+CREATE TABLE nfts_pending (
+    contract_id           BIGINT       NOT NULL,  -- no FK to soroban_contracts
+    token_id              VARCHAR(256) NOT NULL,
+    collection_name       VARCHAR(256),
+    name                  VARCHAR(256),
+    media_url             TEXT,
+    minted_at_ledger      BIGINT,
+    current_owner_id      BIGINT,                  -- no FK to accounts
+    current_owner_ledger  BIGINT,
+    PRIMARY KEY (contract_id, token_id)
+);
+CREATE INDEX idx_nfts_pending_contract ON nfts_pending(contract_id);
+
+CREATE TABLE nft_ownership_pending (
+    contract_id      BIGINT       NOT NULL,
+    token_id         VARCHAR(256) NOT NULL,
+    transaction_id   BIGINT       NOT NULL,         -- no FK
+    owner_id         BIGINT,                         -- no FK
+    event_type       SMALLINT     NOT NULL,         -- ADR 0031 NftEventType
+    ledger_sequence  BIGINT       NOT NULL,
+    event_order      SMALLINT     NOT NULL,
+    created_at       TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (contract_id, token_id, created_at, ledger_sequence, event_order),
+    CONSTRAINT ck_nft_own_pending_event_type_range CHECK (event_type BETWEEN 0 AND 15)
+);
+CREATE INDEX idx_nft_ownership_pending_contract ON nft_ownership_pending(contract_id);
+```
+
+Purpose:
+
+- isolate NFT-candidate rows whose contract has not yet been definitively
+  classified (verdict `Other` or NULL — no usable WASM observed in any indexed
+  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership`) stay
+  clean by design.
+
+Persist routing (task 0217 Phase B, see
+[`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)):
+
+| Classifier verdict   | Target tables                            |
+| -------------------- | ---------------------------------------- |
+| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                    |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+
+Promotion is wired through the existing `reclassify_contracts_from_wasm`
+UPDATE path (originally task 0118 Phase 2). When a contract's verdict flips
+`Other → Nft`, the quarantine rows move into the hot tables in the same
+transaction; on `Other → Fungible`/`Token` they are dropped without an
+intermediate hot insert. API endpoints (`/v1/nfts*`) never read the
+`_pending` tables.
+
+Design notes:
+
+- **No FKs to `soroban_contracts` / `accounts` / `transactions` / `nfts`** —
+  rows arrive transient and the FK lookup churn has no read-side payoff
+  (the only read is the per-`contract_id` promotion lookup).
+- **No partitioning** — pending is transient; the by-`created_at` range
+  pattern that drives `nft_ownership`'s partitioning has no read-side
+  payoff here.
+- **Minimal indexing** — single `(contract_id)` btree on each table.
+- Natural-key PKs (`(contract_id, token_id)` and
+  `(contract_id, token_id, created_at, ledger_sequence, event_order)`)
+  enable column-projection promotion via `INSERT INTO nfts SELECT …`
+  without needing to resolve a SERIAL `nfts.id`.
+
+Operational lifecycle: see
+[`docs/runbooks/0217_nfts_pending_migration_and_drain.md`](../../runbooks/0217_nfts_pending_migration_and_drain.md)
+for the one-shot migration of existing `Other`/NULL hot rows into the
+quarantine and the post-backfill drain procedure. The decision record
+for the quarantine pattern (alternatives considered, design rationale,
+consequences) lives in
+[ADR 0046](../../../lore/2-adrs/0046_classifier-quarantine-tables-nfts-pending.md).
+
 ### 4.14 Liquidity Pools
 
 ```sql
@@ -854,6 +980,16 @@ Design notes:
   any subsequent ledger, the 13a UPSERT replaces every dimension field with real
   data. Detection: `WHERE created_at_ledger = 0`. Audit-harness invariant
   `15_liquidity_pools.sql:I6` reports the count as a partial-backfill thermometer.
+  **API filter (task 0193):** every pool-surfacing endpoint excludes sentinels
+  at two layers. (1) The handler-level `pool_exists()` gate carries
+  `created_at_ledger > 0` so per-pool look-ups of a sentinel return 404 before
+  the per-endpoint query runs. (2) Each of the five canonical LP SQL queries
+  (`18_*.sql`, `19_*.sql`, `20_*.sql`, `21_*.sql`, `23_*.sql`; `22_*.sql` is
+  `get_search` and unrelated) carries its own sentinel predicate: `18` / `19`
+  filter `lp.created_at_ledger > 0` inline (they read `liquidity_pools`
+  directly); `20` / `21` / `23` add an `EXISTS (SELECT 1 FROM liquidity_pools
+… WHERE created_at_ledger > 0)` guard. The redundancy is defense-in-depth —
+  a future caller bypassing the handler still gets an empty result.
 
 ### 4.15 Liquidity Pool Snapshots
 
@@ -1124,6 +1260,31 @@ The backend and frontend imply predictable read categories:
 - search over metadata and canonical identifiers
 
 The schema should continue to prioritize those explorer patterns over generic analytical use cases.
+
+#### Canonical query references
+
+Each `/v1/*` list / detail endpoint has a canonical SQL projection committed
+in this repo. Two parallel reference sets exist:
+
+- [`endpoint-queries/`](./endpoint-queries/) — **PostgreSQL** canonical
+  source of truth for the live API handlers in
+  [`crates/api/`](../../../crates/api). Every endpoint enumerated in
+  [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
+  maps 1:1 to a `NN_*.sql` file here.
+  Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
+  list-endpoint completeness verified by audit task 0197
+  (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
+- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
+  parallel reference set for the CH-side pilot
+  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
+  tasks 0204 / 0206 / 0207). Maintained alongside the PG set but the API
+  read-path does **not** call into it yet — CH is a parallel store, no live
+  `/v1/*` handler routes through it. A CH-side equivalence audit is deferred
+  until at least one handler is wired through ClickHouse.
+
+When editing a `/v1/*` endpoint behaviour, update the PG canonical SQL in the
+same PR. Update the CH parallel file only when explicitly working on the CH
+pilot (0207 scope).
 
 ### 7.3 Raw vs Derived Storage
 

@@ -28,6 +28,7 @@ coverage
 !.vscode/extensions.json
 .claude/worktrees
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # logs
 npm-debug.log*

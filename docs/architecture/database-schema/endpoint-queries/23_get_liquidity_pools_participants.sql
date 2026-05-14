@@ -35,6 +35,14 @@
 --     enough to display "joined N ago" / "last activity N ago" if the
 --     UI design needs it (the §6.14 spec doesn't require it explicitly,
 --     but the columns are free since the row is already being read).
+--   • Sentinel placeholder pools (ADR 0041 / task 0193) are filtered at
+--     two layers: (1) the handler-level `pool_exists()` gate returns
+--     404 for sentinel pool ids before this query runs; (2) an EXISTS
+--     subquery against `liquidity_pools` in the main WHERE provides
+--     defense-in-depth. A sentinel pool can legitimately have non-zero
+--     `lp_positions` (it was emitted *because* a position referenced
+--     it) — without the EXISTS guard, a direct caller bypassing the
+--     handler would surface "participants of a pool you can't see".
 
 WITH latest_snap AS (
     SELECT
@@ -59,6 +67,12 @@ JOIN accounts acc                ON acc.id = lpp.account_id
 LEFT JOIN latest_snap snap       ON TRUE
 WHERE lpp.pool_id = $1
   AND lpp.shares  > 0
+  -- Sentinel filter (ADR 0041 / task 0193) — defense-in-depth.
+  AND EXISTS (
+      SELECT 1 FROM liquidity_pools lp
+       WHERE lp.pool_id = $1
+         AND lp.created_at_ledger > 0
+  )
   AND ($3::numeric IS NULL
        OR (lpp.shares, lpp.account_id) < ($3, $4))
 ORDER BY lpp.shares DESC, lpp.account_id DESC

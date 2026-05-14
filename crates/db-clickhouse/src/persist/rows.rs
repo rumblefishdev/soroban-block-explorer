@@ -1,0 +1,294 @@
+//! Row structs for the CH writer — production schema (hybrid: surrogate
+//! `id Int64` on the three high-cardinality FK hubs, natural / composite
+//! keys elsewhere).
+//!
+//! One `#[derive(clickhouse::Row, serde::Serialize)]` struct per table
+//! in `crates/db-clickhouse/schema/init.sql`. Column name + order
+//! match `init.sql` byte-for-byte (RowBinary is positional —
+//! mismatch silently corrupts every row written). Column-order
+//! pinning tests in `persist/tests_cross.rs` guard against drift.
+//!
+//! ## Surrogate-id hubs (`accounts`, `soroban_contracts`, `transactions`)
+//!
+//! Each carries `id: i64` derived deterministically via
+//! [`super::ids`] (`cityhash64(natural_key)`). FK columns in 10+
+//! downstream tables are `Int64` referencing these `id`s. See `ids.rs`
+//! module docs for the why-this-three-tables rationale.
+//!
+//! ## Natural / composite keys (everything else)
+//!
+//! `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
+//! `liquidity_pool_snapshots`, `operations_appearances`,
+//! `transaction_participants`, `nft_ownership` — composite ORDER BY
+//! over already-cheap-shape columns (FixedString(32) hashes,
+//! low-cardinality codes, Int64 FK references).
+//!
+//! ## Type translation
+//!
+//! - `Int64` → `i64`
+//! - `Int32` → `i32`
+//! - `Int16` → `i16`
+//! - `Bool` → `bool`
+//! - `String` (incl. `LowCardinality(String)`) → `String`
+//! - `Nullable(String)` (incl. LC-wrapped) → `Option<String>`
+//! - `FixedString(32)` → `[u8; 32]`
+//! - `Nullable(FixedString(32))` → `Option<[u8; 32]>`
+//! - `Decimal128(7)` → `i128` (scaled by 10⁷, matches PG `NUMERIC(28,7)`)
+//! - `Nullable(Decimal128(7))` → `Option<i128>`
+//! - `DateTime64(3, 'UTC')` → `i64` ms since Unix epoch
+
+use clickhouse::Row;
+use serde::Serialize;
+
+/// `ledgers` — immutable lookup, MergeTree, partitioned.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct LedgerRow {
+    pub sequence: i64,
+    pub hash: [u8; 32],
+    /// `DateTime64(3, 'UTC')` — milliseconds since Unix epoch.
+    pub closed_at: i64,
+    pub protocol_version: i32,
+    pub transaction_count: i32,
+    pub base_fee: i64,
+}
+
+/// `wasm_interface_metadata` — immutable lookup, MergeTree.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct WasmInterfaceMetadataRow {
+    pub wasm_hash: [u8; 32],
+    pub metadata: String,
+}
+
+/// `accounts` — state hub, RMT(last_seen_ledger). Surrogate `id` for
+/// FK joins; ORDER BY natural key `account_id` for direct lookups.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AccountRow {
+    pub id: i64,
+    pub account_id: String,
+    pub first_seen_ledger: i64,
+    pub last_seen_ledger: i64,
+    pub sequence_number: i64,
+    pub home_domain: Option<String>,
+}
+
+/// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
+/// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AssetRow {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
+    pub name: Option<String>,
+    pub total_supply: Option<i128>,
+    pub holder_count: Option<i32>,
+    pub icon_url: Option<String>,
+}
+
+/// `account_balances_current` — state, RMT(last_updated_ledger).
+/// Trustline removals emitted as `balance = 0` rows; reads filter
+/// `WHERE balance > 0`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AccountBalanceRow {
+    pub account_id: i64,
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub balance: i128,
+    pub last_updated_ledger: i64,
+}
+
+/// `soroban_contracts` — state hub, RMT(wasm_uploaded_at_ledger).
+/// Surrogate `id`; `wasm_uploaded_at_ledger = 0` is the stub sentinel
+/// (Pass 2 stub-rowing for referenced-but-not-deployed contracts).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanContractRow {
+    pub id: i64,
+    pub contract_id: String,
+    pub wasm_hash: Option<[u8; 32]>,
+    pub wasm_uploaded_at_ledger: i64,
+    pub deployer_id: Option<i64>,
+    pub deployed_at_ledger: Option<i64>,
+    pub contract_type: Option<i16>,
+    pub is_sac: bool,
+    pub name: Option<String>,
+}
+
+/// `nfts` — state, RMT(current_owner_ledger). Composite PK
+/// = (contract_id, token_id). No surrogate id.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub collection_name: Option<String>,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub minted_at_ledger: Option<i64>,
+    pub current_owner_id: Option<i64>,
+    pub current_owner_ledger: i64,
+}
+
+/// `nfts_pending` — task 0217 quarantine for NFT-candidate rows whose
+/// contract is still `Other`/NULL-classified. Same shape as
+/// [`NftRow`]; routed via `stage::prepare` based on the per-contract
+/// `wasm_classification` verdict. Promoted to hot `nfts` via the
+/// post-backfill drain runbook
+/// (`docs/runbooks/0217_nfts_pending_migration_and_drain.md`) — CH
+/// has no per-row UPDATE / `WHERE NOT EXISTS` equivalent to PG's
+/// in-tx `promote_pending_nfts_to_hot` step.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftPendingRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub collection_name: Option<String>,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub minted_at_ledger: Option<i64>,
+    pub current_owner_id: Option<i64>,
+    pub current_owner_ledger: i64,
+}
+
+/// `liquidity_pools` — state, RMT(last_updated_ledger). PK = pool_id.
+/// `created_at_ledger` removed (derive read-time from snapshots).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct LiquidityPoolRow {
+    pub pool_id: [u8; 32],
+    pub asset_a_type: i16,
+    pub asset_a_code: String,
+    pub asset_a_issuer_id: i64,
+    pub asset_b_type: i16,
+    pub asset_b_code: String,
+    pub asset_b_issuer_id: i64,
+    pub fee_bps: i32,
+    pub last_updated_ledger: i64,
+}
+
+/// `lp_positions` — state, RMT(last_updated_ledger).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct LpPositionRow {
+    pub pool_id: [u8; 32],
+    pub account_id: i64,
+    pub shares: i128,
+    pub first_deposit_ledger: i64,
+    pub last_updated_ledger: i64,
+}
+
+/// `transactions` — append-only fact hub, surrogate `id`,
+/// ORDER BY (ledger_sequence, application_order).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct TransactionRow {
+    pub id: i64,
+    pub hash: [u8; 32],
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub source_id: i64,
+    pub fee_charged: i64,
+    pub inner_tx_hash: Option<[u8; 32]>,
+    pub successful: bool,
+    pub operation_count: i16,
+    pub has_soroban: bool,
+    pub parse_error: bool,
+}
+
+/// `transaction_hash_index` — fact, backs `transaction_hash_dict`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct TransactionHashIndexRow {
+    pub hash: [u8; 32],
+    pub ledger_sequence: i64,
+}
+
+/// `operations_appearances` — fact, no surrogate id. ORDER BY
+/// (ledger_sequence, transaction_id, application_order).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct OperationAppearanceRow {
+    pub transaction_id: i64,
+    pub application_order: i16,
+    /// `type` is a Rust keyword — serde rename keeps the CH column
+    /// match clean.
+    #[serde(rename = "type")]
+    pub op_type: i16,
+    pub source_id: Option<i64>,
+    pub destination_id: Option<i64>,
+    pub contract_id: Option<i64>,
+    pub asset_code: String,
+    pub asset_issuer_id: Option<i64>,
+    pub pool_id: Option<[u8; 32]>,
+    pub amount: i64,
+    pub ledger_sequence: i64,
+}
+
+/// `transaction_participants` — fact.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct TransactionParticipantRow {
+    pub account_id: i64,
+    pub ledger_sequence: i64,
+    pub transaction_id: i64,
+}
+
+/// `soroban_events` — fact, full-content per-event row (ADR 0044
+/// §4a unfold). `signature` is the lifted first-topic Symbol.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanEventRow {
+    pub contract_id: i64,
+    pub transaction_id: i64,
+    pub ledger_sequence: i64,
+    pub event_index: i16,
+    pub event_type: i16,
+    pub signature: Option<String>,
+    pub topics_xdr: String,
+    pub data_xdr: String,
+}
+
+/// `soroban_invocations_appearances` — fact (ADR 0034 fold).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanInvocationAppearanceRow {
+    pub contract_id: i64,
+    pub transaction_id: i64,
+    pub ledger_sequence: i64,
+    pub caller_id: Option<i64>,
+    pub caller_contract_id: Option<i64>,
+    pub amount: i32,
+}
+
+/// `nft_ownership` — fact, no surrogate. ORDER BY
+/// (contract_id, token_id, ledger_sequence, event_order).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftOwnershipRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub ledger_sequence: i64,
+    pub event_order: i16,
+    pub transaction_id: i64,
+    pub owner_id: Option<i64>,
+    pub event_type: i16,
+}
+
+/// `nft_ownership_pending` — task 0217 quarantine companion to
+/// [`NftOwnershipRow`]. Same row shape + same partitioning as the hot
+/// `nft_ownership` table so promotion (`INSERT … SELECT FROM
+/// nft_ownership_pending`) is a clean part copy. Routed by the same
+/// per-contract classifier verdict as [`NftPendingRow`].
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftOwnershipPendingRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub ledger_sequence: i64,
+    pub event_order: i16,
+    pub transaction_id: i64,
+    pub owner_id: Option<i64>,
+    pub event_type: i16,
+}
+
+/// `liquidity_pool_snapshots` — fact, no surrogate. ORDER BY
+/// (pool_id, ledger_sequence).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct LiquidityPoolSnapshotRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub total_shares: i128,
+    pub tvl: Option<i128>,
+    pub volume: Option<i128>,
+    pub fee_revenue: Option<i128>,
+}

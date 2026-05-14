@@ -4,7 +4,7 @@ title: 'BUG: NFT false positives from fungible token transfers'
 type: BUG
 status: blocked
 related_adr: ['0027']
-related_tasks: ['0026', '0027', '0149']
+related_tasks: ['0026', '0027', '0149', '0217']
 tags: [priority-high, effort-medium, layer-indexer, audit-F9]
 milestone: 1
 links:
@@ -107,6 +107,118 @@ history:
       false-positive rate validation against real mainnet data both
       require the full Soroban-era corpus indexed. Unblocks once
       `backfill-runner` (task 0145) finishes the historical sweep.
+  - date: '2026-05-12'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Reactivated after CH pilot endpoint audit confirmed the false
+      positives manifest empirically on a 64k-ledger backfill: 100% of
+      `nfts` rows = misclassified fungible transfers (XLM SAC = 421k
+      rows alone; top 5 contracts all fungibles). Phase 3 scope
+      expanded: (a) cleanup SQL for both PG and CH stores, (b)
+      ingester filter strengthen for pre-window WASM-less contracts
+      (current `Other` verdict's permissive emit policy produces the
+      observed false positives). See
+      `docs/audits/2026-05-12-ch-pilot-endpoint-audit.md` §E15.
+  - date: '2026-05-13'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 1.5 (Patch C — parser-side whitelist in
+      `crates/xdr-parser/src/nft.rs::looks_like_token_id`) +
+      Phase 3 (cleanup SQL for PG + CH) implemented on branch
+      `fix/0118_nft-false-positives-phase-c`. Picked up from Karol's
+      local prototype; ship both as one PR.
+
+      Patch C: `looks_like_token_id` now rejects `i128`/`u128`
+      (always SEP-41 fungible amount per spec) with a `debug!` log
+      (target `xdr_parser::nft`) for on-demand observability — `warn!`
+      would have flooded production logs because fungible transfers are
+      high-volume (XLM SAC alone ≈ 421k events in the audit window).
+      Whitelists conventional SEP-50 + OpenZeppelin
+      token_id shapes (`u32`, `u64`, `i64`, `i32`, `bytes`, `string`,
+      `address`). Spec basis: SEP-41 amount=i128, SEP-50 token_id =
+      unsigned integer, OpenZeppelin Stellar NonFungibleToken trait =
+      u32, Stellar Discussion #1674 = zero argument for i128. Trade-off:
+      hypothetical false-negative for SEP-50-non-compliant NFT using
+      i128 token_id — zero such contracts observed in the audit sample,
+      warn-log surfaces any future case for whitelist extension.
+
+      Test refresh: renamed `parser_emits_i128_transfer_as_nft_candidate`
+      → `parser_rejects_i128_transfer_per_patch_c` (inverted assertion).
+      Added `parser_rejects_u128_transfer_per_patch_c`,
+      `whitelist_accepts_u32_token_id`, `whitelist_accepts_u64_token_id`,
+      `whitelist_accepts_i32_and_i64_token_ids`,
+      `whitelist_accepts_bytes_string_address_token_ids`,
+      `whitelist_rejects_unknown_data_types`. 16/16 `nft::tests` green.
+
+      Phase 3 cleanup SQL embedded in operator runbook
+      `docs/runbooks/0118_phase3_cleanup_nfts.md` (PG + CH sections
+      side-by-side, with preconditions / sanity probes / verification
+      steps and ContractType discriminant mapping). Both flows
+      idempotent, both run only AFTER the Soroban-era backfill has
+      populated WASM verdicts. CH section tracks mutation completion
+      via `system.mutations` before `OPTIMIZE TABLE nfts FINAL`.
+
+      Ingester filter strengthen for the `Other`/NULL bucket
+      DEFERRED to task 0217 (nfts quarantine table) — proper
+      architectural fix routes `Other`/NULL to dedicated
+      `nfts_pending` instead of permissive-inserting into the
+      API-facing hot table.
+  - date: '2026-05-13'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      External blocker: full Soroban-era backfill run on a prod-like
+      DB required for the Phase 3 empirical dry-run AC. Code-side
+      delivery is complete after PR #178 (Patch C parser whitelist +
+      Phase 3 cleanup runbook for both PG and CH). Operator runbook
+      lives at `docs/runbooks/0118_phase3_cleanup_nfts.md` — one
+      markdown with PG and CH sections side-by-side, embedded SQL,
+      preconditions / sanity probes / verification queries, and a
+      ContractType discriminant mapping table. The cleanup is
+      idempotent and only has effect once
+      `soroban_contracts.contract_type` is populated with
+      WASM-derived verdicts (i.e. after the full Soroban-era backfill
+      has indexed every `wasm_upload` op). Ingester filter strengthen
+      for the `Other`/NULL bucket split to task 0217 (`nfts_pending`
+      quarantine table — architectural follow-up). After the dry-run
+      runs and the sanity probe returns 0 unclassified-with-NFT-rows,
+      archive this task.
+  - date: '2026-05-13'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      **Patch C reverted in PR #180** (same branch as 0217 quarantine
+      implementation). The 2026-05-13 pre-audit re-test against live
+      mainnet RPC discovered a real SEP-39 NFT
+      (Bachini `CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY`,
+      `SorobanNFT`/`SBN`) using `i128` for `token_id` — Patch C's
+      whitelist would have silently dropped this legitimate NFT.
+      Audit team's stated principle ("discrimination MUSI być po WASM
+      signature, NIE po payload type") is correct; Patch C contradicted
+      it.
+
+      Parser `looks_like_token_id` is back to its pre-2026-05-12
+      permissive blacklist (`!void|map|vec|error`). The
+      Patch-C-specific tests (`parser_rejects_i128_transfer_per_patch_c`
+      + the 5 `whitelist_accepts_*` tests) were removed and the
+      original `parser_emits_i128_transfer_as_nft_candidate` was
+      restored with an updated docstring referencing the Bachini
+      mainnet example. The Phase 3 cleanup runbook
+      (`docs/runbooks/0118_phase3_cleanup_nfts.md`) is unchanged — it
+      still drops legacy `Fungible`/`Token`-classified rows from
+      `nfts` post-backfill.
+
+      Implication for this task: the "Phase 1.5" deliverable is
+      retracted. Phase 1 (classifier function, PR #104) + Phase 2
+      (persist cache + filter, PR #110) + Phase 3 SQL cleanup are the
+      shipped deliverables; the architectural follow-up for the
+      `Other`/NULL bucket is **task 0217**'s quarantine pattern
+      (proper WASM-spec-based discrimination at persist time, not
+      payload-type discrimination at parser time). ADR 0046 documents
+      the revert with the empirical evidence (Alternative 4 flipped
+      from "ACCEPTED AS COMPLEMENT" to "REJECTED").
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -129,7 +241,26 @@ contracts legitimately use `i128` as token IDs
 - **Phase 1 (parser)** — can start now, independent of other work.
 - **Phase 2 (integration)** — gated on task 0149 merge (new
   `persist_ledger` signature).
-- **Phase 3 (cleanup)** — operational, after production backfill.
+- **Phase 3 (cleanup + filter strengthen)** — operational, after
+  production backfill. **Reactivated 2026-05-12** after CH pilot audit
+  ([2026-05-12-ch-pilot-endpoint-audit.md](../../../docs/audits/2026-05-12-ch-pilot-endpoint-audit.md))
+  confirmed 100% NFT rows in CH backfill = false positives (XLM SAC
+  contributes 421k rows alone). Scope expanded:
+
+  - SQL cleanup script for **both PG and CH** stores.
+  - **Ingester filter strengthen** — current `Other` verdict permissive
+    emit produces false positives for pre-window WASM-less contracts
+    (deploy precedes backfill range, no WASM observed in window).
+    Either: (a) stricter "no WASM in window AND not already
+    classified" → drop; (b) post-backfill reclassification pass once
+    WASM observed in later windows.
+  - VACUUM ANALYZE in runbook (PG side). CH equivalent after cleanup
+    deletes:
+
+    ```sql
+    OPTIMIZE TABLE nfts FINAL;
+    OPTIMIZE TABLE nft_ownership FINAL;
+    ```
 
 ## Context
 
@@ -286,9 +417,10 @@ COMMIT;
 VACUUM ANALYZE nfts;
 ```
 
-Script committed to the repo (e.g.
-`crates/db/migrations/` or a dedicated `ops/sql/` folder) so it is
-reviewable and re-runnable.
+Cleanup procedure shipped as an operator runbook at
+`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH sections
+side-by-side, embedded SQL, preconditions / sanity probes /
+verification queries, and a ContractType discriminant mapping table.
 
 ## Acceptance Criteria
 
@@ -372,12 +504,48 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
       and the per-worker cache holds both definitive verdicts after
       the ledger commits.)_
 
-### Phase 3 (cleanup)
+### Phase 1.5 (Patch C — parser whitelist, 2026-05-13) — **RETRACTED**
 
-- [ ] SQL cleanup script committed to the repo; reviewable.
+Patch C was shipped in PR #178 and reverted on the same day in
+PR #180 after the pre-audit re-test against live mainnet RPC
+discovered a real SEP-39 NFT
+(`CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY` /
+Bachini `SorobanNFT`) using `i128` for `token_id` — the whitelist
+would have silently dropped a legitimate NFT collection. Audit
+team's stated principle ("discrimination MUST be by WASM signature,
+NOT by payload type") is correct; Patch C contradicted it.
+ADR 0046 §Alternative 4 documents the empirical evidence and
+flips the verdict from "ACCEPTED AS COMPLEMENT" to "REJECTED".
+
+The parser is back to its pre-2026-05-12 permissive blacklist
+(`!void|map|vec|error`). The "Phase 1.5" criteria below are
+documented for the historical record only and **do not represent
+the shipped state**.
+
+- [~] ~~`looks_like_token_id` narrowed to whitelist…~~ **REVERTED**
+- [~] ~~`i128` and `u128` explicitly rejected…~~ **REVERTED**
+- [~] ~~Test rename + 5 whitelist-coverage tests…~~ **REVERTED** — the
+  `parser_emits_i128_transfer_as_nft_candidate` test was restored
+  with an updated docstring referencing the Bachini mainnet
+  example as evidence for parser-side permissiveness.
+
+### Phase 3 (cleanup, 2026-05-13)
+
+- [x] SQL cleanup script committed to the repo; reviewable.
+      _(`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH
+      sections side-by-side with embedded SQL, preconditions,
+      sanity probes, and verification queries.)_
 - [ ] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
-- [ ] `VACUUM ANALYZE nfts` in the operational runbook.
+      _(Operational — run after task 0145 completes full Soroban-era
+      backfill.)_
+- [x] `VACUUM ANALYZE nfts` (PG) / `OPTIMIZE TABLE nfts FINAL` (CH) in
+      the cleanup script. CH script tracks `system.mutations` to ensure
+      mutations complete before OPTIMIZE.
+- [ ] Ingester filter strengthen for `Other`/NULL bucket — DEFERRED to
+      task 0217 (`nfts_pending` quarantine table). 0118 ships Patch C +
+      cleanup SQL; 0217 lands the proper architectural fix
+      (Other/NULL → quarantine, hot table stays clean by design).
 
 ## Risks / Notes
 
@@ -400,3 +568,12 @@ soroban_contracts WHERE contract_id = ANY($1)` for cache misses
   Phase 2's filter (which treats unknown variants conservatively as
   `Nft`-insert — document this default explicitly when extending the
   enum).
+- **Phase 2 classifier hit-rate observation (2026-05-12)**: ad-hoc
+  smoke test on the current 28,742-contract sample (grouped by
+  `soroban_contracts.contract_type` × `wasm_hash IS NOT NULL`) showed
+  that only 2 of 306 wasm-bearing contracts received a definitive
+  `Nft` / `Fungible` verdict; the other 304 stayed `Other`. The 306
+  set is heavily biased — it covers only contracts whose `wasm_upload`
+  happened to land in the indexed window, not the full Soroban-era
+  population. **Re-evaluate after backfill (task 0145)** before
+  treating the low hit-rate as a real classifier bug.

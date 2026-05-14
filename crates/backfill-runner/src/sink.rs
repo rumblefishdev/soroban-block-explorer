@@ -1,15 +1,20 @@
 //! Sink abstraction over the two write-path targets.
 //!
-//! Task 0205 / ADR 0044: the same backfill orchestrator now feeds both
-//! Postgres (production) and ClickHouse (pilot). The narrow PG surface
-//! (preflight + load_completed + persist) collapses into three enum-
-//! dispatched methods here; the rest of the runner sees `&Sink` and is
-//! target-agnostic.
+//! Task 0205 / ADR 0044 collapsed the PG-only write surface into a
+//! target-agnostic `Sink`. Task 0206 (this revision) gains a
+//! **partition-writer lifecycle**: `open_partition` → `write_ledger × N`
+//! → `commit` / `abort`. The PG variant maps these onto today's
+//! per-ledger `process_ledger` (open + commit are no-ops; each
+//! `write_ledger` is its own DB transaction, fast commits intact).
+//! The CH variant drives a [`db_clickhouse::persist::PartitionWriter`] across
+//! the partition so the 14 server-side INSERTs only open once and end
+//! once — see that module's docs for why per-ledger inserts are wrong
+//! for CH (parts explosion, merger overwhelmed).
 //!
-//! The ClickHouse `persist_ledger` arm is **stubbed** — it parses the
-//! ledger and calls `db_clickhouse::persist::persist_ledger_clickhouse`,
-//! which logs and returns `Ok` without issuing any INSERT. Real CH
-//! writes land in a follow-up task.
+//! The legacy [`Sink::persist_ledger`] method is kept as a thin
+//! wrapper (`open` → `write` → `commit`) for tests and any caller
+//! that wants per-ledger semantics. Production backfill goes through
+//! the lifecycle on `ingest.rs::index_partition`.
 
 use std::collections::HashSet;
 
@@ -122,31 +127,88 @@ impl Sink {
         Ok(set)
     }
 
+    /// Open a partition writer handle. The CH variant constructs a
+    /// long-lived [`db_clickhouse::persist::PartitionWriter`] that holds one
+    /// `Insert<RowT>` per table across the partition. The PG variant
+    /// is a no-op constructor that just borrows the pool; per-ledger
+    /// transaction semantics are intact (no batching across ledgers).
+    pub fn open_partition(&self) -> PartitionWriterHandle<'_> {
+        match self {
+            Sink::Postgres(pool) => PartitionWriterHandle::Postgres { pool },
+            Sink::Clickhouse(client) => PartitionWriterHandle::Clickhouse(
+                db_clickhouse::persist::PartitionWriter::open(client.clone()),
+            ),
+        }
+    }
+
     /// Parse + persist a single ledger.
     ///
-    /// - **Postgres**: delegates to `process_ledger` (unchanged
-    ///   behaviour, classification cache threaded through).
-    /// - **Clickhouse**: calls `parse_ledger` then the stub
-    ///   `persist_ledger_clickhouse`. `classification_cache` is ignored
-    ///   on this path (PG-specific NFT filter helper, task 0118 Phase 2).
+    /// Kept for legacy / per-ledger callers (tests and any direct
+    /// invocation that doesn't want to drive the lifecycle). Wraps
+    /// `open_partition` → `write_ledger` → `commit` so the per-ledger
+    /// semantics PG had before task 0206 are preserved byte-for-byte.
     ///
-    /// Returning `()` (not a timings struct) keeps the PG path byte-for-
-    /// byte equivalent: the caller's outer `Instant::now()` measurement
-    /// in `ingest.rs` is the same wall-clock value it has always been.
+    /// Production backfill (`ingest.rs::index_partition`) drives the
+    /// lifecycle explicitly across the whole partition — never calls
+    /// this method.
+    #[allow(dead_code)]
     pub async fn persist_ledger(
         &self,
         meta: &LedgerCloseMeta,
         classification_cache: &ClassificationCache,
     ) -> Result<(), BackfillError> {
+        let mut handle = self.open_partition();
+        if let Err(err) = handle.write_ledger(meta, classification_cache).await {
+            handle.abort().await;
+            return Err(err);
+        }
+        handle.commit().await
+    }
+}
+
+/// Lifecycle handle for one backfill partition's writes.
+///
+/// PG: thin borrow of the pool + the per-worker classification cache.
+/// Each `write_ledger` is its own atomic transaction.
+///
+/// Clickhouse: owns a [`db_clickhouse::persist::PartitionWriter`] — the actual
+/// 14-handle insert lifecycle described in
+/// `db-clickhouse/src/persist/writer.rs`.
+#[allow(clippy::large_enum_variant)]
+pub enum PartitionWriterHandle<'a> {
+    Postgres { pool: &'a PgPool },
+    Clickhouse(db_clickhouse::persist::PartitionWriter),
+}
+
+impl PartitionWriterHandle<'_> {
+    pub async fn write_ledger(
+        &mut self,
+        meta: &LedgerCloseMeta,
+        classification_cache: &ClassificationCache,
+    ) -> Result<(), BackfillError> {
         match self {
-            Sink::Postgres(pool) => {
+            Self::Postgres { pool } => {
                 indexer::handler::process::process_ledger(meta, pool, None, classification_cache)
                     .await?;
+                Ok(())
             }
-            Sink::Clickhouse(client) => {
+            Self::Clickhouse(pw) => {
+                // Parse on every ledger; the CH path doesn't share the
+                // PG-side staging cache. `classification_cache` is
+                // ignored: it's a PG-specific NFT filter helper (task
+                // 0118 Phase 2) and the CH writer doesn't run the NFT
+                // reclassification UPDATE path that needs it.
+                let _ = classification_cache;
                 let parsed = indexer::handler::process::parse_ledger(meta);
-                db_clickhouse::persist::persist_ledger_clickhouse(
-                    client,
+                // Task 0220 — switch to the `_with_sac_overrides` entry
+                // point so the CH writer flips `is_sac=true,
+                // contract_type=Token` on pre-existing SAC skeleton
+                // rows via the forward-derived `ParseOutput.sac_overrides`
+                // list. The legacy `stage::prepare` is kept as a
+                // backwards-compat shim with empty overrides; this is
+                // the production wire-up the PR #186 description called
+                // out as a follow-up.
+                let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                     &parsed.ledger,
                     &parsed.transactions,
                     &parsed.operations,
@@ -162,11 +224,35 @@ impl Sink {
                     &parsed.nft_events,
                     &parsed.lp_positions,
                     &parsed.contract_name_writes,
-                )
-                .await?;
+                    &parsed.sac_overrides,
+                )?;
+                pw.write_ledger(staged).await?;
+                Ok(())
             }
         }
-        Ok(())
+    }
+
+    /// End every open insert (CH variant), or a no-op (PG variant).
+    /// Mid-partition failure must call [`Self::abort`] instead.
+    pub async fn commit(self) -> Result<(), BackfillError> {
+        match self {
+            Self::Postgres { .. } => Ok(()),
+            Self::Clickhouse(pw) => {
+                pw.commit().await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Abandon the partition. PG: nothing to roll back (each ledger
+    /// committed individually). CH: drops in-flight insert handles
+    /// without ending them, ensuring resume finds no `ledgers` rows
+    /// for this partition's range and re-does it cleanly.
+    pub async fn abort(self) {
+        match self {
+            Self::Postgres { .. } => {}
+            Self::Clickhouse(pw) => pw.abort().await,
+        }
     }
 }
 

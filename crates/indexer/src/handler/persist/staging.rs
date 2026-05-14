@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use domain::{AssetType, ContractType, NftEventType, OperationType, TokenAssetType};
 use serde_json::Value;
+use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
@@ -31,13 +32,15 @@ use super::HandlerError;
 // ---------------------------------------------------------------------------
 
 /// `transactions` row, ready for UNNEST. `source_str_key` is resolved to
-/// `accounts.id` by the write layer.
+/// `accounts.id` by the write layer. `None` when the upstream transaction
+/// carries no source (Variant A `parse_error` envelope-missing branch,
+/// lore-0209); the column is `NULL`-able in DB since the same task.
 pub(super) struct TxRow {
     pub hash_hex: String,
     pub hash: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub source_str_key: String,
+    pub source_str_key: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<[u8; 32]>,
     pub successful: bool,
@@ -264,6 +267,17 @@ pub(super) struct Staged {
     /// a spec at all" — only the definitive variants are forwarded to the
     /// DB UPDATE or the per-worker cache.
     pub wasm_classification: HashMap<[u8; 32], ContractType>,
+    /// Task 0218 — forward-derived SAC `(contract_id, identity)` pairs.
+    ///
+    /// Built from every observed `ExtractedAsset` whose `asset_type` is
+    /// `Native` or `ClassicCredit` by walking the asset list through
+    /// `xdr_parser::derive_sac_overrides_from_assets`. The persist step
+    /// `apply_sac_overrides_for_skeleton_contracts` consumes this list
+    /// to flip `is_sac=true` + `contract_type=Token` on
+    /// `soroban_contracts` rows that were inserted as skeletons (because
+    /// the SAC's `create_contract` op happened before the indexed window).
+    /// Idempotent: the UPDATE guards on `is_sac = FALSE`.
+    pub sac_overrides: Vec<SacOverride>,
 
     pub tx_rows: Vec<TxRow>,
 
@@ -303,6 +317,7 @@ impl Staged {
         nft_events: &[ExtractedNftEvent],
         lp_positions: &[ExtractedLpPosition],
         contract_name_writes: &[(String, String)],
+        sac_overrides: &[SacOverride],
     ) -> Result<Self, HandlerError> {
         let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
         let ledger_closed_at = ts_from_unix(ledger.closed_at)?;
@@ -314,11 +329,32 @@ impl Staged {
         let has_soroban: HashMap<String, bool> = tx_has_soroban_map(operations);
 
         for tx in transactions {
-            account_keys_set.insert(tx.source_account.clone());
-            participants_per_tx
-                .entry(tx.hash.clone())
-                .or_default()
-                .insert(tx.source_account.clone());
+            // lore-0209: empty `source_account` only appears on Variant A
+            // `parse_error` (envelope-missing) transactions — corrupt
+            // upstream `LedgerCloseMeta` where the `tx_processing` slot
+            // hash had no match in `tx_set`. Skip the empty key entirely:
+            //
+            //   * `account_keys_set` would drop it anyway via the
+            //     `starts_with('G')` filter further below;
+            //   * `participants_per_tx` MUST skip it — otherwise
+            //     `write::insert_participants` aborts with
+            //     `"unresolved StrKey for participants.account_id"` (the
+            //     hard-resolve invariant in `participants.account_id`
+            //     mirrors the original `transactions.source` failure).
+            //
+            // The write layer maps the resulting `None` to SQL NULL on
+            // `transactions.source_id` (nullable since the accompanying
+            // migration). No operations / events / invocations are emitted
+            // for Variant A (no envelope ⇒ no decoded ops_xdr), so the
+            // tx ends up with zero participants — semantically correct
+            // for "source unknown".
+            if !tx.source_account.is_empty() {
+                account_keys_set.insert(tx.source_account.clone());
+                participants_per_tx
+                    .entry(tx.hash.clone())
+                    .or_default()
+                    .insert(tx.source_account.clone());
+            }
         }
 
         // operations: source override + destinations + issuers + callers + poolIds
@@ -414,13 +450,29 @@ impl Staged {
             }
         }
         for ev in nft_events {
-            if let Some(owner) = &ev.owner_account {
-                account_keys_set.insert(owner.clone());
-            }
-            participants_per_tx
+            // Defense-in-depth: NFT events from parser-detected owners
+            // can carry non-account StrKeys when an NFT-shaped event
+            // is emitted by a Liquidity Pool (L-prefix), Claimable
+            // Balance (B-prefix), Contract (C-prefix) etc. — these
+            // are then false-positive NFTs (task 0118 territory) but
+            // staging must not let them leak into `participants`
+            // either way. `accounts` universe filter strips them
+            // later (G-only); applying the same predicate here so
+            // participants stays consistent and the
+            // `unresolved StrKey for participants.account_id`
+            // invariant in `write::insert_participants` holds.
+            //
+            // Matches the same `is_strkey_account` filter applied to
+            // events / invocations / ops participants further up.
+            let participants = participants_per_tx
                 .entry(ev.transaction_hash.clone())
-                .or_default()
-                .extend(ev.owner_account.clone());
+                .or_default();
+            if let Some(owner) = &ev.owner_account
+                && is_strkey_account(owner)
+            {
+                account_keys_set.insert(owner.clone());
+                participants.insert(owner.clone());
+            }
         }
         for lpp in lp_positions {
             account_keys_set.insert(lpp.account_id.clone());
@@ -585,7 +637,7 @@ impl Staged {
                 application_order: app_order
                     .try_into()
                     .map_err(|_| staging_err("tx application_order overflow"))?,
-                source_str_key: tx.source_account.clone(),
+                source_str_key: (!tx.source_account.is_empty()).then(|| tx.source_account.clone()),
                 fee_charged: tx.fee_charged,
                 inner_tx_hash,
                 successful: tx.successful,
@@ -1154,6 +1206,12 @@ impl Staged {
             }
         }
 
+        // Task 0218 / 0220 — SAC overrides forwarded in from the shared
+        // parser layer (`ParseOutput.sac_overrides`). Previously
+        // computed locally here; promoted to `parse_ledger` so the CH
+        // writer can consume the same slice without re-deriving it.
+        let sac_overrides = sac_overrides.to_vec();
+
         Ok(Self {
             ledger_sequence: ledger.sequence,
             ledger_sequence_i64,
@@ -1170,6 +1228,7 @@ impl Staged {
             contract_rows,
             contract_name_writes: contract_name_writes.to_vec(),
             wasm_classification,
+            sac_overrides,
             tx_rows,
             participant_rows,
             op_rows,
@@ -1661,5 +1720,107 @@ mod tests {
         ];
         let map = merge_account_state_overrides(&states_with_null);
         assert_eq!(map["G1"].home_domain.as_deref(), Some("set.example.com"));
+    }
+
+    /// Regression: NFT events whose parser-detected `owner_account` is
+    /// a non-G StrKey (LiquidityPool L…, ClaimableBalance B…, Contract
+    /// C…, etc. — false-positive NFTs from task 0118 territory) must
+    /// NOT leak into `transaction_participants`. The accounts universe
+    /// filter strips them anyway, so any participant row with such a
+    /// key would later fail `write::insert_participants` with
+    /// `unresolved StrKey for participants.account_id`. Real mainnet
+    /// regression observed on ledger range 62016000–62016099 after
+    /// task 0202 wired `nft_events` into staging.
+    #[test]
+    fn nft_event_with_l_prefix_owner_does_not_leak_into_participants() {
+        use xdr_parser::types::{ExtractedLedger, ExtractedNftEvent, ExtractedTransaction};
+
+        let tx_hash = "aa".repeat(32);
+        let g_source = "G".to_string() + &"A".repeat(55);
+        // Real LP StrKey from the mainnet regression (56 chars, starts with 'L').
+        let l_owner = "LB5LVIUONNMAHTH2KB72Q4NUSVY6G76VUINPGYQ4IMEMYEFD6HFL4J52".to_string();
+        assert_eq!(l_owner.len(), 56);
+        assert!(l_owner.starts_with('L'));
+
+        let ledger = ExtractedLedger {
+            sequence: 1,
+            hash: "00".repeat(32),
+            closed_at: 0,
+            protocol_version: 22,
+            transaction_count: 1,
+            base_fee: 100,
+        };
+        let tx = ExtractedTransaction {
+            hash: tx_hash.clone(),
+            inner_tx_hash: None,
+            ledger_sequence: 1,
+            source_account: g_source.clone(),
+            fee_charged: 100,
+            successful: true,
+            result_code: "txSuccess".into(),
+            envelope_xdr: String::new(),
+            result_xdr: String::new(),
+            result_meta_xdr: None,
+            operation_tree: None,
+            memo_type: None,
+            memo: None,
+            created_at: 0,
+            parse_error: false,
+        };
+        let nft_event = ExtractedNftEvent {
+            transaction_hash: tx_hash.clone(),
+            contract_id: "C".to_string() + &"D".repeat(55),
+            token_id: "tok-1".into(),
+            event_type: NftEventType::Transfer,
+            owner_account: Some(l_owner.clone()),
+            event_order: 0,
+            ledger_sequence: 1,
+            created_at: 0,
+        };
+
+        let staged = Staged::prepare(
+            &ledger,
+            std::slice::from_ref(&tx),
+            &[(tx_hash.clone(), vec![])],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&nft_event),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("staging must not fail on L-prefix nft_event owner");
+
+        // L-prefix owner must NOT appear in participants under any tx —
+        // otherwise `write::insert_participants` would fail with
+        // `unresolved StrKey` because accounts staging strips non-G keys.
+        for p in &staged.participant_rows {
+            assert!(
+                !p.account_str_key.starts_with('L'),
+                "L-prefix StrKey leaked into participants: {p_key}",
+                p_key = p.account_str_key
+            );
+        }
+        // And it must NOT appear in accounts either (defense-in-depth).
+        assert!(
+            !staged.account_keys.iter().any(|k| k.starts_with('L')),
+            "L-prefix StrKey leaked into accounts: {:?}",
+            staged.account_keys
+        );
+        // Sanity: the legitimate G-source still got through.
+        assert!(
+            staged
+                .participant_rows
+                .iter()
+                .any(|p| p.account_str_key == g_source),
+            "G-source dropped from participants — filter was too aggressive"
+        );
     }
 }

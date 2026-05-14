@@ -3,7 +3,7 @@ id: '0044'
 title: 'ClickHouse pilot — parallel store mirroring Postgres schema, with full-content soroban_events'
 status: proposed
 deciders: [fmazur]
-related_tasks: ['0204']
+related_tasks: ['0204', '0205', '0206']
 related_adrs: ['0033']
 tags:
   [
@@ -48,6 +48,156 @@ history:
       surfaced and resolved in the same session: locked at 500 000
       ledgers (~29 days). CH net schema: 17 tables + 1 Dictionary. ER
       diagram archived in task 0204 `notes/G-clickhouse-schema-er.md`.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      Task 0206 landed the real CH writer: `db_clickhouse::persist`
+      module (rows.rs + stage.rs + writer.rs + ids.rs), partition-
+      aligned streaming inserts via `PartitionWriter` (one
+      `clickhouse::Insert<RowT>` per table per backfill partition),
+      deterministic surrogate-ID derivation
+      (cityhash-rs::cityhash_102_128, lower 64/32 bits — documented
+      divergence from CH SQL `cityHash64()`), and a
+      `backfill-runner::Sink` partition-writer lifecycle
+      (open_partition / write_ledger / commit / abort) — PG variant
+      maps to no-op open/commit so behaviour is unchanged on that
+      path. Schema (init.sql) untouched. Closes the §"Future Work"
+      first bullet ("populating the store"). Open Q6 (success
+      criteria) remains deferred — measurement task spawns once a
+      partition run lands.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      Codec amendment: `soroban_events.topics_xdr` and
+      `soroban_events.data_xdr` switched from CH-default LZ4 to
+      `CODEC(ZSTD(3))`. Empirical justification on the first 100
+      mainnet ledgers post-task-0206: `topics_xdr` carries
+      ScVal-decoded JSON with the repeated `{"type":...,"value":...}`
+      wrapper on every topic — LZ4's 64-KiB window cannot exploit
+      that long-range dictionary pattern (measured ratio 6.29×).
+      ZSTD(3) reaches ~20–40× on the same shape. `data_xdr` is
+      lighter on redundancy (LZ4 already at 11.12×) but shares the
+      codec for symmetry — marginal positive gain, zero downside.
+      Decompression cost matches LZ4 on the read path; insert CPU is
+      a one-time append-only write. Documented in
+      `docs/architecture/database-schema/clickhouse-pilot.md` §4a +
+      `crates/db-clickhouse/README.md` type-translation note. This
+      slightly relaxes task 0206's "schema untouched" gate — codec is
+      a column-level attribute change, no table shape / column count
+      / type translation impact.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      Writer hardening — bumped `http_receive_timeout` /
+      `http_send_timeout` from CH default 30s to 1800s (30 min) via
+      `Insert::with_setting` in
+      `db_clickhouse::persist::writer::apply_bulk_ingest_settings`.
+      Empirical trigger: 10 k-ledger smoke at 62016000 failed at
+      ~9.6 k with `Network("channel closed")`; root cause was server
+      `http_receive_timeout = 30s` closing the socket between sparse
+      chunked-HTTP body writes on tables like `nfts` (~15
+      rows/ledger ⇒ ~5 min between 256 KiB-buffer flushes),
+      `wasm_interface_metadata` (often 0 rows over many ledgers),
+      `lp_positions`. Per-stalled-chunk timeout, not per-request,
+      so steady-state never approaches it. Client-side `with_setting`
+      keeps the change scoped to the writer's INSERTs.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      Follow-up to the previous entry: per-query `with_setting` was
+      verified via `system.query_log.Settings` to reach CH (recorded
+      as 1800) but a second 10 k-ledger smoke failed identically at
+      ~9.6 k with the same SOCKET_TIMEOUT 30000 ms. CH 26.3 does not
+      propagate the per-query override to the Poco-level socket
+      read on the HTTP body chunked stream — only profile-level XML
+      config takes effect. Added
+      `crates/db-clickhouse/config.d/timeouts.xml` (mounted into the
+      `clickhouse` service in `docker-compose.yml` at
+      `/etc/clickhouse-server/config.d/`) setting
+      `keep_alive_timeout / http_receive_timeout / http_send_timeout
+      / receive_timeout / send_timeout` to 1800 s on the `default`
+      profile. Per-query `with_setting` calls in the writer retained
+      as belt-and-suspenders (cost zero; future CH versions may
+      propagate). Pilot-only — production deployment needs a
+      narrower posture + monitoring. Documented in
+      `crates/db-clickhouse/README.md` and the XML header.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      **Production-grade schema refactor (folds in tasks 0206 + 0208).**
+      Six structural changes:
+      (1) Drop all surrogate `Int64`/`Int32` `id` columns (7 tables:
+      accounts, transactions, soroban_contracts, assets, nfts,
+      operations_appearances, liquidity_pool_snapshots). Natural-key
+      `ORDER BY` everywhere. Removes the entire client-side
+      `cityhash` derivation layer (`crates/db-clickhouse/src/persist/ids.rs`
+      moved to .trash/), eliminates Int32 collision risk on assets/nfts,
+      eliminates the "our hash ≠ CH cityHash64()" footgun.
+      (2) FK columns reference natural keys directly
+      (`transactions.source_account: LowCardinality(String)` instead of
+      `source_id Int64`, etc.). `LowCardinality(String)` dictionary-
+      encodes the per-block-repeated StrKeys for free.
+      (3) `liquidity_pools` Path 2 from task 0208 — drop
+      `created_at_ledger`, add `last_updated_ledger`, engine becomes
+      `ReplacingMergeTree(last_updated_ledger)`. Read-time recovery of
+      create-ledger via `MIN(ledger_sequence) FROM
+      liquidity_pool_snapshots GROUP BY pool_id`. Task 0208
+      superseded.
+      (4) `operations_appearances` ORDER BY (ledger_sequence,
+      transaction_hash, application_order); `nft_ownership` ORDER BY
+      (contract_id, token_id, ledger_sequence, event_order);
+      `liquidity_pool_snapshots` ORDER BY (pool_id, ledger_sequence).
+      All surrogate-id-free.
+      (5) Account-balance trustline removals emit `balance = 0` rows
+      at current ledger; reads filter `WHERE balance > 0` to recover
+      "active trustlines" semantics. No `CollapsingMergeTree` needed.
+      (6) Composite-PK columns use empty-string sentinel for "no value"
+      (`assets.asset_code = ''`, `account_balances_current.issuer_account = ''`
+      for native, etc.) instead of `Nullable(String)` — CH `ORDER BY`
+      on plain `String` significantly faster than on `Nullable(String)`,
+      no `allow_nullable_key` setting needed. `ZSTD(3)` codec also
+      applied to `wasm_interface_metadata.metadata` (analogous to
+      `soroban_events.topics_xdr/data_xdr`); `LowCardinality` applied
+      to event signatures, asset codes, contract StrKey FK columns.
+      All implemented inline in task 0206's PR (task 0208 closed
+      as folded). Schema-overview matrix in
+      `docs/architecture/database-schema/clickhouse-pilot.md` §3
+      updated; type-translation table in
+      `crates/db-clickhouse/README.md` updated; coverage-mapping
+      doc in `lore/.../0206_…/notes/G-coverage-mapping.md` updated.
+  - date: '2026-05-12'
+    status: proposed
+    who: fmazur
+    note: >
+      **Hybrid surrogate / natural keys (partial revert of previous
+      entry).** Empirical 10k-ledger smoke at 62016000 measured ~500
+      MB extra on-disk vs a hash-i64 baseline. Projected ~550 GB at
+      11M-ledger full scale. Plus +10 ms write/ledger from
+      LowCardinality dictionary build on high-cardinality columns.
+      Reverted surrogate `id Int64` on the **three central FK hubs**
+      where the natural keys are 56-byte StrKeys and join frequency
+      is very high: `accounts`, `soroban_contracts`, `transactions`.
+      All FK columns to those tables become `Int64` again
+      (`source_id`, `destination_id`, `contract_id`, `caller_id`,
+      `transaction_id`, etc.). Other tables (`assets`, `nfts`,
+      `liquidity_pools`, `lp_positions`,
+      `liquidity_pool_snapshots`, `operations_appearances`,
+      `transaction_participants`, `nft_ownership`) keep their natural
+      / composite primary keys — for them composite (StrKey-or-hash, …)
+      ORDER BYs work cheaply. ORDER BY on the three hub tables uses
+      the natural key (`account_id`, `contract_id`,
+      `(ledger_sequence, application_order)`) — surrogate `id` is for
+      FK joins only, not granule pruning. cityhash-rs Cargo dep
+      reinstated; `crates/db-clickhouse/src/persist/ids.rs`
+      recreated with exactly three helpers (`account_id`,
+      `contract_id`, `transaction_id`); writer / row structs /
+      tests updated accordingly. Honest framing of the trade in
+      `crates/db-clickhouse/README.md` §"Surrogate-id hubs".
 ---
 
 # ADR 0044: ClickHouse pilot — parallel store mirroring Postgres schema, with full-content soroban_events

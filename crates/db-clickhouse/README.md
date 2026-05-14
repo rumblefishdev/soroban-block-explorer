@@ -205,12 +205,152 @@ crates/db-clickhouse/
 ├── README.md                       (this file)
 ├── schema/
 │   └── init.sql                    17 tables + 1 Dictionary, idempotent
+├── config.d/                       (XML server-config mounts for docker compose)
+│   └── timeouts.xml
+├── users.d/
+│   └── timeouts.xml                profile-level http_*/receive/send_timeout overrides
 ├── src/
 │   ├── lib.rs                      Config + client factory + `apply_init_sql`
+│   ├── persist.rs                  Writer entrypoint + module root
+│   ├── persist/
+│   │   ├── ids.rs                  cityhash64 surrogate-id helpers (3 hubs)
+│   │   ├── rows.rs                 #[derive(clickhouse::Row)] per table
+│   │   ├── stage.rs                Extracted* → row staging
+│   │   └── writer.rs               PartitionWriter (long-lived inserts)
 │   └── bin/db-clickhouse-init.rs   CLI: applies init.sql to a target instance
 └── tests/
     └── smoke.rs                    end-to-end smoke (gated on CLICKHOUSE_URL)
 ```
+
+## Writer
+
+Real writes land via the `persist` module. The production caller
+(`crates/backfill-runner`) drives the writer through a
+partition-writer lifecycle:
+
+```rust
+let mut handle = sink.open_partition();         // CH: construct PartitionWriter
+for meta in partition_ledgers {
+    handle.write_ledger(meta, cache).await?;    // CH: stream into open inserts
+}
+handle.commit().await?;                          // CH: end inserts + write ledgers commit-marker
+```
+
+PG side: `open_partition` borrows the pool, `commit` is a no-op,
+`write_ledger` runs the existing per-ledger DB transaction — behaviour
+is byte-for-byte equivalent to the pre-task-0206 path.
+
+CH side: `db_clickhouse::persist::PartitionWriter` holds one
+long-lived `clickhouse::Insert<RowT>` per CH table, lazy-initialised
+on the first row written to that table within the partition. At
+`commit()` every non-`ledgers` insert is ended in PG-FK-friendly
+order, then the `ledgers` insert opens + ends as the partition's
+**commit marker**. Mid-partition failure leaves no `ledgers` rows for
+the range; resume re-does the whole partition cleanly.
+
+For the full design — why per-ledger inserts are wrong here, the
+commit-marker contract, the bulk-ingest CH settings the writer
+applies, and the deterministic ID derivation rule — see
+[`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md#writers).
+
+### Surrogate-id hubs (hybrid design)
+
+**Three** tables carry surrogate `id Int64` columns, derived
+deterministically via `cityhash64(natural_key)` in
+[`crates/db-clickhouse/src/persist/ids.rs`](src/persist/ids.rs):
+
+- `accounts.id` ← `cityhash64(account_id StrKey)`
+- `soroban_contracts.id` ← `cityhash64(contract_id StrKey)`
+- `transactions.id` ← `cityhash64(hash bytes)`
+
+These three are the **central FK hubs** — referenced by 6–8
+downstream tables each, with tens of millions of unique values at
+full mainnet scale. Empirical measurement on the 10 k-ledger smoke
+(62016000–62025999) showed a fully-natural-key variant added ~500
+MB on-disk vs the surrogate-id baseline, projected ~550 GB at 11 M
+full scale. Plus +10 ms write/ledger from `LowCardinality(String)`
+dictionary build on the high-cardinality FK columns.
+
+All FK columns referencing these three tables are `Int64`
+(`transactions.source_id`, `operations_appearances.contract_id`,
+`soroban_events.transaction_id`, etc.) — cheap integer joins, ~7×
+smaller on-disk than 56-byte StrKey FK columns.
+
+**Other tables (`assets`, `nfts`, `liquidity_pools`, `lp_positions`,
+`liquidity_pool_snapshots`, `operations_appearances`,
+`transaction_participants`, `nft_ownership`)** stay on natural /
+composite primary keys — for them, composite ORDER BYs over already-
+cheap-shape columns (FixedString(32) hashes, low-cardinality codes,
+Int64 FK references) work without a hash layer.
+
+**Honest trade-off**: surrogate `id` values are opaque integers in
+GUIs / direct SQL inspection. Three reasons we accept this:
+
+1. **Storage + read perf** — ~7× smaller FK columns, faster JOIN
+   on integer equality vs variable-length-string memcmp.
+2. **`ORDER BY (account_id)` on hub tables** — natural-key direct
+   queries (`WHERE account_id = 'GDMOSA…'`) still granule-prune
+   cheaply; surrogate `id` is for FK joins only, not lookups.
+3. **Deterministic derivation** — same input → same `id`, always.
+   Replay-idempotent, parallel-writer-safe, cross-table FK
+   consistent by integer equality.
+
+**Caveat (deliberate divergence)** — our `cityhash` is the lower 64
+bits of CityHash v1.0.2 128-bit (`cityhash-rs::cityhash_102_128`),
+**not** bit-equivalent to CH SQL `cityHash64()` (which is the
+64-bit variant of CityHash v1.0.2 — different algorithm). Future
+CH-side `JOIN ... ON cityHash64(...) = id` needs a UDF wrapping the
+writer's helper. Documented in
+[`docs/architecture/database-schema/clickhouse-pilot.md`](../../docs/architecture/database-schema/clickhouse-pilot.md).
+
+### Server-side bulk-ingest settings
+
+The writer applies these CH settings on every per-table insert:
+
+| Setting                       | Value         | Why                                                                                              |
+| ----------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
+| `async_insert`                | `0`           | Client-side batching. Server-side async-buffer adds latency variance without gain.               |
+| `max_insert_block_size`       | `1_048_576`   | Pinned against future CH default drift.                                                          |
+| `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunks into 1 M-row blocks before the part-create path.                           |
+| `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                       |
+| `insert_deduplicate`          | `0`           | Rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                           |
+| `http_receive_timeout`        | `7200` (2 h)  | CH default 30s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` that fill the client's 256 KiB buffer slowly. Surface: `Network("channel closed")` after ~10 min on a real mainnet partition. 2 h covers a 64 k-ledger partition (~80 min wall-clock) with headroom for parallel contention. |
+| `http_send_timeout`           | `7200` (2 h)  | Same axis, response side.                                                                        |
+
+> **Important — split XML config overrides.** CH 26.3 records the
+> per-query `with_setting("http_receive_timeout", "7200")` in
+> `system.query_log.Settings` but does **not** propagate it to the
+> Poco-level socket read timeout that actually fires on the chunked
+> HTTP body. Only **XML config files** take effect for the wire
+> behaviour. The pilot ships two override files, mounted in the
+> `clickhouse` service in `docker-compose.yml`:
+>
+> - [`config.d/timeouts.xml`](config.d/timeouts.xml) → mounted at
+>   `/etc/clickhouse-server/config.d/timeouts.xml`. Bumps
+>   `merge_tree.parts_to_delay_insert = 1000` and
+>   `parts_to_throw_insert = 5000` so the background merger has
+>   headroom under sustained heavy-insert pressure during the
+>   backfill. RAM cap (`max_server_memory_usage`) is intentionally
+>   not set here — per-query `max_memory_usage` in the user profile
+>   is the only memory ceiling for the pilot.
+> - [`users.d/timeouts.xml`](users.d/timeouts.xml) → mounted at
+>   `/etc/clickhouse-server/users.d/timeouts.xml`. Profile-level
+>   `http_receive_timeout / http_send_timeout / receive_timeout /
+>   send_timeout = 7200` on the `default` profile plus
+>   `max_memory_usage = 6 GB` per-query cap.
+>
+> Both are **file-level** (not directory-level) bind mounts because
+> the official CH docker entrypoint writes its own files into both
+> `config.d/` and `users.d/` based on `CLICKHOUSE_USER` /
+> `CLICKHOUSE_PASSWORD` env. Mounting the whole directory `:ro`
+> blocks entrypoint with `Read-only file system` and CH never starts.
+>
+> The writer still calls `with_setting` belt-and-suspenders — zero
+> cost; future CH versions may start propagating per-query overrides
+> to the Poco socket read.
+
+`enable_http_compression` stays at CH default (off). Loopback
+transport — compression CPU on both sides for no measurable gain.
 
 ## Client choice
 
@@ -278,6 +418,19 @@ The full table-by-table ENGINE / PARTITION BY / ORDER BY matrix lives in
 | CHECK constraints                                   | OMIT for the pilot                                                          |
 | GIN / `pg_trgm` indexes                             | OMIT (no equivalent)                                                        |
 | Partial unique indexes                              | OMIT (no enforcement); composite ORDER BY uses `allow_nullable_key` instead |
+
+### Column-level codec on `soroban_events`
+
+`topics_xdr` and `data_xdr` carry `CODEC(ZSTD(3))` (every other
+`String` column in the schema stays on CH-default LZ4). The two
+columns hold ScVal-decoded JSON with a heavily-repeated
+`{"type":...,"value":...}` wrapper per topic; LZ4's 64-KiB sliding
+window cannot exploit that long-range pattern. Measured on the first
+100 mainnet ledgers: `topics_xdr` LZ4 ratio 6.29×, ZSTD(3) reaches
+~20–40× on the same shape. Read-path cost is identical (ZSTD
+decompression matches LZ4 in CH); insert CPU is a one-time
+append-only write. See ADR 0044 history for the empirical
+justification.
 
 ### Two CH-side coercions for `ReplacingMergeTree` version columns
 

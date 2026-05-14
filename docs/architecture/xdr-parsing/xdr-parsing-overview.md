@@ -239,9 +239,42 @@ entities:
 - classic LP state → `liquidity_pools` row + `liquidity_pool_snapshots` row +
   `lp_positions` upsert per participating account (asset pair modeled as typed
   `asset_*_type SMALLINT` + code + issuer_id, not JSONB)
+- **classic-credit + native asset entity rows** → `assets` row per distinct
+  `(asset_code, issuer)` pair observed in a `trustline` LedgerEntryChange
+  (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
+  per-ledger singleton emit (`xdr_parser::native_asset_singleton`) — the
+  persist `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.
+  These two paths complement `detect_assets`, which only emits SAC + Soroban
+  variants from observed contract deployments. Without the dedicated
+  classic-credit producer, `account_balances_current` would carry the
+  balances but the entity row never existed (Karol's pre-audit Bug #1).
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.
+
+**Post-parse derivations not produced by the XDR parser itself** (covered in
+[`indexing-pipeline-overview.md`](../indexing-pipeline/indexing-pipeline-overview.md) §5.2
+step 14, called out here so the parser/indexer boundary stays explicit):
+
+- `assets.total_supply` / `assets.holder_count` — computed by
+  `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`
+  from `account_balances_current` _after_ the parser writes the balance rows.
+  Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
+  on-chain-derivable, hence indexer-owned. The parser only produces the
+  per-trustline / per-balance rows; the aggregate is a downstream rollup.
+- `liquidity_pool_snapshots.volume` / `fee_revenue` / `tvl` — per-op extraction
+  half is on-chain (parser provides PathPayment `claimedOffers[].amount_sold`),
+  USD denomination half is off-chain (Lambda 2 / price oracle). Consolidated
+  under task 0199. The parser does NOT compute these aggregates today —
+  columns stay NULL until 0199 ships.
+- `assets.name` for classic credit — extracted from issuer's SEP-1 TOML by
+  Lambda 2 (`sep1_assets` kind, task 0195 §2a). Parser produces only
+  `asset_code` / `issuer_id` for classic credits; the human-readable name is
+  off-chain and lives outside parser scope.
+- `nfts.name` / `nfts.media_url` / `nfts.collection_name` — extracted from the
+  NFT contract's `token_uri()` JSON by Lambda 2 (`nft_token_uri` kind,
+  task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
+  `current_owner_id`) tuple — see §5.1 NFT pattern.
 
 ## 5. Soroban-Specific Handling
 
@@ -450,9 +483,24 @@ If `stellar-xdr` returns an error during ingestion:
 - `transactions.parse_error = true` is set on the affected row
 - the transaction remains visible with all non-failed fields available
 
-At read time, E3 retries the archive fetch and re-parse on its own retry budget.
-If that also fails, the detail endpoint returns a decode-failure marker in the
-response; list endpoints are not affected because they do not call the archive.
+At read time, the transaction detail handler reads `transactions.parse_error`
+from the DB and **short-circuits** the archive fetch + re-parse for any row
+where the flag is `true` (task 0190 — `crates/api/src/transactions/handlers.rs`).
+The response carries `heavy: null` + `heavy_fields_status: "unavailable"` so
+the lore-0044 / lore-0046 contract holds: the light slice is always served,
+the heavy block is explicitly unavailable. Skipping the archive call on
+known-degraded rows also avoids a wasted S3 round-trip per request. List
+endpoints are unaffected because they do not call the archive.
+
+The three reachable triggers for `parse_error = true` — `envelope.is_none()`,
+`envelope_xdr.is_empty()`, `result_xdr.is_empty()` — are exercised by
+synthetic-fixture unit tests in
+`crates/xdr-parser/src/transaction.rs::parse_error_tests` (Variant A,
+Variant B, plus a default-limits regression sentinel). End-to-end
+persist coverage lives in `crates/indexer/tests/persist_integration.rs`
+(`parse_error_transaction_persists_and_replays_idempotent`); the API
+overlay contract is locked in
+`crates/api/src/tests_integration.rs::detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact`.
 
 ### 7.2 Unknown Operation Types
 

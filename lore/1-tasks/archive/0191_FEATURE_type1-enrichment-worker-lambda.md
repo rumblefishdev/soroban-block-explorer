@@ -3,7 +3,7 @@ id: '0191'
 title: 'Type-1 enrichment live path (icon only): SQS-driven worker for assets.icon_url'
 type: FEATURE
 status: completed
-related_adr: ['0029']
+related_adr: ['0029', '0043']
 related_tasks: ['0124', '0187', '0188']
 tags:
   [
@@ -359,12 +359,24 @@ Open design questions inside the task (not blocking kickoff):
 
 ## Future Work
 
-- **Local backfill CLI subcommand** — `backfill-runner enrichment run /
+- **Local backfill CLI subcommand** — ~~`backfill-runner enrichment run /
 status`. Reuses `enrichment_shared::enrich_and_persist::icon::enrich_asset_icon`
   to drain rows that pre-date the live producer. Streaming
   per-asset SELECT + `buffer_unordered(10)`, sentinel resume on
   `WHERE icon_url IS NULL`. Spawn a separate task when 0191 is in
-  production and the live path is proven.
+  production and the live path is proven.~~
+  **OBSOLETE (2026-05-11).** Superseded by task 0196 which lands the
+  backfill as a **separate crate** `crates/backfill-enrichment-runner`,
+  not a `backfill-runner` subcommand. Karol overrode this bullet on
+  2026-05-06 — enrichment backfill and ledger backfill have different
+  concerns, different data sources, different operational profiles;
+  mixing them into one CLI would violate 0191 design decision #8
+  (which mandated the ledger-backfill code path stay untouched). The
+  separate crate guarantees that boundary. Streaming + concurrency
+  shape inherited (chunked cursor + `Semaphore`-bounded fan-out), but
+  the entry point is its own bin (`enrich icon` / `enrich nft-metadata`
+  / `enrich status`) modelled on `audit-harness`'s shape rather than
+  `backfill-runner`'s.
 - **Add LP analytics kind** — extend `enrichment-shared::enrich` with
   `enrich_pool_tvl`, add `lp_tvl` arm to the worker dispatcher, add
   the columns migration and indexer SQS produce hook for new LP rows.
