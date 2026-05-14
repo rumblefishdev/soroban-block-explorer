@@ -2,7 +2,7 @@ export type EntityType =
   | 'transaction'
   | 'account'
   | 'contract'
-  | 'token'
+  | 'asset'
   | 'pool'
   | 'ledger'
   | 'nft';

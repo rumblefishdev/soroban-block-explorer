@@ -32,7 +32,7 @@ export function isValidIdentifier(type: EntityType, value: string): boolean {
       return isContractId(value);
     case 'ledger':
       return isLedgerSequence(value);
-    case 'token':
+    case 'asset':
     case 'pool':
     case 'nft':
       return value.length > 0;

@@ -6,7 +6,7 @@ const defaultByType: Record<EntityType, TruncationConfig> = {
   transaction: { prefix: 12, suffix: 8 },
   account: { prefix: 6, suffix: 4 },
   contract: { prefix: 6, suffix: 4 },
-  token: { prefix: 6, suffix: 4 },
+  asset: { prefix: 6, suffix: 4 },
   pool: { prefix: 6, suffix: 4 },
   nft: { prefix: 6, suffix: 4 },
   ledger: { prefix: 0, suffix: 0 },
