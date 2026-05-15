@@ -4,7 +4,7 @@ title: 'Frontend: Transactions list page'
 type: FEATURE
 status: completed
 related_adr: []
-related_tasks: ['0227']
+related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
 milestone: 2
 links: []
@@ -32,7 +32,7 @@ history:
       Completed. 6 files (web/src/pages/transactions/* + page). build +
       typecheck + lint green; layout, table, pagination and all states
       verified in the dev preview against a local mock API. Figma gaps in
-      libs/ui shared states deferred to task 0227.
+      libs/ui shared states noted under Future Work.
 ---
 
 # Frontend: Transactions list page
@@ -207,13 +207,16 @@ verified in the dev preview; table-with-data not verified (local API offline).
 
 ## Future Work
 
-- **Task 0227** — `libs/ui` error/empty state components diverge from Figma
+- `libs/ui` error/empty state components diverge from the Figma Design System
   (error copy/buttons/icons, missing `TableEmptyState` filtered variant, square
   `EmptyState` icon container, no two-line `TimestampCell`). Fixes were prepared
-  here but reverted — those files belong to other tasks; spawned 0227 to correct
-  them at source.
+  here but reverted — those files belong to other tasks and should be corrected
+  at source, coordinated with their owner.
 - Operation pill colour (`Chip color="neutral"`) and the `+N` multi-operation
   indicator were judgement calls — confirm against Figma with design.
+- `GET /transactions` exposes `operation_type` as a free string; the OpenAPI
+  spec has no operation-type enum, so the filter dropdown list is hardcoded.
+  An enum in the API schema would let it be generated instead.
 
 ## Notes
 
