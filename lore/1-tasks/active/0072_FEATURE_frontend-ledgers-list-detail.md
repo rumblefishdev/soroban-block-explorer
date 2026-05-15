@@ -2,7 +2,7 @@
 id: '0072'
 title: 'Frontend: Ledgers list and detail pages'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-small, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-15
+    status: active
+    who: karolkow
+    note: 'Promoted to active'
 ---
 
 # Frontend: Ledgers list and detail pages
