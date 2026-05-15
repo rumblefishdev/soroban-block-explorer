@@ -1,4 +1,3 @@
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import AddBoxIcon from '@mui/icons-material/AddBoxOutlined';
 import AddCircleIcon from '@mui/icons-material/AddCircleOutline';
 import ImageIcon from '@mui/icons-material/ImageOutlined';
@@ -6,12 +5,7 @@ import ListAltIcon from '@mui/icons-material/ListAlt';
 import { Box, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
-export type TableEmptyKind =
-  | 'transactions'
-  | 'ledgers'
-  | 'tokens'
-  | 'nft'
-  | 'accounts';
+export type TableEmptyKind = 'transactions' | 'ledgers' | 'tokens' | 'nft';
 
 interface Preset {
   icon: ReactNode;
@@ -39,11 +33,6 @@ const PRESETS: Record<TableEmptyKind, Preset> = {
     icon: <ImageIcon fontSize="small" />,
     title: 'No NFTs found',
     description: 'No NFT contracts have been deployed on this network yet',
-  },
-  accounts: {
-    icon: <AccountBalanceWalletIcon fontSize="small" />,
-    title: 'No accounts found',
-    description: 'No accounts have been indexed on this network yet',
   },
 };
 

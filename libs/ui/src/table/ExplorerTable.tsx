@@ -59,6 +59,10 @@ export function ExplorerTable<T>({
                   sx={{ textTransform: 'none' }}
                 >
                   {col.sortable ? (
+                    // active is always true so the neutral CaretUpDown
+                    // glyph renders for every sortable column (per Figma
+                    // node 2-1696); transform is reset below to suppress
+                    // MUI's asc/desc rotation.
                     <TableSortLabel
                       active
                       direction={dir}
