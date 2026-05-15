@@ -41,7 +41,8 @@ export function useTableUrlState(
       if (v) filters[key] = v;
     }
     const rawDir = params.get(DIR_PARAM);
-    const sortDir: SortDirection = rawDir === 'asc' ? 'asc' : defaultSortDir;
+    const sortDir: SortDirection =
+      rawDir === 'asc' || rawDir === 'desc' ? rawDir : defaultSortDir;
     return {
       cursor: params.get(CURSOR_PARAM),
       sortBy: params.get(SORT_PARAM) ?? defaultSortBy ?? null,

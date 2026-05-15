@@ -1,3 +1,4 @@
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import {
   Box,
@@ -57,23 +58,24 @@ export function ExplorerTable<T>({
                   sortDirection={isSorted ? sortDir : false}
                 >
                   {col.sortable ? (
-                    // active is always true so the neutral CaretUpDown
-                    // glyph renders for every sortable column (per Figma
-                    // node 2-1696); transform is reset below to suppress
-                    // MUI's asc/desc rotation.
+                    // Unsorted columns show a neutral CaretUpDown; the
+                    // sorted column swaps to a directional caret that
+                    // MUI rotates for asc/desc.
                     <TableSortLabel
-                      active
+                      active={isSorted}
+                      direction={isSorted ? sortDir : 'desc'}
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
                         onSortChange?.(col.id, next);
                       }}
-                      IconComponent={UnfoldMoreIcon}
+                      IconComponent={
+                        isSorted ? KeyboardArrowDownIcon : UnfoldMoreIcon
+                      }
                       sx={(theme) => ({
                         '& .MuiTableSortLabel-icon': {
-                          opacity: 0.5,
                           fontSize: 12,
-                          transform: 'none',
+                          opacity: isSorted ? 1 : 0.5,
                           color: theme.palette.text.primary,
                         },
                       })}
