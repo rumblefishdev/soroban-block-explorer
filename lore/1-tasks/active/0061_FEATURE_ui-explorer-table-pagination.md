@@ -21,6 +21,10 @@ history:
     status: active
     who: karolkow
     note: 'Components + hooks landed (631b96c, fbc677b); tests + demo outstanding'
+  - date: 2026-05-15
+    status: active
+    who: karolkow
+    note: 'Playground demo (6e42807) verified in-browser; spawned 0221 for test infra'
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
@@ -128,10 +132,24 @@ Verified: `nx` build + typecheck + lint green for `libs/ui` and `web`.
 
 Outstanding:
 
-- Unit tests — `libs/ui` has no Vitest/test-target infra yet; setting it
-  up (jsdom + `@testing-library/react` + test target) is a prerequisite.
-- Runtime demo — wire into a `web` list page to confirm 1:1 visual parity
-  in-browser.
+- Unit tests — `libs/ui` has no Vitest/test-target infra; spawned as
+  backlog task 0221.
+
+Done:
+
+- Commit `6e42807` — `/table-playground` route renders all four
+  primitives against mock data. Verified in-browser: sort toggles
+  desc/asc and syncs `?sort`/`?dir`, `Next` writes `?cursor` and enables
+  `Previous`, a sort change drops the stale cursor, empty table renders
+  `TableEmptyState`.
+- Commit `436eef7` — `package-lock.json` synced with the `react-router-dom`
+  peer dep.
+
+## Future Work
+
+- **Unit test infrastructure for `libs/ui`** → backlog task 0221.
+  `libs/ui` has no Vitest config / test target; standing it up plus the
+  first table-primitive tests is its own piece of work.
 
 ### Docs updated (ADR 0032)
 
