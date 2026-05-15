@@ -39,43 +39,46 @@ export function PaginationControls({
         <Box />
       )}
       <Stack direction="row" spacing={1} alignItems="center">
-        <Button
-          variant="text"
-          size="small"
+        <PagerButton
+          label="Previous"
           disabled={prevDisabled}
           onClick={() => prevCursor && onPrev?.(prevCursor)}
-          sx={(theme) => ({
-            borderRadius: theme.shape.radius.pills,
-            px: 2,
-            py: 1,
-            color: prevDisabled
-              ? theme.palette.text.tertiary
-              : theme.palette.text.primary,
-            ...theme.typography.bodySmMedium,
-            textTransform: 'none',
-          })}
-        >
-          Previous
-        </Button>
-        <Button
-          variant="text"
-          size="small"
+        />
+        <PagerButton
+          label="Next"
           disabled={nextDisabled}
           onClick={() => nextCursor && onNext?.(nextCursor)}
-          sx={(theme) => ({
-            borderRadius: theme.shape.radius.pills,
-            px: 2,
-            py: 1,
-            color: nextDisabled
-              ? theme.palette.text.tertiary
-              : theme.palette.text.primary,
-            ...theme.typography.bodySmMedium,
-            textTransform: 'none',
-          })}
-        >
-          Next
-        </Button>
+        />
       </Stack>
     </Box>
+  );
+}
+
+interface PagerButtonProps {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+function PagerButton({ label, disabled, onClick }: PagerButtonProps) {
+  return (
+    <Button
+      variant="text"
+      size="small"
+      disabled={disabled}
+      onClick={onClick}
+      sx={(theme) => ({
+        borderRadius: theme.shape.radius.pills,
+        px: 2,
+        py: 1,
+        color: disabled
+          ? theme.palette.text.tertiary
+          : theme.palette.text.primary,
+        ...theme.typography.bodySmMedium,
+        textTransform: 'none',
+      })}
+    >
+      {label}
+    </Button>
   );
 }

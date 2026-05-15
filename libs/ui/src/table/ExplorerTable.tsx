@@ -49,14 +49,12 @@ export function ExplorerTable<T>({
           <TableRow>
             {columns.map((col) => {
               const isSorted = sortBy === col.id;
-              const dir = isSorted ? sortDir : 'desc';
               return (
                 <TableCell
                   key={col.id}
                   align={col.align ?? 'left'}
                   width={col.width}
                   sortDirection={isSorted ? sortDir : false}
-                  sx={{ textTransform: 'none' }}
                 >
                   {col.sortable ? (
                     // active is always true so the neutral CaretUpDown
@@ -65,7 +63,6 @@ export function ExplorerTable<T>({
                     // MUI's asc/desc rotation.
                     <TableSortLabel
                       active
-                      direction={dir}
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
