@@ -2,7 +2,8 @@ import type { TypographyVariantsOptions } from '@mui/material/styles';
 
 const headingFontFamily = '"Mona Sans", system-ui, sans-serif';
 const bodyFontFamily = '"Inter", system-ui, sans-serif';
-const monoFontFamily = '"JetBrains Mono", ui-monospace, monospace';
+export const monoFontFamily =
+  '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 type Weight = 400 | 500 | 600 | 700;
 
@@ -90,6 +91,7 @@ export const typography: TypographyVariantsOptions = {
   }),
 
   heading5Bold: makeHeading({ desktopSize: 24, mobileSize: 18, weight: 700 }),
+  // Figma value: hardcoded 24px regardless of viewport (mirrors source).
   heading5SemiBold: makeHeading({ desktopSize: 24, weight: 600 }),
   heading5Medium: makeHeading({ desktopSize: 24, mobileSize: 18, weight: 500 }),
   heading5Regular: makeHeading({
@@ -104,6 +106,7 @@ export const typography: TypographyVariantsOptions = {
     mobileSize: 16,
     weight: 600,
   }),
+  // Figma value: lineHeight 1.22 (outlier vs other h6 weights' 1.2).
   heading6Medium: makeHeading({
     desktopSize: 20,
     mobileSize: 16,
