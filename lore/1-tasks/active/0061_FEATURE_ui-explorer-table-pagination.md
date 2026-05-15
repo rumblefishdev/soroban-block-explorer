@@ -24,7 +24,7 @@ history:
   - date: 2026-05-15
     status: active
     who: karolkow
-    note: 'Verified in-browser via local demo; reverted playground route (59effa9); spawned 0221'
+    note: 'Verified in-browser via local demo; reverted playground route (59effa9); spawned 0226'
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
@@ -133,7 +133,7 @@ Verified: `nx` build + typecheck + lint green for `libs/ui` and `web`.
 Outstanding:
 
 - Unit tests — `libs/ui` has no Vitest/test-target infra; spawned as
-  backlog task 0221.
+  backlog task 0226.
 
 Done:
 
@@ -148,7 +148,7 @@ Done:
 
 ## Future Work
 
-- **Unit test infrastructure for `libs/ui`** → backlog task 0221.
+- **Unit test infrastructure for `libs/ui`** → backlog task 0226.
   `libs/ui` has no Vitest config / test target; standing it up plus the
   first table-primitive tests is its own piece of work.
 
