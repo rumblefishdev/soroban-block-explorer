@@ -316,6 +316,29 @@ That split should remain stable even if the network layout expands later.
 - provide the infrastructure deployment pipeline
 - are the documented mechanism for infrastructure-as-code rollout
 
+### 5.6 Production ClickHouse on Hetzner (task 0216)
+
+The local-development ClickHouse pilot described in §5.2 is graduated
+to a production deployment on a Hetzner-hosted dedicated server.
+Hetzner hosts the data plane only; the application API remains on AWS.
+
+As part of this migration, the AWS-side topology is restructured:
+Lambda functions are moved out of the VPC and the long-running
+ingestion task is moved to a public subnet, eliminating the NAT
+Gateway. Authentication between AWS-side workloads and the Hetzner-
+hosted database is based on cryptographic identity (mutual TLS).
+
+High-level decisions are recorded in the
+[task 0216 notes](../../../lore/1-tasks/active/0216_RESEARCH_hetzner-clickhouse-deploy/notes/S-decisions.md).
+
+**Relationship to the AWS sections above:** the AWS topology described
+in §§3–5.5 represents the original infrastructure design and is
+preserved verbatim. Post-CH-migration, the AWS-hosted database is
+decommissioned, Lambdas exit their VPC, the ingestion task moves to a
+public subnet, and the NAT Gateway is removed. A separate, future ADR
+records this architectural realignment in which the Hetzner-hosted
+ClickHouse becomes the production data plane.
+
 ## 6. Networking and Security Boundary
 
 ### 6.1 Network Shape
