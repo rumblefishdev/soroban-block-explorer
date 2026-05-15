@@ -760,12 +760,11 @@ export const overrides: Components<Theme> = {
         verticalAlign: 'middle',
       }),
       head: ({ theme }) => ({
-        fontSize: 12,
-        fontWeight: 600,
-        color: theme.palette.text.secondary,
-        textTransform: 'uppercase',
-        letterSpacing: '0.04em',
-        padding: '10px 16px',
+        fontSize: 14,
+        fontWeight: 500,
+        color: theme.palette.text.primary,
+        letterSpacing: '-0.02em',
+        padding: '8px 16px',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       }),
       body: ({ theme }) => ({
