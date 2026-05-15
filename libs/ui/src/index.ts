@@ -44,6 +44,28 @@ export {
 } from './timestamps/index.js';
 
 export {
+  ExplorerTable,
+  PaginationControls,
+  TableSectionHeader,
+  TableEmptyState,
+  useTableUrlState,
+  useCursorPagination,
+} from './table/index.js';
+export type {
+  ExplorerTableColumn,
+  ExplorerTableProps,
+  SortDirection,
+  PaginationControlsProps,
+  TableSectionHeaderProps,
+  TableEmptyStateProps,
+  TableEmptyKind,
+  TableUrlState,
+  UseTableUrlStateOptions,
+  UseTableUrlStateResult,
+  UseCursorPaginationResult,
+} from './table/index.js';
+
+export {
   NetworkSwitcher,
   type Network,
   type NetworkSwitcherProps,
