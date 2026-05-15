@@ -17,6 +17,10 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active — parallel frontend lib work on separate worktree'
+  - date: 2026-05-15
+    status: active
+    who: karolkow
+    note: 'Components + hooks landed (631b96c, fbc677b); tests + demo outstanding'
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
@@ -96,18 +100,47 @@ Export all table components and hooks from `libs/ui` barrel.
 
 ## Acceptance Criteria
 
-- [ ] ExplorerTable renders semantic HTML (`<table>`, `<thead>`, `<th>`, `<td>`)
-- [ ] Table accepts generic column definitions and typed row data
-- [ ] Sortable columns toggle sort direction on header click
-- [ ] PaginationControls show Previous/Next only, no page numbers or total counts
-- [ ] Previous disabled when no prevCursor; Next disabled when no nextCursor
-- [ ] Cursor pagination hook reads/writes cursor to URL query params
-- [ ] Filter changes reset cursor to null
-- [ ] No hard page reloads on filter, sort, or pagination changes
-- [ ] SectionHeader renders contextual table section titles
-- [ ] URL state sync works bidirectionally for filters, sorting, and cursor
-- [ ] Components reusable across all list pages and detail page sub-sections
-- [ ] All components and hooks exported from `libs/ui`
+- [x] ExplorerTable renders semantic HTML (`<table>`, `<thead>`, `<th>`, `<td>`) — via MUI `Table`/`TableHead`/`TableCell`
+- [x] Table accepts generic column definitions and typed row data — `ExplorerTableColumn<T>`, `rows: readonly T[]`
+- [x] Sortable columns toggle sort direction on header click — `TableSortLabel`, desc↔asc toggle
+- [x] PaginationControls show Previous/Next only, no page numbers or total counts
+- [x] Previous disabled when no prevCursor; Next disabled when no nextCursor
+- [x] Cursor pagination hook reads/writes cursor to URL query params — `useTableUrlState` / `useCursorPagination`
+- [x] Filter changes reset cursor to null — `setFilter`/`setSort` drop `cursor` param
+- [x] No hard page reloads on filter, sort, or pagination changes — `useSearchParams` `replace: true`
+- [x] SectionHeader renders contextual table section titles — `TableSectionHeader`
+- [x] URL state sync works bidirectionally for filters, sorting, and cursor
+- [x] Components reusable across all list pages and detail page sub-sections — generic, in `libs/ui`
+- [x] All components and hooks exported from `libs/ui` — barrel `table/index.ts` + `libs/ui/src/index.ts`
+
+## Progress
+
+Delivered on `feat/0061_ui-explorer-table-pagination`:
+
+- Commit `631b96c` — visual primitives translated 1:1 from Figma DS
+  (`siumLgKOc9LLepEfbimyp3`): `ExplorerTable`, `PaginationControls`,
+  `TableSectionHeader`, `TableEmptyState`.
+- Commit `fbc677b` — `useTableUrlState` + `useCursorPagination` hooks
+  (spec from this task; Figma carries no logic). Adds `react-router-dom`
+  peer dep on `libs/ui`.
+
+Verified: `nx` build + typecheck + lint green for `libs/ui` and `web`.
+
+Outstanding:
+
+- Unit tests — `libs/ui` has no Vitest/test-target infra yet; setting it
+  up (jsdom + `@testing-library/react` + test target) is a prerequisite.
+- Runtime demo — wire into a `web` list page to confirm 1:1 visual parity
+  in-browser.
+
+### Docs updated (ADR 0032)
+
+- `docs/architecture/frontend/frontend-overview.md` — N/A: already
+  describes cursor pagination, URL-held filter/sort/cursor state, and
+  list tables (lines 92, 186-188, 234, 261, 318-331). This task
+  implements the already-documented contract; system shape unchanged.
+- All other architecture docs — N/A: frontend-only presentation
+  primitives, no schema / API / pipeline / infra change.
 
 ## Notes
 
