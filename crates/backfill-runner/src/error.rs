@@ -35,4 +35,32 @@ pub enum BackfillError {
         exit_code: i32,
         stderr: String,
     },
+
+    /// Task 0225: post-sync local file count is below `PARTITION_SIZE`
+    /// despite S3 reporting the partition as fully archived. Re-sync
+    /// did not fix it. Distinct from `AwsSyncFailed` because the
+    /// subprocess itself returned exit 0 — the failure is on our side
+    /// (disk full, permissions, network glitch that AWS CLI swallowed,
+    /// etc.).
+    #[error(
+        "partition {partition_start} sync incomplete after retry: local={local} s3={s3} need={need}"
+    )]
+    PartitionSyncFailed {
+        partition_start: u32,
+        local: usize,
+        s3: usize,
+        need: usize,
+    },
+
+    /// Task 0225: `aws s3 ls --recursive` failed when probing whether
+    /// the partition is fully archived on S3 (used to disambiguate
+    /// "S3 archive lag" from "local sync failed"). Operator must
+    /// investigate — we don't fall back to "assume complete" because
+    /// that just defers the panic to `ingest.rs`.
+    #[error("aws s3 ls failed for partition {partition_start}: {source}")]
+    S3LsFailed {
+        partition_start: u32,
+        #[source]
+        source: std::io::Error,
+    },
 }

@@ -50,6 +50,10 @@ base64 = { workspace = true }
 # Task 0214: StrKey decode for `G…` → 32-byte ed25519 public key
 # when constructing `LedgerKey::Account` keys to request.
 stellar-strkey = "0.0.16"
+# Task 0225: dyn-dispatch S3 driver trait so the sync orchestrator
+# can be unit-tested with a mock without spinning an `aws s3 ls`
+# subprocess. Single use site in sync.rs.
+async-trait = "0.1"
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture

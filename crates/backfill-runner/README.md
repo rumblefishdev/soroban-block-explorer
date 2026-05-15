@@ -199,6 +199,38 @@ built at startup:
 a LIST with no GETs — so there is no Stage A marker or file-count check.
 A partial dir from a crashed run gets filled in on the next sync.
 
+## Recent partitions and AWS S3 archive lag
+
+The public Stellar archive on
+`s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` lags real-time
+mainnet by a window of hours. Partitions covering the live tail of the
+chain may be partially uploaded at sync time: `aws s3 sync` exits 0,
+the local folder is incomplete, and indexing would panic on the first
+missing file.
+
+Task 0225 added a post-sync validation pass to `sync_partition`:
+
+| Local count          | S3 count (via `aws s3 ls`) | Behaviour                                      |
+|----------------------|----------------------------|------------------------------------------------|
+| `== PARTITION_SIZE`  | (not probed)               | proceed to index (`SyncOutcome::Complete`)     |
+| `< PARTITION_SIZE`   | `< PARTITION_SIZE`         | **skip + warn** (`SyncOutcome::S3Incomplete`)  |
+| `< PARTITION_SIZE`   | `== PARTITION_SIZE`        | retry sync once; still partial → hard error    |
+
+`SyncOutcome::S3Incomplete` is operator-visible via a `WARN` log line
+carrying `partition_start`, `local_files`, `s3_files`, and the partition
+count is reflected in the final run summary
+(`partitions skipped (S3)`). The run continues to the next partition;
+no panic.
+
+Operator action when archive lag is in effect: rerun the same
+`--start … --end …` window after the archive catches up (typically
+within a few hours). `resume.rs` picks up exactly the skipped ledgers
+on the next run.
+
+If the runner crashes mid-partition for a non-sync reason (parse
+error, OOM, etc.), follow
+[`docs/runbooks/0225_backfill_crash_recovery.md`](../../docs/runbooks/0225_backfill_crash_recovery.md).
+
 ## Retry policy
 
 - **`aws s3 sync`** — 3 attempts, 2s base delay, ×2 multiplier, 30s cap.
@@ -206,10 +238,16 @@ A partial dir from a crashed run gets filled in on the next sync.
 - **Parse / persist errors** — not retried. Parse failures indicate a
   data-shape bug; schema / constraint violations are write-path bugs.
   Both surface immediately.
-- **Missing file post-sync** — panics (`assert!`). A file absent after a
-  successful `aws s3 sync` means either an archive gap or a sync bug;
-  both are worth a stack trace, not a silent skip. Debug-first stance
-  for the duration of 0149's write-path churn — revisit once stable.
+- **Local partial sync despite full S3** — one fresh `sync_partition`
+  retry (above the internal `run_sync_with_retry`'s 3 attempts). Still
+  partial → `BackfillError::PartitionSyncFailed`. See [Recent partitions
+  and AWS S3 archive lag](#recent-partitions-and-aws-s3-archive-lag).
+- **Missing file post-sync** — still panics via `assert!(path.exists(),
+  …)` in `ingest.rs`, but in practice unreachable after task 0225 —
+  the validation pass converts the previous panic into either
+  `SyncOutcome::S3Incomplete` (graceful skip) or
+  `BackfillError::PartitionSyncFailed` (hard error). The assert stays
+  as a last-line invariant for genuine filesystem bugs.
 
 ## Observability
 
