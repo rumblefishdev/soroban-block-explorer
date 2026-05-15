@@ -2,9 +2,9 @@
 id: '0061'
 title: 'UI lib: explorer table, pagination controls, cursor pagination adapter'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0226']
 tags: [priority-high, effort-medium, layer-frontend-shared]
 milestone: 2
 links: []
@@ -25,6 +25,16 @@ history:
     status: active
     who: karolkow
     note: 'Verified in-browser via local demo; reverted playground route (59effa9); spawned 0226'
+  - date: 2026-05-15
+    status: completed
+    who: karolkow
+    note: >
+      All 12 acceptance criteria met. 6 files in libs/ui/src/table/
+      (4 components + 2 hooks) + barrel; react-router-dom peer dep.
+      13 commits on feat/0061_ui-explorer-table-pagination. Unit tests
+      deferred to 0226 (no libs/ui test infra). Key calls: opaque
+      cursors, URL-as-state, sort caret without the DS Active pill,
+      theme header uppercase corrected to match Figma.
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
@@ -117,34 +127,72 @@ Export all table components and hooks from `libs/ui` barrel.
 - [x] Components reusable across all list pages and detail page sub-sections — generic, in `libs/ui`
 - [x] All components and hooks exported from `libs/ui` — barrel `table/index.ts` + `libs/ui/src/index.ts`
 
-## Progress
+## Implementation Notes
 
-Delivered on `feat/0061_ui-explorer-table-pagination`:
+Delivered on `feat/0061_ui-explorer-table-pagination`. New module
+`libs/ui/src/table/` (barrel + re-export from `libs/ui`):
 
-- Commit `631b96c` — visual primitives translated 1:1 from Figma DS
-  (`siumLgKOc9LLepEfbimyp3`): `ExplorerTable`, `PaginationControls`,
-  `TableSectionHeader`, `TableEmptyState`.
-- Commit `fbc677b` — `useTableUrlState` + `useCursorPagination` hooks
-  (spec from this task; Figma carries no logic). Adds `react-router-dom`
-  peer dep on `libs/ui`.
+- `ExplorerTable.tsx` — generic `ExplorerTable<T>`, semantic MUI
+  `Table`, typed `ExplorerTableColumn<T>`, sortable headers, striped
+  rows, empty-state slot.
+- `PaginationControls.tsx` — cursor Previous/Next (no page numbers /
+  totals), disabled by nullable cursor; `PagerButton` inner component.
+- `TableSectionHeader.tsx` — title + badge + description + action slots.
+- `TableEmptyState.tsx` — four Figma kinds (transactions/ledgers/
+  tokens/nft).
+- `useTableUrlState.ts` — cursor/sort/filter ↔ URL query params,
+  `replace: true`; sort/filter changes drop the cursor.
+- `useCursorPagination.ts` — thin cursor adapter over the above.
 
-Verified: `nx` build + typecheck + lint green for `libs/ui` and `web`.
+`react-router-dom` added as a `libs/ui` peer dep (hooks need router
+context). Verified: `nx` build + typecheck + lint green for `libs/ui`
+and `web`; behaviour confirmed in-browser via a local, uncommitted
+page-level demo (1:1 with Figma node 2-1696) — sort toggles desc/asc
+and syncs `?sort`/`?dir`, `Next` writes `?cursor` and enables
+`Previous`, sort/filter changes drop the stale cursor.
 
-Outstanding:
+## Issues Encountered
 
-- Unit tests — `libs/ui` has no Vitest/test-target infra; spawned as
-  backlog task 0226.
+- **Worktree had no `node_modules`** — `web` resolved `libs/ui` from the
+  main checkout (missing the new `table/` exports). Fixed by running
+  `npm install` in the worktree.
+- **Stale vite dep cache** surfaced spurious "Invalid hook call" /
+  `ReferenceError` after edits. Cleared `web/node_modules/.vite`; not a
+  code defect.
+- **Spawned task id collision** — `develop` already carried `0221`; the
+  test-infra follow-up was renumbered `0221 → 0226`.
 
-Done:
+## Design Decisions
 
-- Commit `436eef7` — `package-lock.json` synced with the `react-router-dom`
-  peer dep.
-- Behaviour verified in-browser against a local, uncommitted page-level
-  demo (1:1 with Figma node 2-1696, "Latest transactions"): sort toggles
-  desc/asc and syncs `?sort`/`?dir`, `Next` writes `?cursor` and enables
-  `Previous`, a sort change drops the stale cursor, empty table renders
-  `TableEmptyState`. The earlier `/table-playground` route (`6e42807`)
-  was reverted in `59effa9` — visual-check aids stay out of the repo.
+### From Plan
+
+1. **Cursor tokens stay opaque** — components only pass them through;
+   never parsed or constructed (task constraint, backend contract).
+2. **URL is the state store** — filter/sort/cursor live in query params
+   via `useSearchParams`; `replace: true` avoids history spam.
+3. **Hooks are spec-driven, not Figma-driven** — Figma carries no
+   logic; `useTableUrlState` / `useCursorPagination` come from the task
+   spec (Steps 3 & 5).
+
+### Emerged
+
+4. **Sort caret without the DS "Active" pill** — Figma is internally
+   inconsistent: DS `Table header` (8935:1142) has an Active state with
+   a yellow pill + CaretDown, but the page node 2-1696 shows only a
+   neutral CaretUpDown. Per review feedback the icon now reflects sort
+   state (neutral when unsorted, directional caret when sorted) but
+   drops the yellow pill. Deliberate middle ground between the two
+   Figma variants.
+5. **Theme header override corrected** — task 0058's `MuiTableCell`
+   head override forced `uppercase`; Figma headers are sentence-case.
+   Removed `uppercase` and aligned the head style (14/500/text.primary)
+   to Figma. Touches a 0058 file but is a genuine Figma-fidelity fix.
+6. **`TableEmptyState` kept to four Figma kinds** — an `accounts` kind
+   was briefly added then removed; it has no Figma source and no
+   accounts list route.
+7. **Playground demo not shipped** — a `/table-playground` route was
+   committed then reverted (`59effa9`); the page-level demo stays a
+   local, uncommitted file.
 
 ## Future Work
 
