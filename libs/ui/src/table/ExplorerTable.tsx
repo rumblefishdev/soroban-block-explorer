@@ -1,4 +1,3 @@
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import {
   Box,
@@ -49,40 +48,32 @@ export function ExplorerTable<T>({
         <TableHead>
           <TableRow>
             {columns.map((col) => {
-              const active = sortBy === col.id;
-              const dir = active ? sortDir : 'desc';
+              const isSorted = sortBy === col.id;
+              const dir = isSorted ? sortDir : 'desc';
               return (
                 <TableCell
                   key={col.id}
                   align={col.align ?? 'left'}
                   width={col.width}
-                  sortDirection={active ? sortDir : false}
+                  sortDirection={isSorted ? sortDir : false}
+                  sx={{ textTransform: 'none' }}
                 >
                   {col.sortable ? (
                     <TableSortLabel
-                      active={active}
+                      active
                       direction={dir}
                       onClick={() => {
                         const next: SortDirection =
-                          active && sortDir === 'desc' ? 'asc' : 'desc';
+                          isSorted && sortDir === 'desc' ? 'asc' : 'desc';
                         onSortChange?.(col.id, next);
                       }}
-                      IconComponent={
-                        active ? KeyboardArrowDownIcon : UnfoldMoreIcon
-                      }
+                      IconComponent={UnfoldMoreIcon}
                       sx={(theme) => ({
-                        ...(active && {
-                          '& .MuiTableSortLabel-icon': {
-                            color: theme.palette.text.primary,
-                            backgroundColor: theme.palette.surface.primaryMain,
-                            borderRadius: theme.shape.radius.pills,
-                            padding: '2px',
-                            fontSize: 20,
-                            opacity: 1,
-                          },
-                        }),
-                        '&:not(.Mui-active) .MuiTableSortLabel-icon': {
+                        '& .MuiTableSortLabel-icon': {
                           opacity: 0.5,
+                          fontSize: 12,
+                          transform: 'none',
+                          color: theme.palette.text.primary,
                         },
                       })}
                     >
