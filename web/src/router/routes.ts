@@ -9,8 +9,8 @@ export const routes = {
 
   account: (accountId: string) => `/accounts/${accountId}`,
 
-  tokens: '/tokens',
-  token: (id: string) => `/tokens/${encodeURIComponent(id)}`,
+  assets: '/assets',
+  asset: (id: string) => `/assets/${encodeURIComponent(id)}`,
 
   contract: (contractId: string) => `/contracts/${contractId}`,
 
@@ -27,7 +27,7 @@ export const NAV_LINKS = [
   { to: routes.home, label: 'Home' },
   { to: routes.transactions, label: 'Transactions' },
   { to: routes.ledgers, label: 'Ledgers' },
-  { to: routes.tokens, label: 'Tokens' },
+  { to: routes.assets, label: 'Assets' },
   { to: routes.nfts, label: 'NFTs' },
   { to: routes.pools, label: 'Pools' },
 ] as const;

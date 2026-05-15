@@ -2,7 +2,7 @@
 id: '0220'
 title: 'CH writer parity: nfts_pending routing + is_sac override UPDATE'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0027', '0030', '0044', '0046']
 related_tasks: ['0118', '0217', '0218']
 tags:
@@ -129,6 +129,21 @@ history:
       a real `CLICKHOUSE_URL` lives in
       `crates/db-clickhouse/tests/smoke.rs` (DB-gated; run locally
       when the cluster is available).
+  - date: '2026-05-14'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed after empirical verification on 64k + 512k CH pilots.
+      CH writer parity confirmed via `/compare-with-stellar-api`:
+      USDCAllow SAC + native XLM SAC override rows present in
+      `soroban_contracts` with `is_sac=true, contract_type=0=Token,
+      wasm_uploaded_at_ledger=0` exactly as designed. nfts_pending
+      routing populated with `Other`/NULL-classified contracts;
+      `nfts` hot table = 0 rows. Production wire-up (sink.rs switch
+      to `prepare_with_sac_overrides`) shipped in PR #185 (task
+      0214). Known follow-up: SAC leak into `nfts_pending` (task
+      0221, drain runbook ready) — structural CH-stage limitation
+      acknowledged in stage.rs comments.
 ---
 
 # CH writer parity: nfts_pending routing + is_sac override UPDATE

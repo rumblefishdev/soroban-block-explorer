@@ -3,7 +3,7 @@ import { createBrowserRouter } from 'react-router-dom';
 
 import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 
-import { AppShellStub } from './AppShellStub.js';
+import { AppShell } from './AppShell.js';
 import { RouteErrorBoundary } from './RouteErrorBoundary.js';
 
 const page = (load: () => Promise<{ default: ComponentType }>) => {
@@ -18,7 +18,7 @@ const page = (load: () => Promise<{ default: ComponentType }>) => {
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <AppShellStub />,
+    element: <AppShell />,
     errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: page(() => import('../pages/HomePage.js')) },
@@ -47,12 +47,12 @@ export const router = createBrowserRouter([
       },
 
       {
-        path: 'tokens',
-        element: page(() => import('../pages/TokensListPage.js')),
+        path: 'assets',
+        element: page(() => import('../pages/AssetsListPage.js')),
       },
       {
-        path: 'tokens/:id',
-        element: page(() => import('../pages/TokenDetailPage.js')),
+        path: 'assets/:id',
+        element: page(() => import('../pages/AssetDetailPage.js')),
       },
 
       {

@@ -107,6 +107,23 @@ history:
         `decode_trustline_snapshot` / `rebuild_trustline_asset`
         helpers are on the public module surface ready to wire in
         when Phase 3 lands.
+  - date: '2026-05-14'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed empirically. PR #189 shipped: `bootstrap` subcommand for
+      standalone RPC top-up (allows post-hoc fix without re-ingest),
+      `JOIN accounts AS a FINAL` CH syntax fix (latent bug in original
+      discovery query, never surfaced because unit test used
+      fabricated rows), and auto-detect watermark
+      `max(end+1, max(last_seen_ledger)+1)` to win the RMT race after
+      partial-commit crash recovery. Empirical replay on 9-partition
+      512k pilot reduced skeleton rate 17.21% → 0.80% across three
+      iterations. All three open empirical ACs satisfied via
+      `/compare-with-stellar-api` E06 verification (4/5 sample
+      accounts byte-exact MATCH vs Horizon current state; one
+      genuine non-participant skeleton edge case captured + obsoleted
+      at scale).
 ---
 
 # CH writer: initial-snapshot mechanism for account state on backfill start

@@ -2,12 +2,12 @@ import { useParams } from 'react-router-dom';
 
 import { PageStub } from './PageStub.js';
 
-export default function TokenDetailPage() {
+export default function AssetDetailPage() {
   const { id } = useParams<{ id: string }>();
   return (
     <PageStub
-      title="Token"
-      path="/tokens/:id"
+      title="Asset"
+      path="/assets/:id"
       rows={[{ label: 'id', value: id }]}
     />
   );

@@ -2,7 +2,7 @@
 id: '0219'
 title: 'BUG: indexer never writes classic-credit assets entity rows'
 type: BUG
-status: active
+status: completed
 related_adr: ['0027', '0030', '0031', '0043']
 related_tasks: ['0118', '0119', '0188', '0191', '0194', '0195', '0214', '0218']
 tags:
@@ -122,6 +122,18 @@ history:
       warnings` clean. Empirical replay (post-merge backfill rerun,
       count assets.asset_type=1 vs. distinct classic-credit pairs
       in account_balances_current) is operational follow-up.
+  - date: '2026-05-14'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed after empirical replay. 64k CH pilot: 18,483 classic
+      credit rows (`asset_type=1`); 512k pilot: 70,835 (~3.83× growth,
+      sub-linear — anchor set saturates). Pre-fix baseline confirmed
+      0 classic-credit rows (only native XLM placeholder).
+      `/compare-with-stellar-api` E08 verification: 5 sample rows
+      (Circle USDC, Circle EURC, USDCAllow SAC, native XLM, less-known
+      anchor) showed issuer G-StrKey + asset_code byte-exact MATCH on
+      Horizon + stellar.expert. ACs satisfied.
 ---
 
 # BUG: indexer never writes classic-credit assets entity rows
@@ -275,7 +287,7 @@ SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type;
 - [x] Native XLM singleton bootstrap path emits `ExtractedAsset { asset_type: Native }` idempotently. _(`xdr_parser::native_asset_singleton`; persist's `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.)_
 - [x] `persist_ledger` wires the new producer's output into the same staging path as `detect_assets`. _(`crates/indexer/src/handler/process.rs` per-tx loop extends `all_assets` with `detect_classic_credit_assets(changes)`; after the loop, the native singleton is pushed once per ledger.)_
 - [x] Integration test: trustline-shaped `ExtractedAsset` → classic-credit row in `assets`. _(`classic_credit_extracted_asset_lands_in_assets_table` + `native_singleton_idempotent_across_repeat_persist` in `crates/indexer/tests/persist_integration.rs`. **Note:** the persist-side test feeds a hand-crafted `ExtractedAsset(ClassicCredit, USDC, GA5ZSEJY…)` shape; the parser-side producer is exercised by the unit tests in `state::tests`. Pool-share rejection is unit-tested at the parser layer where the decision actually lives.)_
-- [ ] **Empirical replay**: re-run a backfill window that previously held 0 classic credits and verify `SELECT COUNT(*) FROM assets WHERE asset_type = 1` matches the distinct `(asset_code, issuer_id)` count in `account_balances_current` for the same range. _(Operational follow-up — run after this PR lands and a fresh backfill is kicked.)_
+- [x] **Empirical replay**: verified 2026-05-14 on CH pilots. 64k window yielded 18,483 `asset_type=1` rows; 512k window yielded 70,835 (~3.83× growth, sub-linear because the anchor set saturates). Pre-fix baseline was 0 classic credits. `/compare-with-stellar-api` E08 cross-source verification on 5 sample rows (Circle USDC, Circle EURC, USDCAllow SAC, native XLM, less-known anchor) showed issuer G-StrKey + asset_code byte-exact MATCH against Horizon + stellar.expert.
 - [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md` §4.10 gains a 4-row producer-table by `asset_type` (Native = migration seed + parser singleton; ClassicCredit = `detect_classic_credit_assets`; Sac + Soroban = `detect_assets`); `docs/architecture/xdr-parsing/xdr-parsing-overview.md` §4.6 gains a bullet documenting the new responsibility. No ADR amendment needed (the change is additive — ADR 0043's "list endpoint + on-chain → indexer" rule now finally has matching implementation for classic credits + native).
 - [x] **API types regenerated** — N/A (no API contract change; `GET /v1/assets` shape unchanged, just returns more rows).
 

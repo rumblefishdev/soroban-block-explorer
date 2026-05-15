@@ -7,3 +7,4 @@ export { radius } from './radius.js';
 export { shadows } from './shadows.js';
 export { createExplorerTheme } from './theme.js';
 export { ExplorerThemeProvider, useColorMode } from './ThemeProvider.js';
+export { monoFontFamily } from './typography.js';
