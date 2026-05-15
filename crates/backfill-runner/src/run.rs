@@ -19,7 +19,7 @@ use indexer::handler::persist::ClassificationCache;
 use indicatif::MultiProgress;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::bootstrap::bootstrap_account_state;
 use crate::dashboard::{Dashboard, install_panic_hook};
@@ -27,7 +27,7 @@ use crate::error::BackfillError;
 use crate::ingest::{PartitionStats, index_partition};
 use crate::partition::{Partition, partitions_for_range};
 use crate::sink::Sink;
-use crate::sync::sync_partition;
+use crate::sync::{AwsCliS3Driver, S3Driver, SyncOutcome, sync_partition};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -88,6 +88,9 @@ pub async fn execute(
 
     let run_start = Instant::now();
     let mut totals = PartitionStats::default();
+    // Task 0225: counter for partitions skipped due to S3 archive lag.
+    // Operator visibility only — does not abort the run.
+    let mut partitions_skipped_s3_incomplete: usize = 0;
 
     // Single cache instance reused across the whole run. Mirrors the
     // indexer Lambda's per-invocation reuse pattern (task 0118 Phase 2)
@@ -107,89 +110,93 @@ pub async fn execute(
 
     install_panic_hook(dashboard.clone());
 
+    // Task 0225: S3 driver. Single concrete impl behind a trait so the
+    // sync orchestrator is mockable. `Arc<dyn …>` lets us hand a clone
+    // to the prefetch task without lifetime gymnastics.
+    let driver: Arc<dyn S3Driver> = Arc::new(AwsCliS3Driver);
+
     // Prime: foreground sync of the first partition that still needs work.
     // Subsequent partitions arrive via the background prefetch spawned at
-    // the end of each iteration.
+    // the end of each iteration. The sync outcome flows through the loop
+    // — current iteration handles the outcome captured for *this*
+    // partition; the prefetch handle resolves to next iteration's outcome.
     dashboard.set_partition(0, todo.len(), todo[0].start);
     dashboard.set_stage("syncing");
-    sync_partition(todo[0], temp_dir).await?;
+    let mut current_outcome = sync_partition(&*driver, todo[0], temp_dir).await?;
 
     for (i, partition) in todo.iter().enumerate() {
         dashboard.set_partition(i, todo.len(), partition.start);
 
-        // Kick off prefetch for N+1 BEFORE indexing N — so the sync runs
+        // Kick off prefetch for N+1 BEFORE handling N — so the sync runs
         // while the indexer is busy. Exactly one in flight.
-        let next_handle: Option<JoinHandle<Result<(), BackfillError>>> =
+        let next_handle: Option<JoinHandle<Result<SyncOutcome, BackfillError>>> =
             if let Some(next) = todo.get(i + 1) {
                 let next = (*next).clone();
                 let temp = temp_dir.to_path_buf();
-                Some(tokio::spawn(
-                    async move { sync_partition(&next, &temp).await },
-                ))
+                let driver_clone = Arc::clone(&driver);
+                Some(tokio::spawn(async move {
+                    sync_partition(&*driver_clone, &next, &temp).await
+                }))
             } else {
                 None
             };
 
-        dashboard.set_stage("indexing");
-        let stats = index_partition(
-            partition,
-            temp_dir,
-            sink,
-            start,
-            end,
-            &completed,
-            &dashboard,
-            &classification_cache,
-        )
-        .await?;
+        // Handle current partition's sync outcome.
+        match current_outcome {
+            SyncOutcome::Complete => {
+                dashboard.set_stage("indexing");
+                let stats = index_partition(
+                    partition,
+                    temp_dir,
+                    sink,
+                    start,
+                    end,
+                    &completed,
+                    &dashboard,
+                    &classification_cache,
+                )
+                .await?;
 
-        // Fold per-partition stats into the run-wide accumulator.
-        // `wall_clock` is per-partition and not summed.
-        totals.indexed += stats.indexed;
-        totals.skipped_completed += stats.skipped_completed;
-        totals.total_bytes += stats.total_bytes;
-        totals.parse_total_ms += stats.parse_total_ms;
-        totals.persist_total_ms += stats.persist_total_ms;
-        totals.min_ledger_ms = combine_min(totals.min_ledger_ms, stats.min_ledger_ms);
-        totals.max_ledger_ms = combine_max(totals.max_ledger_ms, stats.max_ledger_ms);
+                // Fold per-partition stats into the run-wide accumulator.
+                // `wall_clock` is per-partition and not summed.
+                totals.indexed += stats.indexed;
+                totals.skipped_completed += stats.skipped_completed;
+                totals.total_bytes += stats.total_bytes;
+                totals.parse_total_ms += stats.parse_total_ms;
+                totals.persist_total_ms += stats.persist_total_ms;
+                totals.min_ledger_ms = combine_min(totals.min_ledger_ms, stats.min_ledger_ms);
+                totals.max_ledger_ms = combine_max(totals.max_ledger_ms, stats.max_ledger_ms);
 
-        // Delete the local partition folder now that it has been fully
-        // indexed. Bounds total disk use at ~2 × partition_size (this
-        // plus the prefetch in flight). Doing it BEFORE awaiting the
-        // prefetch reclaims disk sooner in the sync-slower-than-index
-        // case. A failure here is a hard error — silent warn-and-
-        // continue would accumulate the garbage we just removed.
-        //
-        // `--keep-partitions` short-circuits the delete for iteration
-        // workflows (re-running the same range against the CH stub
-        // turns the next `aws s3 sync` into a cheap LIST instead of an
-        // 11.6 GB re-download).
-        if keep_partitions {
-            let local = partition.local_folder(temp_dir);
-            info!(
-                partition = partition.start,
-                local = %local.display(),
-                "partition local folder kept (--keep-partitions)"
-            );
-        } else {
-            dashboard.set_stage("cleaning");
-            let local = partition.local_folder(temp_dir);
-            tokio::fs::remove_dir_all(&local).await?;
-            info!(
-                partition = partition.start,
-                local = %local.display(),
-                "partition local folder cleaned up"
-            );
+                // Delete the local partition folder now that it has been
+                // fully indexed. See `--keep-partitions` for the override.
+                cleanup_partition_folder(partition, temp_dir, keep_partitions, &dashboard).await?;
+            }
+            SyncOutcome::S3Incomplete { local, s3, need } => {
+                // The actual warn log already fired inside `sync_partition`
+                // with the same context. Here we just account for the skip
+                // and clean up any partial dir so a future rerun starts
+                // from scratch.
+                warn!(
+                    partition_start = partition.start,
+                    local, s3, need, "skipping partition — S3 archive lag"
+                );
+                partitions_skipped_s3_incomplete += 1;
+                cleanup_partition_folder(partition, temp_dir, keep_partitions, &dashboard).await?;
+            }
         }
 
         // Await prefetch so its error (if any) surfaces synchronously
         // before we advance. Happy path: already resolved, zero wait.
-        // The returned `Duration` is dropped — per-partition sync time
-        // lives in the `partition sync complete` tracing event.
-        if let Some(h) = next_handle {
+        // The returned `SyncOutcome` is carried into the next iteration's
+        // current_outcome.
+        current_outcome = if let Some(h) = next_handle {
             dashboard.set_stage("syncing");
-            h.await.expect("prefetch task panicked")?;
-        }
+            h.await.expect("prefetch task panicked")?
+        } else {
+            // Last iteration — no further work; value is unused after the
+            // loop exits.
+            SyncOutcome::Complete
+        };
     }
 
     dashboard.finish_and_clear();
@@ -236,30 +243,77 @@ pub async fn execute(
     }
 
     let elapsed = run_start.elapsed();
-    print_run_summary(todo.len(), &totals, elapsed);
+    print_run_summary(
+        todo.len(),
+        &totals,
+        partitions_skipped_s3_incomplete,
+        elapsed,
+    );
 
     Ok(())
+}
+
+/// Common cleanup: delete the partition's local folder unless
+/// `--keep-partitions` is in effect, logging the choice either way.
+/// Used on both the happy path (post-index) and the skip path
+/// (S3 archive lag) so a future rerun starts from a clean state.
+async fn cleanup_partition_folder(
+    partition: &Partition,
+    temp_dir: &Path,
+    keep_partitions: bool,
+    dashboard: &Dashboard,
+) -> Result<(), BackfillError> {
+    let local = partition.local_folder(temp_dir);
+    if keep_partitions {
+        info!(
+            partition = partition.start,
+            local = %local.display(),
+            "partition local folder kept (--keep-partitions)"
+        );
+        return Ok(());
+    }
+    dashboard.set_stage("cleaning");
+    match tokio::fs::remove_dir_all(&local).await {
+        Ok(()) => {
+            info!(
+                partition = partition.start,
+                local = %local.display(),
+                "partition local folder cleaned up"
+            );
+            Ok(())
+        }
+        // Missing dir is fine — sync may have written nothing
+        // (S3Incomplete skip path) or a previous attempt cleaned up.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(BackfillError::Io(e)),
+    }
 }
 
 /// Final run summary — printed via `println!` so it's always visible,
 /// not gated by `--verbose`. The per-ledger and per-partition info logs
 /// are the debugging stream; this is the single "what just happened"
 /// block an operator sees when a run wraps up.
-fn print_run_summary(partitions_processed: usize, totals: &PartitionStats, elapsed: Duration) {
+fn print_run_summary(
+    partitions_processed: usize,
+    totals: &PartitionStats,
+    partitions_skipped_s3_incomplete: usize,
+    elapsed: Duration,
+) {
     let (min_str, max_str) = match (totals.min_ledger_ms, totals.max_ledger_ms) {
         (Some(min), Some(max)) => (format!("{min} ms"), format!("{max} ms")),
         _ => ("n/a".into(), "n/a".into()),
     };
     println!();
     println!("=== backfill complete ===");
-    println!("partitions processed:    {partitions_processed}");
-    println!("ledgers indexed:         {}", totals.indexed);
-    println!("ledgers already in DB:   {}", totals.skipped_completed);
-    println!("total bytes:             {}", totals.total_bytes);
-    println!("parse total:             {} ms", totals.parse_total_ms);
-    println!("persist total:           {} ms", totals.persist_total_ms);
-    println!("ledger time (min / max): {min_str} / {max_str}");
-    println!("elapsed:                 {} s", elapsed.as_secs());
+    println!("partitions processed:      {partitions_processed}");
+    println!("partitions skipped (S3):   {partitions_skipped_s3_incomplete}");
+    println!("ledgers indexed:           {}", totals.indexed);
+    println!("ledgers already in DB:     {}", totals.skipped_completed);
+    println!("total bytes:               {}", totals.total_bytes);
+    println!("parse total:               {} ms", totals.parse_total_ms);
+    println!("persist total:             {} ms", totals.persist_total_ms);
+    println!("ledger time (min / max):   {min_str} / {max_str}");
+    println!("elapsed:                   {} s", elapsed.as_secs());
 }
 
 fn combine_min(a: Option<u128>, b: Option<u128>) -> Option<u128> {
