@@ -4,7 +4,7 @@ title: 'RESEARCH: Hetzner production ClickHouse — server selection, provisioni
 type: RESEARCH
 status: active
 related_adr: ['0044', '0045']
-related_tasks: []
+related_tasks: ['0227']
 tags:
   [
     priority-high,
