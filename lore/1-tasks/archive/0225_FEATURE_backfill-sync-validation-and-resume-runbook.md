@@ -2,7 +2,7 @@
 id: '0225'
 title: 'FEATURE: backfill-runner sync validation pre-parse + crash-recovery runbook'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0204', '0205', '0214', '0220']
 tags:
@@ -45,6 +45,28 @@ history:
       remains as the active work. Bootstrap subcommand + watermark
       race fix already merged in the same PR mitigate the cascade
       effects (skeleton accounts after partial-partition crash).
+  - date: 2026-05-15
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Closed via PR #191 (commits 5c4fbba + 3522bb1, merged into develop
+      as d02be32). Implementation placement deviated from the task body
+      ("pre-parse in `ingest.rs`") to the cleaner sync layer
+      (`sync.rs::sync_partition` returns new `SyncOutcome` enum) —
+      separation of concerns wins; `ingest.rs` stays consumer-only and
+      its `assert!(path.exists(), …)` invariant is retained but now
+      unreachable. New `S3Driver` trait + `AwsCliS3Driver` production
+      impl enable unit testing without an AWS subprocess; `MockS3Driver`
+      drives 5 new tests covering all four outcomes (Complete,
+      S3Incomplete, retry-success, retry-fails-hard-error) +
+      `S3LsFailed` propagation. 44/44 backfill-runner tests pass,
+      clippy + fmt clean. Crash-recovery runbook
+      `docs/runbooks/0225_backfill_crash_recovery.md` shipped in
+      PR #189. README §"Recent partitions and AWS S3 archive lag"
+      added in PR #191. Empirical replay against the original panic
+      scenario (partition 9, 62528000-62591999) deferred to operator
+      smoke after S3 catches up — non-deterministic timing makes it a
+      post-merge follow-up, not a merge gate.
 ---
 
 # FEATURE: backfill-runner sync validation pre-parse + crash-recovery runbook
@@ -238,20 +260,35 @@ Expect: `max_ledgers >= max_tx` and `orphan_tx = 0`.
 
 ## Acceptance Criteria
 
-- [ ] `aws_s3_ls_count` helper added to `crates/backfill-runner`
-      (anonymous S3 ls via tokio).
-- [ ] Pre-parse sync validation in `ingest.rs` per Part 1; new
-      `IngestOutcome::SkippedS3Incomplete` variant.
-- [ ] Unit/integration tests per Part 2.
-- [ ] Runbook `docs/runbooks/0225_backfill_crash_recovery.md` committed.
+- [x] **S3 ops behind a trait** — `S3Driver` trait + `AwsCliS3Driver`
+      production impl in `crates/backfill-runner/src/sync.rs`. The
+      original AC mentioned an `aws_s3_ls_count` helper; the shipped
+      shape lifts the two S3 ops (sync + ls) behind a trait so the
+      orchestrator is mockable. `object_count` is the method
+      equivalent to the proposed helper.
+- [x] **Sync validation** — placed in `sync.rs::sync_partition`
+      (returns new `SyncOutcome { Complete, S3Incomplete }` enum)
+      rather than `ingest.rs` per the original task body. Design
+      decision: sync layer owns "is this partition's local copy
+      correct" semantics; ingest stays consumer-only. The original
+      `IngestOutcome::SkippedS3Incomplete` proposal becomes
+      `SyncOutcome::S3Incomplete`.
+- [x] **Unit tests** — 5 tests in `sync::tests` covering all four
+      outcomes (happy path, S3 archive lag skip, retry-success,
+      retry-fails-hard-error) + `S3LsFailed` propagation. Use a
+      `MockS3Driver` for deterministic execution. 44/44 backfill-runner
+      tests pass.
+- [x] Runbook `docs/runbooks/0225_backfill_crash_recovery.md`
+      committed (shipped in PR #189).
 - [ ] Empirical test: re-run partition 9 (62528000-62591999) after S3
-      catches up (file `FC4579AA--62555733.xdr.zst` now exists at
-      2026-05-14 00:46:12). Verify resume succeeds and RMT dedupes
-      previous-attempt orphan rows.
-- [ ] **Docs updated** — `crates/backfill-runner/README.md` (or module
-      doc) gains a "Recent partitions / archive lag" section linking
-      to the runbook.
-- [ ] **API types regenerated** — N/A (no `crates/api/**` change).
+      catches up. **Deferred to operator smoke** — non-deterministic
+      timing on natural mainnet archive lag makes this a post-merge
+      follow-up, not a merge gate. The decision tree is verified
+      deterministically via the mock-driven unit tests.
+- [x] **Docs updated** — `crates/backfill-runner/README.md` gains a
+      §"Recent partitions and AWS S3 archive lag" subsection linking
+      to the crash-recovery runbook.
+- [x] **API types regenerated** — N/A (no `crates/api/**` change).
 
 ## Out of Scope
 
