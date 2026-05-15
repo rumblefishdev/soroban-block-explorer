@@ -47,6 +47,8 @@ export {
   PaginationControls,
   TableSectionHeader,
   TableEmptyState,
+  useTableUrlState,
+  useCursorPagination,
 } from './table/index.js';
 export type {
   ExplorerTableColumn,
@@ -56,4 +58,8 @@ export type {
   TableSectionHeaderProps,
   TableEmptyStateProps,
   TableEmptyKind,
+  TableUrlState,
+  UseTableUrlStateOptions,
+  UseTableUrlStateResult,
+  UseCursorPaginationResult,
 } from './table/index.js';

@@ -13,3 +13,11 @@ export type {
   TableEmptyStateProps,
   TableEmptyKind,
 } from './TableEmptyState.js';
+export { useTableUrlState } from './useTableUrlState.js';
+export type {
+  TableUrlState,
+  UseTableUrlStateOptions,
+  UseTableUrlStateResult,
+} from './useTableUrlState.js';
+export { useCursorPagination } from './useCursorPagination.js';
+export type { UseCursorPaginationResult } from './useCursorPagination.js';
