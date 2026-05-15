@@ -2,7 +2,7 @@
 id: '0069'
 title: 'Frontend: Transactions list page'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-15
+    status: active
+    who: karolkow
+    note: 'Task activated'
 ---
 
 # Frontend: Transactions list page
@@ -21,9 +25,9 @@ history:
 
 Implement the Transactions list page (`/transactions`) showing a paginated, filterable table of all indexed transactions, sorted most-recent-first by default.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** In progress.
 
 ## Context
 
