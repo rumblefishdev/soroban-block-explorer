@@ -24,7 +24,7 @@ history:
   - date: 2026-05-15
     status: active
     who: karolkow
-    note: 'Playground demo (6e42807) verified in-browser; spawned 0221 for test infra'
+    note: 'Verified in-browser via local demo; reverted playground route (59effa9); spawned 0221'
 ---
 
 # UI lib: explorer table, pagination controls, cursor pagination adapter
@@ -137,13 +137,14 @@ Outstanding:
 
 Done:
 
-- Commit `6e42807` — `/table-playground` route renders all four
-  primitives against mock data. Verified in-browser: sort toggles
-  desc/asc and syncs `?sort`/`?dir`, `Next` writes `?cursor` and enables
-  `Previous`, a sort change drops the stale cursor, empty table renders
-  `TableEmptyState`.
 - Commit `436eef7` — `package-lock.json` synced with the `react-router-dom`
   peer dep.
+- Behaviour verified in-browser against a local, uncommitted page-level
+  demo (1:1 with Figma node 2-1696, "Latest transactions"): sort toggles
+  desc/asc and syncs `?sort`/`?dir`, `Next` writes `?cursor` and enables
+  `Previous`, a sort change drops the stale cursor, empty table renders
+  `TableEmptyState`. The earlier `/table-playground` route (`6e42807`)
+  was reverted in `59effa9` — visual-check aids stay out of the repo.
 
 ## Future Work
 
