@@ -79,11 +79,6 @@ export const router = createBrowserRouter([
         path: 'search',
         element: page(() => import('../pages/SearchResultsPage.js')),
       },
-
-      {
-        path: 'table-playground',
-        element: page(() => import('../pages/TablePlaygroundPage.js')),
-      },
     ],
   },
 ]);
