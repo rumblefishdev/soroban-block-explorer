@@ -1,6 +1,7 @@
 import { Box, Skeleton, Stack, Typography } from '@mui/material';
 import { LineChart } from '@mui/x-charts/LineChart';
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 
 import { scales } from '../theme/colors.js';
 
@@ -125,8 +126,11 @@ export function TimeSeriesChart({
     return valueFormatter ? valueFormatter(value) : String(value);
   };
 
-  const xData = data.map((point) => new Date(point.timestamp));
-  const yData = data.map((point) => point.value);
+  const xData = useMemo(
+    () => data.map((point) => new Date(point.timestamp)),
+    [data]
+  );
+  const yData = useMemo(() => data.map((point) => point.value), [data]);
   const isEmpty = data.length === 0;
 
   return (
