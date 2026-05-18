@@ -88,8 +88,8 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
     ],
     [
       {
-        label: 'Transaction hash',
-        // Full hash here (detail view) — not linked: a ledger has no
+        label: 'Hash',
+        // Full ledger hash (detail view) — not linked: a ledger has no
         // hash route, it is addressed by sequence.
         value: (
           <IdentifierWithCopy
