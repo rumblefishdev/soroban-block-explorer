@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "worker_id": "laptop1",
+  "share_of_total": "2/5",
+  "captured_at_utc": "2026-05-18T13:06:11Z",
+  "parser_git_sha_at_repo_capture": "26d75f33bf2f4135f8ecbf3a93bb9c0b27b14d4a",
+  "parser_git_sha_on_worker": "26d75f33bf2f4135f8ecbf3a93bb9c0b27b14d4a",
+  "parser_git_sha_match": true,
+
+  "range": {
+    "start_ledger": 50457424,
+    "end_ledger": 55103999,
+    "ledger_count": 4646576,
+    "partition_count": 73,
+    "partition_id_range": [788, 860]
+  },
+
+  "backfill_run": {
+    "elapsed_seconds": 130696,
+    "parse_total_ms": 6735881,
+    "persist_total_ms": 100653662,
+    "ledger_time_min_ms": 0,
+    "ledger_time_max_ms": 131,
+    "ledgers_already_in_db": 0,
+    "total_bytes_processed": 712056025041,
+    "notes": "1 RPC 429 WARN at backfill tail — addressed by post-run bootstrap top-up (see bootstrap_topups)"
+  },
+
+  "bootstrap_topups": [
+    {
+      "pass": 1,
+      "rpc_url": "https://soroban-rpc.mainnet.stellar.gateway.fm",
+      "discovered": 791948,
+      "fetched": 602282,
+      "staged": 602282,
+      "rpc_batches": 3960,
+      "rpc_errors": 0,
+      "interpretation": "Initial top-up after first 429-truncated bootstrap. Phase-2 gate caught all skeletons in window."
+    },
+    {
+      "pass": 2,
+      "rpc_url": "https://soroban-rpc.mainnet.stellar.gateway.fm",
+      "discovered": 189666,
+      "fetched": 0,
+      "staged": 0,
+      "rpc_batches": "TODO — full output was truncated, retrieve from terminal or rerun",
+      "rpc_errors": 0,
+      "interpretation": "Floor confirmed. fetched=0 ⇒ residual 189,666 accounts have no AccountEntry on chain today (AccountMerge'd between range window and tip). These remain skeletons permanently."
+    }
+  ],
+
+  "section_8c_metrics": {
+    "captured_via": "SELECT … FROM <table> FINAL  (per docs/runbooks/backfill_soroban_2of5_fresh_machine.md §8c)",
+    "accounts_total": 6683666,
+    "accounts_skeletons": 191060,
+    "accounts_skeleton_pct": 2.859,
+    "skeleton_floor_explained": "AccountMerge'd accounts have no live AccountEntry → permanent skeletons in this range. Plan 0228 §387 sets <1% target on post-merge Hetzner state, not per-worker pre-merge.",
+    "classic_credits": 172092,
+    "soroban_contracts_total": 174644,
+    "soroban_contracts_sac": 168680,
+    "soroban_contracts_non_sac": 5964,
+    "soroban_contracts_sac_pct": 96.59,
+    "nfts_hot": 0,
+    "nfts_pending_pre_drain": 45007263,
+    "nfts_pending_post_drain": 21883579,
+    "nfts_pending_drain_delta": -23123684,
+    "nfts_pending_drain_pct": -51.4,
+    "nfts_pending_drain_leaked_residual": 0,
+    "nft_ownership_pending_pre_drain": 97952883,
+    "nft_ownership_pending_pre_drain_leaked": 50325776,
+    "nft_ownership_pending_post_drain": 47627107,
+    "nft_ownership_pending_post_drain_leaked": 0,
+    "nft_ownership_pending_drain_delta": -50325776,
+    "nft_ownership_pending_drain_pct": -51.38,
+    "drain_pilot_reference": "64k pilot 0220 saw 25.7% drop; 4.6M-ledger backfill at 51.4% is plausibly higher (more SAC churn)",
+    "residual_explanation": "21.8M = non-SAC NFT-candidate transfers (DeFi LP tokens, marketplaces). 0118 Phase 3 reclassification will resolve post-merge on Hetzner."
+  },
+
+  "ledger_continuity_check": {
+    "min_sequence": 50457424,
+    "max_sequence": 55103999,
+    "total_rows": 4646576,
+    "gap": 0,
+    "verdict": "PASS"
+  },
+
+  "fact_table_parity_check": {
+    "transactions": {
+      "expected_tx": 1458788880,
+      "actual_tx": 1458788880,
+      "verdict": "PASS"
+    }
+  },
+
+  "next_steps": [
+    "Run §8b SAC drain per docs/runbooks/0221_ch_drain_sac_from_nfts_pending.md (capture nfts_pending pre/post)",
+    "Fill TODO §8c metrics (one query per row, GUI-friendly without FORMAT clause)",
+    "Run ledger_continuity_check + fact_table_parity_check; expect zero gap, equal counts",
+    "Capture worker git SHA: git rev-parse HEAD on laptop 1",
+    "Decide on local OPTIMIZE FINAL — yes if FREEZE+rsync soon, no if Hetzner Phase 5 will do it"
+  ],
+
+  "references": {
+    "runbook": "docs/runbooks/backfill_soroban_2of5_fresh_machine.md §8",
+    "merge_plan": "lore/1-tasks/backlog/0228_FEATURE_parallel-backfill-merge-and-validation/notes/S-approved-plan.md",
+    "open_question_audit_table": "Plan 0228 OQ#7 — final source of truth may move to backfill_runs CH audit table; JSON file is interim."
+  }
+}

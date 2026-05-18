@@ -2,7 +2,7 @@
 id: '0228'
 title: 'FEATURE: parallel-backfill merge into Hetzner CH (3-way split) + post-merge validation'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0040', '0044', '0045']
 related_tasks: ['0118', '0194', '0198', '0216', '0225']
 blocked_by: ['0216', '0225']
@@ -29,6 +29,18 @@ history:
       on task 0225 (sync-validation pre-parse) landing on develop and
       task 0216 implementation work completing (Ansible playbook,
       mTLS CA, dict_reader user fix, BX21 Storage Box ordered).
+  - date: '2026-05-18'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated. Laptop 1 finished Phase 1 (full 2/5 backfill, 73 partitions,
+      4,646,576 ledgers, range 50,457,424–55,103,999) and Phase 2 cleanup +
+      invariants on its local CH. Phase 2 results captured in
+      notes/R-laptop1-phase2-results.md + docs/runbooks/artifacts/laptop1_pre-export-metrics.json.
+      Task remains blocked_by 0216 + 0225 for Phase 3 onward (Hetzner readiness +
+      laptop 3 sync-validation), but Phase 1/2 execution on laptop 1 is correctness-safe
+      without those prereqs (laptop 1's range is far from S3 frontier and
+      no cross-machine joins yet).
 ---
 
 # Parallel-backfill merge into Hetzner CH (3-way split) + post-merge validation
@@ -113,8 +125,14 @@ this is the executive index.
 - [ ] Workers run on identical schema (sidecar `init.sql` from locked SHA) and
       identical parser binary hash; both verified in the `backfill_runs`
       audit table at merge time.
+      _Laptop 1: parser SHA `26d75f33bf2f4135f8ecbf3a93bb9c0b27b14d4a` confirmed._
 - [ ] All worker ranges are disjoint, recorded in audit table.
+      _Laptop 1 range locked: 50,457,424–55,103,999 (73 partitions, 4,646,576 ledgers)._
 - [ ] `verify-local` passes on every worker before its FREEZE + rsync.
+      _Laptop 1: manual verify-local equivalent done — continuity gap=0,
+      fact-parity tx 1,458,788,880 expected == actual, skeleton floor 2.86%
+      (residual = merged accounts), `nfts_pending` + `nft_ownership_pending`
+      drained (leaked=0 in both)._
 - [ ] All 19 CH tables + 1 dictionary are populated on Hetzner.
 - [ ] No-`FINAL`-at-query-time invariant holds after Phase 5
       (`SELECT count() FROM <state_table>` matches `SELECT count() FROM <state_table> FINAL`).
