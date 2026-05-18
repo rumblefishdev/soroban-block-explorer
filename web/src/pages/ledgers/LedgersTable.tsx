@@ -5,13 +5,20 @@ import {
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
+  type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Typography } from '@mui/material';
+import { useState } from 'react';
 
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LedgersTableProps {
   rows: readonly LedgerListItem[];
+  /**
+   * Enable client-side sorting on the Sequence column. Used by the home
+   * page Latest Ledgers table, which renders a fixed set of rows.
+   */
+  sortable?: boolean;
 }
 
 const columns: ExplorerTableColumn<LedgerListItem>[] = [
@@ -64,19 +71,44 @@ const columns: ExplorerTableColumn<LedgerListItem>[] = [
   },
 ];
 
+/** Columns with the Sequence header marked sortable. */
+const sortableColumns: ExplorerTableColumn<LedgerListItem>[] = columns.map(
+  (col) => (col.id === 'sequence' ? { ...col, sortable: true } : col)
+);
+
 /** Column count — used to size the loading skeleton consistently. */
 export const LEDGER_COLUMN_COUNT = columns.length;
 
 /**
  * The Ledgers list table — sequence, hash, closed-at, protocol and
- * transaction-count columns, per the Figma design.
+ * transaction-count columns, per the Figma design. Pass `sortable` to
+ * enable Sequence sorting (home page Latest Ledgers).
  */
-export function LedgersTable({ rows }: LedgersTableProps) {
+export function LedgersTable({ rows, sortable = false }: LedgersTableProps) {
+  const [sortDir, setSortDir] = useState<SortDirection>('desc');
+
+  if (!sortable) {
+    return (
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => String(row.sequence)}
+      />
+    );
+  }
+
+  const sortedRows = [...rows].sort((a, b) =>
+    sortDir === 'desc' ? b.sequence - a.sequence : a.sequence - b.sequence
+  );
+
   return (
     <ExplorerTable
-      columns={columns}
-      rows={rows}
+      columns={sortableColumns}
+      rows={sortedRows}
       rowKey={(row) => String(row.sequence)}
+      sortBy="sequence"
+      sortDir={sortDir}
+      onSortChange={(_id, dir) => setSortDir(dir)}
     />
   );
 }

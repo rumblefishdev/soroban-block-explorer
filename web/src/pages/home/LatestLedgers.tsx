@@ -54,7 +54,7 @@ export function LatestLedgers() {
       </Box>
     );
   } else {
-    body = <LedgersTable rows={rows} />;
+    body = <LedgersTable rows={rows} sortable />;
   }
 
   return (

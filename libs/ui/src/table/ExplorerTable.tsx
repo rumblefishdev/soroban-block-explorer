@@ -8,7 +8,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  TableSortLabel,
 } from '@mui/material';
 import type { ReactNode } from 'react';
 
@@ -58,30 +57,69 @@ export function ExplorerTable<T>({
                   sortDirection={isSorted ? sortDir : false}
                 >
                   {col.sortable ? (
-                    // Unsorted columns show a neutral CaretUpDown; the
-                    // sorted column swaps to a directional caret that
-                    // MUI rotates for asc/desc.
-                    <TableSortLabel
-                      active={isSorted}
-                      direction={isSorted ? sortDir : 'desc'}
+                    // Sortable header (Design System "Table header"):
+                    // a neutral up/down caret when inactive, a down caret
+                    // in a filled accent circle when this column is sorted.
+                    <Box
+                      component="button"
+                      type="button"
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
                         onSortChange?.(col.id, next);
                       }}
-                      IconComponent={
-                        isSorted ? KeyboardArrowDownIcon : UnfoldMoreIcon
-                      }
-                      sx={(theme) => ({
-                        '& .MuiTableSortLabel-icon': {
-                          fontSize: 12,
-                          opacity: isSorted ? 1 : 0.5,
-                          color: theme.palette.text.primary,
+                      sx={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 0.5,
+                        border: 0,
+                        background: 'none',
+                        padding: 0,
+                        font: 'inherit',
+                        color: 'inherit',
+                        cursor: 'pointer',
+                        '&:focus-visible': {
+                          outline: (theme) =>
+                            `2px solid ${theme.palette.stroke.action}`,
+                          outlineOffset: 2,
+                          borderRadius: 1,
                         },
-                      })}
+                      }}
                     >
                       {col.header}
-                    </TableSortLabel>
+                      {isSorted ? (
+                        <Box
+                          component="span"
+                          sx={{
+                            width: 20,
+                            height: 20,
+                            flexShrink: 0,
+                            borderRadius: '50%',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'surface.primaryMain',
+                            color: 'common.black',
+                          }}
+                        >
+                          <KeyboardArrowDownIcon
+                            sx={{
+                              fontSize: 14,
+                              transform:
+                                sortDir === 'asc' ? 'rotate(180deg)' : 'none',
+                            }}
+                          />
+                        </Box>
+                      ) : (
+                        <UnfoldMoreIcon
+                          sx={{
+                            fontSize: 14,
+                            opacity: 0.5,
+                            color: 'text.primary',
+                          }}
+                        />
+                      )}
+                    </Box>
                   ) : (
                     col.header
                   )}
