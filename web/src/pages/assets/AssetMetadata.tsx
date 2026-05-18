@@ -3,22 +3,9 @@ import type { AssetDetailResponse } from '@rumblefish/api-types';
 
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow, type SummaryCell } from '../detail/SummaryRow.js';
+import { safeHttpUrl } from '../url.js';
 
 import { AssetIcon } from './AssetIcon.js';
-
-/**
- * Returns the URL only when it is a safe `http(s)` link. TOML metadata is
- * off-chain and attacker-controlled, so a `javascript:` (or other scheme)
- * `home_page` must never reach an `href`.
- */
-function safeHttpUrl(url: string): string | null {
-  try {
-    const { protocol } = new URL(url);
-    return protocol === 'http:' || protocol === 'https:' ? url : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Asset metadata card — the optional TOML-sourced name, icon, description and

@@ -42,6 +42,9 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           cells={[
             {
               label: 'Issuer',
+              // libs/ui IdentifierDisplay has no wrap mode; in this narrow
+              // (half-width) card a 56-char id would clip. Override the
+              // anchor to wrap instead of ellipsis-clipping.
               value: (
                 <Box
                   sx={{
@@ -64,6 +67,7 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           cells={[
             {
               label: 'Contract ID',
+              // See the Issuer note above — same wrap override.
               value: (
                 <Box
                   sx={{
