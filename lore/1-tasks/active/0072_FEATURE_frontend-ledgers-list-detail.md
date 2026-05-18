@@ -134,6 +134,16 @@ Create `apps/web/src/pages/ledger-detail/LedgerDetailPage.tsx`:
 - [ ] 404 state: "Ledger not found"
 - [ ] Loading skeleton and error states for both list and detail
 
+## Future Work
+
+Cross-task debt surfaced while implementing the ledger pages — spawned as
+backlog tasks:
+
+- UI lib: generic `Button`, value formatters, two-line timestamp.
+  Removes `pages/ledgers/` → `pages/transactions/` coupling.
+  — Frontend: URL-synced cursor pagination for list pages. Wires the
+  unused `useTableUrlState` / `useCursorPagination` (0061) into the list pages.
+
 ## Notes
 
 - Ledger data is immutable once the ledger is closed, so long stale times are appropriate.
