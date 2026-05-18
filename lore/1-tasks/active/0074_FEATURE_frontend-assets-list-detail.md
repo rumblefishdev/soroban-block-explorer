@@ -7,7 +7,10 @@ related_adr: ['0036']
 related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
 milestone: 2
-links: []
+links:
+  - 'https://www.figma.com/design/n1p6WCMVd4iinbuvOA2WjP/Designs?node-id=188-25012&m=dev'
+  - 'https://www.figma.com/design/n1p6WCMVd4iinbuvOA2WjP/Designs?node-id=206-15608&m=dev'
+  - 'https://www.figma.com/design/siumLgKOc9LLepEfbimyp3/Design-System---Stellar-Block-Explorer?node-id=360-1812&m=dev'
 history:
   - date: 2026-03-24
     status: backlog
@@ -25,6 +28,10 @@ history:
     status: active
     who: karolkow
     note: 'Spec sync: paths corrected to web/ (no apps/); hooks to web/src/api/hooks/ per 0066; sub-component layout per 0069; type badge via Chip (no TypeBadge). File renamed tokens→assets.'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Added Figma links — assets list + assets detail frames + design-system file (Chip).'
 ---
 
 # Frontend: Assets list and detail pages
@@ -175,3 +182,4 @@ Flesh out the existing router stub `web/src/pages/AssetDetailPage.tsx`:
 
 - Asset identity is the most confusing area for users: classic_credit assets share codes across issuers, Soroban assets are identified by contract. Type badges and display formatting are critical.
 - The asset detail page serves as a discovery path into the broader explorer via transaction links.
+- Figma frames may still carry legacy "tokens" naming; code, routes, and types use "assets" per task 0154 — do not reintroduce "tokens".
