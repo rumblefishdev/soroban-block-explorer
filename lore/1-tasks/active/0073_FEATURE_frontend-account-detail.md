@@ -17,6 +17,10 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active — bundled with 0074 on shared branch feat/0073-0074_frontend-account-and-asset-pages.'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Spec sync: paths corrected to web/ (no apps/); hooks to web/src/api/hooks/ per 0066; sub-component layout per 0069; status badge via Chip (no StatusBadge); balance link /tokens→/assets per 0154.'
 ---
 
 # Frontend: Account detail page
@@ -54,31 +58,36 @@ The account detail page provides a complete view of a Stellar account's state an
 | Field              | Display                            | Notes                                                |
 | ------------------ | ---------------------------------- | ---------------------------------------------------- |
 | XLM Balance        | Native balance                     | Prominent, at top of balances                        |
-| Trustline Balances | Token code + balance per trustline | Each token code linked to `/tokens/:id` if available |
+| Trustline Balances | Token code + balance per trustline | Each token code linked to `/assets/:id` if available |
 
 - Balances visually separated from transaction history
 - XLM balance distinguished from trustline/token balances
 
 ### Account Transactions Table Columns
 
-| Column          | Display                                    | Notes                             |
-| --------------- | ------------------------------------------ | --------------------------------- |
-| Hash            | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062)     |
-| Ledger Sequence | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0062)     |
-| Source Account  | Truncated, linked                          | IdentifierDisplay (task 0062)     |
-| Operation Type  | Human-readable label                       | Same as global transactions table |
-| Status          | Badge (success/failed)                     | StatusBadge (task 0063)           |
-| Fee             | XLM amount                                 | Fee charged                       |
-| Timestamp       | Relative                                   | RelativeTimestamp (task 0063)     |
+| Column          | Display                                    | Notes                                  |
+| --------------- | ------------------------------------------ | -------------------------------------- |
+| Hash            | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062)          |
+| Ledger Sequence | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0062)          |
+| Source Account  | Truncated, linked                          | IdentifierDisplay (task 0062)          |
+| Operation Type  | Human-readable label                       | Same as global transactions table      |
+| Status          | Badge (success/failed)                     | `Chip` color success/error (task 0063) |
+| Fee             | XLM amount                                 | Fee charged                            |
+| Timestamp       | Relative                                   | RelativeTimestamp (task 0063)          |
 
 - Paginated with cursor-based pagination
 - Reuses global transaction row conventions
 
 ## Implementation Plan
 
+> Structure follows task 0069 (transactions list): the page entry file stays
+> flat in `web/src/pages/` (router imports it), page-specific sub-components go
+> in the route-named subdirectory `web/src/pages/accounts/`, and data hooks go
+> in `web/src/api/hooks/` per task 0066 convention.
+
 ### Step 1: Account detail query hooks
 
-Create `apps/web/src/pages/account-detail/useAccountDetail.ts` and `useAccountTransactions.ts`:
+Create `web/src/api/hooks/useAccountDetail.ts` and `web/src/api/hooks/useAccountTransactions.ts`:
 
 - `useAccountDetail`: fetches `GET /accounts/:account_id`, stale time 5 minutes
 - `useAccountTransactions`: fetches `GET /accounts/:account_id/transactions` with cursor, stale time 60 seconds
@@ -86,14 +95,14 @@ Create `apps/web/src/pages/account-detail/useAccountDetail.ts` and `useAccountTr
 
 ### Step 2: Account summary section
 
-Create `apps/web/src/pages/account-detail/AccountSummary.tsx`:
+Create `web/src/pages/accounts/AccountSummary.tsx`:
 
 - Renders: account ID (full, copyable), sequence number, first seen ledger (linked), last seen ledger (linked)
 - Summary card layout at top of page
 
 ### Step 3: Balances section
 
-Create `apps/web/src/pages/account-detail/AccountBalances.tsx`:
+Create `web/src/pages/accounts/AccountBalances.tsx`:
 
 - XLM balance prominent at top
 - Trustline/token balances listed below
@@ -102,7 +111,7 @@ Create `apps/web/src/pages/account-detail/AccountBalances.tsx`:
 
 ### Step 4: Account transactions section
 
-Create `apps/web/src/pages/account-detail/AccountTransactions.tsx`:
+Create `web/src/pages/accounts/AccountTransactions.tsx`:
 
 - Paginated transaction table with standard columns
 - SectionHeader: "Transactions"
@@ -111,7 +120,7 @@ Create `apps/web/src/pages/account-detail/AccountTransactions.tsx`:
 
 ### Step 5: Page composition
 
-Create `apps/web/src/pages/account-detail/AccountDetailPage.tsx`:
+Flesh out the existing router stub `web/src/pages/AccountDetailPage.tsx`:
 
 - Composes: AccountSummary, AccountBalances, AccountTransactions
 - Each section in SectionErrorBoundary (task 0064)
@@ -136,4 +145,4 @@ Create `apps/web/src/pages/account-detail/AccountDetailPage.tsx`:
 
 - This page is the canonical destination for all account ID links and search results.
 - The account scope is intentionally limited to summary, balances, and transactions per the architecture docs.
-- Transaction rows should look identical to the global transactions list page for consistency.
+- Transaction rows should look identical to the global transactions list page for consistency. Reuse the conventions from `web/src/pages/transactions/TransactionsTable.tsx` (task 0069).
