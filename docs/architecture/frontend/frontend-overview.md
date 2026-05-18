@@ -293,13 +293,16 @@ Each route should be implemented as a dedicated page module with:
 Entry point and chain overview. Provides at-a-glance state of the Stellar network and
 quick access to exploration.
 
-- Global search bar - accepts transaction hashes, contract IDs, token codes, account IDs,
-  ledger sequences
+- Hero - headline, tagline, and a large global search bar accepting transaction hashes,
+  contract IDs, token codes, account IDs, ledger sequences (submits to `/search`). The
+  global search bar is also always present in the header.
+- Chain overview - current ledger sequence (with a live indicator), transactions per
+  second, total accounts, total contracts
 - Latest transactions table - hash (truncated), source account, operation type, status
-  badge, timestamp
-- Latest ledgers table - sequence, closed_at, transaction count
-- Chain overview - current ledger sequence, transactions per second, total accounts,
-  total contracts
+  badge, relative + absolute timestamp; section header carries a polling indicator and a
+  "View All" link
+- Latest ledgers table - sequence, hash (truncated), closed_at, protocol version,
+  transaction count
 
 Expanded behavior:
 
