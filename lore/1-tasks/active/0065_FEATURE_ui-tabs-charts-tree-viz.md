@@ -2,7 +2,7 @@
 id: '0065'
 title: 'UI lib: tabs, charts, and graph/tree visualization primitives'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-large, layer-frontend-shared]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Promoted to active — Figma-first implementation of visualization primitives.'
 ---
 
 # UI lib: tabs, charts, and graph/tree visualization primitives
