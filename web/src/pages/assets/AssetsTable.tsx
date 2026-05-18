@@ -71,7 +71,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     header: 'Total supply',
     align: 'right',
     cell: (row) => (
-      <Box>
+      <Stack sx={{ alignItems: 'flex-end' }}>
         <Typography variant="bodySmRegular">
           {formatAmount(row.total_supply)}
         </Typography>
@@ -80,7 +80,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
             {row.asset_code}
           </Typography>
         )}
-      </Box>
+      </Stack>
     ),
   },
   {

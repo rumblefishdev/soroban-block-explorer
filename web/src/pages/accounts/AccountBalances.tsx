@@ -41,7 +41,7 @@ function BalanceRow({ balance }: { balance: AccountBalance }) {
         sx={{ minWidth: 0 }}
       >
         <AssetIcon code={code} />
-        <Box sx={{ minWidth: 0 }}>
+        <Stack sx={{ minWidth: 0 }}>
           {href ? (
             <Link
               component={RouterLink}
@@ -59,16 +59,16 @@ function BalanceRow({ balance }: { balance: AccountBalance }) {
           <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
             {typeLabel}
           </Typography>
-        </Box>
+        </Stack>
       </Stack>
-      <Box sx={{ textAlign: 'right' }}>
+      <Stack sx={{ alignItems: 'flex-end', flexShrink: 0 }}>
         <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
           {formatAmount(balance.balance, 2)}
         </Typography>
         <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
           {code}
         </Typography>
-      </Box>
+      </Stack>
     </Box>
   );
 }

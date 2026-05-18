@@ -35,6 +35,7 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
           target="_blank"
           rel="noopener noreferrer"
           variant="bodySmRegular"
+          sx={{ color: 'text.accent', wordBreak: 'break-all' }}
         >
           {asset.home_page}
         </Link>

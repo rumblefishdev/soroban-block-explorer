@@ -1,4 +1,4 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { AssetDetailResponse } from '@rumblefish/api-types';
 import {
   IdentifierDisplay,
@@ -17,7 +17,7 @@ function SupplyValue({
   code?: string | null;
 }) {
   return (
-    <Box>
+    <Stack>
       <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
         {formatAmount(supply)}
       </Typography>
@@ -26,7 +26,7 @@ function SupplyValue({
           {code}
         </Typography>
       )}
-    </Box>
+    </Stack>
   );
 }
 
@@ -43,11 +43,17 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
             {
               label: 'Issuer',
               value: (
-                <IdentifierWithCopy
-                  value={asset.issuer}
-                  type="account"
-                  truncate={false}
-                />
+                <Box
+                  sx={{
+                    '& a': { whiteSpace: 'normal', wordBreak: 'break-all' },
+                  }}
+                >
+                  <IdentifierWithCopy
+                    value={asset.issuer}
+                    type="account"
+                    truncate={false}
+                  />
+                </Box>
               ),
             },
           ]}
@@ -59,11 +65,17 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
             {
               label: 'Contract ID',
               value: (
-                <IdentifierWithCopy
-                  value={asset.contract_id}
-                  type="contract"
-                  truncate={false}
-                />
+                <Box
+                  sx={{
+                    '& a': { whiteSpace: 'normal', wordBreak: 'break-all' },
+                  }}
+                >
+                  <IdentifierWithCopy
+                    value={asset.contract_id}
+                    type="contract"
+                    truncate={false}
+                  />
+                </Box>
               ),
             },
           ]}
