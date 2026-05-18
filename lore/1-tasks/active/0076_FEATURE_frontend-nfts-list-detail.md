@@ -2,7 +2,7 @@
 id: '0076'
 title: 'Frontend: NFTs list and detail pages'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0005']
 tags: [priority-medium, effort-medium, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Task activated'
 ---
 
 # Frontend: NFTs list and detail pages
@@ -21,9 +25,9 @@ history:
 
 Implement the NFTs list page (`/nfts`) and NFT detail page (`/nfts/:id`). Supports browsing Soroban-based NFT contracts with media previews, metadata attributes, and transfer history. Graceful degradation for broken media and sparse metadata.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** Implementation in progress.
 
 ## Context
 
