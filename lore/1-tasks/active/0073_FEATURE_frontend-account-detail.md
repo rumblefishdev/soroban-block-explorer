@@ -28,6 +28,10 @@ history:
     status: active
     who: karolkow
     note: 'Added Figma links — account detail frames + design-system file (Chip).'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Implemented account detail page. Account-transactions table omits the Source account column to match the Figma design — acceptance criteria updated to match.'
 ---
 
 # Frontend: Account detail page
@@ -76,7 +80,6 @@ The account detail page provides a complete view of a Stellar account's state an
 | --------------- | ------------------------------------------ | -------------------------------------- |
 | Hash            | Truncated, linked to `/transactions/:hash` | IdentifierDisplay (task 0062)          |
 | Ledger Sequence | Linked to `/ledgers/:sequence`             | IdentifierDisplay (task 0062)          |
-| Source Account  | Truncated, linked                          | IdentifierDisplay (task 0062)          |
 | Operation Type  | Human-readable label                       | Same as global transactions table      |
 | Status          | Badge (success/failed)                     | `Chip` color success/error (task 0063) |
 | Fee             | XLM amount                                 | Fee charged                            |
@@ -84,6 +87,7 @@ The account detail page provides a complete view of a Stellar account's state an
 
 - Paginated with cursor-based pagination
 - Reuses global transaction row conventions
+- Source account column omitted per the Figma design
 
 ## Implementation Plan
 
@@ -140,7 +144,7 @@ Flesh out the existing router stub `web/src/pages/AccountDetailPage.tsx`:
 - [ ] Account summary shows: account ID (full, copyable), sequence number, first seen ledger (linked), last seen ledger (linked)
 - [ ] Balances section shows: XLM balance (prominent) + trustline/token balances
 - [ ] Balances visually separated from transaction history
-- [ ] Transaction table columns: hash, ledger sequence, source account, operation type, status badge, fee, timestamp
+- [ ] Transaction table columns: hash, ledger sequence, operation type, status badge, fee, timestamp
 - [ ] Transactions paginated with cursor-based pagination
 - [ ] Account summary and transactions fetched independently (separate queries)
 - [ ] Failed transactions section does NOT collapse account summary
