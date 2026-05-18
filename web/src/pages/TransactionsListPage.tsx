@@ -14,13 +14,7 @@ import {
   TransientErrorState,
   useTableUrlState,
 } from '@rumblefish/soroban-block-explorer-ui';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
 
 import { useTransactionsList } from '../api/index.js';
 
@@ -29,6 +23,7 @@ import {
   TRANSACTION_COLUMN_COUNT,
   TransactionsTable,
 } from './transactions/TransactionsTable.js';
+import { useInfinitePager } from './useInfinitePager.js';
 
 type Filters = NonNullable<ListTransactionsData['query']>;
 
@@ -64,33 +59,18 @@ export default function TransactionsListPage() {
     refetch,
   } = useTransactionsList(queryFilters);
 
-  const [pageIndex, setPageIndex] = useState(0);
+  const { rows, canPrev, canNext, handlePrev, handleNext, reset } =
+    useInfinitePager(
+      data?.pages ?? [],
+      fetchNextPage,
+      hasNextPage,
+      isFetchingNextPage
+    );
 
   // A new filter set is a fresh query starting at page 0.
   useEffect(() => {
-    setPageIndex(0);
-  }, [q, op]);
-
-  const pages = data?.pages ?? [];
-  const currentPage = pages[pageIndex];
-  const rows = currentPage?.data ?? [];
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage?.page.has_more);
-
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
-
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+    reset();
+  }, [q, op, reset]);
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),

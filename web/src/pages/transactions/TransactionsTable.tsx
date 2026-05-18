@@ -1,42 +1,18 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
-  Chip,
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Box, Typography } from '@mui/material';
+import { Typography } from '@mui/material';
 
+import { Dash, OperationCell, StatusCell } from './cells.js';
 import { formatFee } from './formatters.js';
-import { formatOperationType } from './operationTypes.js';
 import { TransactionTime } from './TransactionTime.js';
 
 interface TransactionsTableProps {
   rows: readonly TransactionListItem[];
-}
-
-function Dash() {
-  return (
-    <Typography component="span" sx={{ color: 'text.tertiary' }}>
-      —
-    </Typography>
-  );
-}
-
-function OperationCell({ types }: { types: readonly string[] }) {
-  if (types.length === 0) return <Dash />;
-  const [first, ...rest] = types;
-  return (
-    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-      <Chip size="sm" color="neutral" label={formatOperationType(first)} />
-      {rest.length > 0 && (
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
-          +{rest.length}
-        </Typography>
-      )}
-    </Box>
-  );
 }
 
 const columns: ExplorerTableColumn<TransactionListItem>[] = [
@@ -70,14 +46,7 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => (
-      <Chip
-        size="sm"
-        color={row.successful ? 'success' : 'error'}
-        dot
-        label={row.successful ? 'Success' : 'Failed'}
-      />
-    ),
+    cell: (row) => <StatusCell successful={row.successful} />,
   },
   {
     id: 'fee',
