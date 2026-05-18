@@ -1,11 +1,11 @@
 ---
 id: '0226'
-title: 'libs/ui: Vitest + Testing Library test infrastructure and table primitive tests'
+title: 'Frontend: Vitest + Testing Library test infrastructure (libs/ui + web pages)'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0061']
-tags: [priority-medium, effort-small, layer-frontend-shared, phase-future]
+related_tasks: ['0061', '0069', '0073', '0074']
+tags: [priority-medium, effort-medium, layer-frontend-shared, phase-future]
 milestone: 2
 links: []
 history:
@@ -13,16 +13,22 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0061 future work — libs/ui has no test infra.'
+  - date: 2026-05-18
+    status: backlog
+    who: karolkow
+    note: 'Scope extended to cover web/ app test infra + page tests for the 0069/0073/0074 explorer pages, which shipped without tests by decision.'
 ---
 
-# libs/ui: Vitest + Testing Library test infrastructure and table primitive tests
+# Frontend: Vitest + Testing Library test infrastructure (libs/ui + web pages)
 
 ## Summary
 
-`libs/ui` ships components and hooks but has no unit-test setup — no
-Vitest config, no `test` target, no jsdom, no `@testing-library/react`.
-Stand up the test infrastructure and add the first component/hook tests,
-starting with the task 0061 table primitives.
+Neither `libs/ui` nor the `web` app has a unit-test setup — no Vitest
+config, no `test` target, no jsdom, no `@testing-library/react`. Stand
+up the test infrastructure for both and add the first tests: the task
+0061 table primitives in `libs/ui`, and the explorer pages in `web`
+(transactions 0069, account detail 0073, assets list + detail 0074)
+which shipped without coverage by decision.
 
 ## Context
 
@@ -52,17 +58,34 @@ a per-project Vitest config, and an Nx `test` target on `libs/ui`.
   - `useTableUrlState` — cursor/sort/filter round-trip through URL params
     (render inside `MemoryRouter`); `setSort` and `setFilter` drop the
     `cursor` param.
-- Confirm CI picks up the new `test` target (affected runs).
+- `web` app test setup: `web/vitest.config.ts` (jsdom + setup file), an
+  Nx `test` target for `@rumblefish/soroban-block-explorer-web`, and a
+  render helper wrapping `QueryProvider` + `MemoryRouter` +
+  `ExplorerThemeProvider`.
+- Page tests for the explorer pages that shipped without coverage
+  (tasks 0069, 0073, 0074):
+  - Account detail (0073) — summary/balances render, per-section error
+    isolation, 404 on a malformed `G…` id, balance → `/assets/:id` link.
+  - Assets list (0074) — type-chip + code-search filters drive the
+    query, cursor pagination, empty vs filtered-empty states.
+  - Asset detail (0074) — summary, partial-metadata tolerance, type
+    badge per asset class.
+  - Pure helpers — `formatAmount`, `assetTypeMeta`, `formatFee`.
+- Confirm CI picks up the new `test` targets (affected runs).
 
 ## Acceptance Criteria
 
 - [ ] `libs/ui` has a Vitest config with jsdom + Testing Library setup
 - [ ] Nx `test` target runs for `@rumblefish/soroban-block-explorer-ui`
 - [ ] ExplorerTable, PaginationControls, useTableUrlState covered
-- [ ] `nx run @rumblefish/soroban-block-explorer-ui:test` green
-- [ ] CI affected runs include the new target
+- [ ] `web` has a Vitest config + Nx `test` target with a shared render
+      helper (QueryProvider + router + theme)
+- [ ] Account, assets-list, and asset-detail pages have query + render
+      coverage; `formatAmount` / `assetTypeMeta` unit-tested
+- [ ] `nx run-many -t test` green for both projects
+- [ ] CI affected runs include the new targets
 
 ## Notes
 
-- This is the first test target in `libs/`; the chosen layout becomes the
-  pattern for sibling libs.
+- These are the first test targets in the frontend; the chosen layout
+  becomes the pattern for sibling libs and the app.
