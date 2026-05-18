@@ -1,0 +1,178 @@
+import SwapHorizIcon from '@mui/icons-material/SwapHorizOutlined';
+import { Box, Card, Typography } from '@mui/material';
+import type { NftTransferItem } from '@rumblefish/api-types';
+import {
+  classifyError,
+  EmptyState,
+  ExplorerTable,
+  GenericErrorState,
+  IdentifierDisplay,
+  PaginationControls,
+  RateLimitState,
+  TableSectionHeader,
+  TableSkeleton,
+  TransientErrorState,
+  type ExplorerTableColumn,
+} from '@rumblefish/soroban-block-explorer-ui';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+
+import { useNftTransfers } from '../../api/index.js';
+import { TransactionTime } from '../transactions/TransactionTime.js';
+
+import { NftEventBadge } from './NftEventBadge.js';
+
+interface NftTransfersProps {
+  /** Numeric `nfts.id` surrogate. */
+  nftId: number;
+}
+
+function Dash() {
+  return (
+    <Typography component="span" sx={{ color: 'text.tertiary' }}>
+      —
+    </Typography>
+  );
+}
+
+const columns: ExplorerTableColumn<NftTransferItem>[] = [
+  {
+    id: 'event',
+    header: 'Event',
+    cell: (row) => <NftEventBadge name={row.event_type_name} />,
+  },
+  {
+    id: 'from',
+    header: 'From',
+    // `from_account` is null on the mint row.
+    cell: (row) =>
+      row.from_account ? (
+        <IdentifierDisplay value={row.from_account} type="account" />
+      ) : (
+        <Dash />
+      ),
+  },
+  {
+    id: 'to',
+    header: 'To',
+    // `to_account` is null on a burn.
+    cell: (row) =>
+      row.to_account ? (
+        <IdentifierDisplay value={row.to_account} type="account" />
+      ) : (
+        <Dash />
+      ),
+  },
+  {
+    id: 'transaction',
+    header: 'Transaction',
+    cell: (row) => (
+      <IdentifierDisplay value={row.transaction_hash} type="transaction" />
+    ),
+  },
+  {
+    id: 'time',
+    header: 'Time',
+    cell: (row) => <TransactionTime createdAt={row.created_at} />,
+  },
+];
+
+const COLUMN_COUNT = columns.length;
+
+/**
+ * Transfer-history section of the NFT detail page — a cursor-paginated table
+ * of mint / transfer / burn events for one NFT, per the Figma design.
+ */
+export function NftTransfers({ nftId }: NftTransfersProps) {
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch,
+  } = useNftTransfers(nftId);
+
+  const [pageIndex, setPageIndex] = useState(0);
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [nftId]);
+
+  const pages = data?.pages ?? [];
+  const currentPage = pages[pageIndex];
+  const rows = currentPage?.data ?? [];
+  const canPrev = pageIndex > 0;
+  const canNext = Boolean(currentPage?.page.has_more);
+
+  const handlePrev = useCallback(() => {
+    setPageIndex((index) => Math.max(0, index - 1));
+  }, []);
+
+  const handleNext = useCallback(() => {
+    if (isFetchingNextPage) return;
+    if (pageIndex + 1 < pages.length) {
+      setPageIndex(pageIndex + 1);
+      return;
+    }
+    if (hasNextPage) {
+      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
+    }
+  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  let body: ReactNode;
+  if (isLoading) {
+    body = (
+      <Box sx={{ p: 2 }}>
+        <TableSkeleton rows={5} columns={COLUMN_COUNT} />
+      </Box>
+    );
+  } else if (isError) {
+    const kind = classifyError(error);
+    const retry = () => void refetch();
+    body = (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        {kind === 'rate-limit' ? (
+          <RateLimitState onRetry={retry} />
+        ) : kind === 'transient' ? (
+          <TransientErrorState onRetry={retry} />
+        ) : (
+          <GenericErrorState onRetry={retry} />
+        )}
+      </Box>
+    );
+  } else if (rows.length === 0) {
+    body = (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <EmptyState
+          icon={<SwapHorizIcon />}
+          title="No transfer history"
+          description="This NFT has no recorded mint, transfer or burn events."
+        />
+      </Box>
+    );
+  } else {
+    body = (
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+      />
+    );
+  }
+
+  return (
+    <Card>
+      <TableSectionHeader title="Transfer history" />
+      <Box sx={{ minHeight: 200 }}>{body}</Box>
+      <PaginationControls
+        caption="Latest results"
+        prevCursor={canPrev ? 'prev' : null}
+        nextCursor={canNext ? 'next' : null}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
+    </Card>
+  );
+}
