@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 
 import {
   TopNav,
@@ -49,25 +48,6 @@ function HomeLogo({
         alt="Rumblefish"
         style={{ height, display: 'block' }}
       />
-    </Box>
-  );
-}
-
-function TestnetBanner() {
-  return (
-    <Box
-      role="alert"
-      aria-label="Testnet environment"
-      sx={(theme) => ({
-        backgroundColor: theme.palette.surface.warning,
-        textAlign: 'center',
-        py: 0.5,
-        px: 2,
-      })}
-    >
-      <Typography variant="bodyXsMedium" color="text.warning">
-        TESTNET — not production data
-      </Typography>
     </Box>
   );
 }
@@ -125,7 +105,6 @@ export function AppShell() {
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {network === 'testnet' && <TestnetBanner />}
       <TopNav
         network={network}
         onNetworkChange={setNetwork}
