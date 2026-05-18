@@ -2,7 +2,7 @@
 id: '0073'
 title: 'Frontend: Account detail page'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-small, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Promoted to active — bundled with 0074 on shared branch feat/0073-0074_frontend-account-and-asset-pages.'
 ---
 
 # Frontend: Account detail page
@@ -21,9 +25,9 @@ history:
 
 Implement the Account detail page (`/accounts/:accountId`) showing account summary, balances, and paginated transaction history. This is the canonical destination for account ID lookups from global search and linked identifiers throughout the explorer.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** Promoted to active. Implementation not yet started.
 
 ## Context
 
