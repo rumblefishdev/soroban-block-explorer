@@ -7,7 +7,10 @@ related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-small, layer-frontend-pages]
 milestone: 2
-links: []
+links:
+  - 'https://www.figma.com/design/n1p6WCMVd4iinbuvOA2WjP/Designs?node-id=154-12747&m=dev'
+  - 'https://www.figma.com/design/n1p6WCMVd4iinbuvOA2WjP/Designs?node-id=157-22153&m=dev'
+  - 'https://www.figma.com/design/siumLgKOc9LLepEfbimyp3/Design-System---Stellar-Block-Explorer?node-id=360-1812&m=dev'
 history:
   - date: 2026-03-24
     status: backlog
@@ -21,6 +24,10 @@ history:
     status: active
     who: karolkow
     note: 'Spec sync: paths corrected to web/ (no apps/); hooks to web/src/api/hooks/ per 0066; sub-component layout per 0069; status badge via Chip (no StatusBadge); balance link /tokens→/assets per 0154.'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Added Figma links — account detail frames + design-system file (Chip).'
 ---
 
 # Frontend: Account detail page
