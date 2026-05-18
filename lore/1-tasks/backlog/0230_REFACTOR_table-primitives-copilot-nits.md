@@ -4,10 +4,12 @@ title: 'libs/ui table primitives: address Copilot review nits from 0061'
 type: REFACTOR
 status: backlog
 related_adr: []
-related_tasks: ['0061']
+related_tasks: ['0061', '0072']
 tags: [priority-low, effort-small, layer-frontend-shared, phase-future]
 milestone: 2
-links: ['https://github.com/rumblefishdev/soroban-block-explorer/pull/190']
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/pull/190'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/pull/193'
 history:
   - date: 2026-05-18
     status: backlog
@@ -19,15 +21,16 @@ history:
 
 ## Summary
 
-Three valid Copilot review comments landed on PR #190 (task 0061) after
-merge. All still valid against current `develop`. Small, low-risk
-follow-ups to the `libs/ui/src/table/` primitives.
+Four valid Copilot review comments from merged frontend PRs — three on
+PR #190 (task 0061, `libs/ui/src/table/` primitives), one on PR #193
+(task 0072, the infinite-query hooks). All still valid against current
+`develop`. Small, low-risk follow-ups.
 
 ## Context
 
-PR #190 (table primitives + cursor hooks) merged with a late Copilot
-review. None of the comments blocked merge; collected here so they are
-not lost.
+PR #190 (table primitives + cursor hooks) and PR #193 (ledger pages)
+each merged with a late Copilot review. None of the comments blocked
+merge; collected here so they are not lost.
 
 ## Implementation
 
@@ -52,6 +55,23 @@ not lost.
    blank gap. Fix: skip the empty row when `emptyState` is undefined, or
    render a minimal default placeholder.
 
+4. **Infinite-query hooks — `getNextPageParam` ignores `has_more`**
+   (Copilot, PR #193 / task 0072). `useLedgersList`, `useLedgerDetail`
+   and the pre-existing `useTransactionsList` all return
+   `cursor ?? undefined` without consulting `page.has_more`. If the API
+   ever returns a non-null cursor with `has_more: false`, React Query's
+   `hasNextPage` diverges from end-of-list. The page Next buttons are
+   safe (`canNext` is gated on `has_more`), but `hasNextPage` and any
+   direct caller would be wrong. Fix all three hooks consistently:
+
+   ```ts
+   getNextPageParam: (lastPage) =>
+     lastPage.page.has_more ? (lastPage.page.cursor ?? undefined) : undefined,
+   ```
+
+   `useLedgerDetail` reads `lastPage.transactions.page`. Doing only one
+   hook would diverge from the others — change all three.
+
 ## Acceptance Criteria
 
 - [ ] `useTableUrlState` does not recompute `state` when `filterKeys`
@@ -60,7 +80,9 @@ not lost.
       duplication
 - [ ] `ExplorerTable` renders no blank gap when empty and `emptyState`
       is omitted
-- [ ] `libs/ui` typecheck + lint green
+- [ ] `useLedgersList`, `useLedgerDetail`, `useTransactionsList` gate
+      `getNextPageParam` on `has_more`
+- [ ] `libs/ui` typecheck + lint green; `web` typecheck + lint green
 
 ## Notes
 
