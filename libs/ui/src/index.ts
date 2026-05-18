@@ -104,3 +104,29 @@ export {
   isTransactionHash,
   isValidIdentifier,
 } from './identifiers/index.js';
+
+export {
+  Tabs,
+  useTabUrlState,
+  TimeSeriesChart,
+  DEFAULT_TIME_SERIES_INTERVALS,
+  OperationFlowTree,
+  LazySection,
+  useIntersectionObserver,
+} from './visualization/index.js';
+export type {
+  TabsProps,
+  TabDefinition,
+  UseTabUrlStateOptions,
+  UseTabUrlStateResult,
+  TimeSeriesChartProps,
+  TimeSeriesPoint,
+  TimeSeriesInterval,
+  OperationFlowTreeProps,
+  FlowNode,
+  FlowNodeKind,
+  FlowNodeIdentifier,
+  LazySectionProps,
+  UseIntersectionObserverOptions,
+  UseIntersectionObserverResult,
+} from './visualization/index.js';
