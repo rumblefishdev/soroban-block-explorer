@@ -2,7 +2,7 @@
 id: '0074'
 title: 'Frontend: Assets list and detail pages'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0036']
 related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
@@ -36,6 +36,14 @@ history:
     status: active
     who: karolkow
     note: 'Implemented assets list + detail. Type filter is chips without Native, and the asset-transactions table shows Ledger instead of Fee, matching Figma — acceptance criteria updated to match.'
+  - date: 2026-05-18
+    status: completed
+    who: karolkow
+    note: >
+      Completed. Assets list + detail pages delivered on branch
+      feat/0073-0074; verified 1:1 against Figma; typecheck/lint/build
+      green. safeHttpUrl guard added for off-chain TOML URLs. Tests
+      deferred to task 0226.
 ---
 
 # Frontend: Assets list and detail pages
@@ -44,10 +52,10 @@ history:
 
 Implement the Assets list page (`/assets`) and Asset detail page (`/assets/:id`). Covers native XLM, classic credit assets, SACs, and Soroban-native tokens in a unified browsing surface with clear type differentiation.
 
-## Status: Active
+## Status: Completed
 
 **Current state:** Implemented on branch
-`feat/0073-0074_frontend-account-and-asset-pages`; pending review and merge.
+`feat/0073-0074_frontend-account-and-asset-pages`; archived pending merge.
 
 ## Context
 
@@ -177,15 +185,66 @@ Flesh out the existing router stub `web/src/pages/AssetDetailPage.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Asset list columns: asset code, issuer/contract ID, type badge (native/classic_credit/SAC/soroban), total supply, holder count
-- [ ] Filters: type chips (Classic/SAC/Soroban), code search. Reflected in URL.
-- [ ] Asset detail shows: code, issuer OR contract ID (copyable, linked), type badge (prominent), supply, holders, deployed at ledger (Soroban/SAC)
-- [ ] Type badge clearly distinguishes native, classic_credit, SAC, and Soroban assets
-- [ ] Metadata section tolerates partial availability (missing name/icon/description)
-- [ ] Asset transactions table with standard columns, cursor pagination
-- [ ] Classic credit asset issuer linked to `/accounts/:id`; Soroban contract linked to `/contracts/:id`
-- [ ] 404 state: "Asset not found"
-- [ ] Loading skeleton and error states per section
+- [x] Asset list columns: asset code, issuer/contract ID, type badge (native/classic_credit/SAC/soroban), total supply, holder count
+- [x] Filters: type chips (Classic/SAC/Soroban), code search. Reflected in URL.
+- [x] Asset detail shows: code, issuer OR contract ID (copyable, linked), type badge (prominent), supply, holders, deployed at ledger (Soroban/SAC)
+- [x] Type badge clearly distinguishes native, classic_credit, SAC, and Soroban assets
+- [x] Metadata section tolerates partial availability (missing name/icon/description)
+- [x] Asset transactions table with standard columns, cursor pagination
+- [x] Classic credit asset issuer linked to `/accounts/:id`; Soroban contract linked to `/contracts/:id`
+- [x] 404 state: "Asset not found"
+- [x] Loading skeleton and error states per section
+
+## Implementation Notes
+
+Delivered on branch `feat/0073-0074_frontend-account-and-asset-pages`
+(commits `6e3347f`, `1518020`, `dfef824`, `47d0bfb`).
+
+- Hooks: `web/src/api/hooks/{useAssetsList,useAssetDetail,useAssetTransactions}.ts`.
+- Pages: `web/src/pages/AssetsListPage.tsx`, `AssetDetailPage.tsx`
+  (fleshed-out router stubs).
+- Sub-components: `web/src/pages/assets/{AssetIcon,AssetFilters,AssetsTable,
+AssetSummary,AssetMetadata,AssetTransactions}.tsx`, plus `assetType.ts`.
+- Shared: `web/src/pages/url.ts` (`safeHttpUrl`) and the `detail/`
+  primitives created with 0073.
+- Verified 1:1 against the Figma frames by rendering against a mock API;
+  typecheck, lint and build green. No automated tests — deferred to 0226.
+
+## Issues Encountered
+
+- **Off-chain URLs are untrusted**: `home_page` / `icon_url` come from
+  SEP-1 TOML metadata; a `javascript:` URL would otherwise reach an `href`.
+  Added `safeHttpUrl` to gate both an `href` and an image `src`.
+- **No wrap mode in `IdentifierDisplay`**: a long issuer/contract id clips
+  in the narrow asset-summary card. A proper `wrap` prop on the libs/ui
+  component did not propagate cleanly through the nx project-reference /
+  `customConditions` build (`nx typecheck` failed against a correct
+  source/dist), so it was reverted; a documented CSS override in
+  `AssetSummary` wraps the value instead.
+
+## Design Decisions
+
+### From Plan
+
+1. **Unified asset surface** — native, classic credit, SAC and Soroban
+   assets in one list/detail flow; per-section `SectionErrorBoundary`,
+   cursor pagination, libs/ui primitive reuse.
+2. **Metadata tolerates partial availability** — only present TOML fields
+   render; an empty metadata section shows a short placeholder.
+
+### Emerged
+
+3. **Type filter is chips, not a dropdown** — the Figma filter is a chip row
+   (All types / Classic / SAC / Soroban) and excludes Native; the spec said
+   a dropdown including native. Figma took priority; acceptance criteria
+   updated.
+4. **Asset-transactions table shows Ledger, omits Fee** — matches the Figma
+   asset-detail table; the original spec listed Fee and no Ledger.
+5. **Type badge via generic `Chip`** — colour-coded (blue native, neutral
+   classic, violet SAC, emerald Soroban); task 0063 shipped `Chip`, not a
+   named `TypeBadge`.
+6. **`safeHttpUrl` URL guard** — off-chain TOML `home_page` / `icon_url` are
+   validated to `http(s)` before reaching an `href` / `src`.
 
 ## Notes
 

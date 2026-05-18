@@ -2,7 +2,7 @@
 id: '0073'
 title: 'Frontend: Account detail page'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-small, layer-frontend-pages]
@@ -32,6 +32,13 @@ history:
     status: active
     who: karolkow
     note: 'Implemented account detail page. Account-transactions table omits the Source account column to match the Figma design — acceptance criteria updated to match.'
+  - date: 2026-05-18
+    status: completed
+    who: karolkow
+    note: >
+      Completed. Account detail page (summary, balances, transactions)
+      delivered on branch feat/0073-0074. ~10 files; verified 1:1 against
+      Figma; typecheck/lint/build green. Tests deferred to task 0226.
 ---
 
 # Frontend: Account detail page
@@ -40,10 +47,10 @@ history:
 
 Implement the Account detail page (`/accounts/:accountId`) showing account summary, balances, and paginated transaction history. This is the canonical destination for account ID lookups from global search and linked identifiers throughout the explorer.
 
-## Status: Active
+## Status: Completed
 
 **Current state:** Implemented on branch
-`feat/0073-0074_frontend-account-and-asset-pages`; pending review and merge.
+`feat/0073-0074_frontend-account-and-asset-pages`; archived pending merge.
 
 ## Context
 
@@ -142,16 +149,66 @@ Flesh out the existing router stub `web/src/pages/AccountDetailPage.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Account summary shows: account ID (full, copyable), sequence number, first seen ledger (linked), last seen ledger (linked)
-- [ ] Balances section shows: XLM balance (prominent) + trustline/token balances
-- [ ] Balances visually separated from transaction history
-- [ ] Transaction table columns: hash, ledger sequence, operation type, status badge, fee, timestamp
-- [ ] Transactions paginated with cursor-based pagination
-- [ ] Account summary and transactions fetched independently (separate queries)
-- [ ] Failed transactions section does NOT collapse account summary
-- [ ] Param validation: G... format for accountId
-- [ ] 404 state: "Account not found"
-- [ ] Loading skeleton and error states per section
+- [x] Account summary shows: account ID (full, copyable), sequence number, first seen ledger (linked), last seen ledger (linked)
+- [x] Balances section shows: XLM balance (prominent) + trustline/token balances
+- [x] Balances visually separated from transaction history
+- [x] Transaction table columns: hash, ledger sequence, operation type, status badge, fee, timestamp
+- [x] Transactions paginated with cursor-based pagination
+- [x] Account summary and transactions fetched independently (separate queries)
+- [x] Failed transactions section does NOT collapse account summary
+- [x] Param validation: G... format for accountId
+- [x] 404 state: "Account not found"
+- [x] Loading skeleton and error states per section
+
+## Implementation Notes
+
+Delivered on branch `feat/0073-0074_frontend-account-and-asset-pages`
+(commits `6e3347f`, `1518020`).
+
+- Hooks: `web/src/api/hooks/useAccountDetail.ts`, `useAccountTransactions.ts`.
+- Page: `web/src/pages/AccountDetailPage.tsx` (fleshed-out router stub).
+- Sub-components: `web/src/pages/accounts/{AccountSummary,AccountBalances,AccountTransactions}.tsx`.
+- Shared primitives created here and reused by 0074:
+  `web/src/pages/detail/{SectionCard,SummaryRow,PageBreadcrumb}.tsx`,
+  `web/src/pages/useInfinitePager.ts`, `web/src/pages/format.ts`, and
+  `web/src/pages/transactions/cells.tsx` (Dash / OperationCell / StatusCell
+  extracted from the 0069 table for reuse).
+- Verified 1:1 against the Figma frames by rendering against a mock API;
+  typecheck, lint and build green. No automated tests — deferred to 0226.
+
+## Issues Encountered
+
+- **Infinite-query `initialPageParam`**: for path-bearing endpoints
+  (`/accounts/:id/transactions`) the page-param type requires `path`, so
+  `initialPageParam` is `{ path: { account_id } }`, not `{}`.
+- **Custom Typography variants are inline**: `bodySmMedium` etc. map to
+  `<span>`, so stacked label/value pairs ran together — fixed by wrapping
+  them in `Stack`.
+
+## Design Decisions
+
+### From Plan
+
+1. **Independent per-section queries** — summary/balances
+   (`useAccountDetail`) and transactions (`useAccountTransactions`) are
+   separate queries, each in its own `SectionErrorBoundary`, so a failure in
+   one section never collapses the others.
+2. **Reuse libs/ui + 0069 conventions** — ExplorerTable, identifiers,
+   states, `Chip`, `RelativeTimestamp`; transaction rows reuse 0069 cells.
+
+### Emerged
+
+3. **Source account column dropped** — the Figma account-transactions table
+   has no Source account column though the original spec listed one. Figma
+   took priority; column omitted and acceptance criteria updated.
+4. **Badge via generic `Chip`** — task 0063 shipped a generic `Chip`, not a
+   named `StatusBadge`; status renders `Chip` with success/error colour.
+5. **Balances show only Native / Classic** — the API `AccountBalance` cannot
+   distinguish a SAC (`native | credit_alphanum4 | credit_alphanum12`), so
+   balance rows label "Native asset" or "Classic" only.
+6. **`useInfinitePager` extracted** — cursor-pagination logic pulled into a
+   shared hook; the 0069 transactions list was refactored onto it
+   (commit `9008a8a`) to keep one implementation.
 
 ## Notes
 
