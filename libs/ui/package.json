@@ -20,6 +20,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.9",
     "@mui/material": "^7.3.9",
+    "@mui/x-charts": "^9.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tslib": "^2.3.0"

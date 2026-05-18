@@ -9,15 +9,24 @@ import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';
 import type { EntityType, TruncationConfig } from './types.js';
 
-function makeMonoSx(linked: boolean, fullWidth: boolean): SxProps<Theme> {
+function makeMonoSx(
+  linked: boolean,
+  fullWidth: boolean,
+  tone: 'default' | 'inherit'
+): SxProps<Theme> {
+  const inheritColor = tone === 'inherit';
   return {
     fontFamily: monoFontFamily,
     fontSize: 14,
     fontWeight: 500,
     lineHeight: 1.4,
-    color: (theme) => theme.palette.text.primary,
+    color: inheritColor
+      ? 'inherit'
+      : (theme: Theme) => theme.palette.text.primary,
     '&:visited': {
-      color: (theme: Theme) => theme.palette.text.primary,
+      color: inheritColor
+        ? 'inherit'
+        : (theme: Theme) => theme.palette.text.primary,
     },
     textDecoration: 'none',
     display: 'inline-flex',
@@ -28,10 +37,14 @@ function makeMonoSx(linked: boolean, fullWidth: boolean): SxProps<Theme> {
     whiteSpace: 'nowrap',
     cursor: linked ? 'pointer' : 'inherit',
     '&:hover': linked
-      ? { color: (theme: Theme) => theme.palette.surface.primaryMainAlt }
+      ? inheritColor
+        ? { textDecoration: 'underline' }
+        : { color: (theme: Theme) => theme.palette.surface.primaryMainAlt }
       : undefined,
     '&:focus-visible': {
-      outline: (theme) => `2px solid ${theme.palette.stroke.action}`,
+      outline: inheritColor
+        ? '2px solid currentColor'
+        : (theme: Theme) => `2px solid ${theme.palette.stroke.action}`,
       outlineOffset: 2,
       borderRadius: 2,
     },
@@ -45,6 +58,12 @@ export interface IdentifierDisplayProps {
   truncation?: TruncationConfig;
   linked?: boolean;
   href?: string;
+  /**
+   * 'inherit' makes the link adopt the surrounding text colour — needed when
+   * rendered on coloured backgrounds (e.g. flow-tree node cards). Defaults to
+   * 'default' (theme text colour).
+   */
+  tone?: 'default' | 'inherit';
   className?: string;
   'aria-label'?: string;
 }
@@ -63,13 +82,17 @@ export function IdentifierDisplay({
   truncation,
   linked = true,
   href,
+  tone = 'default',
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
   const cfg = truncation ?? getDefaultTruncation(type);
   const formatted = formatForDisplay(type, value);
   const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;
-  const sx = useMemo(() => makeMonoSx(linked, !truncate), [linked, truncate]);
+  const sx = useMemo(
+    () => makeMonoSx(linked, !truncate, tone),
+    [linked, truncate, tone]
+  );
 
   return (
     <Box
