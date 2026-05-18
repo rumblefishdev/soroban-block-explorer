@@ -42,7 +42,8 @@ Implement the Account detail page (`/accounts/:accountId`) showing account summa
 
 ## Status: Active
 
-**Current state:** Promoted to active. Implementation not yet started.
+**Current state:** Implemented on branch
+`feat/0073-0074_frontend-account-and-asset-pages`; pending review and merge.
 
 ## Context
 
