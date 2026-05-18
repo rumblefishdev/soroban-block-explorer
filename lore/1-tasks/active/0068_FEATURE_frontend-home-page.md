@@ -2,7 +2,7 @@
 id: '0068'
 title: 'Frontend: Home page'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-medium, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Promoted to active — starting Figma-first frontend home page implementation.'
 ---
 
 # Frontend: Home page
