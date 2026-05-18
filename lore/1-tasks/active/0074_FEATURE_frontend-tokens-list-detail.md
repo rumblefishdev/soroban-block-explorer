@@ -2,7 +2,7 @@
 id: '0074'
 title: 'Frontend: Assets list and detail pages'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0036']
 related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
@@ -17,6 +17,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Updated per task 0154: tokens→assets rename throughout'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Promoted to active — bundled with 0073 on shared branch feat/0073-0074_frontend-account-and-asset-pages.'
 ---
 
 # Frontend: Assets list and detail pages
@@ -25,9 +29,9 @@ history:
 
 Implement the Assets list page (`/assets`) and Asset detail page (`/assets/:id`). Covers native XLM, classic credit assets, SACs, and Soroban-native tokens in a unified browsing surface with clear type differentiation.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** Promoted to active. Implementation not yet started.
 
 ## Context
 
