@@ -7,6 +7,20 @@ import { SummaryRow, type SummaryCell } from '../detail/SummaryRow.js';
 import { AssetIcon } from './AssetIcon.js';
 
 /**
+ * Returns the URL only when it is a safe `http(s)` link. TOML metadata is
+ * off-chain and attacker-controlled, so a `javascript:` (or other scheme)
+ * `home_page` must never reach an `href`.
+ */
+function safeHttpUrl(url: string): string | null {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Asset metadata card — the optional TOML-sourced name, icon, description and
  * homepage. Missing fields are tolerated gracefully: only available rows are
  * shown, and an empty section renders a short placeholder.
@@ -27,11 +41,12 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
     rows.push({ label: 'Description', value: asset.description });
   }
   if (asset.home_page) {
+    const safeUrl = safeHttpUrl(asset.home_page);
     rows.push({
       label: 'Homepage',
-      value: (
+      value: safeUrl ? (
         <Link
-          href={asset.home_page}
+          href={safeUrl}
           target="_blank"
           rel="noopener noreferrer"
           variant="bodySmRegular"
@@ -39,6 +54,14 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
         >
           {asset.home_page}
         </Link>
+      ) : (
+        // Non-http(s) value — show as plain text, never as a clickable href.
+        <Typography
+          variant="bodySmRegular"
+          sx={{ color: 'text.primary', wordBreak: 'break-all' }}
+        >
+          {asset.home_page}
+        </Typography>
       ),
     });
   }
