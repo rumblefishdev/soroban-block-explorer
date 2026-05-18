@@ -21,6 +21,10 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active — bundled with 0073 on shared branch feat/0073-0074_frontend-account-and-asset-pages.'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Spec sync: paths corrected to web/ (no apps/); hooks to web/src/api/hooks/ per 0066; sub-component layout per 0069; type badge via Chip (no TypeBadge). File renamed tokens→assets.'
 ---
 
 # Frontend: Assets list and detail pages
@@ -51,7 +55,7 @@ The asset pages must unify all asset classes into one browseable surface while m
 | -------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Asset Code           | Text                                      | Primary identifier text (e.g., "USDC", "XLM")                                               |
 | Issuer / Contract ID | Truncated, linked                         | Classic: issuer linked to `/accounts/:id`. Soroban: contract ID linked to `/contracts/:id`. |
-| Type                 | Badge (native/classic_credit/SAC/soroban) | TypeBadge (task 0063). Prevents confusion between similar names.                            |
+| Type                 | Badge (native/classic_credit/SAC/soroban) | `Chip` color-coded per type (task 0063). Prevents confusion between similar names.          |
 | Total Supply         | Formatted number                          | Total supply of the asset                                                                   |
 | Holder Count         | Integer                                   | Number of accounts holding this asset                                                       |
 
@@ -67,15 +71,15 @@ The asset pages must unify all asset classes into one browseable surface while m
 
 ### Asset Detail Fields
 
-| Field                 | Display                                    | Notes                                                        |
-| --------------------- | ------------------------------------------ | ------------------------------------------------------------ |
-| Asset Code            | Prominent header                           | Primary asset name                                           |
-| Issuer (classic)      | Full, copyable, linked to `/accounts/:id`  | IdentifierWithCopy (task 0062). Only for classic_credit/SAC. |
-| Contract ID (soroban) | Full, copyable, linked to `/contracts/:id` | IdentifierWithCopy (task 0062). Only for Soroban/SAC assets. |
-| Type Badge            | Prominent badge                            | TypeBadge (task 0063). Must be obvious at top of page.       |
-| Total Supply          | Formatted number                           | Total asset supply                                           |
-| Holder Count          | Integer                                    | Number of holders                                            |
-| Deployed At Ledger    | Linked to `/ledgers/:sequence`             | Only for Soroban/SAC assets. IdentifierDisplay (task 0062).  |
+| Field                 | Display                                    | Notes                                                                    |
+| --------------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
+| Asset Code            | Prominent header                           | Primary asset name                                                       |
+| Issuer (classic)      | Full, copyable, linked to `/accounts/:id`  | IdentifierWithCopy (task 0062). Only for classic_credit/SAC.             |
+| Contract ID (soroban) | Full, copyable, linked to `/contracts/:id` | IdentifierWithCopy (task 0062). Only for Soroban/SAC assets.             |
+| Type Badge            | Prominent badge                            | `Chip` color-coded per type (task 0063). Must be obvious at top of page. |
+| Total Supply          | Formatted number                           | Total asset supply                                                       |
+| Holder Count          | Integer                                    | Number of holders                                                        |
+| Deployed At Ledger    | Linked to `/ledgers/:sequence`             | Only for Soroban/SAC assets. IdentifierDisplay (task 0062).              |
 
 ### Asset Metadata (when available)
 
@@ -102,9 +106,15 @@ Same as global transaction table conventions:
 
 ## Implementation Plan
 
+> Structure follows task 0069 (transactions list): page entry files stay flat
+> in `web/src/pages/` (router imports them), page-specific sub-components go in
+> the route-named subdirectory `web/src/pages/assets/`, and data hooks go in
+> `web/src/api/hooks/` per task 0066 convention.
+
 ### Step 1: Asset list query hook and page
 
-Create `apps/web/src/pages/assets/useAssetsList.ts` and `AssetsListPage.tsx`:
+Create the hook `web/src/api/hooks/useAssetsList.ts` and flesh out the existing
+router stub `web/src/pages/AssetsListPage.tsx`:
 
 - Fetches `GET /assets` with limit, cursor, type filter, code filter
 - Filter controls: type dropdown, code text input
@@ -113,14 +123,14 @@ Create `apps/web/src/pages/assets/useAssetsList.ts` and `AssetsListPage.tsx`:
 
 ### Step 2: Asset detail query hooks
 
-Create `apps/web/src/pages/asset-detail/useAssetDetail.ts` and `useAssetTransactions.ts`:
+Create `web/src/api/hooks/useAssetDetail.ts` and `web/src/api/hooks/useAssetTransactions.ts`:
 
 - `useAssetDetail`: fetches `GET /assets/:id`, stale time 5 minutes
 - `useAssetTransactions`: fetches `GET /assets/:id/transactions` with cursor
 
 ### Step 3: Asset detail summary
 
-Create `apps/web/src/pages/asset-detail/AssetSummary.tsx`:
+Create `web/src/pages/assets/AssetSummary.tsx`:
 
 - Asset code as header
 - Type badge (prominent, near top)
@@ -129,21 +139,21 @@ Create `apps/web/src/pages/asset-detail/AssetSummary.tsx`:
 
 ### Step 4: Asset metadata section
 
-Create `apps/web/src/pages/asset-detail/AssetMetadata.tsx`:
+Create `web/src/pages/assets/AssetMetadata.tsx`:
 
 - Name, description, icon, domain
 - Graceful handling of missing fields (show what is available, hide empty sections)
 
 ### Step 5: Asset transactions section
 
-Create `apps/web/src/pages/asset-detail/AssetTransactions.tsx`:
+Create `web/src/pages/assets/AssetTransactions.tsx`:
 
 - Paginated transaction table, standard columns
 - SectionHeader: "Transactions"
 
 ### Step 6: Page composition
 
-Create `apps/web/src/pages/asset-detail/AssetDetailPage.tsx`:
+Flesh out the existing router stub `web/src/pages/AssetDetailPage.tsx`:
 
 - Composes: AssetSummary, AssetMetadata, AssetTransactions
 - Each section in SectionErrorBoundary (task 0064)
