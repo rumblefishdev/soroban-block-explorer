@@ -46,7 +46,7 @@ This plan defines: (1) how to slice the work so the two local backfills stay coh
 
 `L_last_closed` = end of the **highest fully-closed S3 partition** at the laptop 3's completion time — not the chain tip. Discovered dynamically by task 0225 sync-validation pre-parse, which refuses to ingest partitions with `<64,000` ledgers in S3.
 
-**What `L_last_closed` looks like in practice.** Chain tip (per stellarchain.io 2026-05-15) is ~`62,577,300`, which falls in partition 977 (`62,528,000–62,591,999`). Partition 977 is _not yet closed on S3_ — it's the live tail. The last fully-closed S3 partition today is therefore partition 976 (`62,464,000–62,527,999`), so `L_last_closed ≈ 62,527,999` if machine 2 finished right now. By the time machine 2 actually finishes (~80–120 h after start), the chain will have advanced another ~80–150k ledgers, closing 1–2 more S3 partitions. Machine 2 stops at _whatever the highest closed partition is at completion time_ — captured from the audit table, not pinned in the CLI.
+**What `L_last_closed` looks like in practice.** Chain tip (per stellarchain.io 2026-05-15) is ~`62,577,300`, which falls in partition 977 (`62,528,000–62,591,999`). Partition 977 is _not yet closed on S3_ — it's the live tail. The last fully-closed S3 partition today is therefore partition 976 (`62,464,000–62,527,999`), so `L_last_closed ≈ 62,527,999` if laptop 3 finished right now. By the time laptop 3 actually finishes (~40–60 h after start at its smaller ~38-partition range), the chain will have advanced another ~40–80 k ledgers, closing 0–2 more S3 partitions. Laptop 3 stops at _whatever the highest closed partition is at completion time_ — captured from the audit table, not pinned in the CLI.
 
 This avoids two failure modes:
 
@@ -55,16 +55,16 @@ This avoids two failure modes:
 
 **Live tail** (everything beyond `L_last_closed`) is explicitly out of scope for this batch backfill. The realtime indexer (or a future catch-up pass once those partitions close) handles it. The Hetzner merge boundary equals `L_last_closed` and the production CH advertises completeness only up to that ledger.
 
-Soroban-era partitions through partition 976: `(976 - 788 + 1) = 189` partitions; we did 73 in 2/5 so 3/5 is at least 116 closed partitions, plus 1–2 more closing during machine 2's run. Peak local disk usage on either machine is dominated by accumulated CH data (S3 scratch never holds more than 2 partitions ≈ 24 GB simultaneously; runner deletes after index unless `--keep-partitions`). Runbook published prereq is 2 TB+; for machine 2, that's comfortable headroom.
+Soroban-era partitions through partition 976: `(976 - 788 + 1) = 189` partitions; laptop 1 did 73 in 2/5 (partitions 788–860), machine 2 owns 78 (861–938), laptop 3 owns ~38 (939–976+), plus 0–2 more partitions closing during laptop 3's run. Peak local disk on any worker is dominated by accumulated CH data (S3 scratch never holds more than 2 partitions ≈ 24 GB simultaneously; runner deletes after index unless `--keep-partitions`). Runbook published prereq is 2 TB+; for machine 2's 761 GB free that's already comfortable; laptop 3's 400–500 GB free is the constrained one — see Phase 0 step 5b for the disk-pressure monitoring.
 
-> **Note on `git pull`**: requested at the top of the conversation but skipped here because plan mode forbids non-readonly tools. Run `git fetch origin && git checkout develop && git pull --ff-only` after exiting plan mode. Currently on `feat/0225_backfill-sync-validation-and-resume-runbook` with uncommitted edits in `crates/backfill-runner/src/{run,sync,error}.rs` and `Cargo.{lock,toml}` — those belong to task 0225 (sync validation pre-parse), not this merge work. **Task 0225 must land before machine 2 starts**, because the 3/5 range reaches close to chain tip where S3 archive lag is an active concern (the exact failure mode 0225 addresses; see runbook §9 troubleshooting).
+> **Note on `git pull`**: requested at the top of the conversation but skipped here because plan mode forbids non-readonly tools. Run `git fetch origin && git checkout develop && git pull --ff-only` after exiting plan mode. The 0225 branch carried uncommitted edits in `crates/backfill-runner/src/{run,sync,error}.rs` and `Cargo.{lock,toml}` — those belong to task 0225 (sync validation pre-parse), not this merge work. **Task 0225 must land before laptop 3 starts**, because only laptop 3's range reaches close to chain tip where S3 archive lag is an active concern (the exact failure mode 0225 addresses; see runbook §9 troubleshooting). Machine 2's range ends at partition 938 (60,095,999) — far enough from tip to be safe without 0225, but parser-parity still requires the same git SHA across all workers.
 
 ---
 
 ## Architectural Constraints (must hold for the plan to be sound)
 
 1. **Schema parity**: both local CHs _and_ Hetzner CH must run the _exact same_ schema migration. All three apply schema via the `db-clickhouse-init` sidecar from the same git SHA (ADR 0044 `init.sql`). The sidecar runs on every container boot and is idempotent (`CREATE TABLE IF NOT EXISTS`), so the invariant holds as long as all parties pin to the same SHA. Schema drift = silent corruption. **Required pre-merge fix**: `init.sql`'s `transaction_hash_dict` SOURCE clause hardcodes `USER 'default' PASSWORD 'clickhouse'`; Hetzner uses a different password. Apply the `users.d/dict.xml` localhost-only `dict_reader` user fix (Surfaced trap #2 in task 0216 deployment reference) before the schema sidecar runs on Hetzner.
-2. **Parser parity**: both machines must run the _same `backfill-runner` binary hash_, built from the same git SHA on `develop` (or a tagged release). Different parser versions on the same ledger range can produce different rows. Tag the SHA before machine 2 starts; record it in the audit table.
+2. **Parser parity**: all workers (laptop 1, machine 2, laptop 3) must run the _same `backfill-runner` binary hash_, built from the same git SHA on `develop` (or a tagged release). Different parser versions on the same ledger range can produce different rows. Tag the SHA before any new worker starts; record it in the audit table.
 3. **Disjoint ledger ranges**: split fixed at `55,103,999 / 55,104,000` (partition 860 / 861 boundary, multiple of 64,000). No partition is touched by both workers.
 4. **Partition alignment**: there are two distinct concepts called "partition" and only one needs strict alignment.
    - **S3 source partition** (Stellar public archive, 64,000 ledgers per bucket): both internal splits — `55,103,999 / 55,104,000` (partition 860/861) and `60,095,999 / 60,096,000` (partition 938/939) — are multiples of 64,000. Every S3 partition is processed by exactly one worker. Clean — required for the backfill-runner's single-process-per-partition semantics.
@@ -74,7 +74,7 @@ Soroban-era partitions through partition 976: `(976 - 788 + 1) = 189` partitions
    - This is **not a correctness issue**. Fact tables have `ORDER BY` keys including `ledger_sequence`, and rows in each straddle are disjoint by ledger → no row-identity overlap → RMT has nothing to dedupe across workers in those partitions, only to merge the parts. State tables (`accounts`, `account_balances_current`, `nfts`, `lp_positions`, `soroban_contracts`, `assets`, `liquidity_pools`) have **no `PARTITION BY`** at all, so straddles don't apply to them.
    - Operational cost: two extra `OPTIMIZE TABLE <fact_table> FINAL PARTITION X` per partitioned table (partitions 110 and 120). Tiny vs. the rest of the pipeline. Strict alignment would require LCM(64_000, 500_000) = 8,000,000 — pushing every split to multiples of 8 M ledgers, which adds significant wall-clock to laptop 1 with no correctness benefit. Rejected in favor of the two straddles.
 5. **Idempotency hooks already in the schema**: deterministic `CityHash64` surrogate IDs + `ReplacingMergeTree(version_ledger)` over the natural sort key. The runbook explicitly states "RMT dedup means re-running an overlapping range is a no-op." This means re-inserting the same ledger row is safe, and the row with the highest `version_ledger` wins after `FINAL` / background merge. **The merge plan leans on this — do not break it.**
-6. **Task 0225 prerequisite**: machine 2's range approaches chain tip where S3 archive lag is real. The sync-validation pre-parse work in 0225 (current branch) must land on `develop` before machine 2 starts the second invocation (`--start 59751000 --end <tip>`).
+6. **Task 0225 prerequisite**: laptop 3's range approaches chain tip where S3 archive lag is real. The sync-validation pre-parse work in 0225 (current branch) must land on `develop` before laptop 3 starts (`run --start 60096000 --end <L_last_closed>`).
 
 ---
 
@@ -163,9 +163,9 @@ Anything in the second category must run on the union. The pre-merge bucket is s
 
 ## Phased Plan
 
-### Phase 0 — Preconditions (before machine 2 starts)
+### Phase 0 — Preconditions (before new workers start)
 
-1. **Land task 0225** on `develop` (sync-validation pre-parse + crash-recovery runbook). Required for the 3/5 second invocation that approaches chain tip.
+1. **Land task 0225** on `develop` (sync-validation pre-parse + crash-recovery runbook). Required for laptop 3's invocation, which approaches chain tip and will hit S3 archive lag.
 2. **Lock schema version**: tag the current schema migration via the git SHA used for `db-clickhouse-init`. Both workers _and_ Hetzner pin to that SHA. Add a `--require-schema-version` guard to `backfill-runner` so a divergent CH errors out fast.
 3. **Apply `users.d/dict.xml` `dict_reader` user fix** in `crates/db-clickhouse/` and the corresponding `init.sql` change to route the `transaction_hash_dict` SOURCE through it. Required because Hetzner uses a non-default password and the current `init.sql` hardcodes `default:clickhouse`. Surfaced trap #2 in task 0216.
 4. **Lock parser version**: both machines build `backfill-runner` from the _same git SHA_ on `develop`. Print the SHA at startup and persist it in a new `backfill_runs` audit table (`run_id`, `git_sha`, `schema_version`, `range`, `host`, `started_at`, `finished_at`, `status`).
@@ -218,33 +218,39 @@ Anything in the second category must run on the union. The pre-merge bucket is s
    - Worker and Hetzner must both be reachable during the rsync window. `rsync --partial` survives blips; cold-storage durability of S3 is lost. Acceptable for one-time merge.
    - **Atomic-engine `<uuid>` mapping wrinkle** (ADR 0045 cited): source and destination tables have different `<uuid>`s under CH Atomic engine. The mv-to-`detached/` step must look up the destination's UUID per table on Hetzner before each move. Easy to script, easy to fumble — include as a `verify-attach-paths` step in the new orchestrator.
 
-### Phase 1 — Parallel local backfill
+### Phase 1 — Parallel local backfill (3-way split)
 
-- **Machine 1 (laptop)**: continues from current watermark to `55,103,999` (end of 2/5) → writes to local CH. No code changes needed; resume logic in `backfill-runner` skips already-committed partitions.
-- **Machine 2 (new)**: provisions local CH with identical schema (`docker compose run --rm db-clickhouse-init` from the locked SHA); runs 3/5 in two phases:
+- **Laptop 1 (2/5, in flight)**: continues from current watermark to `55,103,999` (end of partition 860) → writes to local CH. No code changes needed; resume logic in `backfill-runner` skips already-committed partitions.
+
+- **Machine 2 (mid-3/5, new)**: provisions local CH with identical schema (`docker compose run --rm db-clickhouse-init` from the locked SHA); single invocation over 78 partitions (861–938):
 
   ```bash
-  # Phase A — bulk run over partitions known to be closed at start
   ./target/release/backfill-runner --target clickhouse \
       --clickhouse-url "http://127.0.0.1:8123" \
       --soroban-rpc-url "https://mainnet.sorobanrpc.com" \
-      run --start 55104000 --end 59750999
-
-  # Phase B — continue toward the moving closed-partition frontier
-  # Pick `--end` as the highest partition-boundary minus 1 that S3 has
-  # closed at run-start; task 0225's sync-validation pre-parse will
-  # additionally guard against any partition that isn't actually
-  # complete when the run reaches it.
-  ./target/release/backfill-runner --target clickhouse \
-      --clickhouse-url "http://127.0.0.1:8123" \
-      --soroban-rpc-url "https://mainnet.sorobanrpc.com" \
-      run --start 59751000 --end <L_last_closed_at_phase_B_start>
+      run --start 55104000 --end 60095999
   ```
 
-  After phase B completes, record the actual `L_last_closed` reached (from the audit table) — that becomes the canonical merge upper bound. If more S3 partitions have closed by then, an optional **phase C** small invocation extends `L_last_closed` further before export. Each invocation is independent and idempotent (runbook §11).
+  Range ends exactly at the closed boundary of partition 938 (60,095,999) — a multiple of 64,000. Single clean run, no Phase A/B internal split.
 
-- Both machines record progress in `backfill_runs` (new audit table — see Critical Files).
-- Both machines monitor via the runbook §7 watch queries; eject early on schema-version / git-SHA drift.
+- **Laptop 3 (newest 3/5, new)**: provisions local CH same as machine 2; runs the remaining ~38 partitions (939 → highest fully-closed S3 partition at run-start), processing partitions oldest-first per Phase 0 step 5b:
+
+  ```bash
+  # Pick --end as the highest closed-partition boundary minus 1 at run-start.
+  # Task 0225's sync-validation pre-parse additionally guards any partition
+  # that turns out incomplete when the run reaches it.
+  ./target/release/backfill-runner --target clickhouse \
+      --clickhouse-url "http://127.0.0.1:8123" \
+      --soroban-rpc-url "https://mainnet.sorobanrpc.com" \
+      run --start 60096000 --end <L_last_closed_at_run_start>
+  ```
+
+  After completion, record the actual `L_last_closed` reached (from the audit table) — that becomes the canonical merge upper bound. If more S3 partitions have closed by then, an optional follow-up invocation extends `L_last_closed` further before export. Each invocation is independent and idempotent (runbook §11).
+
+  **Disk-pressure pause** (Phase 0 step 5b): after each S3 partition commit, orchestrator computes projected end-state disk; if > 90 % of filesystem capacity, pause at next clean boundary and prompt operator (continue / split-and-drop / abort).
+
+- All workers record progress in `backfill_runs` (new audit table — see Critical Files).
+- All workers monitor via the runbook §7 watch queries; eject early on schema-version / git-SHA drift.
 
 ### Phase 2 — Pre-merge per-machine cleanup + invariants
 
@@ -316,7 +322,7 @@ Per worker, executed by a new `scripts/freeze-and-rsync-to-hetzner.sh` orchestra
 
 ### Phase 4 — Import to Hetzner (ATTACH PART, ordered)
 
-**Order matters** because `ReplacingMergeTree(<version>)` keeps the row with max version. Attaching machine 1's older-range parts first then machine 2's newer-range parts on top → background merger eventually picks the newer-range row → matches single-machine sequential outcome.
+**Order matters** because `ReplacingMergeTree(<version>)` keeps the row with max version. Attaching laptop 1's oldest-range parts first, then machine 2's, then laptop 3's newest-range parts on top → background merger eventually picks the newer-range row → matches single-machine sequential outcome.
 
 Per-table loop in `scripts/attach-parts-on-hetzner.sh` running on Hetzner:
 
@@ -371,8 +377,8 @@ Run in this order (each step idempotent):
 
 New `backfill-runner verify-completeness` subcommand, run against Hetzner:
 
-1. **Ledger continuity**: no gaps in `ledgers.sequence` from `50,457,424` to `L_last_closed` (the canonical merge upper bound captured from machine 2's audit row). Anything past `L_last_closed` is out of scope and the API surface should advertise completeness only up to that ledger.
-2. **Row-count parity**: per `(table, CH partition)`, `count_local_m1 + count_local_m2` versus `count() FROM tbl FINAL` on Hetzner (allowing RMT collapse). Use the per-machine `pre-export-metrics.json` from Phase 2 as the input expectation.
+1. **Ledger continuity**: no gaps in `ledgers.sequence` from `50,457,424` to `L_last_closed` (the canonical merge upper bound captured from laptop 3's audit row). Anything past `L_last_closed` is out of scope and the API surface should advertise completeness only up to that ledger.
+2. **Row-count parity**: per `(table, CH partition)`, `count_local_laptop1 + count_local_machine2 + count_local_laptop3` versus `count() FROM tbl FINAL` on Hetzner (allowing RMT collapse). Use the per-worker `pre-export-metrics.json` from Phase 2 as the input expectation.
 3. **Per-ledger tx count** matches XDR-expected (re-derive from S3).
 4. **No orphan ops** (as in Phase 2, but at Hetzner scope).
 5. **Account balance non-null** for every account that has any operation.
@@ -422,7 +428,7 @@ After Phase 6 passes, run these as a final gate:
 ```bash
 # 1. Ledger continuity + row-count parity
 backfill-runner verify-completeness --clickhouse-url $HETZNER_URL \
-    --expected-runs <run_id_m1>,<run_id_m2> \
+    --expected-runs <run_id_laptop1>,<run_id_machine2>,<run_id_laptop3> \
     --sample-ledgers 1000
 
 # 2. Cross-source spot check (manual or via skill)
@@ -453,7 +459,7 @@ Acceptance criteria for "merge complete":
 3. **Task scope**: this is broader than 0225. Lands under `0228_FEATURE_parallel-backfill-merge-and-validation` (0227 was claimed by an infra-hetzner-ansible task via a parallel commit) with 0225 + 0216 as prerequisites.
 4. **Hetzner CH topology — single-node confirmed by task 0216** (Server Auction box, single CH 26.3 in Docker). No `ReplicatedMergeTree` complication. HA is explicit out-of-scope for now; if/when it lands, a separate ADR will trigger a schema rewrite and this plan will need revisit.
 5. **Repair pass blocks on tasks 0118/0194/0198/0199** — at least 0118 (NFT reclass) and 0198 (Statement B). Surface in the new task's `blocked_by`.
-6. **Task 0225 dependency**: machine 2's second invocation (`--start 59751000`) approaches chain tip and will hit S3 archive lag; the sync-validation pre-parse on the current branch is the right fix. Either land 0225 first, or run machine 2 from `feat/0225_*` directly with `--require-schema-version` enforcement.
+6. **Task 0225 dependency**: laptop 3's invocation (`--start 60096000 --end <L_last_closed>`) approaches chain tip and will hit S3 archive lag; the sync-validation pre-parse on the current branch is the right fix. Either land 0225 first, or run laptop 3 from `feat/0225_*` directly with `--require-schema-version` enforcement. Machine 2's range (ends at 60,095,999) is far enough from tip to not need 0225 — but pinning to the same SHA is required for parser parity.
 7. **`pre-export-metrics.json` shared via where?** Recommend the `backfill_runs` audit table — single source of truth, indexable.
 8. **ADR 0044 staleness** — task 0216's "Future Work" section already plans a net-new ADR superseding 0044's "pilot" framing to record the architectural realignment (Postgres-on-RDS abandoned, CH-on-Hetzner sole prod store, mTLS over Tailscale). This plan can reference that pending ADR without owning it. Coordinate with whoever lands the 0216 implementation work.
 9. **NFT metadata rehydration**: confirm whether the mint event payload (`collection_name`, `name`, `media_url`) is decodable directly from `soroban_events.{topics_xdr, data_xdr}` on Hetzner. If yes, the Tier-1 repair stays cheap (a few minutes via in-CH ScVal decode using the NFT-contract filter). If no, we'd need to re-parse mint operations from S3 — adds 1–3 h to the repair budget. Audit before committing.
