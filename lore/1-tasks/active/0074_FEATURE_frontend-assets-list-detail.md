@@ -32,6 +32,10 @@ history:
     status: active
     who: karolkow
     note: 'Added Figma links — assets list + assets detail frames + design-system file (Chip).'
+  - date: 2026-05-18
+    status: active
+    who: karolkow
+    note: 'Implemented assets list + detail. Type filter is chips without Native, and the asset-transactions table shows Ledger instead of Fee, matching Figma — acceptance criteria updated to match.'
 ---
 
 # Frontend: Assets list and detail pages
@@ -68,13 +72,15 @@ The asset pages must unify all asset classes into one browseable surface while m
 
 ### Asset List Filters
 
-| Filter     | Type                                           | Notes                     |
-| ---------- | ---------------------------------------------- | ------------------------- |
-| Type       | Dropdown: native, classic_credit, SAC, soroban | Filters by `filter[type]` |
-| Asset Code | Text input / search                            | Filters by `filter[code]` |
+| Filter     | Type                                    | Notes                     |
+| ---------- | --------------------------------------- | ------------------------- |
+| Type       | Chips: All types, Classic, SAC, Soroban | Filters by `filter[type]` |
+| Asset Code | Text input / search                     | Filters by `filter[code]` |
 
 - Filters additive, reflected in URL
 - Filter change resets cursor
+- Type filter rendered as chips per the Figma design; native excluded
+  (the native asset is the single XLM entry)
 
 ### Asset Detail Fields
 
@@ -105,11 +111,13 @@ Same as global transaction table conventions:
 | Column | Display |
 |---|---|
 | Hash | Truncated, linked |
+| Ledger | Linked to `/ledgers/:sequence` |
 | Source Account | Truncated, linked |
 | Operation Type | Label |
 | Status | Badge |
-| Fee | XLM |
 | Timestamp | Relative |
+
+- Fee column omitted per the Figma design
 
 ## Implementation Plan
 
@@ -124,7 +132,7 @@ Create the hook `web/src/api/hooks/useAssetsList.ts` and flesh out the existing
 router stub `web/src/pages/AssetsListPage.tsx`:
 
 - Fetches `GET /assets` with limit, cursor, type filter, code filter
-- Filter controls: type dropdown, code text input
+- Filter controls: type chips, code text input
 - Table with columns: asset code, issuer/contract ID, type badge, total supply, holder count
 - Cursor-based pagination
 
@@ -169,7 +177,7 @@ Flesh out the existing router stub `web/src/pages/AssetDetailPage.tsx`:
 ## Acceptance Criteria
 
 - [ ] Asset list columns: asset code, issuer/contract ID, type badge (native/classic_credit/SAC/soroban), total supply, holder count
-- [ ] Filters: type dropdown (native/classic_credit/SAC/soroban), code search. Reflected in URL.
+- [ ] Filters: type chips (Classic/SAC/Soroban), code search. Reflected in URL.
 - [ ] Asset detail shows: code, issuer OR contract ID (copyable, linked), type badge (prominent), supply, holders, deployed at ledger (Soroban/SAC)
 - [ ] Type badge clearly distinguishes native, classic_credit, SAC, and Soroban assets
 - [ ] Metadata section tolerates partial availability (missing name/icon/description)
