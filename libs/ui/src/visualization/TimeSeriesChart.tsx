@@ -154,7 +154,7 @@ export function TimeSeriesChart({
             </Typography>
           )}
         </Stack>
-        {intervals.length > 0 && (
+        {onIntervalChange && intervals.length > 0 && (
           <IntervalSelector
             intervals={intervals}
             activeInterval={activeInterval}
