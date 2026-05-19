@@ -291,7 +291,7 @@ task's `Notes` section once spawned.
 ## Acceptance Criteria
 
 - [ ] `CREATE MATERIALIZED VIEW assets_aggregates_refresh ...
-    TO assets ...` lands in `init.sql`; applies cleanly to
+TO assets ...` lands in `init.sql`; applies cleanly to
       Hetzner via the standard schema migration path.
 - [ ] `OPTIMIZE TABLE assets FINAL` cron entry in the Hetzner
       runbook.
