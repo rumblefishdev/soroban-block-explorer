@@ -3,6 +3,7 @@
 //! Spec source: lore task 0053 + canonical SQL in
 //! `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -21,10 +22,15 @@ pub enum SearchResponse {
 }
 
 /// Redirect payload — frontend navigates directly to the entity page.
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SearchRedirect {
     pub entity_type: EntityType,
     pub entity_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub successful: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 /// Results payload — six entity-typed buckets, each capped at the
@@ -54,19 +60,30 @@ pub struct SearchGroups {
     pub pools: Vec<SearchHit>,
 }
 
-/// Single search row. Narrow shape — same four columns for every
-/// entity bucket; rich entity payloads are NOT inlined here.
+/// Single search row. Same shape across every entity bucket.
 ///
 /// `identifier` is the canonical human-shown id (hex hash for
 /// transactions / pools, StrKey for accounts / contracts, asset code
 /// for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
 /// the frontend MUST route via `surrogate_id`.
+///
+/// `successful` and `last_activity_at` are populated only for
+/// `entity_type = transaction` today — joined from the partitioned
+/// `transactions` table via `(hash, created_at)` for partition pruning.
+/// Other entity types pass `None` for both until follow-up enrichment
+/// adds per-entity last-activity joins. The frontend renders a
+/// status chip + relative timestamp on the right side of the row
+/// whenever these fields are present.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SearchHit {
     pub entity_type: EntityType,
     pub identifier: String,
     pub label: String,
     pub surrogate_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub successful: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 /// Entity discriminator. Closed allowlist used by the `type=` filter

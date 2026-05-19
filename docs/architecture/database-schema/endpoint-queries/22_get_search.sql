@@ -62,14 +62,26 @@
 --     surrogate id (or NULL where the entity has none) for the API to
 --     build the link target.
 
+-- `successful` and `last_activity_at` are populated only for the
+-- transaction CTE via a LEFT JOIN to `transactions` ON the composite
+-- PK `(hash, created_at)` — partition-pruned, single-partition probe.
+-- Other entity-type CTEs select NULL placeholders so the UNION column
+-- shape stays uniform; per-entity last-activity joins (account ↔ most
+-- recent tx, etc.) can be added later without changing the wire shape.
+
 WITH
 tx_hits AS (
     SELECT
         'transaction'::text       AS entity_type,
         encode(thi.hash, 'hex')   AS identifier,
         'ledger ' || thi.ledger_sequence::text AS label,
-        NULL::bigint              AS surrogate_id
+        NULL::bigint              AS surrogate_id,
+        t.successful              AS successful,
+        thi.created_at            AS last_activity_at
     FROM transaction_hash_index thi
+    LEFT JOIN transactions t
+      ON t.hash = thi.hash
+     AND t.created_at = thi.created_at
     WHERE $5  = TRUE
       AND $2 IS NOT NULL
       AND thi.hash = $2
@@ -80,7 +92,9 @@ contract_hits AS (
         'contract'::text          AS entity_type,
         sc.contract_id            AS identifier,
         COALESCE(sc.name, '')              AS label,
-        sc.id                     AS surrogate_id
+        sc.id                     AS surrogate_id,
+        NULL::bool                AS successful,
+        NULL::timestamptz         AS last_activity_at
     FROM soroban_contracts sc
     WHERE $6 = TRUE
       AND (
@@ -98,7 +112,9 @@ asset_hits AS (
         'asset'::text                       AS entity_type,
         COALESCE(a.asset_code, 'XLM')       AS identifier,
         token_asset_type_name(a.asset_type) AS label,
-        a.id::bigint                        AS surrogate_id
+        a.id::bigint                        AS surrogate_id,
+        NULL::bool                          AS successful,
+        NULL::timestamptz                   AS last_activity_at
     FROM assets a
     WHERE $7 = TRUE
       AND (
@@ -115,7 +131,9 @@ account_hits AS (
         'account'::text         AS entity_type,
         a.account_id            AS identifier,
         COALESCE(a.home_domain, '') AS label,
-        a.id                    AS surrogate_id
+        a.id                    AS surrogate_id,
+        NULL::bool              AS successful,
+        NULL::timestamptz       AS last_activity_at
     FROM accounts a
     WHERE $8 = TRUE
       AND $3 IS NOT NULL
@@ -133,7 +151,9 @@ nft_hits AS (
         'nft'::text                          AS entity_type,
         n.name                               AS identifier,
         COALESCE(n.collection_name, '')      AS label,
-        n.id::bigint                         AS surrogate_id
+        n.id::bigint                         AS surrogate_id,
+        NULL::bool                           AS successful,
+        NULL::timestamptz                    AS last_activity_at
     FROM nfts n
     WHERE $9 = TRUE
       AND n.name IS NOT NULL
@@ -153,21 +173,23 @@ pool_hits AS (
             || ' / '
             || COALESCE(lp.asset_b_code, 'XLM')
         )::text                     AS label,
-        NULL::bigint                AS surrogate_id
+        NULL::bigint                AS surrogate_id,
+        NULL::bool                  AS successful,
+        NULL::timestamptz           AS last_activity_at
     FROM liquidity_pools lp
     WHERE $10 = TRUE
       AND $2 IS NOT NULL
       AND lp.pool_id = $2
     LIMIT $4
 )
-SELECT entity_type, identifier, label, surrogate_id FROM tx_hits
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM tx_hits
 UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM contract_hits
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM contract_hits
 UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM asset_hits
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM asset_hits
 UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM account_hits
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM account_hits
 UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM nft_hits
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM nft_hits
 UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM pool_hits;
+SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM pool_hits;

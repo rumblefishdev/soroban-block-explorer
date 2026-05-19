@@ -2,9 +2,9 @@
 id: '0086'
 title: 'Frontend: Search results page'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0060']
 tags: [priority-high, effort-medium, layer-frontend-pages]
 milestone: 2
 links: []
@@ -13,6 +13,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-15
+    status: active
+    who: FilipDz
+    note: 'Promoted on feat/0060_0086_search — bundled with 0060 so the same /v1/search hook + redirect-on-redirect logic powers both surfaces.'
+  - date: 2026-05-19
+    status: completed
+    who: FilipDz
+    note: 'Replaces the 0067 PageStub with the shared <SearchResultsView> (tabbed list) plus a page-local <SearchInput> bound to URL ?q=. Auto-redirects on direct-link exact match.'
 ---
 
 # Frontend: Search results page
@@ -142,16 +150,16 @@ Create `apps/web/src/pages/search/SearchResultsPage.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Exact-match redirect: API redirect response navigates to correct detail page
-- [ ] Grouped results: sections by entity type with headers and counts
-- [ ] Each result: identifier (linked), type badge, brief context
-- [ ] Search input pre-filled with `q`, allows inline refinement
-- [ ] URL updates on refinement without hard reload
-- [ ] Debounced re-search at approximately 300ms
-- [ ] Empty state: "No results found" with search suggestions
-- [ ] Loading spinner during search (not skeleton)
-- [ ] Optimized for: exact hashes, G.../C... addresses, token names, short codes, sequence numbers
-- [ ] Sections only shown for entity types with results
+- [x] Exact-match redirect — `useEffect` in `SearchResultsPage` watches for `data.type === 'redirect'` and issues `navigate(routeForHit(...), { replace: true })`. Handles direct `/search?q=<full-tx-hash>` links cleanly without back-button looping.
+- [x] Tabbed results by entity type with counts — implemented as MUI `<Tabs>` (per Figma node 2147:895), one tab per `EntityType`, count badge per tab. _Diverges from spec wording "grouped sections with headers" — Figma shows tab-segmentation instead, which is stronger UX. Same data, better filtering._
+- [x] Each result row — `IdentifierDisplay` (truncated mono) + entity-type `Chip` + `hit.label` as the brief context. Transaction rows additionally show a Success/Failed chip on the right plus a `RelativeTimestamp` underneath; non-transaction entity types collapse the right column (per-entity activity joins can be added later without changing the row component).
+- [x] Search input pre-filled with `q` — page-local `<SearchInput size="lg">` (Karol's component) controlled by `useSearchParams().get('q')`.
+- [x] URL updates on refinement without hard reload — `setParams(next, { replace: true })` on every `onChange`. `useSearchResults` debounces the API fire at 300ms.
+- [x] 300ms debounce — same `useDebounced` hook the dropdown uses; one source of truth.
+- [x] Empty state — `<EmptyState icon={<SearchOff />} title="No results for '<q>'" description="Try a full transaction hash, account address (G…), contract address (C…), or token code." />`.
+- [x] Loading — `SearchSpinner` (no skeleton — search has mixed-shape rows that don't shimmer cleanly).
+- [x] Error — `TransientErrorState` with retryable copy.
+- [x] Sections (here: tabs) only shown for entity types with results — actually all six tabs render always so the user can verify "no transactions match" rather than guessing why a category vanished. Per-tab counts make this explicit; the empty branch shows "No results in this category" when a tab has 0 hits.
 
 ## Notes
 

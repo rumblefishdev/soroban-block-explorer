@@ -14,6 +14,7 @@
 //!   with the per-bucket `:include_*` flags resolved from the optional
 //!   `?type=` filter.
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
 use super::classifier::Classified;
@@ -88,23 +89,50 @@ impl IncludeFlags {
 ///
 /// Returns `None` if no exact row matches; the caller falls through to
 /// broad search so the user still sees suggestions instead of a 404.
+/// Redirect-path result row. Carries the entity coordinates plus the
+/// same `successful` + `last_activity_at` enrichment as a `SearchHit`
+/// so the frontend can render a richer dropdown row when it presents
+/// the redirect as a clickable hit instead of auto-navigating.
+pub struct RedirectRow {
+    pub entity_type: EntityType,
+    pub entity_id: String,
+    pub successful: Option<bool>,
+    pub last_activity_at: Option<DateTime<Utc>>,
+}
+
 pub async fn fetch_redirect(
     pool: &PgPool,
     classified: &Classified,
-) -> Result<Option<(EntityType, String)>, sqlx::Error> {
+) -> Result<Option<RedirectRow>, sqlx::Error> {
     if !classified.is_fully_typed {
         return Ok(None);
     }
 
     if let Some(bytes) = &classified.hash_bytes {
-        let tx: Option<(String,)> = sqlx::query_as(
-            "SELECT encode(hash, 'hex') FROM transaction_hash_index WHERE hash = $1",
+        // Same `(hash, created_at)` join as the broad-search tx_hits CTE
+        // — composite PK lookup, partition-pruned.
+        let tx: Option<(String, Option<bool>, DateTime<Utc>)> = sqlx::query_as(
+            r#"
+            SELECT encode(thi.hash, 'hex'),
+                   t.successful,
+                   thi.created_at
+            FROM transaction_hash_index thi
+            LEFT JOIN transactions t
+              ON t.hash = thi.hash
+             AND t.created_at = thi.created_at
+            WHERE thi.hash = $1
+            "#,
         )
         .bind(bytes.as_slice())
         .fetch_optional(pool)
         .await?;
-        if let Some((id,)) = tx {
-            return Ok(Some((EntityType::Transaction, id)));
+        if let Some((id, successful, last_activity_at)) = tx {
+            return Ok(Some(RedirectRow {
+                entity_type: EntityType::Transaction,
+                entity_id: id,
+                successful,
+                last_activity_at: Some(last_activity_at),
+            }));
         }
 
         let pool_row: Option<(String,)> =
@@ -113,7 +141,12 @@ pub async fn fetch_redirect(
                 .fetch_optional(pool)
                 .await?;
         if let Some((id,)) = pool_row {
-            return Ok(Some((EntityType::Pool, id)));
+            return Ok(Some(RedirectRow {
+                entity_type: EntityType::Pool,
+                entity_id: id,
+                successful: None,
+                last_activity_at: None,
+            }));
         }
         return Ok(None);
     }
@@ -129,7 +162,12 @@ pub async fn fetch_redirect(
                         .fetch_optional(pool)
                         .await?;
                 if let Some((id,)) = row {
-                    return Ok(Some((EntityType::Account, id)));
+                    return Ok(Some(RedirectRow {
+                        entity_type: EntityType::Account,
+                        entity_id: id,
+                        successful: None,
+                        last_activity_at: None,
+                    }));
                 }
             }
             b'C' => {
@@ -140,7 +178,12 @@ pub async fn fetch_redirect(
                 .fetch_optional(pool)
                 .await?;
                 if let Some((id,)) = row {
-                    return Ok(Some((EntityType::Contract, id)));
+                    return Ok(Some(RedirectRow {
+                        entity_type: EntityType::Contract,
+                        entity_id: id,
+                        successful: None,
+                        last_activity_at: None,
+                    }));
                 }
             }
             _ => {}
@@ -166,6 +209,11 @@ pub async fn fetch_search(
     per_group_limit: i32,
 ) -> Result<Vec<(String, SearchHit)>, sqlx::Error> {
     // Verbatim port of `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
+    //
+    // `tx_hits` joins `transactions` ON (hash, created_at) — composite PK
+    // gives partition-pruned access. `successful` + `last_activity_at`
+    // come from that join. Other entity-type CTEs select NULLs for both
+    // columns; per-entity last-activity joins are a follow-up.
     let sql = r#"
         WITH
         tx_hits AS (
@@ -173,8 +221,13 @@ pub async fn fetch_search(
                 'transaction'::text       AS entity_type,
                 encode(thi.hash, 'hex')   AS identifier,
                 'ledger ' || thi.ledger_sequence::text AS label,
-                NULL::bigint              AS surrogate_id
+                NULL::bigint              AS surrogate_id,
+                t.successful              AS successful,
+                thi.created_at            AS last_activity_at
             FROM transaction_hash_index thi
+            LEFT JOIN transactions t
+              ON t.hash = thi.hash
+             AND t.created_at = thi.created_at
             WHERE $5  = TRUE
               AND $2 IS NOT NULL
               AND thi.hash = $2
@@ -185,7 +238,9 @@ pub async fn fetch_search(
                 'contract'::text          AS entity_type,
                 sc.contract_id            AS identifier,
                 COALESCE(sc.name, '')              AS label,
-                sc.id                     AS surrogate_id
+                sc.id                     AS surrogate_id,
+                NULL::bool                AS successful,
+                NULL::timestamptz         AS last_activity_at
             FROM soroban_contracts sc
             WHERE $6 = TRUE
               AND (
@@ -199,7 +254,9 @@ pub async fn fetch_search(
                 'asset'::text                       AS entity_type,
                 COALESCE(a.asset_code, 'XLM')       AS identifier,
                 token_asset_type_name(a.asset_type) AS label,
-                a.id::bigint                        AS surrogate_id
+                a.id::bigint                        AS surrogate_id,
+                NULL::bool                          AS successful,
+                NULL::timestamptz                   AS last_activity_at
             FROM assets a
             WHERE $7 = TRUE
               AND (
@@ -213,7 +270,9 @@ pub async fn fetch_search(
                 'account'::text         AS entity_type,
                 a.account_id            AS identifier,
                 COALESCE(a.home_domain, '') AS label,
-                a.id                    AS surrogate_id
+                a.id                    AS surrogate_id,
+                NULL::bool              AS successful,
+                NULL::timestamptz       AS last_activity_at
             FROM accounts a
             WHERE $8 = TRUE
               AND $3 IS NOT NULL
@@ -225,7 +284,9 @@ pub async fn fetch_search(
                 'nft'::text                          AS entity_type,
                 n.name                               AS identifier,
                 COALESCE(n.collection_name, '')      AS label,
-                n.id::bigint                         AS surrogate_id
+                n.id::bigint                         AS surrogate_id,
+                NULL::bool                           AS successful,
+                NULL::timestamptz                    AS last_activity_at
             FROM nfts n
             WHERE $9 = TRUE
               AND n.name IS NOT NULL
@@ -241,24 +302,26 @@ pub async fn fetch_search(
                     || ' / '
                     || COALESCE(lp.asset_b_code, 'XLM')
                 )::text                     AS label,
-                NULL::bigint                AS surrogate_id
+                NULL::bigint                AS surrogate_id,
+                NULL::bool                  AS successful,
+                NULL::timestamptz           AS last_activity_at
             FROM liquidity_pools lp
             WHERE $10 = TRUE
               AND $2 IS NOT NULL
               AND lp.pool_id = $2
             LIMIT $4
         )
-        SELECT entity_type, identifier, label, surrogate_id FROM tx_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM tx_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id FROM contract_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM contract_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id FROM asset_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM asset_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id FROM account_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM account_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id FROM nft_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM nft_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id FROM pool_hits
+        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM pool_hits
     "#;
 
     let rows = sqlx::query(sql)
@@ -293,6 +356,8 @@ pub async fn fetch_search(
             let identifier: String = row.get("identifier");
             let label: String = row.get("label");
             let surrogate_id: Option<i64> = row.get("surrogate_id");
+            let successful: Option<bool> = row.get("successful");
+            let last_activity_at: Option<DateTime<Utc>> = row.get("last_activity_at");
             Some((
                 entity_type,
                 SearchHit {
@@ -300,6 +365,8 @@ pub async fn fetch_search(
                     identifier,
                     label,
                     surrogate_id,
+                    successful,
+                    last_activity_at,
                 },
             ))
         })
