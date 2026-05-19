@@ -8,6 +8,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
 } from '@mui/material';
 import type { ReactNode } from 'react';
 
@@ -57,72 +58,30 @@ export function ExplorerTable<T>({
                   sortDirection={isSorted ? sortDir : false}
                 >
                   {col.sortable ? (
-                    // Sortable header (Design System "Table header"):
-                    // a neutral up/down caret when inactive, a down caret
-                    // in a filled accent circle when this column is sorted.
-                    <Box
-                      component="button"
-                      type="button"
-                      // `aria-sort` lives on the parent `<th>` (TableCell
-                      // `sortDirection`); the button only needs an action label.
-                      aria-label={`Sort by ${col.id}`}
+                    // Unsorted columns show a neutral CaretUpDown; the
+                    // sorted column swaps to a directional caret that
+                    // MUI rotates for asc/desc.
+                    <TableSortLabel
+                      active={isSorted}
+                      direction={isSorted ? sortDir : 'desc'}
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
                         onSortChange?.(col.id, next);
                       }}
-                      sx={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 0.5,
-                        border: 0,
-                        background: 'none',
-                        padding: 0,
-                        font: 'inherit',
-                        color: 'inherit',
-                        cursor: 'pointer',
-                        '&:focus-visible': {
-                          outline: (theme) =>
-                            `2px solid ${theme.palette.stroke.action}`,
-                          outlineOffset: 2,
-                          borderRadius: 1,
+                      IconComponent={
+                        isSorted ? KeyboardArrowDownIcon : UnfoldMoreIcon
+                      }
+                      sx={(theme) => ({
+                        '& .MuiTableSortLabel-icon': {
+                          fontSize: 12,
+                          opacity: isSorted ? 1 : 0.5,
+                          color: theme.palette.text.primary,
                         },
-                      }}
+                      })}
                     >
                       {col.header}
-                      {isSorted ? (
-                        <Box
-                          component="span"
-                          sx={{
-                            width: 20,
-                            height: 20,
-                            flexShrink: 0,
-                            borderRadius: '50%',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor: 'surface.primaryMain',
-                            color: 'common.black',
-                          }}
-                        >
-                          <KeyboardArrowDownIcon
-                            sx={{
-                              fontSize: 14,
-                              transform:
-                                sortDir === 'asc' ? 'rotate(180deg)' : 'none',
-                            }}
-                          />
-                        </Box>
-                      ) : (
-                        <UnfoldMoreIcon
-                          sx={{
-                            fontSize: 14,
-                            opacity: 0.5,
-                            color: 'text.primary',
-                          }}
-                        />
-                      )}
-                    </Box>
+                    </TableSortLabel>
                   ) : (
                     col.header
                   )}
