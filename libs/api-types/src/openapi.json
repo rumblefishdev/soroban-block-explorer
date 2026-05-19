@@ -3778,7 +3778,7 @@
       },
       "SearchRedirect": {
         "type": "object",
-        "description": "Redirect payload — frontend navigates directly to the entity page.\n\n`successful` + `last_activity_at` mirror the equivalent fields on\n`SearchHit` and are populated only for `entity_type = transaction`\ntoday (joined from the partitioned `transactions` table via\n`(hash, created_at)`). They let the dropdown render a status chip\n+ relative timestamp on the row when the search bar opts to show\nthe matched entity as a row instead of auto-navigating.",
+        "description": "Redirect payload — frontend navigates directly to the entity page.",
         "required": ["entity_type", "entity_id"],
         "properties": {
           "entity_id": {

@@ -1231,13 +1231,6 @@ export type SearchHit = {
 
 /**
  * Redirect payload — frontend navigates directly to the entity page.
- *
- * `successful` + `last_activity_at` mirror the equivalent fields on
- * `SearchHit` and are populated only for `entity_type = transaction`
- * today (joined from the partitioned `transactions` table via
- * `(hash, created_at)`). They let the dropdown render a status chip
- * + relative timestamp on the row when the search bar opts to show
- * the matched entity as a row instead of auto-navigating.
  */
 export type SearchRedirect = {
   entity_id: string;
