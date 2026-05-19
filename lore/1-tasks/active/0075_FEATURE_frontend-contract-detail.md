@@ -2,7 +2,7 @@
 id: '0075'
 title: 'Frontend: Contract detail page'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0003']
 tags: [priority-high, effort-large, layer-frontend-pages]
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-19
+    status: active
+    who: karolkow
+    note: 'Promoted to active; starting Contract detail page implementation'
 ---
 
 # Frontend: Contract detail page
