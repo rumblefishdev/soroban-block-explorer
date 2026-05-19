@@ -29,7 +29,7 @@ export function GlobalSearchBar({
     setHighlightedIndex(-1);
   }, [state.activeTab, state.effectiveQuery]);
 
-  const selectHit = useCallback(
+  const selectHitByKeyboard = useCallback(
     (hit: SearchHit) => {
       navigate(routeForHit(hit));
       onDismiss();
@@ -41,7 +41,7 @@ export function GlobalSearchBar({
     registerEnterHandler(() => {
       const picked = state.hitsForActiveTab[highlightedIndex];
       if (picked) {
-        selectHit(picked);
+        selectHitByKeyboard(picked);
         return true;
       }
       return false;
@@ -50,7 +50,7 @@ export function GlobalSearchBar({
     registerEnterHandler,
     state.hitsForActiveTab,
     highlightedIndex,
-    selectHit,
+    selectHitByKeyboard,
   ]);
 
   const handleKeyDown = useCallback(
@@ -93,10 +93,7 @@ export function GlobalSearchBar({
             state={state}
             highlightedIndex={highlightedIndex}
             onRowMouseEnter={setHighlightedIndex}
-            onRowClick={(idx) => {
-              const hit = state.hitsForActiveTab[idx];
-              if (hit) selectHit(hit);
-            }}
+            onRowClick={onDismiss}
             maxListHeight={480}
           />
         </Paper>
