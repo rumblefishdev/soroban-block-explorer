@@ -65,8 +65,13 @@ function useActivePage(): string | undefined {
 export function AppShell() {
   const navigate = useNavigate();
   const activePage = useActivePage();
+  const { pathname } = useLocation();
   const [network, setNetwork] = useState<Network>('mainnet');
   const [searchValue, setSearchValue] = useState('');
+
+  // The home page is full-bleed (hero band, edge-to-edge section
+  // backgrounds); every other route gets the standard content padding.
+  const isFullBleed = pathname === routes.home;
 
   const handleSearchSubmit = () => {
     const q = searchValue.trim();
@@ -120,7 +125,10 @@ export function AppShell() {
         activePage={activePage}
         onNavClick={handleNavClick}
       />
-      <Box component="main" sx={{ flex: 1, px: 10, py: 4 }}>
+      <Box
+        component="main"
+        sx={{ flex: 1, ...(isFullBleed ? {} : { px: 10, py: 4 }) }}
+      >
         <Outlet />
       </Box>
       <Footer

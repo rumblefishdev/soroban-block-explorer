@@ -25,9 +25,10 @@ history:
 
 Implement the Home page (`/`) as the entry point and chain overview for the Stellar Block Explorer. Provides at-a-glance network state, latest transactions, and latest ledgers with polling-based auto-refresh.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started.
+**Current state:** Implemented on branch `feat/0068_frontend-home-page`
+(PR #197) — pending review and merge.
 
 ## Context
 

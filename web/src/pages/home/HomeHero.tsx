@@ -1,4 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -27,8 +28,12 @@ export function HomeHero() {
         pt: 8,
         pb: 6,
         // Soft radial glow behind the headline, per the Figma hero.
+        // `alpha` blends regardless of the token's colour format.
         background: (theme) =>
-          `radial-gradient(620px 280px at 50% -40px, ${theme.palette.surface.primaryMain}14, transparent 70%)`,
+          `radial-gradient(620px 280px at 50% -40px, ${alpha(
+            theme.palette.surface.primaryMain,
+            0.08
+          )}, transparent 70%)`,
       }}
     >
       <Stack spacing={3} alignItems="center" sx={{ maxWidth: 632, mx: 'auto' }}>
