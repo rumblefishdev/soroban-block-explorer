@@ -1,0 +1,4 @@
+# Issued client certificates land under ./out/. Private keys
+# absolutely must not be committed; the whole directory is
+# ignored as a category-wide guardrail.
+/out/

@@ -1,0 +1,220 @@
+---
+# Daily encrypted backup of the ClickHouse data set to the
+# Hetzner BX21 Storage Box via Borg over SSH.
+#
+# Workflow (executed by /usr/local/bin/ch-backup on cron):
+#   1. `BACKUP DATABASE default TO Disk('backups', ...)` inside CH
+#      → produces a consistent snapshot in /srv/backups/.
+#   2. `borg create` pushes the snapshot directory to BX21.
+#   3. Local snapshot is deleted (it has been pushed; BX21 is
+#      the durable copy).
+#   4. `borg prune` enforces retention.
+#
+# Encryption: Borg encrypts client-side using the passphrase from
+# /etc/soroban-backup/borg.passphrase. Hetzner stores ciphertext;
+# a Hetzner-side disclosure does not leak our data.
+
+- name: Install Borg
+  ansible.builtin.apt:
+    name: borgbackup
+    state: present
+
+- name: Ensure /etc/soroban-backup exists
+  ansible.builtin.file:
+    path: /etc/soroban-backup
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deliver Borg passphrase file
+  # Mode 0400, root-owned. The cron entry runs as root and reads
+  # this file; no other user on the box can.
+  ansible.builtin.copy:
+    dest: /etc/soroban-backup/borg.passphrase
+    content: '{{ borg_passphrase }}'
+    owner: root
+    group: root
+    mode: '0400'
+  no_log: true
+
+  # NOTE: the host-side clickhouse-client credentials file at
+  # /etc/soroban-backup/clickhouse-client.xml is delivered by the
+  # `app` role, NOT here. The file must exist before `docker
+  # compose up` runs (otherwise Docker auto-creates the bind
+  # mount target as a directory), and compose up is in the `app`
+  # role. The credentials file is functionally a backup-script
+  # input, but lifecycle-wise it has to land at compose time.
+
+- name: Ensure /root/.ssh exists with correct permissions
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Ensure /root/.ssh/known_hosts exists
+  ansible.builtin.file:
+    path: /root/.ssh/known_hosts
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+  changed_when: false
+
+- name: Check if the Storage Box SSH host key is already pinned
+  # ssh-keygen -F returns 0 if a matching entry exists, non-zero
+  # otherwise. Avoids the previous task's `creates:` foot-gun:
+  # that marker made the task always skip after the first run,
+  # so a legitimate Storage Box host-key rotation would never
+  # be picked up. Splitting check + add lets re-runs catch real
+  # drift.
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -F [{{ storagebox_ssh_host }}]:{{ storagebox_ssh_port }}
+      -f /root/.ssh/known_hosts
+  register: known_host_check
+  failed_when: false
+  changed_when: false
+
+- name: Pin the Storage Box SSH host key (TOFU)
+  # Trust-on-first-use accept. Runs only when ssh-keygen -F
+  # reports the entry is missing. A future Storage Box host-key
+  # rotation requires manual removal from known_hosts before
+  # the next playbook run — a deliberate guard against silent
+  # MITM during routine ops.
+  ansible.builtin.shell:
+    cmd: >-
+      ssh-keyscan -H -p {{ storagebox_ssh_port }}
+      {{ storagebox_ssh_host }} >> /root/.ssh/known_hosts
+  when: known_host_check.rc != 0
+
+- name: Generate a dedicated SSH key for the backup cron
+  # Distinct from the operator keys so revocation is independent
+  # (e.g. compromised box → rotate only the backup key, devs still
+  # in business).
+  community.crypto.openssh_keypair:
+    path: /root/.ssh/borg_ed25519
+    type: ed25519
+    owner: root
+    group: root
+    mode: '0600'
+  register: borg_ssh_key
+
+- name: Read the previously-recorded Borg SSH key fingerprint
+  # Drift detector: if `/root/.ssh/borg_ed25519` was ever wiped
+  # and re-generated (operator error, disk replacement, restore
+  # gone wrong), the public part diverges from the one registered
+  # on the Storage Box. Without detection the backup cron starts
+  # failing silently. We store the SHA-256 fingerprint after each
+  # successful run and compare on subsequent runs.
+  ansible.builtin.slurp:
+    src: /etc/soroban-backup/borg.fp
+  register: borg_fp_recorded
+  failed_when: false
+  changed_when: false
+
+- name: Compute the current Borg SSH key fingerprint
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -lf
+      - /root/.ssh/borg_ed25519.pub
+  register: borg_fp_current
+  changed_when: false
+
+- name: Alert if the Borg SSH key fingerprint changed
+  ansible.builtin.fail:
+    msg: |
+      The Borg cron SSH key fingerprint has changed since the
+      last playbook run:
+
+        recorded: {{ borg_fp_recorded.content | b64decode | trim }}
+        current:  {{ borg_fp_current.stdout }}
+
+      This means the keypair was regenerated (file deletion +
+      module re-run, restore from backup, etc.). The Storage
+      Box's authorized_keys still trusts the OLD public key, so
+      the backup cron WILL FAIL until you:
+
+        1. Add the new public key to the Storage Box authorised
+           keys via Hetzner Robot UI (Storage Boxes → SSH Keys):
+              {{ borg_ssh_key.public_key }}
+        2. Optionally remove the old key from the same Robot UI
+           page.
+        3. Re-run this playbook to record the new fingerprint.
+
+      If this is the FIRST run on a fresh box, expected. Bypass
+      this check by deleting /etc/soroban-backup/borg.fp manually
+      and re-running.
+  when:
+    - borg_fp_recorded.content is defined
+    - (borg_fp_recorded.content | b64decode | trim) != borg_fp_current.stdout
+
+- name: Record the current Borg SSH key fingerprint for future drift checks
+  # Mode 0640 (was 0644) — the fingerprint is not a secret on its
+  # own (it's a SHA256 of a public key), but world-readability
+  # leaks which key authorises the box against BX21, which is
+  # useful intel for a privilege-escalation pivot. Consistent
+  # with the rest of /etc/soroban-backup/ (passphrase 0400,
+  # client config 0400, dir 0750).
+  ansible.builtin.copy:
+    dest: /etc/soroban-backup/borg.fp
+    content: '{{ borg_fp_current.stdout }}'
+    owner: root
+    group: root
+    mode: '0640'
+
+- name: Display Storage Box authorised_keys onboarding instructions
+  # The public key has to be added to the Storage Box's
+  # authorized_keys via the Hetzner Robot UI (Storage Boxes →
+  # SSH Keys). This module call surfaces the exact key contents
+  # to the operator on first deploy. Idempotent: prints on every
+  # run but does not modify anything remote.
+  ansible.builtin.debug:
+    msg: |
+      Add this public key to the Hetzner Storage Box authorised
+      keys via Robot UI (Storage Boxes → SSH Keys):
+
+      {{ borg_ssh_key.public_key }}
+
+      Without this, the daily backup cron cannot push to BX21.
+
+- name: Deliver the backup script
+  ansible.builtin.template:
+    src: ch-backup.sh.j2
+    dest: /usr/local/bin/ch-backup
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Install the daily backup cron entry
+  ansible.builtin.cron:
+    name: 'ch-backup'
+    user: root
+    minute: '{{ borg_cron_minute }}'
+    hour: '{{ borg_cron_hour }}'
+    job: '/usr/local/bin/ch-backup >> /var/log/ch-backup.log 2>&1'
+    cron_file: ch-backup
+
+- name: Ensure /var/log/ch-backup.log exists and rotates
+  # 26 weeks ≈ 6 months. Backup-pipeline log volume is tiny (a
+  # few KiB per daily run) so retention is cheap; an incident
+  # opened months after a silent backup failure can still trace
+  # the regression to its first occurrence.
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/ch-backup
+    content: |
+      /var/log/ch-backup.log {
+          weekly
+          rotate 26
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0640 root adm
+      }
+    owner: root
+    group: root
+    mode: '0644'

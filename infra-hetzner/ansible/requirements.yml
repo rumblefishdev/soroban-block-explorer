@@ -1,0 +1,43 @@
+---
+# Ansible collections required by this playbook. Install with:
+#
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Versions are pinned to a minor floor (caret-style is not yet
+# universal across galaxy clients; ">= X.Y.Z" is the safe form).
+# A floor — not an exact pin — lets bug-fix releases through while
+# refusing accidental backwards-incompatible upgrades. Bump the
+# floor in a deliberate PR after testing.
+
+collections:
+  # Hetzner Robot REST API — manages firewall rules, reverse DNS,
+  # server display name, rescue SSH keys, and Storage Box SSH
+  # authorisations on the dedicated server.
+  - name: community.hrobot
+    version: '>=1.9.0,<2.0.0'
+
+  # Docker daemon + compose plugin orchestration. Also pulls in
+  # the docker_login / docker_compose_v2 modules used in the app
+  # role.
+  - name: community.docker
+    version: '>=3.10.0,<4.0.0'
+
+  # Community general — ufw, cron, etc. Most modules used by this
+  # playbook are in core ansible (ansible.builtin) but a few host
+  # firewall ergonomics live here.
+  - name: community.general
+    version: '>=8.0.0,<11.0.0'
+
+  # OpenSSH key generation for the dedicated backup-cron SSH key.
+  # `community.crypto.openssh_keypair` is idempotent and avoids
+  # the `ssh-keygen | shell` pattern.
+  - name: community.crypto
+    version: '>=2.20.0,<3.0.0'
+
+  # Provides `ansible.posix.synchronize` — rsync wrapper used to
+  # push the operator's local repo checkout to /srv/app on the
+  # box. Replaces the previous `community.general.git`-based
+  # clone-on-box flow so the box no longer needs network access
+  # to GitHub.
+  - name: ansible.posix
+    version: '>=1.5.0,<2.0.0'

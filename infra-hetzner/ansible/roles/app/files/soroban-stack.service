@@ -1,0 +1,34 @@
+[Unit]
+# Managed by infra-hetzner/ansible/roles/app — do not edit by hand.
+#
+# Re-applies the Compose stack on every host boot. Without this
+# unit a host reboot leaves the schema sidecar in `Exited (0)`
+# state (its compose restart policy is intentionally `no`), so a
+# schema-applying upgrade landed mid-uptime would not propagate
+# to the next clean boot. This unit fixes that by re-running
+# `docker compose up -d`, which is itself idempotent: existing
+# healthy services are left alone, the sidecar re-applies the
+# `CREATE … IF NOT EXISTS` schema script, exits 0.
+#
+# The boot-time invocation is the same one Ansible runs at deploy
+# time; behaviour is identical, just under systemd instead of an
+# Ansible-mediated SSH session.
+
+Description=Soroban production Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/srv/app
+# `up -d` is idempotent; healthy services are not recreated.
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+# Generous boot timeout — Caddy obtains an ACME cert on first
+# start, and CH cold-start with 100 GiB cache pre-warm is ~30 s.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# Real inventory carries the production host IP and any per-host
+# overrides. Templates and example files commit, real files do not.
+/inventory.ini
+
+# Operator-local Ansible state. retry files have been deprecated
+# but still occasionally land here from old Ansible installs.
+*.retry
+
+# Galaxy collection installs land in a workspace-local path when
+# the operator runs `ansible-galaxy collection install -p .`
+/collections/

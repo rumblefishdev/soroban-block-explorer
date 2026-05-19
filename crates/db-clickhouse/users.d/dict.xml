@@ -1,0 +1,89 @@
+<!--
+  Internal user `dict_reader` used as the SOURCE clause of the
+  `transaction_hash_dict` Dictionary (see schema/init.sql).
+
+  Why a dedicated user instead of `default` with a password:
+  - Dictionaries load via an inner CH→CH client connection. The
+    SOURCE() clause has to embed credentials in plaintext in the
+    DDL — there is no secret-reference mechanism inside CREATE
+    DICTIONARY. Reusing `default` would either pin the production
+    password in init.sql (committed to a public repo) or force a
+    DDL rewrite at every credential rotation.
+  - This user is reachable only from the loopback interface
+    (`::1` / `127.0.0.1`), so a missing password is not an
+    authentication weakness — the network ACL is the gate.
+  - The `readonly = 1` setting in the inherited `default` profile
+    plus `dict_loader`'s overrides blocks any write path even if
+    the loopback ACL is somehow bypassed.
+
+  This file is mounted in both the local-development compose stack
+  (init.sql runs there too) and the production overlay. The
+  loopback restriction is identical in both contexts; the user is
+  unreachable from outside the container regardless of how the
+  compose stack publishes other ports.
+-->
+<clickhouse>
+    <profiles>
+        <!-- Read-only profile for dictionary loads. Inherits
+             the `default` profile to pick up base CH settings.
+
+             max_memory_usage: 8 GiB. The pilot's per-query
+             2 GiB cap was sized for the 10k-ledger smoke
+             fixture. At full mainnet scale the
+             `transaction_hash_index` table will balloon and
+             2 GiB caps the cache before it can finish loading.
+             8 GiB is generous headroom; the server-level
+             `max_server_memory_usage` (100 GiB in
+             config.d/memory.xml) is the real ceiling.
+
+             Connection / socket timeouts for the dict-load
+             client connection are NOT set here. CH user-profile
+             timeouts govern QUERY execution; the inner CH→CH
+             client that loads the dictionary reads its socket
+             timeouts from the SOURCE() clause (per-dictionary)
+             or from server defaults — never from the user
+             profile. Setting them here would be inert. The
+             effective bounds live in the SOURCE() clause in
+             schema/init.sql. -->
+        <dict_loader>
+            <profile>default</profile>
+            <readonly>1</readonly>
+            <allow_ddl>0</allow_ddl>
+            <max_memory_usage>8589934592</max_memory_usage> <!-- 8 GiB -->
+        </dict_loader>
+    </profiles>
+
+    <users>
+        <dict_reader>
+            <!-- `<no_password/>` declares "no password method"
+                 explicitly. CH refuses to load a user definition
+                 that lacks BOTH a `<password>` and a
+                 `<no_password>` element — silently absent is not
+                 the same as empty. Safe here because the
+                 `<networks>` ACL below restricts access to the
+                 loopback interface; the user is unreachable from
+                 the Docker bridge or the public network. -->
+            <no_password/>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <profile>dict_loader</profile>
+            <quota>default</quota>
+
+            <!-- `<allow_databases>` is preserved for documentation
+                 of intent: dict_reader should only ever read from
+                 the `default` database. In CH 24+ this element is
+                 deprecated in favour of SQL `GRANT` / `REVOKE`
+                 (which require `access_management = 1`); we keep
+                 it here for legacy CH compatibility but the real
+                 scope-narrowing comes from `readonly = 1` and the
+                 loopback `<networks>` ACL. -->
+            <allow_databases>
+                <database>default</database>
+            </allow_databases>
+
+            <access_management>0</access_management>
+        </dict_reader>
+    </users>
+</clickhouse>

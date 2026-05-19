@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# Managed by infra-hetzner/ansible/roles/backup — do not edit by hand.
+#
+# Daily ClickHouse backup → Borg → Hetzner BX21 Storage Box.
+#
+# Cron entry installs this at /usr/local/bin/ch-backup; runs as
+# root from /etc/cron.d/ch-backup once a day at
+# {{ borg_cron_hour }}:{{ '%02d' | format(borg_cron_minute) }} {{ host_timezone }}.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------
+# Configuration (injected by Ansible at template time)
+# ---------------------------------------------------------------------
+
+readonly BORG_REPO="{{ borg_repo_url }}"
+export BORG_REPO
+export BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
+# `ConnectTimeout` bounds the initial TCP handshake; `ServerAliveInterval`
+# probes a stuck connection so a hung Storage Box does not hold the
+# Borg repo lock for the kernel's default ~15 min TCP retransmit window
+# (which would block the next day's cron run).
+export BORG_RSH="ssh -i /root/.ssh/borg_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3"
+
+readonly BACKUPS_DIR="{{ backups_dir }}"
+readonly APP_DIR="{{ app_repo_dest }}"
+readonly KEEP_DAILY={{ borg_keep_daily }}
+readonly KEEP_WEEKLY={{ borg_keep_weekly }}
+readonly KEEP_MONTHLY={{ borg_keep_monthly }}
+
+# ---------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------
+
+log()   { printf '%s [ch-backup] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+fatal() { log "FATAL: $*"; exit 1; }
+
+# ---------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------
+
+# Wipe the in-flight local staging dir on any non-success exit.
+# Without this trap a failed `borg create` leaves an orphan archive
+# directory in /srv/backups that grows on every retry until the
+# filesystem fills up and CH itself stalls.
+ARCHIVE=""
+SLEEP_PID=""
+cleanup_in_flight() {
+    local rc=$?
+    # Disarm the EXIT trap before doing anything — bash invokes
+    # both the signal handler AND the EXIT trap on signal-driven
+    # termination, which would re-run this function twice (once
+    # from INT/TERM/HUP, once from the implicit EXIT). Cosmetic
+    # but it makes incident logs ambiguous about which path fired.
+    trap - EXIT
+    # If we were sleeping when the signal arrived, kill the sleep
+    # child so the script does not block waiting for it to wake.
+    if [[ -n "${SLEEP_PID}" ]] && kill -0 "${SLEEP_PID}" 2>/dev/null; then
+        kill "${SLEEP_PID}" 2>/dev/null || true
+    fi
+    if [[ -n "${ARCHIVE}" && -d "${BACKUPS_DIR}/${ARCHIVE}" ]]; then
+        log "Cleaning up local stage ${ARCHIVE} (exit ${rc})"
+        rm -rf "${BACKUPS_DIR:?}/${ARCHIVE:?}"
+    fi
+}
+# Trap on EXIT covers normal exit + `set -e` aborts; INT/TERM/HUP
+# cover signal-driven termination (systemctl stop cron, OOM-killer
+# SIGTERM, reboot). SIGKILL is unrecoverable by design. Without
+# the signal traps, a SIGTERM during borg create would leave the
+# local stage dangling for the daily-+24h `cleanup_stale_stages`
+# sweep to catch — much slower recovery than this trap.
+trap cleanup_in_flight EXIT INT TERM HUP
+
+# Sweep any orphaned ch-* directories from previous failed runs that
+# pre-date the trap (or where the trap itself failed). Anything older
+# than 24 h is fair game — the cron interval is 24 h, so a healthy
+# run never leaves a directory of that age behind.
+cleanup_stale_stages() {
+    find "${BACKUPS_DIR}" -maxdepth 1 -name 'ch-*' -type d -mtime +1 \
+        -exec rm -rf {} + 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------
+# Ensure the Borg repo exists (idempotent — first run initialises).
+# ---------------------------------------------------------------------
+
+ensure_repo() {
+    if borg info "${BORG_REPO}" >/dev/null 2>&1; then
+        return 0
+    fi
+    log "Repo not initialised; running borg init"
+    borg init --encryption=repokey-blake2 "${BORG_REPO}"
+}
+
+# ---------------------------------------------------------------------
+# Take a CH-side BACKUP, push, prune.
+# ---------------------------------------------------------------------
+
+main() {
+    # Randomised delay 0–30 min before any real work. The cron
+    # entry fires at a fixed wall-clock time; without this jitter
+    # an attacker watching Storage Box metadata could correlate
+    # backup-archive timestamps to infer the schedule even with
+    # contents encrypted. Bash's $RANDOM yields 0..32767, modulo
+    # 1800 → 0..1799 s ≈ 0..30 min. Cheap, low-rent obscurity.
+    #
+    # `sleep & wait $!` runs sleep as a background child and
+    # waits for it explicitly. Without this, a SIGTERM (e.g.
+    # `systemctl stop cron`, OOM-killer) delivered to bash
+    # during a foreground `sleep` is deferred until sleep
+    # returns — up to 30 minutes. The wait builtin is
+    # signal-interruptible, so the trap fires immediately.
+    sleep $(( RANDOM % 1800 )) &
+    SLEEP_PID=$!
+    wait "${SLEEP_PID}" 2>/dev/null || true
+    SLEEP_PID=""
+
+    log "Starting"
+
+    cleanup_stale_stages
+    ensure_repo
+
+    local stamp
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    ARCHIVE="ch-${stamp}"
+    : "${ARCHIVE:?archive name must be non-empty}"
+
+    log "Creating CH backup snapshot ${ARCHIVE}"
+    # `clickhouse-client` reads credentials from the config file
+    # bind-mounted at /etc/clickhouse-backup/client.xml inside the
+    # CH container (delivered by Ansible's backup role to
+    # /etc/soroban-backup/clickhouse-client.xml on the host, mode
+    # 0440 root:101). The password never enters argv or env in
+    # either the host process or the in-container process.
+    docker compose -f "${APP_DIR}/docker-compose.yml" \
+                   -f "${APP_DIR}/docker-compose.prod.yml" \
+                   exec -T clickhouse \
+        clickhouse-client \
+            --config-file=/etc/clickhouse-backup/client.xml \
+            --host=127.0.0.1 \
+            --query="BACKUP DATABASE default TO Disk('backups', '${ARCHIVE}/')"
+
+    log "Pushing ${ARCHIVE} to ${BORG_REPO}"
+    borg create \
+        --stats --compression zstd,6 \
+        "${BORG_REPO}::${ARCHIVE}" \
+        "${BACKUPS_DIR}/${ARCHIVE}"
+
+    log "Removing local snapshot ${ARCHIVE}"
+    rm -rf "${BACKUPS_DIR:?}/${ARCHIVE:?}"
+    # Snapshot wiped successfully — clear the trap target so the
+    # EXIT handler does not attempt a double-remove.
+    ARCHIVE=""
+
+    log "Pruning old snapshots (keep ${KEEP_DAILY}d ${KEEP_WEEKLY}w ${KEEP_MONTHLY}m)"
+    borg prune \
+        --stats \
+        --keep-daily="${KEEP_DAILY}" \
+        --keep-weekly="${KEEP_WEEKLY}" \
+        --keep-monthly="${KEEP_MONTHLY}" \
+        --glob-archives 'ch-*' \
+        "${BORG_REPO}"
+
+    # `borg compact` reclaims space freed by `prune`. Holds the
+    # repo lock, so we run it once per week rather than daily —
+    # avoids overlap with a long-running create on the next day's
+    # cron if a single run ever exceeds 24 h. Day-of-week test:
+    # 0 = Sunday in `date -u +%w`.
+    if [[ "$(date -u +%w)" == "0" ]]; then
+        log "Sunday — compacting repository"
+        borg compact "${BORG_REPO}"
+    fi
+
+    log "Done"
+}
+
+main "$@"
