@@ -63,6 +63,9 @@ export function ExplorerTable<T>({
                     <Box
                       component="button"
                       type="button"
+                      // `aria-sort` lives on the parent `<th>` (TableCell
+                      // `sortDirection`); the button only needs an action label.
+                      aria-label={`Sort by ${col.id}`}
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
