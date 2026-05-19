@@ -2,7 +2,7 @@
 id: '0087'
 title: 'Frontend: observability and accessibility baseline'
 type: FEATURE
-status: active
+status: backlog
 related_adr: []
 related_tasks: []
 tags: [priority-medium, effort-medium, layer-frontend-pages]
@@ -13,10 +13,6 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
-  - date: 2026-05-14
-    status: active
-    who: karolkow
-    note: 'Promoted to active — parallel frontend work on separate worktree'
 ---
 
 # Frontend: observability and accessibility baseline
