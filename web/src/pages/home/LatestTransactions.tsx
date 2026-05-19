@@ -26,15 +26,8 @@ import { ViewAllLink } from './ViewAllLink.js';
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    isFetching,
-    dataUpdatedAt,
-    refetch,
-  } = useLatestTransactions();
+  const { data, isLoading, isError, error, dataUpdatedAt, refetch } =
+    useLatestTransactions();
   const rows = data?.data ?? [];
 
   let body: ReactNode;
@@ -74,13 +67,7 @@ export function LatestTransactions() {
         <TableSectionHeader
           title="Latest transactions"
           badge={<LiveIndicator />}
-          description={
-            <PollingIndicator
-              lastUpdated={dataUpdatedAt}
-              isFetching={isFetching}
-              onRefresh={() => void refetch()}
-            />
-          }
+          description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
           action={<ViewAllLink to={routes.transactions} />}
         />
         <Box sx={{ minHeight: 320 }}>{body}</Box>
