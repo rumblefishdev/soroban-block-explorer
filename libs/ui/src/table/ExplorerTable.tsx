@@ -121,6 +121,8 @@ export function ExplorerTable<T>({
                     key={col.id}
                     align={col.align ?? 'left'}
                     width={col.width}
+                    // Fixed 48px row, per the Design System table cell.
+                    sx={{ height: 48, py: 0 }}
                   >
                     {col.cell(row, idx)}
                   </TableCell>

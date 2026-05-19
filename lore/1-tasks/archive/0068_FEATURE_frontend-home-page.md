@@ -2,7 +2,7 @@
 id: '0068'
 title: 'Frontend: Home page'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-medium, layer-frontend-pages]
@@ -17,6 +17,15 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active — starting Figma-first frontend home page implementation.'
+  - date: 2026-05-19
+    status: completed
+    who: karolkow
+    note: >
+      Home page implemented Figma-first on feat/0068 (PR #197): 9 new home
+      components + 2 query hooks + shared-component fixes. Built 1:1 to
+      Figma with documented deviations; verified with Playwright + a mock
+      API. Key decisions: page-level hero backdrop, dedicated HeroSearch,
+      48px DS table rows.
 ---
 
 # Frontend: Home page
@@ -25,9 +34,10 @@ history:
 
 Implement the Home page (`/`) as the entry point and chain overview for the Stellar Block Explorer. Provides at-a-glance network state, latest transactions, and latest ledgers with polling-based auto-refresh.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Not started.
+**Current state:** Implemented on `feat/0068_frontend-home-page` (PR #197),
+verified, and archived. Lands on develop when the PR merges.
 
 ## Context
 
@@ -123,19 +133,99 @@ Create `apps/web/src/pages/home/HomePage.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Chain overview cards show: current ledger sequence, TPS, total accounts, total contracts
-- [ ] Latest transactions table shows: hash (truncated, linked), source account (truncated, linked), operation type, status badge, timestamp (relative)
-- [ ] Latest ledgers table shows: sequence (linked), closed_at (relative), transaction count
-- [ ] All three API endpoints polled at 10-15 second intervals
-- [ ] Polling updates do not cause layout jump or visual reflow
-- [ ] Polling indicator visible showing "Updated Xs ago"
-- [ ] Each section has independent error boundary (failed section does not collapse others)
-- [ ] Skeleton loaders shown during initial load
-- [ ] "View All" links navigate to `/transactions` and `/ledgers`
-- [ ] Identifiers are linked to their respective detail pages
+- [x] Chain overview cards show: current ledger sequence, TPS, total accounts, total contracts
+- [x] Latest transactions table shows: hash (truncated, linked), source account (truncated, linked), operation type, status badge, timestamp (relative)
+- [x] Latest ledgers table shows: sequence (linked), closed_at (relative), transaction count
+- [x] All three API endpoints polled at 10-15 second intervals
+- [x] Polling updates do not cause layout jump or visual reflow
+- [x] Polling indicator visible showing "Updated Xs ago"
+- [x] Each section has independent error boundary (failed section does not collapse others)
+- [x] Skeleton loaders shown during initial load
+- [x] "View All" links navigate to `/transactions` and `/ledgers`
+- [x] Identifiers are linked to their respective detail pages
 
 ## Notes
 
 - The home page is the primary indicator of explorer health and indexer freshness.
 - Layout should feel like a dashboard summary, not a dense analytics page.
 - The global search bar is already present in the header via the layout shell (task 0059).
+
+## Implementation Notes
+
+Built on `feat/0068_frontend-home-page` (PR #197). Code lives in `web/`
+(spec said `apps/web/` — stale).
+
+- New home components in `web/src/pages/home/`: `HomeHero`, `HeroSearch`,
+  `ChainOverview`, `ChainOverviewCard`, `LatestTransactions`,
+  `LatestTransactionsTable`, `LatestLedgers`, `LiveIndicator`,
+  `ViewAllLink`; `HomePage.tsx` composes them with per-section
+  `SectionErrorBoundary`.
+- Query hooks `useLatestTransactions` / `useLatestLedgers` in
+  `web/src/api/hooks/` — `limit: 10`, `homePolicy` (10s stale / 12s poll).
+- Reused: `ExplorerTable`, `TableSectionHeader`, `LedgersTable`, the
+  transaction cells, `IdentifierDisplay`/`IdentifierWithCopy`, skeletons,
+  error states, `PollingIndicator`, `useNetworkStats`.
+- Shared-component changes: `ExplorerTable` rows pinned to the 48px DS
+  cell height; `LedgersTable` Protocol as plain text + ledger-hash
+  truncation; `truncate.ts` default truncation corrected; `AppShell`
+  renders the home route full-bleed.
+- Docs: `frontend-overview.md` §6.2 updated (ADR 0032).
+- Verified: typecheck / lint / build; Playwright visual checks against
+  Figma using a mock API.
+
+## Design Decisions
+
+### From Plan
+
+1. **Reuse over rebuild** — `ExplorerTable`, `LedgersTable`, transaction
+   cells, identifiers and query-hook patterns reused; only the home
+   composition + 2 thin hooks are genuinely new.
+2. **Per-section error boundaries** — each section in its own
+   `SectionErrorBoundary` so one failure does not collapse the page.
+
+### Emerged
+
+3. **Hero section added** — Figma shows a hero (headline + tagline +
+   large search); the spec said search is header-only. Figma-first wins.
+4. **Dedicated `HeroSearch`** — the shared header `SearchInput`
+   collapses/expands; the Figma hero search is static. Built a separate
+   component rather than forking a mode into the shared one.
+5. **`AppShell` full-bleed for `/`** — needed to render the full-bleed
+   Figma hero; all other routes keep the standard content padding.
+6. **Page-level hero backdrop** — glow rebuilt from the exact Figma
+   `Group 1` (two blurred `#fdda24` pills) and grid from `Grid layers`
+   (white, 0.11 opacity, 1.26px, 80.69px pitch); a radial-gradient
+   stands in for the blurred-blob grid mask.
+7. **48px DS table rows** — `ExplorerTable` pins row height to the
+   Design System table cell; affects every explorer table (intended).
+8. **Truncation defaults corrected** — `transaction` 6/4, `account`
+   4/4 in `truncate.ts`, verified against the Figma home + Transactions
+   list tables; per-call overrides removed.
+9. **Client-side sorting reverted** — built, then dropped: out of the
+   0068 spec and the API exposes no sort parameter.
+10. **`PollingIndicator` `isFetching`/`onRefresh` reverted** — built,
+    then dropped as out of scope (belongs to task 0063).
+
+## Issues Encountered
+
+- **nx build-ordering flake** — `web:typecheck` intermittently failed
+  inside `run-many` reading a stale `libs/ui/dist`; fixed by a clean
+  rebuild. Not a regression.
+- **Stray deletion** — commit `3e3095b` removed unrelated task files
+  `0065`/`0069` (stale staged deletions in the worktree index);
+  restored in `7c2ffe6`.
+- **Figma glow mix-up** — `Ellipse 21` exports white and looked like
+  the glow, but it is the grid's alpha mask; the real warm glow is
+  `Group 1` (blurred `#fdda24` pills).
+
+**Broken/modified tests:** none — the project has no frontend tests.
+
+## Future Work
+
+Not spawned as backlog tasks (contingent / owned elsewhere):
+
+- Functional table sorting once the API exposes a sort parameter.
+- Wire `AppShell` TopNav live stats (currently `MOCK_STATS`) — belongs
+  with task 0059 / 0066.
+- Populated-data visual diff against a real backend (verified here
+  with a mock API).

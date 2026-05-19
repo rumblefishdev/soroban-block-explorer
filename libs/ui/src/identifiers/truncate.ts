@@ -2,9 +2,11 @@ import type { EntityType, TruncationConfig } from './types.js';
 
 const ELLIPSIS = '...';
 
+// Prefix/suffix lengths verified against the Figma tables (home + the
+// Transactions list page both truncate tx hashes 6/4 and accounts 4/4).
 const defaultByType: Record<EntityType, TruncationConfig> = {
-  transaction: { prefix: 12, suffix: 8 },
-  account: { prefix: 6, suffix: 4 },
+  transaction: { prefix: 6, suffix: 4 },
+  account: { prefix: 4, suffix: 4 },
   contract: { prefix: 6, suffix: 4 },
   asset: { prefix: 6, suffix: 4 },
   pool: { prefix: 6, suffix: 4 },

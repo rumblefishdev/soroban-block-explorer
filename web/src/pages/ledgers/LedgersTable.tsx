@@ -1,6 +1,5 @@
 import type { LedgerListItem } from '@rumblefish/api-types';
 import {
-  Chip,
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -36,7 +35,7 @@ const columns: ExplorerTableColumn<LedgerListItem>[] = [
         value={row.hash}
         type="ledger"
         linked={false}
-        truncation={{ prefix: 6, suffix: 4 }}
+        truncation={{ prefix: 4, suffix: 4 }}
       />
     ),
   },
@@ -48,8 +47,11 @@ const columns: ExplorerTableColumn<LedgerListItem>[] = [
   {
     id: 'protocol',
     header: 'Protocol',
+    // Plain number, no chip — per the Figma ledger table.
     cell: (row) => (
-      <Chip size="sm" color="neutral" label={String(row.protocol_version)} />
+      <Typography component="span" variant="bodySmRegular">
+        {row.protocol_version}
+      </Typography>
     ),
   },
   {

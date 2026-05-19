@@ -1,4 +1,6 @@
 export { useNetworkStats } from './useNetworkStats.js';
+export { useLatestTransactions } from './useLatestTransactions.js';
+export { useLatestLedgers } from './useLatestLedgers.js';
 export { useTransactionsList } from './useTransactionsList.js';
 export { useTransactionDetail } from './useTransactionDetail.js';
 export { useAccountDetail } from './useAccountDetail.js';
