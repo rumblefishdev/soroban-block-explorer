@@ -1,4 +1,5 @@
 import { Box, Divider } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   classifyError,
   GenericErrorState,
@@ -75,14 +76,17 @@ export function ChainOverview() {
   return (
     <Box sx={{ px: 10 }}>
       <Box
-        sx={{
+        sx={(theme) => ({
           maxWidth: 1064,
           mx: 'auto',
-          borderRadius: 4,
-          border: (theme) => `1px solid ${theme.palette.stroke.default}`,
-          backgroundColor: 'surface.grayMainAlt',
+          // Exact Figma panel (node 4:2727): 16px radius, 80%-opaque
+          // surface so the hero glow shows through, 6px backdrop blur.
+          borderRadius: '16px',
+          border: `1px solid ${theme.palette.stroke.default}`,
+          backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),
+          backdropFilter: 'blur(6px)',
           overflow: 'hidden',
-        }}
+        })}
       >
         {content}
       </Box>

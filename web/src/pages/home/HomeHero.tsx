@@ -1,14 +1,15 @@
 import { Box, Stack, Typography } from '@mui/material';
-import { alpha } from '@mui/material/styles';
-import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 
+import { HeroSearch } from './HeroSearch.js';
+
 /**
  * Home page hero — headline, tagline and a large global search input.
- * Submitting the search navigates to the search results page.
+ * Submitting the search navigates to the search results page. The
+ * background glow + grid live in the page-level backdrop (see `HomePage`).
  */
 export function HomeHero() {
   const navigate = useNavigate();
@@ -20,22 +21,7 @@ export function HomeHero() {
   };
 
   return (
-    <Box
-      sx={{
-        position: 'relative',
-        overflow: 'hidden',
-        px: 10,
-        pt: 8,
-        pb: 6,
-        // Soft radial glow behind the headline, per the Figma hero.
-        // `alpha` blends regardless of the token's colour format.
-        background: (theme) =>
-          `radial-gradient(620px 280px at 50% -40px, ${alpha(
-            theme.palette.surface.primaryMain,
-            0.08
-          )}, transparent 70%)`,
-      }}
-    >
+    <Box sx={{ px: 10, pt: 8, pb: 6 }}>
       <Stack spacing={3} alignItems="center" sx={{ maxWidth: 632, mx: 'auto' }}>
         <Stack spacing={1.5} alignItems="center">
           <Typography
@@ -62,13 +48,7 @@ export function HomeHero() {
           </Typography>
         </Stack>
         <Box sx={{ width: '100%' }}>
-          <SearchInput
-            size="lg"
-            value={value}
-            onChange={setValue}
-            onSubmit={submit}
-            onClear={() => setValue('')}
-          />
+          <HeroSearch value={value} onChange={setValue} onSubmit={submit} />
         </Box>
       </Stack>
     </Box>
