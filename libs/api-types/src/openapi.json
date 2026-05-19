@@ -3751,7 +3751,7 @@
       },
       "SearchHit": {
         "type": "object",
-        "description": "Single search row. Narrow shape — same four columns for every\nentity bucket; rich entity payloads are NOT inlined here.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions / pools, StrKey for accounts / contracts, asset code\nfor assets, name for NFTs). For `asset` and `nft` it is NOT unique —\nthe frontend MUST route via `surrogate_id`.",
+        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions / pools, StrKey for accounts / contracts, asset code\nfor assets, name for NFTs). For `asset` and `nft` it is NOT unique —\nthe frontend MUST route via `surrogate_id`.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
         "required": ["entity_type", "identifier", "label"],
         "properties": {
           "entity_type": {
@@ -3762,6 +3762,13 @@
           },
           "label": {
             "type": "string"
+          },
+          "last_activity_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "successful": {
+            "type": ["boolean", "null"]
           },
           "surrogate_id": {
             "type": ["integer", "null"],
@@ -3779,6 +3786,13 @@
           },
           "entity_type": {
             "$ref": "#/components/schemas/EntityType"
+          },
+          "last_activity_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "successful": {
+            "type": ["boolean", "null"]
           }
         }
       },

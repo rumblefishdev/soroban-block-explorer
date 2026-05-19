@@ -1205,18 +1205,27 @@ export type SearchGroups = {
 };
 
 /**
- * Single search row. Narrow shape — same four columns for every
- * entity bucket; rich entity payloads are NOT inlined here.
+ * Single search row. Same shape across every entity bucket.
  *
  * `identifier` is the canonical human-shown id (hex hash for
  * transactions / pools, StrKey for accounts / contracts, asset code
  * for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
  * the frontend MUST route via `surrogate_id`.
+ *
+ * `successful` and `last_activity_at` are populated only for
+ * `entity_type = transaction` today — joined from the partitioned
+ * `transactions` table via `(hash, created_at)` for partition pruning.
+ * Other entity types pass `None` for both until follow-up enrichment
+ * adds per-entity last-activity joins. The frontend renders a
+ * status chip + relative timestamp on the right side of the row
+ * whenever these fields are present.
  */
 export type SearchHit = {
   entity_type: EntityType;
   identifier: string;
   label: string;
+  last_activity_at?: string | null;
+  successful?: boolean | null;
   surrogate_id?: number | null;
 };
 
@@ -1226,6 +1235,8 @@ export type SearchHit = {
 export type SearchRedirect = {
   entity_id: string;
   entity_type: EntityType;
+  last_activity_at?: string | null;
+  successful?: boolean | null;
 };
 
 /**

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 
@@ -10,6 +10,7 @@ import {
   type NavItem,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
 
 const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
@@ -67,11 +68,30 @@ export function AppShell() {
   const activePage = useActivePage();
   const [network, setNetwork] = useState<Network>('mainnet');
   const [searchValue, setSearchValue] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const enterHandlerRef = useRef<() => boolean>(() => false);
 
   const handleSearchSubmit = () => {
+    if (enterHandlerRef.current()) return;
     const q = searchValue.trim();
-    if (q) void navigate(routes.search(q));
+    if (q) {
+      setSearchOpen(false);
+      void navigate(routes.search(q));
+    }
   };
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
+    if (value.length > 0) setSearchOpen(true);
+  };
+
+  const handleSearchClear = () => {
+    setSearchValue('');
+    setSearchOpen(false);
+  };
+
+  const showSearchOverlay = searchOpen && searchValue.trim().length > 0;
 
   const handleNavClick = (item: NavItem) => {
     if (item.href) void navigate(item.href);
@@ -110,9 +130,20 @@ export function AppShell() {
         onNetworkChange={setNetwork}
         stats={MOCK_STATS}
         searchValue={searchValue}
-        onSearchChange={setSearchValue}
+        onSearchChange={handleSearchChange}
         onSearchSubmit={handleSearchSubmit}
-        onSearchClear={() => setSearchValue('')}
+        onSearchClear={handleSearchClear}
+        searchOverlaySlot={
+          showSearchOverlay ? (
+            <GlobalSearchBar
+              q={searchValue}
+              onDismiss={() => setSearchOpen(false)}
+              registerEnterHandler={(handler) => {
+                enterHandlerRef.current = handler;
+              }}
+            />
+          ) : undefined
+        }
       />
       <SecondaryNav
         logo={<HomeLogo height={32} onClick={handleHomeClick} />}

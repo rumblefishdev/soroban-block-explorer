@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+import type { ReactNode } from 'react';
 
 import { monoFontFamily } from '../theme/typography.js';
 import { NetworkSwitcher, type Network } from './NetworkSwitcher.js';
@@ -20,6 +21,7 @@ export interface TopNavProps {
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
   onSearchClear?: () => void;
+  searchOverlaySlot?: ReactNode;
 }
 
 function StatDivider() {
@@ -81,6 +83,7 @@ export function TopNav({
   onSearchChange,
   onSearchSubmit,
   onSearchClear,
+  searchOverlaySlot,
 }: TopNavProps) {
   return (
     <Box
@@ -132,13 +135,27 @@ export function TopNav({
         </Box>
       </Box>
 
-      <Box flexShrink={0}>
+      <Box sx={{ position: 'relative', flexShrink: 0 }}>
         <SearchInput
           value={searchValue}
           onChange={onSearchChange}
           onSubmit={onSearchSubmit}
           onClear={onSearchClear}
         />
+        {searchOverlaySlot && (
+          <Box
+            sx={(theme) => ({
+              position: 'absolute',
+              top: '100%',
+              right: 0,
+              mt: 0.5,
+              width: 628,
+              zIndex: theme.zIndex.modal,
+            })}
+          >
+            {searchOverlaySlot}
+          </Box>
+        )}
       </Box>
     </Box>
   );

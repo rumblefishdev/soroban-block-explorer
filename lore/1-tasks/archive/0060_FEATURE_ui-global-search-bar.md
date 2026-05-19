@@ -2,9 +2,9 @@
 id: '0060'
 title: 'UI lib: global search bar component'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0086']
 tags: [priority-high, effort-medium, layer-frontend-shared]
 milestone: 2
 links: []
@@ -13,6 +13,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-15
+    status: active
+    who: FilipDz
+    note: 'Promoted on feat/0060_0086_search — bundled with 0086 since both consume the same /v1/search endpoint and same redirect-on-redirect logic.'
+  - date: 2026-05-19
+    status: completed
+    who: FilipDz
+    note: 'Implemented as web/src/search/ connector mounted via new TopNav `searchOverlaySlot` prop. Tabbed dropdown per Figma node 2147:895 (file siumLgKOc9LLepEfbimyp3). API extended in the same PR — `SearchHit.successful` + `SearchHit.last_activity_at` added to `crates/api/src/search/dto.rs` and joined from `transactions` via `(hash, created_at)` for transaction hits; other entity types pass NULL until per-entity activity joins land.'
 ---
 
 # UI lib: global search bar component
@@ -85,15 +93,23 @@ Export `GlobalSearchBar` from `libs/ui` barrel.
 
 ## Acceptance Criteria
 
-- [ ] Search bar renders in header, visible on every page
-- [ ] Accepts tx hashes, contract IDs, account IDs, token codes/names, ledger sequences, pool IDs, NFT identifiers
-- [ ] Debounced type-ahead fires after approximately 300ms of inactivity
-- [ ] Form submit navigates immediately (does not wait for suggestions)
-- [ ] Exact match redirects to the appropriate detail page (`/transactions/:hash`, `/contracts/:id`, `/accounts/:id`, etc.)
-- [ ] Non-exact matches navigate to `/search?q=`
-- [ ] Keyboard accessible: arrow keys, Enter, Escape, Tab all function correctly
-- [ ] Suggestion dropdown closes on blur or Escape
-- [ ] Component exported from `libs/ui`
+- [x] Search bar renders in header — Karol's `SearchInput` mounted in `TopNav`; the suggestions overlay (this task) sits beneath it via the new `searchOverlaySlot` prop on TopNav.
+- [x] Accepts all identifier types — `/v1/search` handles classification; frontend doesn't pre-validate.
+- [x] 300ms debounce — `useDebounced(q, 300)` in `web/src/search/useDebounced.ts`, consumed by `useSearchResults`.
+- [x] Form submit navigates immediately — AppShell's existing `handleSearchSubmit` still fires; the connector intercepts via an `enterHandlerRef` only when a row is highlighted, otherwise falls through to `navigate(routes.search(q))`.
+- [x] Exact-match redirect — `data.type === 'redirect' ⇒ navigate(routeForHit(data), { replace: true })` in `GlobalSearchBar` + same logic in `SearchResultsPage` for direct `/search?q=` links.
+- [x] Non-exact → `/search?q=` — AppShell submit handler.
+- [x] Keyboard a11y — `ArrowDown` / `ArrowUp` cycle hits in the active tab, `Enter` selects highlighted hit (or falls through to submit), `Escape` dismisses the dropdown, `Tab` leaves naturally. MUI `<Tabs>` handles tab keyboard nav.
+- [x] Dropdown closes on blur or Escape — `ClickAwayListener` wraps the dropdown body; Escape handler in `GlobalSearchBar.handleKeyDown`.
+- [x] Component lives in `web/src/search/` — connector knows about React Router + API codegen, so it's web-app-side (not libs/ui). The reusable `SearchResultsView` could move to libs/ui later if a second consumer emerges; for now both call sites are in web/.
+
+### Tabbed dropdown additions (Figma node 2147:895, beyond original spec)
+
+- [x] MUI `<Tabs>` row across dropdown top with one tab per `EntityType`
+- [x] Per-tab count badge using `<Chip size="sm" color="accent/neutral">`
+- [x] Active tab highlighted via existing `MuiTabs` theme override
+- [x] Auto-switch to first tab with hits when results arrive (UX: don't land on empty Transactions when user searched for an asset)
+- [x] Yellow-bordered `Paper variant="outlined"` with `borderColor: stroke.action` matches Figma's yellow card frame
 
 ## Notes
 

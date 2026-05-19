@@ -131,10 +131,12 @@ pub async fn get_search(
     // 5. Redirect short-circuit when `q` is a fully-typed entity id
     //    that hits an existing row.
     match queries::fetch_redirect(&state.db, &classified).await {
-        Ok(Some((entity_type, entity_id))) => {
+        Ok(Some(row)) => {
             let mut resp = Json(SearchResponse::Redirect(SearchRedirect {
-                entity_type,
-                entity_id,
+                entity_type: row.entity_type,
+                entity_id: row.entity_id,
+                successful: row.successful,
+                last_activity_at: row.last_activity_at,
             }))
             .into_response();
             cache_control::attach(&mut resp, cache_control::NO_STORE);
