@@ -41,6 +41,44 @@ history:
       laptop 3 sync-validation), but Phase 1/2 execution on laptop 1 is correctness-safe
       without those prereqs (laptop 1's range is far from S3 frontier and
       no cross-machine joins yet).
+  - date: '2026-05-18'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 5 repair-pass scaffolding landed ahead of Hetzner readiness.
+      Three new `backfill-runner` subcommands implemented in the worktree,
+      each with `--dry-run` for sandbox validation on laptop 1's local CH:
+
+        - `repair-tier1` — rebuilds 12 RMT-corrupted columns across
+          `accounts`, `lp_positions`, `nfts`, `nfts_pending`,
+          `soroban_contracts` via staging-table + `EXCHANGE TABLES`.
+          Sources MIN aggregates from fact tables
+          (`transaction_participants`, `operations_appearances`,
+          `nft_ownership`) to survive RMT collapse.
+        - `asset-aggregates` — CH translation of PG
+          `recompute_asset_aggregates` (task 0194 continuation):
+          `assets.{holder_count, total_supply}` from
+          `account_balances_current FINAL`, scoped to `asset_type IN
+          (1, 2)`. Native + Soroban-native rows pass through unchanged.
+        - `nft-reclassify` — task 0118 Phase 3 + task 0217 quarantine
+          aware: promote `nfts_pending` → `nfts` for newly-classified
+          `Nft`, drop pending + legacy hot rows for `Fungible`/`Token`,
+          followed by `OPTIMIZE FINAL`.
+
+      Statement B rebuild (task 0198) was OUT-of-scope for this CH pass —
+      that task is a PG-side partial-index rewrite, not a CH operation;
+      the 0228 plan still gates Phase 5 completion on 0198 landing on PG
+      separately.
+
+      All four PG short-circuit tests green; clippy clean; workspace
+      `cargo check` green. CH-gated tests skipped (no local CH on this
+      machine — laptop 1 sandbox dry-run is the validation gate before
+      Hetzner production run).
+
+      Per-row CH enrichment (SEP-1 + NFT `token_uri` port) carved out
+      into new task `0231_FEATURE_clickhouse-sep1-nft-enrichment`
+      (backlog, blocked_by 0228) so this task stays scoped to the
+      cross-machine repair pass.
 ---
 
 # Parallel-backfill merge into Hetzner CH (3-way split) + post-merge validation
@@ -154,6 +192,10 @@ this is the executive index.
 ## Notes
 
 - Full approved plan: [`notes/S-approved-plan.md`](notes/S-approved-plan.md)
+- Pipeline overview (Phase 1–4 transport + Stage 1/2 column ownership):
+  [`notes/G-stage-1-2-pipeline.svg`](notes/G-stage-1-2-pipeline.svg) — shows
+  the full 12 Tier-1 columns split across Stage 1 (6 SQL-aggregate columns
+  done in this task) and Stage 2 (6 external-fetch columns in task 0231).
 - Originally drafted as a Claude Code plan at
   `~/.claude/plans/pull-aktualny-develop-aktualnie-sprightly-pixel.md`
   after an extended planning session covering the schema audit,
