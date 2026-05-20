@@ -2,7 +2,7 @@
 id: '0075'
 title: 'Frontend: Contract detail page'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0003']
 tags: [priority-high, effort-large, layer-frontend-pages]
@@ -27,6 +27,23 @@ history:
       inconsistencies + 10 later issues documented below. No tests
       (web has no test harness). Figma verified 1:1 vs frames
       238:7133 / 250:22577 / 250:24249.
+  - date: 2026-05-20
+    status: completed
+    who: karolkow
+    note: >
+      Closed. PR #201
+      (https://github.com/rumblefishdev/soroban-block-explorer/pull/201) —
+      16 files committed (10 web + 1 docs + 2 shared DS components +
+      .gitignore + task file). Copilot review addressed: `isRecord`
+      tightened to exclude arrays, defensive parser filters unnamed
+      entries, React keys switched to `${name}-${index}`. Also swapped
+      local `shortId` helper for `truncateMiddle` from `libs/ui`.
+      5 follow-ups documented (Contracts list + nav, events count,
+      diagnostic events, JSONB schema doc, SAC interface stub). CI
+      `web:typecheck` red due to pre-existing develop breakage in
+      AppShell.tsx + web/src/search/* (unrelated; fix lives on
+      feat/0068, unmerged). No tests added — project has no web test
+      harness.
 ---
 
 # Frontend: Contract detail page
@@ -226,7 +243,8 @@ Not spawned as backlog tasks yet (awaiting owner confirmation):
 1. **Contracts list page + nav link** — `/contracts` list and a "Contracts" entry in `NAV_LINKS`. Without them the contract detail page is unreachable by browsing (L7). Figma navbar already shows "Contracts".
 2. **Backend: events count** — add a count to `ContractStats` (or the events endpoint) so the Events tab can show an honest count pill (P4).
 3. **Backend question: diagnostic events** — decide whether `/contracts/:id/events` should expose genuine `diagnostic`-typed events (L1). Owner asked not to spawn a task for this.
-4. **Document the `wasm_interface_metadata` JSONB shape** — close the SQL-doc-12 "SCHEMA-DOC GAP" (P3) so the frontend type is not reverse-engineered from indexer code.
+4. **Document the `wasm_interface_metadata` JSONB shape** — close the SQL-doc-12 "SCHEMA-DOC GAP" (P3) so the frontend type is not reverse-engineered from indexer code. When this lands (preferred path: add a serialized Rust struct + utoipa schema so the OpenAPI types the field properly and codegen produces the TS automatically), `web/src/pages/contracts/interfaceMetadata.ts` becomes redundant — the hand-written types delete and the defensive parser shrinks to a thin runtime guard (or disappears if generated types are tight).
+5. **Synthesized SAC interface stub** — for `is_sac = true`, the API currently returns `interface_metadata = null` and the frontend renders an empty state. SACs always expose the standard token interface (SEP-41: `transfer`, `balance`, `mint`, `allowance`, `approve`, `decimals`, `name`, `symbol`). SQL doc 12 explicitly leaves room for this: *"the API translates to 'no interface declared' or to a synthesized SAC interface stub"*. Backend could synthesize the SEP-41 stub when `is_sac` so users see the standard surface; frontend would render it like any other interface (no UI change required).
 
 ## Notes
 
