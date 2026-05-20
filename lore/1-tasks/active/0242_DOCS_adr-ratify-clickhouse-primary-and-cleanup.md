@@ -220,8 +220,8 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
    a reader skimming §7.4 Deliverable 1 and then jumping back to §6 would get
    inconsistent signals about the prod datastore.
 
-5. **0046 ratifies 0045 even though 0045 was about transport, not API
-   datastore** — strictly 0046 is about API reads, but 0045's transport mechanism
+5. **0047 ratifies 0045 even though 0045 was about transport, not API
+   datastore** — strictly 0047 is about API reads, but 0045's transport mechanism
    only makes operational sense if CH is the prod store on the receiving end.
    Flipped both to `accepted` together because the architectural commitment is
    one decision, not two. Explicitly noted in 0045's history entry.
@@ -243,7 +243,7 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 
 - Decision date: 2026-05-20 (M1-M3 sequencing planning session).
 - ADR 0047 jest meta-ADR — formalizuje już istniejący kierunek, nie wymyśla nowych
-  konceptów. ADR 0044/0045 dostarczają technical details; 0046 łączy kropki dla
+  konceptów. ADR 0044/0045 dostarczają technical details; 0047 łączy kropki dla
   API reads.
 - Backup runbook (CH single-node failure recovery z Borg na BX21) — TBD jako
   follow-up task po 0245 lub w M3 hardening phase.
