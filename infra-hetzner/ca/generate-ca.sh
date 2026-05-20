@@ -54,6 +54,12 @@ readonly CA_DAYS=3650  # 10 years — long-lived root, rotation is a planned ope
 if [[ ! -d /dev/shm ]]; then
     echo "ERROR: /dev/shm not available; refusing to write the CA key to a persistent disk." >&2
     echo "       This script requires a tmpfs to keep the private key off disk." >&2
+    echo "       /dev/shm is Linux-specific. On macOS / BSD this CA tooling is" >&2
+    echo "       NOT supported — run generate-ca.sh from a Linux laptop or VM," >&2
+    echo "       then transfer the public ca.crt back via the repo and the" >&2
+    echo "       private key via the team password manager. macOS support is" >&2
+    echo "       out of scope (would need a secure ephemeral mount like a" >&2
+    echo "       per-run encrypted disk image rather than tmpfs)." >&2
     exit 1
 fi
 

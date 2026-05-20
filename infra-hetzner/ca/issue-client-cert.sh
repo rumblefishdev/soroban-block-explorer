@@ -128,19 +128,52 @@ fi
 
 # ---------------------------------------------------------------------
 # Cleanup on failure — never leave half-written artefacts behind.
+#
+# Two-phase write: openssl writes every output into WORK_DIR (tmpfs).
+# Only after every step succeeds do we copy the bundle into OUT_DIR
+# atomically. If any openssl step fails (or the script is killed
+# mid-run), OUT_DIR is never touched, so an existing --force-overwrite
+# target retains its previous, consistent contents.
+#
+# BACKUP_DIR is used when --force overwrites an existing OUT_DIR: the
+# previous contents are renamed out of the way first, the new bundle
+# is moved in, and only then the backup is dropped. A failure between
+# rename-out and final swap leaves the backup on disk for the operator
+# to inspect / restore.
 # ---------------------------------------------------------------------
 
 WORK_DIR=""
+BACKUP_DIR=""
+ATOMIC_SWAP_DONE=0
 cleanup() {
     local rc=$?
+    # Drop the tmpfs staging directory unconditionally — the
+    # private key in it is sensitive and the bundle has either
+    # been promoted to OUT_DIR or the run failed.
     if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then
         rm -rf "${WORK_DIR}"
     fi
-    if [[ $rc -ne 0 && -d "${OUT_DIR}" && ${FORCE} -eq 0 ]]; then
-        # If we created OUT_DIR this run and then failed, wipe it
-        # so a retry sees a clean state. Skip on --force where the
-        # directory existed before.
-        rm -rf "${OUT_DIR}"
+    if [[ $rc -ne 0 ]]; then
+        # Failure path. Three sub-cases:
+        if [[ ${ATOMIC_SWAP_DONE} -eq 1 ]]; then
+            # Already swapped — shouldn't happen because the swap is
+            # the last step, but defensive: leave OUT_DIR alone.
+            :
+        elif [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
+            # --force run that renamed the previous OUT_DIR out
+            # before failing. Restore it so the operator's existing
+            # cert is not lost.
+            rm -rf "${OUT_DIR}"
+            mv "${BACKUP_DIR}" "${OUT_DIR}"
+            echo "Failure detected — restored previous ${OUT_DIR} from backup." >&2
+        elif [[ -d "${OUT_DIR}" && ${FORCE} -eq 0 ]]; then
+            # Fresh issuance (no prior OUT_DIR) that we partially
+            # created — wipe to leave a clean state for retry.
+            rm -rf "${OUT_DIR}"
+        fi
+    elif [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
+        # Success path: drop the backup of the previous --force target.
+        rm -rf "${BACKUP_DIR}"
     fi
 }
 trap cleanup EXIT
@@ -150,23 +183,25 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------
 
 WORK_DIR="$(mktemp -d -p /dev/shm "issue-${CN}.XXXXXX")"
-install -d -m 0700 "${OUT_DIR}"
 
-readonly CLIENT_KEY="${OUT_DIR}/${CN}.key"
-readonly CLIENT_CRT="${OUT_DIR}/${CN}.crt"
+# Stage every output inside WORK_DIR (tmpfs). OUT_DIR is touched
+# only at the end, after every openssl step has succeeded.
+readonly STAGED_KEY="${WORK_DIR}/${CN}.key"
+readonly STAGED_CRT="${WORK_DIR}/${CN}.crt"
+readonly STAGED_CA="${WORK_DIR}/ca.crt"
 readonly CLIENT_CSR="${WORK_DIR}/${CN}.csr"
 
 echo "==> Generating client private key (ECDSA P-256)"
 openssl genpkey \
     -algorithm EC \
     -pkeyopt ec_paramgen_curve:P-256 \
-    -out "${CLIENT_KEY}"
-chmod 0600 "${CLIENT_KEY}"
+    -out "${STAGED_KEY}"
+chmod 0600 "${STAGED_KEY}"
 
 echo "==> Generating certificate signing request"
 openssl req \
     -new \
-    -key "${CLIENT_KEY}" \
+    -key "${STAGED_KEY}" \
     -out "${CLIENT_CSR}" \
     -subj "/CN=${CN}"
 
@@ -193,7 +228,7 @@ openssl x509 \
     -CA "${CA_CRT}" \
     -CAkey "${CA_KEY_PATH}" \
     -set_serial "${SERIAL}" \
-    -out "${CLIENT_CRT}" \
+    -out "${STAGED_CRT}" \
     -days "${CERT_DAYS}" \
     -extfile <(cat <<EOF
 basicConstraints = critical,CA:FALSE
@@ -203,10 +238,28 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 EOF
 )
-chmod 0644 "${CLIENT_CRT}"
+chmod 0644 "${STAGED_CRT}"
 
 # Drop the CA cert next to the client material for convenience.
-cp "${CA_CRT}" "${OUT_DIR}/ca.crt"
+cp "${CA_CRT}" "${STAGED_CA}"
+
+# Atomic-ish swap into OUT_DIR. Under --force, rename the previous
+# bundle out first so a failed swap can be undone by the cleanup trap.
+echo "==> Promoting staged bundle into ${OUT_DIR}"
+if [[ -d "${OUT_DIR}" && ${FORCE} -eq 1 ]]; then
+    BACKUP_DIR="${OUT_DIR}.backup-$$-$(date +%s)"
+    mv "${OUT_DIR}" "${BACKUP_DIR}"
+fi
+install -d -m 0700 "${OUT_DIR}"
+cp -p "${STAGED_KEY}" "${OUT_DIR}/${CN}.key"
+cp -p "${STAGED_CRT}" "${OUT_DIR}/${CN}.crt"
+cp -p "${STAGED_CA}"  "${OUT_DIR}/ca.crt"
+ATOMIC_SWAP_DONE=1
+
+# Re-export the final paths so the operator hand-off block below
+# (kept verbatim from the staged-target era) keeps working.
+readonly CLIENT_KEY="${OUT_DIR}/${CN}.key"
+readonly CLIENT_CRT="${OUT_DIR}/${CN}.crt"
 
 # ---------------------------------------------------------------------
 # Operator hand-off

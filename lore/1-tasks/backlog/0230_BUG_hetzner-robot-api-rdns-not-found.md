@@ -60,6 +60,27 @@ inspection in Robot UI confirms:
 The webservice user (`#ws+...`) authenticates successfully (the
 preceding preflight assertions pass), so credentials are OK.
 
+## Candidate root cause (added after Copilot review of PR #200)
+
+`hetzner_server_ipv4` in `group_vars/all.yml` was derived as
+`'{{ ansible_host }}'`. The Hetzner Robot play runs under
+`hosts: localhost`, where `ansible_host` resolves to
+`localhost` / `127.0.0.1`, not the box's public IPv4. The
+`community.hrobot.reverse_dns` and `community.hrobot.firewall`
+modules were therefore being called against `127.0.0.1` — which
+the Robot API correctly reports as "IP not found", since that
+address is obviously not associated with our account.
+
+PR #200 changes the derivation to
+`{{ hostvars[groups['ch_prod'][0]].ansible_host }}` so the IP is
+always resolved from the inventory entry of the actual box
+regardless of which play is evaluating the variable.
+
+**Status**: candidate fix shipped, not yet validated end-to-end —
+re-running the playbook **without** `--skip-tags hetzner` is the
+acceptance test. If rDNS/firewall calls succeed, this task can
+be closed as `completed` with `0227` as the resolving PR.
+
 ## Hypotheses to investigate
 
 1. **Webservice user permissions** — Robot UI may have per-feature

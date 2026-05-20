@@ -94,7 +94,17 @@ hetzner_server_number: "{{ lookup('env', 'HETZNER_SERVER_NUMBER') | default('', 
 
 # Derived values — not directly env-driven.
 borg_repo_url: 'ssh://{{ storagebox_ssh_user }}@{{ storagebox_ssh_host }}:{{ storagebox_ssh_port }}/{{ borg_repo_path }}'
-hetzner_server_ipv4: '{{ ansible_host }}'
+
+# The Hetzner Robot play runs under `hosts: localhost` (the Robot
+# REST API is a controller-side side-channel, not something the
+# box itself reaches). In that context a bare `{{ ansible_host }}`
+# resolves to `localhost` / `127.0.0.1`, which would point the
+# reverse_dns and firewall modules at the wrong IP and surface
+# as a confusing "IP not found" from the API. Resolving via
+# `hostvars[groups['ch_prod'][0]].ansible_host` always returns
+# the inventory-declared IP of the box regardless of which play
+# is evaluating the variable.
+hetzner_server_ipv4: "{{ hostvars[groups['ch_prod'][0]].ansible_host }}"
 hetzner_reverse_dns: '{{ ch_prod_domain }}'
 
 # ---------------------------------------------------------------------

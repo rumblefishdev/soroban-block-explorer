@@ -81,9 +81,20 @@ rmdir /dev/shm/soroban-ca
 | AWS service   | `<service>-<env>`    | `lambda-api-prod` |
 | CI runner     | `ci-<purpose>`       | `ci-smoke`        |
 
-The CN is what surfaces in Caddy access logs (`X-Client-CN`
-forwarded header) and is the unit of revocation. Pick descriptive
-names; future-you will read them in incident postmortems.
+The CN is the unit of revocation. It surfaces in Caddy access
+logs via two forwarded headers (defined in `infra-hetzner/Caddyfile`):
+
+- `X-Client-Subject` — the full RFC-2253 Distinguished Name string
+  (e.g. `CN=alice-laptop`). Downstream audit consumers substr- or
+  regex-parse the CN out of this DN.
+- `X-Client-Cert-Fingerprint` — SHA-256 fingerprint of the
+  presenting cert. Cross-checks against the issuance ledger if
+  there is ambiguity.
+
+Caddy 2.x does NOT register a bare `{http.request.tls.client.subject_cn}`
+placeholder, which is why we forward the full DN instead of a
+separate `X-Client-CN` header. Pick descriptive CNs; future-you
+will read them in incident postmortems.
 
 ## Delivering certificates to consumers
 

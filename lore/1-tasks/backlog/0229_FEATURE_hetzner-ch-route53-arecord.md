@@ -100,7 +100,12 @@ because:
 
 - After updating env values and re-sourcing, **wipe the
   `caddy-data` Docker volume on the box once** so Caddy creates
-  a fresh LE account with the new email:
+  a fresh LE account with the new email. The Compose project
+  name on the box is `app` (derived from `project_src=/srv/app`
+  basename — see `app_repo_dest` in `group_vars/all.yml`), so
+  the fully-qualified volume name is `app_caddy-data`. **Do
+  not** copy the repo name here — the box does not see the
+  GitHub project name, only `/srv/app`.
 
   ```bash
   ssh deploy@ch-prod-01 \
@@ -108,7 +113,7 @@ because:
                           -f /srv/app/docker-compose.prod.yml \
                           stop caddy
   ssh deploy@ch-prod-01 \
-      sudo docker volume rm sorban-block-explorer_caddy-data
+      sudo docker volume rm app_caddy-data
   ```
 
   (Without the wipe, Caddy keeps using the original LE account
@@ -136,23 +141,28 @@ because:
       re-created with the new email
 - [ ] External mTLS smoke test from operator laptop succeeds **without**
       `--insecure`:
-      `bash
-curl --cert ~/.certs/<dev>-laptop.crt \
-     --key  ~/.certs/<dev>-laptop.key \
-     --cacert infra-hetzner/ca/ca.crt \
-     "https://ch-prod.sorobanscan.rumblefish.dev/?query=SELECT+version()&user=default&password=$CLICKHOUSE_PASSWORD"
-`
+
+      ```bash
+      curl --cert ~/.certs/<dev>-laptop.crt \
+           --key  ~/.certs/<dev>-laptop.key \
+           --cacert infra-hetzner/ca/ca.crt \
+           "https://ch-prod.sorobanscan.rumblefish.dev/?query=SELECT+version()&user=default&password=$CLICKHOUSE_PASSWORD"
+      ```
+
 - [ ] **Negative mTLS smoke test** — connection without a client
       certificate is rejected at the TLS-handshake stage (carry-over
       from 0227's Phase 6 acceptance, deferred here because LE cert
       issuance unblocks both tests in the same run):
-      `bash
-curl -sv --cacert infra-hetzner/ca/ca.crt \
-     "https://ch-prod.sorobanscan.rumblefish.dev/" 2>&1 \
-  | grep -iE "alert|certificate required|tls.*error"
-`
+
+      ```bash
+      curl -sv --cacert infra-hetzner/ca/ca.crt \
+           "https://ch-prod.sorobanscan.rumblefish.dev/" 2>&1 \
+        | grep -iE "alert|certificate required|tls.*error"
+      ```
+
       Expect a TLS alert (`handshake failure` / `certificate
-required`) and a non-zero exit.
+      required`) and a non-zero exit.
+
 - [ ] **API types regenerated** — N/A — this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`
 - [ ] **Docs updated** — `infra-hetzner/README.md` operating-model
