@@ -5,7 +5,7 @@
 >
 > - rsync + ATTACH PART transport per [ADR 0044](../2-adrs/0044_clickhouse-pilot-parallel-store.md),
 >   [ADR 0045](../2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md),
->   [ADR 0046](../2-adrs/0046_clickhouse-primary-api-datastore.md), and
+>   [ADR 0047](../2-adrs/0047_clickhouse-primary-api-datastore.md), and
 >   [task 0228](../1-tasks/active/0228_FEATURE_parallel-backfill-merge-and-validation/README.md).
 >   Live-tail cutover after `L_last_closed` is covered by
 >   [task 0241](../1-tasks/backlog/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).

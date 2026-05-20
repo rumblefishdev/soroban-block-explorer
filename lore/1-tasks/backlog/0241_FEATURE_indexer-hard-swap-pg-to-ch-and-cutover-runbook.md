@@ -41,7 +41,7 @@ history:
 
 ## Summary
 
-Po pivocie na Hetzner ClickHouse jako prod data store (ADR 0044/0045 + ADR 0046),
+Po pivocie na Hetzner ClickHouse jako prod data store (ADR 0044/0045 + ADR 0047),
 indexer Lambda musi pisać do CH zamiast PG. Decision team (2026-05-20): hard swap,
 brak dual-write. Task obejmuje (A) code change w `crates/indexer/`, (B) operator
 runbook dla cutover, (C) empirical validation na żywym pipeline.
