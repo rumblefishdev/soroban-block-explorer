@@ -1,5 +1,5 @@
 ---
-id: '0230'
+id: '0235'
 title: 'BUG: community.hrobot Robot API returns "IP not found" for auction server'
 type: BUG
 status: backlog
@@ -134,7 +134,7 @@ be closed as `completed` with `0227` as the resolving PR.
 - [ ] `ansible-playbook -i inventory.ini site.yml` (without
       `--skip-tags hetzner`) completes successfully
 - [ ] rDNS entry `ch-prod-01` IP → `ch-prod.sorobanscan.rumblefish.dev`
-      (once task 0229 lands real DNS; until then any test value)
+      (once task 0234 lands real DNS; until then any test value)
 - [ ] Switch-level firewall rules visible in Robot UI matching
       `hetzner_firewall_rules` in `group_vars/all.yml`
 - [ ] **API types regenerated** — N/A — this task does not touch

@@ -1,10 +1,10 @@
 ---
-id: '0231'
+id: '0236'
 title: 'FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0227', '0230']
+related_tasks: ['0227', '0235']
 tags:
   [
     priority-medium,
@@ -39,7 +39,7 @@ manual step preserved: creating the BX21 subaccount + uploading
 the cron's `ed25519` pubkey via Hetzner Cloud Console. The decision
 to defer was a scope call — 0227 spec already mandated "everything
 declarative" but adding subaccount automation risked expanding the
-task while we still had unverified Robot API behaviour (see 0230).
+task while we still had unverified Robot API behaviour (see 0235).
 
 Two API surfaces are candidates:
 
@@ -48,7 +48,7 @@ Two API surfaces are candidates:
    `PUT /storagebox/{id}/subaccount/{username}/key`):
 
    - Pro: same webservice user we already use for rDNS / firewall.
-   - Con: behaviour for our account is unverified; 0230 documents a
+   - Con: behaviour for our account is unverified; 0235 documents a
      possible per-feature permission gap on the webservice user
      (`reverse_dns` returns "IP not found").
    - Ansible module: `community.hrobot.storagebox_subaccount` (1.9+).
@@ -75,7 +75,7 @@ locked down.
   for Robot API endpoints) plus preflight assertion.
 - New role/section `roles/hetzner_storagebox/` with its own tag
   so it can be run independently of the existing `hetzner` tag
-  (which is currently broken on the auction server per 0230).
+  (which is currently broken on the auction server per 0235).
 - Tasks:
   - Reconcile subaccount (`borg-backup-ch-prod-01`, homedir
     `/borg-ch-prod-01-repo`, SSH on, SMB/WebDAV/Read-Only off).
@@ -89,7 +89,7 @@ locked down.
     using the same `HCLOUD_ROBOT_USER` / `HCLOUD_ROBOT_PASSWORD`
     that the existing hetzner role uses. Fallback to Hetzner
     Cloud API (`POST /v1/storage_boxes/{id}/sub_accounts` with
-    `ssh_keys` array) if Robot returns 403/not-found like 0230.
+    `ssh_keys` array) if Robot returns 403/not-found like 0235.
 - Update `STORAGEBOX_SSH_USER` / `STORAGEBOX_SSH_HOST` flow.
   Subaccount in Cloud Console gets its own hostname
   (`<sub>.your-storagebox.de`) distinct from master; the env
@@ -137,7 +137,7 @@ locked down.
   access through subaccounts — separation-of-concerns).
 - Migrating away from `community.hrobot` to the Cloud API
   across the whole hetzner role (different scope; only matters
-  if 0230 root-causes to webservice permissions that newer Cloud
+  if 0235 root-causes to webservice permissions that newer Cloud
   API tokens sidestep).
 
 ## Notes
