@@ -4,7 +4,7 @@ title: 'FEATURE: Build infra-hetzner/ Ansible playbook, mTLS CA, and Docker comp
 type: FEATURE
 status: completed
 related_adr: ['0044', '0045']
-related_tasks: ['0216', '0229', '0230', '0231']
+related_tasks: ['0216', '0234', '0235', '0236']
 tags:
   [
     priority-high,
@@ -28,11 +28,11 @@ history:
       First deploy validated against the live ch-prod-01 box
       (<box-ipv4>). Stack healthy: Caddy + ClickHouse +
       sidecar (sidecar exit 0 after applying init.sql; 20 tables
-      in `default`). Three follow-ups spawned: 0229 (Route 53
-      A-record + mTLS smoke), 0230 (Robot API "IP not found"
-      bug), 0231 (declarative Storage Box subaccount IaC).
-      Deferred AC: mTLS smoke → 0229 (no LE cert without real
-      DNS), Borg backup roundtrip → 0231 (Cloud Console UI does
+      in `default`). Three follow-ups spawned: 0234 (Route 53
+      A-record + mTLS smoke), 0235 (Robot API "IP not found"
+      bug), 0236 (declarative Storage Box subaccount IaC).
+      Deferred AC: mTLS smoke → 0234 (no LE cert without real
+      DNS), Borg backup roundtrip → 0236 (Cloud Console UI does
       not expose subaccount SSH keys). 7 AC done, 3 deferred,
       2 N/A. Artefacts: 7 Ansible roles, mTLS CA tooling, Caddy
       mTLS gate, docker-compose.prod.yml overlay, CH server
@@ -177,26 +177,26 @@ Mutual TLS is the primary cross-cloud authentication mechanism and
 --force-recreate --wait` brings the stack to healthy in
       ~10 s; sidecar exits 0 after applying init.sql.
 - [ ] Mutual TLS handshake works end-to-end with a CA-signed client
-      certificate — **(deferred to 0229)** — `CH_PROD_DOMAIN` is
+      certificate — **(deferred to 0234)** — `CH_PROD_DOMAIN` is
       still `ch-prod.placeholder` because the Route 53 A-record is
-      not yet wired (intentional: 0229 separates the AWS CDK work
+      not yet wired (intentional: 0234 separates the AWS CDK work
       from this task's Hetzner-side artefacts). Caddy is in the
-      documented LE-retry loop. As soon as 0229 publishes the
+      documented LE-retry loop. As soon as 0234 publishes the
       real A-record and the operator re-sources the env with the
       production `CH_PROD_DOMAIN`, both this AC and the negative
-      test below are validated by 0229's smoke step.
+      test below are validated by 0234's smoke step.
 - [ ] Synthetic negative test: connection without a client certificate
-      is rejected at the TLS-handshake stage — **(deferred to 0229)**
-      same reason: needs the LE cert from a real domain. 0229's
+      is rejected at the TLS-handshake stage — **(deferred to 0234)**
+      same reason: needs the LE cert from a real domain. 0234's
       Acceptance Criteria carries the explicit `curl -sv` negative
       check.
 - [ ] Borg backup script runs successfully against the BX21 Storage
-      Box destination — **(deferred to 0231)** — Storage Box
+      Box destination — **(deferred to 0236)** — Storage Box
       subaccount `<storagebox-sub>` was created manually in Hetzner
       Cloud Console (chroot `/borg-ch-prod-01-repo`); wiring the
       Borg pubkey requires SFTP-with-password or Cloud API
       because the Console UI does not expose subaccount SSH keys.
-      0231 brings the subaccount + pubkey + first roundtrip under
+      0236 brings the subaccount + pubkey + first roundtrip under
       IaC. Backfill can proceed without backup wired (RAID 1 is
       the first line of defence).
 - [x] Schema applied via the sidecar on every boot, idempotent — 20
@@ -252,7 +252,7 @@ committed):
 - Hetzner Robot project — server + Storage Box ordered.
 - Hetzner Cloud Console — Storage Box BX21 subaccount
   `<storagebox-sub>` with chroot `/borg-ch-prod-01-repo`
-  (SSH key wiring deferred to 0231).
+  (SSH key wiring deferred to 0236).
 - `~/.config/soroban-prod.env` on the operator's laptop
   (gitignored, mirrored in the team password manager under
   `soroban-prod / ansible-env`).
@@ -337,21 +337,21 @@ app`.
    community.hrobot `reverse_dns` / firewall calls return
    "IP not found" for our auction-purchased server. Worked
    around by skipping the `hetzner` tag and proceeding with the
-   OS-side roles. Root cause spawned as [[task-0230]].
+   OS-side roles. Root cause spawned as [[task-0235]].
 
 10. **Storage Box subaccount created manually in Cloud Console
     instead of via API** — community.hrobot 1.9.x predates the
     `storagebox_subaccount` module (added in 2.x); a 2.x upgrade
     plus per-tag splitting of the existing `hetzner` role was
     scope-budget incompatible with operator's preference to
-    unblock backfill. Manual creation + deferral to [[task-0231]]
+    unblock backfill. Manual creation + deferral to [[task-0236]]
     for full IaC.
 
 11. **`CH_PROD_DOMAIN=ch-prod.placeholder` to allow first deploy
     without DNS** — Caddy enters an LE retry loop without
     affecting the rest of the stack; the runbook documents this
     as the canonical "deploy before DNS" mode. mTLS smoke
-    deferred to [[task-0229]] which wires the real Route 53
+    deferred to [[task-0234]] which wires the real Route 53
     A-record.
 
 12. **Caddy access log `format filter` redacts URL-embedded
@@ -403,13 +403,13 @@ request>headers>Cookie delete } }`.
   `--skip-tags hetzner` on every deploy; rDNS is set to the
   Hetzner default which is functional for outbound mail and
   meets the security baseline. Root-cause investigation spawned
-  as [[task-0230]].
+  as [[task-0235]].
 
 - **Cloud Console UI does not expose subaccount SSH keys** —
   Storage Box subaccount Create / Edit / Access Details views
   only handle password auth. SSH key wiring goes through either
   SFTP-with-password (operator manual) or Cloud API (declarative,
-  per [[task-0231]]).
+  per [[task-0236]]).
 
 - **Pre-commit security audit caught URL credential leak path** —
   three Explore subagents ran in parallel before the close commit:
@@ -427,10 +427,10 @@ request>headers>Cookie delete } }`.
 
 Spawned during first-deploy operational work; see backlog entries:
 
-- [[task-0229]] — Route 53 A-record `ch-prod.sorobanscan.rumblefish.dev`
+- [[task-0234]] — Route 53 A-record `ch-prod.sorobanscan.rumblefish.dev`
   in production CDK, plus carry-over mTLS smoke (positive +
   negative).
-- [[task-0230]] — community.hrobot Robot API "IP not found"
+- [[task-0235]] — community.hrobot Robot API "IP not found"
   root cause investigation for the auction server.
-- [[task-0231]] — Declarative Storage Box subaccount + SSH key
+- [[task-0236]] — Declarative Storage Box subaccount + SSH key
   - first backup roundtrip via Robot / Cloud API.

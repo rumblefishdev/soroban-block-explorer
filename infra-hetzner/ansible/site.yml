@@ -54,7 +54,7 @@
             CLICKHOUSE_PASSWORD     (random 32-byte base64)
             BORG_PASSPHRASE         (random 40-byte base64)
             CH_PROD_DOMAIN          (Caddy site address — e.g. ch-prod.placeholder
-                                     until task 0229 lands real DNS)
+                                     until task 0234 lands real DNS)
             ACME_EMAIL              (Let's Encrypt account email)
             OPERATOR_SSH_PUBKEYS    (one OpenSSH public key per line —
                                      who can SSH into the deploy user)
