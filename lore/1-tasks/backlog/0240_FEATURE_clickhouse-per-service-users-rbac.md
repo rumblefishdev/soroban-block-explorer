@@ -214,7 +214,7 @@ Lambda runtime expectations.
       — expect `Cannot execute query in readonly mode` (or
       `Not enough privileges`).
 - [ ] Negative test: connect as `galexie`, attempt `ALTER TABLE
-    ... ADD COLUMN` — expect rejection.
+  ... ADD COLUMN` — expect rejection.
 - [ ] Negative test: connect as `partition_admin`, attempt
       `INSERT` — expect rejection.
 - [ ] Quota smoke: connect as `api_reader`, fire 10001 trivial
