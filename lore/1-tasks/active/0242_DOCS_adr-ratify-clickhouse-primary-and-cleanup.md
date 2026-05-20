@@ -27,14 +27,15 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: >
-      Spawned z M1-M3 sequencing planu (2026-05-20). Formalna ratyfikacja decyzji
-      że ClickHouse na Hetznerze = primary API datastore (zamiast RDS Postgres).
-      ADR 0044 i 0045 są obecnie status `proposed`; team zatwierdził kierunek.
-      Plus cleanup obsolete docs/tasks po PG-cutover-path become martwy.
+      Spawned from M1-M3 sequencing plan (2026-05-20). Formal ratification of
+      the decision that ClickHouse on Hetzner is the primary API datastore
+      (replacing RDS Postgres). ADR 0044 and 0045 are currently `proposed`;
+      the team has committed to the direction. Plus cleanup of obsolete docs
+      and tasks now that the PG cutover path is dead.
   - date: '2026-05-20'
     status: active
     who: stkrolikiewicz
-    note: 'Promoted to active. Steps 4 (banner) i 5 (0174 close) już shipped w commicie c82c9fa8. Pozostały kroki 1-3: ADR 0047 + status flip 0044/0045 + tech design sweep.'
+    note: 'Promoted to active. Steps 4 (banner) and 5 (0174 close) already shipped in commit c82c9fa8. Remaining steps 1-3: ADR 0047 + status flip 0044/0045 + tech design sweep.'
   - date: '2026-05-20'
     status: active
     who: stkrolikiewicz
@@ -55,30 +56,30 @@ history:
 
 ## Summary
 
-Formalna ratyfikacja decyzji "ClickHouse jako primary API datastore (post-RDS-drop)".
-Nowy ADR 0047, status flip dla 0044/0045 `proposed → accepted`, update tech design
-ACs ("RDS" → "ClickHouse"), banner SUPERSEDED na backfill-execution-plan, close
-task 0174 jako obsolete.
+Formal ratification of the decision "ClickHouse as primary API datastore
+(post-RDS-drop)". New ADR 0047, status flip for 0044/0045
+`proposed → accepted`, tech design AC update ("RDS" → "ClickHouse"),
+SUPERSEDED banner on backfill-execution-plan, close task 0174 as obsolete.
 
 ## Context
 
-ADR 0044 ("CH parallel store") + 0045 ("FREEZE+rsync+ATTACH transport") są obecnie
-`proposed`. Team decision (2026-05-20): ratyfikować. ADR 0044 opisuje CH jako
-"parallel pilot" — to nieadekwatne post-pivot, gdzie CH jest **primary** dla API
-reads.
+ADR 0044 ("CH parallel store") and 0045 ("FREEZE+rsync+ATTACH transport") are
+currently `proposed`. Team decision (2026-05-20): ratify. ADR 0044 describes
+CH as a "parallel pilot" — that framing is no longer accurate post-pivot,
+where CH is the **primary** datastore for API reads.
 
-Dodatkowo:
+Additionally:
 
-- `docs/architecture/technical-design-general-overview.md` D1 AC #2/#3 odnoszą się
-  do "RDS" — to teraz "ClickHouse".
-- `lore/3-wiki/backfill-execution-plan.md` opisuje pg_dump/pg_restore cutover —
-  to martwy szlak (superseded przez ADR 0045 FREEZE+rsync+ATTACH).
-- Task 0174 (split pre/post-restore migrations) — obsolete bo nie ma już
-  pg_restore w prod path.
+- `docs/architecture/technical-design-general-overview.md` D1 AC #2/#3 still
+  reference "RDS" — should now read "ClickHouse".
+- `lore/3-wiki/backfill-execution-plan.md` describes pg_dump/pg_restore
+  cutover — a dead path (superseded by ADR 0045 FREEZE+rsync+ATTACH).
+- Task 0174 (split pre/post-restore migrations) — obsolete because there is
+  no pg_restore in the prod path anymore.
 
 ## Implementation Plan
 
-### Step 1: Napisać ADR 0047
+### Step 1: Author ADR 0047
 
 `lore/2-adrs/0047_clickhouse-primary-api-datastore.md`:
 
@@ -87,23 +88,24 @@ Dodatkowo:
 - **Deciders**: [stkrolikiewicz, fmazur]
 - **Related ADRs**: ['0044', '0045']
 - **Related tasks**: ['0228', '0241', '0243']
-- **Context**: pivot od PG-primary do CH-primary. Cost (NAT GW + RDS dominują),
-  OLAP query patterns suit CH, Hetzner egress sponsored przez AWS Open Data
-  Program dla `aws-public-blockchain` S3.
-- **Decision**: CH na Hetznerze = single source of truth dla API reads. RDS
-  decommissioned w Phase 6 0239 (M3).
-- **Trade-offs**: no read replica (single-node), failure mode → Borg backup na
-  BX21 Storage Box (per 0236) + restore runbook (do napisania po 0245 lub w
-  follow-up). API egress AWS → Hetzner over public internet (mTLS-auth).
-- **Consequences**: API rewrite required (= task 0243). Indexer hard swap (= 0241).
-  RDS retirement (= 0239 Phase 6, M3).
+- **Context**: pivot from PG-primary to CH-primary. Cost (NAT GW + RDS
+  dominate), OLAP query patterns suit CH, Hetzner egress sponsored via the
+  AWS Open Data Program for `aws-public-blockchain` S3.
+- **Decision**: CH on Hetzner = single source of truth for API reads. RDS
+  decommissioned in 0239 Phase 6 (M3).
+- **Trade-offs**: no read replica (single-node), failure mode → Borg backup
+  to BX21 Storage Box (per task 0236) + restore runbook (to be authored after
+  0245 or as a follow-up). API egress AWS → Hetzner over public internet
+  (mTLS-authenticated).
+- **Consequences**: API rewrite required (= task 0243). Indexer hard swap
+  (= task 0241). RDS retirement (= 0239 Phase 6, M3).
 
 ### Step 2: Status flip ADR 0044 + 0045
 
-W `lore/2-adrs/0044_*.md` i `0045_*.md`:
+In `lore/2-adrs/0044_*.md` and `0045_*.md`:
 
 - Frontmatter `status: proposed` → `status: accepted`
-- Dodać history entry:
+- Add history entry:
   ```yaml
   - date: 2026-05-20
     status: accepted
@@ -115,14 +117,15 @@ W `lore/2-adrs/0044_*.md` i `0045_*.md`:
 
 `docs/architecture/technical-design-general-overview.md`:
 
-- Linia ~1353-1354 D1 AC #2: "RDS `ledgers` table contains all ledgers..."
+- Line ~1353-1354 D1 AC #2: "RDS `ledgers` table contains all ledgers..."
   → "**ClickHouse** `ledgers` table contains all ledgers..."
-- Linia ~1355-1356 D1 AC #3: "RDS `soroban_events_appearances` table..."
+- Line ~1355-1356 D1 AC #3: "RDS `soroban_events_appearances` table..."
   → "**ClickHouse** `soroban_events_appearances` table..."
-- Sprawdzić też reszta tech designu: §6.2 (storage section), §7.4 (deliverables),
-  diagrammy. Wszelkie wzmianki RDS w prod context → ClickHouse.
+- Also sweep the rest of the document: §6.2 (storage section), §7.4
+  (deliverables), diagrams. All RDS references in the prod context become
+  ClickHouse.
 
-### Step 4: Banner SUPERSEDED na backfill-execution-plan
+### Step 4: SUPERSEDED banner on backfill-execution-plan
 
 `lore/3-wiki/backfill-execution-plan.md` — top of file:
 
@@ -132,8 +135,8 @@ W `lore/2-adrs/0044_*.md` i `0045_*.md`:
 > below is no longer the prod path. Retained for historical reference only.
 ```
 
-Alternative: `mv lore/3-wiki/backfill-execution-plan.md .trash/`. Sugerowane
-zostawić z banner (historical context może być przydatny).
+Alternative: `mv lore/3-wiki/backfill-execution-plan.md .trash/`. Preferred
+to keep it in place with the banner — historical context may be useful.
 
 ### Step 5: Close 0174
 
@@ -142,7 +145,7 @@ zostawić z banner (historical context może być przydatny).
 - Move to `lore/1-tasks/archive/`
 - Frontmatter:
   - `status: canceled`
-  - Dodać history entry:
+  - Add history entry:
     ```yaml
     - date: 2026-05-20
       status: canceled
@@ -153,19 +156,21 @@ zostawić z banner (historical context może być przydatny).
 
 ## Acceptance Criteria
 
-- [x] ADR 0047 napisany w `lore/2-adrs/0047_clickhouse-primary-api-datastore.md`,
+- [x] ADR 0047 authored in `lore/2-adrs/0047_clickhouse-primary-api-datastore.md`,
       status `accepted`
-- [x] ADR 0044 status `proposed` → `accepted` z history entry
-- [x] ADR 0045 status `proposed` → `accepted` z history entry
-- [x] `docs/architecture/technical-design-general-overview.md` D1 AC #2/#3 + Deliverable 1
-      prose update ("RDS" → "ClickHouse on Hetzner") with inline note pointing to ADR 0047;
-      comprehensive sweep deferred to [task 0246](../backlog/0246_DOCS_tech-design-rds-prose-comprehensive-sweep.md)
+- [x] ADR 0044 status `proposed` → `accepted` with history entry
+- [x] ADR 0045 status `proposed` → `accepted` with history entry
+- [x] `docs/architecture/technical-design-general-overview.md` D1 AC #2/#3 +
+      Deliverable 1 prose updated ("RDS" → "ClickHouse on Hetzner") with
+      inline note pointing to ADR 0047; comprehensive sweep deferred to
+      [task 0246](../backlog/0246_DOCS_tech-design-rds-prose-comprehensive-sweep.md)
 - [x] `lore/3-wiki/backfill-execution-plan.md` SUPERSEDED banner top-of-file (commit c82c9fa8)
-- [x] 0174 moved to `lore/1-tasks/archive/` z `status: canceled`, reason `obsolete` (commit c82c9fa8)
-- [x] **Docs updated** — task IS the docs update; partial sweep per ADR 0032 honored
-      for parts that ADR 0047 directly changes (§7.4 D1 ACs + Deliverable 1 prose)
-- [x] **API types regenerated** — N/A — task does not touch `crates/api/**` ani
-      `Cargo.{toml,lock}` ani `libs/api-types/**`
+- [x] 0174 moved to `lore/1-tasks/archive/` with `status: canceled`, reason `obsolete` (commit c82c9fa8)
+- [x] **Docs updated** — task IS the docs update; partial sweep per ADR 0032
+      honored for parts that ADR 0047 directly changes (§7.4 D1 ACs +
+      Deliverable 1 prose)
+- [x] **API types regenerated** — N/A — task does not touch `crates/api/**`,
+      `Cargo.{toml,lock}`, or `libs/api-types/**`
 
 ## Implementation Notes
 
@@ -206,7 +211,7 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 ### Emerged
 
 3. **Comprehensive RDS prose sweep deferred to task 0246** — task plan said
-   "sweep dokumentu dla innych stale RDS refs". On encountering ~30+ RDS
+   "sweep the document for other stale RDS refs". On encountering ~30+ RDS
    references in tech design + likely matching count in infrastructure-overview,
    judged the sweep too large for the "small" effort budget of 0242. Spawned
    0246 (medium effort) to carry the comprehensive update. Honored ADR 0032
@@ -226,10 +231,22 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
    Flipped both to `accepted` together because the architectural commitment is
    one decision, not two. Explicitly noted in 0045's history entry.
 
+6. **ADR ID renumber 0046 → 0047 after collision discovered** — initial ADR
+   draft used ID 0046, but on regenerating the lore index discovered the slot
+   was already taken by `0046_classifier-quarantine-tables-nfts-pending.md`
+   (existing ADR about NFT quarantine, unrelated to the CH pivot). Renamed
+   file + updated all 10+ cross-references (other ADRs, tasks, tech design,
+   backfill-execution-plan banner). Lore framework's shared sequence makes
+   this kind of mid-flight collision possible; future tasks should
+   `lore_generate-index` and check the highest existing ADR ID before
+   committing to a new one.
+
 ## Issues Encountered
 
-- **No `notes/` directory needed** — task is small enough to stay as a single
-  file per lore file-vs-directory convention.
+- **ADR ID collision (0046)** — see Design Decision #6 above. Root cause: did
+  not check `ls lore/2-adrs/0046*` before writing the new ADR. Fix: renamed
+  to 0047 and grep-swept all consumers. Not a regression in the codebase, but
+  a process gap to avoid next time.
 
 ## Future Work → spawned
 
@@ -242,8 +259,8 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 ## Notes
 
 - Decision date: 2026-05-20 (M1-M3 sequencing planning session).
-- ADR 0047 jest meta-ADR — formalizuje już istniejący kierunek, nie wymyśla nowych
-  konceptów. ADR 0044/0045 dostarczają technical details; 0047 łączy kropki dla
-  API reads.
-- Backup runbook (CH single-node failure recovery z Borg na BX21) — TBD jako
-  follow-up task po 0245 lub w M3 hardening phase.
+- ADR 0047 is a meta-ADR — it formalizes an existing direction rather than
+  proposing new technical concepts. ADR 0044/0045 provide the technical
+  details; 0047 ties the threads together for API reads.
+- Backup runbook (CH single-node failure recovery from Borg on BX21) — TBD
+  as a follow-up task after 0245 or during M3 hardening phase.
