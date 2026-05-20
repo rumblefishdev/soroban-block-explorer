@@ -2,7 +2,7 @@
 id: '0234'
 title: 'FEATURE: Route 53 ARecord for Hetzner ch-prod in production CDK'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0227', '0216']
 tags:
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0227 future work — DNS for Hetzner CH endpoint deferred so initial deploy can validate everything else without blocking on CDK changes outside the 0227 scope.'
+  - date: '2026-05-20'
+    status: active
+    who: fmazur
+    note: 'Promoted to active. Pre-requirement for 0239 (AWS cutover) Phase 4-5. Unblocks dev-laptop mTLS access to Hetzner CH once LE cert is issued from a real DNS name.'
 ---
 
 # FEATURE: Route 53 ARecord for Hetzner ch-prod in production CDK
