@@ -2,9 +2,9 @@
 id: '0174'
 title: "DB migrations: split pre-restore vs post-restore directories so the Lambda doesn't apply heavy indexes before pg_restore"
 type: FEATURE
-status: backlog
-related_adr: ['0032', '0039']
-related_tasks: ['0132']
+status: canceled
+related_adr: ['0032', '0039', '0044', '0045']
+related_tasks: ['0132', '0228', '0242']
 tags: [priority-medium, effort-small, layer-db, layer-infra, backfill, staging]
 milestone: 1
 links:
@@ -12,6 +12,17 @@ links:
   - crates/db/migrations/20260428000100_add_endpoint_query_indexes.up.sql
   - lore/3-wiki/backfill-execution-plan.md
 history:
+  - date: '2026-05-20'
+    status: canceled
+    who: stkrolikiewicz
+    reason: obsolete
+    note: >
+      Superseded by ADR 0044/0045 (Hetzner ClickHouse pivot) + task 0228
+      (parallel-backfill merge via FREEZE+rsync+ATTACH). PG pg_restore staging
+      cutover described in lore/3-wiki/backfill-execution-plan.md is no longer
+      the prod path — CH on Hetzner replaces RDS as primary store (ADR 0047).
+      Split-migrations rationale gone because there is no pg_restore in the
+      prod path. Closing as obsolete per M1-M3 sequencing plan (2026-05-20).
   - date: '2026-04-28'
     status: backlog
     who: stkrolikiewicz

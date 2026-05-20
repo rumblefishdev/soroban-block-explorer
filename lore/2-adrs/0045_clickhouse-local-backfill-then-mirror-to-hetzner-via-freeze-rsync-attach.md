@@ -1,13 +1,23 @@
 ---
 id: '0045'
 title: 'ClickHouse local-backfill → Hetzner mirror via FREEZE + rsync + ATTACH PART'
-status: proposed
-deciders: [fmazur]
-related_tasks: []
-related_adrs: ['0010', '0040', '0044']
+status: accepted
+deciders: [fmazur, stkrolikiewicz]
+related_tasks: ['0228', '0233']
+related_adrs: ['0010', '0040', '0044', '0047']
 tags: [clickhouse, backfill, migration, hetzner, infrastructure]
 links: []
 history:
+  - date: 2026-05-20
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Ratified post-pivot per ADR 0047. FREEZE + rsync + ATTACH PART transport
+      is the committed backfill mechanism for getting historical CH data onto
+      the production Hetzner box; the previous PG pg_restore staging cutover
+      (lore/3-wiki/backfill-execution-plan.md) is now SUPERSEDED. Implementation
+      tracked in task 0228 (parallel-backfill merge); operator runbook in
+      task 0233 (merge-parallel-backfills runbook).
   - date: 2026-05-13
     status: proposed
     who: fmazur

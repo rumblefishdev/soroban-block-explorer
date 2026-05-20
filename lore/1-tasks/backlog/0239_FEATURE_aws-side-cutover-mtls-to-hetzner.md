@@ -15,6 +15,7 @@ tags:
     migration,
     cost-optimization,
   ]
+milestone: 1
 links: []
 history:
   - date: '2026-05-20'
