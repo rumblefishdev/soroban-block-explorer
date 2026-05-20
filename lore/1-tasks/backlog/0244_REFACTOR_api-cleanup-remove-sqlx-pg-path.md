@@ -3,7 +3,7 @@ id: '0244'
 title: 'REFACTOR: API cleanup — usunięcie sqlx + PG path po wszystkich 9 modułach na CH default'
 type: REFACTOR
 status: backlog
-related_adr: ['0046']
+related_adr: ['0047']
 related_tasks: ['0243']
 blocked_by: ['0243']
 tags:

@@ -4,7 +4,7 @@ title: 'ClickHouse pilot — parallel store mirroring Postgres schema, with full
 status: accepted
 deciders: [fmazur]
 related_tasks: ['0204', '0205', '0206']
-related_adrs: ['0033']
+related_adrs: ['0033', '0047']
 tags:
   [
     architecture,

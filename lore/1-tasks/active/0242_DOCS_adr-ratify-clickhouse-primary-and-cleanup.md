@@ -3,7 +3,7 @@ id: '0242'
 title: 'DOCS: ADR 0047 + 0044/0045 ratify + tech design AC update + obsolete cleanup (backfill-plan, task 0174)'
 type: DOCS
 status: active
-related_adr: ['0044', '0045']
+related_adr: ['0044', '0045', '0047']
 related_tasks: ['0174', '0228', '0241']
 tags:
   [

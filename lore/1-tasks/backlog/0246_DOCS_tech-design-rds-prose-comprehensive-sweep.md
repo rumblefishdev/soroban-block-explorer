@@ -3,7 +3,7 @@ id: '0246'
 title: 'DOCS: comprehensive sweep of pre-pivot RDS prose in tech design + infrastructure docs (post ADR 0047)'
 type: DOCS
 status: backlog
-related_adr: ['0044', '0045', '0046']
+related_adr: ['0044', '0045', '0047']
 related_tasks: ['0242']
 tags:
   [

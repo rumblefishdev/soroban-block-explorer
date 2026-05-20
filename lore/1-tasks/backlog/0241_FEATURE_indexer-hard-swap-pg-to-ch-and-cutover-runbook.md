@@ -3,7 +3,7 @@ id: '0241'
 title: 'FEATURE: Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation'
 type: FEATURE
 status: backlog
-related_adr: ['0044', '0045']
+related_adr: ['0044', '0045', '0047']
 related_tasks: ['0206', '0228', '0233', '0239', '0240', '0242']
 blocked_by: ['0228', '0239']
 tags:

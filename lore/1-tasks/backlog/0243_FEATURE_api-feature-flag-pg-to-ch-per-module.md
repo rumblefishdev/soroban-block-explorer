@@ -3,7 +3,7 @@ id: '0243'
 title: 'FEATURE: API feature flag per module — gradual PG↔CH migration for all 9 handler modules'
 type: FEATURE
 status: backlog
-related_adr: ['0044', '0046']
+related_adr: ['0044', '0047']
 related_tasks: ['0207', '0228', '0239', '0240', '0241', '0244']
 blocked_by: ['0241', '0239', '0240']
 tags:
