@@ -2,7 +2,7 @@
 id: '0230'
 title: 'libs/ui table primitives: address Copilot review nits from 0061'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0061', '0072']
 tags: [priority-low, effort-small, layer-frontend-shared, phase-future]
@@ -15,6 +15,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0061 — Copilot review on merged PR #190.'
+  - date: 2026-05-20
+    status: active
+    who: karolkow
+    note: 'Activated to start work.'
 ---
 
 # libs/ui table primitives: address Copilot review nits from 0061
