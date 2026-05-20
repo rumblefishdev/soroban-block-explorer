@@ -83,6 +83,22 @@
     state: started
 
 - name: Configure unattended-upgrades — security packages only
+  # `Automatic-Reboot "false"` is a deliberate uptime tradeoff:
+  # security patches that update the kernel / libc / systemd
+  # still install in the background, but the machine does NOT
+  # restart itself at 03:00 to pick them up. Operator decides
+  # when to reboot — typically inside a scheduled maintenance
+  # window aligned with low-traffic hours and an on-call presence.
+  #
+  # The `/var/run/reboot-required` flag is still written by apt
+  # when a reboot is pending, so a periodic check (e.g. login
+  # MOTD, or a future Slack-notify cron) surfaces the backlog.
+  # See the spawned follow-up task for the notification piece.
+  #
+  # `Automatic-Reboot-Time "03:00"` is left in the file so that
+  # if a future operator ever flips Automatic-Reboot back to
+  # "true", the chosen window is already documented (03:00 UTC
+  # = 05:00 CEST = quiet hour for EU traffic).
   ansible.builtin.copy:
     dest: /etc/apt/apt.conf.d/50unattended-upgrades-soroban
     content: |
@@ -94,7 +110,7 @@
           "${distro_id}ESMApps:${distro_codename}-apps-security";
           "${distro_id}ESM:${distro_codename}-infra-security";
       };
-      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
       Unattended-Upgrade::Automatic-Reboot-Time "03:00";
       Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
       Unattended-Upgrade::Remove-Unused-Dependencies "true";
