@@ -1,0 +1,35 @@
+# Managed by infra-hetzner/ansible/roles/app — do not edit by hand.
+# Re-rendered on every `ansible-playbook --tags app` run from
+# `allowed_client_cns` in group_vars/all.yml.
+#
+# Imported into Caddyfile via `import snippets/cn_allowlist.snippet`.
+# Defines the `@allowed_clients` request matcher; the site block
+# uses it to gate the reverse_proxy → CH.
+#
+# ## Why we match on full DN, not just CN
+#
+# Caddy 2.x does NOT register a `{http.request.tls.client.subject_cn}`
+# placeholder. The available placeholders are documented in Caddy
+# source (modules/caddyhttp/replacer.go): fingerprint, public_key,
+# public_key_sha256, issuer, serial, subject, certificate_pem,
+# certificate_der_base64, san.*. `subject` returns the full
+# RFC-2253 Distinguished Name string (pkix.Name.String()), e.g.
+# `CN=alice-laptop` for a cert issued by the bundled
+# issue-client-cert.sh script (which sets Subject to `/CN=<name>`
+# with no other RDNs).
+#
+# A matcher referencing a non-existent placeholder evaluates to
+# null in CEL, `.matches()` on null errors, and `Match()` then
+# returns false — fail-closed, but breaks every legitimate client.
+# This snippet therefore matches against `subject` directly with
+# the `CN=` prefix.
+#
+# ## Defense-in-depth regex
+#
+# The first matcher asserts the subject is well-formed
+# (`^CN=[a-zA-Z0-9._-]+$`) — same character set the issuance
+# script and Ansible preflight enforce. This blocks any CEL
+# injection via a CN crafted by an attacker who has compromised
+# the CA key.
+
+@allowed_clients expression `{http.request.tls.client.subject}.matches("^CN=[a-zA-Z0-9._-]+$") && {http.request.tls.client.subject} in [{% for cn in allowed_client_cns %}"CN={{ cn }}"{%- if not loop.last %},{% endif %}{% endfor %}]`

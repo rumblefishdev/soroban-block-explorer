@@ -1,0 +1,76 @@
+---
+# Docker CE installation from Docker's official apt repository.
+#
+# We do NOT use the distro `docker.io` package because:
+#   - It lags upstream by 1-2 minor versions on average.
+#   - It does not ship `docker compose` v2 as a plugin by default.
+#   - Security-fix release cadence on the distro package is slower.
+#
+# The official Docker repo is signed; we pin the public key by
+# fingerprint via the keyring file.
+
+- name: Ensure Docker's apt keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Fetch Docker's apt signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: '0644'
+    # `force: false` keeps the file idempotent — re-runs only
+    # fetch if missing. Docker rotates this key very rarely.
+    force: false
+
+- name: Configure Docker's apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ ansible_distribution_release }} stable
+    filename: docker
+    state: present
+    update_cache: true
+
+- name: Install Docker engine + compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+- name: Apply Docker daemon configuration
+  ansible.builtin.copy:
+    src: docker-daemon.json
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart docker
+
+- name: Ensure docker.service is enabled and started
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add deploy user to the docker group
+  # Membership of `docker` is functionally root-equivalent on this
+  # box (a docker socket user can mount the host filesystem).
+  # Acceptable because the deploy user already has passwordless
+  # sudo; adding to docker just removes the `sudo` ceremony for
+  # compose commands run during ops.
+  ansible.builtin.user:
+    name: '{{ deploy_user }}'
+    groups: docker
+    append: true

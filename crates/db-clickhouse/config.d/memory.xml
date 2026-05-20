@@ -1,0 +1,83 @@
+<!--
+  Production memory tuning for the Hetzner ch-prod-01 box
+  (Ryzen 9 12c/24t, 128 GiB DDR4 ECC, no swap).
+
+  Mounted at /etc/clickhouse-server/config.d/memory.xml only by the
+  production compose overlay. The pilot `config.d/timeouts.xml`
+  carries the MergeTree part-count thresholds and remains in effect
+  in both environments.
+
+  ## Sizing rationale
+
+  Total RAM:        128 GiB
+  Reserved for OS:   ~16 GiB  (kernel, fs cache, Borg, fail2ban)
+  Reserved for proxy: ~4 GiB   (Caddy + sidecar)
+  Available for CH: ~108 GiB
+
+  `max_server_memory_usage` is set to 100 GiB (≈ 78% of total RAM)
+  as a hard ceiling — comfortably below the available envelope, so
+  the OOM killer is not reachable from steady-state CH activity.
+
+  ## Why `max_server_memory_usage_to_ram_ratio` is pinned to 1.0
+
+  CH applies the smaller of the absolute byte value and the
+  ratio × detected-RAM (or cgroup limit, where applicable).
+  Default ratio is 0.9. With the Compose-side `mem_limit: 108g`,
+  the default cap would compute as 0.9 × 108 ≈ 97 GiB and silently
+  pre-empt the intended 100 GiB absolute. Pinning the ratio to
+  1.0 makes the absolute byte value the single binding constraint
+  regardless of the cgroup limit.
+
+  Do not re-introduce a sub-1.0 ratio without consciously
+  re-deriving the interaction with the Compose-side `mem_limit`.
+
+  Caches are sized for the OLAP read pattern (large mark / index
+  reuse across queries hitting the same partitions). The
+  uncompressed cache is intentionally generous: ZSTD-compressed
+  parts decompress repeatedly otherwise.
+
+  Background merge / fetch pools are sized for the available cores.
+  `background_pool_size` covers MergeTree merges + mutations; the
+  Ryzen 9 has 24 hardware threads, 16 allocated here leaves the
+  rest for query execution and the kernel.
+
+  The product `background_pool_size * background_merges_mutations_concurrency_ratio`
+  must stay strictly greater than CH's default
+  `number_of_free_entries_in_pool_to_execute_optimize_entire_partition`
+  (25 as of 26.3) or the server refuses to start with BAD_ARGUMENTS
+  at the sanity check. 16 × 2 = 32 clears that bound with headroom;
+  do not lower the pool below 13 without also overriding the free-
+  entries setting.
+
+  ## What is intentionally NOT set here
+
+  - **Per-query `max_memory_usage`** stays in the user profile
+    (`users.d/timeouts.xml`, pilot-tuned to 6 GiB). Re-tuning it
+    for prod is a follow-up once real workload memory profiles
+    are observed; bumping it blindly invites a single runaway
+    SELECT to monopolise the host.
+  - **`max_concurrent_queries`** kept at CH default (100) — the
+    inbound surface is gated by Caddy mTLS, the concurrency
+    upstream is bounded by Lambda concurrency + Galexie single
+    task, both well below 100.
+-->
+<clickhouse>
+    <!-- Hard server-side memory ceiling, absolute bytes.
+         Ratio pinned to 1.0 so the absolute cap is binding and
+         not silently reduced by the default 0.9 ratio × cgroup
+         limit. See the docstring above for the derivation. -->
+    <max_server_memory_usage>107374182400</max_server_memory_usage> <!-- 100 GiB -->
+    <max_server_memory_usage_to_ram_ratio>1</max_server_memory_usage_to_ram_ratio>
+
+    <!-- Read-side caches sized for OLAP reuse. -->
+    <mark_cache_size>10737418240</mark_cache_size>          <!-- 10 GiB -->
+    <uncompressed_cache_size>17179869184</uncompressed_cache_size> <!-- 16 GiB -->
+    <mmap_cache_size>1000</mmap_cache_size>                  <!-- entries, not bytes -->
+
+    <!-- Background work pools. Sized against 24 hardware threads. -->
+    <background_pool_size>16</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <background_move_pool_size>4</background_move_pool_size>
+    <background_fetches_pool_size>4</background_fetches_pool_size>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+</clickhouse>

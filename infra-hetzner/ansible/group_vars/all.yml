@@ -1,0 +1,167 @@
+---
+# Group variables shared across every host in the inventory.
+#
+# Per-deployment values are sourced from the operator's shell
+# environment via the `lookup('env', ...)` plugin. The canonical
+# password-manager entry `soroban-prod / ansible-env` is the
+# single source of truth — every value listed here that is
+# "required" must be exported before invoking ansible-playbook.
+#
+# `error_on_undefined_vars = true` in ansible.cfg ensures any task
+# that consumes an unset variable fails at template time, not at
+# runtime. A pre-flight `assert` in site.yml turns the failure
+# into a specific actionable message.
+#
+# Variables with `| default(<value>, true)` are overridable via env
+# but ship with a team-policy default. Variables hardcoded below
+# the "System facts" line are NOT env-configurable because they
+# are coupled to the Docker image, Compose contract, or playbook
+# implementation — overriding them would break the deploy.
+
+# ---------------------------------------------------------------------
+# Required env vars — playbook fails preflight if unset
+# ---------------------------------------------------------------------
+
+hcloud_robot_user: "{{ lookup('env', 'HCLOUD_ROBOT_USER') }}"
+hcloud_robot_password: "{{ lookup('env', 'HCLOUD_ROBOT_PASSWORD') }}"
+clickhouse_password: "{{ lookup('env', 'CLICKHOUSE_PASSWORD') }}"
+borg_passphrase: "{{ lookup('env', 'BORG_PASSPHRASE') }}"
+
+# Public DNS name Caddy serves on. The Hetzner Robot reverse-DNS
+# entry should match. Let's Encrypt validates http-01 against this
+# hostname.
+ch_prod_domain: "{{ lookup('env', 'CH_PROD_DOMAIN') }}"
+
+# Let's Encrypt account email — receives expiry-warning mail.
+acme_email: "{{ lookup('env', 'ACME_EMAIL') }}"
+
+# Operator-supplied SSH public keys (one per line, OpenSSH
+# format). Replaces the previous github.com/<user>.keys fetch
+# pattern — no external network dependency at deploy time, no
+# coupling to GitHub account state. The `users` role writes
+# this verbatim to /home/<deploy_user>/.ssh/authorized_keys.
+#
+# Multi-line example (in ~/.config/soroban-prod.env):
+#   export OPERATOR_SSH_PUBKEYS="$(cat <<'EOF'
+#   ssh-ed25519 AAAA... alice@laptop
+#   ssh-rsa     AAAA... bob@laptop
+#   EOF
+#   )"
+operator_ssh_pubkeys: "{{ lookup('env', 'OPERATOR_SSH_PUBKEYS') }}"
+
+# Comma-separated list of allowed mTLS client CNs. Caddy's HTTP
+# layer rejects any cert whose CN is not on this list, even when
+# the cert is CA-signed (defence-in-depth against a leaked
+# client cert).
+#
+# Example:
+#   export ALLOWED_CLIENT_CNS="<dev1>-laptop,<dev2>-laptop,lambda-api-prod"
+allowed_client_cns: "{{ lookup('env', 'ALLOWED_CLIENT_CNS').split(',') | map('trim') | reject('equalto', '') | list }}"
+
+# Storage Box SSH credentials (BX21).
+storagebox_ssh_user: "{{ lookup('env', 'STORAGEBOX_SSH_USER') }}"
+storagebox_ssh_host: "{{ lookup('env', 'STORAGEBOX_SSH_HOST') }}"
+
+# ---------------------------------------------------------------------
+# Operational defaults — env-overridable
+# ---------------------------------------------------------------------
+
+storagebox_ssh_port: "{{ lookup('env', 'STORAGEBOX_SSH_PORT') | default('23', true) | int }}"
+borg_repo_path: "{{ lookup('env', 'BORG_REPO_PATH') | default('./backups/clickhouse', true) }}"
+
+# Borg retention policy — overridable for envs with different
+# capacity / retention requirements.
+borg_keep_daily: "{{ lookup('env', 'BORG_KEEP_DAILY') | default('7', true) | int }}"
+borg_keep_weekly: "{{ lookup('env', 'BORG_KEEP_WEEKLY') | default('4', true) | int }}"
+borg_keep_monthly: "{{ lookup('env', 'BORG_KEEP_MONTHLY') | default('6', true) | int }}"
+
+# Daily backup cron — UTC. Box is forced to UTC by the base role.
+borg_cron_hour: "{{ lookup('env', 'BORG_CRON_HOUR') | default('3', true) | int }}"
+borg_cron_minute: "{{ lookup('env', 'BORG_CRON_MINUTE') | default('30', true) | int }}"
+
+# Local timezone for the host.
+host_timezone: "{{ lookup('env', 'HOST_TIMEZONE') | default('Etc/UTC', true) }}"
+
+# Hetzner Robot display label for the server (cosmetic in UI).
+hetzner_server_name: "{{ lookup('env', 'HETZNER_SERVER_NAME') | default('ch-prod-01', true) }}"
+
+# Optional Hetzner Robot server number — required ONLY to set the
+# display label via `community.hrobot.server`. Visible in Robot
+# UI → Server → top-right corner (#NNNNNNN). If unset, the role
+# skips the rename task and the server keeps whatever label
+# Robot UI defaults to. rDNS + firewall do not need this.
+hetzner_server_number: "{{ lookup('env', 'HETZNER_SERVER_NUMBER') | default('', true) }}"
+
+# Derived values — not directly env-driven.
+borg_repo_url: 'ssh://{{ storagebox_ssh_user }}@{{ storagebox_ssh_host }}:{{ storagebox_ssh_port }}/{{ borg_repo_path }}'
+
+# The Hetzner Robot play runs under `hosts: localhost` (the Robot
+# REST API is a controller-side side-channel, not something the
+# box itself reaches). In that context a bare `{{ ansible_host }}`
+# resolves to `localhost` / `127.0.0.1`, which would point the
+# reverse_dns and firewall modules at the wrong IP and surface
+# as a confusing "IP not found" from the API. Resolving via
+# `hostvars[groups['ch_prod'][0]].ansible_host` always returns
+# the inventory-declared IP of the box regardless of which play
+# is evaluating the variable.
+hetzner_server_ipv4: "{{ hostvars[groups['ch_prod'][0]].ansible_host }}"
+hetzner_reverse_dns: '{{ ch_prod_domain }}'
+
+# ---------------------------------------------------------------------
+# System facts — NOT env-configurable
+#
+# These values are coupled to the Docker image, Compose contract,
+# or playbook implementation. Changing them silently breaks the
+# deploy — they are not config, they are facts. If a future
+# refactor needs to vary one of these (e.g. different deploy
+# user UID per env), promote it above this line with an env
+# override.
+# ---------------------------------------------------------------------
+
+deploy_user: deploy
+deploy_user_uid: 1100
+# Separate from the UID so each end of the pairing can be re-aimed
+# without confusing future readers. The two happen to coincide
+# today; that is a convenience, not a property to rely on.
+deploy_user_gid: 1100
+
+# Where the operator's rsync lands on the box.
+app_repo_dest: /srv/app
+
+# Filesystem layout consumed by the compose prod overlay bind
+# mounts. Ownership matches the in-container CH UID (101).
+ch_data_dir: /srv/clickhouse-data
+ch_logs_dir: /srv/clickhouse-logs
+backups_dir: /srv/backups
+
+# ClickHouse runs as UID/GID 101 inside the official 26.x image.
+clickhouse_uid: 101
+clickhouse_gid: 101
+
+# Hetzner Robot stateless firewall rules at the network-switch
+# level. Security policy lives in repo, not in env — these are
+# version-controlled review artefacts.
+#
+# Rule names must match the Robot API's accepted character set
+# [A-Za-z0-9_-]; spaces / punctuation are rejected by the
+# `community.hrobot.firewall` module ≥ 1.9.
+hetzner_firewall_rules:
+  - name: 'ssh'
+    dst_port: '22'
+    protocol: 'tcp'
+    action: 'accept'
+  - name: 'http-acme'
+    dst_port: '80'
+    protocol: 'tcp'
+    action: 'accept'
+  - name: 'https-mtls'
+    dst_port: '443'
+    protocol: 'tcp'
+    action: 'accept'
+  - name: 'established'
+    protocol: 'tcp'
+    tcp_flags: 'ack'
+    action: 'accept'
+  - name: 'icmp'
+    protocol: 'icmp'
+    action: 'accept'
