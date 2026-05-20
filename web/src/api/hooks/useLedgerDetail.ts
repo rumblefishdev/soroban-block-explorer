@@ -15,5 +15,7 @@ export const useLedgerDetail = (sequence: number, enabled = true) =>
     enabled: enabled && sequence > 0,
     initialPageParam: { path: { sequence } },
     getNextPageParam: (lastPage) =>
-      lastPage.transactions.page.cursor ?? undefined,
+      lastPage.transactions.page.has_more
+        ? lastPage.transactions.page.cursor ?? undefined
+        : undefined,
   });

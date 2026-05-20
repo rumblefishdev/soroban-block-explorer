@@ -34,9 +34,20 @@ export function useTableUrlState(
   const { defaultSortBy, defaultSortDir = 'desc', filterKeys = [] } = options;
   const [params, setParams] = useSearchParams();
 
+  // Callers commonly pass `filterKeys` inline (`{ filterKeys: ['q', 'op'] }`),
+  // which yields a new array reference every render. Depending on that array
+  // directly would invalidate the memo every render and re-issue a new
+  // `state` / `state.filters` identity to every downstream effect/memo.
+  // Collapse the array into a stable string key (with `|` separator so
+  // distinct key lists do not collide) and reparse inside the memo — that
+  // way the memo's only array-shaped dep is the string itself, and the
+  // closure captures nothing whose identity changes per render.
+  const filterKeysKey = filterKeys.join('|');
+
   const state = useMemo<TableUrlState>(() => {
     const filters: Record<string, string> = {};
-    for (const key of filterKeys) {
+    const keys = filterKeysKey ? filterKeysKey.split('|') : [];
+    for (const key of keys) {
       const v = params.get(key);
       if (v) filters[key] = v;
     }
@@ -49,7 +60,7 @@ export function useTableUrlState(
       sortDir,
       filters,
     };
-  }, [params, filterKeys, defaultSortBy, defaultSortDir]);
+  }, [params, filterKeysKey, defaultSortBy, defaultSortDir]);
 
   const update = useCallback(
     (mutator: (next: URLSearchParams) => void) => {
