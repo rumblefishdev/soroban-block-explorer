@@ -1,5 +1,16 @@
 # Backfill Execution Plan (Proposal)
 
+> ⚠️ **SUPERSEDED (2026-05-20)** — RDS pg_restore staging cutover described
+> below is **no longer the prod path**. Replaced by Hetzner ClickHouse + FREEZE
+>
+> - rsync + ATTACH PART transport per [ADR 0044](../2-adrs/0044_clickhouse-pilot-parallel-store.md),
+>   [ADR 0045](../2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md),
+>   [ADR 0046](../2-adrs/0046_clickhouse-primary-api-datastore.md), and
+>   [task 0228](../1-tasks/active/0228_FEATURE_parallel-backfill-merge-and-validation/README.md).
+>   Live-tail cutover after `L_last_closed` is covered by
+>   [task 0241](../1-tasks/backlog/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+>   Retained here for historical reference only.
+
 How we propose to populate staging RDS with the full Soroban era (Feb 2024 →
 present) ahead of switching live ingestion on. Local-first, dump-restore,
 sequential cutover.
