@@ -80,10 +80,10 @@ across three workers + one production Hetzner CH:
   on Hetzner.
   ([Task 0228 README §Context](../active/0228_FEATURE_parallel-backfill-merge-and-validation/README.md))
 - **Hetzner readiness gate**: [task 0216](../active/0216_RESEARCH_hetzner-clickhouse-deploy/README.md)
-  + [task 0227](../active/0227_FEATURE_infra-hetzner-ansible-playbook.md)
-  must land before Phase 3 to Hetzner is possible — staging dirs,
-  mTLS CA, dict_reader user, `config.d/memory.xml`, BX21 Storage Box,
-  Borg repo. Worker-side FREEZE is local and can run independently.
+  - [task 0227](../active/0227_FEATURE_infra-hetzner-ansible-playbook.md)
+    must land before Phase 3 to Hetzner is possible — staging dirs,
+    mTLS CA, dict_reader user, `config.d/memory.xml`, BX21 Storage Box,
+    Borg repo. Worker-side FREEZE is local and can run independently.
 - **Phase 5 code on Hetzner**: the post-merge repair pass
   (`backfill-runner repair-tier1 + asset-aggregates + nft-reclassify`)
   must be available on the Hetzner binary before Phase 5 runs but
@@ -108,10 +108,9 @@ Before any Phase 3 step starts:
       fact-parity verified)
 - [ ] Schema/parser SHA logged in `backfill_runs` audit table per
       worker
-- [ ] Disk free on Hetzner ≥ 1.5 TB (transient staging during rsync
-      + post-attach data)
+- [ ] Disk free on Hetzner ≥ 1.5 TB (transient staging during rsync + post-attach data)
 - [ ] No in-flight merges / mutations on any worker
-  (`SELECT count() FROM system.merges` = 0)
+      (`SELECT count() FROM system.merges` = 0)
 - [ ] No leftover `/shadow/<name>/` from prior freeze attempts
       (UNFREEZE first if found)
 
@@ -140,8 +139,8 @@ Per worker, after FREEZE complete + verified.
 
 - **Command shape**:
   `rsync -av --partial --progress
-   /var/lib/clickhouse/shadow/<name>/
-   hetzner-ch:/var/lib/clickhouse/detached_inbox/<worker>/<name>/`
+/var/lib/clickhouse/shadow/<name>/
+hetzner-ch:/var/lib/clickhouse/detached_inbox/<worker>/<name>/`
 - **Resumability**: `--partial` survives network interrupts;
   re-running rsync only transfers missing parts.
 - **mTLS / SSH**: documented per task 0216's auth model. Verify
@@ -159,7 +158,7 @@ Worker-order m1 → m2 → m3. Per worker:
 
 - **Move parts from staging into table's `detached/`**:
   `mv /var/lib/clickhouse/detached_inbox/<worker>/<name>/<uuid>/<part>
-      /var/lib/clickhouse/data/default/<table>/detached/`
+/var/lib/clickhouse/data/default/<table>/detached/`
 - **ATTACH PART**:
   `ALTER TABLE <table> ATTACH PART '<part>'`
 - **Per-partition `OPTIMIZE FINAL PARTITION`** after each
