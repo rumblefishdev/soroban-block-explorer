@@ -1,5 +1,5 @@
 ---
-id: '0246'
+id: '0248'
 title: 'DOCS: comprehensive sweep of pre-pivot RDS prose in tech design + infrastructure docs (post ADR 0047)'
 type: DOCS
 status: backlog

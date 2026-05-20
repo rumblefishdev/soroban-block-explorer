@@ -2,7 +2,7 @@
 id: '0242'
 title: 'DOCS: ADR 0047 + 0044/0045 ratify + tech design AC update + obsolete cleanup (backfill-plan, task 0174)'
 type: DOCS
-status: active
+status: completed
 related_adr: ['0044', '0045', '0047']
 related_tasks: ['0174', '0228', '0241']
 tags:
@@ -50,6 +50,16 @@ history:
       docs-update obligation honored for the parts that ADR 0047 directly
       changes (D1 ACs + Deliverable 1 prose). Inline note added at §7.4 D1
       explaining the partial sweep and pointing readers to ADR 0047.
+  - date: '2026-05-20'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      PR #203 merged (commit 128c9ca4). All acceptance criteria met:
+      ADR 0047 authored + accepted, ADR 0044/0045 status flipped, tech design
+      D1 updated, backfill-execution-plan SUPERSEDED banner, 0174 archived.
+      Spawned follow-up task 0248 (renumbered from 0246 post-merge due to ID
+      collision with Filip's LP API task — see commit 0505ac45) carrying the
+      comprehensive RDS prose sweep deferred from this task.
 ---
 
 # ADR 0047 + 0044/0045 ratify + tech design AC update + obsolete cleanup
@@ -163,7 +173,7 @@ to keep it in place with the banner — historical context may be useful.
 - [x] `docs/architecture/technical-design-general-overview.md` D1 AC #2/#3 +
       Deliverable 1 prose updated ("RDS" → "ClickHouse on Hetzner") with
       inline note pointing to ADR 0047; comprehensive sweep deferred to
-      [task 0246](../backlog/0246_DOCS_tech-design-rds-prose-comprehensive-sweep.md)
+      [task 0248](../backlog/0248_DOCS_tech-design-rds-prose-comprehensive-sweep.md)
 - [x] `lore/3-wiki/backfill-execution-plan.md` SUPERSEDED banner top-of-file (commit c82c9fa8)
 - [x] 0174 moved to `lore/1-tasks/archive/` with `status: canceled`, reason `obsolete` (commit c82c9fa8)
 - [x] **Docs updated** — task IS the docs update; partial sweep per ADR 0032
@@ -182,7 +192,7 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
   no-rewrite-cost / operational simplicity), 3 alternatives considered (keep
   parallel pilot / CH on AWS / PG primary + CH replica via CDC), positive +
   negative consequences, and ADR 0032 delivery checklist (D1 ACs only; rest
-  N/A or deferred to spawned task 0246).
+  N/A or deferred to spawned task 0248).
 - ADR 0044 (`status: proposed → accepted`) — history entry citing ADR 0047,
   notes that pilot evaluation phase complete and architectural direction
   committed.
@@ -192,7 +202,7 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 - `docs/architecture/technical-design-general-overview.md` §7.4 Deliverable 1
   prose + ACs #2/#3/#4 updated; inline note added at top of Deliverable 1
   pointing to ADR 0047, explaining the partial sweep, and signalling that
-  comprehensive cleanup is in task 0246.
+  comprehensive cleanup is in task 0248.
 
 ## Design Decisions
 
@@ -210,18 +220,18 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 
 ### Emerged
 
-3. **Comprehensive RDS prose sweep deferred to task 0246** — task plan said
+3. **Comprehensive RDS prose sweep deferred to task 0248** — task plan said
    "sweep the document for other stale RDS refs". On encountering ~30+ RDS
    references in tech design + likely matching count in infrastructure-overview,
    judged the sweep too large for the "small" effort budget of 0242. Spawned
-   0246 (medium effort) to carry the comprehensive update. Honored ADR 0032
+   0248 (medium effort) to carry the comprehensive update. Honored ADR 0032
    docs-update obligation for the parts ADR 0047 directly changes (D1 ACs +
-   Deliverable 1 prose); marked everything else N/A or "deferred to 0246" in
+   Deliverable 1 prose); marked everything else N/A or "deferred to 0248" in
    the ADR 0047 delivery checklist.
 
 4. **Inline note at top of §7.4 Deliverable 1** — added an explicit
    `> Note (2026-05-20):` block warning readers that pre-pivot RDS prose later
-   in the document is stale until 0246 lands. This is defensive — without it,
+   in the document is stale until 0248 lands. This is defensive — without it,
    a reader skimming §7.4 Deliverable 1 and then jumping back to §6 would get
    inconsistent signals about the prod datastore.
 
@@ -250,7 +260,7 @@ Implementation landed on branch `docs/0242_adr-ratify-clickhouse-primary-and-cle
 
 ## Future Work → spawned
 
-- [Task 0246](../backlog/0246_DOCS_tech-design-rds-prose-comprehensive-sweep.md) —
+- [Task 0248](../backlog/0248_DOCS_tech-design-rds-prose-comprehensive-sweep.md) —
   comprehensive sweep of pre-pivot RDS prose in tech design + infrastructure
   docs. Spawned with concrete grep audit, classification scheme (retain /
   rewrite / mark-with-ADR-link), and detailed implementation plan. Priority

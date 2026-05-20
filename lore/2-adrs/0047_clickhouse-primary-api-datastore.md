@@ -293,7 +293,7 @@ corresponding updates to `docs/architecture/**`.
       D1 AC #2/#3 ("RDS" → "ClickHouse on Hetzner") + Deliverable 1 prose
       updated with inline note pointing to this ADR (this PR). Comprehensive
       sweep of remaining pre-pivot RDS prose in §6 (Architecture) and §7.3
-      (Scaling Model) deferred to task 0246.
+      (Scaling Model) deferred to task 0248.
 - [ ] `docs/architecture/database-schema/database-schema-overview.md` updated
       — N/A — schema docs already track CH schema independently of this ADR
       (per ADR 0044). Update if subsequent sweep finds stale RDS refs.
