@@ -2,7 +2,7 @@
 id: '0246'
 title: 'Backend: liquidity pool API extensions for FE list/detail (0077)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0027', '0031', '0032', '0041']
 related_tasks: ['0077', '0199', '0215', '0247']
 tags: [priority-high, effort-small, layer-api, layer-docs, milestone-2]
@@ -35,6 +35,12 @@ history:
       in the same operation. Earlier commit messages (cac0215, ddbbb34)
       retain the original `lore-0241` scope — left intact per
       no-amend convention; this history entry is the renumber trail.
+  - date: 2026-05-20
+    status: active
+    who: karolkow
+    note: >
+      Promoted backlog → active. Starting implementation on
+      feat/0246_backend-liquidity-pools-api-extensions branch.
 ---
 
 # Backend: liquidity pool API extensions for FE list/detail (0077)
