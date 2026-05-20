@@ -115,6 +115,11 @@ pub struct PoolItem {
     /// the frontend can render directly (frontend §6.13/§6.14).
     pub fee_percent: String,
     pub created_at_ledger: i64,
+    /// Count of active liquidity providers (`lp_positions WHERE shares > 0`).
+    /// Computed from the live table — not dependent on the snapshot
+    /// freshness window, so it is populated even on stale pools (where
+    /// `tvl`/`volume`/`fee_revenue` are NULL).
+    pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,

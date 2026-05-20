@@ -176,6 +176,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
+        participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         reserve_a: row.reserve_a,
         reserve_b: row.reserve_b,

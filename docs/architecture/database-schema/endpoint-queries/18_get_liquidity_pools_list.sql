@@ -22,7 +22,10 @@
 --                  — exact keyset walk; added in task 0132 migration
 --                  `20260428000100_add_endpoint_query_indexes`,
 --               idx_lps_pool ON (pool_id, created_at DESC) — for the
---                  latest-snapshot lateral lookup.
+--                  latest-snapshot lateral lookup,
+--               idx_lpp_shares (pool_id, shares DESC) WHERE shares > 0
+--                  — partial index covering the per-row participant count
+--                  subquery (task 0246).
 -- Notes:
 --   • Default ordering is `(created_at_ledger DESC, pool_id DESC)`: newest
 --     pools first, deterministic on tie. We deliberately do NOT order by
@@ -53,6 +56,12 @@
 --     Stellar pubnet).
 --   • Issuer StrKeys resolve via a CTE with the `accounts.account_id`
 --     UNIQUE index, then are surfaced via final joins.
+--   • `participant_count` (task 0246) is a correlated subquery hitting
+--     the partial index `idx_lpp_shares (pool_id, shares DESC) WHERE
+--     shares > 0`. Not snapshot-bound — populated even on stale pools.
+--     N×1 index seeks per page (limit + 1); on hot pools with many
+--     LP positions this can dominate page latency — benchmark before
+--     production scale-out, consider a cached column if it bites.
 --   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
 --     via `lp.created_at_ledger > 0`. The persist layer emits these
 --     rows (`created_at_ledger = 0`, NULL/0 asset/fee fields) to
@@ -84,6 +93,11 @@ SELECT
     -- DB stores basis points; conversion is here, not on the client.
     (lp.fee_bps::numeric / 100)         AS fee_percent,
     lp.created_at_ledger,
+    -- Task 0246: active LP count per pool. Correlated subquery on
+    -- `idx_lpp_shares` partial index. Not snapshot-bound.
+    (SELECT COUNT(*) FROM lp_positions lpp
+      WHERE lpp.pool_id = lp.pool_id AND lpp.shares > 0)
+                                        AS participant_count,
     s.ledger_sequence                   AS latest_snapshot_ledger,
     s.reserve_a,
     s.reserve_b,

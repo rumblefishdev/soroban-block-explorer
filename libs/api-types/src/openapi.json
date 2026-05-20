@@ -3336,7 +3336,8 @@
                 "asset_b",
                 "fee_bps",
                 "fee_percent",
-                "created_at_ledger"
+                "created_at_ledger",
+                "participant_count"
               ],
               "properties": {
                 "asset_a": {
@@ -3367,6 +3368,11 @@
                 "latest_snapshot_ledger": {
                   "type": ["integer", "null"],
                   "format": "int64"
+                },
+                "participant_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
                 },
                 "pool_id": {
                   "type": "string",
@@ -3611,7 +3617,8 @@
           "asset_b",
           "fee_bps",
           "fee_percent",
-          "created_at_ledger"
+          "created_at_ledger",
+          "participant_count"
         ],
         "properties": {
           "asset_a": {
@@ -3642,6 +3649,11 @@
           "latest_snapshot_ledger": {
             "type": ["integer", "null"],
             "format": "int64"
+          },
+          "participant_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
           },
           "pool_id": {
             "type": "string",

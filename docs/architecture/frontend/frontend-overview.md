@@ -518,7 +518,7 @@ Expanded behavior:
 Paginated table of all liquidity pools.
 
 - Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
-  per asset, fee percentage
+  per asset, fee percentage, participant count (active LP positions; task 0246)
 - Filters - asset (`filter[asset_code]`, case-insensitive single-asset; task 0246)
   or per-leg `(code, issuer)`, minimum TVL (`filter[min_tvl]`)
 - Cursor-based pagination controls
@@ -532,7 +532,7 @@ Expanded behavior:
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
 - Pool summary - pool ID (full, copyable), asset pair, fee percentage, total shares,
-  reserves per asset
+  reserves per asset, participant count (task 0246)
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
 - Recent transactions - deposits, withdrawals, and trades involving this pool

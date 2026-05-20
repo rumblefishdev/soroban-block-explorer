@@ -165,6 +165,9 @@ pub struct PoolRow {
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
+    /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
+    /// Task 0246 — see DTO doc for surfacing rules.
+    pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
@@ -189,6 +192,7 @@ fn map_pool_row(r: &PgRow) -> PoolRow {
         fee_bps: r.get("fee_bps"),
         fee_percent: r.get("fee_percent"),
         created_at_ledger: r.get("created_at_ledger"),
+        participant_count: r.get("participant_count"),
         latest_snapshot_ledger: r.get("latest_snapshot_ledger"),
         reserve_a: r.get("reserve_a"),
         reserve_b: r.get("reserve_b"),
@@ -252,6 +256,13 @@ pub async fn fetch_pool_list(
             lp.fee_bps,
             (lp.fee_bps::numeric / 100)::text   AS fee_percent,
             lp.created_at_ledger,
+            -- Task 0246: active liquidity providers. Correlated subquery
+            -- hits the partial index `idx_lpp_shares (pool_id, shares DESC)
+            -- WHERE shares > 0` once per pool row (page size = limit + 1).
+            -- Not snapshot-bound, so populated even on stale pools.
+            (SELECT COUNT(*) FROM lp_positions lpp
+              WHERE lpp.pool_id = lp.pool_id AND lpp.shares > 0)
+                                                AS participant_count,
             s.ledger_sequence                   AS latest_snapshot_ledger,
             s.reserve_a::text                   AS reserve_a,
             s.reserve_b::text                   AS reserve_b,
@@ -342,6 +353,12 @@ pub async fn fetch_pool_by_id(
             lp.fee_bps,
             (lp.fee_bps::numeric / 100)::text  AS fee_percent,
             lp.created_at_ledger,
+            -- Task 0246: active LP count. Same correlated subquery as
+            -- file 18 (list); the partial index `idx_lpp_shares` covers
+            -- it. Populated even on stale pools (no snapshot dep).
+            (SELECT COUNT(*) FROM lp_positions lpp
+              WHERE lpp.pool_id = lp.pool_id AND lpp.shares > 0)
+                                               AS participant_count,
             s.ledger_sequence                  AS latest_snapshot_ledger,
             s.reserve_a::text                  AS reserve_a,
             s.reserve_b::text                  AS reserve_b,
