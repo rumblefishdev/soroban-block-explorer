@@ -12,6 +12,7 @@ import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
+import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -125,6 +126,8 @@ export function createApp({
     restApi: apiGateway.api,
   });
   cloudWatch.addDependency(apiGateway);
+
+  new HetznerDnsStack(app, `${prefix}-HetznerDns`, { env, config });
 
   app.synth();
 }

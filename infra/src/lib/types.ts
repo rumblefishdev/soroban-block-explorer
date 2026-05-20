@@ -149,6 +149,22 @@ export interface EnvironmentConfig {
   readonly slackWorkspaceId: string;
   /** Slack channel ID for AWS Chatbot alarm notifications (e.g. "C01ABCDEF"). */
   readonly slackChannelId: string;
+
+  // Hetzner ClickHouse DNS — per-environment (consumed by HetznerDnsStack)
+
+  /**
+   * FQDN that Route 53 maps to the Hetzner ClickHouse box for this
+   * environment. Caddy on the box uses this name for the Let's
+   * Encrypt HTTP-01 challenge, and external mTLS clients (Lambda,
+   * dev laptops) connect via it.
+   *
+   * The IPv4 target is intentionally NOT in the env config — it is
+   * read from SSM Parameter Store at `/soroban/${envName}/ch-ip`
+   * by `HetznerDnsStack`, matching the existing convention that
+   * keeps box-specific IPs out of git (see `inventory.ini` which is
+   * gitignored).
+   */
+  readonly chDomainName: string;
 }
 
 /**
@@ -287,6 +303,17 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (!config.slackChannelId || config.slackChannelId.includes('CHANGE_ME')) {
     errors.push(
       `slackChannelId missing or placeholder: "${config.slackChannelId}"`
+    );
+  }
+
+  // Hetzner DNS — per-env (consumed by HetznerDnsStack).
+  if (
+    !config.chDomainName ||
+    config.chDomainName.includes('CHANGE') ||
+    config.chDomainName.includes('PLACEHOLDER')
+  ) {
+    errors.push(
+      `chDomainName missing or placeholder: "${config.chDomainName}"`
     );
   }
 

@@ -83,7 +83,7 @@ export HCLOUD_ROBOT_USER="..."          # Hetzner Robot webservice user (#ws+...
 export HCLOUD_ROBOT_PASSWORD="..."      # Robot webservice password
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
-export CH_PROD_DOMAIN="..."             # Caddy site address (placeholder OK until task 0234)
+export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
 export STORAGEBOX_SSH_USER="..."        # BX21 user, e.g. u123456
 export STORAGEBOX_SSH_HOST="..."        # BX21 host, e.g. u123456.your-storagebox.de
@@ -175,7 +175,7 @@ ansible-galaxy collection install -r requirements.yml
 
 Edit `infra-hetzner/ansible/group_vars/all.yml`:
 
-- `ch_prod_domain` → real DNS name pointed at the server IP
+- `ch_domain` → real DNS name pointed at the server IP
 - `acme_email` → real operator email
 - `storagebox_ssh_user`, `storagebox_ssh_host` → values from the
   BX21 order page
@@ -237,13 +237,13 @@ docker exec clickhouse clickhouse-client -q 'SELECT version()'
 # CH responds via Caddy with a valid client cert.
 exit
 clickhouse-client --secure \
-  -h "$CH_PROD_DOMAIN" \
+  -h "$CH_DOMAIN" \
   --user default --password "$CLICKHOUSE_PASSWORD" \
   --config-file ~/.clickhouse-client/config.xml \
   -q 'SELECT version()'
 
 # Synthetic negative: connection without cert is rejected at TLS layer.
-curl -sSI "https://${CH_PROD_DOMAIN}/ping"
+curl -sSI "https://${CH_DOMAIN}/ping"
 #   → "alert handshake failure" (TLS abort), NOT 200.
 
 # Synthetic negative: connection with a valid CA-signed cert
@@ -418,9 +418,12 @@ See `infra-hetzner/ca/README.md` §Compromise response.
 - LE certificate state lives in the `caddy-data` Docker volume.
 - The first deploy obtains a cert via http-01; Caddy renews
   automatically when within 30 days of expiry.
-- DNS for `$CH_PROD_DOMAIN` must point at the server IP **before**
-  the first deploy or the http-01 challenge fails. Caddy retries
-  automatically once DNS is corrected.
+- DNS for `$CH_DOMAIN` must point at the server IP **before** the
+  first deploy or the http-01 challenge fails. Caddy retries
+  automatically once DNS is corrected. The record itself lives in
+  Route 53 and is managed by the CDK `HetznerDnsStack` — see
+  `infra/src/lib/stacks/hetzner-dns-stack.ts` and `make
+deploy-production-hetzner-dns`.
 
 ### ClickHouse password rotation
 

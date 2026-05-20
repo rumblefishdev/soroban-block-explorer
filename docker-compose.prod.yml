@@ -27,7 +27,7 @@
 #
 # ## Required environment variables on the host
 #
-#   CH_PROD_DOMAIN          public DNS name (Caddy serves on this)
+#   CH_DOMAIN               public DNS name (Caddy serves on this)
 #   ACME_EMAIL              contact email for Let's Encrypt
 #   CLICKHOUSE_PASSWORD     password for the `default` CH user
 #
@@ -68,7 +68,7 @@ services:
       - caddy-config:/config
     environment:
       # Read by the Caddyfile via {$VAR} substitution.
-      CH_PROD_DOMAIN: ${CH_PROD_DOMAIN:?CH_PROD_DOMAIN must be set}
+      CH_DOMAIN: ${CH_DOMAIN:?CH_DOMAIN must be set}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set}
     # Caddy is a tiny static binary; 256 MiB is generous. Pinning
     # prevents an unexpected memory leak from competing with CH

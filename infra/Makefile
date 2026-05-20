@@ -45,6 +45,15 @@ deploy-staging-bastion: build
 destroy-staging-bastion: build
 	npx cdk --app "$(BASTION_STAGING_APP)" destroy --force
 
+synth-staging-hetzner-dns: build
+	npx cdk --app "$(STAGING_APP)" synth Explorer-staging-HetznerDns
+
+diff-staging-hetzner-dns: build
+	npx cdk --app "$(STAGING_APP)" diff Explorer-staging-HetznerDns
+
+deploy-staging-hetzner-dns: build
+	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-HetznerDns --require-approval broadening
+
 # --- Production ---
 
 synth-production: build
@@ -82,6 +91,15 @@ deploy-production-bastion: build
 
 destroy-production-bastion: build
 	npx cdk --app "$(BASTION_PRODUCTION_APP)" destroy --force
+
+synth-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" synth Explorer-production-HetznerDns
+
+diff-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" diff Explorer-production-HetznerDns
+
+deploy-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-HetznerDns --require-approval broadening
 
 # --- CI/CD (shared, deploy once per account) ---
 

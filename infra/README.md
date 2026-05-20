@@ -117,6 +117,32 @@ Your laptop (localhost:15432)
 
 No SSH, no open ports, no VPN, no IP whitelisting required. Only valid AWS credentials with `ssm:StartSession` permission.
 
+## HetznerDnsStack — Route 53 record for the production ClickHouse box
+
+`HetznerDnsStack` provisions a Route 53 A record (`ch.${envName === 'production' ? '' : envName + '.'}sorobanscan.rumblefish.dev` ← `chDomainName` in the env config) targeting the Hetzner-hosted ClickHouse server's public IPv4. Caddy on the box uses this name for the Let's Encrypt HTTP-01 challenge; AWS-side workloads use it as the mTLS endpoint.
+
+### One-time setup (per environment, before first deploy)
+
+The box IPv4 is intentionally NOT in `envs/${env}.json` — that matches the existing `inventory.ini`-is-gitignored convention. It lives in SSM Parameter Store:
+
+```bash
+aws ssm put-parameter \
+    --name /soroban/production/ch-ip \
+    --value <dedicated-server-ipv4> \
+    --type String \
+    --region us-east-1
+```
+
+Subsequent IP rotations (after a box replacement) use `--overwrite` on the same command — no CDK code change, no PR.
+
+### Deploy
+
+```bash
+make deploy-production-hetzner-dns
+```
+
+`cdk synth` does NOT require AWS auth for the IP — the SSM value is rendered as a CFN dynamic reference (`{{resolve:ssm:/soroban/production/ch-ip}}`) and resolved by CloudFormation at deploy time. If the parameter is missing, the deploy fails with a CFN error pointing at the parameter name.
+
 ## Environments
 
 Each environment has its own JSON config and CDK entry point:
