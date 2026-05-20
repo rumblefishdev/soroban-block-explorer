@@ -46,7 +46,12 @@ export function ExplorerTable<T>({
   return (
     <TableContainer>
       <Table>
-        <TableHead>
+        <TableHead
+          sx={(theme) => ({
+            // Table header sits on the darkest surface (Figma).
+            backgroundColor: theme.palette.surface.backgroundAlt,
+          })}
+        >
           <TableRow>
             {columns.map((col) => {
               const isSorted = sortBy === col.id;
