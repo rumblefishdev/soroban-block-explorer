@@ -96,45 +96,50 @@ export function ExplorerTable<T>({
           </TableRow>
         </TableHead>
         <TableBody>
-          {isEmpty ? (
-            <TableRow>
-              <TableCell colSpan={columns.length} sx={{ borderBottom: 'none' }}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    justifyContent: 'center',
-                    py: 6,
-                  }}
-                >
-                  {emptyState}
-                </Box>
-              </TableCell>
-            </TableRow>
-          ) : (
-            rows.map((row, idx) => (
-              <TableRow
-                key={rowKey(row, idx)}
-                sx={(theme) => ({
-                  backgroundColor:
-                    idx % 2 === 1
-                      ? theme.palette.surface.grayMainAlt
-                      : theme.palette.surface.grayMain,
-                })}
-              >
-                {columns.map((col) => (
+          {isEmpty
+            ? // No `emptyState` → render nothing rather than an empty 96px-tall
+              // placeholder row. Callers that want a placeholder pass one in.
+              emptyState !== undefined && (
+                <TableRow>
                   <TableCell
-                    key={col.id}
-                    align={col.align ?? 'left'}
-                    width={col.width}
-                    // Fixed 48px row, per the Design System table cell.
-                    sx={{ height: 48, py: 0 }}
+                    colSpan={columns.length}
+                    sx={{ borderBottom: 'none' }}
                   >
-                    {col.cell(row, idx)}
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'center',
+                        py: 6,
+                      }}
+                    >
+                      {emptyState}
+                    </Box>
                   </TableCell>
-                ))}
-              </TableRow>
-            ))
-          )}
+                </TableRow>
+              )
+            : rows.map((row, idx) => (
+                <TableRow
+                  key={rowKey(row, idx)}
+                  sx={(theme) => ({
+                    backgroundColor:
+                      idx % 2 === 1
+                        ? theme.palette.surface.grayMainAlt
+                        : theme.palette.surface.grayMain,
+                  })}
+                >
+                  {columns.map((col) => (
+                    <TableCell
+                      key={col.id}
+                      align={col.align ?? 'left'}
+                      width={col.width}
+                      // Fixed 48px row, per the Design System table cell.
+                      sx={{ height: 48, py: 0 }}
+                    >
+                      {col.cell(row, idx)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
         </TableBody>
       </Table>
     </TableContainer>

@@ -8,5 +8,6 @@ export const useLedgersList = () =>
     ...listLedgersInfiniteOptions(),
     ...listPolicy,
     initialPageParam: {},
-    getNextPageParam: (lastPage) => lastPage.page.cursor ?? undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.page.has_more ? lastPage.page.cursor ?? undefined : undefined,
   });
