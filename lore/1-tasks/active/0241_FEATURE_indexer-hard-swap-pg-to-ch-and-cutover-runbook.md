@@ -2,7 +2,7 @@
 id: '0241'
 title: 'FEATURE: Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0044', '0045', '0047']
 related_tasks: ['0206', '0228', '0233', '0239', '0240', '0242']
 blocked_by: ['0228', '0239']
@@ -35,6 +35,16 @@ history:
       — the indexer Lambda writes to PG only. Decision: hard swap CH-only
       (single PR cutover, no dual-write transition). Task covers code change
       in the indexer crate + operator runbook + empirical cutover validation.
+  - date: '2026-05-20'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active in prep-work mode. Real blockers (0228 parallel-backfill
+      merge in flight, 0239 AWS-side cutover backlog) prevent deploy, but Part A
+      (code change in crates/indexer/) is doable solo against the local CH pilot
+      Docker stack (per 0204). Part B (runbook) and Part C (empirical validation)
+      remain gated on blocker resolution. PR will be opened as draft with a
+      "do not merge until 0228 + 0239 ready" marker.
 ---
 
 # Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation
