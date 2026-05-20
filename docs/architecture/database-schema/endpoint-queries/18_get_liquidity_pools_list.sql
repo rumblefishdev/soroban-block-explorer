@@ -14,12 +14,18 @@
 --   $6  :asset_b_code             VARCHAR        NULL = no filter
 --   $7  :asset_b_issuer_strkey    VARCHAR(56)    NULL = no filter
 --   $8  :min_tvl                  NUMERIC(28,7)  NULL = no filter
--- Indexes:      idx_pools_asset_a / idx_pools_asset_b (asset filters),
+--   $9  :asset_code               VARCHAR        NULL = no filter
+--                                                (uppercased + trimmed
+--                                                 at API boundary; task 0246)
+-- Indexes:      idx_pools_asset_a / idx_pools_asset_b (per-leg asset filters),
 --               idx_pools_created_at_ledger ON (created_at_ledger DESC, pool_id DESC)
 --                  — exact keyset walk; added in task 0132 migration
 --                  `20260428000100_add_endpoint_query_indexes`,
 --               idx_lps_pool ON (pool_id, created_at DESC) — for the
---                  latest-snapshot lateral lookup.
+--                  latest-snapshot lateral lookup,
+--               idx_lpp_shares (pool_id, shares DESC) WHERE shares > 0
+--                  — partial index covering the per-row participant count
+--                  subquery (task 0246).
 -- Notes:
 --   • Default ordering is `(created_at_ledger DESC, pool_id DESC)`: newest
 --     pools first, deterministic on tie. We deliberately do NOT order by
@@ -40,8 +46,22 @@
 --     by leaving both code and issuer params NULL, OR explicit classic
 --     identity (both non-NULL). Mixed (one NULL one not) is undefined —
 --     the API validates inputs upstream.
+--   • Single-asset filter (`$9`, task 0246) coexists additively with the
+--     per-leg filters. The handler trims + uppercases the caller input
+--     before binding; the column side applies `UPPER(...)` symmetrically
+--     so mixed-case stored codes still match. The two `idx_pools_asset_*`
+--     btree indexes are on the raw column, so this clause does not seek;
+--     acceptable because the planner can still use the cursor / per-leg
+--     filters when present, and the pool table is small (≈10⁴ rows on
+--     Stellar pubnet).
 --   • Issuer StrKeys resolve via a CTE with the `accounts.account_id`
 --     UNIQUE index, then are surfaced via final joins.
+--   • `participant_count` (task 0246) is a correlated subquery hitting
+--     the partial index `idx_lpp_shares (pool_id, shares DESC) WHERE
+--     shares > 0`. Not snapshot-bound — populated even on stale pools.
+--     N×1 index seeks per page (limit + 1); on hot pools with many
+--     LP positions this can dominate page latency — benchmark before
+--     production scale-out, consider a cached column if it bites.
 --   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
 --     via `lp.created_at_ledger > 0`. The persist layer emits these
 --     rows (`created_at_ledger = 0`, NULL/0 asset/fee fields) to
@@ -73,6 +93,11 @@ SELECT
     -- DB stores basis points; conversion is here, not on the client.
     (lp.fee_bps::numeric / 100)         AS fee_percent,
     lp.created_at_ledger,
+    -- Task 0246: active LP count per pool. Correlated subquery on
+    -- `idx_lpp_shares` partial index. Not snapshot-bound.
+    (SELECT COUNT(*) FROM lp_positions lpp
+      WHERE lpp.pool_id = lp.pool_id AND lpp.shares > 0)
+                                        AS participant_count,
     s.ledger_sequence                   AS latest_snapshot_ledger,
     s.reserve_a,
     s.reserve_b,
@@ -108,5 +133,11 @@ WHERE
     AND ($6::varchar IS NULL OR lp.asset_b_code = $6)
     AND ($7::varchar IS NULL OR lp.asset_b_issuer_id = (SELECT id FROM issuer_b))
     AND ($8::numeric IS NULL OR s.tvl >= $8)
+    -- Single-asset filter (task 0246). `$9` is uppercased + trimmed at
+    -- the API boundary; `UPPER(...)` on the column side covers
+    -- mixed-case stored codes.
+    AND ($9::varchar IS NULL
+         OR UPPER(lp.asset_a_code) = $9
+         OR UPPER(lp.asset_b_code) = $9)
 ORDER BY lp.created_at_ledger DESC, lp.pool_id DESC
 LIMIT $1;

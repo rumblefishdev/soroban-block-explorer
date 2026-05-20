@@ -41,6 +41,14 @@ history:
     note: >
       Promoted backlog → active. Starting implementation on
       feat/0246_backend-liquidity-pools-api-extensions branch.
+  - date: 2026-05-20
+    status: active
+    who: karolkow
+    note: >
+      Phase 1 (filter[asset_code]) shipped — commit 193e269.
+      Phase 2 (participant_count on PoolItem) shipped — commit f105f36.
+      Phase 3 (total_count envelope) dropped mid-implementation as
+      duplicate of Phase 2 data — see Design Decisions → Emerged.
 ---
 
 # Backend: liquidity pool API extensions for FE list/detail (0077)
@@ -135,26 +143,23 @@ no oracle dependency" — these extensions stay in that lane.
 - Stale pools (no fresh snapshot): `participant_count` is still computed
   (no oracle dependency). Only `tvl/volume/fee_revenue` stay NULL.
 
-### Phase 3 — `total_count` on participants envelope
+### Phase 3 — `total_count` on participants envelope — **DROPPED**
 
-- **Endpoint:** `GET /liquidity-pools/:id/participants`
-- **Files:** `crates/api/src/liquidity_pools/handlers.rs::list_participants`,
-  `crates/api/src/liquidity_pools/dto.rs`,
-  `docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`
-- Introduce wrapper DTO:
-  ```rust
-  pub struct ParticipantsResponse {
-      pub data: Vec<ParticipantItem>,
-      pub total_count: i64,
-      pub cursor: Option<String>,
-  }
-  ```
-- Compute via `COUNT(*) OVER()` window inside paginated CTE, or a
-  separate COUNT query (prefer window — single round-trip).
-- 404 unchanged when pool does not exist. Empty pool returns
-  `total_count = 0`.
-- This is one of the first envelope-style responses; the wrapper sets
-  precedent. Document in OpenAPI.
+**Status:** dropped mid-implementation. See Design Decisions → Emerged
+(2026-05-20) for the full rationale.
+
+Short version: `total_count` on the participants envelope would have
+duplicated the per-pool active-participant count that Phase 2 already
+surfaces on `PoolItem` (returned by both `GET /liquidity-pools` and
+`GET /liquidity-pools/:id`). The frontend's "1,284 liquidity providers"
+KPI on the LP detail page (Figma §6.14) reads that field directly from
+the detail call — no second source needed. Implementing this phase
+would have meant: a window function over the full active-participant
+set per request (vs cheap `LIMIT 20` index walk today), a canonical
+`PageInfo.total_count` extension cascading on every existing list
+handler (`assets/`, `contracts/`, etc.), and zero additional UX. Pure
+over-engineering; revisit only when a concrete FE deep-link surface
+without a prior detail prefetch shows up.
 
 ### Phase 4 — Docs (per ADR 0032)
 
@@ -162,8 +167,9 @@ no oracle dependency" — these extensions stay in that lane.
   `filter[asset_code]` clause + `participant_count` projection.
 - `docs/architecture/database-schema/endpoint-queries/19_*.sql` — add
   `participant_count` projection.
-- `docs/architecture/database-schema/endpoint-queries/23_*.sql` — add
-  `total_count` window function + envelope shape.
+- ~~`docs/architecture/database-schema/endpoint-queries/23_*.sql` — add
+  `total_count` window function + envelope shape.~~ — dropped with
+  Phase 3.
 - `docs/architecture/backend-overview.md` — update §6.3 (E18, E19),
   §6.13 / §6.14 frontend impact tables.
 - OpenAPI regenerated:
@@ -176,27 +182,77 @@ no oracle dependency" — these extensions stay in that lane.
   mapping per phase.
 - DB integration tests (seeded): `filter[asset_code]` matches either
   leg, case-insensitive; `participant_count` accurate for 0 / 1 / many
-  positions; `total_count` matches `data.len()` when no pagination,
-  exceeds it on page 2.
+  positions.
 - OpenAPI snapshot test (drift detection).
 
 ## Acceptance Criteria
 
-- [ ] `filter[asset_code]` on `GET /liquidity-pools` matches either leg
-      (case-insensitive)
-- [ ] Existing per-leg filters (`asset_a_*`, `asset_b_*`) unchanged +
-      still work; both modes can combine
-- [ ] `participant_count: i64` returned on `PoolItem` (list + detail),
-      accurate vs `lp_positions WHERE shares > 0`
-- [ ] `GET /liquidity-pools/:id/participants` returns
-      `{ data, total_count, cursor }` envelope
-- [ ] Sentinel pools (`created_at_ledger = 0`) excluded from all
+- [x] `filter[asset_code]` on `GET /liquidity-pools` matches either leg
+      (case-insensitive) — Phase 1, commit 193e269
+- [x] Existing per-leg filters (`asset_a_*`, `asset_b_*`) unchanged +
+      still work; both modes can combine — Phase 1, commit 193e269
+- [x] `participant_count: i64` returned on `PoolItem` (list + detail),
+      accurate vs `lp_positions WHERE shares > 0` — Phase 2, commit f105f36
+- [ ] ~~`GET /liquidity-pools/:id/participants` returns
+      `{ data, total_count, cursor }` envelope~~ — **dropped** (Phase 3
+      cancelled; see Design Decisions → Emerged)
+- [x] Sentinel pools (`created_at_ledger = 0`) excluded from all
       affected endpoints (defense-in-depth per ADR 0041)
-- [ ] Three canonical SQL specs updated under
-      `docs/architecture/database-schema/endpoint-queries/`
-- [ ] `backend-overview.md` §6.3 / §6.13 / §6.14 updated
-- [ ] OpenAPI types regenerated (CI gate `API types freshness` green)
-- [ ] Unit + integration tests pass; OpenAPI snapshot test passes
+- [x] Two canonical SQL specs updated under
+      `docs/architecture/database-schema/endpoint-queries/` (18, 19;
+      23 unchanged after Phase 3 drop)
+- [x] `backend-overview.md` §6.3 + `frontend-overview.md` §6.13 / §6.14
+      updated
+- [x] OpenAPI types regenerated (CI gate `API types freshness` green)
+- [x] Unit + integration tests pass; OpenAPI snapshot test passes
+
+## Design Decisions
+
+### From Plan
+
+1. **`filter[asset_code]` coexists with per-leg filters.** Single-asset
+   convenience for the Figma list input (`USDC` / `XLM`) without
+   removing the per-leg `(code, issuer)` path that API consumers need
+   for issuer disambiguation. Both modes combine additively in the
+   WHERE clause.
+
+2. **`participant_count` is snapshot-independent.** Computed via
+   correlated subquery against `lp_positions` (partial index
+   `idx_lpp_shares` covers it) — not part of the snapshot freshness
+   window. Stale pools still get an accurate count; only the
+   USD-denominated `tvl/volume/fee_revenue` stay NULL pending the
+   oracle work in task 0199.
+
+### Emerged
+
+3. **2026-05-20 — Phase 3 dropped.** The original plan added
+   `page.total_count` (envelope-side) on
+   `GET /liquidity-pools/:id/participants` to back the "1,284 liquidity
+   providers" KPI on the LP detail page (Figma §6.14). Senior-fresh-eye
+   review during implementation flagged this as duplication:
+
+   - The same number is already on `PoolItem.participant_count` (Phase 2)
+     in the detail call that the FE makes anyway when it opens the LP
+     detail page. The KPI reads from that field.
+   - The participants list endpoint is only ever opened from inside
+     that detail view (no current FE deep-link surface targeting
+     `…/participants` directly without a prior detail call).
+   - Implementing the envelope addition would have cost (a) a window
+     function over the full active-participant set per request — 64×
+     more rows scanned per page than the current `LIMIT 20` index walk
+     on a 1,284-LP pool; (b) a canonical `PageInfo.total_count`
+     extension cascading on every existing list handler in the API
+     crate; (c) zero user-visible UX gain.
+
+   Net: drop. If a future deep-link surface emerges (FE adds a route
+   that lands directly on `…/participants` without a detail prefetch),
+   revisit by either (i) populating `total_count` on the envelope at
+   that point or (ii) keeping the detail call as the canonical source
+   and prefetching it client-side. Reactive, not speculative.
+
+   No envelope canonical change. Phase 3 reverted in working tree;
+   `crates/api/src/openapi/schemas.rs::PageInfo` stays at its pre-0246
+   shape.
 
 ## Notes
 

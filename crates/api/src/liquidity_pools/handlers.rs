@@ -142,6 +142,22 @@ fn is_valid_decimal_string(s: &str) -> bool {
     digits > 0 && dots <= 1
 }
 
+/// Normalize `filter[asset_code]` for the WHERE clause: trim surrounding
+/// whitespace and uppercase the result. Empty input (e.g. `?filter[asset_code]=`)
+/// is treated as "no filter" and dropped to `None`. The DB side applies
+/// `UPPER(...)` symmetrically so a mixed-case stored code matches.
+///
+/// Stellar protocol asset codes are case-sensitive (1–12 ASCII chars,
+/// any case), but the canonical convention is uppercase (USDC, XLM). The
+/// trim+uppercase normalization matches caller intent for the Figma
+/// "Filter by asset pair" free-text field; consumers who need exact
+/// case-sensitive issuer-disambiguated matching should use the per-leg
+/// `filter[asset_a_code]` / `filter[asset_a_issuer]` mode instead.
+fn normalize_asset_code(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+}
+
 fn map_pool_item(row: PoolRow) -> PoolItem {
     PoolItem {
         pool_id: row.pool_id_hex,
@@ -160,6 +176,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
+        participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         reserve_a: row.reserve_a,
         reserve_b: row.reserve_b,
@@ -263,6 +280,7 @@ pub async fn list_pools(
         asset_b_code: params.filter_asset_b_code,
         asset_b_issuer: params.filter_asset_b_issuer,
         min_tvl: params.filter_min_tvl,
+        asset_code: normalize_asset_code(params.filter_asset_code),
     };
 
     let mut rows = match fetch_pool_list(&state.db, &resolved).await {
@@ -551,4 +569,54 @@ pub async fn get_pool_chart(
     .into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);
     resp
+}
+
+#[cfg(test)]
+mod normalize_asset_code_tests {
+    use super::normalize_asset_code;
+
+    #[test]
+    fn none_passes_through() {
+        assert_eq!(normalize_asset_code(None), None);
+    }
+
+    #[test]
+    fn empty_string_becomes_none() {
+        assert_eq!(normalize_asset_code(Some(String::new())), None);
+        assert_eq!(normalize_asset_code(Some("   ".into())), None);
+    }
+
+    #[test]
+    fn lowercase_is_uppercased() {
+        assert_eq!(
+            normalize_asset_code(Some("usdc".into())),
+            Some("USDC".into())
+        );
+    }
+
+    #[test]
+    fn mixed_case_is_uppercased() {
+        assert_eq!(
+            normalize_asset_code(Some("UsDc".into())),
+            Some("USDC".into())
+        );
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed() {
+        assert_eq!(
+            normalize_asset_code(Some("  xlm  ".into())),
+            Some("XLM".into())
+        );
+    }
+
+    #[test]
+    fn unicode_lower_uppercases_too() {
+        // Stellar codes are ASCII-only in practice, but the normalizer
+        // should not panic on UTF-8 — `String::to_uppercase` handles it.
+        assert_eq!(
+            normalize_asset_code(Some("usdc🪙".into())),
+            Some("USDC🪙".into())
+        );
+    }
 }
