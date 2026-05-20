@@ -127,7 +127,15 @@ export function createApp({
   });
   cloudWatch.addDependency(apiGateway);
 
-  new HetznerDnsStack(app, `${prefix}-HetznerDns`, { env, config });
+  // HetznerDnsStack only when the env has a real `chDomainName`.
+  // Staging carries a `PLACEHOLDER` value so the rest of its CDK app
+  // synths cleanly — see `validateConfig` for the matching rule.
+  if (
+    !config.chDomainName.includes('PLACEHOLDER') &&
+    !config.chDomainName.includes('CHANGE')
+  ) {
+    new HetznerDnsStack(app, `${prefix}-HetznerDns`, { env, config });
+  }
 
   app.synth();
 }

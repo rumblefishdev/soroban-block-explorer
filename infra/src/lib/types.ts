@@ -307,13 +307,21 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
 
   // Hetzner DNS — per-env (consumed by HetznerDnsStack).
-  if (
-    !config.chDomainName ||
-    config.chDomainName.includes('CHANGE') ||
-    config.chDomainName.includes('PLACEHOLDER')
+  //
+  // `chDomainName` must be set on every environment so the type stays
+  // mandatory, but a `PLACEHOLDER` / `CHANGE_ME` value is only fatal
+  // for production. On staging it signals "do not deploy HetznerDns"
+  // — `app.ts` guards stack instantiation on the same condition, so
+  // every OTHER staging stack still synths cleanly.
+  if (!config.chDomainName) {
+    errors.push(`chDomainName missing`);
+  } else if (
+    config.envName === 'production' &&
+    (config.chDomainName.includes('CHANGE') ||
+      config.chDomainName.includes('PLACEHOLDER'))
   ) {
     errors.push(
-      `chDomainName missing or placeholder: "${config.chDomainName}"`
+      `chDomainName placeholder rejected on production: "${config.chDomainName}"`
     );
   }
 

@@ -171,18 +171,27 @@ cp inventory.ini.example inventory.ini
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 4. Configure the storage box and domain defaults
+### 4. Configure the storage box and domain values
 
-Edit `infra-hetzner/ansible/group_vars/all.yml`:
+These are NOT edited in `group_vars/all.yml` — `all.yml` reads
+them via `lookup('env', '...')`. Set them in
+`~/.config/soroban-prod.env` (the canonical block lives in the
+`soroban-prod / ansible-env` password-manager entry, copied from
+the template in the "Prerequisites" section above):
 
-- `ch_domain` → real DNS name pointed at the server IP
-- `acme_email` → real operator email
-- `storagebox_ssh_user`, `storagebox_ssh_host` → values from the
+- `CH_DOMAIN` → real DNS name pointed at the server IP (matches
+  `chDomainName` in the CDK env config — provisioned by
+  `HetznerDnsStack`)
+- `ACME_EMAIL` → real operator email (LE expiry warnings)
+- `STORAGEBOX_SSH_USER`, `STORAGEBOX_SSH_HOST` → values from the
   BX21 order page
-- `ssh_authorized_github_users` → the team's GitHub logins
+- `OPERATOR_SSH_PUBKEYS` → multi-line block of OpenSSH public
+  keys; one per operator authorised to SSH the box
 
-These are committed (non-secret deployment config). Pair the
-change with a `feat(lore-0227): ...` commit.
+Source the env file (`source ~/.config/soroban-prod.env`) before
+each `ansible-playbook` run. Adding a new operator = append their
+pubkey to the env block in the password manager + each operator
+re-fetches the entry locally.
 
 ### 5. Smoke-test SSH connectivity
 

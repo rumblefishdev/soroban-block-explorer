@@ -119,7 +119,13 @@ No SSH, no open ports, no VPN, no IP whitelisting required. Only valid AWS crede
 
 ## HetznerDnsStack — Route 53 record for the production ClickHouse box
 
-`HetznerDnsStack` provisions a Route 53 A record (`ch.${envName === 'production' ? '' : envName + '.'}sorobanscan.rumblefish.dev` ← `chDomainName` in the env config) targeting the Hetzner-hosted ClickHouse server's public IPv4. Caddy on the box uses this name for the Let's Encrypt HTTP-01 challenge; AWS-side workloads use it as the mTLS endpoint.
+`HetznerDnsStack` provisions a Route 53 A record targeting the
+Hetzner-hosted ClickHouse server's public IPv4. The FQDN comes
+verbatim from the `chDomainName` field in the env config
+(`envs/${env}.json`) — for example, production today resolves to
+`ch.sorobanscan.rumblefish.dev`. Caddy on the box uses this name
+for the Let's Encrypt HTTP-01 challenge; AWS-side workloads use
+it as the mTLS endpoint.
 
 ### One-time setup (per environment, before first deploy)
 

@@ -36,10 +36,12 @@ export interface HetznerDnsStackProps extends cdk.StackProps {
  *         --type String \
  *         --region <awsRegion>
  *
- * `valueForStringParameter` renders a CFN dynamic reference
- * (`{{resolve:ssm:NAME:version}}`) — CloudFormation resolves it at
- * deploy time, so no AWS auth is required during `cdk synth` and
- * the IP never lands in the synthesized template stored locally.
+ * `valueForStringParameter` renders a CFN dynamic reference of
+ * the form `{{resolve:ssm:/path}}` (a `:version` suffix may
+ * appear when the call passes a specific version). CloudFormation
+ * resolves the reference at deploy time, so no AWS auth is
+ * required during `cdk synth` and the literal IP never lands in
+ * the synthesized template stored locally.
  */
 export class HetznerDnsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: HetznerDnsStackProps) {
