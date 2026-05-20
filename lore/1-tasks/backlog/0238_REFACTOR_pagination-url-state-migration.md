@@ -136,16 +136,16 @@ entity and must drop on entity change.
 
 Before merge, click through each page:
 
-| Page | Smoke |
-|------|-------|
-| `/ledgers` | Next 3×, Prev 3×, refresh on N=2, share link |
-| `/ledgers/:sequence` | Inner Next 2×, prev/next ledger, refresh |
-| `/transactions` | Filter change resets cursor, refresh on filtered cursor |
-| `/assets` | Same as transactions |
-| `/nfts` | Same as transactions |
-| `/nfts/:id` | Switch NFT id, transfer history pagination |
-| `/accounts/:id` | Switch account, transactions pagination |
-| `/assets/:id` | Switch asset, transactions pagination |
+| Page                 | Smoke                                                   |
+| -------------------- | ------------------------------------------------------- |
+| `/ledgers`           | Next 3×, Prev 3×, refresh on N=2, share link            |
+| `/ledgers/:sequence` | Inner Next 2×, prev/next ledger, refresh                |
+| `/transactions`      | Filter change resets cursor, refresh on filtered cursor |
+| `/assets`            | Same as transactions                                    |
+| `/nfts`              | Same as transactions                                    |
+| `/nfts/:id`          | Switch NFT id, transfer history pagination              |
+| `/accounts/:id`      | Switch account, transactions pagination                 |
+| `/assets/:id`        | Switch asset, transactions pagination                   |
 
 ## Risks
 
