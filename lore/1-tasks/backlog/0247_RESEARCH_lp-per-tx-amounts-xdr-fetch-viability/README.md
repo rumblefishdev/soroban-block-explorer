@@ -1,10 +1,10 @@
 ---
-id: '0242'
+id: '0247'
 title: 'RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives'
 type: RESEARCH
 status: backlog
 related_adr: ['0011', '0027', '0029', '0037']
-related_tasks: ['0077', '0163', '0169', '0199', '0241']
+related_tasks: ['0077', '0163', '0169', '0199', '0246']
 tags:
   [
     priority-medium,
@@ -21,7 +21,7 @@ history:
     status: backlog
     who: karolkow
     note: >
-      Split from 0241 Phase 4 (originally bundled). Per-tx LP amounts
+      Split from 0246 Phase 4 (originally bundled). Per-tx LP amounts
       (deposit_a/b, withdraw_a/b, trade direction) need to land in
       `GET /liquidity-pools/:id/transactions` to support Figma "Recent
       transactions" amount column. Default proposal was XDR archive
@@ -30,6 +30,16 @@ history:
       150 ms each = 0.5–1.5 s typical, 1.5–3 s p99. Worth benchmarking
       before commit. Alternatives (narrow ADR 0029 exception for LP
       ops, ingest-side extraction) also on the table.
+  - date: 2026-05-20
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0242 → 0247. Origin commit c82c9fa (M1-M3 sequencing
+      plan, merged concurrently) had already grabbed 0242 for the
+      ADR ratify ClickHouse-primary task. Sister feature task renumbered
+      0241 → 0246 in the same operation. Original spawn commits
+      (cac0215, ddbbb34) retain the `lore-0241` scope tag —
+      not amended per no-amend convention.
 ---
 
 # RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives
@@ -50,7 +60,7 @@ recommendation with measured numbers.
 
 ## Status: Backlog
 
-**Current state:** Not started. Spawned from 0241 split on 2026-05-20.
+**Current state:** Not started. Spawned from 0246 split on 2026-05-20.
 
 ## Open question
 
@@ -167,7 +177,7 @@ Sub-questions:
 ## Notes
 
 - Frontend FE 0077 can ship without amount column for MVP (Path D as
-  interim). 0242 unblocks the proper amount column.
+  interim). 0247 unblocks the proper amount column.
 - 0199 (LP analytics, blocked-on-oracle) is orthogonal — that task
   aggregates USD volume per snapshot, not per-tx amounts. No overlap.
 - Indexer already parses every op for fold-count + identity tuple

@@ -2,7 +2,7 @@
 prefix: Q
 title: S3 archive fetch latency — measured p50/p95/p99
 status: seed
-spawned_from: '0242'
+spawned_from: '0247'
 ---
 
 # Question
@@ -24,7 +24,7 @@ zstd, and parsing it enough to extract LP-specific operation amounts?
 
 ## Why it matters
 
-Path A in 0242 (the default proposal) hinges on this number. If a
+Path A in 0247 (the default proposal) hinges on this number. If a
 single ledger fetch is p95 = 80 ms, a typical 20-row page hitting 8
 distinct ledgers = ~640 ms. If p95 = 200 ms, it's 1.6 s. The user-
 visible threshold for "feels instant" is ~300 ms, "acceptable" ~1 s,

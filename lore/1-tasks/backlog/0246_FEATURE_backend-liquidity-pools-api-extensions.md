@@ -1,10 +1,10 @@
 ---
-id: '0241'
+id: '0246'
 title: 'Backend: liquidity pool API extensions for FE list/detail (0077)'
 type: FEATURE
 status: backlog
 related_adr: ['0027', '0031', '0032', '0041']
-related_tasks: ['0077', '0199', '0215', '0242']
+related_tasks: ['0077', '0199', '0215', '0247']
 tags: [priority-high, effort-small, layer-api, layer-docs, milestone-2]
 milestone: 2
 links:
@@ -19,12 +19,22 @@ history:
     note: >
       Spawned from 0077 deep-dive (FE liquidity pools list + detail vs
       Figma + backend reality). Three DB-only additions; per-tx LP
-      amounts (originally Phase 4) split off into 0242 RESEARCH because
+      amounts (originally Phase 4) split off into 0247 RESEARCH because
       XDR-archive fetch latency on hot path needs benchmark + arch
       decision before commit.
       Verified non-conflicting vs ADR 0027 (LP schema), 0031 (pool_id),
       0032 (evergreen docs), 0041 (sentinel). Orthogonal to 0199 (LP
       analytics, blocked-on-oracle) and 0215 (FE impact catalog).
+  - date: 2026-05-20
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0241 → 0246. Origin commit c82c9fa (M1-M3 sequencing
+      plan, merged concurrently) had already grabbed 0241 for the
+      indexer hard-swap task. Sister research task renumbered 0242 → 0247
+      in the same operation. Earlier commit messages (cac0215, ddbbb34)
+      retain the original `lore-0241` scope — left intact per
+      no-amend convention; this history entry is the renumber trail.
 ---
 
 # Backend: liquidity pool API extensions for FE list/detail (0077)
@@ -35,7 +45,7 @@ Three additive, DB-only backend extensions to the liquidity pool API
 surface, needed to unblock FE task 0077 (frontend liquidity pools list +
 detail): single-asset filter, participant counts on `PoolItem`, and
 `total_count` envelope on the participants endpoint. Per-tx LP amounts
-(originally scoped as Phase 4) extracted into 0242 RESEARCH — that path
+(originally scoped as Phase 4) extracted into 0247 RESEARCH — that path
 requires XDR archive fetch on the hot read path and needs benchmark +
 arch decision before commit.
 
@@ -47,7 +57,7 @@ arch decision before commit.
 
 FE task 0077 deep-dive revealed four backend API gaps that block 1:1
 Figma implementation. Three are pure DB additions and ship together in
-this task. The fourth (per-tx LP amounts) is heavier and lives in 0242.
+this task. The fourth (per-tx LP amounts) is heavier and lives in 0247.
 
 1. **Asset filter.** Figma list filter is a single text input ("Filter by
    asset pair"). API today requires per-leg exact match
@@ -63,11 +73,11 @@ this task. The fourth (per-tx LP amounts) is heavier and lives in 0242.
    `GET /liquidity-pools/:id/participants` paginates the list, does not
    return total count.
 
-4. **Per-transaction LP amounts.** (Split into 0242 RESEARCH.) Figma
+4. **Per-transaction LP amounts.** (Split into 0247 RESEARCH.) Figma
    "Recent transactions" section shows per-row LP-specific amounts.
    Per ADR 0029, per-op stroop amounts are not stored in the DB.
    XDR-archive read-time fetch is one option; latency + alternatives
-   need benchmark before implementation. See 0242.
+   need benchmark before implementation. See 0247.
 
 This task scopes items 1–3. Frontend 0077 depends on this landing.
 
@@ -184,11 +194,11 @@ no oracle dependency" — these extensions stay in that lane.
 
 ## Notes
 
-- Per-tx LP amounts (formerly Phase 4) extracted into **0242 RESEARCH**
+- Per-tx LP amounts (formerly Phase 4) extracted into **0247 RESEARCH**
   — XDR archive fetch latency on hot read path is the open architectural
   question; needs benchmark before committing to expand pattern. FE 0077
   can ship without amount column (drop column from Transactions section
-  for MVP) and add it later when 0242 conclusion lands.
+  for MVP) and add it later when 0247 conclusion lands.
 - No new schema migrations. Phases 2 + 3 use existing tables
   (`lp_positions`).
 - Status badge in Figma detail header (Active / Stale) uses existing
