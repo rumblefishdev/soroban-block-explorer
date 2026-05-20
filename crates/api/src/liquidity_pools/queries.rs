@@ -210,6 +210,11 @@ pub struct ResolvedPoolListParams {
     /// Decimal string preserving NUMERIC(28,7) precision; passed straight
     /// to `$8::numeric` in the SQL (Postgres parses).
     pub min_tvl: Option<String>,
+    /// Single-asset filter (task 0246) — trimmed + uppercased at the
+    /// handler boundary, matched against either `asset_a_code` or
+    /// `asset_b_code` case-insensitively (`UPPER(...) = $9`). NULL =
+    /// no filter.
+    pub asset_code: Option<String>,
 }
 
 pub async fn fetch_pool_list(
@@ -285,6 +290,17 @@ pub async fn fetch_pool_list(
             AND ($6::varchar IS NULL OR lp.asset_b_code = $6)
             AND ($7::varchar IS NULL OR lp.asset_b_issuer_id = (SELECT id FROM issuer_b))
             AND ($8::numeric IS NULL OR s.tvl >= $8::numeric)
+            -- Task 0246: single-asset filter. `$9` is already trimmed +
+            -- uppercased at the handler boundary; `UPPER(...)` on the
+            -- column side covers mixed-case stored codes. The two
+            -- `idx_pools_asset_a/b` btree indexes are on the *raw*
+            -- column so this clause forfeits index lookup — acceptable
+            -- because the planner can still seek on per-leg filters /
+            -- cursor predicate when present, and a full pool-table scan
+            -- is bounded (current Stellar pubnet ≈ 10⁴ pools).
+            AND ($9::varchar IS NULL
+                 OR UPPER(lp.asset_a_code) = $9
+                 OR UPPER(lp.asset_b_code) = $9)
         ORDER BY lp.created_at_ledger DESC, lp.pool_id DESC
         LIMIT $1
         "#,
@@ -297,6 +313,7 @@ pub async fn fetch_pool_list(
     .bind(&params.asset_b_code)
     .bind(&params.asset_b_issuer)
     .bind(&params.min_tvl)
+    .bind(&params.asset_code)
     .fetch_all(pool)
     .await?;
 

@@ -54,13 +54,24 @@ pub struct ParticipantItem {
 
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools`.
 ///
-/// Asset filters are split per-leg (rather than a single `filter[assets]`
-/// composite) to mirror canonical SQL `18_get_liquidity_pools_list.sql`,
-/// which takes asset_a_code / asset_a_issuer / asset_b_code / asset_b_issuer
-/// as four independent inputs. `limit` / `cursor` are read by a sibling
-/// `Pagination<PoolListCursor>` extractor.
+/// Two asset-filter modes coexist:
+///   * **`filter[asset_code]`** — single-asset, case-insensitive exact
+///     match against either leg. Convenience for the Figma list filter
+///     (frontend §6.13) where the user types just `USDC` / `XLM`.
+///   * **Per-leg `asset_a_code` / `asset_a_issuer` / `asset_b_code` /
+///     `asset_b_issuer`** — kept for API consumers that need exact
+///     issuer disambiguation (`code, issuer` is the classic identity).
+///
+/// Both modes can combine — the WHERE clause is additive. `limit` /
+/// `cursor` are read by a sibling `Pagination<PoolListCursor>` extractor.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct PoolListParams {
+    /// Single-asset filter — matches either `asset_a_code` or
+    /// `asset_b_code` case-insensitively (input is trimmed + uppercased
+    /// before the query). Intended for the Figma list's free-text
+    /// "Filter by asset pair" input.
+    #[serde(rename = "filter[asset_code]")]
+    pub filter_asset_code: Option<String>,
     #[serde(rename = "filter[asset_a_code]")]
     pub filter_asset_a_code: Option<String>,
     #[serde(rename = "filter[asset_a_issuer]")]

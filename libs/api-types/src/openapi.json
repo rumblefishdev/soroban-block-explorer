@@ -838,6 +838,15 @@
             }
           },
           {
+            "name": "filter[asset_code]",
+            "in": "query",
+            "description": "Single-asset filter — matches either `asset_a_code` or\n`asset_b_code` case-insensitively (input is trimmed + uppercased\nbefore the query). Intended for the Figma list's free-text\n\"Filter by asset pair\" input.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
             "name": "filter[asset_a_code]",
             "in": "query",
             "required": false,

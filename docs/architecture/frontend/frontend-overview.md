@@ -519,7 +519,8 @@ Paginated table of all liquidity pools.
 
 - Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
   per asset, fee percentage
-- Filters - asset pair, minimum TVL
+- Filters - asset (`filter[asset_code]`, case-insensitive single-asset; task 0246)
+  or per-leg `(code, issuer)`, minimum TVL (`filter[min_tvl]`)
 - Cursor-based pagination controls
 
 Expanded behavior:

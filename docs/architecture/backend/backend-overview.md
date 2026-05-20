@@ -381,10 +381,12 @@ quality may vary significantly.
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** - Paginated list of pools. Query params: `limit`, `cursor`,
-`filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey), `filter[asset_b_code]`,
-`filter[asset_b_issuer]` (G-StrKey), `filter[min_tvl]` (decimal). Per-leg
-`(code, issuer)` must be supplied paired or both omitted (classic identity).
-Filter semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
+`filter[asset_code]` (single-asset, case-insensitive, matches either leg —
+task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
+`filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
+`filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
+or both omitted (classic identity). The single-asset and per-leg modes coexist
+additively. Filter semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
 **`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares, TVL.
 Dynamic fields come from the latest snapshot row; clients that care about

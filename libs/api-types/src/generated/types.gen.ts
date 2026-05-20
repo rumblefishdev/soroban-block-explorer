@@ -1934,6 +1934,13 @@ export type ListPoolsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Single-asset filter — matches either `asset_a_code` or
+     * `asset_b_code` case-insensitively (input is trimmed + uppercased
+     * before the query). Intended for the Figma list's free-text
+     * "Filter by asset pair" input.
+     */
+    'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;
     'filter[asset_a_issuer]'?: string | null;
     'filter[asset_b_code]'?: string | null;

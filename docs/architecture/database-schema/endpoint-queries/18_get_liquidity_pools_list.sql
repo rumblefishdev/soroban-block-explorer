@@ -14,7 +14,10 @@
 --   $6  :asset_b_code             VARCHAR        NULL = no filter
 --   $7  :asset_b_issuer_strkey    VARCHAR(56)    NULL = no filter
 --   $8  :min_tvl                  NUMERIC(28,7)  NULL = no filter
--- Indexes:      idx_pools_asset_a / idx_pools_asset_b (asset filters),
+--   $9  :asset_code               VARCHAR        NULL = no filter
+--                                                (uppercased + trimmed
+--                                                 at API boundary; task 0246)
+-- Indexes:      idx_pools_asset_a / idx_pools_asset_b (per-leg asset filters),
 --               idx_pools_created_at_ledger ON (created_at_ledger DESC, pool_id DESC)
 --                  — exact keyset walk; added in task 0132 migration
 --                  `20260428000100_add_endpoint_query_indexes`,
@@ -40,6 +43,14 @@
 --     by leaving both code and issuer params NULL, OR explicit classic
 --     identity (both non-NULL). Mixed (one NULL one not) is undefined —
 --     the API validates inputs upstream.
+--   • Single-asset filter (`$9`, task 0246) coexists additively with the
+--     per-leg filters. The handler trims + uppercases the caller input
+--     before binding; the column side applies `UPPER(...)` symmetrically
+--     so mixed-case stored codes still match. The two `idx_pools_asset_*`
+--     btree indexes are on the raw column, so this clause does not seek;
+--     acceptable because the planner can still use the cursor / per-leg
+--     filters when present, and the pool table is small (≈10⁴ rows on
+--     Stellar pubnet).
 --   • Issuer StrKeys resolve via a CTE with the `accounts.account_id`
 --     UNIQUE index, then are surfaced via final joins.
 --   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
@@ -108,5 +119,11 @@ WHERE
     AND ($6::varchar IS NULL OR lp.asset_b_code = $6)
     AND ($7::varchar IS NULL OR lp.asset_b_issuer_id = (SELECT id FROM issuer_b))
     AND ($8::numeric IS NULL OR s.tvl >= $8)
+    -- Single-asset filter (task 0246). `$9` is uppercased + trimmed at
+    -- the API boundary; `UPPER(...)` on the column side covers
+    -- mixed-case stored codes.
+    AND ($9::varchar IS NULL
+         OR UPPER(lp.asset_a_code) = $9
+         OR UPPER(lp.asset_b_code) = $9)
 ORDER BY lp.created_at_ledger DESC, lp.pool_id DESC
 LIMIT $1;
