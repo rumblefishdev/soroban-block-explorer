@@ -5,7 +5,7 @@ type: FEATURE
 status: backlog
 related_adr: ['0044', '0045']
 related_tasks: ['0206', '0228', '0233', '0239', '0240', '0242']
-blocked_by: ['0228', '0239', '0242']
+blocked_by: ['0228', '0239']
 tags:
   [
     priority-high,
@@ -137,10 +137,10 @@ Step-by-step operator instructions:
 
 ## Depends on
 
-- **0239 Phase 2** (mTLS connection layer dla AWS Lambdas → Hetzner CH)
-- **0228** (historical CH ready jako baseline; cutover bez działającego merge'a nie ma sensu)
-- **0242** (ADR 0046 + 0044/0045 ratification — formalne tło decyzji)
-- **0233** (merge runbook — para z live-tail runbook, complementary docs)
+- **0239 Phase 2** (mTLS connection layer dla AWS Lambdas → Hetzner CH) — technical blocker
+- **0228** (historical CH ready jako baseline; cutover bez działającego merge'a nie ma sensu) — technical blocker
+- **0233** (merge runbook — para z live-tail runbook, complementary docs) — soft dependency
+- **0242** — NOT a blocker. ADR ratification jest post-factum dokumentacją per lore convention (`lore/2-adrs/CLAUDE.md`: "Written post-factum after implementation."). 0241 code może lecieć przed 0242 ADR.
 
 ## Open questions
 
