@@ -17,6 +17,7 @@ tags:
     merge,
     multi-machine,
   ]
+milestone: 1
 links:
   - docs/runbooks/backfill_soroban_2of5_fresh_machine.md
   - lore/2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md

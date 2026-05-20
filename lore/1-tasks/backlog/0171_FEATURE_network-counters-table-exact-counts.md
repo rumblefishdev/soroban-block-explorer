@@ -6,6 +6,7 @@ status: backlog
 related_adr: ['0021', '0037']
 related_tasks: ['0045', '0167']
 tags: [layer-indexer, counters, exactness, phase-future]
+milestone: 3
 links:
   - 'docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql'
 history:

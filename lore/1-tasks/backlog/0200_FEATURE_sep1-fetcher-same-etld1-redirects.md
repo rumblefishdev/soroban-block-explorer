@@ -6,6 +6,7 @@ status: backlog
 related_adr: []
 related_tasks: ['0188']
 tags: [priority-low, effort-small, layer-backend, enrichment, sep1, security]
+milestone: 2
 links:
   - https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md
   - https://crates.io/crates/publicsuffix

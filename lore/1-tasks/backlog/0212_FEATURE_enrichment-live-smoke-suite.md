@@ -14,6 +14,7 @@ tags:
     smoke-tests,
     ci-opt-in,
   ]
+milestone: 3
 links:
   - https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md
 history:

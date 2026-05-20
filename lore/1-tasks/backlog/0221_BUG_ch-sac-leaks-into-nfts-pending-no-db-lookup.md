@@ -15,6 +15,7 @@ tags:
     'effort-small',
     'priority-medium',
   ]
+milestone: 2
 links:
   - 'docs/runbooks/0221_ch_drain_sac_from_nfts_pending.md'
 history:
