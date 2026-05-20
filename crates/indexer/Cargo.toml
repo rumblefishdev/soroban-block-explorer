@@ -16,6 +16,13 @@ path = "src/main.rs"
 xdr-parser = { path = "../xdr-parser" }
 domain = { path = "../domain", features = ["sqlx"] }
 db = { path = "../db", features = ["aws-secrets"] }
+# Task 0241 — Hetzner ClickHouse is the prod datastore (ADR 0047). The Lambda
+# writes to CH via `db_clickhouse::persist::persist_ledger_clickhouse` (the
+# one-shot wrapper, since each S3 event is a single ledger). `sqlx` + `db`
+# stay on the dep list during the hard-swap rollout so existing call sites
+# compile; their unused state will be torn out in a follow-up commit.
+db-clickhouse = { path = "../db-clickhouse" }
+clickhouse = "=0.15.0"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
