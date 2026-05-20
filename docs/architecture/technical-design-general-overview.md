@@ -1339,26 +1339,38 @@ Ledger and transaction history are kept indefinitely.
 
 #### Deliverable 1 — Indexing Pipeline & Core Infrastructure
 
+> **Note (2026-05-20):** Per [ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md),
+> the prod datastore for API reads is ClickHouse on Hetzner, not RDS PostgreSQL.
+> Acceptance criteria #2 and #3 below reference "ClickHouse" accordingly. RDS
+> retirement is scheduled in [task 0239](../../lore/1-tasks/backlog/0239_FEATURE_aws-side-cutover-mtls-to-hetzner.md)
+> Phase 6 (M3 — post-launch cost-optimization step). Earlier RDS-centric prose
+> in §6 (Architecture) and §7.3 (Scaling Model) of this document still describes
+> the pre-pivot baseline; a comprehensive sweep is deferred to the
+> docs-architecture cleanup follow-up.
+
 Galexie ECS Fargate task running on mainnet, writing `LedgerCloseMeta` XDR files to S3
 every ~5–6 seconds. Lambda Ledger Processor triggered per file, parsing and writing
 ledgers, transactions, operations, accounts, Soroban invocations, and CAP-67 events to a
-dedicated RDS PostgreSQL database. Historical backfill from Soroban mainnet activation ledger
-(late 2023). Rust API scaffolding with core modules (axum + utoipa). OpenAPI specification. AWS CDK
+dedicated **ClickHouse on Hetzner** database (`ch-prod-01`, single-node MergeTree, mTLS
+behind Caddy). Historical backfill from Soroban mainnet activation ledger (late 2023)
+delivered via FREEZE + rsync + ATTACH PART transport per
+[ADR 0045](../../lore/2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md).
+Rust API scaffolding with core modules (axum + utoipa). OpenAPI specification. AWS CDK
 infrastructure-as-code. CI/CD pipeline. CloudWatch dashboards and ingestion lag alarms.
 
 **Acceptance criteria:**
 
 1. S3 bucket contains consecutive `LedgerCloseMeta` files with timestamps matching
    mainnet ledger close times
-2. RDS `ledgers` table contains all ledgers from backfill start through current tip with
-   no gaps
-3. RDS `soroban_events_appearances` table contains appearance-index rows for CAP-67
+2. **ClickHouse on Hetzner** `ledgers` table contains all ledgers from backfill start
+   through current tip with no gaps
+3. **ClickHouse on Hetzner** `soroban_events` table contains full-content rows for CAP-67
    events in known Soroswap/Aquarius/Phoenix transactions (spot-checked by
-   transaction hashes); full decoded events are confirmed by fetching the
+   transaction hashes); decoded events are confirmed by fetching the
    corresponding `.xdr.zst` from the public archive and re-expanding via
    `xdr_parser::extract_events`
-4. `cdk deploy` from a clean AWS account produces the full working stack with no manual
-   steps
+4. `cdk deploy` (AWS side) + `ansible-playbook` (Hetzner side) from clean environments
+   produces the full working stack with no manual steps
 5. CloudWatch dashboard accessible; Galexie lag alarm fires correctly in staging
 
 **Budget: $26,240 (20% of total)**

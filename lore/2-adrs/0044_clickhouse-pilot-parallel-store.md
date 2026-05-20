@@ -1,10 +1,10 @@
 ---
 id: '0044'
 title: 'ClickHouse pilot — parallel store mirroring Postgres schema, with full-content soroban_events'
-status: proposed
+status: accepted
 deciders: [fmazur]
 related_tasks: ['0204', '0205', '0206']
-related_adrs: ['0033']
+related_adrs: ['0033', '0047']
 tags:
   [
     architecture,
@@ -18,6 +18,17 @@ tags:
   ]
 links: []
 history:
+  - date: '2026-05-20'
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Ratified post-pivot per ADR 0047. CH on Hetzner promoted from
+      "parallel pilot" to primary API datastore. Status flipped
+      proposed → accepted; the pilot evaluation phase is complete and
+      the architectural direction is committed. Implementation paths
+      tracked in tasks 0228 (parallel-backfill merge), 0241 (indexer
+      hard swap), 0243 (API rewrite), 0239 (AWS-side cutover including
+      RDS decommission in Phase 6).
   - date: '2026-05-08'
     status: proposed
     who: fmazur
