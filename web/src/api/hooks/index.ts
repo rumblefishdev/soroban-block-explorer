@@ -17,3 +17,4 @@ export { useContractDetail } from './useContractDetail.js';
 export { useContractInterface } from './useContractInterface.js';
 export { useContractInvocations } from './useContractInvocations.js';
 export { useContractEvents } from './useContractEvents.js';
+export { usePoolsList } from './usePoolsList.js';
