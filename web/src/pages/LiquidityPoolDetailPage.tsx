@@ -34,9 +34,11 @@ import { PoolTransactions } from './pool-detail/PoolTransactions.js';
  * unrelated siblings.
  */
 export default function LiquidityPoolDetailPage() {
-  // React Router won't match `/liquidity-pools/:id` without `:id`, so
-  // `id` is always non-empty here — no need for a defensive fallback
-  // branch that would never execute.
+  // The `= ''` fallback is only here to narrow `id` from
+  // `string | undefined` (the `useParams` return type) down to `string`
+  // for the hooks below. React Router guarantees `:id` is present and
+  // non-empty whenever this component mounts, so the fallback value is
+  // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
   const detail = usePoolDetail(poolId);

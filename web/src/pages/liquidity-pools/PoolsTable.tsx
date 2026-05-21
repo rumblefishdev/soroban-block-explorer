@@ -1,5 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import type { PoolItem } from '@rumblefish/api-types';
 import {
   Chip,
   ExplorerTable,
@@ -8,21 +8,14 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { formatAmount } from '../format.js';
+// `assetLegLabel` lives in the detail-page helpers but the labelling
+// rules apply equally to the list — reuse the shared helper rather than
+// duplicating it, to keep the native-asset / fallback behaviour in one
+// place.
+import { assetLegLabel } from '../pool-detail/helpers.js';
 import { Dash } from '../transactions/cells.js';
 
 export const POOL_COLUMN_COUNT = 4;
-
-/**
- * Returns the display label for one leg of a pool's asset pair.
- *
- * Native (XLM) legs come back with `asset_type_name === 'native'` and
- * `null` `asset_code`. Classic, SAC, and Soroban legs all carry a
- * code. Falls back to `?` only on schema drift.
- */
-function assetLegLabel(leg: PoolAssetLeg): string {
-  if (leg.asset_type_name === 'native') return 'XLM';
-  return leg.asset_code ?? '?';
-}
 
 /** Colored dot per asset leg, matching the Figma reserve row markers. */
 function AssetDot({ color }: { color: string }) {

@@ -21,14 +21,21 @@ const TABS = [
 
 const PERIODS: ChartPeriod[] = ['1D', '7D', '30D', '1Y'];
 
+/**
+ * Module-level — Intl.NumberFormat construction is not free, and the
+ * chart calls `valueFormatter` once per axis tick and once per tooltip
+ * hover, so per-call instantiation adds up.
+ */
+const USD_COMPACT_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
 /** Currency formatter for chart y-axis + tooltip — values are USD amounts. */
 const usdFormatter = (value: number): string =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(value);
+  USD_COMPACT_FORMATTER.format(value);
 
 interface PoolChartsProps {
   poolId: string;
