@@ -171,7 +171,10 @@ This matters because the infrastructure document assumes:
 
 ### 4.2 Launch Topology
 
-At launch, the system is deployed in a single Availability Zone: `us-east-1a`.
+At launch, the system was deployed in a single Availability Zone: `us-east-1a`.
+The `us-east-1` footprint is being decommissioned (task 0249) ahead of a
+greenfield production redeploy in `eu-central-1` (task 0239); the original
+launch topology described below is preserved verbatim for historical reference.
 
 The documented initial deployment model includes:
 
@@ -349,6 +352,20 @@ decommissioned, Lambdas exit their VPC, the ingestion task moves to a
 public subnet, and the NAT Gateway is removed. A separate, future ADR
 records this architectural realignment in which the Hetzner-hosted
 ClickHouse becomes the production data plane.
+
+**Region change.** As part of the same realignment, the AWS-side
+production deployment moves from `us-east-1` to `eu-central-1`
+(task 0239). Task 0249 destroys the entire `us-east-1` footprint
+(staging in full + `Explorer-Cicd`; no production stacks ever
+deployed there) so the new region starts greenfield, avoiding
+cross-region cost overlap on NAT Gateway and RDS. Two AWS resources
+must remain in `us-east-1` regardless of the production region:
+the `CDKToolkit` bootstrap stack and the ACM certificate that backs
+the CloudFront viewer-side TLS (a hard CloudFront requirement —
+viewer certificates must live in `us-east-1`). Route 53 hosted
+zones are global and are unaffected by the region change; only the
+records inside them are recreated as the new stacks come up in
+`eu-central-1`.
 
 ## 6. Networking and Security Boundary
 
