@@ -153,7 +153,7 @@ async fn rebuild_accounts(client: &ClickhouseClient, dry_run: bool) -> Result<u6
              a.last_seen_ledger,
              a.sequence_number,
              a.home_domain
-           FROM accounts FINAL AS a
+           FROM accounts AS a FINAL
            LEFT JOIN (
              SELECT account_id AS id, min(ledger_sequence) AS min_ledger
                FROM transaction_participants
@@ -209,7 +209,7 @@ async fn rebuild_lp_positions(
              lp.shares,
              ifNull(m.min_ledger, lp.first_deposit_ledger) AS first_deposit_ledger,
              lp.last_updated_ledger
-           FROM lp_positions FINAL AS lp
+           FROM lp_positions AS lp FINAL
            LEFT JOIN (
              SELECT
                  pool_id AS pool_id,
@@ -265,7 +265,7 @@ async fn rebuild_nfts(
              ifNull(m.min_ledger, n.minted_at_ledger) AS minted_at_ledger,
              n.current_owner_id,
              n.current_owner_ledger
-           FROM {nfts_table} FINAL AS n
+           FROM {nfts_table} AS n FINAL
            LEFT JOIN (
              SELECT contract_id, token_id, min(ledger_sequence) AS min_ledger
                FROM {ownership_table}
@@ -310,6 +310,11 @@ async fn rebuild_soroban_contracts(
     drop_if_exists(client, staging).await?;
     create_staging_like(client, "soroban_contracts", staging).await?;
 
+    // Subquery aliases use a distinct suffix (`_rebuilt`) to avoid
+    // CH 26.3 rejecting `WHERE isNotNull(deployer_id)` as
+    // ILLEGAL_AGGREGATION when the projected alias shadows the raw
+    // column name (the parser resolves the WHERE reference against
+    // the projection list and sees an aggregate there).
     let insert_sql = format!(
         "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name)
          SELECT
@@ -317,17 +322,17 @@ async fn rebuild_soroban_contracts(
              sc.contract_id,
              sc.wasm_hash,
              sc.wasm_uploaded_at_ledger,
-             ifNull(d.deployer_id, sc.deployer_id) AS deployer_id,
-             ifNull(d.deployed_at_ledger, sc.deployed_at_ledger) AS deployed_at_ledger,
+             ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
+             ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger,
              sc.contract_type,
              sc.is_sac,
              sc.name
-           FROM soroban_contracts FINAL AS sc
+           FROM soroban_contracts AS sc FINAL
            LEFT JOIN (
              SELECT
                  contract_id,
-                 argMin(deployer_id, wasm_uploaded_at_ledger) AS deployer_id,
-                 min(wasm_uploaded_at_ledger) AS deployed_at_ledger
+                 argMin(deployer_id, wasm_uploaded_at_ledger) AS deployer_id_rebuilt,
+                 min(wasm_uploaded_at_ledger) AS deployed_at_ledger_rebuilt
                FROM soroban_contracts
               WHERE isNotNull(deployer_id)
               GROUP BY contract_id

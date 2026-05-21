@@ -102,7 +102,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<AssetAggregatesStats,
                 CAST(ifNull(agg.holder_count, 0) AS Int32),
                 a.holder_count) AS holder_count,
              a.icon_url
-           FROM assets FINAL AS a
+           FROM assets AS a FINAL
            LEFT JOIN (
              SELECT
                  asset_code,
