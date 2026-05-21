@@ -2,7 +2,7 @@
 id: '0240'
 title: 'FEATURE: ClickHouse per-service users + RBAC profiles + quotas (Layer 3 defense-in-depth)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0216', '0227', '0239']
 tags:
@@ -22,6 +22,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned during 0238 scope review — 0216 decision document specifies a three-layer defense-in-depth (TLS + mTLS + CH-side RBAC) but 0227 delivered only Layers 1–2. Currently every mTLS-authenticated client reaches CH as the single `default` user with full permissions. This task adds Layer 3: per-service CH users, profiles and quotas matching each AWS service / dev consumer.'
+  - date: '2026-05-21'
+    status: active
+    who: fmazur
+    note: 'Activated. Pulled ahead of [[task-0239]] so the Secrets Manager bundle contract (`{cert, key, ca, ch_user, ch_password}`) and per-service CH users land before 0239 Phase 1 starts issuing certs and Phase 2 starts wiring Lambda runtime — avoids a two-phase bundle rollout + Lambda re-deploy.'
 ---
 
 # FEATURE: ClickHouse per-service users + RBAC profiles + quotas
