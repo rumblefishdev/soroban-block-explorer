@@ -151,12 +151,17 @@
 		max_size 256MB
 	}
 
-	# Second auth gate: even with a valid CA-signed cert, the
-	# Subject CN must be on the allowlist. The snippet defines
-	# the `@allowed_clients` expression matcher, populated by
-	# Ansible from `allowed_client_cns` in group_vars. Re-running
-	# `--tags app` propagates additions and removals here within
-	# a single playbook run.
+	# Second auth gate + identity assertion: the snippet defines a
+	# `map` directive that translates the verified mTLS subject DN
+	# into a ClickHouse user name (`{ch_user}`). Service certs map
+	# to scoped users (`api_reader`, `galexie`, …); dev certs map
+	# to `dev_shared` (admin user with `<no_password/>` restricted
+	# to loopback/bridge — keeps the password-protected `default`
+	# unreachable from the Caddy path). Any CN absent from the map
+	# leaves `{ch_user}` empty — the @no_user matcher below rejects
+	# with 403 before any backend hop. The map IS the allowlist:
+	# one source of truth, populated by Ansible from
+	# `clickhouse_cn_user_pairs` in group_vars (task 0240).
 	#
 	# This is the proactive equivalent of the CRL/OCSP revocation
 	# story documented in infra-hetzner/ca/README.md — losing a
@@ -168,47 +173,64 @@
 	# directory (not the single file) avoids the docker-bind-mount
 	# auto-create-as-directory failure mode if the file is ever
 	# absent at compose-up time.
-	import snippets/cn_allowlist.snippet
+	import snippets/cn_user_map.snippet
 
-	handle @allowed_clients {
-		reverse_proxy clickhouse:8123 {
-			# Forward TLS metadata so CH access logs (and
-			# downstream audit) can attribute requests to the
-			# presenting client. The CH server ignores unknown
-			# headers; these are informational unless explicitly
-			# consumed.
-			#
-			# `subject` is the only Caddy-registered placeholder
-			# for the client cert's identity. `subject_cn` does
-			# not exist — using it silently emits an empty
-			# header. The value here is the full DN string
-			# (e.g. `CN=alice-laptop`); downstream audit
-			# consumers parse the CN out with a substr / regex.
-			header_up X-Client-Subject {http.request.tls.client.subject}
-			header_up X-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
-
-			# Timeouts cover the longest legitimate analytical
-			# query we expect (mirrored from the pilot users.d
-			# /timeouts.xml 7200 s window). Tighter than the
-			# CH-side timeout so Caddy releases the upstream
-			# socket first on stalls.
-			transport http {
-				dial_timeout 10s
-				response_header_timeout 30s
-				read_timeout 7200s
-				write_timeout 7200s
-			}
-		}
+	@no_user expression `{ch_user} == ""`
+	respond @no_user `{"error":"unauthorized client"}` 403 {
+		close
 	}
 
-	# Anything not matched by @allowed_clients — i.e. a valid
-	# CA-signed cert whose CN is not on the allowlist — gets a
-	# JSON 403. The body is deliberately uninformative; a leaked
-	# cert with an off-list CN should not learn anything about
-	# the allowlist contents from this response.
-	handle {
-		respond `{"error":"unauthorized client"}` 403 {
-			close
+	# Strip any client-supplied ClickHouse credential carriers
+	# BEFORE proxying. CH 26.3 rejects requests that mix
+	# `X-ClickHouse-User` header auth with URL-param `?user=` /
+	# `?password=` auth (`Invalid authentication: it is not
+	# allowed to use X-ClickHouse HTTP headers and authentication
+	# via parameters simultaneously`). Without these strips a
+	# well-meaning client that sends `?user=…` for backwards
+	# compat would self-DoS as soon as Caddy adds its own
+	# `X-ClickHouse-User` header below.
+	#
+	# `request_header` operates on the request before
+	# `reverse_proxy`'s `header_up` runs. `uri query -<param>`
+	# removes the named query parameter from the request URL.
+	request_header -X-ClickHouse-User
+	request_header -X-ClickHouse-Key
+	uri query -user
+	uri query -password
+
+	reverse_proxy clickhouse:8123 {
+		# Identity assertion. `header_up` in set-mode replaces any
+		# residual client-supplied value with the map's verified
+		# output. Combined with the request_header strip above, the
+		# request reaching CH contains EXACTLY one identity claim,
+		# from Caddy's verified mTLS map. Verified empirically on
+		# Caddy 2.10 (task 0240 Phase 0 V1). CH (`<no_password/>`
+		# users restricted to the compose bridge subnet) trusts
+		# this header as the sole auth signal; the cert is the
+		# credential, this header carries the cert's resolved
+		# identity.
+		header_up X-ClickHouse-User {ch_user}
+
+		# Forward TLS metadata so CH access logs (and downstream
+		# audit) can attribute requests to the presenting client
+		# beyond the CH user name. `subject` is the only Caddy-
+		# registered placeholder for the client cert's identity;
+		# `subject_cn` does not exist (silently emits empty).
+		# Downstream audit consumers parse the CN out of the full
+		# DN with a substr / regex.
+		header_up X-Client-Subject {http.request.tls.client.subject}
+		header_up X-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+
+		# Timeouts cover the longest legitimate analytical
+		# query we expect (mirrored from the pilot users.d
+		# /timeouts.xml 7200 s window). Tighter than the
+		# CH-side timeout so Caddy releases the upstream
+		# socket first on stalls.
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 30s
+			read_timeout 7200s
+			write_timeout 7200s
 		}
 	}
 }
