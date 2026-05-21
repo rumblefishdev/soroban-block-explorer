@@ -134,10 +134,17 @@
 # Exit codes
 # ----------
 #   0   success
-#   1   pre-flight failure
-#   2   ATTACH error (partial state — see log, audit JSON)
-#   3   verification failure (post-attach row count mismatch)
-#   4   bad arguments
+#   1   pre-flight failure (clickhouse-client unreachable, staging dir
+#       missing, manifest absent, in-flight merges/mutations blocking)
+#   2   ATTACH error (mv failed, ALTER ATTACH PART rejected, partial
+#       state — see log + check `system.detached_parts`)
+#   3   reserved for verification failure (post-attach row count
+#       mismatch against expected baseline). NOT currently emitted —
+#       the script logs per-table counts but does not compare against
+#       a baseline. Future enhancement; left in the table so operators
+#       can rely on the code as a placeholder.
+#   4   bad arguments (missing required flag, invalid worker / snapshot
+#       name characters, unknown option)
 
 set -euo pipefail
 
@@ -399,6 +406,12 @@ log "discovered ${#SRC_UUID_DIRS[@]} source UUID dir(s) in staging"
 # Also discover all distinct partition IDs across partitioned tables (for OPTIMIZE).
 declare -A TABLE_PARTS_COUNT     # table → total parts found in staging
 declare -A PARTITION_SEEN        # partition_id → 1 (set semantics)
+# Bash quirk: under `set -u`, `${#assoc[@]}` on a declared-but-never-assigned
+# associative array throws "unbound variable". Set-then-unset a sentinel key
+# to "initialize" the array so subsequent count/key expansions are safe even
+# when staging discovery doesn't populate any real keys.
+TABLE_PARTS_COUNT[__init__]=0; unset 'TABLE_PARTS_COUNT[__init__]'
+PARTITION_SEEN[__init__]=0; unset 'PARTITION_SEEN[__init__]'
 TOTAL_PARTS_FOUND=0
 for src_dir in "${SRC_UUID_DIRS[@]}"; do
   src_uuid=$(basename "$src_dir")
@@ -423,14 +436,38 @@ for src_dir in "${SRC_UUID_DIRS[@]}"; do
 done
 
 log "parts inventory:"
-for tbl in "${!TABLE_PARTS_COUNT[@]}"; do
-  log "  $tbl: ${TABLE_PARTS_COUNT[$tbl]} part(s)"
-done
+# Iterate keys defensively — under `set -u`, `${!arr[@]}` on a never-assigned
+# associative array can error in some bash builds. Counting via `${#arr[@]}`
+# is safe even on empty maps, so gate the for-loop on that count first.
+if [[ "${#TABLE_PARTS_COUNT[@]}" -gt 0 ]]; then
+  for tbl in "${!TABLE_PARTS_COUNT[@]}"; do
+    log "  $tbl: ${TABLE_PARTS_COUNT[$tbl]} part(s)"
+  done
+fi
 log "  total: $TOTAL_PARTS_FOUND"
 # Sort partition IDs numerically for stable display (assoc-array iteration
 # order is hash-based and would print "110 100 105 …").
-PARTITIONS_SORTED=$(printf '%s\n' "${!PARTITION_SEEN[@]}" | sort -n | tr '\n' ' ')
+if [[ "${#PARTITION_SEEN[@]}" -gt 0 ]]; then
+  PARTITIONS_SORTED=$(printf '%s\n' "${!PARTITION_SEEN[@]}" | sort -n | tr '\n' ' ')
+else
+  PARTITIONS_SORTED=""
+fi
 log "partitions found: $PARTITIONS_SORTED"
+
+# ────────────────────────────────────────────────────────────────────────────
+# Empty-staging short-circuit
+# ────────────────────────────────────────────────────────────────────────────
+#
+# If the staging dir has no parts (e.g. a previous successful ATTACH already
+# moved them all out, or this is a re-run targeting only the OPTIMIZE phase),
+# skip the ATTACH block entirely. OPTIMIZE + verification still run below
+# using `system.parts` discovery — they don't depend on staging state.
+
+SKIP_ATTACH=false
+if [[ "$TOTAL_PARTS_FOUND" -eq 0 ]]; then
+  log "no parts in staging — skipping ATTACH phase (will still run dictionary reload + OPTIMIZE + verification)"
+  SKIP_ATTACH=true
+fi
 
 # ────────────────────────────────────────────────────────────────────────────
 # Confirm
@@ -445,6 +482,7 @@ Ready to ATTACH:
   unique tables  = ${#TABLE_PARTS_COUNT[@]}
   unique parts   = $TOTAL_PARTS_FOUND
   partitions     = $PARTITIONS_SORTED
+  attach phase   = $([[ "$SKIP_ATTACH" == "true" ]] && echo skip || echo run)
   post-OPTIMIZE  = $([[ "$NO_OPTIMIZE" == "true" ]] && echo skip || echo run)
 EOF
 confirm
@@ -470,7 +508,14 @@ trap '
 ATTACHED_COUNT=0
 SKIPPED_COUNT=0
 
-for src_dir in "${SRC_UUID_DIRS[@]}"; do
+if [[ "$SKIP_ATTACH" == "true" ]]; then
+  log "ATTACH phase skipped (no staging parts)"
+fi
+
+# `for x in "${arr[@]}"` on a possibly-empty array is safe with `set -u` here
+# because `SRC_UUID_DIRS` is always assigned (mapfile populates it, even with
+# zero entries). The loop just no-ops when the array has 0 elements.
+[[ "$SKIP_ATTACH" == "true" ]] || for src_dir in "${SRC_UUID_DIRS[@]}"; do
   src_uuid=$(basename "$src_dir")
   table_name="${UUID_TO_TABLE[$src_uuid]:-}"
   [[ -z "$table_name" ]] && continue
@@ -524,11 +569,32 @@ if [[ "$NO_OPTIMIZE" == "true" ]]; then
   log "skipping OPTIMIZE FINAL (--no-optimize)"
 else
   log "OPTIMIZE FINAL per partition (per-table fact-data collapse)"
-  for pid in "${!PARTITION_SEEN[@]}"; do
+  # Discover partitions directly from `system.parts` instead of relying on
+  # `PARTITION_SEEN` (built from staging discovery). This makes OPTIMIZE
+  # work even when staging is empty — e.g. on a re-run after a previous
+  # OPTIMIZE crashed mid-flight, or when running with `--optimize-only`-style
+  # intent (all parts already attached from prior worker runs).
+  # `partition_id != 'all'` filters out state tables, which use 'all' as
+  # their partition_id and don't accept per-partition OPTIMIZE syntax.
+  DISCOVERED_PARTITIONS=$(ch_query_capture "
+    SELECT DISTINCT partition_id
+      FROM system.parts
+     WHERE database = '$DATABASE'
+       AND active = 1
+       AND partition_id != 'all'
+     ORDER BY toUInt32OrZero(partition_id)
+     FORMAT TabSeparated
+  ")
+  log "partitions discovered from system.parts: $(echo $DISCOVERED_PARTITIONS | tr '\n' ' ')"
+  for pid in $DISCOVERED_PARTITIONS; do
     for tbl in "${PARTITIONED_TABLES[@]}"; do
-      log "  OPTIMIZE TABLE $DATABASE.$tbl FINAL PARTITION '$pid'"
+      log "  OPTIMIZE TABLE $DATABASE.$tbl PARTITION ID '$pid' FINAL"
+      # CH grammar: `OPTIMIZE TABLE name [PARTITION p | PARTITION ID 'pid']
+      # [FINAL] [DEDUPLICATE ...]` — PARTITION comes BEFORE FINAL.
+      # `PARTITION ID '<pid>'` is the literal-partition-id syntax — robust
+      # for any underlying partition expression type (integer, tuple, etc.).
       ch_query "
-        OPTIMIZE TABLE $DATABASE.$tbl FINAL PARTITION '$pid'
+        OPTIMIZE TABLE $DATABASE.$tbl PARTITION ID '$pid' FINAL
         SETTINGS optimize_throw_if_noop = 0, max_execution_time = 3600
       "
     done
@@ -536,6 +602,22 @@ else
 
   log "OPTIMIZE FINAL (whole-table) for state tables"
   for tbl in "${STATE_TABLES[@]}"; do
+    # CRITICAL: skip soroban_contracts here. Task 0228 Phase 5
+    # `repair_tier1` rebuilds `soroban_contracts.{deployer_id,
+    # deployed_at_ledger}` by reading raw (pre-FINAL) rows where
+    # `deployer_id IS NOT NULL`. OPTIMIZE FINAL collapses by
+    # `wasm_uploaded_at_ledger` and keeps the row with the highest
+    # version — for WASM-upgrade contracts that row carries NULL
+    # deployer_id, erasing the original deployer permanently.
+    # The repair pass MUST observe the un-collapsed table.
+    # Operator runs `OPTIMIZE TABLE soroban_contracts FINAL` AFTER
+    # `backfill-runner repair-tier1` swaps in the corrected staging
+    # table (the swap itself produces a single canonical row per
+    # contract, so post-repair OPTIMIZE is just a no-op tidy).
+    if [[ "$tbl" == "soroban_contracts" ]]; then
+      log "  SKIP $DATABASE.$tbl — deferred to after repair_tier1 (task 0228)"
+      continue
+    fi
     log "  OPTIMIZE TABLE $DATABASE.$tbl FINAL"
     ch_query "
       OPTIMIZE TABLE $DATABASE.$tbl FINAL
@@ -550,7 +632,12 @@ fi
 
 log "verification: per-table active part counts post-attach"
 declare -A POST_TABLE_PARTS POST_TABLE_ROWS
-for tbl in "${!TABLE_PARTS_COUNT[@]}"; do
+POST_TABLE_PARTS[__init__]=0; unset 'POST_TABLE_PARTS[__init__]'
+POST_TABLE_ROWS[__init__]=0; unset 'POST_TABLE_ROWS[__init__]'
+# Iterate the hardcoded full schema (partitioned + state) so verification
+# runs even when staging discovery was empty (e.g. re-run after the previous
+# attempt already attached parts and emptied the staging dir).
+for tbl in "${PARTITIONED_TABLES[@]}" "${STATE_TABLES[@]}"; do
   pcount=$(ch_query_capture "
     SELECT count() FROM system.parts
      WHERE database = '$DATABASE' AND table = '$tbl' AND active = 1
@@ -581,10 +668,13 @@ else
     printf '"skipped_parts":%s,' "$SKIPPED_COUNT"
     printf '"tables":{'
     first=1
-    for tbl in "${!TABLE_PARTS_COUNT[@]}"; do
+    # Audit JSON walks the hardcoded full schema to stay consistent with
+    # verification — staging-parts may be 0 for tables fully attached in
+    # an earlier run; active_parts and rows reflect current CH state.
+    for tbl in "${PARTITIONED_TABLES[@]}" "${STATE_TABLES[@]}"; do
       [[ $first -eq 1 ]] && first=0 || printf ','
       printf '"%s":{"staging_parts":%s,"active_parts":%s,"rows":%s}' \
-        "$tbl" "${TABLE_PARTS_COUNT[$tbl]}" "${POST_TABLE_PARTS[$tbl]:-0}" "${POST_TABLE_ROWS[$tbl]:-0}"
+        "$tbl" "${TABLE_PARTS_COUNT[$tbl]:-0}" "${POST_TABLE_PARTS[$tbl]:-0}" "${POST_TABLE_ROWS[$tbl]:-0}"
     done
     printf '}'
     printf '}\n'

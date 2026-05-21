@@ -13,7 +13,13 @@
 //! worker observed, not the actual earliest observation across the
 //! union.
 //!
-//! Twelve columns across four tables silently corrupt this way:
+//! Twelve Tier-1 columns silently corrupt this way; this pass repairs
+//! the **6** that derive from on-chain facts (across **5** tables). The
+//! remaining 6 (NFT metadata: `collection_name`, `name`, `media_url` ×
+//! `nfts` + `nfts_pending`) require external HTTP/IPFS fetches and are
+//! delivered by task 0231 (Stage 2 SEP-1 + NFT `token_uri` enrichment).
+//!
+//! ### Stage 1 scope (this module) — 6 columns × 5 tables
 //!
 //! | Table | Column | Correct rebuild |
 //! |-------|--------|-----------------|
@@ -21,7 +27,13 @@
 //! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM operations_appearances WHERE type = 22 (LiquidityPoolDeposit)` |
 //! | `nfts` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership WHERE event_type = 0 (Mint)` |
 //! | `nfts_pending` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership_pending WHERE event_type = 0` |
-//! | `soroban_contracts` | `deployer_id`, `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
+//! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
+//!
+//! ### Stage 2 scope (task 0231, deferred) — 6 columns × 2 tables
+//!
+//! `nfts.{collection_name, name, media_url}` and
+//! `nfts_pending.{collection_name, name, media_url}` — populated by
+//! per-row SEP-1 / NFT `token_uri` enrichment loop. Not repaired here.
 //!
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
@@ -442,13 +454,21 @@ mod tests {
         Some(Sink::Clickhouse(client))
     }
 
-    /// End-to-end smoke for the accounts rebuild: stamp an account with
-    /// a deliberately-wrong `first_seen_ledger` (RMT collapse outcome),
+    /// Dry-run smoke for the accounts rebuild: stamp an account with a
+    /// deliberately-wrong `first_seen_ledger` (RMT collapse outcome),
     /// stamp two `transaction_participants` rows at earlier ledgers,
-    /// run the rebuild in dry-run mode, then confirm the staging table
-    /// holds the corrected MIN.
+    /// invoke `rebuild_accounts` in dry-run mode. Asserts the live
+    /// `accounts` table is UNCHANGED — the staging-table swap only
+    /// happens on a real run.
+    ///
+    /// This test deliberately does NOT verify staging contents: the
+    /// dry-run path drops the staging table inside `finalize()` before
+    /// the test can query it. Real-run correctness (staging actually
+    /// contains the corrected MIN) is exercised by
+    /// `clickhouse_rebuild_accounts_real_run_writes_corrected_min`
+    /// below.
     #[tokio::test]
-    async fn clickhouse_rebuild_accounts_first_seen_ledger_picks_min_participant() {
+    async fn clickhouse_rebuild_accounts_dry_run_leaves_live_untouched() {
         let Some(sink) = build_ch_sink().await else {
             eprintln!("CLICKHOUSE_URL not set — skipping");
             return;
@@ -518,18 +538,15 @@ mod tests {
             .expect("write later participant");
         parts.end().await.expect("close participants insert");
 
-        // Dry-run: build the staging table without swapping.
+        // Dry-run: builds the staging table, logs row count, then drops
+        // staging in `finalize()`. We can only check the count returned
+        // and that the live table is untouched — staging contents are
+        // gone by the time this assertion runs.
         let rows = rebuild_accounts(client, /* dry_run */ true)
             .await
             .expect("rebuild_accounts must succeed");
         assert!(rows > 0, "staging must contain rows");
 
-        // The dry-run path drops the staging table after recording the
-        // row count, so the assertion above is what guards us. The
-        // live `accounts.first_seen_ledger` should still be `later`
-        // (unchanged), and a real run (--dry-run=false) would then
-        // swap it to `early`. We don't run the swap variant here to
-        // keep the test idempotent on a shared CH.
         #[derive(Debug, serde::Deserialize, clickhouse::Row)]
         struct AcctFsl {
             first_seen_ledger: i64,
@@ -546,6 +563,140 @@ mod tests {
         );
 
         // Cleanup.
+        for q in [
+            "ALTER TABLE accounts DELETE WHERE id = ?",
+            "ALTER TABLE transaction_participants DELETE WHERE account_id = ?",
+            "DROP TABLE IF EXISTS accounts_staging_repair_tier1",
+        ] {
+            let _ = client
+                .query(q)
+                .bind(acct_id)
+                .with_setting("mutations_sync", "1")
+                .execute()
+                .await;
+        }
+    }
+
+    /// Real-run end-to-end: same fixture as the dry-run test, but
+    /// invokes `rebuild_accounts(client, dry_run=false)` so the staging
+    /// table is built AND EXCHANGE'd with `accounts`. Asserts the live
+    /// `accounts.first_seen_ledger` for the fixture account flips from
+    /// `later` (planted) to `early` (the actual MIN of participants).
+    ///
+    /// This is the proof that the rebuild logic produces correct
+    /// values — the dry-run test only proves "doesn't touch live".
+    ///
+    /// Uses a different StrKey from the dry-run test so the two can run
+    /// independently (test-threads=1 still recommended on shared CH).
+    #[tokio::test]
+    async fn clickhouse_rebuild_accounts_real_run_writes_corrected_min() {
+        let Some(sink) = build_ch_sink().await else {
+            eprintln!("CLICKHOUSE_URL not set — skipping");
+            return;
+        };
+        let Sink::Clickhouse(ref client) = sink else {
+            unreachable!()
+        };
+
+        // Distinct StrKey from the dry-run test so concurrent runs don't
+        // share a fixture row.
+        let strkey = "GAQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ";
+        let acct_id = db_clickhouse::persist::ids::account_id(strkey);
+        let early = i64::from(TEST_BASE + 7);
+        let later = i64::from(TEST_BASE + 70);
+
+        // Cleanup any prior fixture.
+        for q in [
+            "ALTER TABLE accounts DELETE WHERE id = ?",
+            "ALTER TABLE transaction_participants DELETE WHERE account_id = ?",
+            "DROP TABLE IF EXISTS accounts_staging_repair_tier1",
+        ] {
+            let _ = client
+                .query(q)
+                .bind(acct_id)
+                .with_setting("mutations_sync", "1")
+                .execute()
+                .await;
+        }
+
+        // Plant collapsed row with WRONG first_seen_ledger.
+        let mut accounts = client
+            .insert::<AccountRow>("accounts")
+            .await
+            .expect("open accounts insert");
+        accounts
+            .write(&AccountRow {
+                id: acct_id,
+                account_id: strkey.to_string(),
+                first_seen_ledger: later,
+                last_seen_ledger: later,
+                sequence_number: 1,
+                home_domain: None,
+            })
+            .await
+            .expect("write account fixture");
+        accounts.end().await.expect("close accounts insert");
+
+        // Two participant rows at `early` and `later` ledgers.
+        let mut parts = client
+            .insert::<TransactionParticipantRow>("transaction_participants")
+            .await
+            .expect("open participants insert");
+        parts
+            .write(&TransactionParticipantRow {
+                account_id: acct_id,
+                ledger_sequence: early,
+                transaction_id: 11,
+            })
+            .await
+            .expect("write early participant");
+        parts
+            .write(&TransactionParticipantRow {
+                account_id: acct_id,
+                ledger_sequence: later,
+                transaction_id: 12,
+            })
+            .await
+            .expect("write later participant");
+        parts.end().await.expect("close participants insert");
+
+        // REAL RUN — staging built, EXCHANGE TABLES swaps it with
+        // `accounts`. After this, FINAL read of the fixture account
+        // returns the corrected first_seen_ledger.
+        let rows = rebuild_accounts(client, /* dry_run */ false)
+            .await
+            .expect("rebuild_accounts real-run must succeed");
+        assert!(rows > 0, "swap must have touched at least the fixture row");
+
+        #[derive(Debug, serde::Deserialize, clickhouse::Row)]
+        struct AcctFsl {
+            first_seen_ledger: i64,
+            last_seen_ledger: i64,
+            sequence_number: i64,
+        }
+        let row: AcctFsl = client
+            .query("SELECT first_seen_ledger, last_seen_ledger, sequence_number FROM accounts FINAL WHERE id = ? LIMIT 1")
+            .bind(acct_id)
+            .fetch_one()
+            .await
+            .expect("read account row after real run");
+        assert_eq!(
+            row.first_seen_ledger, early,
+            "real run must REPLACE first_seen_ledger with MIN(participants.ledger_sequence) = {early}"
+        );
+        // Other columns must be preserved (RMT version + non-rebuilt fields).
+        assert_eq!(
+            row.last_seen_ledger, later,
+            "last_seen_ledger must pass through unchanged"
+        );
+        assert_eq!(
+            row.sequence_number, 1,
+            "sequence_number must pass through unchanged"
+        );
+
+        // Cleanup. Note: after EXCHANGE, the original `accounts` table
+        // is renamed to `accounts_staging_repair_tier1` and dropped by
+        // finalize(). The current `accounts` is the rebuilt staging.
         for q in [
             "ALTER TABLE accounts DELETE WHERE id = ?",
             "ALTER TABLE transaction_participants DELETE WHERE account_id = ?",

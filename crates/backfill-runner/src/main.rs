@@ -145,11 +145,17 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 12 columns across 4 state
-    /// tables (`accounts`, `lp_positions`, `nfts`, `nfts_pending`,
-    /// `soroban_contracts`) that silently corrupt under cross-machine
-    /// `ReplacingMergeTree` collapse. Per-table staging + EXCHANGE
-    /// TABLES atomic swap. CH-only — PG target short-circuits.
+    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
+    /// across 5 state tables (`accounts.first_seen_ledger`,
+    /// `lp_positions.first_deposit_ledger`,
+    /// `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`,
+    /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
+    /// These silently corrupt under cross-machine
+    /// `ReplacingMergeTree` collapse. The remaining 6 columns
+    /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
+    /// tables) are filled by Stage 2 enrichment (task 0231).
+    /// Per-table staging + EXCHANGE TABLES atomic swap. CH-only —
+    /// PG target short-circuits.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
         /// them — do not EXCHANGE. Use on laptop 1's local CH as a

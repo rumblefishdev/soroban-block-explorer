@@ -129,18 +129,37 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
 
     if !dry_run {
         // OPTIMIZE FINAL after mutations to collapse tombstones.
-        for tbl in [
-            "nfts",
-            "nfts_pending",
-            "nft_ownership",
-            "nft_ownership_pending",
-        ] {
+        // Skip per-table when this run did nothing to it — saves
+        // expensive full-table scans on a re-run that's already
+        // idempotent (e.g. operator runs nft-reclassify twice or
+        // after Phase 5 manual rerun). Each (mutated_count) below
+        // sums the promote-from-pending + the legacy-drop / pending-
+        // drop work for that table.
+        let touched: [(&str, u64); 4] = [
+            ("nfts", stats.promoted_nfts + stats.dropped_legacy_nfts),
+            ("nfts_pending", stats.dropped_pending_nfts),
+            (
+                "nft_ownership",
+                stats.promoted_ownership + stats.dropped_legacy_ownership,
+            ),
+            ("nft_ownership_pending", stats.dropped_pending_ownership),
+        ];
+        for (tbl, mutated) in touched {
+            if mutated == 0 {
+                debug!(
+                    table = tbl,
+                    "nft_reclassify: OPTIMIZE skipped (no rows touched this run)"
+                );
+                continue;
+            }
             client
-                .query(&format!("OPTIMIZE TABLE {tbl} FINAL"))
+                .query(&format!(
+                    "OPTIMIZE TABLE {tbl} FINAL SETTINGS optimize_throw_if_noop = 0, max_execution_time = 3600"
+                ))
                 .execute()
                 .await
                 .map_err(BackfillError::Ch)?;
-            debug!(table = tbl, "nft_reclassify: optimized");
+            debug!(table = tbl, mutated, "nft_reclassify: optimized");
         }
     }
 
