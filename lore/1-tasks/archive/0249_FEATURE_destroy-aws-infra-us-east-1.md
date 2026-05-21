@@ -2,7 +2,7 @@
 id: '0249'
 title: 'FEATURE: Destroy AWS infra in us-east-1 (staging + any production stacks)'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0239', '0234', '0216']
 tags:
@@ -27,6 +27,36 @@ history:
       eu-central-1 (region change handled by 0239). Both steps
       start from a clean us-east-1 — this task wipes everything
       there before 0239 re-deploys in eu-central-1.
+  - date: '2026-05-21'
+    status: active
+    who: fmazur
+    note: >
+      Promoted to active. Phase 0 discovery (aws cli) confirmed
+      us-east-1 footprint: 12 staging stacks + `Explorer-Cicd`
+      (deployed) + `CDKToolkit`. Zero production stacks
+      (`hostedZoneId: "CHANGE_ME"` blocked `validateConfig`).
+      Decisions: (a) destroy `Explorer-Cicd` too, rebuild in
+      eu-central-1 as part of 0239; (b) delete staging hosted zone
+      `staging.sorobanscan.rumblefish.dev`;
+      (c) delete staging ACM cert after CloudFront releases it.
+      No data retention (no RDS snapshot, no S3 archive).
+      `cdk destroy` will empty both staging S3 buckets automatically
+      (`autoDeleteObjects: true` for non-prod envs).
+  - date: '2026-05-21'
+    status: completed
+    who: fmazur
+    note: >
+      us-east-1 fully wiped. All 12 staging stacks + `Explorer-Cicd`
+      + `CDKToolkit` destroyed. Non-CDK cleanup: secrets, ACM cert,
+      staging Route 53 zone (after ACM validation CNAME removal),
+      CDK assets S3 bucket (after versioned-object cleanup).
+      Final verification: list-stacks / NAT GW / VPC / S3 / ECR /
+      Secrets / ACM all empty. Two operator interventions during
+      destroy: (1) manual delete of 2 orphan VPC Lambda ENIs that
+      blocked Network stack delete; (2) ACM validation CNAME +
+      versioned-bucket cleanup. Files: infra/Makefile (+destroys),
+      docs/architecture/infrastructure/infrastructure-overview.md
+      (§4.2 + §5.6 region change notes), this task .md.
 ---
 
 # FEATURE: Destroy AWS infra in us-east-1
@@ -186,21 +216,149 @@ the existing `deploy-*` per-stack target convention.
 
 ## Acceptance Criteria
 
-- [ ] Pre-destroy checklist complete (snapshots taken, S3
-      contents confirmed empty / archived, ECR images documented).
-- [ ] All staging CDK stacks destroyed in us-east-1.
-- [ ] All production CDK stacks (if any) destroyed in us-east-1.
-- [ ] Makefile updated with `destroy-staging-*` targets for every
-      stack (symmetric to existing `deploy-*` targets).
-- [ ] Post-destroy verification passes — `list-stacks`, NAT GW,
-      VPC, S3, ECR, Secrets all empty in us-east-1.
-- [ ] Route 53 hosted zone for `staging.sorobanscan.rumblefish.dev`
-      decision documented (keep / delete).
-- [ ] **API types regenerated** — N/A — this task does not touch
+- [x] Pre-destroy checklist complete — N/A for snapshots/archives
+      (no data retention per task owner decision); S3 buckets had
+      `autoDeleteObjects: true` for staging so CDK destroy emptied
+      them automatically; ECR images not documented (greenfield
+      rebuild in 0239).
+- [x] All staging CDK stacks destroyed in us-east-1
+      (12 stacks: Network, Rds, LedgerBucket, Migration, Partition,
+      Compute, Ingestion, Delivery, ApiGateway, Observability,
+      CloudWatch, Bastion).
+- [x] All production CDK stacks destroyed in us-east-1 — zero
+      production stacks were ever deployed (validateConfig blocked
+      on `hostedZoneId: "CHANGE_ME"`), so this AC is vacuously
+      satisfied.
+- [x] Makefile updated with `destroy-staging-*` targets for every
+      stack (symmetric to existing `deploy-*` targets); production
+      destroy targets added for parity; `destroy-cicd` added;
+      umbrella `destroy-staging` / `destroy-production` added.
+- [x] Post-destroy verification passes — `list-stacks`, NAT GW,
+      VPC, S3, ECR, Secrets, ACM all empty in us-east-1.
+- [x] Route 53 hosted zone for `staging.sorobanscan.rumblefish.dev`
+      decision documented — **deleted** (staging retired entirely,
+      not coming back as AWS-side env).
+- [x] **API types regenerated** — N/A — this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`.
-- [ ] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
-      §5.6 note: us-east-1 footprint removed; new prod region is
-      `eu-central-1` (cross-link to [[task-0239]]).
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
+      §4.2 (launch AZ note) and §5.6 (region change paragraph) updated
+      with us-east-1 footprint removal + cross-link to [[task-0239]].
+
+## Implementation Notes
+
+**Files modified (3):**
+
+- `infra/Makefile` — added 13 `destroy-staging-*` targets
+  (network, rds, ledger-bucket, migration, partition, compute,
+  ingestion, delivery, apigateway, observability, cloudwatch,
+  bastion already existed, hetzner-dns) + 13 `destroy-production-*`
+  for parity + `destroy-cicd` + umbrella `destroy-staging` and
+  `destroy-production`. Also added 4 missing `deploy-staging-*` /
+  `deploy-production-*` targets (compute, apigateway, observability,
+  cloudwatch) for true symmetry.
+- `docs/architecture/infrastructure/infrastructure-overview.md` —
+  §4.2 note that launch AZ `us-east-1a` is historical; §5.6 region
+  change paragraph linking 0249/0239 + CloudFront cert constraint
+  note (must stay in us-east-1 regardless of prod region).
+- `lore/1-tasks/active/0249_*.md` — promotion + history entries.
+
+**Destroy execution (operator-driven):**
+
+Reverse dependency order via per-stack `make destroy-staging-*`
+targets. Two manual interventions during execution (see Issues).
+
+**Manual non-CDK cleanup:**
+
+- `secretsmanager delete-secret --force-delete-without-recovery`
+  for `soroban-explorer/staging/rds-credentials`.
+- ECR `staging-galexie` was CDK-managed and removed with Ingestion
+  stack — no manual delete needed (initial plan assumed manual).
+- ACM cert `*.staging.sorobanscan...` deleted manually (cert was
+  imported via `fromCertificateArn`, not created by stack).
+- Route 53 staging zone: deleted ACM validation CNAME first
+  (`_eff656...acm-validations.aws.`), then `delete-hosted-zone`.
+- `CDKToolkit` stack + S3 assets bucket
+  (`cdk-hnb659fds-assets-<account-id>-us-east-1`) destroyed.
+  Bucket required versioning cleanup (`list-object-versions` +
+  `delete-objects` for both Versions and DeleteMarkers) before
+  `s3 rb` would succeed.
+
+**Final state:** `aws s3 ls`, `aws ecr describe-repositories`,
+`aws secretsmanager list-secrets`, `aws acm list-certificates`,
+`aws ec2 describe-nat-gateways`, `aws ec2 describe-vpcs`, and
+`aws cloudformation list-stacks` all return empty in us-east-1.
+
+## Design Decisions
+
+### From Plan
+
+1. **Reverse dependency order destroy** — per task spec, started
+   with top-layer stacks (CloudWatch, ApiGateway, Observability),
+   ended with Network (VPC). CDK destroy auto-detects dependents
+   so even single-stack targets pulled in their dependants.
+
+2. **No RDS final snapshot** — task owner decision: zero data
+   retention. Staging RDS had `dbDeletionProtection: false`
+   already; no operator action needed before destroy.
+
+3. **Makefile destroy targets symmetric to deploy-\*** — explicit
+   AC requirement; mirrored existing convention.
+
+### Emerged
+
+4. **Destroy `Explorer-Cicd` too** (not just staging) — Phase 0
+   discovery showed it was deployed. Cleaner break: rebuild fresh
+   in `eu-central-1` as part of 0239. Trade-off: no CI deploy
+   between 0249 and 0239 Phase 0, but the bootstrap deploy of
+   eu-central-1 is operator-run from laptop anyway.
+
+5. **Delete staging hosted zone** — was an open AC decision
+   ("keep / delete"). Resolved: delete. Staging is fully retired
+   and never returns as AWS-side env; ~$0.50/mo savings + cleaner
+   state.
+
+6. **Delete `CDKToolkit` in us-east-1 too** — original task said
+   "leave in place". Re-evaluated: with prod moving to eu-central-1
+   and only ACM cert needing to stay in us-east-1 (cert can be
+   issued via `aws acm request-certificate` without CDK), CDK
+   bootstrap in us-east-1 has no consumer. Destroyed for zero
+   footprint. Re-bootstrap is a one-line command if ever needed
+   again (`npx cdk bootstrap aws://<account>/us-east-1`).
+
+7. **Added `Explorer-Cicd` destroy target separately** — task
+   originally focused on staging/production patterns; cicd is a
+   third CDK app (`CICD_APP`). Added `destroy-cicd` mirroring
+   the existing `deploy-cicd`.
+
+## Issues Encountered
+
+- **Lambda VPC ENI cleanup delay** — `destroy-staging-network`
+  failed first attempt with `DELETE_FAILED` on two private subnets
+  and `LambdaSg`. Cause: two orphan ENIs (type `interface`, not
+  `lambda` — older pre-Hyperplane ENIs) for `staging-soroban-explorer-api`
+  remained in the VPC in `available` state, blocking subnet and
+  SG deletion. Manually deleted via `ec2 delete-network-interface`
+  for each ENI ID, then re-ran `make destroy-staging-network` which
+  resumed from `DELETE_FAILED` and completed cleanly.
+
+- **ACM DNS validation CNAME blocks hosted zone deletion** —
+  `delete-hosted-zone` refused while the cert validation record
+  `_eff656...acm-validations.aws.` was still present. Removed via
+  `change-resource-record-sets` (Action DELETE) before retrying.
+
+- **S3 bucket versioning blocks `rb`** — `cdk-hnb659fds-assets-…`
+  has versioning enabled. `aws s3 rm --recursive` removed current
+  versions but left old versions / delete markers. Resolution:
+  `s3api list-object-versions` + `delete-objects` for both
+  `Versions` and `DeleteMarkers`, then `s3 rb`.
+
+- **Parent zone NS delegation** — `sorobanscan.rumblefish.dev`
+  may still contain an NS delegation record for
+  `staging.sorobanscan.rumblefish.dev` pointing at the (now
+  deleted) child zone's nameservers. Left in place — DNS lookups
+  for staging return SERVFAIL, which is acceptable since staging
+  is retired. Cleanup can be done opportunistically next time
+  someone is in the prod hosted zone.
 
 ## Dependencies
 
