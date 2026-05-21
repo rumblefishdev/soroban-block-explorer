@@ -2,7 +2,7 @@
 id: '0239'
 title: 'FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet, mTLS to Hetzner CH, NAT GW + RDS decommission, region eu-central-1'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0216', '0227', '0228', '0234', '0240', '0249']
 tags:
@@ -35,6 +35,16 @@ history:
       cert stays in us-east-1 (CloudFront requirement); everything
       else (network, lambdas, ECR, secrets, KMS, regional WAF)
       moves to eu-central-1.
+  - date: '2026-05-21'
+    status: active
+    who: fmazur
+    note: >
+      Promoted to active. All blocking dependencies (0227, 0234, 0240,
+      0249) are completed. Starting with Phase 0/2/3 CDK refactor
+      (region change to eu-central-1, Lambda out-of-VPC + SM Extension
+      wiring, Galexie public subnet) locally; operator handles AWS
+      bootstrap + cert issuance + ansible runs. Phase 6 decommission
+      gated on 0228 (parallel-backfill merge) still active.
 ---
 
 # FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet, mTLS to Hetzner CH
