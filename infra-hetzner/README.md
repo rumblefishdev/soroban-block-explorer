@@ -87,7 +87,7 @@ export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobansca
 export ACME_EMAIL="..."                 # Let's Encrypt account email
 export STORAGEBOX_SSH_USER="..."        # BX21 user, e.g. u123456
 export STORAGEBOX_SSH_HOST="..."        # BX21 host, e.g. u123456.your-storagebox.de
-export ALLOWED_CLIENT_CNS="..."         # Comma-separated mTLS client CN allowlist
+export CLICKHOUSE_CN_USER_MAP="..."     # Comma-separated `<cn>:<ch_user>` pairs — Caddy uses both as the mTLS allowlist AND as the identity it forwards to CH (e.g. `<firstname>-laptop:dev_shared,galexie-production:galexie,...`). See docs/architecture/security/clickhouse-rbac.md.
 
 # OPERATOR_SSH_PUBKEYS — multi-line. One OpenSSH public key per
 # line. The `users` role writes this verbatim to the deploy
@@ -256,33 +256,34 @@ curl -sSI "https://${CH_DOMAIN}/ping"
 #   → "alert handshake failure" (TLS abort), NOT 200.
 
 # Synthetic negative: connection with a valid CA-signed cert
-# whose CN is NOT in `allowed_client_cns` gets 403 at the HTTP
-# layer. Issue a throwaway cert for this test, then add its CN
-# to a *removed* list slot — i.e. confirm that taking a CN out
-# of `allowed_client_cns` actually denies traffic.
+# whose CN is NOT in `CLICKHOUSE_CN_USER_MAP` gets 403 at the HTTP
+# layer (the Caddy `map` IS the allowlist — unmapped CN yields an
+# empty `{ch_user}` and the @no_user matcher returns 403 before
+# any backend hop). Issue a throwaway cert for this test, then
+# leave its CN out of the map — confirm that absence denies traffic.
 ```
 
 ## Adding a developer
 
-1. Edit `infra-hetzner/ansible/group_vars/all.yml` in **two** places:
+Two env vars in the operator's `~/.config/soroban-prod.env` drive
+this (no group_vars edit, no commit):
 
-   ```yaml
-   ssh_authorized_github_users:
-     - …existing…
-     - <new-github-username>
+1. Append the new dev's SSH public key to `OPERATOR_SSH_PUBKEYS`
+   (one OpenSSH key per line in the heredoc — see the
+   group_vars/all.yml comment for the multi-line shape).
+2. Append `<newdev>-laptop:dev_shared` to `CLICKHOUSE_CN_USER_MAP`
+   — this both adds the cert to the mTLS allowlist (Caddy `map`)
+   and tells Caddy which CH user to forward the request as
+   (`dev_shared` — admin, no_password, loopback/bridge-restricted).
+   See [`docs/architecture/security/clickhouse-rbac.md`](../docs/architecture/security/clickhouse-rbac.md)
+   for the full user matrix.
 
-   allowed_client_cns:
-     - …existing…
-     - <newdev>-laptop
-   ```
+Then:
 
-   The first list authorises SSH to the box; the second authorises
-   the dev's mTLS cert to actually query CH. The CN convention is
-   documented in `infra-hetzner/ca/README.md`.
-
-2. Commit + push.
-3. `ansible-playbook ... --tags users,app`.
-4. Issue the new dev's mTLS cert:
+3. Each operator re-fetches the password-manager entry into their
+   `~/.config/soroban-prod.env`.
+4. `ansible-playbook ... --tags users,caddy_reload`.
+5. Issue the new dev's mTLS cert:
    ```bash
    ./infra-hetzner/ca/issue-client-cert.sh <newdev>-laptop
    ```
@@ -290,14 +291,16 @@ curl -sSI "https://${CH_DOMAIN}/ping"
 
 ## Removing a developer
 
-1. Remove from **both** `ssh_authorized_github_users` and
-   `allowed_client_cns` in `group_vars/all.yml`. Commit + push.
-2. `ansible-playbook ... --tags users,app`.
-3. The role rebuilds `authorized_keys` from scratch each run, so
-   removing the name evicts SSH access. Likewise the Caddy CN
-   allowlist is re-rendered from group_vars, so removing the CN
-   evicts mTLS access — effective on Caddy restart (triggered by
-   the snippet-change handler).
+1. Remove the dev's SSH key line from `OPERATOR_SSH_PUBKEYS` and
+   the matching `<dev>-laptop:dev_shared` entry from
+   `CLICKHOUSE_CN_USER_MAP` in `~/.config/soroban-prod.env`.
+   Each operator re-fetches.
+2. `ansible-playbook ... --tags users,caddy_reload`.
+3. The `users` role rebuilds `authorized_keys` from scratch each
+   run, so removing the line evicts SSH access. The Caddy `map`
+   snippet is re-rendered from `CLICKHOUSE_CN_USER_MAP`, so
+   removing the CN evicts mTLS access — effective on Caddy
+   reload (triggered by the snippet-change handler).
 
 If the offboarding is hostile (laptop unreturned), the CN
 removal is the immediate access cut — no CA rotation needed, no
@@ -434,7 +437,24 @@ See `infra-hetzner/ca/README.md` §Compromise response.
   `infra/src/lib/stacks/hetzner-dns-stack.ts` and `make
 deploy-production-hetzner-dns`.
 
+### ClickHouse RBAC + auth model
+
+Per-service users + profiles + quotas, plus the Caddy CN→user
+mapping that drives proxy-trust identity, are documented in
+[`docs/architecture/security/clickhouse-rbac.md`](../docs/architecture/security/clickhouse-rbac.md).
+That file is the source of truth for the user matrix, profile /
+quota definitions, the `CLICKHOUSE_CN_USER_MAP` env var format,
+cert revocation procedure, and known limitations (notably that
+quotas are NOT enforced for Caddy-proxied requests on CH 26.3 —
+DoS protection lives in other layers).
+
 ### ClickHouse password rotation
+
+The `default` ClickHouse user keeps a password (host-side admin
+only: sidecar `db-clickhouse-init`, backup script, operator after
+`ssh deploy && sudo`). External clients reach scoped users via
+Caddy proxy-trust without ever touching this password — see the
+RBAC doc above.
 
 1. Update the `soroban-prod / ansible-env` entry in the password
    manager with the new value.

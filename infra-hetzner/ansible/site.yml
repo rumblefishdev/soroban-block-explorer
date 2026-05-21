@@ -44,14 +44,16 @@
           - operator_ssh_pubkeys | trim | length > 0
           - storagebox_ssh_user | trim | length > 0
           - storagebox_ssh_host | trim | length > 0
-          - allowed_client_cns | length > 0
+          - clickhouse_cn_user_pairs | length > 0
         fail_msg: |
           One or more required environment variables are not set (or are
           whitespace-only).
           Expected, sourced from your shell before invoking ansible-playbook:
             HCLOUD_ROBOT_USER       (Hetzner Robot webservice user, e.g. #ws+...)
             HCLOUD_ROBOT_PASSWORD   (Robot webservice password, set in Robot UI)
-            CLICKHOUSE_PASSWORD     (random 32-byte base64)
+            CLICKHOUSE_PASSWORD     (random 32-byte base64 — host-side
+                                     admin only; external clients use
+                                     CLICKHOUSE_CN_USER_MAP via Caddy)
             BORG_PASSPHRASE         (random 40-byte base64)
             CH_DOMAIN               (Caddy site address — e.g.
                                      ch.sorobanscan.rumblefish.dev)
@@ -60,25 +62,32 @@
                                      who can SSH into the deploy user)
             STORAGEBOX_SSH_USER     (BX21 user, e.g. u123456)
             STORAGEBOX_SSH_HOST     (BX21 host, e.g. u123456.your-storagebox.de)
-            ALLOWED_CLIENT_CNS      (comma-separated mTLS client CN allowlist)
+            CLICKHOUSE_CN_USER_MAP  (comma-separated `<cn>:<ch_user>`
+                                     pairs — Caddy uses this both as the
+                                     mTLS allowlist and as the CN→user
+                                     mapping forwarded to ClickHouse;
+                                     dev CNs typically map to `dev_shared`)
           See infra-hetzner/README.md for the canonical password-manager
           source for these values.
 
-    - name: Every allowed_client_cns entry must match the issuance regex
-      # Mirrors the validation in infra-hetzner/ca/issue-client-cert.sh.
-      # The list is hand-edited and rendered directly into a Caddy
-      # snippet — an entry with backticks / quotes / regex metachars
-      # could break the snippet parse or worse silently widen the
-      # match. Reject anything outside the safe character set
-      # before we even touch the box.
+    - name: Every clickhouse_cn_user_pairs entry must be `<cn>:<user>` with safe chars
+      # Mirrors the validation in infra-hetzner/ca/issue-client-cert.sh
+      # for the CN side and constrains the user side to the CH
+      # username character set. The list is hand-edited and rendered
+      # directly into a Caddy snippet — an entry with backticks /
+      # quotes / regex metachars could break the snippet parse or
+      # silently widen the match. Reject anything outside the safe
+      # character set before we even touch the box.
       ansible.builtin.assert:
         that:
-          - item is regex('^[a-zA-Z0-9._-]+$')
+          - item is regex('^[a-zA-Z0-9._-]+:[a-z][a-z0-9_]*$')
         fail_msg: |
-          CN '{{ item }}' contains characters outside [a-zA-Z0-9._-].
-          The issuance script enforces the same regex; group_vars must
-          stay in sync. Fix the entry and re-run.
-      loop: '{{ allowed_client_cns }}'
+          Pair '{{ item }}' does not match `<cn>:<user>` with safe chars.
+          CN must match `[a-zA-Z0-9._-]+` (same as the issuance script).
+          ClickHouse user must match `[a-z][a-z0-9_]*` (matches user
+          names defined in crates/db-clickhouse/users.d/services.xml).
+          Fix the entry and re-run.
+      loop: '{{ clickhouse_cn_user_pairs }}'
 
 - name: Hetzner Robot — manage server-side configuration via REST API
   hosts: localhost

@@ -321,11 +321,15 @@
   notify: Reload caddy
   tags: [app, caddy_reload]
 
-- name: Render Caddy CN allowlist snippet
+- name: Render Caddy CN→ClickHouse user map snippet
   # The site block in infra-hetzner/Caddyfile imports this file
-  # to obtain the `@allowed_clients` matcher. Triggers a Caddy-
-  # only restart (not a full compose-stack restart) — a CN
-  # rotation should not interrupt in-flight ClickHouse queries.
+  # to obtain the `{ch_user}` map placeholder used in
+  # `header_up X-ClickHouse-User`. The map IS the allowlist —
+  # any CN not in the map yields empty `{ch_user}`, which the
+  # @no_user matcher in Caddyfile rejects with 403 before any
+  # backend hop. Triggers a Caddy-only restart (not a full
+  # compose-stack restart) — a CN rotation should not interrupt
+  # in-flight ClickHouse queries.
   #
   # `tags: caddy_reload` carves out a fast path for revocation:
   #   ansible-playbook ... --tags caddy_reload
@@ -335,8 +339,8 @@
   # SLA documented in infra-hetzner/ca/README.md requires this
   # narrow tag.
   ansible.builtin.template:
-    src: cn_allowlist.snippet.j2
-    dest: /srv/caddy/cn_allowlist.snippet
+    src: cn_user_map.snippet.j2
+    dest: /srv/caddy/cn_user_map.snippet
     owner: root
     group: root
     mode: '0644'

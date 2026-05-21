@@ -133,6 +133,20 @@ services:
       - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
       - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
+      # Per-service RBAC users + profiles + quotas (task 0240).
+      # `services.xml` defines proxy-trust users (`dev_shared`,
+      # `galexie`, `api_reader`, `ingestion_writer`, `partition_admin`,
+      # `migration_admin`) as `<no_password/>` with `<networks>`
+      # restricted to loopback + the pinned compose bridge subnet
+      # (172.30.0.0/16). `default` is intentionally NOT overridden
+      # here — the image entrypoint owns it (password from
+      # `CLICKHOUSE_PASSWORD` env, loopback-only `<networks>`) and
+      # remains the host-side admin path (sidecar, backup,
+      # SSH→docker exec). External clients reach scoped users via
+      # Caddy proxy-trust, not `default`.
+      - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
+      - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro
+      - ./crates/db-clickhouse/users.d/services.xml:/etc/clickhouse-server/users.d/services.xml:ro
       # Production-only overrides.
       - ./crates/db-clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       - ./crates/db-clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
@@ -141,7 +155,10 @@ services:
       CLICKHOUSE_USER: default
       # Fail-fast pattern — Compose refuses to start if the env
       # variable is unset, so we never silently launch with the
-      # baked-in dev password from the base file.
+      # baked-in dev password from the base file. `default` is the
+      # host-side admin user (sidecar, backup, SSH→docker exec);
+      # external clients reach scoped users (`api_reader`, …) or
+      # `dev_shared` via Caddy, none of which need this password.
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
       CLICKHOUSE_DB: default
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
@@ -227,3 +244,17 @@ services:
 volumes:
   caddy-data:
   caddy-config:
+
+# Pin compose bridge subnet (task 0240). users.d/services.xml's
+# `<networks>` allowlist lists 172.30.0.0/16 explicitly — without
+# this pin Docker would assign an unpredictable subnet from its
+# default range (172.17.0.0/16, 172.18.0.0/16, …) and the CH
+# `<networks>` ACL would either reject the bridge gateway or have
+# to be widened to 172.16.0.0/12 (every Docker bridge on the host).
+# The pinned range stays stable across `docker network prune` cycles
+# and keeps the services.xml allowlist reviewable.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16

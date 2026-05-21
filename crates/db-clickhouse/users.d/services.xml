@@ -1,0 +1,128 @@
+<!--
+  Per-service ClickHouse users (task 0240). Mounted at
+  /etc/clickhouse-server/users.d/services.xml.
+
+  Identity model: every external client (Lambda, Galexie, dev
+  laptop) terminates mTLS at the Caddy reverse proxy. Caddy maps
+  the verified cert CN to a CH user and forwards
+  `X-ClickHouse-User: <user>`. ClickHouse never sees the cert
+  itself — Caddy IS the authenticator, this file lists the userIDs
+  Caddy is allowed to assert.
+
+  Every user is `<no_password/>` because the cert is the
+  credential. The `<networks>` ACL pins the compose bridge subnet
+  so a stray request from outside the docker network is refused at
+  the CH layer even if it somehow bypasses Caddy. The subnet
+  `172.30.0.0/16` is pinned explicitly in `docker-compose.prod.yml`
+  (and `docker-compose.yml` for dev) — Docker's default subnet
+  allocator picks unpredictable ranges and would make this
+  allowlist either too narrow (broken after `docker network prune`)
+  or too wide (`172.16.0.0/12` covers all bridges on the host).
+
+  Loopback (`127.0.0.1`, `::1`) is also allowed so the sidecar
+  `db-clickhouse-init` and operator `clickhouse-client` on the box
+  itself continue to work.
+
+  `default` is intentionally NOT overridden here — the image
+  entrypoint manages it (password from `CLICKHOUSE_PASSWORD` env,
+  networks `127.0.0.1`/`::1` only via the entrypoint-generated
+  `default-user.xml`). `default` is reachable from the box itself
+  (sidecar, backup, SSH→docker exec) with the password; external
+  clients cannot reach it because the Caddy CN→user map has no
+  entry pointing to `default`. Dev certs map to `dev_shared` (see
+  below) instead, so cert alone suffices for dev access without
+  exposing the box's password-protected `default`.
+-->
+<clickhouse>
+    <users>
+        <!-- Shared admin user for developer mTLS certs. Cert is the
+             credential (verified by Caddy + mapped to dev_shared);
+             ClickHouse trusts the forwarded `X-ClickHouse-User`
+             header on a `<no_password/>` user restricted to the
+             compose bridge subnet + loopback. Per-dev attribution
+             lives in Caddy access logs (X-Client-Subject), not in
+             the CH user — joining the two log streams gives the
+             "who ran which query" answer. -->
+        <dev_shared>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>admin</profile>
+            <quota>unlimited</quota>
+            <access_management>0</access_management>
+        </dev_shared>
+
+        <galexie>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>write_no_ddl</profile>
+            <quota>high_write</quota>
+            <access_management>0</access_management>
+        </galexie>
+
+        <api_reader>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>read_only</profile>
+            <quota>api_throttle</quota>
+            <access_management>0</access_management>
+        </api_reader>
+
+        <ingestion_writer>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>write_no_ddl</profile>
+            <quota>high_write</quota>
+            <access_management>0</access_management>
+        </ingestion_writer>
+
+        <!-- partition_admin is an admin-class user gated only by its
+             profile + quota — CH 26.3 refuses SQL GRANT/REVOKE on
+             users defined in users.xml storage
+             (ACCESS_STORAGE_READONLY, verified empirically), so the
+             "narrow to DROP PARTITION + SELECT" intent from task
+             0240's original draft is unreachable via XML+SQL combo.
+             Scope-narrowing comes from `partition_only` profile
+             (max_execution_time 300s) and `low_volume` quota
+             (100 queries/h) instead — both bound how much damage a
+             compromised partition_admin Lambda can do per hour. -->
+        <partition_admin>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>partition_only</profile>
+            <quota>low_volume</quota>
+            <access_management>0</access_management>
+        </partition_admin>
+
+        <migration_admin>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>migration_full</profile>
+            <quota>low_volume</quota>
+            <access_management>0</access_management>
+        </migration_admin>
+    </users>
+</clickhouse>

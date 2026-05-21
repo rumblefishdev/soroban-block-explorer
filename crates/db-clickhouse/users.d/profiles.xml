@@ -1,0 +1,69 @@
+<!--
+  RBAC profiles backing the per-service users in `services.xml`
+  (task 0240). Mounted at /etc/clickhouse-server/users.d/profiles.xml.
+
+  Profiles are intentionally NOT inheriting from `default` — the
+  long timeouts in `timeouts.xml` (7200 s) are specific to the
+  bulk-ingest workload and would be wrong defaults for read-only
+  API queries. Each profile declares the timeouts and memory caps
+  appropriate to its workload class.
+-->
+<clickhouse>
+    <profiles>
+        <admin>
+            <readonly>0</readonly>
+            <allow_ddl>1</allow_ddl>
+            <max_memory_usage>20000000000</max_memory_usage>
+            <http_receive_timeout>7200</http_receive_timeout>
+            <http_send_timeout>7200</http_send_timeout>
+            <receive_timeout>7200</receive_timeout>
+            <send_timeout>7200</send_timeout>
+        </admin>
+
+        <read_only>
+            <readonly>1</readonly>
+            <allow_ddl>0</allow_ddl>
+            <max_memory_usage>4000000000</max_memory_usage>
+            <max_execution_time>30</max_execution_time>
+        </read_only>
+
+        <write_no_ddl>
+            <readonly>0</readonly>
+            <allow_ddl>0</allow_ddl>
+            <max_memory_usage>8000000000</max_memory_usage>
+            <max_insert_block_size>1048576</max_insert_block_size>
+            <min_insert_block_size_rows>262144</min_insert_block_size_rows>
+            <http_receive_timeout>7200</http_receive_timeout>
+            <http_send_timeout>7200</http_send_timeout>
+            <receive_timeout>7200</receive_timeout>
+            <send_timeout>7200</send_timeout>
+        </write_no_ddl>
+
+        <!-- partition_admin profile. Intent: "DROP PARTITION + SELECT
+             only" — but CH 26.3 cannot express this via XML+SQL combo
+             (XML-defined users reject SQL GRANT/REVOKE with
+             ACCESS_STORAGE_READONLY, and the profile gates are
+             binary `allow_ddl=0/1`). This profile therefore opens
+             DDL broadly; blast radius is bounded by:
+             - `max_execution_time` 300s (no long-running DDL)
+             - `max_memory_usage` 2 GiB (smaller than admin/write profiles)
+             - the `low_volume` quota (100 queries/h) on the bound user
+             A compromised partition_admin Lambda can ALTER / DROP
+             tables, but only 100 times/h and never for longer than
+             5 minutes per query. Acceptable for an internal Lambda
+             gated by AWS IAM. -->
+        <partition_only>
+            <readonly>0</readonly>
+            <allow_ddl>1</allow_ddl>
+            <max_memory_usage>2000000000</max_memory_usage>
+            <max_execution_time>300</max_execution_time>
+        </partition_only>
+
+        <migration_full>
+            <readonly>0</readonly>
+            <allow_ddl>1</allow_ddl>
+            <max_memory_usage>8000000000</max_memory_usage>
+            <max_execution_time>900</max_execution_time>
+        </migration_full>
+    </profiles>
+</clickhouse>

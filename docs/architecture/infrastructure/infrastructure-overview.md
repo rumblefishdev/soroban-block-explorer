@@ -345,6 +345,22 @@ Hetzner stack can serve traffic.
 High-level decisions are recorded in the
 [task 0216 notes](../../../lore/1-tasks/active/0216_RESEARCH_hetzner-clickhouse-deploy/notes/S-decisions.md).
 
+**Per-service identity and RBAC.** Within the Hetzner stack,
+ClickHouse exposes per-service users (one per Lambda / Galexie /
+dev consumer class) bound to capability-scoped profiles
+(`read_only`, `write_no_ddl`, `migration_full`, …) and quotas
+(task 0240). Caddy verifies the mTLS client cert and maps the
+verified CN to the ClickHouse user it forwards as
+`X-ClickHouse-User`; the cert is the credential, the CH user is
+`<no_password/>` restricted to the compose bridge subnet. The
+host-side admin user (`default`, used by the init sidecar and
+backup script) keeps its password and is reachable only from
+loopback. See
+[`docs/architecture/security/clickhouse-rbac.md`](../security/clickhouse-rbac.md)
+for the per-service user matrix, the CN→user mapping mechanism,
+and known limitations (notably quota enforcement gap on the
+proxy-trust path).
+
 **Relationship to the AWS sections above:** the AWS topology described
 in §§3–5.5 represents the original infrastructure design and is
 preserved verbatim. Post-CH-migration, the AWS-hosted database is

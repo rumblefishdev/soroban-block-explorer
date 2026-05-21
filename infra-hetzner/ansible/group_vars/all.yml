@@ -51,14 +51,34 @@ acme_email: "{{ lookup('env', 'ACME_EMAIL') }}"
 #   )"
 operator_ssh_pubkeys: "{{ lookup('env', 'OPERATOR_SSH_PUBKEYS') }}"
 
-# Comma-separated list of allowed mTLS client CNs. Caddy's HTTP
-# layer rejects any cert whose CN is not on this list, even when
-# the cert is CA-signed (defence-in-depth against a leaked
-# client cert).
+# Comma-separated `<cn>:<ch_user>` pairs. Caddy's `map` directive
+# (rendered into snippets/cn_user_map.snippet) uses this to:
+#   1. Allow only listed CNs (the map IS the allowlist — unmapped
+#      certs leave `{ch_user}` empty and the site block returns 403).
+#   2. Forward the resolved CH user to the backend as
+#      `X-ClickHouse-User: <ch_user>`.
+#
+# Service certs map to scoped users (`api_reader`, `galexie`, …);
+# dev certs map to `dev_shared` (admin user with `<no_password/>`,
+# loopback/bridge-restricted — leaves the password-protected
+# `default` unreachable via Caddy).
 #
 # Example:
-#   export ALLOWED_CLIENT_CNS="<dev1>-laptop,<dev2>-laptop,lambda-api-prod"
-allowed_client_cns: "{{ lookup('env', 'ALLOWED_CLIENT_CNS').split(',') | map('trim') | reject('equalto', '') | list }}"
+#   export CLICKHOUSE_CN_USER_MAP="\
+#     <dev1>-laptop:dev_shared,\
+#     <dev2>-laptop:dev_shared,\
+#     galexie-production:galexie,\
+#     lambda-api-production:api_reader,\
+#     lambda-ingestion-production:ingestion_writer,\
+#     lambda-partition-production:partition_admin,\
+#     lambda-migration-production:migration_admin"
+clickhouse_cn_user_pairs: "{{ lookup('env', 'CLICKHOUSE_CN_USER_MAP').split(',') | map('trim') | reject('equalto', '') | list }}"
+
+# Plain list of CNs derived from the pair list — used by the site.yml
+# preflight regex check (the CN side of the pair must be in the
+# issuance regex's safe character set) and by any other place that
+# only needs the names, not the mapping.
+allowed_client_cns: "{{ clickhouse_cn_user_pairs | map('regex_replace', '^([^:]+):.*$', '\\1') | list }}"
 
 # Storage Box SSH credentials (BX21).
 storagebox_ssh_user: "{{ lookup('env', 'STORAGEBOX_SSH_USER') }}"
