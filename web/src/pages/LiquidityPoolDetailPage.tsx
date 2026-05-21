@@ -34,17 +34,12 @@ import { PoolTransactions } from './pool-detail/PoolTransactions.js';
  * unrelated siblings.
  */
 export default function LiquidityPoolDetailPage() {
+  // React Router won't match `/liquidity-pools/:id` without `:id`, so
+  // `id` is always non-empty here — no need for a defensive fallback
+  // branch that would never execute.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
   const detail = usePoolDetail(poolId);
-
-  if (poolId === '') {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="liquidity-pool" identifier={poolId} />
-      </Box>
-    );
-  }
 
   let summarySection: ReactNode = null;
   let kpiSection: ReactNode = null;

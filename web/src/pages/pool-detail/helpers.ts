@@ -29,6 +29,13 @@ export function isPoolStale(
   return Number.isNaN(ageMs) || ageMs > SEVEN_DAYS_MS;
 }
 
+/** Module-level — Intl.NumberFormat construction is expensive enough
+ *  to be worth caching across renders. */
+const COMPACT_FORMATTER = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
 /**
  * Compact decimal display (`753.9M`, `1.2K`, `480K`) for the KPI strip.
  * Accepts the same string-or-number input as `formatAmount` and returns
@@ -40,8 +47,5 @@ export function formatCompactAmount(
   if (value == null) return '—';
   const n = typeof value === 'string' ? Number(value) : value;
   if (!Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('en-US', {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(n);
+  return COMPACT_FORMATTER.format(n);
 }

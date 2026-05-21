@@ -42,12 +42,13 @@ function classifyLpTx(operationTypes: readonly string[]): {
     return { label: 'Deposit', color: 'emerald' };
   if (has('liquidity_pool_withdraw'))
     return { label: 'Withdrawal', color: 'brown' };
-  if (
-    has('path_payment_strict_send') ||
-    has('path_payment_strict_receive') ||
-    has('manage_buy_offer') ||
-    has('manage_sell_offer')
-  )
+  // Only path_payment_strict_* actually touch the pool's reserves; a
+  // standalone manage_*_offer creates / updates a classic DEX offer
+  // and doesn't move pool liquidity (the pool-tx endpoint can still
+  // surface such tx if a *separate* op in the same tx touched the
+  // pool, but in that case the path-payment branch above will fire).
+  // Classifying on manage_*_offer would over-label as Trade.
+  if (has('path_payment_strict_send') || has('path_payment_strict_receive'))
     return { label: 'Trade', color: 'blue' };
   return { label: 'Other', color: 'neutral' };
 }

@@ -6,6 +6,10 @@ import { assetLegLabel, formatCompactAmount, isPoolStale } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
 
+/** Module-level formatter — Intl.NumberFormat is expensive to
+ *  instantiate on every render. */
+const COUNT_FORMATTER = new Intl.NumberFormat('en-US');
+
 interface KpiCellProps {
   label: string;
   value: ReactNode;
@@ -72,7 +76,7 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       />
       <KpiCell
         label="Participants"
-        value={new Intl.NumberFormat('en-US').format(pool.participant_count)}
+        value={COUNT_FORMATTER.format(pool.participant_count)}
         subtitle="liquidity providers"
       />
     </Stack>

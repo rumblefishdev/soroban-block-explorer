@@ -51,6 +51,13 @@ function periodToQueryParams(period: ChartPeriod): {
  * Disabled until both a pool id and a period are present.
  */
 export const usePoolChart = (poolId: string, period: ChartPeriod) => {
+  // `from` is anchored at the first render that produced this period —
+  // the memo only re-runs when `period` changes, so a long-lived session
+  // on the same preset shows data starting at "X ago from the time the
+  // page loaded", not literal "X ago from now". Acceptable for an
+  // explorer (5-min stale-time triggers a refetch which recomputes
+  // `from` on memo re-evaluation after remount); a trading UI would
+  // want a periodic re-anchor.
   const query = useMemo(() => periodToQueryParams(period), [period]);
   return useQuery({
     ...getPoolChartOptions({
