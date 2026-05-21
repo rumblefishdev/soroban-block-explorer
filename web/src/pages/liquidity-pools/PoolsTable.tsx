@@ -7,6 +7,8 @@ import {
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from '../../router/routes.js';
+import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
 import { formatAmount } from '../format.js';
 // `assetLegLabel` lives in the detail-page helpers but the labelling
 // rules apply equally to the list — reuse the shared helper rather than
@@ -34,6 +36,12 @@ function AssetDot({ color }: { color: string }) {
   );
 }
 
+// Pair asset icons (Figma 266:35969) are deferred until the backend
+// adds per-leg `icon_url` to `PoolAssetLeg`. Using a letter-avatar
+// fallback would be a placeholder no one wants in production; the
+// Figma intent is real per-asset iconography. Track the backend
+// extension as a follow-up.
+
 const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'pool',
@@ -42,12 +50,20 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
         row.asset_b
       )}`;
+      // Display the SEP-23 `L...` strkey (Stellar canonical user-facing
+      // form), but keep the link target on the raw hex so the backend
+      // route still resolves.
+      const strkey = poolIdHexToStrkey(row.pool_id);
       return (
         <Stack spacing={0.5} sx={{ minWidth: 0 }}>
           <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
             {pair}
           </Typography>
-          <IdentifierWithCopy value={row.pool_id} type="pool" />
+          <IdentifierWithCopy
+            value={strkey}
+            type="pool"
+            href={routes.pool(row.pool_id)}
+          />
         </Stack>
       );
     },
@@ -104,8 +120,8 @@ interface PoolsTableProps {
 
 /**
  * Table for the liquidity-pools list page. Columns mirror the Figma node
- * `266:35969` design: Pool (pair + truncated id) / Fee / Reserves
- * (two-line with colored dots) / Participants.
+ * `266:35969` design: Pool (stacked asset icons + pair + strkey id) /
+ * Fee / Reserves (two-line with colored dots) / Participants.
  */
 export function PoolsTable({ rows }: PoolsTableProps) {
   return (

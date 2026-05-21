@@ -32,6 +32,12 @@ import { useInfinitePager } from '../useInfinitePager.js';
  * (deposit / withdraw) and a path-payment trade against the same pool —
  * a rare bundling — the LP-management classification wins. Most
  * realistic transactions have a single LP-relevant operation.
+ *
+ * **Hard-fail on unknown ops.** If none of the recognised op kinds is
+ * present we throw rather than render a silent fallback chip. The
+ * `SectionErrorBoundary` around the transactions section will catch the
+ * throw and surface a visible error state, so the gap can't ship
+ * unnoticed if the backend ever starts returning a new op kind.
  */
 function classifyLpTx(operationTypes: readonly string[]): {
   label: string;
@@ -50,7 +56,11 @@ function classifyLpTx(operationTypes: readonly string[]): {
   // Classifying on manage_*_offer would over-label as Trade.
   if (has('path_payment_strict_send') || has('path_payment_strict_receive'))
     return { label: 'Trade', color: 'blue' };
-  return { label: 'Other', color: 'neutral' };
+  throw new Error(
+    `classifyLpTx: no recognised LP op kind in operation_types=[${operationTypes.join(
+      ', '
+    )}]`
+  );
 }
 
 const columns: ExplorerTableColumn<PoolTransactionItem>[] = [

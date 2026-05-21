@@ -2,9 +2,11 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
 import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 
-import { formatAmount } from '../format.js';
+import { routes } from '../../router/routes.js';
+import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
+import { formatAmount } from '../format.js';
 
 import { assetLegLabel } from './helpers.js';
 
@@ -57,7 +59,16 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
         cells={[
           {
             label: 'Pool ID',
-            value: <IdentifierWithCopy value={pool.pool_id} type="pool" />,
+            // Display + copy the SEP-23 `L...` strkey (Stellar canonical
+            // user-facing form); link target stays on the hex id so the
+            // backend route resolves.
+            value: (
+              <IdentifierWithCopy
+                value={poolIdHexToStrkey(pool.pool_id)}
+                type="pool"
+                href={routes.pool(pool.pool_id)}
+              />
+            ),
           },
         ]}
       />

@@ -7,11 +7,20 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
  *
  * Native (XLM) legs come back with `asset_type_name === 'native'` and
  * `null` `asset_code`. Classic, SAC, and Soroban legs all carry a code.
- * Falls back to `?` only on schema drift.
+ *
+ * **Hard-fail on schema drift.** If a leg has neither the native flag
+ * nor an `asset_code` the backend contract is broken — throw rather
+ * than silently render a `?` placeholder, so the bug is caught by the
+ * surrounding `SectionErrorBoundary` instead of leaking into the UI.
  */
 export function assetLegLabel(leg: PoolAssetLeg): string {
   if (leg.asset_type_name === 'native') return 'XLM';
-  return leg.asset_code ?? '?';
+  if (leg.asset_code != null && leg.asset_code !== '') return leg.asset_code;
+  throw new Error(
+    `assetLegLabel: non-native leg has no asset_code (asset_type_name=${
+      leg.asset_type_name ?? 'null'
+    })`
+  );
 }
 
 /**

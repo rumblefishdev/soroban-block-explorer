@@ -2,8 +2,9 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
 import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 
-import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 import { routes } from '../../router/routes.js';
+import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
+import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
 import { assetLegLabel, isPoolStale } from './helpers.js';
 
@@ -25,7 +26,14 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
     ? `${assetLegLabel(pool.asset_a)} / ${assetLegLabel(pool.asset_b)}`
     : 'Liquidity pool';
   const stale = pool ? isPoolStale(pool.latest_snapshot_at) : false;
+  // Backend serves the pool id as 64-char hex; render the SEP-23 `L...`
+  // strkey (the form Stellar Laboratory / stellar.expert show) but keep
+  // the route href on hex so backend lookups still resolve.
+  const strkey = poolIdHexToStrkey(poolId);
 
+  // Per-leg asset icons (Figma 325:7098) are deferred until the backend
+  // surfaces `icon_url` on `PoolAssetLeg`; a letter-avatar fallback is
+  // not the intent.
   return (
     <Box>
       <PageBreadcrumb
@@ -46,7 +54,7 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
           />
         )}
       </Stack>
-      <IdentifierDisplay value={poolId} type="pool" />
+      <IdentifierDisplay value={strkey} type="pool" />
     </Box>
   );
 }
