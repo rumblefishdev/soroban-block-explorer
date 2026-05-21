@@ -35,14 +35,19 @@ history:
     status: completed
     who: karolkow
     note: >
-      Shipped in PR #207 on feat/0077 branch (3 feat commits +
-      1 review-polish commit). 18 files, +1382 / −10 LOC. Build +
-      lint + typecheck green at chain tip. 28 of 30 acceptance
-      criteria met; 2 deferred (Pool ID strkey "L..." encoding —
-      UX acceptable as truncated hex; Playwright CLI regression —
-      gated on FE test-infra task 0226). Implementation Notes,
-      Design Decisions (From Plan + Emerged), and Issues
-      Encountered captured below before archive.
+      Shipped in PR #207 on feat/0077 branch (8 commits after rebase
+      onto latest develop). Build + lint + typecheck green at chain
+      tip. 29 of 30 acceptance criteria met; 1 deferred (Playwright
+      CLI regression — gated on FE test-infra task 0226). Pool ID
+      strkey "L..." encoder delivered post-review (was the second
+      deferral; built + verified vs `@stellar/stellar-base` on a real
+      mainnet pool). Post-review polish in this same PR also:
+      swapped list Reserves col → Total shares col, hard-failed
+      `assetLegLabel` + `classifyLpTx` on schema drift / unknown ops,
+      dropped the AssetIcon pair stack pending a backend `icon_url`
+      extension. Implementation Notes, Design Decisions (From Plan +
+      Emerged), Issues Encountered, and Future Work captured below
+      before archive.
 ---
 
 # Frontend: Liquidity Pools list and detail pages
@@ -60,8 +65,11 @@ tasks spawned after merge — see "Known limitations" below.
 ## Status: Completed
 
 **Final state:** Shipped via PR #207 on
-`feat/0077_frontend-liquidity-pools-list-detail`. Four commits, 18
-files, +1382 / −10 LOC. Build + lint + typecheck green at chain tip.
+`feat/0077_frontend-liquidity-pools-list-detail`. Eight commits after
+the rebase onto latest develop (three feat commits, two fix commits,
+one chore commit for the task close, one feat commit for post-review
+polish, one style commit to unblock CI's `format:check`). Build +
+lint + typecheck green at chain tip.
 
 ## Context
 
@@ -122,16 +130,24 @@ Filters reflected in URL via `useTableUrlState` (existing pattern from
 
 #### Columns
 
-| Column       | Display                                          | Source                                   |
-| ------------ | ------------------------------------------------ | ---------------------------------------- |
-| Pool         | Pair name "XLM / USDC" + Pool ID truncated below | `PoolItem.asset_a/b` + `pool_id`         |
-| Fee          | Yellow pill badge "0.30%"                        | `PoolItem.fee_percent`                   |
-| Reserves     | Two lines per row with colored dot per asset     | `PoolItem.reserve_a/b` (null → "—")      |
-| Participants | Numeric count "1,284"                            | `PoolItem.participant_count` (from 0246) |
+| Column       | Display                                       | Source                                                         |
+| ------------ | --------------------------------------------- | -------------------------------------------------------------- |
+| Pool         | Pair name + Pool ID `L...` strkey (truncated) | `PoolItem.asset_a/b` + `pool_id` (encoded to strkey, hex href) |
+| Fee          | Yellow pill badge "0.30%"                     | `PoolItem.fee_percent`                                         |
+| Total shares | Right-aligned formatted number                | `PoolItem.total_shares` (null → "—" on stale pools)            |
+| Participants | Numeric count                                 | `PoolItem.participant_count` (from 0246, never null)           |
 
 Stale pools: dynamic fields (`reserve_a/b`, `total_shares`, `tvl`,
-`volume`, `fee_revenue`) come back `null`. Render as "—".
-`participant_count` is **never null** (snapshot-independent per 0246).
+`volume`, `fee_revenue`) come back `null`. `total_shares` cell renders
+"—" via `formatAmount(null)`. `participant_count` is **never null**
+(snapshot-independent per 0246). Per-asset reserves moved to the detail
+page KPI strip + Summary — the list no longer carries them.
+
+Pool ID is rendered as the SEP-23 `L...` strkey (canonical Stellar
+user-facing form). Backend serves hex (64 chars); frontend encodes via
+`web/src/utils/poolIdStrkey.ts` (~60 LOC, browser-safe, no deps),
+verified byte-for-byte vs `@stellar/stellar-base.StrKey.encodeLiquidityPool`
+on a real mainnet pool.
 
 ### Pool detail page
 
@@ -351,24 +367,24 @@ Replace stub `web/src/pages/LiquidityPoolDetailPage.tsx`:
 - [x] Filter "asset pair" text input maps to `filter[asset_code]`
 - [x] Filter "Minimum TVL" dropdown — 4 presets (Any / $10k / $100k / $1M) — maps to `filter[min_tvl]`
 - [x] Filters reflected in URL; filter change resets cursor
-- [x] Columns: Pool (pair + truncated id) / Fee (badge) / Reserves (2-line w/ dots) / Participants (numeric)
-      — _asset icons deferred (no `icon_url` on `PoolItem`; would require N+1 fetch per leg)_
+- [x] Columns: Pool (pair + truncated `L...` strkey) / Fee (badge) / Total shares (right-aligned) / Participants (numeric)
+      — _post-review: per-asset Reserves column was swapped to Total shares; reserves now live on the detail page only_
+      — _asset icons dropped from list + header (would require `icon_url` on `PoolAssetLeg`); backend extension follow-up to be spawned post-merge_
 - [x] Stale pools render "—" for null dynamic fields
 - [x] Cursor-based pagination via `useInfinitePager`
 
 ### Pool detail
 
 - [x] Breadcrumb "Liquidity Pools / {pair name}" with links
-- [x] Header: pair name + status badge (Active / Stale) + truncated Pool ID
-      — _asset icons deferred (same reason as list)_
+- [x] Header: pair name + status badge (Active / Stale) + truncated `L...` strkey
+      — _asset icons dropped (same reason as list); backend `icon_url` extension required to re-add_
 - [x] KPI strip: 4 cells (Total shares / asset A reserve / asset B reserve / Participants)
 - [x] Summary table: Pool ID (full + copy) / Fee / Total shares / XLM reserve / USDC reserve
-- [ ] Pool ID renders as `L...` strkey everywhere (not hex) — **deferred**
-      _MVP uses truncated hex via `IdentifierWithCopy type="pool"`. Strkey
-      encoder (CRC16-XModem + base32 + version byte) is real work + needs
-      cross-tested fixtures (no `@stellar/stellar-sdk` in workspace). UX
-      acceptable as truncated hex; full strkey is a small, well-scoped
-      follow-up that can land standalone._
+- [x] Pool ID renders as `L...` strkey everywhere (not hex)
+      — _delivered post-review: `web/src/utils/poolIdStrkey.ts` encoder
+      (CRC16-XModem + base32 + version byte 0x58, ~60 LOC, browser-safe,
+      zero deps). Verified byte-for-byte vs `@stellar/stellar-base.StrKey.encodeLiquidityPool`
+      on real mainnet pool `ffffe478...085a → LD777ZDYWGOA...U7ZD`._
 - [x] Status badge derives from `latest_snapshot_at` age (7-day threshold)
 
 ### Chart
@@ -408,24 +424,40 @@ Replace stub `web/src/pages/LiquidityPoolDetailPage.tsx`:
 ## Implementation Notes
 
 PR: **#207** on `feat/0077_frontend-liquidity-pools-list-detail`.
-Four commits, 18 files (4 modified + 14 new), +1382 / −10 LOC.
-Build + lint + typecheck green at chain tip.
+Eight commits (after rebase onto latest develop). Build + lint +
+typecheck green at chain tip.
 
-Commit chain:
+Commit chain (post-rebase SHAs):
 
-- `8e76b3d` `feat(lore-0077): add liquidity pools list page` — 6 files,
+- `1127b7c` `feat(lore-0077): add liquidity pools list page` — 6 files,
   +428 LOC. List page, filter bar, table, hook, `TableEmptyKind: 'pools'`.
-- `52092b1` `feat(lore-0077): add LP detail query hooks + header, KPI
+- `ee60021` `feat(lore-0077): add LP detail query hooks + header, KPI
 strip, summary` — 9 files, +410 LOC. Four read hooks, helpers,
   presentational header / KPI strip / summary.
-- `c1474b1` `feat(lore-0077): add LP detail chart, participants,
+- `b657197` `feat(lore-0077): add LP detail chart, participants,
 transactions + page` — 4 files, +544 LOC. Chart with tabs + LazySection
   - oracle-pending placeholder, paginated participants and transactions
     tables, page composition with per-section `SectionErrorBoundary`.
-- `28a7403` `fix(lore-0077): apply senior-review polish` — 5 files,
+- `2b5613e` `fix(lore-0077): apply senior-review polish` — 5 files,
   +30 / −19 LOC. usePoolChart drift comment, dead `poolId === ''` branch
   removed, classifier no longer over-labels `manage_*_offer` as Trade,
   `Intl.NumberFormat` hoisted to module-level.
+- `72d144a` `chore(lore-0077): mark task completed + move to archive`.
+- `b65cd8a` `fix(lore-0077): address Copilot review on PR #207` — 3
+  files. `USD_COMPACT_FORMATTER` hoisted to module scope in PoolCharts,
+  comment-vs-code mismatch on the destructure fallback rewritten,
+  duplicate `assetLegLabel` in PoolsTable replaced with the shared
+  `pool-detail/helpers` import.
+- `8ca9a37` `feat(lore-0077): pool ID strkey + UX polish post-review`
+  — 6 files. New `web/src/utils/poolIdStrkey.ts` SEP-23 encoder; list
+  Reserves col swapped to Total shares; `assetLegLabel` hard-fails on
+  non-native leg without `asset_code`; `classifyLpTx` hard-fails on
+  unknown `operation_types[]`; AssetIcon pair-icon stack dropped from
+  list + header (letter-avatar fallback unacceptable; backend
+  `icon_url` extension follow-up).
+- `6dd5602` `style(lore-0228): nx format:write phase6 validation runbook`
+  — prettier fix on `docs/runbooks/0228_phase6_validation.md` after
+  rebase, to unblock the merge-preview format:check.
 
 File layout:
 
@@ -437,6 +469,7 @@ web/src/api/hooks/usePoolDetail.ts          (new)
 web/src/api/hooks/usePoolTransactions.ts    (new)
 web/src/api/hooks/usePoolParticipants.ts    (new)
 web/src/api/hooks/usePoolChart.ts           (new, with ChartPeriod type)
+web/src/utils/poolIdStrkey.ts               (new, SEP-23 strkey encoder)
 web/src/pages/liquidity-pools/
   PoolsFilterBar.tsx                        (new)
   PoolsTable.tsx                            (new)
@@ -450,6 +483,7 @@ web/src/pages/pool-detail/
   PoolTransactions.tsx                      (new)
 web/src/pages/LiquidityPoolsListPage.tsx    (M, replaces stub)
 web/src/pages/LiquidityPoolDetailPage.tsx   (M, replaces stub)
+docs/runbooks/0228_phase6_validation.md     (M, prettier-fix only)
 ```
 
 Tests: none new. Project has no React component test infra yet
@@ -480,44 +514,65 @@ oracle (task 0199)`) per 0215 §6.14.
 
 ### Emerged
 
-9. **Pool ID strkey "L..." encoder skipped.** Spec called for SEP-23
-   strkey but the workspace has no `@stellar/stellar-sdk` and a
-   hand-rolled CRC16-XModem + base32 + version-byte encoder is real
-   work that needs cross-tested fixtures. MVP renders truncated hex via
-   `IdentifierWithCopy type="pool"`. AC marked deferred, no follow-up
-   task spawned (small enough to add inline when the strkey utility is
-   first needed elsewhere).
-10. **Asset icons skipped.** `PoolItem` carries no `icon_url` per leg —
-    populating icons would require fetching `/assets/:id` for each leg
-    (N+1 on the list, or a hardcoded asset-icon registry). Deferred,
-    no follow-up task (cosmetic; reserves + pair text are clear enough).
-11. **`'Other'` transaction badge** for `operation_types[]` arrays that
-    don't match any of the three Figma-defined categories
-    (Deposit / Withdrawal / Trade). Defensive fallback for unknown
-    op-type strings; renders as neutral chip.
-12. **URL filter keys: `asset` and `min_tvl`** (not `asset_code`). Short
+9. **Pool ID strkey "L..." encoder delivered post-review.** Originally
+   deferred (MVP rendered truncated hex via `IdentifierWithCopy
+type="pool"`); user requested the full strkey display before merge.
+   New utility `web/src/utils/poolIdStrkey.ts` (~60 LOC, browser-safe,
+   zero deps) implements the SEP-23 algorithm: version byte 0x58 +
+   32-byte payload + CRC16-XModem little-endian checksum, RFC 4648
+   base32. Verified byte-for-byte vs
+   `@stellar/stellar-base.StrKey.encodeLiquidityPool` on real mainnet
+   pool `ffffe478...085a → LD777ZDYWGOA...U7ZD`. Bundle stays clean
+   (no `@stellar/*` runtime dep — pulling the SDK for one function
+   would be 50–100 KB compressed).
+10. **AssetIcon pair-icon stack dropped from list + header.** Initially
+    added with the existing `AssetIcon` primitive, which falls back to
+    a letter-avatar when no `icon_url` is present. `PoolAssetLeg` does
+    not carry `icon_url`, so the production result is letter avatars —
+    a placeholder no one wants. Dropped on the user's request; the
+    backend extension (add `icon_url` per leg to `PoolAssetLeg`) is
+    tracked as a follow-up to be spawned post-merge.
+11. **List Reserves column swapped to Total shares.** Per the user's
+    post-review call: per-asset reserves on the list row duplicated
+    information that already lives on the detail page (KPI strip +
+    Summary). The list is now: Pool / Fee / Total shares / Participants.
+    Reserves remain visible on the detail page; the list stays compact.
+12. **`assetLegLabel` hard-fails on schema drift.** Originally returned
+    `'?'` for a non-native leg without `asset_code`. Replaced with
+    `throw new Error(...)` so the `SectionErrorBoundary` surfaces a
+    backend-contract violation instead of the UI leaking a `?`
+    placeholder.
+13. **`classifyLpTx` hard-fails on unknown `operation_types`.**
+    Originally returned an `'Other'` neutral chip for op*type arrays
+    that matched none of `liquidity_pool_deposit` /
+    `liquidity_pool_withdraw` / `path_payment_strict*\*`. Replaced with
+`throw new Error(...)` so a new on-chain op kind cannot ship
+    unnoticed as a silent fallback.
+14. **URL filter keys: `asset` and `min_tvl`** (not `asset_code`). Short
     URL key, mapped to `filter[asset_code]` at hook level. Mirrors the
     `useTableUrlState` pattern from `AssetsListPage` (`code`, `type` →
     `filter[code]`, `filter[type]`).
-13. **Empty state for `PoolTransactions` uses `EmptyState` with
+15. **Empty state for `PoolTransactions` uses `EmptyState` with
     `ListAltIcon`** rather than a plain `Typography`. Matches the polish
     level of `PoolParticipants` and the rest of the explorer.
-14. **`formatAbsoluteUtc` reuse** in `PoolTransactions` time cell
+16. **`formatAbsoluteUtc` reuse** in `PoolTransactions` time cell
     instead of hand-rolling `new Date(...).toISOString().slice(...)`.
     Spotted in review; one shared formatter prevents UTC-offset drift.
-15. **Stale-pool KPI subtitle** swapped to "no recent snapshot" for
+17. **Stale-pool KPI subtitle** swapped to "no recent snapshot" for
     cells 1–3 when `isPoolStale(latest_snapshot_at)` returns true. Cell
     4 (participants) keeps its normal subtitle — `participant_count` is
     snapshot-independent per 0246.
-16. **`manage_*_offer` removed from Trade classifier.** Standalone
+18. **`manage_*_offer` removed from Trade classifier.** Standalone
     manage_offer creates classic DEX offers without moving pool
     liquidity; classifying on it would over-label non-trade activity.
     Path-payment branch already fires for the genuine cross-pool trade
-    case. Caught by senior review.
-17. **`Intl.NumberFormat` hoisted to module-level constants** in
-    `PoolKpiStrip` and `helpers.formatCompactAmount`. Per-render
-    construction is cheap but not free, and matches the
-    formatter-as-constant pattern used elsewhere in the explorer.
+    case. Caught by Copilot review.
+19. **`Intl.NumberFormat` hoisted to module-level constants** in
+    `PoolKpiStrip`, `helpers.formatCompactAmount`, and `PoolCharts`
+    (USD_COMPACT_FORMATTER). Per-render construction is cheap but not
+    free, and the chart's `valueFormatter` runs per-axis-tick and
+    per-tooltip-hover — matches the formatter-as-constant pattern used
+    elsewhere in the explorer.
 
 ## Issues Encountered
 
@@ -544,12 +599,21 @@ on type 'PoolItem'` even though the worktree's own
 - **`rm -rf libs/.../dist`** used during the api-types rebuild flail.
   Build artefacts (gitignored) so no impact, but violates CLAUDE.md
   "rm forbidden — move to .trash/". Going forward: `mv ... .trash/`.
+- **Rebase pulled in unformatted `0228_phase6_validation.md`.** After
+  rebasing the branch onto the latest `origin/develop`, the merge
+  preview included a runbook file added on develop without a prettier
+  pass. CI's `nx format:check --all` flagged it. Fixed in a dedicated
+  `style(lore-0228): nx format:write …` commit on this branch — pure
+  formatting; no content change.
 
 ## Broken / modified tests
 
 None. No existing component tests reference any of the touched paths.
 
 ## Future Work
+
+Explicit deferrals from the original spec / Figma (each will be tracked
+as its own backlog task once the gating dependency clears):
 
 - **Tx Amount column** — spawn after 0247 RESEARCH concludes. Small FE
   patch on `PoolTransactions.tsx` + `usePoolTransactions.ts` once the
@@ -558,14 +622,34 @@ None. No existing component tests reference any of the touched paths.
   blocked-on-oracle) ships. Removes the placeholder overlay on
   `PoolCharts.tsx`, re-enables sort-by-TVL on the list page if
   applicable (per 0215 §E18). ~0.5-day patch.
-- **Pool ID strkey "L..." encoder** — small follow-up, not tasked. Add
-  a `web/src/utils/poolIdStrkey.ts` with CRC16-XModem + base32 +
-  version-byte encoder + jest fixtures the first time another page
-  needs it; swap `IdentifierWithCopy type="pool"` to pass strkey at
-  that point.
-- **Asset icons on Pool / KPI cards** — not tasked. Needs either an
-  expansion of `PoolItem` to carry per-leg `icon_url` or a frontend
-  asset-icon registry. Cosmetic; revisit on first stakeholder request.
+- **Asset icons on Pool list rows + detail header** — **backend
+  extension required.** `PoolAssetLeg` needs a per-leg `icon_url`
+  field (matching the pattern already used by `AssetItem.icon_url`
+  in `/assets`). Once delivered, the AssetIcon pair stack — initially
+  added then dropped in this task because the letter-avatar fallback
+  was unacceptable — can be re-added (~30 min FE patch).
+- **Playwright CLI regression** — gated on FE test-infra task 0226
+  (vitest + Playwright bootstrap). Add an LP regression spec once
+  that infra lands.
+
+Out-of-scope improvements that **were not part of the 0077 spec** and
+therefore have no deferral, but a senior eye would naturally flag for a
+future iteration:
+
+- Stale-pool **row** visual distinction (currently only cells render
+  "—"; the row itself looks the same as an active pool).
+- List sort options (sort by TVL / participants / created_at) — current
+  list is ordered server-side, no client sort UI.
+- Transaction-type filter on the Recent transactions section
+  (deposits-only / withdrawals-only / trades-only).
+- Direct pool-id search (paste `L...` strkey to navigate).
+- A11y review (aria-labels, keyboard navigation across paginators,
+  focus management on tab switches).
+- Mobile responsive QA on real device (TimeSeriesChart claims
+  responsive but no fixture run yet).
+
+Each of the above would be its own scoped task; they are not promises
+this PR is making.
 
 ## Notes
 
