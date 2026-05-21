@@ -84,7 +84,7 @@
 	}
 }
 
-{$CH_PROD_DOMAIN} {
+{$CH_DOMAIN} {
 	tls {
 		# Both directions of mutual authentication. `require_and_verify`
 		# rejects any handshake that does not present a certificate

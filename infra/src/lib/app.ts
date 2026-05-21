@@ -12,6 +12,7 @@ import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
+import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -125,6 +126,16 @@ export function createApp({
     restApi: apiGateway.api,
   });
   cloudWatch.addDependency(apiGateway);
+
+  // HetznerDnsStack only when the env has a real `chDomainName`.
+  // Staging carries a `PLACEHOLDER` value so the rest of its CDK app
+  // synths cleanly — see `validateConfig` for the matching rule.
+  if (
+    !config.chDomainName.includes('PLACEHOLDER') &&
+    !config.chDomainName.includes('CHANGE')
+  ) {
+    new HetznerDnsStack(app, `${prefix}-HetznerDns`, { env, config });
+  }
 
   app.synth();
 }

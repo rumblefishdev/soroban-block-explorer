@@ -328,6 +328,17 @@ ingestion task is moved to a public subnet, eliminating the NAT
 Gateway. Authentication between AWS-side workloads and the Hetzner-
 hosted database is based on cryptographic identity (mutual TLS).
 
+DNS for the Hetzner endpoint is provisioned via AWS Route 53. A
+dedicated CDK stack (`HetznerDnsStack` in `infra/src/lib/stacks/`)
+creates an A record under the `sorobanscan.rumblefish.dev` hosted
+zone that points directly at the dedicated server's public IPv4 —
+a literal value, not an AWS alias, because the target is non-AWS.
+The record TTL is short (5 minutes) so an IP change after a box
+replacement propagates quickly. The same hostname is the target of
+the Let's Encrypt HTTP-01 challenge that Caddy on the box uses to
+obtain its TLS certificate, so this record must exist before the
+Hetzner stack can serve traffic.
+
 High-level decisions are recorded in the
 [task 0216 notes](../../../lore/1-tasks/active/0216_RESEARCH_hetzner-clickhouse-deploy/notes/S-decisions.md).
 

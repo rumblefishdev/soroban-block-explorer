@@ -55,5 +55,6 @@
   "rdsStorageThresholdPct": 60,
   "apiGateway5xxThreshold": 2.0,
   "slackWorkspaceId": "T83HLEDJN",
-  "slackChannelId": "C0ASK8JR10U"
+  "slackChannelId": "C0ASK8JR10U",
+  "chDomainName": "PLACEHOLDER"
 }

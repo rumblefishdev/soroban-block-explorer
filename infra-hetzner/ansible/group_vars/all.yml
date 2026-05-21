@@ -29,8 +29,10 @@ borg_passphrase: "{{ lookup('env', 'BORG_PASSPHRASE') }}"
 
 # Public DNS name Caddy serves on. The Hetzner Robot reverse-DNS
 # entry should match. Let's Encrypt validates http-01 against this
-# hostname.
-ch_prod_domain: "{{ lookup('env', 'CH_PROD_DOMAIN') }}"
+# hostname. Per-environment in the CDK config (see EnvironmentConfig
+# `chDomainName`); the Ansible side reads it from the operator's
+# shell env so the playbook stays env-agnostic.
+ch_domain: "{{ lookup('env', 'CH_DOMAIN') }}"
 
 # Let's Encrypt account email — receives expiry-warning mail.
 acme_email: "{{ lookup('env', 'ACME_EMAIL') }}"
@@ -105,7 +107,7 @@ borg_repo_url: 'ssh://{{ storagebox_ssh_user }}@{{ storagebox_ssh_host }}:{{ sto
 # the inventory-declared IP of the box regardless of which play
 # is evaluating the variable.
 hetzner_server_ipv4: "{{ hostvars[groups['ch_prod'][0]].ansible_host }}"
-hetzner_reverse_dns: '{{ ch_prod_domain }}'
+hetzner_reverse_dns: '{{ ch_domain }}'
 
 # ---------------------------------------------------------------------
 # System facts — NOT env-configurable

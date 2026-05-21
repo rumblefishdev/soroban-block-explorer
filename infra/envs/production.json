@@ -55,5 +55,6 @@
   "rdsStorageThresholdPct": 20,
   "apiGateway5xxThreshold": 0.5,
   "slackWorkspaceId": "T83HLEDJN",
-  "slackChannelId": "C09JZ0Z0Z0Z"
+  "slackChannelId": "C09JZ0Z0Z0Z",
+  "chDomainName": "ch.sorobanscan.rumblefish.dev"
 }

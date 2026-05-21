@@ -39,7 +39,7 @@
           - hcloud_robot_password | trim | length > 0
           - clickhouse_password | trim | length > 0
           - borg_passphrase | trim | length > 0
-          - ch_prod_domain | trim | length > 0
+          - ch_domain | trim | length > 0
           - acme_email | trim | length > 0
           - operator_ssh_pubkeys | trim | length > 0
           - storagebox_ssh_user | trim | length > 0
@@ -53,8 +53,8 @@
             HCLOUD_ROBOT_PASSWORD   (Robot webservice password, set in Robot UI)
             CLICKHOUSE_PASSWORD     (random 32-byte base64)
             BORG_PASSPHRASE         (random 40-byte base64)
-            CH_PROD_DOMAIN          (Caddy site address — e.g. ch-prod.placeholder
-                                     until task 0234 lands real DNS)
+            CH_DOMAIN               (Caddy site address — e.g.
+                                     ch.sorobanscan.rumblefish.dev)
             ACME_EMAIL              (Let's Encrypt account email)
             OPERATOR_SSH_PUBKEYS    (one OpenSSH public key per line —
                                      who can SSH into the deploy user)

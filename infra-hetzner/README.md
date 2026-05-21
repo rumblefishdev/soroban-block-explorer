@@ -83,7 +83,7 @@ export HCLOUD_ROBOT_USER="..."          # Hetzner Robot webservice user (#ws+...
 export HCLOUD_ROBOT_PASSWORD="..."      # Robot webservice password
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
-export CH_PROD_DOMAIN="..."             # Caddy site address (placeholder OK until task 0234)
+export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
 export STORAGEBOX_SSH_USER="..."        # BX21 user, e.g. u123456
 export STORAGEBOX_SSH_HOST="..."        # BX21 host, e.g. u123456.your-storagebox.de
@@ -171,18 +171,27 @@ cp inventory.ini.example inventory.ini
 ansible-galaxy collection install -r requirements.yml
 ```
 
-### 4. Configure the storage box and domain defaults
+### 4. Configure the storage box and domain values
 
-Edit `infra-hetzner/ansible/group_vars/all.yml`:
+These are NOT edited in `group_vars/all.yml` — `all.yml` reads
+them via `lookup('env', '...')`. Set them in
+`~/.config/soroban-prod.env` (the canonical block lives in the
+`soroban-prod / ansible-env` password-manager entry, copied from
+the template in the "Prerequisites" section above):
 
-- `ch_prod_domain` → real DNS name pointed at the server IP
-- `acme_email` → real operator email
-- `storagebox_ssh_user`, `storagebox_ssh_host` → values from the
+- `CH_DOMAIN` → real DNS name pointed at the server IP (matches
+  `chDomainName` in the CDK env config — provisioned by
+  `HetznerDnsStack`)
+- `ACME_EMAIL` → real operator email (LE expiry warnings)
+- `STORAGEBOX_SSH_USER`, `STORAGEBOX_SSH_HOST` → values from the
   BX21 order page
-- `ssh_authorized_github_users` → the team's GitHub logins
+- `OPERATOR_SSH_PUBKEYS` → multi-line block of OpenSSH public
+  keys; one per operator authorised to SSH the box
 
-These are committed (non-secret deployment config). Pair the
-change with a `feat(lore-0227): ...` commit.
+Source the env file (`source ~/.config/soroban-prod.env`) before
+each `ansible-playbook` run. Adding a new operator = append their
+pubkey to the env block in the password manager + each operator
+re-fetches the entry locally.
 
 ### 5. Smoke-test SSH connectivity
 
@@ -237,13 +246,13 @@ docker exec clickhouse clickhouse-client -q 'SELECT version()'
 # CH responds via Caddy with a valid client cert.
 exit
 clickhouse-client --secure \
-  -h "$CH_PROD_DOMAIN" \
+  -h "$CH_DOMAIN" \
   --user default --password "$CLICKHOUSE_PASSWORD" \
   --config-file ~/.clickhouse-client/config.xml \
   -q 'SELECT version()'
 
 # Synthetic negative: connection without cert is rejected at TLS layer.
-curl -sSI "https://${CH_PROD_DOMAIN}/ping"
+curl -sSI "https://${CH_DOMAIN}/ping"
 #   → "alert handshake failure" (TLS abort), NOT 200.
 
 # Synthetic negative: connection with a valid CA-signed cert
@@ -418,9 +427,12 @@ See `infra-hetzner/ca/README.md` §Compromise response.
 - LE certificate state lives in the `caddy-data` Docker volume.
 - The first deploy obtains a cert via http-01; Caddy renews
   automatically when within 30 days of expiry.
-- DNS for `$CH_PROD_DOMAIN` must point at the server IP **before**
-  the first deploy or the http-01 challenge fails. Caddy retries
-  automatically once DNS is corrected.
+- DNS for `$CH_DOMAIN` must point at the server IP **before** the
+  first deploy or the http-01 challenge fails. Caddy retries
+  automatically once DNS is corrected. The record itself lives in
+  Route 53 and is managed by the CDK `HetznerDnsStack` — see
+  `infra/src/lib/stacks/hetzner-dns-stack.ts` and `make
+deploy-production-hetzner-dns`.
 
 ### ClickHouse password rotation
 

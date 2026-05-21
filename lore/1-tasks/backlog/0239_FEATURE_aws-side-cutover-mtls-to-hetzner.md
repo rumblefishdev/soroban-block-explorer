@@ -1,10 +1,10 @@
 ---
 id: '0239'
-title: 'FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet, mTLS to Hetzner CH, NAT GW + RDS decommission'
+title: 'FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet, mTLS to Hetzner CH, NAT GW + RDS decommission, region eu-central-1'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0216', '0227', '0228', '0234', '0240']
+related_tasks: ['0216', '0227', '0228', '0234', '0240', '0249']
 tags:
   [
     priority-high,
@@ -14,6 +14,7 @@ tags:
     mtls,
     migration,
     cost-optimization,
+    region-change,
   ]
 milestone: 1
 links: []
@@ -22,6 +23,18 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0227 future work — AWS-side restructuring downstream of the Hetzner ClickHouse deployment. Lambdas + Galexie no longer need VPC-internal RDS connectivity since ClickHouse on Hetzner replaces it; this enables Lambda VPC removal, Galexie public-subnet placement, and NAT Gateway + RDS decommissioning. All AWS → Hetzner traffic authenticates via mTLS client certificates issued by the team CA (from 0227).'
+  - date: '2026-05-20'
+    status: backlog
+    who: fmazur
+    note: >
+      Scope extended: region change us-east-1 → eu-central-1 for
+      production. Combined with [[task-0249]] (destroy us-east-1
+      first), this task becomes a greenfield deploy in eu-central-1
+      with the target AWS-minimal topology baked in from day one
+      — no incremental migration of in-place stacks. CloudFront
+      cert stays in us-east-1 (CloudFront requirement); everything
+      else (network, lambdas, ECR, secrets, KMS, regional WAF)
+      moves to eu-central-1.
 ---
 
 # FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet, mTLS to Hetzner CH
@@ -218,10 +231,46 @@ Each step depends on the previous:
 
 ### `infra/envs/production.json` changes
 
-- Add `chProdDomainName` and `mtlsSecretArnPrefix` fields.
+- Change `awsRegion` from `us-east-1` to `eu-central-1`. All
+  regional resources (network, lambdas, ECR, ECS, secrets, KMS,
+  CloudWatch, regional WAF) move with it. CloudFront cert stays
+  in us-east-1 (CloudFront-only requirement) — `certificateArn`
+  remains a us-east-1 ARN even after the region change. Document
+  this explicitly in the field doc-comment so future readers
+  don't "fix" it by changing the region in the ARN.
+- Add `mtlsSecretArnPrefix` field. (`chDomainName` already exists
+  from [[task-0234]].)
 - Drop RDS-related config (`dbInstanceClass`, `dbAllocatedStorage`, etc.).
 - Drop NAT-related config if any.
 - Update `EnvConfig` interface in `infra/src/lib/types.ts` accordingly.
+
+### Region migration prerequisites (Phase 0)
+
+This phase precedes the AWS-cutover work proper:
+
+1. **[[task-0249]] must complete first** — wipe everything in
+   us-east-1 (staging + any prod stacks). Greenfield deploy in
+   eu-central-1 starts from an empty regional footprint, avoiding
+   the "two NAT GWs, two RDS instances" cost overlap during the
+   transition.
+2. **CDK bootstrap eu-central-1**:
+   ```bash
+   npx cdk bootstrap aws://<account>/eu-central-1
+   ```
+3. **ACM certificate for `*.sorobanscan.rumblefish.dev` in
+   eu-central-1** — required for API Gateway custom domain in the
+   new region. Issue via AWS Console or CDK (DNS validation
+   against the existing Route 53 hosted zone, which is global and
+   unaffected by the region change).
+4. **Update `infra/envs/production.json:awsRegion`** to
+   `eu-central-1`. Validate `cdk synth` is clean before any deploy.
+5. **ECR repositories** — push the indexer / api / galexie images
+   to the new region's ECR. The us-east-1 images are deleted as
+   part of 0249.
+
+After Phase 0, the Phase 1-6 work below executes against the new
+region from the start — no in-place "migration" of existing
+stacks.
 
 ## Acceptance Criteria
 
@@ -250,6 +299,9 @@ Each step depends on the previous:
 
 ## Dependencies
 
+- [[task-0249]] — destroy us-east-1 AWS infra first. Greenfield
+  deploy in eu-central-1 only makes sense once the old region is
+  empty (no orphan stacks, no NAT-GW cost overlap).
 - [[task-0227]] — Hetzner-side artefacts must be deployed and
   validated (✅ delivered, awaiting first prod traffic).
 - [[task-0234]] — Route 53 A-record + LE cert must be live before
@@ -312,6 +364,6 @@ Each step depends on the previous:
 - Migrating `infra/src/` away from CDK to another IaC tool — out
   of scope; this task stays within CDK conventions.
 - Multi-environment rollout — this task targets production only.
-  Staging gets the same treatment in a follow-up if staging has
-  ever pointed at a Hetzner CH (currently staging stays on its
-  own RDS until product decides otherwise).
+  Staging is being decommissioned entirely by [[task-0249]] and is
+  not re-deployed in eu-central-1; there is no AWS-side staging
+  until product explicitly asks for one.
