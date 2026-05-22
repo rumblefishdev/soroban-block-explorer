@@ -2,7 +2,7 @@
 id: '0251'
 title: 'Frontend QA fixes batch: 13 bugs across 5 clusters'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0077', '0246', '0249', '0250']
 tags: ['frontend', 'qa', 'polish', 'bug', 'priority-high']
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Task created. Spawned from comprehensive Playwright-MCP QA traversal of 13 frontend routes covering whole explorer.'
+  - date: '2026-05-22'
+    status: active
+    who: karolkow
+    note: 'Promoted backlog → active.'
 ---
 
 # Frontend QA fixes batch: 13 bugs across 5 clusters
