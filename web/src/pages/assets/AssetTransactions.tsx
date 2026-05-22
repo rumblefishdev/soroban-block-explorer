@@ -11,6 +11,8 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -19,7 +21,6 @@ import { useAssetTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { Dash, OperationCell, StatusCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
@@ -67,23 +68,18 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
  * summary and metadata.
  */
 export function AssetTransactions({ assetId }: { assetId: string }) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useAssetTransactions(assetId);
+  // Cursors are asset-scoped — drop the URL cursor on asset switch.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: assetId,
+  });
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  const { data, isLoading, isError, error, refetch } = useAssetTransactions(
+    assetId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -123,9 +119,9 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </SectionCard>

@@ -12,9 +12,11 @@ import {
   TableSectionHeader,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { useNftTransfers } from '../../api/index.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -83,43 +85,18 @@ const COLUMN_COUNT = columns.length;
  * of mint / transfer / burn events for one NFT, per the Figma design.
  */
 export function NftTransfers({ nftId }: NftTransfersProps) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useNftTransfers(nftId);
+  // Cursors are NFT-scoped — drop the URL cursor on NFT switch.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: nftId,
+  });
 
-  const [pageIndex, setPageIndex] = useState(0);
+  const { data, isLoading, isError, error, refetch } = useNftTransfers(
+    nftId,
+    cursor
+  );
 
-  useEffect(() => {
-    setPageIndex(0);
-  }, [nftId]);
-
-  const pages = data?.pages ?? [];
-  const currentPage = pages[pageIndex];
-  const rows = currentPage?.data ?? [];
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage?.page.has_more);
-
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
-
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -168,9 +145,9 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
       <Box sx={{ minHeight: 200 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </Card>

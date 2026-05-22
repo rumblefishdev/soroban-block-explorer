@@ -14,14 +14,16 @@ import {
   RelativeTimestamp,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { usePoolTransactions } from '../../api/index.js';
+import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { formatAbsoluteUtc } from '../transactions/formatters.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 /**
  * Classifies a pool-touching transaction into the three Figma-defined
@@ -110,23 +112,21 @@ interface PoolTransactionsProps {
  * research in task 0247. The FE add-back is task 0249.
  */
 export function PoolTransactions({ poolId }: PoolTransactionsProps) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = usePoolTransactions(poolId);
+  // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
+  // simultaneously, so each section needs its own URL key. `resetKey`
+  // drops the cursor when the user navigates to a different pool.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    cursorParam: CURSOR_PARAMS.POOL_TRANSACTIONS,
+    resetKey: poolId,
+  });
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  const { data, isLoading, isError, error, refetch } = usePoolTransactions(
+    poolId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -170,9 +170,9 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </SectionCard>

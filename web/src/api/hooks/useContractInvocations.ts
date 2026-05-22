@@ -1,23 +1,25 @@
-import { listInvocationsInfiniteOptions } from '@rumblefish/api-types';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { listInvocationsOptions } from '@rumblefish/api-types';
+import { useQuery } from '@tanstack/react-query';
 
 import { listPolicy } from '../polling.js';
 
 const PAGE_SIZE = 20;
 
 /**
- * Fetches the paginated invocation appearance index for a contract
- * (`GET /contracts/:contract_id/invocations`). Cursor pagination; disabled
- * until an id is present.
+ * `GET /contracts/:contract_id/invocations` — cursor-paginated invocation
+ * appearance index for a contract. Each cursor is a distinct queryKey, so
+ * revisiting a cursor is a cache hit. URL-as-state pagination — caller
+ * passes the current cursor from `useCursorPagination`.
  */
-export const useContractInvocations = (contractId: string) =>
-  useInfiniteQuery({
-    ...listInvocationsInfiniteOptions({
+export const useContractInvocations = (
+  contractId: string,
+  cursor: string | null = null
+) =>
+  useQuery({
+    ...listInvocationsOptions({
       path: { contract_id: contractId },
-      query: { limit: PAGE_SIZE },
+      query: { limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) },
     }),
     ...listPolicy,
     enabled: contractId.length > 0,
-    initialPageParam: { path: { contract_id: contractId } },
-    getNextPageParam: (lastPage) => lastPage.page.cursor ?? undefined,
   });

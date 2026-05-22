@@ -1,15 +1,12 @@
-import {
-  listPoolsInfiniteOptions,
-  type ListPoolsData,
-} from '@rumblefish/api-types';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { listPoolsOptions, type ListPoolsData } from '@rumblefish/api-types';
+import { useQuery } from '@tanstack/react-query';
 
 import { listPolicy } from '../polling.js';
 
 type Filters = NonNullable<ListPoolsData['query']>;
 
 /**
- * Fetches the paginated liquidity-pool list (`GET /liquidity-pools`).
+ * `GET /liquidity-pools` — cursor-paginated liquidity-pool list.
  *
  * Supported filters per task 0246:
  *   * `filter[asset_code]` — single-asset, case-insensitive, matches either
@@ -18,12 +15,14 @@ type Filters = NonNullable<ListPoolsData['query']>;
  *   * Per-leg `filter[asset_a_code/issuer]` / `filter[asset_b_code/issuer]`
  *     remain available for API consumers needing issuer disambiguation.
  *
- * Cursor pagination via `lastPage.page.cursor`.
+ * Each (filter, cursor) combination forms a distinct queryKey, so
+ * revisiting a cursor is a cache hit. URL-as-state pagination — caller
+ * passes the current cursor from `useCursorPagination`.
  */
-export const usePoolsList = (filters?: Filters) =>
-  useInfiniteQuery({
-    ...listPoolsInfiniteOptions(filters ? { query: filters } : undefined),
+export const usePoolsList = (cursor: string | null = null, filters?: Filters) =>
+  useQuery({
+    ...listPoolsOptions({
+      query: { ...(filters ?? {}), ...(cursor ? { cursor } : {}) },
+    }),
     ...listPolicy,
-    initialPageParam: {},
-    getNextPageParam: (lastPage) => lastPage.page.cursor ?? undefined,
   });

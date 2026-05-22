@@ -10,15 +10,15 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
-  useTableUrlState,
+  useCursorPagination,
+  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { usePoolsList } from '../api/index.js';
 
 import { PoolsFilterBar } from './liquidity-pools/PoolsFilterBar.js';
 import { POOL_COLUMN_COUNT, PoolsTable } from './liquidity-pools/PoolsTable.js';
-import { useInfinitePager } from './useInfinitePager.js';
 
 type Filters = NonNullable<ListPoolsData['query']>;
 
@@ -31,9 +31,8 @@ const PAGE_SIZE = 20;
  * `GET /liquidity-pools` endpoint as extended by task 0246.
  */
 export default function LiquidityPoolsListPage() {
-  const { state, setFilter } = useTableUrlState({
-    filterKeys: ['asset', 'min_tvl'],
-  });
+  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
+    useCursorPagination({ filterKeys: ['asset', 'min_tvl'] });
   const asset = state.filters.asset ?? '';
   const minTvl = state.filters.min_tvl ?? '';
   const hasFilters = asset !== '' || minTvl !== '';
@@ -45,29 +44,13 @@ export default function LiquidityPoolsListPage() {
     return filters;
   }, [asset, minTvl]);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = usePoolsList(queryFilters);
+  const { data, isLoading, isError, error, refetch } = usePoolsList(
+    cursor,
+    queryFilters
+  );
 
-  const { rows, canPrev, canNext, handlePrev, handleNext, reset } =
-    useInfinitePager(
-      data?.pages ?? [],
-      fetchNextPage,
-      hasNextPage,
-      isFetchingNextPage
-    );
-
-  // A new filter set is a fresh query starting at page 0.
-  useEffect(() => {
-    reset();
-  }, [asset, minTvl, reset]);
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   const handleAssetChange = useCallback(
     (value: string) => setFilter('asset', value || null),
@@ -147,9 +130,9 @@ export default function LiquidityPoolsListPage() {
         <Box sx={{ minHeight: 320 }}>{body}</Box>
         <PaginationControls
           caption="Latest results"
-          prevCursor={canPrev ? 'prev' : null}
-          nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          canPrev={canPrev}
+          canNext={canNext}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

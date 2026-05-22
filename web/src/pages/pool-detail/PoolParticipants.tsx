@@ -11,14 +11,16 @@ import {
   RateLimitState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { usePoolParticipants } from '../../api/index.js';
+import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { formatAmount } from '../format.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 const columns: ExplorerTableColumn<ParticipantItem>[] = [
   {
@@ -70,23 +72,21 @@ interface PoolParticipantsProps {
  * of the rest of the page so failures stay scoped.
  */
 export function PoolParticipants({ poolId }: PoolParticipantsProps) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = usePoolParticipants(poolId);
+  // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
+  // simultaneously, so each section needs its own URL key. `resetKey`
+  // drops the cursor when the user navigates to a different pool.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    cursorParam: CURSOR_PARAMS.POOL_PARTICIPANTS,
+    resetKey: poolId,
+  });
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  const { data, isLoading, isError, error, refetch } = usePoolParticipants(
+    poolId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -134,9 +134,9 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </SectionCard>
