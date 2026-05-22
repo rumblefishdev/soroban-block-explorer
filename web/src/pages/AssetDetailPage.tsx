@@ -4,6 +4,7 @@ import {
   Chip,
   classifyError,
   GenericErrorState,
+  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -49,7 +50,7 @@ export default function AssetDetailPage() {
   } else if (asset.isError) {
     summary = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {classifyError(asset.error) === 'not-found' ? (
+        {isMissingResource(classifyError(asset.error)) ? (
           <NotFoundState entity="asset" identifier={id} />
         ) : (
           <GenericErrorState onRetry={() => void asset.refetch()} />

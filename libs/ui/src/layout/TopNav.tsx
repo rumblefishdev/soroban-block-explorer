@@ -3,7 +3,6 @@ import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
 import { monoFontFamily } from '../theme/typography.js';
-import { NetworkSwitcher, type Network } from './NetworkSwitcher.js';
 import { SearchInput } from './SearchInput.js';
 
 export interface NetworkStats {
@@ -14,9 +13,11 @@ export interface NetworkStats {
 }
 
 export interface TopNavProps {
-  network: Network;
-  onNetworkChange?: (network: Network) => void;
-  stats: NetworkStats;
+  /** Live network counters. Pass `undefined` to render dashes while the
+   *  underlying query is loading or errored — TopNav handles the
+   *  fallback so callers don't ship visually-misleading hard-coded
+   *  zeros. */
+  stats?: NetworkStats;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -75,9 +76,24 @@ function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+/** Renders the TPS counter — dash when stats unavailable OR genuinely
+ *  zero. Historical backfill data has no recent 60s TPS, so `"0.0"`
+ *  reads as a dead network rather than "no data". */
+function formatTps(stats: NetworkStats | undefined): string {
+  if (!stats || stats.tps === 0) return '—';
+  return stats.tps.toFixed(1);
+}
+
+/** Renders a counter — dash when stats unavailable. */
+function formatStat(
+  stats: NetworkStats | undefined,
+  pick: (s: NetworkStats) => number
+): string {
+  if (!stats) return '—';
+  return formatNumber(pick(stats));
+}
+
 export function TopNav({
-  network,
-  onNetworkChange,
   stats,
   searchValue,
   onSearchChange,
@@ -107,13 +123,6 @@ export function TopNav({
         minWidth={0}
         overflow="hidden"
       >
-        <Box flexShrink={0}>
-          <NetworkSwitcher
-            network={network}
-            onNetworkChange={onNetworkChange}
-          />
-        </Box>
-
         <Box
           display="flex"
           alignItems="center"
@@ -123,15 +132,18 @@ export function TopNav({
         >
           <Stat
             label="TPS"
-            value={stats.tps.toFixed(1)}
+            value={formatTps(stats)}
             valueColor="text.success"
           />
           <StatDivider />
-          <Stat label="Ledger" value={formatNumber(stats.ledger)} />
+          <Stat label="Ledger" value={formatStat(stats, (s) => s.ledger)} />
           <StatDivider />
-          <Stat label="Accounts" value={formatNumber(stats.accounts)} />
+          <Stat label="Accounts" value={formatStat(stats, (s) => s.accounts)} />
           <StatDivider />
-          <Stat label="Contracts" value={formatNumber(stats.contracts)} />
+          <Stat
+            label="Contracts"
+            value={formatStat(stats, (s) => s.contracts)}
+          />
         </Box>
       </Box>
 

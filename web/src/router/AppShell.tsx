@@ -6,10 +6,12 @@ import {
   TopNav,
   SecondaryNav,
   Footer,
-  type Network,
+  PageGridBackdrop,
   type NavItem,
+  type NetworkStats,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { useNetworkStats } from '../api/index.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
 
@@ -131,9 +133,7 @@ export function AppShell() {
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <TopNav
-        network={network}
-        onNetworkChange={setNetwork}
-        stats={MOCK_STATS}
+        stats={stats}
         searchValue={searchValue}
         onSearchChange={handleSearchChange}
         onSearchSubmit={handleSearchSubmit}
@@ -158,14 +158,23 @@ export function AppShell() {
       />
       <Box
         component="main"
-        sx={{ flex: 1, ...(isFullBleed ? {} : { px: 10, py: 4 }) }}
+        sx={{
+          flex: 1,
+          position: 'relative',
+          ...(isFullBleed ? {} : { px: 10, py: 4 }),
+        }}
       >
-        <Outlet />
+        {/* Faint grid halo behind every page. The home page adds the
+            warm gold glow pills on top of this same backdrop; every
+            other route shows the grid on its own. */}
+        <PageGridBackdrop />
+        <Box sx={{ position: 'relative', zIndex: 1 }}>
+          <Outlet />
+        </Box>
       </Box>
       <Footer
         logo={<HomeLogo height={47} onClick={handleHomeClick} />}
         navItems={FOOTER_NAV_ITEMS}
-        network={network}
       />
     </Box>
   );

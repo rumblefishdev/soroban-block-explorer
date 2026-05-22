@@ -3,6 +3,7 @@ import {
   CardSkeleton,
   classifyError,
   GenericErrorState,
+  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -52,7 +53,7 @@ export default function LiquidityPoolDetailPage() {
     const kind = classifyError(detail.error);
     summarySection = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'not-found' ? (
+        {isMissingResource(kind) ? (
           <NotFoundState entity="liquidity-pool" identifier={poolId} />
         ) : (
           <GenericErrorState onRetry={() => void detail.refetch()} />
