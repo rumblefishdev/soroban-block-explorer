@@ -2,7 +2,7 @@
 id: '0251'
 title: 'Frontend QA fixes batch: 13 bugs across 5 clusters'
 type: BUG
-status: active
+status: done
 related_adr: []
 related_tasks: ['0077', '0246', '0249', '0250']
 tags: ['frontend', 'qa', 'polish', 'bug', 'priority-high']
@@ -17,6 +17,21 @@ history:
     status: active
     who: karolkow
     note: 'Promoted backlog → active.'
+  - date: '2026-05-22'
+    status: done
+    who: karolkow
+    note: >
+      Shipped 11 of 13 bugs across 3 commits on `fix/0251_…` branch.
+      B1 resolved structurally by pre-task `linked={false}` on the
+      header pool-id. B3 plan misread — both `Reserves` + `Total
+      shares` cols already match Figma. B2 / B5 / H1 / H4 / H8 / H10
+      / H6 / H7 / H2 landed. B4 dropped on user signal (visual
+      regression in pair strings outweighed phishing signal); H5
+      superseded by emergent decision (literal 0 TPS stays `0.0`,
+      staleness is a separate signal). Playwright MCP regression
+      deferred — task body marks it pending. CI green: typecheck +
+      lint + build all pass on `web`. No new npm deps, no new UI
+      components, zero crates touched.
 ---
 
 # Frontend QA fixes batch: 13 bugs across 5 clusters
@@ -62,13 +77,13 @@ Bugs split into 5 clusters by touched file area, one commit per cluster.
 
 ### Bug-to-cluster mapping
 
-| Cluster | Bugs | Files | Severity |
-|---|---|---|---|
-| **C1** LP polish | B1, B2-LP-fee, B3, B4, B5 | `web/src/pages/pool-detail/PoolDetailHeader.tsx`, `web/src/pages/pool-detail/helpers.ts`, `web/src/pages/liquidity-pools/PoolsTable.tsx`, `web/src/pages/pool-detail/PoolSummary.tsx`, `web/src/pages/pool-detail/PoolKpiStrip.tsx` | 🔴1 / 🟡4 |
-| **C2** Network stats wiring | H1, H4, H5 | `web/src/router/AppShell.tsx`, `libs/ui/src/layout/TopNav.tsx`, `libs/ui/src/layout/NetworkSwitcher.tsx`, `web/src/pages/home/ChainOverview.tsx` | 🟠1 / 🟡2 |
-| **C3** Transactions filter | H2, H6, H7 | `web/src/pages/transactions/operationTypes.ts`, `web/src/pages/TransactionsListPage.tsx` | 🟠1 / 🟡2 |
-| **C4** Error classification | H8 | `libs/ui/src/states/classifyError.ts` (verify), `web/src/pages/LedgerDetailPage.tsx` + analogiczne detail pages | 🟡1 |
-| **C5** Search polish | H10 | `web/src/pages/SearchResultsPage.tsx` | 🟢1 |
+| Cluster                     | Bugs                      | Files                                                                                                                                                                                                                               | Severity  |
+| --------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| **C1** LP polish            | B1, B2-LP-fee, B3, B4, B5 | `web/src/pages/pool-detail/PoolDetailHeader.tsx`, `web/src/pages/pool-detail/helpers.ts`, `web/src/pages/liquidity-pools/PoolsTable.tsx`, `web/src/pages/pool-detail/PoolSummary.tsx`, `web/src/pages/pool-detail/PoolKpiStrip.tsx` | 🔴1 / 🟡4 |
+| **C2** Network stats wiring | H1, H4, H5                | `web/src/router/AppShell.tsx`, `libs/ui/src/layout/TopNav.tsx`, `libs/ui/src/layout/NetworkSwitcher.tsx`, `web/src/pages/home/ChainOverview.tsx`                                                                                    | 🟠1 / 🟡2 |
+| **C3** Transactions filter  | H2, H6, H7                | `web/src/pages/transactions/operationTypes.ts`, `web/src/pages/TransactionsListPage.tsx`                                                                                                                                            | 🟠1 / 🟡2 |
+| **C4** Error classification | H8                        | `libs/ui/src/states/classifyError.ts` (verify), `web/src/pages/LedgerDetailPage.tsx` + analogiczne detail pages                                                                                                                     | 🟡1       |
+| **C5** Search polish        | H10                       | `web/src/pages/SearchResultsPage.tsx`                                                                                                                                                                                               | 🟢1       |
 
 ## Implementation Plan
 
@@ -79,11 +94,13 @@ Bugs split into 5 clusters by touched file area, one commit per cluster.
 Plik: `web/src/pages/pool-detail/PoolDetailHeader.tsx:57`
 
 Current:
+
 ```tsx
 <IdentifierDisplay value={strkey} type="pool" />
 ```
 
 Fix — add `href` override (analog to `PoolSummary.tsx:66-70`):
+
 ```tsx
 <IdentifierDisplay value={strkey} type="pool" href={routes.pool(poolId)} />
 ```
@@ -100,6 +117,7 @@ Current: column id `reserves`, header `Reserves`, cell renders both
 `PoolSummary.tsx`, column should be Total shares.
 
 Fix — swap column definition:
+
 ```tsx
 { id: 'total_shares', header: 'Total shares', cell: (row) => formatAmount(row.total_shares) }
 ```
@@ -116,8 +134,9 @@ Postgres NUMERIC stringification = full precision.
 
 Fix — use existing `formatAmount(value, minDecimals=2)` from
 `web/src/pages/format.ts` (already used everywhere else):
+
 ```tsx
-`${formatAmount(row.fee_percent, 2)}%`  // → "0.30%"
+`${formatAmount(row.fee_percent, 2)}%`; // → "0.30%"
 ```
 
 **B4 🟡 Fake-XLM disambiguation (always issuer for non-native)**
@@ -129,6 +148,7 @@ Frontend currently renders real native XLM and fake-XLM identically →
 phishing vector.
 
 Current:
+
 ```ts
 if (leg.asset_type_name === 'native') return 'XLM';
 if (leg.asset_code != null && leg.asset_code !== '') return leg.asset_code;
@@ -136,6 +156,7 @@ throw …;
 ```
 
 Fix:
+
 ```ts
 if (leg.asset_type_name === 'native') return 'XLM';
 if (leg.asset_code != null && leg.asset_code !== '') {
@@ -163,6 +184,7 @@ Consequence of B4. When both legs have `code === 'XLM'`, keys like
 `${codeA} reserve === ${codeB} reserve` collide → React warning.
 
 Fix — index + composite key:
+
 ```tsx
 key={`${idx}-${leg.asset_type_name}-${leg.asset_code ?? 'native'}`}
 ```
@@ -177,6 +199,7 @@ guarantees no collision).
 Plik: `web/src/router/AppShell.tsx:25-30`
 
 Current:
+
 ```tsx
 const MOCK_STATS = { tps: 0, ledger: 0, accounts: 0, contracts: 0 };
 <TopNav stats={MOCK_STATS} ... />
@@ -227,6 +250,7 @@ Current 5 hardcoded. Backend enum in
 full parity over curated subset on 2026-05-22.
 
 Full 27 (Title Case labels):
+
 ```
 CREATE_ACCOUNT, PAYMENT, PATH_PAYMENT_STRICT_RECEIVE, MANAGE_SELL_OFFER,
 CREATE_PASSIVE_SELL_OFFER, SET_OPTIONS, CHANGE_TRUST, ALLOW_TRUST,
@@ -245,6 +269,7 @@ Select, upgrade to Autocomplete — 27 entries warrants type-to-filter.
 **H7 🟡 Combobox label "Manage Offer" maps to `MANAGE_SELL_OFFER` only**
 
 Resolved automatically by H6 — full enum has separate entries:
+
 ```ts
 { label: 'Manage Sell Offer', value: 'MANAGE_SELL_OFFER' },
 { label: 'Manage Buy Offer', value: 'MANAGE_BUY_OFFER' },
@@ -258,9 +283,10 @@ Backend enum case-sensitive (UPPERCASE only). Lowercase URL → 400 →
 SectionErrorBoundary → "Something went wrong".
 
 Fix — normalize + validate:
+
 ```tsx
 const op = (state.filters.op ?? '').toUpperCase().trim();
-const validOp = OPERATION_TYPE_OPTIONS.some(o => o.value === op) ? op : '';
+const validOp = OPERATION_TYPE_OPTIONS.some((o) => o.value === op) ? op : '';
 if (validOp) filters['filter[operation_type]'] = validOp;
 ```
 
@@ -283,6 +309,7 @@ For `/ledgers/404` (in-range, no record) → 404 → 'not-found' → nice
 same concept ("this ledger doesn't exist").
 
 Fix (preferred — Option A): extend LedgerDetailPage switch:
+
 ```tsx
 if (kind === 'not-found' || kind === 'validation') {
   return <NotFoundState entity="Ledger" identifier={String(sequence)} />;
@@ -308,24 +335,47 @@ or separate element.
 
 ## Acceptance Criteria
 
-- [ ] **C1 LP polish** — B1 routing fixed, B3 col swapped, B2 fee trimmed,
-      B4 issuer suffix for non-native, B5 React keys composite.
-- [ ] **C2 Network wiring** — H4 stats wired, H5 TPS "—" on zero, H1 toggle
-      cut from UI.
-- [ ] **C3 Filter UX** — H6 27 ops in dropdown, H7 separate Sell/Buy labels,
-      H2 lowercase normalized + validated.
-- [ ] **C4 Error states** — H8 LedgerDetailPage handles 'validation' as
-      NotFound; pattern unified across other detail pages.
-- [ ] **C5 Search polish** — H10 whitespace fixed.
+- [x] **C1 LP polish** — B1 resolved via `linked={false}` (header pool
+      id is a static caption, no link → no bad route — supersedes "fix
+      href" approach); B3 both `Reserves` + `Total shares` cols coexist
+      per Figma node `266:36052` (5-col table matches design — plan
+      misread); B2 fee trimmed via `FeePill.toFixed(2)` + `formatAmount`
+      in `PoolSummary`; **B4 dropped** by user on 2026-05-22 — see
+      Decisions/Emerged #7; B5 composite key `${index}-${label}` in
+      `SummaryRow` (PoolKpiStrip renders statically, no map collision
+      risk).
+- [x] **C2 Network wiring** — H4 stats wired via `useNetworkStats()`
+      directly in `AppShell` (no mapping layer); H5 superseded by the
+      commit 2 emergent decision — literal `0` TPS renders as `0.0`, not
+      `—`; `ChainOverview` already matches via `data.tps_60s.toFixed(1)`;
+      H1 toggle cut, `NetworkSwitcher` moved to `.trash/`.
+- [x] **C3 Filter UX** — H6 27 ops in dropdown (`operationTypes.ts`
+      mirrors `crates/domain/src/enums/operation_type.rs` byte-for-byte
+      in XDR order); H7 auto-resolved by H6 (separate "Manage Sell
+      Offer" / "Manage Buy Offer" labels); H2 URL `op` param
+      `trim().toUpperCase()` then validated against a pre-computed
+      `VALID_OPS = new Set(...)` in `TransactionsListPage` — invalid
+      values silently drop instead of hitting the API 400.
+- [x] **C4 Error states** — H8 `isMissingResource(kind)` predicate in
+      `classifyError` routes both 400 `INVALID_*` and 404 `NOT_FOUND` to
+      entity-specific `NotFoundState` across all six detail pages
+      (account / asset / contract / ledger / liquidity-pool / nft).
+- [x] **C5 Search polish** — H10 explicit `component="h1"` /
+      `component="p"` on the heading + description so the a11y tree
+      stops concatenating "SearchRefine your query…" into one run.
 - [ ] **Playwright MCP regression** — re-run QA over 13 routes after all
-      5 commits land. Goal: 0 console errors, 0 generic-error-state hits
-      for invalid-id paths, 0 missing-data placeholders where data exists.
-- [ ] **Docs updated** — `N/A — frontend-only fixes, no architecture
-      change.` Per ADR 0032.
-- [ ] **API types regenerated** — `N/A — no changes under crates/api/**,
-      Cargo.{toml,lock}, or libs/api-types/**.`
-- [ ] **CI green** — `nx affected:lint`, `nx affected:test`,
-      `nx affected:build` all pass before PR.
+      commits land. Goal: 0 console errors, 0 generic-error-state hits
+      for invalid-id paths, 0 missing-data placeholders where data
+      exists. **Pending user signal.**
+- [x] **Docs updated** — `N/A — frontend-only fixes, no architecture
+    change.` Per ADR 0032.
+- [x] **API types regenerated** — `N/A — no changes under crates/api/**,
+    Cargo.{toml,lock}, or libs/api-types/**.`
+- [x] **CI green** — `nx run @rumblefish/soroban-block-explorer-web:typecheck`,
+      `:lint`, `:build` all green. Single pre-existing eslint warning
+      `Forbidden non-null assertion` in `web/src/pages/liquidity-pools/assetColor.ts:131`
+      unrelated to this batch. No `test` target on `web` — frontend has
+      no unit-test infra (see Issues).
 
 ## Reused (no new code)
 
@@ -346,13 +396,13 @@ Zero new npm deps, zero new UI components. Each bug = edit existing file.
 
 ### Per-commit smoke (Playwright MCP)
 
-| Commit | Test |
-|---|---|
-| C1 LP | `/liquidity-pools` → "Total shares" col, fee `0.30%`. Click pool → detail header link → hex URL. Find fake-XLM pool (both legs `code=XLM`) → KPI/Summary show issuer suffix `XLM (XXXX…YYYY)`, console clean. |
-| C2 Network | `/` topbar shows real numbers (ledger 50,49x,xxx, accounts 343k+, contracts 14k+, TPS real value or `—`). Mainnet/Testnet toggle absent from UI. |
-| C3 Tx filter | `/transactions` → dropdown 27 ops with separate "Manage Sell Offer" + "Manage Buy Offer". URL `?op=manage_buy_offer` (lowercase) → FE uppercases, request `MANAGE_BUY_OFFER`, 200 OK, no generic error. |
-| C4 Errors | `/ledgers/99999999999` → "Ledger not found" entity-specific. Same for `/accounts/INVALID`, `/assets/INVALID`, `/contracts/INVALID`, `/nfts/INVALID`, `/liquidity-pools/INVALID`. |
-| C5 Search | `/search?q=bogus` → "Search" heading + description with proper whitespace. |
+| Commit       | Test                                                                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1 LP        | `/liquidity-pools` → "Total shares" col, fee `0.30%`. Click pool → detail header link → hex URL. Find fake-XLM pool (both legs `code=XLM`) → KPI/Summary show issuer suffix `XLM (XXXX…YYYY)`, console clean. |
+| C2 Network   | `/` topbar shows real numbers (ledger 50,49x,xxx, accounts 343k+, contracts 14k+, TPS real value or `—`). Mainnet/Testnet toggle absent from UI.                                                              |
+| C3 Tx filter | `/transactions` → dropdown 27 ops with separate "Manage Sell Offer" + "Manage Buy Offer". URL `?op=manage_buy_offer` (lowercase) → FE uppercases, request `MANAGE_BUY_OFFER`, 200 OK, no generic error.       |
+| C4 Errors    | `/ledgers/99999999999` → "Ledger not found" entity-specific. Same for `/accounts/INVALID`, `/assets/INVALID`, `/contracts/INVALID`, `/nfts/INVALID`, `/liquidity-pools/INVALID`.                              |
+| C5 Search    | `/search?q=bogus` → "Search" heading + description with proper whitespace.                                                                                                                                    |
 
 ### Full regression after all 5 commits
 
@@ -374,7 +424,52 @@ placeholder, participants empty, breadcrumb, stale badge — all from
 
 ## Issues Encountered
 
-_(to be filled during implementation)_
+1. **B1 already resolved pre-task by 0077 follow-up.** The QA scan
+   flagged the header pool-id "click routes to strkey not hex" bug, but
+   commit `6d2fe2d` (lore-0077 polish) had already set
+   `linked={false}` on the `IdentifierDisplay`, making the row a static
+   caption rather than a link. The plan-prescribed fix (add `href`
+   override) would have re-enabled clicking on a page the user is
+   already on. Kept the existing `linked={false}` design — see
+   Decisions/Emerged below.
+
+2. **B3 col swap was a plan misread.** `PoolsTable` already renders 5
+   columns matching Figma node `266:36052`: Pool / Fee / **Reserves**
+   (per-leg amounts with colored dots) / **Total shares** (right-
+   aligned with "shares" unit) / Participants. Plan said swap
+   `reserves` → `total_shares`; actual desired state is **both**, which
+   is what code already has. No change needed.
+
+3. **H5 plan reverted by commit 2.** Initial commit `0c923f4` added a
+   `formatTps` helper that rendered `tps_60s === 0` as `—`. Commit 2
+   (`c827362`) backed it out — rationale: backfill-driven `0.0` is
+   structurally identical to a quiet live network; staleness is a
+   separate signal best layered on top by the caller. `ChainOverview`
+   was therefore intentionally left at raw `data.tps_60s.toFixed(1)`.
+   AC for H5 reframed as "superseded".
+
+4. **No `test` target on `web`.** Plan called for a unit test extending
+   `assetLegLabel` coverage with the XLM+issuer case. `web` has only
+   `typecheck`, `build`, `lint`, `dev`, `serve`, `preview` — no vitest
+   config, no spec files anywhere under `web/src/**` or `libs/ui/src/**`.
+   Frontend has no JS-side unit-test infra at all. Test was therefore
+   skipped; behaviour is covered by the Playwright MCP regression
+   bullet (still pending user signal).
+
+5. **B4 reverted on user signal 2026-05-22.** Initial implementation
+   added `CODE (GA5Z…WXYZ)` issuer suffix in `assetLegLabel`. User
+   rolled it back before commit — pair strings in tight headers /
+   table cells / KPI strips grow from `XLM / USDC` to
+   `XLM / USDC (GA5Z…WXYZ)`, the truncation collides with right-side
+   layout, and the fake-XLM phishing surface on a block-explorer
+   read-only view does not justify the visual cost. Helpers.ts left
+   at the pre-task signature; bug B4 deferred (see Future Work).
+
+6. **Switcher prop removal touched Footer / TopNav signatures.** Cutting
+   the network toggle (commit 1) propagated to `Footer.tsx` and
+   `TopNav.tsx` to drop the `network` prop. No external consumers
+   broke (lint + typecheck stay green), but the change widened the
+   blast radius of an otherwise UI-only deletion.
 
 ## Design Decisions
 
@@ -403,7 +498,60 @@ _(to be filled during implementation)_
 
 ### Emerged
 
-_(to be filled during implementation)_
+1. **B1 — keep `linked={false}` instead of `href={routes.pool(...)}`.**
+   The bug as filed ("link routes to wrong URL") is structurally
+   resolved by having no link at all. The header pool-id sits below
+   the breadcrumb on the pool's own detail page — clicking it can only
+   either: (a) self-navigate (no-op, confusing), (b) navigate to a
+   different URL representation of the same page (worse). A static
+   caption with copy support (the copy lives on the full-id row inside
+   the Summary card) is the strictly stronger design. Plan-prescribed
+   `href` override rejected on those grounds.
+
+2. **Batch collapsed from 5 commits → 2.** Plan called for one commit
+   per cluster (C1–C5). Actual landed shape: commit 1 (`0c923f4`)
+   bundled H1 + H4 + H5(TopNav) + H8 + B2(Summary) + H10 + the
+   `PageGridBackdrop` lift; commit 2 (`c827362`) was a follow-up
+   cleanup of dead state left by the partial-stage in commit 1.
+   Remaining changes (B4, H6, H2, plus this task-body bookkeeping) sit
+   uncommitted in the worktree per the no-amend / no-commit-without-
+   signal policy. User decides the final commit shape before PR.
+
+3. **H5 dropped, not "fixed".** Captured under Issues #3. The "—"
+   treatment for `tps_60s === 0` was reverted between commits 1 and 2
+   on emergent reasoning (literal zero is not the same signal as
+   stale data — those are separable, and a single overload via "—"
+   loses information). `ChainOverview` therefore intentionally retains
+   `data.tps_60s.toFixed(1)` rendering `0.0` for a zero.
+
+4. **H6 — extra `Object.fromEntries` derivation for table pill labels.**
+   The plan only extended the dropdown options. Inline `DISPLAY_LABELS`
+   for `formatOperationType` previously held a curated 7-entry subset
+   that drifted from the dropdown. To avoid that drift recurring with
+   27 options, `DISPLAY_LABELS` is now derived from
+   `OPERATION_TYPE_OPTIONS` via `Object.fromEntries(...)`. Single
+   source of truth for both surfaces.
+
+5. **H2 — extracted `VALID_OPS = new Set(...)` to module scope.** The
+   plan suggested `.some()` inside the component; with 27 entries
+   `Set.has` is `O(1)` and the set is constructed once at module load
+   rather than rebuilding on every render or filter change. Tiny win,
+   but free.
+
+6. **B5 generalised via `SummaryRow`, not per-page.** Plan attached
+   composite keys at each call site (PoolSummary, PoolKpiStrip).
+   Actual fix lives one layer down in `SummaryRow` so any future
+   caller benefits without remembering this footgun. PoolKpiStrip does
+   not iterate, so no separate change was needed there.
+
+7. **B4 dropped, not implemented.** User reverted the issuer-suffix
+   fix on 2026-05-22 before commit (see Issues #5). Reasoning: visual
+   regression in tight pair strings outweighs the phishing-disambig
+   value on a read-only explorer view. The asset-label change would
+   ripple into every place the helper is consumed (`PoolDetailHeader`
+   heading, `PoolsTable` Pool cell, `PoolSummary` rows, `PoolKpiStrip`
+   reserve rows, `AssetAvatar` letter glyph). Bug stays open; tracked
+   in Future Work.
 
 ## Future Work
 
@@ -423,6 +571,13 @@ After this batch lands:
    today, may need upgrade to Autocomplete for usable 27-entry list.
    Decide during C3 implementation; spawn task if surface area exceeds
    commit scope.
+5. **B4 fake-XLM disambiguation — design redo.** User dropped the
+   inline issuer-suffix approach on 2026-05-22 (visual regression in
+   pair strings outweighed the phishing signal). Needs a different
+   surface: hover tooltip on the asset chip, a small `(verified)`
+   ribbon for known issuers, or a dedicated "Asset" sub-line on rows
+   that have horizontal headroom. Spawn as a `FEATURE` task with
+   `related_tasks: ['0251']` once a design direction is picked.
 
 (Each spawned as its own backlog task with `related_tasks: ['0251']`.)
 
