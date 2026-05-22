@@ -1,5 +1,5 @@
 ---
-id: '0251'
+id: '0253'
 title: 'FEATURE: mTLS client cert auto-rotation pipeline (AWS → Hetzner CH)'
 type: FEATURE
 status: backlog

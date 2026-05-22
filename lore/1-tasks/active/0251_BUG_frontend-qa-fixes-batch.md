@@ -62,13 +62,13 @@ Bugs split into 5 clusters by touched file area, one commit per cluster.
 
 ### Bug-to-cluster mapping
 
-| Cluster | Bugs | Files | Severity |
-|---|---|---|---|
-| **C1** LP polish | B1, B2-LP-fee, B3, B4, B5 | `web/src/pages/pool-detail/PoolDetailHeader.tsx`, `web/src/pages/pool-detail/helpers.ts`, `web/src/pages/liquidity-pools/PoolsTable.tsx`, `web/src/pages/pool-detail/PoolSummary.tsx`, `web/src/pages/pool-detail/PoolKpiStrip.tsx` | 🔴1 / 🟡4 |
-| **C2** Network stats wiring | H1, H4, H5 | `web/src/router/AppShell.tsx`, `libs/ui/src/layout/TopNav.tsx`, `libs/ui/src/layout/NetworkSwitcher.tsx`, `web/src/pages/home/ChainOverview.tsx` | 🟠1 / 🟡2 |
-| **C3** Transactions filter | H2, H6, H7 | `web/src/pages/transactions/operationTypes.ts`, `web/src/pages/TransactionsListPage.tsx` | 🟠1 / 🟡2 |
-| **C4** Error classification | H8 | `libs/ui/src/states/classifyError.ts` (verify), `web/src/pages/LedgerDetailPage.tsx` + analogiczne detail pages | 🟡1 |
-| **C5** Search polish | H10 | `web/src/pages/SearchResultsPage.tsx` | 🟢1 |
+| Cluster                     | Bugs                      | Files                                                                                                                                                                                                                               | Severity  |
+| --------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| **C1** LP polish            | B1, B2-LP-fee, B3, B4, B5 | `web/src/pages/pool-detail/PoolDetailHeader.tsx`, `web/src/pages/pool-detail/helpers.ts`, `web/src/pages/liquidity-pools/PoolsTable.tsx`, `web/src/pages/pool-detail/PoolSummary.tsx`, `web/src/pages/pool-detail/PoolKpiStrip.tsx` | 🔴1 / 🟡4 |
+| **C2** Network stats wiring | H1, H4, H5                | `web/src/router/AppShell.tsx`, `libs/ui/src/layout/TopNav.tsx`, `libs/ui/src/layout/NetworkSwitcher.tsx`, `web/src/pages/home/ChainOverview.tsx`                                                                                    | 🟠1 / 🟡2 |
+| **C3** Transactions filter  | H2, H6, H7                | `web/src/pages/transactions/operationTypes.ts`, `web/src/pages/TransactionsListPage.tsx`                                                                                                                                            | 🟠1 / 🟡2 |
+| **C4** Error classification | H8                        | `libs/ui/src/states/classifyError.ts` (verify), `web/src/pages/LedgerDetailPage.tsx` + analogiczne detail pages                                                                                                                     | 🟡1       |
+| **C5** Search polish        | H10                       | `web/src/pages/SearchResultsPage.tsx`                                                                                                                                                                                               | 🟢1       |
 
 ## Implementation Plan
 
@@ -79,11 +79,13 @@ Bugs split into 5 clusters by touched file area, one commit per cluster.
 Plik: `web/src/pages/pool-detail/PoolDetailHeader.tsx:57`
 
 Current:
+
 ```tsx
 <IdentifierDisplay value={strkey} type="pool" />
 ```
 
 Fix — add `href` override (analog to `PoolSummary.tsx:66-70`):
+
 ```tsx
 <IdentifierDisplay value={strkey} type="pool" href={routes.pool(poolId)} />
 ```
@@ -100,6 +102,7 @@ Current: column id `reserves`, header `Reserves`, cell renders both
 `PoolSummary.tsx`, column should be Total shares.
 
 Fix — swap column definition:
+
 ```tsx
 { id: 'total_shares', header: 'Total shares', cell: (row) => formatAmount(row.total_shares) }
 ```
@@ -116,8 +119,9 @@ Postgres NUMERIC stringification = full precision.
 
 Fix — use existing `formatAmount(value, minDecimals=2)` from
 `web/src/pages/format.ts` (already used everywhere else):
+
 ```tsx
-`${formatAmount(row.fee_percent, 2)}%`  // → "0.30%"
+`${formatAmount(row.fee_percent, 2)}%`; // → "0.30%"
 ```
 
 **B4 🟡 Fake-XLM disambiguation (always issuer for non-native)**
@@ -129,6 +133,7 @@ Frontend currently renders real native XLM and fake-XLM identically →
 phishing vector.
 
 Current:
+
 ```ts
 if (leg.asset_type_name === 'native') return 'XLM';
 if (leg.asset_code != null && leg.asset_code !== '') return leg.asset_code;
@@ -136,6 +141,7 @@ throw …;
 ```
 
 Fix:
+
 ```ts
 if (leg.asset_type_name === 'native') return 'XLM';
 if (leg.asset_code != null && leg.asset_code !== '') {
@@ -163,6 +169,7 @@ Consequence of B4. When both legs have `code === 'XLM'`, keys like
 `${codeA} reserve === ${codeB} reserve` collide → React warning.
 
 Fix — index + composite key:
+
 ```tsx
 key={`${idx}-${leg.asset_type_name}-${leg.asset_code ?? 'native'}`}
 ```
@@ -177,6 +184,7 @@ guarantees no collision).
 Plik: `web/src/router/AppShell.tsx:25-30`
 
 Current:
+
 ```tsx
 const MOCK_STATS = { tps: 0, ledger: 0, accounts: 0, contracts: 0 };
 <TopNav stats={MOCK_STATS} ... />
@@ -227,6 +235,7 @@ Current 5 hardcoded. Backend enum in
 full parity over curated subset on 2026-05-22.
 
 Full 27 (Title Case labels):
+
 ```
 CREATE_ACCOUNT, PAYMENT, PATH_PAYMENT_STRICT_RECEIVE, MANAGE_SELL_OFFER,
 CREATE_PASSIVE_SELL_OFFER, SET_OPTIONS, CHANGE_TRUST, ALLOW_TRUST,
@@ -245,6 +254,7 @@ Select, upgrade to Autocomplete — 27 entries warrants type-to-filter.
 **H7 🟡 Combobox label "Manage Offer" maps to `MANAGE_SELL_OFFER` only**
 
 Resolved automatically by H6 — full enum has separate entries:
+
 ```ts
 { label: 'Manage Sell Offer', value: 'MANAGE_SELL_OFFER' },
 { label: 'Manage Buy Offer', value: 'MANAGE_BUY_OFFER' },
@@ -258,9 +268,10 @@ Backend enum case-sensitive (UPPERCASE only). Lowercase URL → 400 →
 SectionErrorBoundary → "Something went wrong".
 
 Fix — normalize + validate:
+
 ```tsx
 const op = (state.filters.op ?? '').toUpperCase().trim();
-const validOp = OPERATION_TYPE_OPTIONS.some(o => o.value === op) ? op : '';
+const validOp = OPERATION_TYPE_OPTIONS.some((o) => o.value === op) ? op : '';
 if (validOp) filters['filter[operation_type]'] = validOp;
 ```
 
@@ -283,6 +294,7 @@ For `/ledgers/404` (in-range, no record) → 404 → 'not-found' → nice
 same concept ("this ledger doesn't exist").
 
 Fix (preferred — Option A): extend LedgerDetailPage switch:
+
 ```tsx
 if (kind === 'not-found' || kind === 'validation') {
   return <NotFoundState entity="Ledger" identifier={String(sequence)} />;
@@ -320,10 +332,8 @@ or separate element.
 - [ ] **Playwright MCP regression** — re-run QA over 13 routes after all
       5 commits land. Goal: 0 console errors, 0 generic-error-state hits
       for invalid-id paths, 0 missing-data placeholders where data exists.
-- [ ] **Docs updated** — `N/A — frontend-only fixes, no architecture
-      change.` Per ADR 0032.
-- [ ] **API types regenerated** — `N/A — no changes under crates/api/**,
-      Cargo.{toml,lock}, or libs/api-types/**.`
+- [ ] **Docs updated** — `N/A — frontend-only fixes, no architecture change.` Per ADR 0032.
+- [ ] **API types regenerated** — `N/A — no changes under crates/api/**, Cargo.{toml,lock}, or libs/api-types/**.`
 - [ ] **CI green** — `nx affected:lint`, `nx affected:test`,
       `nx affected:build` all pass before PR.
 
@@ -346,13 +356,13 @@ Zero new npm deps, zero new UI components. Each bug = edit existing file.
 
 ### Per-commit smoke (Playwright MCP)
 
-| Commit | Test |
-|---|---|
-| C1 LP | `/liquidity-pools` → "Total shares" col, fee `0.30%`. Click pool → detail header link → hex URL. Find fake-XLM pool (both legs `code=XLM`) → KPI/Summary show issuer suffix `XLM (XXXX…YYYY)`, console clean. |
-| C2 Network | `/` topbar shows real numbers (ledger 50,49x,xxx, accounts 343k+, contracts 14k+, TPS real value or `—`). Mainnet/Testnet toggle absent from UI. |
-| C3 Tx filter | `/transactions` → dropdown 27 ops with separate "Manage Sell Offer" + "Manage Buy Offer". URL `?op=manage_buy_offer` (lowercase) → FE uppercases, request `MANAGE_BUY_OFFER`, 200 OK, no generic error. |
-| C4 Errors | `/ledgers/99999999999` → "Ledger not found" entity-specific. Same for `/accounts/INVALID`, `/assets/INVALID`, `/contracts/INVALID`, `/nfts/INVALID`, `/liquidity-pools/INVALID`. |
-| C5 Search | `/search?q=bogus` → "Search" heading + description with proper whitespace. |
+| Commit       | Test                                                                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1 LP        | `/liquidity-pools` → "Total shares" col, fee `0.30%`. Click pool → detail header link → hex URL. Find fake-XLM pool (both legs `code=XLM`) → KPI/Summary show issuer suffix `XLM (XXXX…YYYY)`, console clean. |
+| C2 Network   | `/` topbar shows real numbers (ledger 50,49x,xxx, accounts 343k+, contracts 14k+, TPS real value or `—`). Mainnet/Testnet toggle absent from UI.                                                              |
+| C3 Tx filter | `/transactions` → dropdown 27 ops with separate "Manage Sell Offer" + "Manage Buy Offer". URL `?op=manage_buy_offer` (lowercase) → FE uppercases, request `MANAGE_BUY_OFFER`, 200 OK, no generic error.       |
+| C4 Errors    | `/ledgers/99999999999` → "Ledger not found" entity-specific. Same for `/accounts/INVALID`, `/assets/INVALID`, `/contracts/INVALID`, `/nfts/INVALID`, `/liquidity-pools/INVALID`.                              |
+| C5 Search    | `/search?q=bogus` → "Search" heading + description with proper whitespace.                                                                                                                                    |
 
 ### Full regression after all 5 commits
 

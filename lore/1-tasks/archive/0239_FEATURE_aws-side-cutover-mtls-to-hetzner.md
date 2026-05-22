@@ -4,7 +4,7 @@ title: 'FEATURE: AWS-side cutover — Lambdas out-of-VPC, Galexie public subnet,
 type: FEATURE
 status: completed
 related_adr: []
-related_tasks: ['0216', '0227', '0228', '0234', '0240', '0241', '0249', '0251']
+related_tasks: ['0216', '0227', '0228', '0234', '0240', '0241', '0249', '0253']
 tags:
   [
     priority-high,
@@ -64,7 +64,9 @@ history:
       CN 403 negative test) absorbed into task 0241 Part D since the
       first realistic deploy of the new region happens at the indexer
       cutover, not as a separate event. Operator follow-up tracked
-      there. Cert rotation strategy (AC #6) spawned as task 0251.
+      there. Cert rotation strategy (AC #6) spawned as task 0253
+      (renamed from 0251 after develop merge introduced an unrelated
+      0251_BUG_frontend-qa-fixes-batch).
       Phase 6 "decommission" steps were vacuously satisfied — per
       task 0249 archive, no production stacks were ever deployed in
       us-east-1 (validateConfig blocked on `hostedZoneId: "CHANGE_ME"`),
@@ -333,7 +335,7 @@ stacks.
       entire pre-0239 lifetime), so there is nothing to snapshot._
 - [x] mTLS client cert rotation strategy documented (auto-renew via
       a scheduled Lambda or follow-up task; current cert lifetime is
-      365 days per `issue-client-cert.sh`). _Spawned as task 0251
+      365 days per `issue-client-cert.sh`). _Spawned as task 0253
       (FEATURE: mTLS client cert auto-rotation pipeline)._
 - [x] **API types regenerated** — N/A — this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`.
