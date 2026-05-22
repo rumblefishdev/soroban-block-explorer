@@ -83,19 +83,27 @@ def pick_one_tx_per_ledger(ledgers: list[int], limit_per_ledger: int = 1,
 def fetch_ch_tx(hash_hex: str) -> dict | None:
     """Statement B of E03 (header). Returns 1 row or empty.
 
-    Pattern (canonical from E03 SQL): use `transaction_hash_dict` to
-    resolve hash → ledger_sequence in O(1), then narrow the scan on
-    `transactions FINAL` to that single ledger partition + hash. The
-    `transaction_hash_index` table itself carries only (hash,
-    ledger_sequence) — no surrogate `id`.
+    The canonical E03 SQL uses `transaction_hash_dict` for the hash →
+    ledger_sequence lookup (1M-cell LRU cache, ideal for the hot API
+    path where ~the same handful of hashes get hit). For batch
+    validation across 30K random hashes the dict overwhelmingly
+    misses; `dictGet` returns the column default (0) on miss → the
+    follow-up `WHERE t.ledger_sequence = 0` finds nothing →
+    `CH_MISSING` false-positives.
+
+    Replaced with a direct subquery on `transaction_hash_index`
+    (PK on `hash` — fast across all 125 partitions even without
+    partition prune). Slightly slower per query than a dict hit but
+    100 % reliable for our access pattern.
 
     Joins `accounts FINAL` to resolve `source_id` (Int64) into the
-    StrKey that Horizon emits as `source_account`. `operation_count`
-    lives directly on `transactions` per the actual canonical schema.
+    StrKey that Horizon emits as `source_account`.
     """
     sql = f"""
-    WITH dictGet('transaction_hash_dict', 'ledger_sequence',
-                 toString(unhex('{hash_hex}'))) AS lseq
+    WITH (
+      SELECT ledger_sequence FROM transaction_hash_index
+       WHERE hash = unhex('{hash_hex}') LIMIT 1
+    ) AS lseq
     SELECT
       t.id                                 AS id,
       lower(hex(t.hash))                   AS hash,
