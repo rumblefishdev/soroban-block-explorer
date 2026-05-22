@@ -115,13 +115,11 @@ export function useCursorPagination(
   );
 
   const goPrev = useCallback(() => {
-    setStack((s) => {
-      if (s.length === 0) return s;
-      const prev = s[s.length - 1];
-      setCursor(prev === FIRST_PAGE ? null : prev);
-      return s.slice(0, -1);
-    });
-  }, [setCursor]);
+    if (stack.length === 0) return;
+    const prev = stack[stack.length - 1];
+    setStack(stack.slice(0, -1));
+    setCursor(prev === FIRST_PAGE ? null : prev);
+  }, [stack, setCursor]);
 
   const setFilter = useCallback(
     (key: string, value: string | null) => {

@@ -126,11 +126,13 @@ screen during cursor fetch so Next clicks don't flash a spinner.
 
 ### Phase 3 — pages (`web/src/pages/`)
 
-11 useInfinitePager consumers migrated to `useCursorPagination`:
+13 paginated pages migrated to `useCursorPagination` (11 direct
+`useInfinitePager` consumers + 2 that used `useInfiniteQuery`
+directly — `LedgerDetailPage`, `NftTransfers`):
 
 - List pages (5): `LedgersListPage`, `TransactionsListPage`,
   `AssetsListPage`, `NftsListPage`, `LiquidityPoolsListPage`.
-- Detail sections (6 + 2 sub-page): `LedgerDetailPage` (ledger tx),
+- Detail pages and sections (8): `LedgerDetailPage` (ledger tx),
   `AccountTransactions`, `AssetTransactions`, `NftTransfers`,
   `PoolParticipants`, `PoolTransactions`, `ContractEvents`,
   `ContractInvocations`.
