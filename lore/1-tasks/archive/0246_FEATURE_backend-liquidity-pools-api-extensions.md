@@ -2,7 +2,7 @@
 id: '0246'
 title: 'Backend: liquidity pool API extensions for FE list/detail (0077)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0027', '0031', '0032', '0041']
 related_tasks: ['0077', '0199', '0215', '0247']
 tags: [priority-high, effort-small, layer-api, layer-docs, milestone-2]
@@ -49,6 +49,17 @@ history:
       Phase 2 (participant_count on PoolItem) shipped — commit f105f36.
       Phase 3 (total_count envelope) dropped mid-implementation as
       duplicate of Phase 2 data — see Design Decisions → Emerged.
+  - date: 2026-05-22
+    status: completed
+    who: karolkow
+    note: >
+      Done. Phases 1 + 2 shipped (commits 193e269, f105f36); Phase 3
+      intentionally dropped (documented under Design Decisions → Emerged
+      #3). Docs (E18/E19 SQL specs, backend-overview §6.3, frontend-overview
+      §6.13/§6.14), OpenAPI regen + CI gate green, unit + integration tests
+      green. All acceptance criteria satisfied; one criterion (Phase 3
+      envelope) struck through with rationale, not deferred. Status/folder
+      hygiene was the only outstanding item — now archived.
 ---
 
 # Backend: liquidity pool API extensions for FE list/detail (0077)
