@@ -2,7 +2,7 @@
 id: '0254'
 title: 'Backend `prev_cursor` in `PageInfo` + pagination test suite (unit + Playwright e2e)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0043']
 related_tasks: ['0238', '0226']
 tags: [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
@@ -18,6 +18,10 @@ history:
       AND the test suite (unit + e2e) that 0238 explicitly deferred.
       Bundled per the team's "larger tasks, not micro-decomposition"
       convention.
+  - date: 2026-05-22
+    who: karolkow
+    status: active
+    note: Activated via /promote-task.
 ---
 
 # Backend `prev_cursor` + pagination test suite
