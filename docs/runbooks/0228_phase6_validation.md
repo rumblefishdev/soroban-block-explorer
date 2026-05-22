@@ -33,14 +33,14 @@ Read-only validation pass against the merged Hetzner CH. Organised into
 six tiers from cheapest to most expensive; **stop-on-failure** between
 tiers so you fix problems before they cascade.
 
-| Tier | Checks                                | Wall-clock |
-| ---- | ------------------------------------- | ---------- |
-| 1    | Sanity (rows, parts, dict, no-FINAL)  | 5–10 min   |
-| 2    | Tier-1 column rebuild correctness     | 10–20 min  |
-| 3    | Row-count parity vs worker baselines  | 15–30 min  |
-| 4    | Skeleton %, orphans, per-ledger tx    | 5–10 min   |
-| 5    | Sample-compare against Horizon        | 1–2 h      |
-| 6    | Cross-check via repo scripts          | ad-hoc     |
+| Tier | Checks                               | Wall-clock |
+| ---- | ------------------------------------ | ---------- |
+| 1    | Sanity (rows, parts, dict, no-FINAL) | 5–10 min   |
+| 2    | Tier-1 column rebuild correctness    | 10–20 min  |
+| 3    | Row-count parity vs worker baselines | 15–30 min  |
+| 4    | Skeleton %, orphans, per-ledger tx   | 5–10 min   |
+| 5    | Sample-compare against Horizon       | 1–2 h      |
+| 6    | Cross-check via repo scripts         | ad-hoc     |
 
 `L_last_closed` is the dynamic upper bound captured at laptop3's
 completion time — record it before running and substitute below
@@ -337,9 +337,9 @@ jq -s --argjson exp "$(cat /tmp/expected.json)" '
 
 **Pass criteria**:
 
-| Table family | Expected diff |
-| ------------ | ------------- |
-| Fact tables (`ledgers`, `transactions`, `transaction_*`, `operations_appearances`, `soroban_*`, `nft_ownership(_pending)`, `liquidity_pool_snapshots`) | `diff = 0` (RMT no-version preserves all rows) |
+| Table family                                                                                                                                                               | Expected diff                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Fact tables (`ledgers`, `transactions`, `transaction_*`, `operations_appearances`, `soroban_*`, `nft_ownership(_pending)`, `liquidity_pool_snapshots`)                     | `diff = 0` (RMT no-version preserves all rows)                                          |
 | State tables (`accounts`, `assets`, `account_balances_current`, `nfts`, `nfts_pending`, `lp_positions`, `liquidity_pools`, `soroban_contracts`, `wasm_interface_metadata`) | `diff ≤ 0`, magnitude bounded by RMT collapse (one row per `ORDER BY` key in the union) |
 
 Significant negative diffs on fact tables → STOP, investigate
@@ -521,17 +521,17 @@ follows a passing validation).
 
 ## Failure modes & remediation
 
-| Symptom | Likely cause | Fix |
-| ------- | ------------ | --- |
-| Tier 1.1 `gaps > 0` | Missing parts from some worker's ATTACH | Re-rsync the affected partition from worker; re-ATTACH PART; OPTIMIZE FINAL partition |
-| Tier 1.4 `DIFF` lines | RMT collapse incomplete | `OPTIMIZE TABLE <tbl> FINAL`; re-run Tier 1.4 |
-| Tier 2 non-empty | Tier-1 rebuild missed rows | Re-run `backfill-runner repair-tier1` (idempotent); verify staging dir cleanup |
-| Tier 2.4 specifically fails | `OPTIMIZE soroban_contracts FINAL` ran before `repair-tier1` | DATA LOSS scenario — restore from Snapshot A, redo Phase 5 with correct order |
-| Tier 3 fact-table diff < 0 | Missing parts on Hetzner | `system.detached_parts` audit; re-attach |
-| Tier 3 state-table diff > 0 | RMT collapse incomplete | `OPTIMIZE TABLE <state_tbl> FINAL` |
-| Tier 4.1 `pct ≥ 1 %` | `backfill-runner bootstrap` not run, or RPC quota hit | Re-run bootstrap with Soroban RPC; verify `--soroban-rpc-url` set |
-| Tier 4.4 non-monotonic > 0 | Parser bug or merge anomaly | Dump offending account; inspect raw XDR; file a parser issue |
-| Tier 5 mismatch > 0.01 % | Real data divergence | STOP; analyse sample; consider rollback |
+| Symptom                     | Likely cause                                                 | Fix                                                                                   |
+| --------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Tier 1.1 `gaps > 0`         | Missing parts from some worker's ATTACH                      | Re-rsync the affected partition from worker; re-ATTACH PART; OPTIMIZE FINAL partition |
+| Tier 1.4 `DIFF` lines       | RMT collapse incomplete                                      | `OPTIMIZE TABLE <tbl> FINAL`; re-run Tier 1.4                                         |
+| Tier 2 non-empty            | Tier-1 rebuild missed rows                                   | Re-run `backfill-runner repair-tier1` (idempotent); verify staging dir cleanup        |
+| Tier 2.4 specifically fails | `OPTIMIZE soroban_contracts FINAL` ran before `repair-tier1` | DATA LOSS scenario — restore from Snapshot A, redo Phase 5 with correct order         |
+| Tier 3 fact-table diff < 0  | Missing parts on Hetzner                                     | `system.detached_parts` audit; re-attach                                              |
+| Tier 3 state-table diff > 0 | RMT collapse incomplete                                      | `OPTIMIZE TABLE <state_tbl> FINAL`                                                    |
+| Tier 4.1 `pct ≥ 1 %`        | `backfill-runner bootstrap` not run, or RPC quota hit        | Re-run bootstrap with Soroban RPC; verify `--soroban-rpc-url` set                     |
+| Tier 4.4 non-monotonic > 0  | Parser bug or merge anomaly                                  | Dump offending account; inspect raw XDR; file a parser issue                          |
+| Tier 5 mismatch > 0.01 %    | Real data divergence                                         | STOP; analyse sample; consider rollback                                               |
 
 ## References
 
