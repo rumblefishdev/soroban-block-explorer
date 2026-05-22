@@ -2,7 +2,7 @@
 id: '0238'
 title: 'Migrate pagination from useState pageIndex to URL cursor (finish 0061)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0061', '0230']
 tags: [priority-medium, effort-medium, layer-frontend, phase-future]
@@ -18,6 +18,10 @@ history:
       `refactor/0238_pagination-url-state-migration` (local; commit
       `d5f5014`), parked there so 0230 can land as the small task it
       was meant to be.
+  - date: 2026-05-22
+    status: active
+    who: karolkow
+    note: Activated to pick up draft and finish URL-cursor migration.
 ---
 
 # Migrate pagination from useState pageIndex to URL cursor (finish 0061)
