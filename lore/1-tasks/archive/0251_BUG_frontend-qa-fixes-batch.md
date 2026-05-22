@@ -368,9 +368,9 @@ or separate element.
       for invalid-id paths, 0 missing-data placeholders where data
       exists. **Pending user signal.**
 - [x] **Docs updated** — `N/A — frontend-only fixes, no architecture
-    change.` Per ADR 0032.
+change.` Per ADR 0032.
 - [x] **API types regenerated** — `N/A — no changes under crates/api/**,
-    Cargo.{toml,lock}, or libs/api-types/**.`
+Cargo.{toml,lock}, or libs/api-types/**.`
 - [x] **CI green** — `nx run @rumblefish/soroban-block-explorer-web:typecheck`,
       `:lint`, `:build` all green. Single pre-existing eslint warning
       `Forbidden non-null assertion` in `web/src/pages/liquidity-pools/assetColor.ts:131`
