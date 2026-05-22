@@ -42,7 +42,7 @@ After PR #207 (0077 — Liquidity Pools list + detail) merged, a comprehensive
 Playwright-MCP QA traversal was run over all 13 frontend routes plus
 cross-cutting topbar/footer. 15 bugs were found. Fresh-eye senior review +
 backend spec lookup reduced to **13 actionable**: 1 🔴 CRITICAL (broken
-routing), 3 🟠 HIGH (broken UX), 8 🟡 MEDIUM (display/UX), 1 🟢 LOW (cosmetic).
+routing), 2 🟠 HIGH (broken UX), 9 🟡 MEDIUM (display/UX), 1 🟢 LOW (cosmetic).
 Two items dropped: H3 asset URL "inconsistency" turned out to be by-design
 (backend `:id` accepts numeric / C-strkey / CODE-ISSUER per spec) and H9
 ScVal decoder defers to its own research task (significant lift, needs
@@ -603,10 +603,14 @@ After this batch lands:
 2. **Network runtime toggle** — full multi-network implementation
    (per-env `VITE_API_BASE_URL`, runtime config swap, client recreate).
    Separate `FEATURE` task.
-3. **Transaction detail page real implementation** — already tracked as
-   0249 in archive (different 0249 — the one in archive is "destroy AWS
-   infra"). Re-check whether the FE-side TransactionDetailPage stub
-   replacement has its own follow-up task; if not, spawn one.
+3. **Transaction detail page real implementation** — the FE work is
+   tracked in `0070_FEATURE_frontend-transaction-detail-normal`
+   (backlog) and `0071_FEATURE_frontend-transaction-detail-advanced`
+   (backlog). Note: id `0249` in the `related_tasks` frontmatter
+   points to `0249_FEATURE_destroy-aws-infra-us-east-1` (the AWS
+   teardown — unrelated to this FE follow-up, retained because the
+   QA traversal that birthed 0251 ran against the post-cutover
+   infra).
 4. **Searchable Autocomplete for ops dropdown** — if MUI Select used
    today, may need upgrade to Autocomplete for usable 27-entry list.
    Decide during C3 implementation; spawn task if surface area exceeds
