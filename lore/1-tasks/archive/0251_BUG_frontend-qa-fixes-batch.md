@@ -363,10 +363,19 @@ or separate element.
 - [x] **C5 Search polish** — H10 explicit `component="h1"` /
       `component="p"` on the heading + description so the a11y tree
       stops concatenating "SearchRefine your query…" into one run.
-- [ ] **Playwright MCP regression** — re-run QA over 13 routes after all
-      commits land. Goal: 0 console errors, 0 generic-error-state hits
-      for invalid-id paths, 0 missing-data placeholders where data
-      exists. **Pending user signal.**
+- [x] **Playwright MCP regression** — full traversal run 2026-05-22
+      from `worktrees/goofy-elion-6d6d7e` against vite :4201 + axum
+      :9000 + local Postgres. Found and fixed three real regressions
+      (commit `a4ae9e0`); see Decisions/Emerged #8. Final pass: 0
+      generic-error-state hits on invalid-id paths
+      (`/ledgers/99999999999`, `/accounts/INVALID`,
+      `/contracts/INVALID`, `/assets/INVALID`, `/nfts/INVALID`,
+      `/liquidity-pools/INVALID`), 0 console errors on
+      `/liquidity-pools/<valid hex>`, lowercase `?op=manage_buy_offer`
+      → 200 OK with `filter[operation_type]=MANAGE_BUY_OFFER`,
+      invalid `?op=garbage_xyz` silently drops, dropdown shows
+      "Manage Buy Offer" label, 27/27 ops accepted by backend smoke
+      (sample of 5).
 - [x] **Docs updated** — `N/A — frontend-only fixes, no architecture
 change.` Per ADR 0032.
 - [x] **API types regenerated** — `N/A — no changes under crates/api/**,
@@ -470,6 +479,37 @@ placeholder, participants empty, breadcrumb, stale badge — all from
    `TopNav.tsx` to drop the `network` prop. No external consumers
    broke (lint + typecheck stay green), but the change widened the
    blast radius of an otherwise UI-only deletion.
+
+7. **Three regressions discovered by the AC #6 Playwright MCP pass.**
+   The traversal that was meant to confirm the batch was clean caught
+   real bugs — fixed in commit `a4ae9e0`:
+
+   - `/liquidity-pools/INVALID` rendered `GenericErrorState`, not
+     `NotFoundState`. Root cause: `PoolDetailHeader` synchronously calls
+     `poolIdHexToStrkey` on mount; for malformed ids that function
+     throws before the async pool query can settle as a 400, so the H8
+     `isMissingResource` branch never gets a chance to fire. Fix: new
+     `isPoolId` validator in `libs/ui/src/identifiers/validators.ts`
+     (64-char lowercase hex, tolerates upper-case input); page guards
+     on it up front and skips the pool query for malformed ids.
+   - `/assets/INVALID` rendered `NotFoundState` correctly in the
+     summary box but ALSO rendered a duplicate `GenericErrorState`
+     below from `<AssetTransactions assetId={id} />` firing its own
+     failing fetch. Fix: gate the embedded section on `asset.data`
+     so it appears only when the parent succeeded.
+   - `/liquidity-pools/<valid hex>` console-errored on every render
+     with `classifyLpTx: no recognised LP op kind in
+operation_types=[LIQUIDITY_POOL_DEPOSIT]`. Root cause: the
+     classifier matched lowercase op names, backend serves
+     SCREAMING_SNAKE_CASE (matches XDR discriminator and the new
+     `OPERATION_TYPE_OPTIONS` source of truth). Fix: switch the four
+     `has(...)` calls in `PoolTransactions.classifyLpTx` to upper-case.
+
+   All three are pre-existing bugs from earlier tasks (0077 LP work +
+   the per-route H8 split) that the lore-0251 polish batch
+   surfaced. Folded into this PR rather than spawned as separate
+   tasks because they directly invalidated AC #6 and the fixes are
+   tiny / scoped to single files.
 
 ## Design Decisions
 
