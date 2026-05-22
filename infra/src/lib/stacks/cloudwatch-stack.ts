@@ -4,7 +4,6 @@ import * as chatbot from 'aws-cdk-lib/aws-chatbot';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as rds from 'aws-cdk-lib/aws-rds';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -21,7 +20,6 @@ export interface CloudWatchStackProps extends cdk.StackProps {
   readonly enrichmentDlq: sqs.IQueue;
   /** Type-1 enrichment worker Lambda (task 0191) — error-rate alarm. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
-  readonly rdsInstance: rds.IDatabaseInstance;
   readonly restApi: apigateway.RestApi;
 }
 
@@ -31,9 +29,9 @@ export interface CloudWatchStackProps extends cdk.StackProps {
  * Creates:
  * - One SNS topic per environment for alarm notifications
  * - AWS Chatbot SlackChannelConfiguration subscribing the topic to a Slack channel
- * - 6 alarms covering Galexie ingestion lag, Processor error rate, DLQ depth,
- *   RDS CPU, RDS free storage, and API Gateway 5xx rate
- * - A CloudWatch dashboard with Ingestion / API / Resources sections
+ * - 4 alarms covering Galexie ingestion lag, Processor error rate, DLQ depth
+ *   and API Gateway 5xx rate
+ * - A CloudWatch dashboard with Ingestion / API sections
  *
  * All alarm thresholds are env-configurable via EnvironmentConfig.
  *
@@ -41,9 +39,8 @@ export interface CloudWatchStackProps extends cdk.StackProps {
  * Authorize the Slack workspace in the AWS Console under AWS Chatbot before
  * deploying. Without this the SlackChannelConfiguration will fail to create.
  *
- * Note: RDS storage alarm uses an absolute threshold (GiB) derived from
- * rdsStorageThresholdPct × dbAllocatedStorage. CloudWatch RDS metrics
- * report FreeStorageSpace in bytes, so the threshold is converted accordingly.
+ * RDS alarms / widgets removed in task 0239 — the production data plane
+ * lives on Hetzner ClickHouse, monitored separately on the box itself.
  */
 export class CloudWatchStack extends cdk.Stack {
   readonly alarmTopic: sns.Topic;
@@ -58,7 +55,6 @@ export class CloudWatchStack extends cdk.Stack {
       deadLetterQueue,
       enrichmentDlq,
       enrichmentWorkerFunction,
-      rdsInstance,
       restApi,
     } = props;
 
@@ -158,53 +154,7 @@ export class CloudWatchStack extends cdk.Stack {
     );
 
     // ---------------------
-    // Alarm 3: RDS CPU
-    // Fires when CPU > threshold sustained for 5 consecutive 1-min periods.
-    // ---------------------
-    withActions(
-      new cloudwatch.Alarm(this, 'RdsCpuAlarm', {
-        alarmName: `${config.envName}-rds-cpu-high`,
-        alarmDescription:
-          'RDS CPU utilization sustained above threshold — may need scaling or query optimisation.',
-        metric: rdsInstance.metricCPUUtilization({
-          period: cdk.Duration.minutes(1),
-          statistic: cloudwatch.Stats.AVERAGE,
-        }),
-        threshold: config.rdsCpuThreshold,
-        comparisonOperator:
-          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-        evaluationPeriods: 5,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      })
-    );
-
-    // ---------------------
-    // Alarm 4: RDS free storage
-    // FreeStorageSpace is in bytes. Convert pct threshold to bytes using
-    // dbAllocatedStorage (GiB).
-    // ---------------------
-    const allocatedBytes = config.dbAllocatedStorage * 1024 * 1024 * 1024;
-    const freeStorageThresholdBytes =
-      (config.rdsStorageThresholdPct / 100) * allocatedBytes;
-
-    withActions(
-      new cloudwatch.Alarm(this, 'RdsFreeStorageAlarm', {
-        alarmName: `${config.envName}-rds-low-storage`,
-        alarmDescription:
-          'RDS free storage below threshold — risk of disk full.',
-        metric: rdsInstance.metricFreeStorageSpace({
-          period: cdk.Duration.minutes(1),
-          statistic: cloudwatch.Stats.MINIMUM,
-        }),
-        threshold: freeStorageThresholdBytes,
-        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-        evaluationPeriods: 1,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      })
-    );
-
-    // ---------------------
-    // Alarm 5: DLQ depth
+    // Alarm 3: DLQ depth
     // Any message landing in the DLQ means a ledger permanently failed processing.
     // ---------------------
     withActions(
@@ -567,70 +517,9 @@ export class CloudWatchStack extends cdk.Stack {
             height: 6,
           }),
         ],
-        // Row 7: Resources section header
-        [
-          new cloudwatch.TextWidget({
-            markdown: '## Resources',
-            width: 24,
-            height: 1,
-          }),
-        ],
-        // Row 8: RDS CPU + connections
-        [
-          new cloudwatch.GraphWidget({
-            title: 'RDS CPU utilization',
-            left: [
-              rdsInstance.metricCPUUtilization({
-                period: cdk.Duration.minutes(1),
-                statistic: cloudwatch.Stats.AVERAGE,
-                label: 'CPU %',
-              }),
-            ],
-            leftAnnotations: [
-              {
-                value: config.rdsCpuThreshold,
-                label: 'Alarm threshold',
-                color: cloudwatch.Color.RED,
-              },
-            ],
-            width: 12,
-            height: 6,
-          }),
-          new cloudwatch.GraphWidget({
-            title: 'RDS connections',
-            left: [
-              rdsInstance.metricDatabaseConnections({
-                period: cdk.Duration.minutes(1),
-                statistic: cloudwatch.Stats.AVERAGE,
-                label: 'Connections',
-              }),
-            ],
-            width: 12,
-            height: 6,
-          }),
-        ],
-        // Row 9: RDS free storage
-        [
-          new cloudwatch.GraphWidget({
-            title: 'RDS free storage (bytes)',
-            left: [
-              rdsInstance.metricFreeStorageSpace({
-                period: cdk.Duration.minutes(1),
-                statistic: cloudwatch.Stats.MINIMUM,
-                label: 'Free storage',
-              }),
-            ],
-            leftAnnotations: [
-              {
-                value: freeStorageThresholdBytes,
-                label: 'Alarm threshold',
-                color: cloudwatch.Color.RED,
-              },
-            ],
-            width: 12,
-            height: 6,
-          }),
-        ],
+        // Resources widgets (RDS CPU / connections / free storage) removed
+        // in task 0239 — the production data plane lives on Hetzner
+        // ClickHouse, monitored separately on the box.
       ],
     });
 

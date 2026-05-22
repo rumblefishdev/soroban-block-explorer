@@ -12,9 +12,10 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
-  useTableUrlState,
+  useCursorPagination,
+  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { useTransactionsList } from '../api/index.js';
 
@@ -24,14 +25,14 @@ import {
   TRANSACTION_COLUMN_COUNT,
   TransactionsTable,
 } from './transactions/TransactionsTable.js';
-import { useInfinitePager } from './useInfinitePager.js';
 
 type Filters = NonNullable<ListTransactionsData['query']>;
 
 const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
-  const { state, setFilter } = useTableUrlState({ filterKeys: ['q', 'op'] });
+  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
+    useCursorPagination({ filterKeys: ['q', 'op'] });
   const q = state.filters.q ?? '';
   // Normalise the URL `op` param against the backend enum — see
   // `normalizeOperationType` for the why. Bad / lowercase values
@@ -52,29 +53,13 @@ export default function TransactionsListPage() {
     return filters;
   }, [q, op]);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useTransactionsList(queryFilters);
+  const { data, isLoading, isError, error, refetch } = useTransactionsList(
+    cursor,
+    queryFilters
+  );
 
-  const { rows, canPrev, canNext, handlePrev, handleNext, reset } =
-    useInfinitePager(
-      data?.pages ?? [],
-      fetchNextPage,
-      hasNextPage,
-      isFetchingNextPage
-    );
-
-  // A new filter set is a fresh query starting at page 0.
-  useEffect(() => {
-    reset();
-  }, [q, op, reset]);
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),
@@ -154,9 +139,9 @@ export default function TransactionsListPage() {
         <Box sx={{ minHeight: 320 }}>{body}</Box>
         <PaginationControls
           caption="All results"
-          prevCursor={canPrev ? 'prev' : null}
-          nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          canPrev={canPrev}
+          canNext={canNext}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

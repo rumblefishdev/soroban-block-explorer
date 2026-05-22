@@ -1,5 +1,5 @@
 {
-  "app": "node dist/bin/staging.js",
+  "app": "node dist/bin/production.js",
   "watch": {
     "include": ["src/**/*.ts"],
     "exclude": ["**/*.d.ts", "**/*.js", "dist/**", "node_modules/**"]

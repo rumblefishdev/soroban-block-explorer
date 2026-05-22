@@ -3,21 +3,19 @@ import type { ReactNode } from 'react';
 
 export interface PaginationControlsProps {
   caption?: ReactNode;
-  prevCursor: string | null;
-  nextCursor: string | null;
-  onPrev?: (cursor: string) => void;
-  onNext?: (cursor: string) => void;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
 }
 
 export function PaginationControls({
   caption,
-  prevCursor,
-  nextCursor,
+  canPrev,
+  canNext,
   onPrev,
   onNext,
 }: PaginationControlsProps) {
-  const prevDisabled = !prevCursor;
-  const nextDisabled = !nextCursor;
   return (
     <Box
       sx={(theme) => ({
@@ -41,13 +39,13 @@ export function PaginationControls({
       <Stack direction="row" spacing={1} alignItems="center">
         <PagerButton
           label="Previous"
-          disabled={prevDisabled}
-          onClick={() => prevCursor && onPrev?.(prevCursor)}
+          disabled={!canPrev}
+          onClick={() => onPrev?.()}
         />
         <PagerButton
           label="Next"
-          disabled={nextDisabled}
-          onClick={() => nextCursor && onNext?.(nextCursor)}
+          disabled={!canNext}
+          onClick={() => onNext?.()}
         />
       </Stack>
     </Box>

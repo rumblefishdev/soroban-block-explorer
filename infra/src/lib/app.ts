@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib';
 
 import { validateConfig, type EnvironmentConfig } from './types.js';
 import { NetworkStack } from './stacks/network-stack.js';
-import { RdsStack } from './stacks/rds-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
 import { MigrationStack } from './stacks/migration-stack.js';
@@ -37,41 +36,20 @@ export function createApp({
 
   const network = new NetworkStack(app, `${prefix}-Network`, { env, config });
 
-  const rds = new RdsStack(app, `${prefix}-Rds`, {
-    env,
-    config,
-    vpc: network.vpc,
-    lambdaSecurityGroup: network.lambdaSecurityGroup,
-    ecsSecurityGroup: network.ecsSecurityGroup,
-  });
-
   const ledgerBucket = new LedgerBucketStack(app, `${prefix}-LedgerBucket`, {
     env,
     config,
   });
 
-  const dbProxyEndpoint = rds.dbProxy
-    ? rds.dbProxy.endpoint
-    : rds.dbInstance.instanceEndpoint.hostname;
-
   const migration = new MigrationStack(app, `${prefix}-Migration`, {
     env,
     config,
-    vpc: network.vpc,
-    lambdaSecurityGroup: network.lambdaSecurityGroup,
-    dbSecret: rds.dbSecret,
-    dbProxyEndpoint,
     cargoWorkspacePath,
   });
-  migration.addDependency(rds);
 
   const partition = new PartitionStack(app, `${prefix}-Partition`, {
     env,
     config,
-    vpc: network.vpc,
-    lambdaSecurityGroup: network.lambdaSecurityGroup,
-    dbSecret: rds.dbSecret,
-    dbProxyEndpoint,
     cargoWorkspacePath,
   });
   partition.addDependency(migration);
@@ -79,10 +57,6 @@ export function createApp({
   const compute = new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
-    vpc: network.vpc,
-    lambdaSecurityGroup: network.lambdaSecurityGroup,
-    dbSecret: rds.dbSecret,
-    dbProxyEndpoint,
     ledgerBucketArn: ledgerBucket.bucket.bucketArn,
     ledgerBucketName: ledgerBucket.bucket.bucketName,
     cargoWorkspacePath,
@@ -122,14 +96,11 @@ export function createApp({
     deadLetterQueue: compute.deadLetterQueue,
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
-    rdsInstance: rds.dbInstance,
     restApi: apiGateway.api,
   });
   cloudWatch.addDependency(apiGateway);
 
   // HetznerDnsStack only when the env has a real `chDomainName`.
-  // Staging carries a `PLACEHOLDER` value so the rest of its CDK app
-  // synths cleanly — see `validateConfig` for the matching rule.
   if (
     !config.chDomainName.includes('PLACEHOLDER') &&
     !config.chDomainName.includes('CHANGE')

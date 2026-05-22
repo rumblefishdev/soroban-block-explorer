@@ -2,9 +2,9 @@
 id: '0118'
 title: 'BUG: NFT false positives from fungible token transfers'
 type: BUG
-status: blocked
-related_adr: ['0027']
-related_tasks: ['0026', '0027', '0149', '0217']
+status: completed
+related_adr: ['0027', '0046']
+related_tasks: ['0026', '0027', '0149', '0217', '0228']
 tags: [priority-high, effort-medium, layer-indexer, audit-F9]
 milestone: 1
 links:
@@ -219,6 +219,42 @@ history:
       payload-type discrimination at parser time). ADR 0046 documents
       the revert with the empirical evidence (Alternative 4 flipped
       from "ACCEPTED AS COMPLEMENT" to "REJECTED").
+  - date: '2026-05-22'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      **Closed.** Phase 3 operationalised on the merged Hetzner CH via
+      task 0228 Phase 5 `backfill-runner nft-reclassify` subcommand
+      (2026-05-21). Effective outcome on the post-merge state:
+      27,602,309 false-positive `nfts_pending` rows + 60,492,304
+      false-positive `nft_ownership_pending` rows evicted (Token / Nft /
+      Fungible discriminants); 0 legacy contamination found in the hot
+      `nfts` / `nft_ownership` tables (`dropped_legacy_nfts=0`,
+      `dropped_legacy_ownership=0`), confirming the 0217 quarantine
+      pattern works end-to-end. Post-eviction `nfts_pending` = 48.85M
+      rows (Other / NULL contracts kept in the parking lot per task
+      0217 design).
+
+      Task 0228 Phase 6 Tier 5 full run (980/980 PASS, 0.0000 % mismatch
+      against Horizon hash-set) provides the regression check: no
+      legitimate NFT was misclassified or dropped. The "Phase 3
+      post-backfill dry-run verifies sanity check returns 0
+      unclassified-with-NFT-rows" AC is effectively satisfied — hot
+      tables are empty by construction (`promoted_nfts=0` because no
+      contract in the union currently classifies as Nft), so there is
+      no unclassified-with-NFT-rows surface to begin with.
+
+      Ingester filter strengthen for the `Other` / NULL bucket — the
+      remaining deferred AC item — was split to task 0217 (quarantine
+      `nfts_pending` table) which is also shipped. Reclassification of
+      `Other` contracts as their WASM is observed later is operationally
+      handled by re-running `nft-reclassify` after future backfill
+      windows.
+
+      Archived. No follow-up tasks spawned — the architectural fixes
+      (parser classifier in PR #104, persist-time filter in PR #110,
+      quarantine in task 0217, post-backfill cleanup in task 0228)
+      together close the bug fully.
 ---
 
 # BUG: NFT false positives from fungible token transfers
@@ -535,17 +571,24 @@ the shipped state**.
       _(`docs/runbooks/0118_phase3_cleanup_nfts.md` — PG + CH
       sections side-by-side with embedded SQL, preconditions,
       sanity probes, and verification queries.)_
-- [ ] Post-backfill dry run verifies sanity check returns 0
+- [x] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
-      _(Operational — run after task 0145 completes full Soroban-era
-      backfill.)_
+      _(Operationalised via task 0228 Phase 5 `backfill-runner
+nft-reclassify` on 2026-05-21. Hot `nfts` / `nft_ownership` =
+      0 rows by construction post-merge (`promoted_nfts=0`,
+      `dropped_legacy_nfts=0`), so the "unclassified-with-NFT-rows"
+      surface is trivially 0. Quarantine `nfts_pending` evicted
+      27.6M false positives.)_
 - [x] `VACUUM ANALYZE nfts` (PG) / `OPTIMIZE TABLE nfts FINAL` (CH) in
       the cleanup script. CH script tracks `system.mutations` to ensure
       mutations complete before OPTIMIZE.
-- [ ] Ingester filter strengthen for `Other`/NULL bucket — DEFERRED to
+- [x] Ingester filter strengthen for `Other`/NULL bucket — DEFERRED to
       task 0217 (`nfts_pending` quarantine table). 0118 ships Patch C +
       cleanup SQL; 0217 lands the proper architectural fix
       (Other/NULL → quarantine, hot table stays clean by design).
+      _(Task 0217 shipped 2026-05-13; quarantine pattern verified
+      end-to-end via task 0228 Phase 6 Tier 5 — 980/980 hash-set
+      parity vs Horizon proves no legitimate NFT was misclassified.)_
 
 ## Risks / Notes
 

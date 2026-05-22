@@ -45,6 +45,20 @@ history:
       Docker stack (per 0204). Part B (runbook) and Part C (empirical validation)
       remain gated on blocker resolution. PR will be opened as draft with a
       "do not merge until 0228 + 0239 ready" marker.
+  - date: '2026-05-21'
+    status: active
+    who: fmazur
+    note: >
+      Scope expanded: 0241 now also covers the operator-side AWS-cutover steps
+      that 0239 leaves on the table (Part D below). 0239 delivers only the
+      CDK / TypeScript refactor — bootstrap of eu-central-1, issuance of mTLS
+      client certs, upload to Secrets Manager, `CLICKHOUSE_CN_USER_MAP`
+      update + ansible replay, and the end-to-end smoke per Lambda + Galexie
+      are absorbed here. Reasoning: 0239 deploy without indexer Rust on CH
+      would crash on cold-start (no RDS endpoint to connect to), so the
+      first realistic deploy of the new region is when 0241 Part A lands.
+      Bundling the operator steps with the cutover keeps "first prod deploy"
+      a single coordinated event instead of two.
 ---
 
 # Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation
@@ -132,6 +146,215 @@ Step-by-step operator instructions:
   cutover".
 - Write lessons learned back into the runbook post-execution.
 
+### Part D — AWS-side first-deploy operator steps (absorbed from 0239)
+
+0239 delivered the CDK code (Lambdas out-of-VPC, Galexie public subnet,
+mTLS wiring, region `eu-central-1`, RDS/bastion stacks dropped) but no
+prod has ever been deployed in AWS for this project (per task 0249
+archive — `validateConfig` blocked deploy with `hostedZoneId: CHANGE_ME`).
+The first realistic deploy is the live-tail cutover this task covers,
+so the operator prerequisites land here:
+
+#### D-1 — CDK bootstrap of eu-central-1 (one-time)
+
+Use the production AWS account ID — extract it from
+`infra/envs/production.json:cloudFrontCertificateArn` (the third segment
+of the ARN). Substitute it for `<account-id>` below.
+
+```bash
+aws sts get-caller-identity     # confirm it matches <account-id>
+cd infra
+npx cdk bootstrap aws://<account-id>/eu-central-1
+```
+
+#### D-2 — ECR image for Galexie in eu-central-1 (one-time)
+
+The Galexie ECR repo is created by the first `make deploy-production-ingestion`.
+After that, push the production Galexie image (matching `galexieImageTag`
+in `infra/envs/production.json`, default `"latest"`) to it. Use the CI
+pipeline once available; for the first deploy, push manually from a
+local build or mirror from the prior us-east-1 ECR (if image still
+exists locally).
+
+#### D-3 — SSM parameter for Hetzner box IPv4
+
+```bash
+aws ssm put-parameter \
+  --region eu-central-1 \
+  --name /soroban/production/ch-ip \
+  --value <hetzner-box-ipv4> \
+  --type String
+```
+
+`HetznerDnsStack` reads this at deploy time and creates the Route 53
+A record for `ch.sorobanscan.rumblefish.dev`.
+
+#### D-4 — Issue + upload mTLS client certs (6 services)
+
+Per `infra-hetzner/ca/README.md`. Linux-only because the script uses
+`/dev/shm` (tmpfs) for the CA key.
+
+```bash
+# 1. Fetch CA key from password manager into tmpfs
+mkdir -p /dev/shm/soroban-ca && chmod 0700 /dev/shm/soroban-ca
+# (paste `soroban-prod / ca-key` contents into /dev/shm/soroban-ca/ca.key)
+chmod 0600 /dev/shm/soroban-ca/ca.key
+
+# 2. Issue all 6 certs
+cd infra-hetzner/ca
+for cn in lambda-api-production \
+          lambda-ingestion-production \
+          lambda-partition-production \
+          lambda-migration-production \
+          lambda-enrichment-production \
+          galexie-production; do
+  ./issue-client-cert.sh "$cn"
+done
+
+# 3. Assemble {cert,key,ca} JSON bundle in memory and pipe directly
+#    to AWS CLI — the bundle JSON itself never lands on disk
+#    (file:///dev/stdin reads from the pipe). The per-cert PEM files
+#    that issue-client-cert.sh emits to ${SCRIPT_DIR}/out/<cn>/ ARE
+#    disk-backed however (script honours SCRIPT_DIR, not /dev/shm,
+#    for its final output) — they get shredded in step 4 below.
+#    Follow-up task 0253 should consider making OUT_DIR overridable
+#    so per-cert keys never touch disk in the first place.
+for cn in lambda-api-production \
+          lambda-ingestion-production \
+          lambda-partition-production \
+          lambda-migration-production \
+          lambda-enrichment-production \
+          galexie-production; do
+  python3 -c "
+import json, sys
+cn = sys.argv[1]
+cert = open(f'out/{cn}/{cn}.crt').read()
+key  = open(f'out/{cn}/{cn}.key').read()
+ca   = open('ca.crt').read()
+print(json.dumps({'cert': cert, 'key': key, 'ca': ca}))
+  " "$cn" | aws secretsmanager create-secret \
+    --region eu-central-1 \
+    --name "soroban/production/mtls/$cn" \
+    --secret-string file:///dev/stdin
+done
+
+# 4. Securely destroy on-disk artefacts. shred overwrites file blocks
+#    before unlinking, mitigating forensic recovery from filesystem
+#    journals / SSD wear-levelling reserves. The ca.key on tmpfs gets
+#    shredded too (overkill on tmpfs but cheap defence-in-depth).
+find out -type f -print0 | xargs -0 shred -u
+find out -depth -type d -empty -delete
+shred -u /dev/shm/soroban-ca/ca.key
+rmdir /dev/shm/soroban-ca 2>/dev/null || true
+```
+
+#### D-5 — Register CNs on Hetzner box
+
+Update `~/.config/soroban-prod.env` — append six entries to
+`CLICKHOUSE_CN_USER_MAP`. Map per the task 0240 RBAC user matrix
+(`docs/architecture/security/clickhouse-rbac.md`); current expected
+shape:
+
+```
+lambda-api-production:api_reader,
+lambda-ingestion-production:indexer,
+lambda-partition-production:partition_writer,
+lambda-migration-production:migration_full,
+lambda-enrichment-production:enrichment_writer,
+galexie-production:galexie
+```
+
+Then replay ansible with the narrow `caddy_reload` tag — this re-renders
+the CN map snippet and reloads Caddy without touching the rest of the
+container stack (smaller blast radius than `--tags app`):
+
+```bash
+source ~/.config/soroban-prod.env
+cd infra-hetzner/ansible
+ansible-playbook -i inventory.ini site.yml --tags caddy_reload
+```
+
+#### D-6 — Initial deploy of the new region
+
+After all of the above plus Part A (indexer code on CH) and 0228
+(parallel-backfill merge) are in place:
+
+```bash
+cd infra
+make deploy-production
+```
+
+CDK applies stacks in dependency order: Network → LedgerBucket →
+Migration → Partition → Compute → Ingestion → Delivery →
+Observability → ApiGateway → CloudWatch → HetznerDns.
+
+`MigrationStack` runs the CH schema migrations as a CloudFormation
+custom resource; failure blocks deploy of the downstream stacks.
+
+#### D-7 — End-to-end smoke per AWS service
+
+For each of the 6 services exercise a real ClickHouse query through
+the mTLS path and verify the corresponding CN appears in Caddy access
+logs on the Hetzner box.
+
+```bash
+# API Lambda — invoke through API Gateway
+curl https://api.sorobanscan.rumblefish.dev/ledgers?limit=1
+
+# Indexer Lambda — upload a known ledger to the S3 trigger
+aws s3 cp test.xdr.zst s3://production-stellar-ledger-data/test/
+
+# Enrichment Worker — enqueue a test message
+aws sqs send-message --queue-url <enrichment-queue-url> --message-body '...'
+
+# Migration Lambda — already invoked by CDK custom resource at deploy
+# Partition Lambda — already invoked by CDK custom resource at deploy
+# Galexie — bumped `galexieDesiredCount` to 1 in production.json and redeployed
+#           ingestion stack; check `aws logs tail /ecs/production/galexie-live`
+```
+
+On the Hetzner box, confirm each service shows up in Caddy logs with
+its expected `X-Client-Subject: CN=<service>-production`:
+
+```bash
+ssh deploy@<hetzner-ip>
+docker logs caddy 2>&1 | grep -oE 'CN=[^,"]+' | sort -u
+# Expect at least:
+#   CN=lambda-api-production
+#   CN=lambda-ingestion-production
+#   CN=lambda-partition-production
+#   CN=lambda-migration-production
+#   CN=lambda-enrichment-production
+#   CN=galexie-production
+```
+
+#### D-8 — Negative test — off-allowlist CN gets 403
+
+Issue a throwaway cert with a CN that is NOT in `CLICKHOUSE_CN_USER_MAP`,
+attempt a connection, and verify Caddy returns 403 at the HTTP layer:
+
+```bash
+cd infra-hetzner/ca
+./issue-client-cert.sh test-rogue-cert    # NOT added to the map
+
+curl --cert out/test-rogue-cert/test-rogue-cert.crt \
+     --key  out/test-rogue-cert/test-rogue-cert.key \
+     --cacert ca.crt \
+     https://ch.sorobanscan.rumblefish.dev/ping
+# Expected: HTTP 403, NOT 200.
+
+# Clean up
+mv out/test-rogue-cert .trash/ 2>/dev/null || rm -rf out/test-rogue-cert
+```
+
+#### D-9 — Close task 0239
+
+After Part D is done end-to-end, `0239`'s acceptance criteria can be
+ticked off (NAT GW removed, RDS stack removed, etc. are already true
+in code; smoke items become satisfied by D-7 / D-8). Then `git mv
+lore/1-tasks/active/0239_*.md lore/1-tasks/archive/`, status →
+completed, history entry pointing at the cutover date.
+
 ## Acceptance Criteria
 
 - [ ] `cargo check -p indexer` clean with no `sqlx` dep
@@ -149,6 +372,31 @@ Step-by-step operator instructions:
       reflects the CH write path (replaces the PG write path description)
 - [ ] **API types regenerated** — N/A — task does not touch `crates/api/**`,
       `Cargo.{toml,lock}` (root), or `libs/api-types/**`
+
+### Part D acceptance criteria (absorbed from 0239)
+
+- [ ] `cdk bootstrap aws://<account-id>/eu-central-1` complete
+      (extract `<account-id>` from `infra/envs/production.json`)
+- [ ] Galexie ECR image pushed to eu-central-1 ECR
+- [ ] SSM parameter `/soroban/production/ch-ip` populated with the
+      Hetzner box's public IPv4
+- [ ] 6 mTLS client certs issued (`lambda-api-production`,
+      `lambda-ingestion-production`, `lambda-partition-production`,
+      `lambda-migration-production`, `lambda-enrichment-production`,
+      `galexie-production`) and uploaded to AWS Secrets Manager under
+      `soroban/production/mtls/<cn>`
+- [ ] All 6 CNs registered in `CLICKHOUSE_CN_USER_MAP` on the Hetzner
+      box and the Caddy snippet picked up the change (verified by
+      `docker logs caddy 2>&1 | grep cn_user_map.snippet`)
+- [ ] `make deploy-production` succeeds end-to-end (all 11 stacks
+      CREATE_COMPLETE)
+- [ ] Each AWS service successfully exercises a CH query and the
+      expected `X-Client-Subject: CN=<service>-production` appears in
+      Caddy access logs on the box
+- [ ] Off-allowlist CN gets 403 at the HTTP layer (verified with a
+      throwaway cert)
+- [ ] Task 0239 moved to `archive/` with `status: completed` after
+      Part D acceptance items are ticked
 
 ## Depends on
 
