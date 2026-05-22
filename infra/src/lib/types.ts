@@ -316,7 +316,8 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
   if (
     !config.mtlsSecretNamePrefix ||
-    config.mtlsSecretNamePrefix.includes('CHANGE')
+    config.mtlsSecretNamePrefix.includes('CHANGE') ||
+    config.mtlsSecretNamePrefix.includes('PLACEHOLDER')
   ) {
     errors.push(
       `mtlsSecretNamePrefix missing or placeholder: "${config.mtlsSecretNamePrefix}"`

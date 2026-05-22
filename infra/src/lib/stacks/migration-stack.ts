@@ -21,7 +21,8 @@ export interface MigrationStackProps extends cdk.StackProps {
  * application Lambdas are deployed. Migration failure blocks the deploy.
  *
  * Post-task-0239: Lambda runs OUT-of-VPC, reaches Hetzner CH over
- * mTLS using the `db-migrate-<env>` client cert in Secrets Manager.
+ * mTLS using the `lambda-migration-<env>` client cert in Secrets
+ * Manager (secret name: `${mtlsSecretNamePrefix}/lambda-migration-<env>`).
  * The actual schema-engine swap (PG sqlx → CH HTTP migrations) is
  * tracked separately; this stack only wires the new transport.
  */

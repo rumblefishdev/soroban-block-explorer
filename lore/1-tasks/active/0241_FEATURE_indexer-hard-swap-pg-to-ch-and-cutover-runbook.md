@@ -189,7 +189,7 @@ aws ssm put-parameter \
 `HetznerDnsStack` reads this at deploy time and creates the Route 53
 A record for `ch.sorobanscan.rumblefish.dev`.
 
-#### D-4 — Issue + upload mTLS client certs (5 services)
+#### D-4 — Issue + upload mTLS client certs (6 services)
 
 Per `infra-hetzner/ca/README.md`. Linux-only because the script uses
 `/dev/shm` (tmpfs) for the CA key.
@@ -200,21 +200,30 @@ mkdir -p /dev/shm/soroban-ca && chmod 0700 /dev/shm/soroban-ca
 # (paste `soroban-prod / ca-key` contents into /dev/shm/soroban-ca/ca.key)
 chmod 0600 /dev/shm/soroban-ca/ca.key
 
-# 2. Issue all 5 certs
+# 2. Issue all 6 certs
 cd infra-hetzner/ca
 for cn in lambda-api-production \
           lambda-ingestion-production \
           lambda-partition-production \
           lambda-migration-production \
+          lambda-enrichment-production \
           galexie-production; do
   ./issue-client-cert.sh "$cn"
 done
 
-# 3. Assemble {cert,key,ca} JSON bundle and upload per CN
+# 3. Assemble {cert,key,ca} JSON bundle in memory and pipe directly
+#    to AWS CLI — the bundle JSON itself never lands on disk
+#    (file:///dev/stdin reads from the pipe). The per-cert PEM files
+#    that issue-client-cert.sh emits to ${SCRIPT_DIR}/out/<cn>/ ARE
+#    disk-backed however (script honours SCRIPT_DIR, not /dev/shm,
+#    for its final output) — they get shredded in step 4 below.
+#    Follow-up task 0253 should consider making OUT_DIR overridable
+#    so per-cert keys never touch disk in the first place.
 for cn in lambda-api-production \
           lambda-ingestion-production \
           lambda-partition-production \
           lambda-migration-production \
+          lambda-enrichment-production \
           galexie-production; do
   python3 -c "
 import json, sys
@@ -223,23 +232,25 @@ cert = open(f'out/{cn}/{cn}.crt').read()
 key  = open(f'out/{cn}/{cn}.key').read()
 ca   = open('ca.crt').read()
 print(json.dumps({'cert': cert, 'key': key, 'ca': ca}))
-  " "$cn" > /tmp/bundle.json
-
-  aws secretsmanager create-secret \
+  " "$cn" | aws secretsmanager create-secret \
     --region eu-central-1 \
     --name "soroban/production/mtls/$cn" \
-    --secret-string file:///tmp/bundle.json
-
-  rm /tmp/bundle.json
+    --secret-string file:///dev/stdin
 done
 
-# 4. Shred CA key from tmpfs
-shred -u /dev/shm/soroban-ca/ca.key && rmdir /dev/shm/soroban-ca
+# 4. Securely destroy on-disk artefacts. shred overwrites file blocks
+#    before unlinking, mitigating forensic recovery from filesystem
+#    journals / SSD wear-levelling reserves. The ca.key on tmpfs gets
+#    shredded too (overkill on tmpfs but cheap defence-in-depth).
+find out -type f -print0 | xargs -0 shred -u
+find out -depth -type d -empty -delete
+shred -u /dev/shm/soroban-ca/ca.key
+rmdir /dev/shm/soroban-ca 2>/dev/null || true
 ```
 
 #### D-5 — Register CNs on Hetzner box
 
-Update `~/.config/soroban-prod.env` — append five entries to
+Update `~/.config/soroban-prod.env` — append six entries to
 `CLICKHOUSE_CN_USER_MAP`. Map per the task 0240 RBAC user matrix
 (`docs/architecture/security/clickhouse-rbac.md`); current expected
 shape:
@@ -249,15 +260,18 @@ lambda-api-production:api_reader,
 lambda-ingestion-production:indexer,
 lambda-partition-production:partition_writer,
 lambda-migration-production:migration_full,
+lambda-enrichment-production:enrichment_writer,
 galexie-production:galexie
 ```
 
-Then replay ansible (writes the new Caddy snippet + reloads Caddy):
+Then replay ansible with the narrow `caddy_reload` tag — this re-renders
+the CN map snippet and reloads Caddy without touching the rest of the
+container stack (smaller blast radius than `--tags app`):
 
 ```bash
 source ~/.config/soroban-prod.env
 cd infra-hetzner/ansible
-ansible-playbook -i inventory.ini site.yml --tags app
+ansible-playbook -i inventory.ini site.yml --tags caddy_reload
 ```
 
 #### D-6 — Initial deploy of the new region
@@ -279,7 +293,7 @@ custom resource; failure blocks deploy of the downstream stacks.
 
 #### D-7 — End-to-end smoke per AWS service
 
-For each of the 5 services exercise a real ClickHouse query through
+For each of the 6 services exercise a real ClickHouse query through
 the mTLS path and verify the corresponding CN appears in Caddy access
 logs on the Hetzner box.
 
@@ -310,6 +324,7 @@ docker logs caddy 2>&1 | grep -oE 'CN=[^,"]+' | sort -u
 #   CN=lambda-ingestion-production
 #   CN=lambda-partition-production
 #   CN=lambda-migration-production
+#   CN=lambda-enrichment-production
 #   CN=galexie-production
 ```
 
@@ -365,11 +380,12 @@ completed, history entry pointing at the cutover date.
 - [ ] Galexie ECR image pushed to eu-central-1 ECR
 - [ ] SSM parameter `/soroban/production/ch-ip` populated with the
       Hetzner box's public IPv4
-- [ ] 5 mTLS client certs issued (`lambda-api-production`,
+- [ ] 6 mTLS client certs issued (`lambda-api-production`,
       `lambda-ingestion-production`, `lambda-partition-production`,
-      `lambda-migration-production`, `galexie-production`) and uploaded
-      to AWS Secrets Manager under `soroban/production/mtls/<cn>`
-- [ ] All 5 CNs registered in `CLICKHOUSE_CN_USER_MAP` on the Hetzner
+      `lambda-migration-production`, `lambda-enrichment-production`,
+      `galexie-production`) and uploaded to AWS Secrets Manager under
+      `soroban/production/mtls/<cn>`
+- [ ] All 6 CNs registered in `CLICKHOUSE_CN_USER_MAP` on the Hetzner
       box and the Caddy snippet picked up the change (verified by
       `docker logs caddy 2>&1 | grep cn_user_map.snippet`)
 - [ ] `make deploy-production` succeeds end-to-end (all 11 stacks

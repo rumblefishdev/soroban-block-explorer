@@ -116,6 +116,16 @@ These need a short ADR or notes pass before implementation:
    the new value only on task restart. Plan a forced task restart
    on rotation? Galexie is singleton; restart = brief gap in S3
    exports. Acceptable.
+5. **issue-client-cert.sh OUT_DIR is disk-backed.** The script
+   writes per-cert outputs to `${SCRIPT_DIR}/out/<cn>/`, NOT tmpfs
+   (only the CA key + the in-flight working dir live on `/dev/shm`).
+   The manual runbook in task 0241 D-4 mitigates this by `shred`ing
+   the outputs after upload — but a rotation pipeline running
+   automatically should not require any on-disk private-key
+   intermediate at all. Decision: refactor `issue-client-cert.sh` to
+   honour an `OUT_DIR` override (default to current behaviour for
+   backward compat), and pass `OUT_DIR=/dev/shm/...` from the
+   automated rotator. Surfaced during 0239 PR #210 review.
 
 ## Implementation Sketch
 

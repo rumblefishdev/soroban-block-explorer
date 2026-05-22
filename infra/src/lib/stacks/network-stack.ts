@@ -4,7 +4,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 
-import { HTTPS_PORT, STELLAR_OVERLAY_PORT } from '../ports.js';
+import { DNS_PORT, HTTPS_PORT, STELLAR_OVERLAY_PORT } from '../ports.js';
 
 export interface NetworkStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
@@ -64,6 +64,22 @@ export class NetworkStack extends cdk.Stack {
       description: 'ECS Fargate tasks (Galexie ingestion) — public subnet',
       allowAllOutbound: false,
     });
+    // DNS — Fargate tasks resolve ECR / CloudWatch / S3 / Hetzner CH
+    // hostnames via the Amazon-provided VPC resolver (VPC CIDR + 2).
+    // Without this rule, outbound TLS handshakes fail with EAI_AGAIN
+    // because the resolver lookup never reaches the VPC DNS service.
+    // Both UDP and TCP because larger responses (TXT, DNSSEC) can spill
+    // to TCP.
+    ecsSg.addEgressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.udp(DNS_PORT),
+      'Allow ECS to DNS (UDP) for hostname resolution'
+    );
+    ecsSg.addEgressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(DNS_PORT),
+      'Allow ECS to DNS (TCP) for large responses'
+    );
     // HTTPS — ECR image pull, CloudWatch Logs, S3 ledger bucket,
     // Secrets Manager (cert bundle), and Hetzner CH on :443 (mTLS).
     ecsSg.addEgressRule(
