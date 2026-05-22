@@ -102,8 +102,8 @@ This task brings code into compliance with the doc.
 - **`useTableUrlState`** + `cursorParam` option (default `'cursor'`)
   so multi-section routes can namespace.
 - **`PaginationControls`** props simplified: `prevCursor/nextCursor:
-  string | null` → `canPrev/canNext: boolean`; `onPrev/onNext:
-  () => void` (callers were passing dummy `'prev'/'next'` strings).
+string | null` → `canPrev/canNext: boolean`; `onPrev/onNext:
+() => void` (callers were passing dummy `'prev'/'next'` strings).
 - **`usePageHandlers(page, goNext)`** — new helper deriving
   `canNext` + `handleNext` from a paginated response's `page` field.
 
@@ -152,10 +152,10 @@ user navigates to a different parent entity.
 1. `083ba30 chore(lore-0238): activate task` — task `backlog → active`,
    pushed to develop (board update).
 2. `7808d6d feat(lore-0238): pagination URL-state migration draft
-   (8 of 11)` — cherry-picked draft from `d5f5014` covering the 8
+(8 of 11)` — cherry-picked draft from `d5f5014` covering the 8
    hooks/pages explicitly listed in the original task.
 3. `101a20a feat(lore-0238): extend scope to 11 consumers + simplify
-   primitives` — Phase 2 extend (LP + contracts), simplify rounds 1+2
+primitives` — Phase 2 extend (LP + contracts), simplify rounds 1+2
    (usePageHandlers, CURSOR_PARAMS, boolean PaginationControls,
    placeholderData default, resetKey).
 
@@ -199,7 +199,7 @@ user navigates to a different parent entity.
   (e.g. `SearchResultsView.tsx`). Root cause: stale
   `tsconfig.lib.tsbuildinfo` referencing pre-export shape. Fix:
   `find . -name '*.tsbuildinfo' -delete && rm -rf libs/ui/dist
-  web/dist && npx nx reset`. Clean rebuild green.
+web/dist && npx nx reset`. Clean rebuild green.
 - **Draft commit had wrong task ref.** Original `wip(lore-0237)`
   message referenced the wrong task id. Recommitted as
   `feat(lore-0238)`.
@@ -250,10 +250,10 @@ user navigates to a different parent entity.
     Old API: `prevCursor: string | null`, callers passed
     `canPrev ? 'prev' : null`. The component only checked truthiness.
     Breaking change to boolean `canPrev/canNext` + `onPrev/onNext:
-    () => void` removes the misleading dummies (~14 lines across 13
+() => void` removes the misleading dummies (~14 lines across 13
     callsites). Single internal consumer (no external API surface).
 11. **`resetKey` typed via local `type Options = ...
-    & { resetKey?: unknown }`, not an exported interface.** Smaller
+& { resetKey?: unknown }`, not an exported interface.** Smaller
     public surface for libs/ui (internal monorepo lib, single
     consumer). Convention can flip if libs/ui ever publishes to npm.
 12. **Scope extended +3 consumers (LP list + contracts events/
@@ -270,7 +270,7 @@ user navigates to a different parent entity.
 
 - **Backend `prev_cursor` in `PageInfo`** — small `crates/api`
   change; eliminates the client-side prev-stack and makes `refresh +
-  Prev` work after a pasted deep link. Single-commit follow-up
+Prev` work after a pasted deep link. Single-commit follow-up
   worth spawning. (Not spawned yet.)
 - **Unit tests for `useCursorPagination`** — gated on 0226 (libs/ui
   vitest infra, currently backlog).
@@ -290,4 +290,4 @@ user navigates to a different parent entity.
   architecture change (ADR 0032 N/A); frontend-overview.md already
   documented the pattern this implements.
 - Working draft branch had a `wip(lore-0237)` commit; cherry-picked
-  + reworded as `feat(lore-0238)`.
+  - reworded as `feat(lore-0238)`.
