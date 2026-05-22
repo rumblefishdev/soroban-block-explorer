@@ -115,9 +115,12 @@ For each of the 23 endpoints:
 
 For each endpoint:
 
-1. Sample 20–50 keys (random + stratified by partition).
-2. For each key, fetch the CH response (via `run_endpoint_ch.sh` or a
-   direct SQL invocation) and the Horizon response (REST API).
+1. Sample **30,000 keys** stratified across 25 ledger partition buckets
+   (1200/bucket × 25 buckets = 30K). Plus **3,000 adversarial edge**
+   samples (partition straddles, worker-handoff ledgers, max/min-tx
+   ledgers, oldest/newest accounts) = 33K total per endpoint.
+2. For each key, fetch the CH response and the Horizon response
+   (REST API).
 3. Field-by-field diff per the documented divergence list (§5 of
    `endpoint-queries-clickhouse/README.md` — `created_at` dropped on
    non-`ledgers` tables, `nfts.metadata` absent, etc.).
@@ -136,12 +139,34 @@ Per-tx hash compare via `transaction_hash_index` (see 0228 Phase 6
 note — `transactions.id` is an Int64 surrogate, NOT the canonical
 32-byte hash) is the canonical pattern for E02 / E03.
 
+**Statistical foundation:** 30K stratified samples with zero defects
+give a 95 % upper bound of ≤ 0.01 % true defect rate (Rule of Three:
+3/n). This exactly satisfies the 0228 AC §"≤ 0.01 % mismatch on 1000
+stratified ledgers" generalised to the per-endpoint level.
+
+### Phase B.5 — S3 archive XDR fallback for pre-retention ledgers
+
+Horizon retention boundary sits around ledger **56,657,428** (verified
+in 0228 Phase 6 Tier 5 — Horizon returns `null` for `successful_transaction_count`
+below that). ~50 % of the backfill range (50.4 M → 56.6 M, ~6.2 M ledgers)
+is therefore not Horizon-validatable.
+
+For 5,000 stratified samples from the pre-retention half, re-parse the
+ledger XDR from the S3 archive (`s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/...`)
+using the locked parser SHA from task 0228 and compare the parsed
+output against CH. This gives a "CH ↔ canonical XDR" path that is
+independent of Horizon retention and is the strongest possible
+correctness signal for the older half.
+
+Wall: ~3 h dominated by XDR download + parse (CH compare is fast).
+
 ### Phase C — Group B: stellar.expert validation (4 endpoints)
 
 For each contract endpoint:
 
-1. Sample 10 contract IDs (mix of classified Token / Nft / Fungible /
-   Other from `soroban_contracts`).
+1. Sample **5,000 contract IDs stratified by `contract_type`**:
+   1.7 % of the 295 K SAC tokens, plus oversample of the rare types
+   (full population of Nft / Fungible, 20 % of NULL).
 2. Fetch CH response and stellar.expert response
    (`https://api.stellar.expert/explorer/public/contract/<id>` + sub-
    resources).
@@ -153,17 +178,62 @@ stellar.expert has no public pagination API on every sub-resource —
 some sub-validations may have to be manual (open browser, eyeball).
 Record the gap honestly.
 
-### Phase D — Group C: internal consistency (9 endpoints)
+### Phase D — Group C: internal consistency (9 endpoints) + full-table invariants
 
-For each:
+Two halves:
 
-1. Define one or more "internal invariant" SQL queries (e.g., `SELECT
-sum(holder_count) FROM assets FINAL` ≈ `count(DISTINCT account_id)
-FROM account_balances_current FINAL` for relevant types — within
-   small tolerance).
-2. Run, document pass / fail.
-3. For `22_get_search.sql`, smoke-test 20 known queries (USDC, XLM,
-   well-known account prefixes) → expected hit per documentation.
+#### D.1 — Per-endpoint internal sanity (5,000 stratified samples / endpoint)
+
+For each of the 9 internal-consistency endpoints, stratified
+sampling (matching Group A method but no external comparator —
+just CH row sanity, FK resolution, monotonic ordering).
+
+For `22_get_search.sql`, smoke-test 100 known queries (USDC, XLM,
+well-known account / contract / pool / asset prefixes) → expected
+hit count + ordering per documentation.
+
+#### D.2 — Full-table invariants (no sampling, scan all rows)
+
+The 6 CH tables that no endpoint exercises directly need dedicated
+invariant queries that scan the full table — cheap on CH-local
+(no rate limit), strongest possible coverage:
+
+| Table                                                   | Invariant                                                                                                                      |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `account_balances_current` (47 M)                       | `sum(balance) per asset` ≈ `assets.total_supply` within Decimal128(7) tolerance; one row per (asset, asset_type) pair          |
+| `transaction_participants` (8.19 B)                     | `count(distinct account_id)` ≈ `count() FROM accounts FINAL` within bootstrap tolerance (≤ 41 zero-fsl accounts)               |
+| `operations_appearances` (5.83 B)                       | each row's `transaction_id` exists in `transactions FINAL`; full anti-join (partition-aware)                                   |
+| `soroban_events` (8.68 B)                               | per `(contract_id, ledger_sequence)`, `count(distinct transaction_id, event_index) == count(*)`; FK to `transactions` resolves |
+| `soroban_invocations_appearances` (719 M)               | per `(contract_id, transaction_id)`, exists in `soroban_contracts FINAL`; FK to `transactions` resolves                        |
+| `nfts_pending` / `nft_ownership_pending` (49 M + 112 M) | every NFT pending row has ≥ 1 matching ownership row; quarantine bucket has consistent `contract_id` mapping                   |
+
+Each invariant: SQL query, expected result, observed result, diff
+(if any) in the report. Mismatches > 0 = mandatory follow-up task.
+
+### Phase F — Per-endpoint latency profile
+
+Independent of correctness validation. For each of the 23 endpoints:
+
+1. Discover one realistic param set (reuse Phase A discovery).
+2. Run query **500 times sequentially**.
+3. Drop first 10 runs (cold-cache warm-up — recorded separately as
+   `cold_first_ms`).
+4. Compute `p50`, `p95`, `p99`, `max`, `min` over runs 11-500
+   (warm steady-state).
+
+Verdict thresholds (proposed — tunable after pilot):
+
+| p95 (warm)  | Verdict | Action                                  |
+| ----------- | ------- | --------------------------------------- |
+| < 100 ms    | FAST    | hot dict + partition prune working      |
+| 100-500 ms  | OK      | acceptable for paginated / aggregating  |
+| 500-1500 ms | SLOW    | flag for follow-up (missing index?)     |
+| > 1500 ms   | FAIL    | blocks go-live, spawn optimisation task |
+
+Wall: ~30 min total (23 × 500 × ~100 ms median ≈ 20 min).
+
+Output TSV: `endpoint, file, cold_first_ms, p50_warm, p95_warm,
+p99_warm, max_ms, min_ms, n_warm, verdict`.
 
 ### Phase E — Write up + close
 
@@ -229,14 +299,27 @@ Three short blocks summarising Group A, B, C:
 ```
 Group A (Horizon-comparable):    N endpoints, M CH tables, K sample compares
   Pass: X  Tolerance: Y  Fail: Z (Fn description, link to spawned task)
+Group A.5 (S3 XDR fallback):     pre-retention pre-validation, M tables, K compares
+  Pass: X  Tolerance: Y  Fail: Z
 Group B (stellar.expert):         N endpoints, M tables, K compares
   Pass: X  Tolerance: Y  Fail: Z
 Group C (internal):               N endpoints, M tables, K compares
   Pass: X  Tolerance: Y  Fail: Z
+Full-table invariants:           6 tables, 0 sampling, all pass-or-fail booleans
 ```
 
 Plus an **Overall** line: `K compares, P/23 endpoints PASS (P/23 %)`
 with the go-live verdict derived from the 95 % threshold.
+
+### Section 4 — Latency profile
+
+One row per endpoint sourced from `phase_f_perf.tsv`:
+
+| Endpoint | Cold first | p50 warm | p95 warm | p99 warm | Max | Min | N (warm) | Verdict |
+
+Verdict column: `FAST`, `OK`, `SLOW`, `FAIL` per the Phase F threshold
+table. Every `SLOW` or `FAIL` row links to a spawned optimisation
+task (`related_tasks: ['0252']`).
 
 ### Source legend (used by Section 1 + 2)
 
@@ -259,11 +342,20 @@ so the aggregator stays simple.
 - [ ] Phase A complete — all 23 endpoints categorised (A/B/C) with
       smoke run captured.
 - [ ] Phase B complete — 10 Horizon-compared endpoints documented;
-      per-endpoint diff matrix in the artifact.
+      30K stratified + 3K adversarial samples per endpoint; zero defects
+      yields ≤ 0.01 % true rate at 95 % confidence; per-endpoint diff
+      matrix in the artifact.
+- [ ] Phase B.5 complete — S3 archive XDR fallback validated 5K
+      stratified samples from the pre-Horizon-retention half (ledger
+      < 56.6 M); pass-rate per stratum recorded.
 - [ ] Phase C complete — 4 stellar.expert-compared endpoints
-      documented; manual-spot-check gaps noted honestly.
+      documented; 5K stratified samples per endpoint with oversample
+      of rare contract types; manual-spot-check gaps noted honestly.
 - [ ] Phase D complete — 9 internal-consistency endpoints documented;
-      structural invariants run + passed (or pinned with follow-up).
+      D.1 sampled invariants + D.2 full-table invariants for the 6
+      indirect-only tables; all mismatches > 0 spawned as bugs.
+- [ ] Phase F complete — 23 endpoints have warm `p50/p95/p99` captured;
+      all `p95 < 1500 ms` or have a spawned optimisation task.
 - [ ] Validation artifact at
       `docs/runbooks/artifacts/endpoint_validation_<YYYYMMDD>.md`
       committed with per-tier pass/fail + sign-off.

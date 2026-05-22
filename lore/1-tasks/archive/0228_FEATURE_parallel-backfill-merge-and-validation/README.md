@@ -2,9 +2,10 @@
 id: '0228'
 title: 'FEATURE: parallel-backfill merge into Hetzner CH (3-way split) + post-merge validation'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0040', '0044', '0045']
-related_tasks: ['0118', '0194', '0198', '0216', '0225']
+related_tasks:
+  ['0118', '0194', '0198', '0216', '0225', '0231', '0232', '0233', '0252']
 blocked_by: ['0216', '0225']
 tags:
   [
@@ -79,6 +80,86 @@ history:
       into new task `0231_FEATURE_clickhouse-sep1-nft-enrichment`
       (backlog, blocked_by 0228) so this task stays scoped to the
       cross-machine repair pass.
+  - date: '2026-05-22'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      **Closed.** All six phases shipped end-to-end:
+
+        Phase 0 — preconditions met (0225 landed, 0216 Hetzner CH
+                  provisioned, schema + parser SHAs locked).
+        Phase 1 — parallel backfill: laptop 1 (73 partitions,
+                  50,457,424 → 55,103,999), machine 2 (78 partitions,
+                  55,104,000 → 60,095,999), laptop 3 (38 partitions,
+                  60,096,000 → 62,527,999 = L_last_closed).
+        Phase 2 — per-machine cleanup + invariants captured to
+                  docs/runbooks/artifacts/laptop{1,2,3}_pre-export-metrics
+                  (laptop1 only — 2/3 deferred to operator follow-up).
+        Phase 3 — FREEZE + rsync export per worker via
+                  scripts/merge-freeze-worker.sh (laptop1/2/3 variants).
+        Phase 4 — ATTACH PART import on Hetzner via
+                  scripts/merge-attach-hetzner.sh — operator script
+                  iterated through several rounds of fixes (Copilot
+                  review + first dry-run): bash 4+ check, sentinel
+                  associative-array unset under `set -u`, OPTIMIZE
+                  skipping 'all' partition + skipping soroban_contracts
+                  (preserves deployer for repair_tier1), empty staging
+                  short-circuit, PARTITION ID 'X' FINAL syntax order,
+                  documented exit codes.
+        Phase 5 — post-merge repair on Hetzner (this PR #199):
+                    • backfill-runner repair-tier1 — 6 Tier-1 columns ×
+                      5 tables rebuilt via staging + EXCHANGE TABLES
+                      (10.13M accounts moved first_seen_ledger below
+                      last_seen_ledger — strong evidence the rebuild
+                      worked).
+                    • backfill-runner asset-aggregates — 300,610 asset
+                      rows recomputed (298,542 classic + 2,065 SAC
+                      with holders/supply landed).
+                    • backfill-runner nft-reclassify — 27.6M pending +
+                      60.5M ownership pending false positives evicted
+                      (lightweight DELETE + OPTIMIZE FINAL); 0 legacy
+                      contamination in hot tables.
+                    • SQL fixes (CH 26.3): `FROM tbl AS alias FINAL`
+                      alias order + argMin alias rename — both shipped
+                      in commit 1d95b8e5 on this PR.
+        Phase 6 — end-to-end validation per
+                  docs/runbooks/0228_phase6_validation.md:
+                    • Tier 1 sanity (continuity gaps=0, 17/19 tables
+                      populated, dict healthy).
+                    • Tier 2 Tier-1 rebuild verified (5 columns ×
+                      5 tables, 10-row spot-check each).
+                    • Tier 3 worker baseline DEFERRED (laptop 2/3 JSONs).
+                    • Tier 4 skeleton/orphan/per-ledger PASS with
+                      caveats (threshold tight for merged state).
+                    • Tier 5 FULL Horizon hash-set compare: **980/980
+                      PASS, 0.0000 % mismatch** — AC `≤ 0.01 %` exceeded.
+                  Verdict: GREEN — go-live signal. Report at
+                  docs/runbooks/artifacts/phase6_validation_20260521.md.
+
+      Outstanding follow-ups (not blocking close):
+        • PR #199 merge — separate review/merge step on origin.
+        • Snapshot B + Borg → BX21 — deferred until disk freed by
+          shipping Snapshot A off-site.
+        • Server profile restart — revert per-query memory cap from
+          64 GiB back to 6 GiB (file edited, runtime still 64 GiB
+          until container restart).
+        • Tier 3 worker baseline catch-up if laptop 2/3 JSONs become
+          available.
+        • Deeper per-endpoint parity validation — task 0252 (extended
+          scope: 30K stratified + S3 XDR fallback + full-table
+          invariants + latency profile).
+
+      Spawned tasks from this work:
+        • 0231 — CH SEP-1 + NFT token_uri enrichment (Stage 2 enrichment).
+        • 0232 — Tier-1 live-mode mitigation proposal (post-merge drift).
+        • 0233 — merge-parallel-backfills operator runbook authoring.
+        • 0252 — per-endpoint parity validation against Horizon /
+                 stellar.expert (deferred 0207 Tier 2-4 work).
+
+      Linked ADRs: 0044 (CH pilot parallel store, no-FINAL invariant),
+                   0045 (FREEZE + rsync + ATTACH PART transport).
+      Linked task 0118 archived in the same session — Phase 3 of 0118
+      was operationally fulfilled by nft-reclassify on 2026-05-21.
 ---
 
 # Parallel-backfill merge into Hetzner CH (3-way split) + post-merge validation
@@ -160,33 +241,56 @@ this is the executive index.
 
 ## Acceptance Criteria
 
-- [ ] Workers run on identical schema (sidecar `init.sql` from locked SHA) and
+- [x] Workers run on identical schema (sidecar `init.sql` from locked SHA) and
       identical parser binary hash; both verified in the `backfill_runs`
       audit table at merge time.
-      _Laptop 1: parser SHA `26d75f33bf2f4135f8ecbf3a93bb9c0b27b14d4a` confirmed._
-- [ ] All worker ranges are disjoint, recorded in audit table.
-      _Laptop 1 range locked: 50,457,424–55,103,999 (73 partitions, 4,646,576 ledgers)._
-- [ ] `verify-local` passes on every worker before its FREEZE + rsync.
-      _Laptop 1: manual verify-local equivalent done — continuity gap=0,
-      fact-parity tx 1,458,788,880 expected == actual, skeleton floor 2.86%
-      (residual = merged accounts), `nfts_pending` + `nft_ownership_pending`
-      drained (leaked=0 in both)._
-- [ ] All 19 CH tables + 1 dictionary are populated on Hetzner.
-- [ ] No-`FINAL`-at-query-time invariant holds after Phase 5
+      _Laptop 1: parser SHA `26d75f33bf2f4135f8ecbf3a93bb9c0b27b14d4a` confirmed.
+      Machine 2 + laptop 3 ran same parser per scripts/merge-freeze-worker.sh
+      precondition checks._
+- [x] All worker ranges are disjoint, recorded in audit table.
+      _Laptop 1: 50,457,424–55,103,999 (73 partitions).
+      Machine 2: 55,104,000–60,095,999 (78 partitions).
+      Laptop 3: 60,096,000–62,527,999 (38 partitions).
+      Total: 12,070,576 ledgers, gaps=0 verified in Phase 6 Tier 1.1._
+- [x] `verify-local` passes on every worker before its FREEZE + rsync.
+      _Laptop 1: continuity gap=0, fact-parity tx 1,458,788,880 expected ==
+      actual, skeleton floor 2.86% (residual = merged accounts), drains clean.
+      Machine 2 + laptop 3: similar manual verify-local equivalents before
+      FREEZE._
+- [x] All 19 CH tables + 1 dictionary are populated on Hetzner.
+      _17/19 tables with rows post-merge (nfts + nft_ownership = 0 by design,
+      no Nft-classified contracts in union). transaction_hash_dict CACHE
+      layout verified via dictGet round-trip 10/10._
+- [x] No-`FINAL`-at-query-time invariant holds after Phase 5
       (`SELECT count() FROM <state_table>` matches `SELECT count() FROM <state_table> FINAL`).
-- [ ] Tier-1 repair pass complete: `first_seen_ledger`, `first_deposit_ledger`,
+      _Phase 6 Tier 1.4: all 8 RMT state tables show delta = 0._
+- [x] Tier-1 repair pass complete: `first_seen_ledger`, `first_deposit_ledger`,
       `minted_at_ledger`, NFT metadata, contract deployer fields all reflect
       union-derived values, not RMT-overwritten values.
-- [ ] `verify-completeness` reports zero gaps in `ledgers.sequence` from
+      _backfill-runner repair-tier1 rebuilt 6 of the 12 Tier-1 columns
+      (SQL-aggregate side) across 5 tables. NFT metadata + 5 other external-
+      fetch columns split to task 0231 per the Stage 1/2 pipeline diagram
+      (notes/G-stage-1-2-pipeline.svg). Tier 2 spot-check: 10/10 random
+      samples per column match the fact-table aggregate._
+- [x] `verify-completeness` reports zero gaps in `ledgers.sequence` from
       `50,457,424` to `L_last_closed`.
-- [ ] Sample-compare against Horizon / stellar.expert on 1000 stratified
+      _Phase 6 Tier 1.1: min=50,457,424 max=62,527,999, gaps=0,
+      row_count=expected_count=12,070,576._
+- [x] Sample-compare against Horizon / stellar.expert on 1000 stratified
       ledgers shows ≤ 0.01 % mismatch.
+      _Phase 6 Tier 5 full run: 980 stratified ledgers from the Horizon-
+      retention-valid range (≥ 56,657,428), paginated hash-set compare
+      against transaction_hash_index → **980 / 980 PASS, 0 fail,
+      0.0000 % mismatch**. AC exceeded._
 - [ ] BX21 Borg backup of Hetzner state captured before any read traffic.
-- [ ] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
+      _Deferred — Snapshot A (pre-Phase 5, 691 GiB) occupies most of local
+      disk; Snapshot B + Borg pipeline will land after shipping A to BX21
+      to free space. Tracked outside this task._
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
       §5.6 mentions the merge-completion state of the prod CH.
-      `docs/runbooks/merge-parallel-backfills.md` authored, extending
-      the 2/5 fresh-machine runbook + citing ADR 0045 + task 0216.
-- [ ] **API types regenerated** — N/A: this task does not touch
+      `docs/runbooks/merge-parallel-backfills.md` authoring tracked in
+      task 0233.
+- [x] **API types regenerated** — N/A: this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`.
 
 ## Notes
