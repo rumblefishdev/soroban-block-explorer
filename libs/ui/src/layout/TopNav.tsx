@@ -5,11 +5,17 @@ import type { ReactNode } from 'react';
 import { monoFontFamily } from '../theme/typography.js';
 import { SearchInput } from './SearchInput.js';
 
+/**
+ * Slim subset of `GET /v1/network/stats` that TopNav needs to render
+ * its counters. Field names mirror the API exactly so callers can pass
+ * the raw query response through without a mapping layer (structural
+ * typing accepts the wider shape).
+ */
 export interface NetworkStats {
-  tps: number;
-  ledger: number;
-  accounts: number;
-  contracts: number;
+  tps_60s: number;
+  latest_ledger_sequence: number;
+  total_accounts: number;
+  total_contracts: number;
 }
 
 export interface TopNavProps {
@@ -76,23 +82,6 @@ function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-/** Renders the TPS counter — dash when stats unavailable OR genuinely
- *  zero. Historical backfill data has no recent 60s TPS, so `"0.0"`
- *  reads as a dead network rather than "no data". */
-function formatTps(stats: NetworkStats | undefined): string {
-  if (!stats || stats.tps === 0) return '—';
-  return stats.tps.toFixed(1);
-}
-
-/** Renders a counter — dash when stats unavailable. */
-function formatStat(
-  stats: NetworkStats | undefined,
-  pick: (s: NetworkStats) => number
-): string {
-  if (!stats) return '—';
-  return formatNumber(pick(stats));
-}
-
 export function TopNav({
   stats,
   searchValue,
@@ -132,17 +121,23 @@ export function TopNav({
         >
           <Stat
             label="TPS"
-            value={formatTps(stats)}
+            value={stats ? stats.tps_60s.toFixed(1) : '—'}
             valueColor="text.success"
           />
           <StatDivider />
-          <Stat label="Ledger" value={formatStat(stats, (s) => s.ledger)} />
+          <Stat
+            label="Ledger"
+            value={stats ? formatNumber(stats.latest_ledger_sequence) : '—'}
+          />
           <StatDivider />
-          <Stat label="Accounts" value={formatStat(stats, (s) => s.accounts)} />
+          <Stat
+            label="Accounts"
+            value={stats ? formatNumber(stats.total_accounts) : '—'}
+          />
           <StatDivider />
           <Stat
             label="Contracts"
-            value={formatStat(stats, (s) => s.contracts)}
+            value={stats ? formatNumber(stats.total_contracts) : '—'}
           />
         </Box>
       </Box>
