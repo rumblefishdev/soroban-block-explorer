@@ -1,32 +1,33 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 
-import { HTTPS_PORT, POSTGRESQL_PORT, STELLAR_OVERLAY_PORT } from '../ports.js';
+import { HTTPS_PORT, STELLAR_OVERLAY_PORT } from '../ports.js';
 
 export interface NetworkStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
 }
 
 /**
- * Foundational networking layer for the Soroban Block Explorer.
+ * Minimum VPC for the Soroban Block Explorer post-task-0239.
  *
- * Creates a VPC with public/private subnet split in a single AZ (us-east-1a),
- * security groups for compute components, and an S3 Gateway VPC endpoint.
+ * Only purpose: provide a public subnet so Galexie (ECS Fargate)
+ * gets a routable public IPv4 per task and can reach both the
+ * Stellar peer overlay and the Hetzner-hosted ClickHouse endpoint
+ * over the Internet Gateway.
  *
- * RDS security group lives in RdsStack to avoid cross-stack cyclic
- * references. Lambda/ECS egress to RDS on port 5432 uses VPC CIDR
- * (configured here) instead of SG-to-SG reference.
+ * Lambdas are intentionally NOT attached to this VPC — they reach
+ * Hetzner CH via the AWS-managed Lambda egress path (free, no NAT
+ * GW). mTLS handles identity, so VPC isolation is unnecessary.
  *
- * Multi-AZ expansion: add AZ entries to `config.availabilityZones`.
- * CDK provisions new subnets and NAT Gateways automatically.
+ * No NAT Gateway, no private subnets, no Lambda security group,
+ * no S3 Gateway endpoint (the endpoint was only useful for private-
+ * subnet workloads).
  */
 export class NetworkStack extends cdk.Stack {
   readonly vpc: ec2.IVpc;
-  readonly lambdaSecurityGroup: ec2.ISecurityGroup;
   readonly ecsSecurityGroup: ec2.ISecurityGroup;
 
   constructor(scope: Construct, id: string, props: NetworkStackProps) {
@@ -35,22 +36,15 @@ export class NetworkStack extends cdk.Stack {
     const { config } = props;
 
     // ---------------------
-    // VPC
+    // VPC — public subnet only
     // ---------------------
-    // Two AZs required by RDS subnet group (AWS minimum).
-    // NAT Gateway count configurable — increase to one per AZ for HA when SLA > 99.9%.
-    const natProvider =
-      config.natType === 'instance'
-        ? ec2.NatProvider.instanceV2({
-            instanceType: new ec2.InstanceType('t3.micro'),
-          })
-        : ec2.NatProvider.gateway();
-
+    // Single AZ is sufficient: Galexie is a singleton writer
+    // (only one task at a time) and Fargate auto-replaces across
+    // AZs on capacity failures within the assigned AZ set.
     const vpc = new ec2.Vpc(this, 'Vpc', {
       ipAddresses: ec2.IpAddresses.cidr(config.vpcCidr),
       availabilityZones: [...config.availabilityZones],
-      natGateways: config.natGatewayCount,
-      natGatewayProvider: natProvider,
+      natGateways: 0,
       restrictDefaultSecurityGroup: true,
       subnetConfiguration: [
         {
@@ -58,134 +52,32 @@ export class NetworkStack extends cdk.Stack {
           subnetType: ec2.SubnetType.PUBLIC,
           cidrMask: 20,
         },
-        {
-          name: 'Private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-          cidrMask: 20,
-        },
       ],
     });
     this.vpc = vpc;
 
     // ---------------------
-    // Security Groups
+    // ECS Security Group — Galexie
     // ---------------------
-    // RDS SG and DB-related egress rules are in RdsStack to avoid
-    // cross-stack cyclic references between Network and Storage.
-
-    // Lambda — API handler, Ledger Processor
-    const lambdaSg = new ec2.SecurityGroup(this, 'LambdaSg', {
-      vpc,
-      description:
-        'Lambda functions (API, Ledger Processor, Event Interpreter)',
-      allowAllOutbound: false,
-    });
-    // Outbound HTTPS to 0.0.0.0/0 — intentionally broad. Lambda needs access to
-    // multiple AWS APIs (Secrets Manager, CloudWatch, X-Ray, STS). VPC Interface
-    // Endpoints (~$7/mo each) are not cost-justified at launch. S3 traffic is
-    // routed via the free Gateway endpoint at route-table level.
-    // Outbound to RDS/RDS Proxy on PostgreSQL port. Uses VPC CIDR instead of
-    // SG-to-SG reference to avoid cross-stack cyclic dependency with RdsStack.
-    // Only RDS listens on 5432 within the VPC.
-    lambdaSg.addEgressRule(
-      ec2.Peer.ipv4(config.vpcCidr),
-      ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow Lambda to RDS/Proxy on PostgreSQL port (VPC scope)'
-    );
-    lambdaSg.addEgressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(HTTPS_PORT),
-      'Allow Lambda to HTTPS (AWS APIs, S3 via VPC endpoint)'
-    );
-
-    // ECS — Fargate tasks (Galexie live + backfill)
     const ecsSg = new ec2.SecurityGroup(this, 'EcsSg', {
       vpc,
-      description: 'ECS Fargate tasks (Galexie ingestion)',
+      description: 'ECS Fargate tasks (Galexie ingestion) — public subnet',
       allowAllOutbound: false,
     });
-    // Outbound HTTPS to 0.0.0.0/0 — intentionally broad. ECS needs ECR image
-    // pull, CloudWatch Logs, and Stellar history archive access. VPC Interface
-    // Endpoints are not cost-justified at launch. S3 via free Gateway endpoint.
-    // Outbound to RDS on PostgreSQL port. VPC CIDR scope (see Lambda SG comment).
-    ecsSg.addEgressRule(
-      ec2.Peer.ipv4(config.vpcCidr),
-      ec2.Port.tcp(POSTGRESQL_PORT),
-      'Allow ECS to RDS on PostgreSQL port (VPC scope)'
-    );
+    // HTTPS — ECR image pull, CloudWatch Logs, S3 ledger bucket,
+    // Secrets Manager (cert bundle), and Hetzner CH on :443 (mTLS).
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(HTTPS_PORT),
-      'Allow ECS to HTTPS (ECR, CloudWatch, S3 via VPC endpoint)'
+      'Allow ECS to HTTPS (ECR, CW Logs, S3, Secrets Manager, Hetzner CH mTLS)'
     );
-    // Outbound for Stellar network peer connections.
-    // Galexie connects to Stellar peers on port 11625 (overlay protocol).
-    // History archives use HTTPS (covered by the 443 rule above).
+    // Stellar overlay protocol — Galexie connects to peers on :11625.
     ecsSg.addEgressRule(
       ec2.Peer.anyIpv4(),
       ec2.Port.tcp(STELLAR_OVERLAY_PORT),
       'Allow ECS to Stellar peer network (overlay protocol)'
     );
-
-    this.lambdaSecurityGroup = lambdaSg;
     this.ecsSecurityGroup = ecsSg;
-
-    // ---------------------
-    // S3 Gateway VPC Endpoint
-    // ---------------------
-    // Gateway type (free, no hourly cost). Adds route table entries so
-    // S3 traffic from private subnets stays within AWS network instead of
-    // traversing the NAT Gateway — reduces cost and improves latency.
-    //
-    // Endpoint policy restricts access to the project's ledger data bucket
-    // and CDK staging buckets (defense in depth — IAM still applies).
-    const ledgerBucketName = `${config.envName}-stellar-ledger-data`;
-    const s3Endpoint = vpc.addGatewayEndpoint('S3Endpoint', {
-      service: ec2.GatewayVpcEndpointAwsService.S3,
-      subnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
-    });
-    // Allow all S3 actions on our bucket — IAM roles provide the
-    // fine-grained action-level control (grantWrite, grantRead).
-    // Endpoint policy restricts WHICH buckets, IAM restricts WHICH actions.
-    s3Endpoint.addToPolicy(
-      new iam.PolicyStatement({
-        principals: [new iam.AnyPrincipal()],
-        actions: ['s3:*'],
-        resources: [
-          `arn:aws:s3:::${ledgerBucketName}`,
-          `arn:aws:s3:::${ledgerBucketName}/*`,
-        ],
-      })
-    );
-    // Allow CDK bootstrap bucket — required for cdk deploy to upload
-    // Lambda bundles and CloudFormation templates. The CDK bootstrap
-    // bucket follows the pattern: cdk-hnb659fds-assets-{ACCOUNT}-{REGION}.
-    // Scoped to this fixed prefix to avoid matching arbitrary third-party
-    // buckets that happen to start with "cdk-".
-    s3Endpoint.addToPolicy(
-      new iam.PolicyStatement({
-        principals: [new iam.AnyPrincipal()],
-        actions: ['s3:*'],
-        resources: [
-          'arn:aws:s3:::cdk-hnb659fds-*',
-          'arn:aws:s3:::cdk-hnb659fds-*/*',
-        ],
-      })
-    );
-    // Allow ECR image layer pulls — ECR stores Docker image layers in
-    // regional S3 buckets (prod-<region>-starport-layer-bucket). Without
-    // this, ECS Fargate tasks in private subnets fail with
-    // CannotPullContainerError because the S3 Gateway endpoint blocks
-    // access to the ECR layer bucket.
-    s3Endpoint.addToPolicy(
-      new iam.PolicyStatement({
-        principals: [new iam.AnyPrincipal()],
-        actions: ['s3:GetObject'],
-        resources: [
-          `arn:aws:s3:::prod-${config.awsRegion}-starport-layer-bucket/*`,
-        ],
-      })
-    );
 
     // ---------------------
     // Tags
@@ -198,18 +90,10 @@ export class NetworkStack extends cdk.Stack {
     // Outputs
     // ---------------------
     new cdk.CfnOutput(this, 'VpcId', { value: vpc.vpcId });
-    new cdk.CfnOutput(this, 'PrivateSubnetIds', {
-      value: vpc
-        .selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
-        .subnetIds.join(','),
-    });
     new cdk.CfnOutput(this, 'PublicSubnetIds', {
       value: vpc
         .selectSubnets({ subnetType: ec2.SubnetType.PUBLIC })
         .subnetIds.join(','),
-    });
-    new cdk.CfnOutput(this, 'LambdaSecurityGroupId', {
-      value: lambdaSg.securityGroupId,
     });
     new cdk.CfnOutput(this, 'EcsSecurityGroupId', {
       value: ecsSg.securityGroupId,

@@ -125,7 +125,7 @@ export class ApiGatewayStack extends cdk.Stack {
     const certificate = acm.Certificate.fromCertificateArn(
       this,
       'ApiCertificate',
-      config.certificateArn
+      config.apiCertificateArn
     );
 
     const apiDomain = api.addDomainName('ApiDomain', {

@@ -1,26 +1,23 @@
 /**
  * Environment-specific configuration for the CDK infrastructure.
  *
- * Only includes fields consumed by existing stacks. Each new stack task
- * extends this interface with the fields it needs — no placeholder values.
+ * Post-task-0239 the AWS side is stateless: Lambdas run out-of-VPC,
+ * Galexie runs in a public subnet with a per-task public IP, and the
+ * data plane lives on the Hetzner-hosted ClickHouse box reached over
+ * mTLS. There is no RDS, no NAT Gateway, no private subnet.
+ *
+ * Production is the only supported AWS environment until product
+ * explicitly asks to bring staging back (see task 0249 archive notes).
  */
 export interface EnvironmentConfig {
-  readonly envName: 'staging' | 'production';
+  readonly envName: 'production';
   readonly awsRegion: string;
 
   // Network (consumed by NetworkStack)
   readonly vpcCidr: string;
   readonly availabilityZones: readonly string[];
-  readonly natType: 'gateway' | 'instance';
-  readonly natGatewayCount: number;
 
-  // Storage (consumed by RdsStack, LedgerBucketStack)
-  readonly dbInstanceClass: string;
-  readonly dbAllocatedStorage: number;
-  readonly dbMultiAz: boolean;
-  readonly dbDeletionProtection: boolean;
-  readonly dbBackupRetentionDays: number;
-  readonly dbProxy: boolean;
+  // KMS (consumed by LedgerBucketStack, IngestionStack)
   readonly kmsEncryption: boolean;
 
   // Compute (consumed by ComputeStack)
@@ -37,9 +34,7 @@ export interface EnvironmentConfig {
   readonly enrichmentWorkerLambdaTimeout: number;
   /**
    * Reserved concurrency for the type-1 enrichment worker. Kept low
-   * (1–2) to be polite to issuer servers and bounded against RDS
-   * connection exhaustion. `0` disables the worker, mirroring the
-   * `indexerLambdaConcurrency` pattern.
+   * (1–2) to be polite to issuer servers. `0` disables the worker.
    */
   readonly enrichmentWorkerLambdaConcurrency: number;
 
@@ -80,7 +75,7 @@ export interface EnvironmentConfig {
   readonly apiGatewayCacheEnabled: boolean;
   /** Cache cluster size in GB. String because AWS API accepts '0.5', '1.6', '6.1', etc. */
   readonly apiGatewayCacheSize: string;
-  /** Cache TTL (seconds) for immutable endpoints (e.g. /transactions/{hash}). Not yet wired per-method — awaits route patterns from task 0033. */
+  /** Cache TTL (seconds) for immutable endpoints (e.g. /transactions/{hash}). */
   readonly apiGatewayCacheTtlImmutable: number;
   /** Cache TTL (seconds) for mutable endpoints (e.g. /transactions?limit=20). Used as the stage-level default. */
   readonly apiGatewayCacheTtlMutable: number;
@@ -89,41 +84,42 @@ export interface EnvironmentConfig {
 
   // Delivery (consumed by DeliveryStack + ApiGatewayStack)
 
-  /** Frontend SPA domain, e.g. "staging.sorobanscan.rumblefish.dev". */
+  /** Frontend SPA domain, e.g. "sorobanscan.rumblefish.dev". */
   readonly domainName: string;
-  /** API custom domain, e.g. "api.staging.sorobanscan.rumblefish.dev". */
+  /** API custom domain, e.g. "api.sorobanscan.rumblefish.dev". */
   readonly apiDomainName: string;
-  /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev. */
+  /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev (global). */
   readonly hostedZoneId: string;
   /** Hosted zone name, e.g. "sorobanscan.rumblefish.dev". */
   readonly hostedZoneName: string;
-  /** ACM wildcard certificate ARN in us-east-1 covering *.sorobanscan.rumblefish.dev. */
-  readonly certificateArn: string;
+  /**
+   * ACM wildcard certificate ARN backing the CloudFront viewer cert.
+   *
+   * **Must be in `us-east-1` regardless of `awsRegion`** — CloudFront
+   * only accepts viewer certs from us-east-1. Don't "fix" this by
+   * matching the cert region to the workload region; CloudFront will
+   * reject the deploy.
+   */
+  readonly cloudFrontCertificateArn: string;
+  /**
+   * ACM wildcard certificate ARN backing the API Gateway custom domain.
+   * Must be in the same region as `awsRegion` (API Gateway regional
+   * endpoint requires same-region cert).
+   */
+  readonly apiCertificateArn: string;
   /**
    * Provision WAF WebACLs (one CLOUDFRONT-scoped on the distribution,
-   * one REGIONAL-scoped on the API Gateway stage). Disable on staging
-   * to save the ~$15-20/month fixed cost when basic auth gating is
-   * the primary access control.
+   * one REGIONAL-scoped on the API Gateway stage).
    */
   readonly enableWaf: boolean;
   /**
    * Enable CloudFront Function basic auth on the SPA distribution.
-   * Credentials live in CloudFront KeyValueStore — see DeliveryStack
-   * for the bootstrap procedure. Production should leave this false.
+   * Production should leave this false.
    */
   readonly enableBasicAuth: boolean;
-  /**
-   * Per-IP request limit over a 5-minute window for the CloudFront WAF.
-   * Browser-facing — needs to be high enough to accommodate normal SPA
-   * page loads (50-100 asset requests). Suggested: 5000+ for production,
-   * lower for staging.
-   */
+  /** Per-IP request limit over a 5-minute window for the CloudFront WAF. */
   readonly cloudFrontWafRateLimit: number;
-  /**
-   * Per-IP request limit over a 5-minute window for the API Gateway WAF.
-   * Should reflect realistic API usage; lower than the CloudFront limit.
-   * Suggested: 1000-2000.
-   */
+  /** Per-IP request limit over a 5-minute window for the API Gateway WAF. */
   readonly apiWafRateLimit: number;
 
   // Observability — X-Ray (consumed by ObservabilityStack)
@@ -139,32 +135,39 @@ export interface EnvironmentConfig {
   readonly galexieLagMinutes: number;
   /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
-  /** RDS CPU utilization % threshold for the RDS CPU alarm (sustained 5 min). */
-  readonly rdsCpuThreshold: number;
-  /** RDS free storage % threshold below which the storage alarm fires. */
-  readonly rdsStorageThresholdPct: number;
   /** API Gateway 5xx error rate % threshold for the 5xx alarm. */
   readonly apiGateway5xxThreshold: number;
-  /** Slack workspace ID for AWS Chatbot alarm notifications (e.g. "T01ABCDEF"). */
+  /** Slack workspace ID for AWS Chatbot alarm notifications. */
   readonly slackWorkspaceId: string;
-  /** Slack channel ID for AWS Chatbot alarm notifications (e.g. "C01ABCDEF"). */
+  /** Slack channel ID for AWS Chatbot alarm notifications. */
   readonly slackChannelId: string;
 
-  // Hetzner ClickHouse DNS — per-environment (consumed by HetznerDnsStack)
+  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, MigrationStack, PartitionStack, HetznerDnsStack)
 
   /**
-   * FQDN that Route 53 maps to the Hetzner ClickHouse box for this
-   * environment. Caddy on the box uses this name for the Let's
-   * Encrypt HTTP-01 challenge, and external mTLS clients (Lambda,
-   * dev laptops) connect via it.
+   * FQDN that Route 53 maps to the Hetzner ClickHouse box. Used as both
+   * the mTLS endpoint hostname by AWS-side workloads (Lambda, Galexie)
+   * and the LE HTTP-01 challenge target by Caddy on the box.
    *
-   * The IPv4 target is intentionally NOT in the env config — it is
-   * read from SSM Parameter Store at `/soroban/${envName}/ch-ip`
-   * by `HetznerDnsStack`, matching the existing convention that
-   * keeps box-specific IPs out of git (see `inventory.ini` which is
-   * gitignored).
+   * The IPv4 target is read from SSM Parameter Store at
+   * `/soroban/${envName}/ch-ip` by `HetznerDnsStack`.
    */
   readonly chDomainName: string;
+  /**
+   * Secret-name prefix in AWS Secrets Manager for mTLS client cert
+   * bundles. Each AWS service (Lambda, Galexie) gets its own secret at
+   * `${mtlsSecretNamePrefix}/<cn>` containing `{cert, key, ca}` (per
+   * task 0240; identity is asserted by Caddy CN→user map, no
+   * ch_user/ch_password in the bundle).
+   *
+   * Example: `soroban/production/mtls` → service secrets live at
+   * `soroban/production/mtls/lambda-api-production`,
+   * `soroban/production/mtls/galexie-production`, etc.
+   *
+   * Stacks construct the full ARN at synth time using
+   * `cdk.Stack.of(this).{account,region}`.
+   */
+  readonly mtlsSecretNamePrefix: string;
 }
 
 /**
@@ -198,18 +201,27 @@ export function relativeRecordName(fqdn: string, zoneName: string): string {
  * Validates an EnvironmentConfig at synth time. Throws on missing or
  * placeholder values rather than letting `cdk synth`/`cdk deploy` fail
  * deep inside CloudFormation with cryptic errors.
- *
- * Catches the most common footgun: a placeholder like `CHANGE_ME`
- * accidentally committed to envs/*.json.
  */
 export function validateConfig(config: EnvironmentConfig): void {
   const errors: string[] = [];
 
+  // CloudFront cert must be in us-east-1 regardless of awsRegion.
   if (
-    !/^arn:aws:acm:[a-z0-9-]+:\d{12}:certificate\//.test(config.certificateArn)
+    !/^arn:aws:acm:us-east-1:\d{12}:certificate\//.test(
+      config.cloudFrontCertificateArn
+    )
   ) {
     errors.push(
-      `certificateArn must be a valid ACM certificate ARN, got: "${config.certificateArn}"`
+      `cloudFrontCertificateArn must be a us-east-1 ACM certificate ARN (CloudFront requirement), got: "${config.cloudFrontCertificateArn}"`
+    );
+  }
+  // API Gateway regional cert must be in the workload region.
+  const apiCertPattern = new RegExp(
+    `^arn:aws:acm:${config.awsRegion}:\\d{12}:certificate/`
+  );
+  if (!apiCertPattern.test(config.apiCertificateArn)) {
+    errors.push(
+      `apiCertificateArn must be an ACM certificate ARN in "${config.awsRegion}" (API Gateway regional endpoint), got: "${config.apiCertificateArn}"`
     );
   }
   if (!/^Z[A-Z0-9]+$/.test(config.hostedZoneId)) {
@@ -271,19 +283,6 @@ export function validateConfig(config: EnvironmentConfig): void {
       `processorErrorRateThreshold must be > 0 and <= 1, got: ${config.processorErrorRateThreshold}`
     );
   }
-  if (config.rdsCpuThreshold <= 0 || config.rdsCpuThreshold > 100) {
-    errors.push(
-      `rdsCpuThreshold must be between 0 and 100, got: ${config.rdsCpuThreshold}`
-    );
-  }
-  if (
-    config.rdsStorageThresholdPct <= 0 ||
-    config.rdsStorageThresholdPct > 100
-  ) {
-    errors.push(
-      `rdsStorageThresholdPct must be between 0 and 100, got: ${config.rdsStorageThresholdPct}`
-    );
-  }
   if (
     config.apiGateway5xxThreshold <= 0 ||
     config.apiGateway5xxThreshold > 100
@@ -307,21 +306,20 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
 
   // Hetzner DNS — per-env (consumed by HetznerDnsStack).
-  //
-  // `chDomainName` must be set on every environment so the type stays
-  // mandatory, but a `PLACEHOLDER` / `CHANGE_ME` value is only fatal
-  // for production. On staging it signals "do not deploy HetznerDns"
-  // — `app.ts` guards stack instantiation on the same condition, so
-  // every OTHER staging stack still synths cleanly.
   if (!config.chDomainName) {
     errors.push(`chDomainName missing`);
   } else if (
-    config.envName === 'production' &&
-    (config.chDomainName.includes('CHANGE') ||
-      config.chDomainName.includes('PLACEHOLDER'))
+    config.chDomainName.includes('CHANGE') ||
+    config.chDomainName.includes('PLACEHOLDER')
+  ) {
+    errors.push(`chDomainName placeholder rejected: "${config.chDomainName}"`);
+  }
+  if (
+    !config.mtlsSecretNamePrefix ||
+    config.mtlsSecretNamePrefix.includes('CHANGE')
   ) {
     errors.push(
-      `chDomainName placeholder rejected on production: "${config.chDomainName}"`
+      `mtlsSecretNamePrefix missing or placeholder: "${config.mtlsSecretNamePrefix}"`
     );
   }
 
@@ -334,9 +332,7 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
 
   // Soft sanity check: an environment with neither WAF nor basic auth
-  // exposes an unprotected public CloudFront distribution. That may be
-  // intentional for production (relying on application-layer controls),
-  // but is almost always a mistake on staging — flag it loudly.
+  // exposes an unprotected public CloudFront distribution.
   if (!config.enableWaf && !config.enableBasicAuth) {
     // eslint-disable-next-line no-console
     console.warn(

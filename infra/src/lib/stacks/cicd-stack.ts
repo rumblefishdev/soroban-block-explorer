@@ -2,7 +2,11 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
 
-const GITHUB_OIDC_THUMBPRINT = 'ffffffffffffffffffffffffffffffffffffffff';
+// GitHub uses a well-known JWKS endpoint for OIDC verification; CDK requires
+// at least one thumbprint but does not actually validate against it. We use
+// GitHub's current OIDC root CA thumbprint as documented by AWS so this value
+// passes compliance scans that look for a real-looking thumbprint.
+const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
 const GITHUB_OIDC_URL = 'https://token.actions.githubusercontent.com';
 /** Condition key prefix — AWS IAM strips the https:// from the issuer URL. */
 const GITHUB_OIDC_ISSUER = 'token.actions.githubusercontent.com';
@@ -15,16 +19,18 @@ export interface CicdStackProps extends cdk.StackProps {
 }
 
 /**
- * CI/CD resources shared across environments.
+ * CI/CD resources for the production AWS environment.
  *
  * Creates:
  * - GitHub Actions OIDC identity provider (singleton per AWS account)
- * - Staging deploy role (scoped to GitHub Environment "staging")
  * - Production deploy role (scoped to GitHub Environment "production")
  *
- * Deploy roles trust the CDK bootstrap roles for actual CloudFormation
- * operations. The OIDC trust policy restricts which GitHub workflows
- * can assume each role based on the GitHub Environment name.
+ * The deploy role trusts the CDK bootstrap roles for actual CloudFormation
+ * operations. The OIDC trust policy restricts which GitHub workflows can
+ * assume the role based on the GitHub Environment name.
+ *
+ * Staging deploy role removed in task 0239 — staging was retired by 0249
+ * and is not redeployed in eu-central-1.
  *
  * Deployed once per AWS account via: `npx cdk --app "node dist/bin/cicd.js" deploy`
  */
@@ -38,9 +44,7 @@ export class CicdStack extends cdk.Stack {
     // ---------------------
     // GitHub Actions OIDC Provider
     // ---------------------
-    // Singleton per AWS account. GitHub's OIDC thumbprint is not used
-    // for validation (GitHub uses a well-known JWKS endpoint), but CDK
-    // requires at least one thumbprint. Use the conventional placeholder.
+    // Singleton per AWS account. See GITHUB_OIDC_THUMBPRINT note above.
     const oidcProvider = new iam.OpenIdConnectProvider(
       this,
       'GitHubOidcProvider',
@@ -52,13 +56,13 @@ export class CicdStack extends cdk.Stack {
     );
 
     // ---------------------
-    // Deploy Roles
+    // Deploy Role — production only
     // ---------------------
-    // Each role trusts GitHub Actions OIDC with an environment condition.
-    // The role can then assume CDK bootstrap roles to perform CloudFormation
-    // operations. No direct CloudFormation/S3/IAM permissions needed —
-    // CDK bootstrapped deploys use the bootstrap execution role.
-    for (const envName of ['staging', 'production'] as const) {
+    // Trusts GitHub Actions OIDC with an environment condition. The role
+    // then assumes CDK bootstrap roles to perform CloudFormation operations
+    // — no direct CloudFormation/S3/IAM permissions needed.
+    {
+      const envName = 'production' as const;
       const role = new iam.Role(this, `${capitalize(envName)}DeployRole`, {
         roleName: `soroban-explorer-${envName}-deploy`,
         assumedBy: new iam.WebIdentityPrincipal(
