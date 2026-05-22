@@ -574,7 +574,7 @@ the shipped state**.
 - [x] Post-backfill dry run verifies sanity check returns 0
       unclassified-with-NFT-rows before the DELETE.
       _(Operationalised via task 0228 Phase 5 `backfill-runner
-    nft-reclassify` on 2026-05-21. Hot `nfts` / `nft_ownership` =
+nft-reclassify` on 2026-05-21. Hot `nfts` / `nft_ownership` =
       0 rows by construction post-merge (`promoted_nfts=0`,
       `dropped_legacy_nfts=0`), so the "unclassified-with-NFT-rows"
       surface is trivially 0. Quarantine `nfts_pending` evicted

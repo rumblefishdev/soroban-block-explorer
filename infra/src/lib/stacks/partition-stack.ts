@@ -1,54 +1,48 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
+import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
 
 export interface PartitionStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSecurityGroup: ec2.ISecurityGroup;
-  readonly dbSecret: secretsmanager.ISecret;
-  readonly dbProxyEndpoint: string;
   readonly cargoWorkspacePath: string;
 }
 
 /**
  * Partition management stack for the Soroban Block Explorer.
  *
- * Creates and maintains PostgreSQL table partitions via a Lambda that:
- * 1. Runs on every deployment (CDK custom resource)
- * 2. Runs daily via EventBridge schedule (refreshes metrics + future partitions)
- * 3. Publishes CloudWatch metrics for monitoring
+ * Runs a Lambda on every deploy (CDK custom resource) AND on a daily
+ * EventBridge schedule. Publishes per-table CloudWatch metrics.
  *
- * All partitioned tables use RANGE (created_at) per ADR 0027.
- *
- * Dependency ordering (enforced in app.ts):
- *   NetworkStack → RdsStack → MigrationStack → PartitionStack → ComputeStack
+ * Post-task-0239: Lambda runs OUT-of-VPC, reaches Hetzner CH over
+ * mTLS using the `lambda-partition-<env>` client cert. The actual
+ * partition-management semantics (PG RANGE partitions → CH custom
+ * partitioning) are out of scope for 0239; this stack only wires
+ * the new transport.
  */
 export class PartitionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PartitionStackProps) {
     super(scope, id, props);
 
-    const {
-      config,
-      vpc,
-      lambdaSecurityGroup,
-      dbSecret,
-      dbProxyEndpoint,
-      cargoWorkspacePath,
-    } = props;
+    const { config, cargoWorkspacePath } = props;
 
     const metricsNamespace = `SorobanExplorer/${config.envName}/Partitions`;
+    const secretName = `${config.mtlsSecretNamePrefix}/lambda-partition-${config.envName}`;
+
+    const secretsExtensionLayer = lambda.LayerVersion.fromLayerVersionArn(
+      this,
+      'SecretsExtensionLayer',
+      secretsManagerLayerArn(this.region)
+    );
 
     // ---------------------
     // Partition Lambda
@@ -58,21 +52,25 @@ export class PartitionStack extends cdk.Stack {
       manifestPath: cargoWorkspacePath,
       binaryName: 'db-partition-mgmt',
       architecture: lambda.Architecture.ARM_64,
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [lambdaSecurityGroup],
+      layers: [secretsExtensionLayer],
       memorySize: 256,
       timeout: cdk.Duration.minutes(5),
       logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
-        RDS_PROXY_ENDPOINT: dbProxyEndpoint,
-        SECRET_ARN: dbSecret.secretArn,
         ENV_NAME: config.envName,
         RUST_LOG: 'info',
+        CH_DOMAIN: config.chDomainName,
+        MTLS_SECRET_NAME: secretName,
+        PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED: 'true',
       },
     });
 
-    dbSecret.grantRead(partitionFn);
+    partitionFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [mtlsSecretArn(this, secretName)],
+      })
+    );
 
     partitionFn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -95,7 +93,6 @@ export class PartitionStack extends cdk.Stack {
     new cdk.CustomResource(this, 'EnsurePartitions', {
       serviceToken: provider.serviceToken,
       properties: {
-        // Force re-invocation on every deploy
         partitionVersion: Date.now().toString(),
       },
     });

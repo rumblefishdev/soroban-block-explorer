@@ -4,8 +4,6 @@ export type { EnvironmentConfig, CicdConfig } from './lib/types.js';
 // Stacks
 export { NetworkStack } from './lib/stacks/network-stack.js';
 export type { NetworkStackProps } from './lib/stacks/network-stack.js';
-export { RdsStack } from './lib/stacks/rds-stack.js';
-export type { RdsStackProps } from './lib/stacks/rds-stack.js';
 export { LedgerBucketStack } from './lib/stacks/ledger-bucket-stack.js';
 export type { LedgerBucketStackProps } from './lib/stacks/ledger-bucket-stack.js';
 export { ComputeStack } from './lib/stacks/compute-stack.js';

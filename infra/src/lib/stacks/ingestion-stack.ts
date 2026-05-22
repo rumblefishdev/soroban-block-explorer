@@ -5,6 +5,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
@@ -13,7 +14,6 @@ import type { EnvironmentConfig } from '../types.js';
 const STOP_TIMEOUT_MIN = 2;
 const STOP_TIMEOUT_MAX = 120;
 
-/** Validate stopTimeout is within ECS allowed range (2–120 seconds). */
 function validateStopTimeout(seconds: number): void {
   if (seconds < STOP_TIMEOUT_MIN || seconds > STOP_TIMEOUT_MAX) {
     throw new Error(
@@ -22,7 +22,6 @@ function validateStopTimeout(seconds: number): void {
   }
 }
 
-/** Map numeric retention days to the CDK enum. */
 function toRetentionDays(days: number): logs.RetentionDays {
   const mapping: Record<number, logs.RetentionDays> = {
     1: logs.RetentionDays.ONE_DAY,
@@ -59,16 +58,16 @@ export interface IngestionStackProps extends cdk.StackProps {
 /**
  * ECS Fargate ingestion layer for the Soroban Block Explorer.
  *
- * Contains:
- * - ECR repository for Galexie container images
- * - ECS cluster with Container Insights
- * - Galexie live service (continuous ledger export)
- * - Galexie backfill task definition (on-demand historical import)
- * - IAM roles: task role (S3 write) + execution role (ECR pull)
+ * Post-task-0239: Galexie runs in the public subnet with
+ * `assignPublicIp: ENABLED`. Without NAT GW in the new topology
+ * the public IP per task is the ONLY egress path; flipping it
+ * back to false breaks every outbound connection (ECR pull, S3,
+ * Stellar overlay, Hetzner CH).
  *
- * Both workloads write LedgerCloseMetaBatch XDR files to the
- * stellar-ledger-data S3 bucket. The S3 PutObject event triggers
- * the Ledger Processor Lambda (configured in ComputeStack).
+ * Cert bundle for the future direct-to-CH write path is injected
+ * via ECS native Secrets Manager integration (one env var per
+ * `{cert,key,ca}` field), so the container can materialise the
+ * PEM files at startup without an SDK call.
  */
 export class IngestionStack extends cdk.Stack {
   readonly cluster: ecs.ICluster;
@@ -85,14 +84,10 @@ export class IngestionStack extends cdk.Stack {
     const logRetention = toRetentionDays(config.ecsLogRetentionDays);
     validateStopTimeout(config.galexieStopTimeout);
 
-    // Image tag: CDK context (-c galexieImageTag=sha) takes precedence
-    // over config. CI/CD passes git SHA via context for immutable deploys.
     const galexieImageTag =
       (this.node.tryGetContext('galexieImageTag') as string) ||
       config.galexieImageTag;
 
-    // Import the ledger bucket by ARN/name to avoid cross-stack
-    // cyclic dependency (same pattern as ComputeStack).
     const ledgerBucket = s3.Bucket.fromBucketAttributes(this, 'LedgerBucket', {
       bucketArn: ledgerBucketArn,
       bucketName: ledgerBucketName,
@@ -128,12 +123,24 @@ export class IngestionStack extends cdk.Stack {
     });
     this.repository = repository;
 
-    // Publish ECR repository URI to SSM so CI/CD (GitHub Actions) can
-    // discover it without hardcoding the repository name.
     new ssm.StringParameter(this, 'EcrRepoUriParam', {
       parameterName: `/soroban-explorer/${config.envName}/ecr-galexie-repo-uri`,
       stringValue: repository.repositoryUri,
     });
+
+    // ---------------------
+    // mTLS client cert bundle for Galexie
+    // ---------------------
+    // Per-service Secrets Manager bundle (`{cert,key,ca}`); the Caddy
+    // CN→user map on the Hetzner box authenticates `galexie-<env>`
+    // to the `galexie` ClickHouse user without a password (task 0240
+    // proxy-trust model).
+    const galexieSecretName = `${config.mtlsSecretNamePrefix}/galexie-${config.envName}`;
+    const galexieMtlsSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GalexieMtlsSecret',
+      galexieSecretName
+    );
 
     // ---------------------
     // ECS Cluster
@@ -163,9 +170,6 @@ export class IngestionStack extends cdk.Stack {
     // ---------------------
     // Galexie config
     // ---------------------
-    // Galexie reads configuration from a TOML file, not env vars.
-    // We generate config.toml at container startup via entrypoint script,
-    // writing to /tmp (writable mount on ephemeral storage).
     const galexieNetworkByPassphrase: Record<string, string> = {
       'Public Global Stellar Network ; September 2015': 'pubnet',
       'Test SDF Network ; September 2015': 'testnet',
@@ -195,15 +199,37 @@ export class IngestionStack extends cdk.Stack {
       `network = "${galexieNetwork}"`,
     ].join('\n');
 
-    /** Build a shell command that writes config.toml and execs Galexie. */
+    /**
+     * Entrypoint: write /tmp/config.toml AND materialise the mTLS bundle
+     * to /tmp/{cert,key,ca}.pem from the ECS-injected env vars before
+     * exec'ing Galexie. `umask 077` ensures the key file is owner-only.
+     */
     const galexieCommand = (subcommand: string): string[] => [
       `/bin/bash`,
       `-c`,
-      `cat > /tmp/config.toml <<'TOMLEOF'\n${galexieConfigToml}\nTOMLEOF\nexec stellar-galexie ${subcommand} --config-file /tmp/config.toml`,
+      [
+        `set -euo pipefail`,
+        `umask 077`,
+        `cat > /tmp/config.toml <<'TOMLEOF'`,
+        galexieConfigToml,
+        `TOMLEOF`,
+        `printf '%s' "$MTLS_CERT" > /tmp/cert.pem`,
+        `printf '%s' "$MTLS_KEY"  > /tmp/key.pem`,
+        `printf '%s' "$MTLS_CA"   > /tmp/ca.pem`,
+        `exec stellar-galexie ${subcommand} --config-file /tmp/config.toml`,
+      ].join('\n'),
     ];
 
-    // Collect task definitions for shared IAM grants below.
     const taskDefs: ecs.FargateTaskDefinition[] = [];
+
+    const sharedContainerSecrets = {
+      MTLS_CERT: ecs.Secret.fromSecretsManager(galexieMtlsSecret, 'cert'),
+      MTLS_KEY: ecs.Secret.fromSecretsManager(galexieMtlsSecret, 'key'),
+      MTLS_CA: ecs.Secret.fromSecretsManager(galexieMtlsSecret, 'ca'),
+    };
+    const sharedContainerEnv = {
+      CH_DOMAIN: config.chDomainName,
+    };
 
     // ---------------------
     // Galexie Live — Task Definition
@@ -219,9 +245,6 @@ export class IngestionStack extends cdk.Stack {
       },
     });
 
-    // Writable volumes on ephemeral storage — required because
-    // readonlyRootFilesystem is enabled. Captive Core needs /data
-    // for ledger state and /tmp for general temp files.
     liveTaskDef.addVolume({ name: 'data' });
     liveTaskDef.addVolume({ name: 'tmp' });
 
@@ -234,11 +257,10 @@ export class IngestionStack extends cdk.Stack {
       entryPoint: galexieCommand('append'),
       workingDirectory: '/data',
       environment: {
-        // Start ledger for append mode. Galexie resumes from the first
-        // missing ledger at or after this value. Set to a recent ledger
-        // on first deploy to avoid replaying the entire mainnet history.
+        ...sharedContainerEnv,
         START: '62024874',
       },
+      secrets: sharedContainerSecrets,
       healthCheck: {
         command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
         interval: cdk.Duration.seconds(30),
@@ -258,22 +280,26 @@ export class IngestionStack extends cdk.Stack {
     // ---------------------
     // Galexie Live — Fargate Service
     // ---------------------
+    // ⚠️  CODEOWNERS-FLAGGED ⚠️
+    // `assignPublicIp: true` is LOAD-BEARING (task 0239 Phase 3).
+    // Without NAT GW in the post-cutover topology the per-task public
+    // IPv4 is Galexie's ONLY egress route — flipping this to `false`
+    // breaks ECR pulls, CloudWatch Logs, S3 writes, Stellar overlay
+    // peering and the mTLS handshake to Hetzner CH simultaneously.
+    // Any PR that toggles this must justify it and provide an
+    // alternative egress path (re-introducing NAT GW, VPC endpoints,
+    // etc.) — not a drive-by hardening change.
     const liveService = new ecs.FargateService(this, 'LiveService', {
       serviceName: `${config.envName}-galexie-live`,
       cluster,
       taskDefinition: liveTaskDef,
       desiredCount: config.galexieDesiredCount,
       securityGroups: [ecsSecurityGroup],
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      assignPublicIp: false,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      assignPublicIp: true,
       platformVersion: ecs.FargatePlatformVersion.LATEST,
-      // ECS Exec for debugging — staging only. For production, run a
-      // one-off task definition update to enable when needed.
       enableExecuteCommand: config.ecsExecEnabled,
       circuitBreaker: { rollback: true },
-      // Singleton service — allow full replacement (old task killed before
-      // new one starts). Zero-downtime is not applicable: only one Galexie
-      // writer can run at a time to avoid duplicate S3 writes.
       minHealthyPercent: 0,
       maxHealthyPercent: 100,
     });
@@ -282,9 +308,6 @@ export class IngestionStack extends cdk.Stack {
     // ---------------------
     // Galexie Backfill — Task Definition (optional)
     // ---------------------
-    // Uses the same Galexie image as the live service — Galexie handles
-    // both append (live) and bounded-range (backfill) modes in the same
-    // binary. The difference is the START/END environment variables.
     if (config.galexieBackfillEnabled) {
       const backfillTaskDef = new ecs.FargateTaskDefinition(
         this,
@@ -316,13 +339,13 @@ export class IngestionStack extends cdk.Stack {
         entryPoint: galexieCommand('scan-and-fill'),
         workingDirectory: '/data',
         environment: {
-          // START and END are overridden per RunTask invocation.
-          // Defaults here serve as documentation; actual values are
-          // passed via container overrides when running the task.
+          ...sharedContainerEnv,
           // Soroban mainnet activation ledger (Protocol 20, Feb 20 2024).
+          // Overridden per RunTask invocation via container overrides.
           START: '50457424',
           END: '',
         },
+        secrets: sharedContainerSecrets,
         healthCheck: {
           command: ['CMD-SHELL', 'pgrep -x stellar-core || exit 1'],
           interval: cdk.Duration.seconds(30),
@@ -344,35 +367,27 @@ export class IngestionStack extends cdk.Stack {
     // ---------------------
     // IAM Grants
     // ---------------------
-    // Task role — application permissions (S3 read + write + list).
-    // Galexie needs read for manifest (.config.json) and checkpoint resume,
-    // write for exporting ledger data, and list for scanning existing files.
     for (const taskDef of taskDefs) {
+      // Task role — Galexie reads/writes ledger bucket.
       ledgerBucket.grantReadWrite(taskDef.taskRole);
-      // ListBucket is needed for Galexie checkpoint resume (scans S3 for
-      // last exported ledger). IBucket.grant() is not available on imported
-      // buckets, so we add the permission via inline policy.
       taskDef.taskRole.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ['s3:ListBucket'],
           resources: [ledgerBucket.bucketArn],
         })
       );
-    }
 
-    // Execution role — ECR pull (auto-granted by fromEcrRepository for image pull,
-    // but explicit grantPull ensures GetAuthorizationToken is also granted).
-    // FargateTaskDefinition always creates an execution role, so the non-null
-    // assertion is safe here.
-    for (const taskDef of taskDefs) {
+      // Execution role — ECR pull, plus Secrets Manager read for the
+      // mTLS bundle (ECS native secrets injection needs the execution
+      // role to fetch the value at task start).
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       repository.grantPull(taskDef.executionRole!);
-    }
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      galexieMtlsSecret.grantRead(taskDef.executionRole!);
 
-    // ECS Exec requires SSM permissions on the task role.
-    // ssmmessages actions do not support resource-level restrictions (AWS limitation).
-    if (config.ecsExecEnabled) {
-      for (const taskDef of taskDefs) {
+      // ECS Exec requires SSM perms on the task role (ssmmessages does
+      // not support resource-level restrictions — AWS limitation).
+      if (config.ecsExecEnabled) {
         taskDef.taskRole.addToPrincipalPolicy(
           new iam.PolicyStatement({
             actions: [

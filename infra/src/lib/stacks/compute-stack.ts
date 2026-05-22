@@ -1,5 +1,4 @@
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaDestinations from 'aws-cdk-lib/aws-lambda-destinations';
@@ -7,21 +6,17 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
+import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
 
 const DLQ_RETENTION_DAYS = 14;
 
 export interface ComputeStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
-  readonly vpc: ec2.IVpc;
-  readonly lambdaSecurityGroup: ec2.ISecurityGroup;
-  readonly dbSecret: secretsmanager.ISecret;
-  readonly dbProxyEndpoint: string;
   readonly ledgerBucketArn: string;
   readonly ledgerBucketName: string;
   readonly cargoWorkspacePath: string;
@@ -30,43 +25,32 @@ export interface ComputeStackProps extends cdk.StackProps {
 /**
  * Compute layer for the Soroban Block Explorer.
  *
- * Contains two Rust Lambda functions built via cargo-lambda-cdk:
- * - API Lambda (axum): serves REST API, reads from PostgreSQL
- * - Ledger Processor Lambda (indexer): processes S3 PutObject events,
- *   parses XDR, writes to PostgreSQL
+ * Three Rust Lambda functions built via cargo-lambda-cdk:
+ * - API Lambda (axum): serves REST API
+ * - Ledger Processor Lambda (indexer): processes S3 PutObject events
+ * - Type-1 Enrichment worker Lambda: SEP-1 toml fetch
  *
- * Both run on ARM64/Graviton2 in VPC private subnets with the Lambda
- * security group. Failed processor invocations route to an SQS DLQ.
+ * Post-task-0239: all Lambdas run OUTSIDE the VPC (no `vpc`/
+ * `securityGroups`/`vpcSubnets`). Egress goes via the AWS-managed
+ * Lambda pool. Identity to the Hetzner-hosted ClickHouse box is
+ * proven by mTLS client certs sourced from Secrets Manager via the
+ * AWS Parameters and Secrets Lambda Extension layer; the Lambda
+ * code reads the per-service bundle (`{cert, key, ca}` per task 0240)
+ * from the local extension HTTP cache at cold start.
  */
 export class ComputeStack extends cdk.Stack {
   readonly apiFunction: lambda.IFunction;
   readonly processorFunction: lambda.IFunction;
   readonly deadLetterQueue: sqs.IQueue;
-  /** Type-1 enrichment DLQ (task 0191). Exposed so the
-   *  observability layer can attach the depth alarm. */
   readonly enrichmentDlq: sqs.IQueue;
-  /** Type-1 enrichment worker Lambda (task 0191). Exposed so the
-   *  observability layer can attach error-rate / metric alarms. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
 
-    const {
-      config,
-      vpc,
-      lambdaSecurityGroup,
-      dbSecret,
-      dbProxyEndpoint,
-      ledgerBucketArn,
-      ledgerBucketName,
-      cargoWorkspacePath,
-    } = props;
+    const { config, ledgerBucketArn, ledgerBucketName, cargoWorkspacePath } =
+      props;
 
-    // Import the ledger bucket by name/ARN to break the cross-stack
-    // cyclic dependency that occurs with direct IBucket references.
-    // LedgerBucketStack owns the bucket; ComputeStack only needs to
-    // read from it and add an event notification.
     const ledgerBucket = s3.Bucket.fromBucketAttributes(this, 'LedgerBucket', {
       bucketArn: ledgerBucketArn,
       bucketName: ledgerBucketName,
@@ -94,31 +78,45 @@ export class ComputeStack extends cdk.Stack {
       }
     );
 
+    // ---------------------
+    // Shared mTLS extension layer
+    // ---------------------
+    // AWS-managed "Parameters and Secrets Lambda Extension" — caches
+    // Secrets Manager values in-memory and exposes them via a
+    // localhost HTTP API (port 2773). Lambda code reads the
+    // `{cert, key, ca}` bundle at cold start and configures its CH
+    // client; per-invocation reads hit the in-process cache, so
+    // there's no SM API call on the hot path.
+    const secretsExtensionLayer = lambda.LayerVersion.fromLayerVersionArn(
+      this,
+      'SecretsExtensionLayer',
+      secretsManagerLayerArn(this.region)
+    );
+
     const sharedLambdaProps = {
       architecture: lambda.Architecture.ARM_64,
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [lambdaSecurityGroup],
       tracing: lambda.Tracing.ACTIVE,
+      layers: [secretsExtensionLayer],
     };
 
     const sharedEnv = {
-      RDS_PROXY_ENDPOINT: dbProxyEndpoint,
-      SECRET_ARN: dbSecret.secretArn,
       ENV_NAME: config.envName,
       // Task 0160 — indexer derives SAC `contract_id` deterministically
       // (`SHA256(network_id || XDR(ContractIdPreimage))`) and panics if
       // this passphrase is missing. Same value used by Galexie partition
       // mapping in ingestion-stack — single source of truth.
       STELLAR_NETWORK_PASSPHRASE: config.stellarNetworkPassphrase,
+      // mTLS endpoint on the Hetzner box (provisioned by HetznerDnsStack).
+      CH_DOMAIN: config.chDomainName,
+      // Standard config for the Secrets Manager Lambda Extension —
+      // turn on in-memory caching so repeat reads in the same execution
+      // environment hit RAM, not Secrets Manager.
+      PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED: 'true',
     };
 
     // ---------------------
     // SQS Dead-Letter Queue
     // ---------------------
-    // Created first because the processor Lambda references it.
-    // Receives S3 event records that exhausted Lambda async retries.
-    // Messages contain bucket/key for manual replay.
     const dlq = new sqs.Queue(this, 'ProcessorDlq', {
       queueName: `${config.envName}-ledger-processor-dlq`,
       retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
@@ -128,21 +126,11 @@ export class ComputeStack extends cdk.Stack {
     // ---------------------
     // Type-1 Enrichment Queue (task 0191)
     // ---------------------
-    // Indexer publishes one message per asset that needs runtime
-    // enrichment (icon today; LP analytics later) after each ledger
-    // commit. The worker Lambda below consumes the queue, fetches the
-    // SEP-1 toml, and writes assets.icon_url. Standard queue (at-least-
-    // once delivery is fine; the worker is idempotent on
-    // assets.icon_url IS NULL but is also designed to handle
-    // duplicate-as-refresh per task 0191).
     const enrichmentDlq = new sqs.Queue(this, 'EnrichmentDlq', {
       queueName: `${config.envName}-enrichment-dlq`,
       retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
     });
 
-    // Visibility timeout must exceed the worker's per-record budget.
-    // AWS recommends visibility ≥ 6× function timeout so a slow batch
-    // never duplicates work mid-flight; clamped at a 60 s floor.
     const enrichmentVisibilityTimeoutSeconds = Math.max(
       60,
       config.enrichmentWorkerLambdaTimeout * 6
@@ -160,14 +148,10 @@ export class ComputeStack extends cdk.Stack {
     });
     this.enrichmentDlq = enrichmentDlq;
 
-    // Depth alarm + dashboard widget for `enrichmentDlq` live in
-    // `CloudWatchStack` alongside the other alarms — same pattern as
-    // the ledger-processor DLQ. ComputeStack only owns the queue
-    // itself; observability is wired in the dedicated stack.
-
     // ---------------------
     // API Lambda
     // ---------------------
+    const apiSecretName = `${config.mtlsSecretNamePrefix}/lambda-api-${config.envName}`;
     const apiFunction = new RustFunction(this, 'ApiFunction', {
       functionName: `${config.envName}-soroban-explorer-api`,
       manifestPath: cargoWorkspacePath,
@@ -178,21 +162,18 @@ export class ComputeStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(config.apiLambdaTimeout),
       environment: {
         ...sharedEnv,
-        // lambda_http prepends the API Gateway stage name to the path by default
-        // (e.g. /health becomes /staging/health), breaking axum route matching.
-        // This env var tells lambda_http to skip the stage prefix.
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
-        // Advertised base URL for the OpenAPI `servers` block so the
-        // spec generated at runtime (task 0042) carries the correct
-        // hostname per environment. Consumed by api::config::AppConfig.
         API_BASE_URL: `https://${config.apiDomainName}`,
+        MTLS_SECRET_NAME: apiSecretName,
       },
     });
     this.apiFunction = apiFunction;
+    grantMtlsSecretRead(this, apiFunction, apiSecretName);
 
     // ---------------------
     // Ledger Processor Lambda
     // ---------------------
+    const processorSecretName = `${config.mtlsSecretNamePrefix}/lambda-ingestion-${config.envName}`;
     const processorFunction = new RustFunction(this, 'ProcessorFunction', {
       functionName: `${config.envName}-soroban-explorer-indexer`,
       manifestPath: cargoWorkspacePath,
@@ -201,38 +182,24 @@ export class ComputeStack extends cdk.Stack {
       logGroup: processorLogGroup,
       memorySize: config.indexerLambdaMemory,
       timeout: cdk.Duration.seconds(config.indexerLambdaTimeout),
-      // Limit concurrency to avoid exhausting RDS max_connections (~87 on t4g.micro).
-      // Each instance holds 1 DB connection (pool.rs max_connections=1).
-      // 20 concurrent is sufficient for Galexie's ~12 files/min throughput.
       reservedConcurrentExecutions: config.indexerLambdaConcurrency,
       environment: {
         ...sharedEnv,
         BUCKET_NAME: ledgerBucket.bucketName,
         RUST_LOG: 'info',
-        // Task 0191 — indexer emits enrichment messages here after
-        // each ledger commit. Required at Lambda init:
-        // `Publisher::from_env` hard-fails on missing/empty so a
-        // misconfig surfaces via CW Init Errors instead of silently
-        // dropping enrichment messages.
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
+        MTLS_SECRET_NAME: processorSecretName,
       },
     });
     this.processorFunction = processorFunction;
+    grantMtlsSecretRead(this, processorFunction, processorSecretName);
 
-    // Retry failed async invocations twice, then send to DLQ.
     new lambda.EventInvokeConfig(this, 'ProcessorInvokeConfig', {
       function: processorFunction,
       retryAttempts: config.indexerLambdaRetryAttempts,
       onFailure: new lambdaDestinations.SqsDestination(dlq),
     });
 
-    // S3 PutObject trigger — fires the processor for each new ledger file.
-    // Filtered to .xdr.zst suffix to avoid triggering on non-ledger objects
-    // (e.g. metadata files, logs). Galexie writes ledger files as:
-    //   {hex}--{start}-{end}/{hex}--{start}[-{end}].xdr.zst
-    // This suffix MUST match parse_s3_key() in crates/xdr-parser/src/lib.rs.
-    // CDK automatically adds Lambda invoke permission for S3.
-    // Skip when concurrency=0 — avoids queuing events for a throttled Lambda.
     if (config.indexerLambdaConcurrency > 0) {
       ledgerBucket.addEventNotification(
         s3.EventType.OBJECT_CREATED,
@@ -244,6 +211,7 @@ export class ComputeStack extends cdk.Stack {
     // ---------------------
     // Type-1 Enrichment Worker Lambda (task 0191)
     // ---------------------
+    const enrichmentSecretName = `${config.mtlsSecretNamePrefix}/lambda-enrichment-${config.envName}`;
     const enrichmentWorkerFunction = new RustFunction(
       this,
       'EnrichmentWorkerFunction',
@@ -255,25 +223,16 @@ export class ComputeStack extends cdk.Stack {
         logGroup: enrichmentWorkerLogGroup,
         memorySize: config.enrichmentWorkerLambdaMemory,
         timeout: cdk.Duration.seconds(config.enrichmentWorkerLambdaTimeout),
-        // Polite to issuer servers and bounded against accidental RDS
-        // exhaustion. Mirror the indexer concurrency pattern: 0 in
-        // staging (disabled), low single-digit in production. Bursts
-        // of 200 parallel HTTPS requests to one issuer's host would
-        // look indistinguishable from a DDoS attack.
         reservedConcurrentExecutions: config.enrichmentWorkerLambdaConcurrency,
         environment: {
           ...sharedEnv,
           RUST_LOG: 'info',
+          MTLS_SECRET_NAME: enrichmentSecretName,
         },
       }
     );
+    grantMtlsSecretRead(this, enrichmentWorkerFunction, enrichmentSecretName);
 
-    // SQS event source mapping. ReportBatchItemFailures lets the worker
-    // ack only the records it successfully processed — failed records
-    // redeliver up to maxReceiveCount and then land in the DLQ.
-    // Skip when concurrency=0 — mirrors the indexer pattern; prevents
-    // the queue from being polled (and potentially DLQ'd) while the
-    // Lambda is fully throttled. Producers can still enqueue messages.
     if (config.enrichmentWorkerLambdaConcurrency > 0) {
       enrichmentWorkerFunction.addEventSource(
         new lambdaEventSources.SqsEventSource(enrichmentQueue, {
@@ -286,11 +245,8 @@ export class ComputeStack extends cdk.Stack {
     this.enrichmentWorkerFunction = enrichmentWorkerFunction;
 
     // ---------------------
-    // IAM Grants
+    // IAM Grants (non-mTLS)
     // ---------------------
-    dbSecret.grantRead(apiFunction);
-    dbSecret.grantRead(processorFunction);
-    dbSecret.grantRead(enrichmentWorkerFunction);
     ledgerBucket.grantRead(processorFunction);
     processorFunction.addToRolePolicy(
       new iam.PolicyStatement({
@@ -304,10 +260,7 @@ export class ComputeStack extends cdk.Stack {
       })
     );
 
-    // Indexer publishes enrichment messages.
     enrichmentQueue.grantSendMessages(processorFunction);
-    // Worker reads + deletes from the queue (grantConsumeMessages also
-    // covers ChangeMessageVisibility for partial-batch failures).
     enrichmentQueue.grantConsumeMessages(enrichmentWorkerFunction);
 
     // ---------------------
@@ -330,4 +283,22 @@ export class ComputeStack extends cdk.Stack {
       value: dlq.queueUrl,
     });
   }
+}
+
+/**
+ * Grant a Lambda permission to read a specific mTLS secret by name.
+ * Uses a wildcard suffix to match the random 6-char tail that AWS
+ * appends to every Secrets Manager ARN (e.g. `…/secret:soroban/…-aBcDeF`).
+ */
+function grantMtlsSecretRead(
+  scope: cdk.Stack,
+  fn: lambda.IFunction,
+  secretName: string
+): void {
+  fn.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [mtlsSecretArn(scope, secretName)],
+    })
+  );
 }
