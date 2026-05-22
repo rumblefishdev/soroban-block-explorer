@@ -35,10 +35,23 @@ use domain::{ContractType, NftEventType, TokenAssetType};
 /// mid-ledger without the original deploy tx) the deployment still
 /// lands here with `sac_asset: None`; `detect_assets` then skips the
 /// asset row with a `tracing::warn` rather than fabricate one.
+///
+/// `deployer_by_contract` maps `contract_id` to the per-op effective
+/// source for every `CreateContract*` reachable from the batch's
+/// envelopes — top-level op effective source (op.source_account override
+/// OR tx source) and auth-tree `CreateContractHostFn` signer
+/// (`SorobanAuthorizationEntry.credentials`). When the map carries an
+/// entry for the deployed `contract_id`, that StrKey wins; otherwise
+/// `tx_source_account` is used as fallback. The fallback preserves
+/// behaviour for the ~88 % of mainnet deploys where the op inherits the
+/// tx source (no per-op override and no auth indirection). Built by
+/// `crate::extract_op_source_per_contract` at the indexer call site.
+/// Task 0255 Phase 1.
 pub fn extract_contract_deployments(
     changes: &[ExtractedLedgerEntryChange],
     tx_source_account: &str,
     sac_identities: &HashMap<String, SacAssetIdentity>,
+    deployer_by_contract: &HashMap<String, String>,
 ) -> Vec<ExtractedContractDeployment> {
     let mut deployments = Vec::new();
 
@@ -85,10 +98,15 @@ pub fn extract_contract_deployments(
             None
         };
 
+        let deployer_account = deployer_by_contract
+            .get(&contract_id)
+            .cloned()
+            .or_else(|| Some(tx_source_account.to_string()));
+
         deployments.push(ExtractedContractDeployment {
             contract_id,
             wasm_hash,
-            deployer_account: Some(tx_source_account.to_string()),
+            deployer_account,
             deployed_at_ledger: change.ledger_sequence,
             contract_type,
             is_sac,
@@ -1178,7 +1196,8 @@ mod tests {
             })),
         )];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert_eq!(deployments.len(), 1);
         assert_eq!(deployments[0].contract_id, "CABC123");
         assert_eq!(
@@ -1210,7 +1229,8 @@ mod tests {
             })),
         )];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert_eq!(deployments.len(), 1);
         assert!(deployments[0].is_sac);
         assert_eq!(deployments[0].contract_type, ContractType::Token);
@@ -1235,7 +1255,8 @@ mod tests {
             })),
         )];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert!(deployments.is_empty());
     }
 
@@ -1259,7 +1280,8 @@ mod tests {
             })),
         )];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert!(deployments.is_empty());
     }
 
@@ -1322,7 +1344,8 @@ mod tests {
             make_name_change("CABC123", "created", "string", &json!("USD Coin")),
         ];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert_eq!(deployments.len(), 1);
         assert_eq!(deployments[0].contract_id, "CABC123");
         assert_eq!(deployments[0].name.as_deref(), Some("USD Coin"));
@@ -1335,7 +1358,8 @@ mod tests {
     fn extract_constructor_pattern_without_name() {
         let changes = vec![make_wasm_deploy_change("CABC123")];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert_eq!(deployments.len(), 1);
         assert!(deployments[0].name.is_none());
     }
@@ -1350,7 +1374,8 @@ mod tests {
             make_name_change("COTHER", "created", "string", &json!("Other Token")),
         ];
 
-        let deployments = extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new());
+        let deployments =
+            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert_eq!(deployments.len(), 1);
         assert!(deployments[0].name.is_none());
     }

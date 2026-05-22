@@ -316,10 +316,34 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
             })
             .collect();
 
+    // Task 0255 Phase 1 — per-contract op-source override for the deployer
+    // attribution path. Mirrors the SAC walker shape: walks every successful
+    // envelope, collects `(contract_id, deployer_strkey)` pairs from
+    // top-level `CreateContract*` ops AND nested `CreateContractHostFn`
+    // auth entries. The map drives `extract_contract_deployments`'s
+    // `deployer_account` fallback — present entries override the tx
+    // source, absent entries inherit it (the ~88 % of mainnet deploys
+    // with no per-op source override).
+    let deployer_by_contract: HashMap<String, String> = extracted_transactions
+        .iter()
+        .enumerate()
+        .filter(|(_, ext_tx)| !ext_tx.parse_error)
+        .filter_map(|(tx_index, _)| envelopes.get(tx_index).and_then(Option::as_ref))
+        .flat_map(|env| {
+            let inner = xdr_parser::envelope::inner_transaction(env);
+            let tx_source = inner.source_account();
+            xdr_parser::extract_op_source_per_contract(&inner, &tx_source, net_id)
+        })
+        .collect();
+
     let mut all_contract_name_writes: Vec<(String, String)> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
-        let deployments =
-            xdr_parser::extract_contract_deployments(changes, tx_source, &sac_identity_by_contract);
+        let deployments = xdr_parser::extract_contract_deployments(
+            changes,
+            tx_source,
+            &sac_identity_by_contract,
+            &deployer_by_contract,
+        );
         // detect_assets uses WASM interfaces to classify non-SAC deployments
         // as Soroban-native assets (task 0120). Contracts deployed in this
         // ledger without a matching interface are skipped here and picked up

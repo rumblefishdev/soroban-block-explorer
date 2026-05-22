@@ -15,6 +15,7 @@ pub mod ledger;
 pub mod ledger_entry_changes;
 pub mod memo;
 pub mod nft;
+pub mod op_source;
 pub mod operation;
 pub mod sac;
 pub mod scval;
@@ -35,6 +36,7 @@ pub use invocation::{InvocationResult, extract_invocations, extract_invocations_
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
 pub use nft::detect_nft_events;
+pub use op_source::extract_op_source_per_contract;
 pub use operation::extract_operations;
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id,
