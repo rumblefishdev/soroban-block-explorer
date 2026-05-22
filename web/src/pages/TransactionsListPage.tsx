@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
 
 import { useTransactionsList } from '../api/index.js';
 
+import { normalizeOperationType } from './transactions/operationTypes.js';
 import { TransactionFilters } from './transactions/TransactionFilters.js';
 import {
   TRANSACTION_COLUMN_COUNT,
@@ -32,7 +33,10 @@ const PAGE_SIZE = 20;
 export default function TransactionsListPage() {
   const { state, setFilter } = useTableUrlState({ filterKeys: ['q', 'op'] });
   const q = state.filters.q ?? '';
-  const op = state.filters.op ?? '';
+  // Normalise the URL `op` param against the backend enum — see
+  // `normalizeOperationType` for the why. Bad / lowercase values
+  // collapse to '' so the API never sees them.
+  const op = normalizeOperationType(state.filters.op);
   const hasFilters = q !== '' || op !== '';
 
   // Map the combined search box to the API's separate account / contract
