@@ -1,9 +1,8 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
 import {
-  Chip,
   ExplorerTable,
-  IdentifierWithCopy,
+  IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
@@ -17,9 +16,14 @@ import { formatAmount } from '../format.js';
 import { assetLegLabel } from '../pool-detail/helpers.js';
 import { Dash } from '../transactions/cells.js';
 
-export const POOL_COLUMN_COUNT = 4;
+import { AssetAvatar } from './AssetAvatar.js';
+import { reserveDotColor } from './assetColor.js';
+import { FeePill } from './FeePill.js';
 
-/** Colored dot per asset leg, matching the Figma reserve row markers. */
+export const POOL_COLUMN_COUNT = 5;
+
+/** Colored dot for the per-leg reserves rows — color comes from the
+ *  same `assetLegColor` mapping that drives `AssetAvatar`. */
 function AssetDot({ color }: { color: string }) {
   return (
     <Box
@@ -36,12 +40,6 @@ function AssetDot({ color }: { color: string }) {
   );
 }
 
-// Pair asset icons (Figma 266:35969) are deferred until the backend
-// adds per-leg `icon_url` to `PoolAssetLeg`. Using a letter-avatar
-// fallback would be a placeholder no one wants in production; the
-// Figma intent is real per-asset iconography. Track the backend
-// extension as a follow-up.
-
 const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'pool',
@@ -55,15 +53,26 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       // route still resolves.
       const strkey = poolIdHexToStrkey(row.pool_id);
       return (
-        <Stack spacing={0.5} sx={{ minWidth: 0 }}>
-          <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
-            {pair}
-          </Typography>
-          <IdentifierWithCopy
-            value={strkey}
-            type="pool"
-            href={routes.pool(row.pool_id)}
-          />
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <AssetAvatar leg={row.asset_a} />
+            <AssetAvatar leg={row.asset_b} overlap />
+          </Box>
+          <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+            <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+              {pair}
+            </Typography>
+            <IdentifierDisplay
+              value={strkey}
+              type="pool"
+              href={routes.pool(row.pool_id)}
+            />
+          </Stack>
         </Stack>
       );
     },
@@ -71,9 +80,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'fee',
     header: 'Fee',
-    cell: (row) => (
-      <Chip size="sm" color="accent" label={`${row.fee_percent}%`} />
-    ),
+    cell: (row) => <FeePill raw={row.fee_percent} />,
   },
   {
     id: 'reserves',
@@ -85,19 +92,42 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       return (
         <Stack spacing={0.5}>
           <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color="primary.main" />
+            <AssetDot color={reserveDotColor(row.asset_a)} />
             <Typography variant="bodyXsMedium">
               {row.reserve_a != null ? formatAmount(row.reserve_a) : '—'}{' '}
               {assetLegLabel(row.asset_a)}
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color="success.main" />
+            <AssetDot color={reserveDotColor(row.asset_b)} />
             <Typography variant="bodyXsMedium">
               {row.reserve_b != null ? formatAmount(row.reserve_b) : '—'}{' '}
               {assetLegLabel(row.asset_b)}
             </Typography>
           </Stack>
+        </Stack>
+      );
+    },
+  },
+  {
+    id: 'total_shares',
+    // Figma reuses the "Reserves" header for this column too. Use a
+    // distinct label so screen readers (and column-mapping helpers)
+    // don't see two identical headers — visually it still reads as a
+    // "reserves" sibling because of the right-aligned amount + "shares"
+    // unit label below.
+    header: 'Total shares',
+    align: 'right',
+    cell: (row) => {
+      if (row.total_shares == null) return <Dash />;
+      return (
+        <Stack spacing={0.25} alignItems="flex-end">
+          <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+            {formatAmount(row.total_shares)}
+          </Typography>
+          <Typography variant="bodyXsRegular" sx={{ color: 'text.secondary' }}>
+            shares
+          </Typography>
         </Stack>
       );
     },
@@ -120,8 +150,9 @@ interface PoolsTableProps {
 
 /**
  * Table for the liquidity-pools list page. Columns mirror the Figma node
- * `266:35969` design: Pool (stacked asset icons + pair + strkey id) /
- * Fee / Reserves (two-line with colored dots) / Participants.
+ * `266:36052` design: Pool (stacked color-coded asset avatars + pair +
+ * truncated id) / Fee (success pill) / Reserves (per-leg) / Total
+ * shares (right-aligned, unit label) / Participants.
  */
 export function PoolsTable({ rows }: PoolsTableProps) {
   return (

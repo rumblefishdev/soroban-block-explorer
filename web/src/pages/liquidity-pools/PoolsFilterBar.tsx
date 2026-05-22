@@ -35,7 +35,9 @@ interface PoolsFilterBarProps {
 
 /**
  * Filter bar for the liquidity-pools list — text input for asset-code
- * search plus a TVL preset dropdown. Matches Figma list page.
+ * search plus a TVL preset dropdown. Geometry and surface tokens match
+ * Figma node `266:36052` (search 400px, TVL 280px, alt-gray surface
+ * with bottom divider).
  */
 export function PoolsFilterBar({
   asset,
@@ -67,17 +69,18 @@ export function PoolsFilterBar({
       sx={(theme) => ({
         display: 'flex',
         flexWrap: 'wrap',
-        gap: 2,
+        gap: 1,
         p: 2,
+        backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
       <TextField
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Filter by asset pair"
+        placeholder="Filter by asset pair..."
         aria-label="Filter by asset pair"
-        sx={{ flex: 1, minWidth: 240 }}
+        sx={{ width: 400, maxWidth: '100%' }}
         slotProps={{
           input: {
             startAdornment: (
@@ -93,7 +96,14 @@ export function PoolsFilterBar({
         onChange={handleTvlChange}
         aria-label="Minimum TVL"
         size="small"
-        sx={{ minWidth: 180 }}
+        // `displayEmpty` keeps the "Any TVL" label visible when no
+        // preset is active — otherwise MUI renders an empty box and
+        // the dropdown's purpose is invisible.
+        displayEmpty
+        renderValue={(value) =>
+          TVL_PRESETS.find((opt) => opt.value === value)?.label ?? 'Any TVL'
+        }
+        sx={{ width: 280, maxWidth: '100%' }}
       >
         {TVL_PRESETS.map((option) => (
           <MenuItem key={option.value || 'any'} value={option.value}>

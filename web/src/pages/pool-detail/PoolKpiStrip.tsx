@@ -2,6 +2,8 @@ import { Card, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
 import type { ReactNode } from 'react';
 
+import { assetLegColor } from '../liquidity-pools/assetColor.js';
+
 import { assetLegLabel, formatCompactAmount, isPoolStale } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
@@ -14,16 +16,27 @@ interface KpiCellProps {
   label: string;
   value: ReactNode;
   subtitle: ReactNode;
+  /**
+   * Optional override for the headline value color. Used by the per-leg
+   * reserve cells so the number reads in the asset's brand hue (Figma
+   * node `325:22339` — XLM blue, USDC emerald, etc.). Defaults to the
+   * primary text color when omitted.
+   */
+  valueColor?: string;
 }
 
-function KpiCell({ label, value, subtitle }: KpiCellProps) {
+function KpiCell({ label, value, subtitle, valueColor }: KpiCellProps) {
   return (
     <Card sx={{ p: 2, flex: 1, minWidth: 0 }}>
       <Stack spacing={1}>
         <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
           {label}
         </Typography>
-        <Typography variant="heading4SemiBold" component="div">
+        <Typography
+          variant="heading4SemiBold"
+          component="div"
+          sx={{ color: valueColor ?? 'text.primary' }}
+        >
           {value}
         </Typography>
         <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
@@ -68,11 +81,13 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
         label={`${codeA} reserve`}
         value={formatCompactAmount(pool.reserve_a)}
         subtitle={stale ? STALE_SUBTITLE : codeA}
+        valueColor={assetLegColor(pool.asset_a).dot}
       />
       <KpiCell
         label={`${codeB} reserve`}
         value={formatCompactAmount(pool.reserve_b)}
         subtitle={stale ? STALE_SUBTITLE : codeB}
+        valueColor={assetLegColor(pool.asset_b).dot}
       />
       <KpiCell
         label="Participants"
