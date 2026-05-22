@@ -10,15 +10,14 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
-  useTableUrlState,
+  useCursorPagination,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { useAssetsList } from '../api/index.js';
 
 import { AssetFilters } from './assets/AssetFilters.js';
 import { ASSET_COLUMN_COUNT, AssetsTable } from './assets/AssetsTable.js';
-import { useInfinitePager } from './useInfinitePager.js';
 
 type Filters = NonNullable<ListAssetsData['query']>;
 
@@ -29,9 +28,8 @@ const PAGE_SIZE = 20;
  * contract, with asset-code search and an asset-type filter. Cursor paginated.
  */
 export default function AssetsListPage() {
-  const { state, setFilter } = useTableUrlState({
-    filterKeys: ['code', 'type'],
-  });
+  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
+    useCursorPagination({ filterKeys: ['code', 'type'] });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
@@ -43,29 +41,18 @@ export default function AssetsListPage() {
     return filters;
   }, [code, type]);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useAssetsList(queryFilters);
+  const { data, isLoading, isError, error, refetch } = useAssetsList(
+    cursor,
+    queryFilters
+  );
 
-  const { rows, canPrev, canNext, handlePrev, handleNext, reset } =
-    useInfinitePager(
-      data?.pages ?? [],
-      fetchNextPage,
-      hasNextPage,
-      isFetchingNextPage
-    );
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
 
-  // A new filter set is a fresh query starting at page 0.
-  useEffect(() => {
-    reset();
-  }, [code, type, reset]);
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('code', value || null),
@@ -147,7 +134,7 @@ export default function AssetsListPage() {
           caption="Latest results"
           prevCursor={canPrev ? 'prev' : null}
           nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

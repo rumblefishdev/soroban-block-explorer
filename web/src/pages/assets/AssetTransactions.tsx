@@ -11,15 +11,15 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { useAssetTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { Dash, OperationCell, StatusCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
@@ -67,23 +67,26 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
  * summary and metadata.
  */
 export function AssetTransactions({ assetId }: { assetId: string }) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useAssetTransactions(assetId);
+  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  // Cursors are asset-scoped; switching assets must drop the URL cursor.
+  // `reset` is intentionally absent from deps — fresh callback each render.
+  useEffect(() => {
+    reset();
+  }, [assetId]);
+
+  const { data, isLoading, isError, error, refetch } = useAssetTransactions(
+    assetId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
+
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   let body: ReactNode;
   if (isLoading) {
@@ -125,7 +128,7 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
         caption="Latest results"
         prevCursor={canPrev ? 'prev' : null}
         nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </SectionCard>

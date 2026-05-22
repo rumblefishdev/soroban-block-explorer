@@ -11,16 +11,16 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { OperationCell, StatusCell } from '../transactions/cells.js';
 import { formatFee } from '../transactions/formatters.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
@@ -68,23 +68,27 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
  * account summary so a failure here never collapses the rest of the page.
  */
 export function AccountTransactions({ accountId }: { accountId: string }) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useAccountTransactions(accountId);
+  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  // Cursors are account-scoped; switching accounts must drop the URL
+  // cursor. `reset` is intentionally absent from deps — fresh callback
+  // each render.
+  useEffect(() => {
+    reset();
+  }, [accountId]);
+
+  const { data, isLoading, isError, error, refetch } = useAccountTransactions(
+    accountId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
+
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   let body: ReactNode;
   if (isLoading) {
@@ -126,7 +130,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
         caption="Latest results"
         prevCursor={canPrev ? 'prev' : null}
         nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </SectionCard>

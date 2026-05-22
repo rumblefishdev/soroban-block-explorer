@@ -12,9 +12,9 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
-  useTableUrlState,
+  useCursorPagination,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { useTransactionsList } from '../api/index.js';
 
@@ -23,14 +23,14 @@ import {
   TRANSACTION_COLUMN_COUNT,
   TransactionsTable,
 } from './transactions/TransactionsTable.js';
-import { useInfinitePager } from './useInfinitePager.js';
 
 type Filters = NonNullable<ListTransactionsData['query']>;
 
 const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
-  const { state, setFilter } = useTableUrlState({ filterKeys: ['q', 'op'] });
+  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
+    useCursorPagination({ filterKeys: ['q', 'op'] });
   const q = state.filters.q ?? '';
   const op = state.filters.op ?? '';
   const hasFilters = q !== '' || op !== '';
@@ -48,29 +48,18 @@ export default function TransactionsListPage() {
     return filters;
   }, [q, op]);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useTransactionsList(queryFilters);
+  const { data, isLoading, isError, error, refetch } = useTransactionsList(
+    cursor,
+    queryFilters
+  );
 
-  const { rows, canPrev, canNext, handlePrev, handleNext, reset } =
-    useInfinitePager(
-      data?.pages ?? [],
-      fetchNextPage,
-      hasNextPage,
-      isFetchingNextPage
-    );
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
 
-  // A new filter set is a fresh query starting at page 0.
-  useEffect(() => {
-    reset();
-  }, [q, op, reset]);
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),
@@ -152,7 +141,7 @@ export default function TransactionsListPage() {
           caption="All results"
           prevCursor={canPrev ? 'prev' : null}
           nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

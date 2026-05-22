@@ -11,15 +11,9 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
-  useTableUrlState,
+  useCursorPagination,
 } from '@rumblefish/soroban-block-explorer-ui';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 
 import { useNftsList } from '../api/index.js';
 
@@ -31,9 +25,8 @@ type Filters = NonNullable<ListNftsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function NftsListPage() {
-  const { state, setFilter } = useTableUrlState({
-    filterKeys: ['collection', 'contract'],
-  });
+  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
+    useCursorPagination({ filterKeys: ['collection', 'contract'] });
   const collection = state.filters.collection ?? '';
   const contract = state.filters.contract ?? '';
   const hasFilters = collection !== '' || contract !== '';
@@ -49,44 +42,18 @@ export default function NftsListPage() {
     return filters;
   }, [collection, contract]);
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useNftsList(queryFilters);
+  const { data, isLoading, isError, error, refetch } = useNftsList(
+    cursor,
+    queryFilters
+  );
 
-  const [pageIndex, setPageIndex] = useState(0);
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
 
-  // A new filter set is a fresh query starting at page 0.
-  useEffect(() => {
-    setPageIndex(0);
-  }, [collection, contract]);
-
-  const pages = data?.pages ?? [];
-  const currentPage = pages[pageIndex];
-  const rows = currentPage?.data ?? [];
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage?.page.has_more);
-
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
-
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   const handleClearFilters = useCallback(() => {
     setFilter('collection', null);
@@ -160,7 +127,7 @@ export default function NftsListPage() {
           caption="Latest results"
           prevCursor={canPrev ? 'prev' : null}
           nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

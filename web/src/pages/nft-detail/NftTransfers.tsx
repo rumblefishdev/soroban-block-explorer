@@ -12,9 +12,10 @@ import {
   TableSectionHeader,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { useNftTransfers } from '../../api/index.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -83,43 +84,27 @@ const COLUMN_COUNT = columns.length;
  * of mint / transfer / burn events for one NFT, per the Figma design.
  */
 export function NftTransfers({ nftId }: NftTransfersProps) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useNftTransfers(nftId);
+  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
 
-  const [pageIndex, setPageIndex] = useState(0);
-
+  // Cursors are NFT-scoped; switching to a different NFT must drop the
+  // URL cursor and stack. `reset` is intentionally absent from deps —
+  // it's a fresh callback each render.
   useEffect(() => {
-    setPageIndex(0);
+    reset();
   }, [nftId]);
 
-  const pages = data?.pages ?? [];
-  const currentPage = pages[pageIndex];
-  const rows = currentPage?.data ?? [];
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage?.page.has_more);
+  const { data, isLoading, isError, error, refetch } = useNftTransfers(
+    nftId,
+    cursor
+  );
 
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
+  const rows = data?.data ?? [];
+  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
+  const canNext = nextCursor !== null;
 
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   let body: ReactNode;
   if (isLoading) {
@@ -170,7 +155,7 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
         caption="Latest results"
         prevCursor={canPrev ? 'prev' : null}
         nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </Card>

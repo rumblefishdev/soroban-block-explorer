@@ -8,8 +8,9 @@ import {
   RateLimitState,
   SectionErrorBoundary,
   TransientErrorState,
+  useCursorPagination,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 
 import { useLedgerDetail } from '../api/index.js';
@@ -24,38 +25,23 @@ export default function LedgerDetailPage() {
   const valid = rawSequence != null && isLedgerSequence(rawSequence);
   const sequence = valid ? Number(rawSequence) : Number.NaN;
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useLedgerDetail(sequence, valid);
+  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
 
-  const [pageIndex, setPageIndex] = useState(0);
+  // Cursors are scoped to a specific ledger's embedded transactions, so
+  // navigating to a different ledger (e.g. via LedgerNav prev/next) must
+  // drop any cursor lingering in the URL — otherwise we'd send it to a
+  // ledger that doesn't recognise it.
+  // Intentionally exclude `reset` from deps — it's a fresh callback each
+  // render and would re-trigger the effect on every render.
   useEffect(() => {
-    setPageIndex(0);
+    reset();
   }, [sequence]);
 
-  const pages = data?.pages ?? [];
-
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
-
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const { data, isLoading, isError, error, refetch } = useLedgerDetail(
+    sequence,
+    cursor,
+    valid
+  );
 
   if (!valid) {
     return <NotFoundState entity="ledger" identifier={rawSequence} />;
@@ -84,16 +70,21 @@ export default function LedgerDetailPage() {
     );
   }
 
-  const ledger = pages[0];
-  if (!ledger) {
+  if (!data) {
     return <NotFoundState entity="ledger" identifier={rawSequence} />;
   }
 
-  const currentPage = pages[pageIndex] ?? ledger;
-  const txRows = currentPage.transactions.data;
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage.transactions.page.has_more);
+  const ledger = data;
+  const txRows = ledger.transactions.data;
+  const nextCursor = ledger.transactions.page.has_more
+    ? ledger.transactions.page.cursor ?? null
+    : null;
+  const canNext = nextCursor !== null;
   const sequenceLabel = ledger.sequence.toLocaleString('en-US');
+
+  const handleNext = () => {
+    if (nextCursor) goNext(nextCursor);
+  };
 
   return (
     <Stack spacing={3}>
@@ -144,7 +135,7 @@ export default function LedgerDetailPage() {
           totalCount={ledger.transaction_count}
           canPrev={canPrev}
           canNext={canNext}
-          onPrev={handlePrev}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </SectionErrorBoundary>
