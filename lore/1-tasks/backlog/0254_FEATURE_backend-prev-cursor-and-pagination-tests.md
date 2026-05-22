@@ -103,8 +103,33 @@ once, after both changes settle, avoids rewriting them mid-flight.
      id))` for `TsIdCursor` — reuse for the prev side.
    - First page: `prev_cursor = None`.
    - Empty page: `prev_cursor = None`.
-3. Backend unit tests: extend each list endpoint's tests with
-   first / middle / last page assertions on `prev_cursor`.
+3. Backend integration tests — **cursor-focused** matrix per list
+   endpoint:
+   - **First page** (no `?cursor=`): `prev_cursor = None`,
+     `cursor = Some(<after-last-row>)`, `has_more = true`.
+   - **Middle page** (after one Next): `prev_cursor` =
+     `to_cursor(first_row)`, `cursor` = `to_cursor(last_row)`,
+     `has_more = true`.
+   - **Last page**: `prev_cursor = Some(...)`, `cursor = None`,
+     `has_more = false`.
+   - **Empty page**: `prev_cursor = None`, `cursor = None`,
+     `has_more = false`.
+   - **Round-trip:** GET page 1 → take its `cursor` as P2; GET
+     `?cursor=P2` → take its `prev_cursor` as P1; GET `?cursor=P1`
+     returns the same rows as the original first request. Cursor
+     symmetry holds.
+   - **Forward 3× then backward 3×:** the rows on each page must
+     match the rows seen during the forward walk (same ordering,
+     same content) — guards against off-by-one in `prev_cursor`
+     row selection.
+   - **Filter scope:** cursor obtained under `filter[x]=A` rejected
+     (or yields different content) when sent with `filter[x]=B`.
+     Documents the "cursors are filter-scoped" contract.
+   - **Endpoint coverage:** matrix above run against every list
+     endpoint, including embedded sub-lists (`LedgerDetail.
+     transactions`, `LiquidityPool.{participants,transactions}`,
+     `Contract.{events,invocations}`, `Account.transactions`,
+     `Asset.transactions`, `Nft.transfers`).
 4. Regenerate OpenAPI:
    `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
    followed by `npx nx run @rumblefish/api-types:generate`. Stage
@@ -188,10 +213,50 @@ Per the team's `[[feedback_playwright_mcp_vs_cli]]`: MCP for
 exploration, CLI for regression / CI.
 
 Add a Playwright spec under wherever the project keeps Playwright
-(verify existing infra first — check `web/e2e/` or root). Scenarios
-per route:
+(verify existing infra first — check `web/e2e/` or root).
 
-| Route | Scenarios |
+#### Cursor-flow scenarios — must pass on every paginated route
+
+These are the **regression net for the cursor mechanism itself**.
+Per-route variations follow in the route matrix below.
+
+1. **Round-trip:** load page 1, capture row hashes; Next, capture
+   page 2 row hashes; Prev, assert page 2's Prev landed back on
+   page 1 with the same row hashes (no off-by-one in
+   `prev_cursor`).
+2. **Refresh preserves URL cursor:** Next 2×, F5, assert URL
+   still has `?cursor=` and page renders the same row hashes.
+3. **Deep-link + Prev (the regression test for the prev-stack
+   hack removal):** open route with `?cursor=<mid-page-token>`
+   in a fresh browser context (no prior history); click Prev;
+   assert it navigates to the previous page successfully —
+   under the old in-memory stack this was the broken case.
+4. **Deep-link + share:** copy the URL after Next 3×, open in
+   second browser context, assert identical rendered rows.
+5. **First page = no Prev:** load with no `?cursor=`, assert
+   Prev button disabled (`prev_cursor === null` from backend).
+6. **Last page = no Next:** walk Next until `has_more === false`,
+   assert Next button disabled (`cursor === null`).
+7. **Filter change resets cursor:** Next 2× → set a filter →
+   assert URL drops the cursor key and rows reflect filter
+   from page 1.
+8. **Switch parent entity resets cursor (detail pages):** Next
+   2× inside a detail-section, navigate to a different parent
+   id, return — assert cursor URL key dropped and rows reflect
+   page 1 of the new parent.
+9. **Network failure on Next:** intercept the Next request,
+   force 5xx, assert the page shows `TransientErrorState` (not
+   blank) and the URL cursor remains unchanged (no broken
+   intermediate state).
+10. **Multi-section namespacing on the same route:** on LP
+    detail and on contract detail, Next in one section must NOT
+    affect the other section's cursor. Concretely: Next on
+    Participants → URL gains `?cursor_p=`, Transactions section
+    still on its own page (no `?cursor_t=` change).
+
+#### Per-route table
+
+| Route | Variants on top of the cursor-flow scenarios |
 |-------|-----------|
 | `/ledgers` | Next 3×, Prev 3×, refresh on N=2, share link → new context same page |
 | `/ledgers/:sequence` | Inner Next 2×, prev/next ledger nav resets cursor |
@@ -232,6 +297,18 @@ for backend-only PRs.
       consequence of `goPrev()` being no-arg under the prev-stack
       hack; with backend `prev_cursor` both sides need the same
       extract-from-`page` wrapper.
+- [ ] Backend integration tests cover the cursor matrix per list
+      endpoint: first page (`prev_cursor=None`), middle (both set),
+      last (`cursor=None`), empty (both `None`), round-trip
+      symmetry (Next then Prev returns the same rows), forward-
+      then-backward 3× consistency, filter-scope rejection. Matrix
+      runs against every list endpoint including embedded sub-lists.
+- [ ] Playwright e2e cursor-flow scenarios (round-trip, refresh
+      preserves URL, **deep-link + Prev** regression for prev-stack
+      hack removal, deep-link share, first-page no-Prev, last-page
+      no-Next, filter-resets-cursor, parent-entity-switch resets,
+      network-failure preserves URL, multi-section namespacing
+      isolation) pass on every paginated route.
 - [ ] Deep-link + Prev works on every paginated route.
 - [ ] All 13 paginated pages still typecheck / lint / build.
 - [ ] Vitest unit suite for the 3 primitives, covering the cases
