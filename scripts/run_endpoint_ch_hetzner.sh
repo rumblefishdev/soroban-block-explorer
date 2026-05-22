@@ -102,8 +102,15 @@ run_query() {
   local end=$(date +%s%N)
   local wall=$(( (end - start) / 1000000 ))
   WALL_MS=$((WALL_MS + wall))
+  # Count non-empty output lines. Note: `grep -c .` exits 1 on empty
+  # input which combined with `|| echo 0` would double-emit ("0\n0")
+  # and break the arithmetic. Use printf + awk to stay deterministic.
   local rows
-  rows=$(echo "$out" | grep -c . || echo 0)
+  if [ -z "$out" ]; then
+    rows=0
+  else
+    rows=$(printf '%s\n' "$out" | awk 'NF{c++} END{print c+0}')
+  fi
   ROW_COUNT=$((ROW_COUNT + rows))
   echo "  STMT $STMT_COUNT: $rows rows in ${wall}ms"
   # Preview first 3 rows of result for sanity check

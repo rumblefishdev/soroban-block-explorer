@@ -1,0 +1,24 @@
+endpoint	file	statements	total_rows	wall_ms	verdict	group	notes
+E01	01_get_network_stats.sql	1	1	159	ok	C	FAST
+E02	02_get_transactions_list.sql	1	50	7691	ok	A	OK latest-partition scan
+E03	03_get_transactions_by_hash.sql	6	7	3986	ok	A	OK avg 660ms/stmt across 6 stmts
+E04	04_get_ledgers_list.sql	1	50	143	ok	A	FAST
+E05	05_get_ledgers_by_sequence.sql	2	51	599	ok	A	OK
+E06	06_get_accounts_by_id.sql	2	6	594	ok	A	OK
+E07	07_get_accounts_transactions.sql	1	48	58338	ok	A	SLOW — account history scan
+E08	08_get_assets_list.sql	1	50	801	ok	C	OK
+E09	09_get_assets_by_id.sql	1	1	499	ok	A	OK
+E10	10_get_assets_transactions.sql	2	55	125905	ok	C	VERY SLOW — both variants >60s
+E11	11_get_contracts_by_id.sql	2	2	606	ok	B	OK
+E12	12_get_contracts_interface.sql	1	1	139	ok	B	FAST
+E13	13_get_contracts_invocations.sql	1	0	135	ok	B	0 results — investigate
+E14	14_get_contracts_events.sql	1	1	34272	ok	B	SLOW — soroban_events FINAL
+E15	15_get_nfts_list.sql	1	0	953	ok	C	empty by design (no Nft contracts)
+E16	16_get_nfts_by_id.sql	0	0	0	skip	C	skip — no nfts
+E17	17_get_nfts_transfers.sql	0	0	0	skip	C	skip — no nfts
+E18	18_get_liquidity_pools_list.sql	1	50	4988	ok	A	OK
+E19	19_get_liquidity_pools_by_id.sql	1	1	831	ok	A	OK
+E20	20_get_liquidity_pools_transactions.sql	1	0	4087	ok	A	0 results — investigate
+E21	21_get_liquidity_pools_chart.sql	1	804	507	ok	C	OK
+E22	22_get_search.sql	1	11	131	ok	C	FAST
+E23	23_get_liquidity_pools_participants.sql	1	4	477	ok	C	OK
