@@ -114,13 +114,17 @@ export default function AssetDetailPage() {
         </Box>
       )}
 
-      {/* The embedded transactions list fetches by asset id; rendering it
-          while the parent asset query is loading or errored would either
-          show a duplicate skeleton (loading) or a duplicate error banner
-          (4xx/5xx) on top of the unified `NotFoundState` / `GenericErrorState`
-          already rendered in the summary box above. Gate the section
-          strictly on `data` so it appears only when the parent succeeded. */}
-      {asset.data && (
+      {/* `AssetTransactions` is an independent query with its own
+          `TableSkeleton` / error handling, so we keep it mounted while
+          the parent asset query is still loading — that way the page
+          shows a consistent skeleton row (summary card + metadata card
+          + transactions table skeleton) instead of the transactions
+          section popping in only after the parent settles. Only hide
+          on parent error: a 400 / 404 / 5xx on the asset itself means
+          the asset doesn't exist (or the API is degraded), in which
+          case the embedded list would just surface a duplicate banner
+          below the already-routed NotFoundState / GenericErrorState. */}
+      {!asset.isError && (
         <SectionErrorBoundary sectionName="asset-transactions">
           <AssetTransactions assetId={id} />
         </SectionErrorBoundary>
