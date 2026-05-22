@@ -163,8 +163,11 @@ fn walk_auth_for_creates(
 }
 
 /// Derive the deterministic `contract_id` StrKey from a preimage and push
-/// the `(contract_id, deployer)` pair. Silently skips derivation failures
-/// — a malformed preimage should not poison the parser.
+/// the `(contract_id, deployer)` pair. Derivation failures are logged via
+/// `tracing::warn!` and the pair is dropped — a malformed preimage must
+/// not poison the parser, but the event needs to be observable in
+/// production so a regression in the XDR layer surfaces in logs rather
+/// than as a quiet data-quality drift.
 fn push_preimage_deployer(
     preimage: &ContractIdPreimage,
     deployer: &str,

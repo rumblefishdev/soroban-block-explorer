@@ -1,7 +1,11 @@
 # Task 0255 Phase 1 — Parser deployer_id fix design
 
-**Status:** design draft, ready for implementation in a dedicated dev session.
-**Effort:** ~half-day (code + tests + review).
+**Status:** implemented — landed in PR
+[#213](https://github.com/rumblefishdev/soroban-block-explorer/pull/213).
+Retained as a design record for the reasoning that led to Design A and
+the test-fixture taxonomy; the runtime contract is the code +
+canonical docs (`docs/architecture/xdr-parsing/xdr-parsing-overview.md`
+and `docs/architecture/database-schema/database-schema-overview.md`).
 
 ## Problem
 
@@ -98,13 +102,10 @@ Vec<(contract_id, strkey)>`:
      logic; for non-SAC use `derive_create_contract_id` —
      check if already exists or add).
      Push `(contract_id, effective_source)`.
-   - If `host_function == InvokeContract`: walk `op.body.invokeHostFunction.auth[]`:
-     - For each `SorobanAuthorizationEntry` with `credentials ==
-SourceAccount(sa)`, push `(contract_id_from_auth, strkey_of(sa))`.
-     - For `credentials == Address(addr)` (account-typed): push
-       `(contract_id_from_auth, strkey_of(addr))`.
-     - Skip when credentials is a contract address (sub-contract call —
-       no human "deployer" there).
+   - If `host_function == InvokeContract`: walk `op.body.invokeHostFunction.auth[]`: - For each `SorobanAuthorizationEntry` with `credentials ==
+SourceAccount(sa)`, push `(contract_id_from_auth, strkey_of(sa))`. - For `credentials == Address(addr)` (account-typed): push
+     `(contract_id_from_auth, strkey_of(addr))`. - Skip when credentials is a contract address (sub-contract call —
+     no human "deployer" there).
 
 Then `extract_contract_deployments` consumes the map:
 
@@ -149,7 +150,7 @@ loop. **Reject** — too invasive for a focused bug fix.
 
 1. **Add helper** `crates/xdr-parser/src/lib.rs` →
    `pub fn extract_op_source_per_contract(tx: &Transaction, tx_source: &str)
-    -> Vec<(String, String)>`.
+ -> Vec<(String, String)>`.
    New file `crates/xdr-parser/src/op_source.rs` or extend
    `crates/xdr-parser/src/sac.rs` if logically close.
 
