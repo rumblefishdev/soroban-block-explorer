@@ -49,18 +49,25 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # --- CH ----------------------------------------------------------------
 
 def ch_query(sql: str, format: str = "TabSeparated") -> str:
-    """Execute SQL on Hetzner CH, return raw stdout (without trailing nl)."""
+    """Execute SQL on Hetzner CH, return raw stdout (without trailing nl).
+
+    Pipes SQL via stdin (`docker exec -i`) instead of `--query=...`
+    argument: this avoids Linux ARG_MAX (~128 KiB on the argv array)
+    when the SQL contains a large `IN (...)` list (e.g. 30K sample
+    ledger sequences). clickhouse-client reads from stdin when no
+    --query flag is present.
+    """
     cmd = [
-        "docker", "exec", CH_CONTAINER,
+        "docker", "exec", "-i", CH_CONTAINER,
         "clickhouse-client",
         f"--user={CH_USER}",
         f"--database={CH_DB}",
         f"--format={format}",
-        f"--query={sql}",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = subprocess.run(cmd, input=sql, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise RuntimeError(f"CH query failed:\n{sql}\n---\n{proc.stderr}")
+        snippet = sql[:400] + ("..." if len(sql) > 400 else "")
+        raise RuntimeError(f"CH query failed:\n{snippet}\n---\n{proc.stderr}")
     return proc.stdout.rstrip("\n")
 
 
