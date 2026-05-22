@@ -5,7 +5,8 @@ type: FEATURE
 status: backlog
 related_adr: ['0043']
 related_tasks: ['0238', '0226']
-tags: [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
+tags:
+  [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
 milestone: 2
 links: []
 history:
@@ -95,12 +96,12 @@ once, after both changes settle, avoids rewriting them mid-flight.
 
 1. Extend `PageInfo` (likely `crates/api/src/openapi/schemas.rs`)
    with `prev_cursor: Option<String>` and `#[serde(skip_serializing_if
-   = "Option::is_none")]`.
+= "Option::is_none")]`.
 2. For each list endpoint, compute `prev_cursor` from the FIRST
    row of the returned slice instead of the LAST (mirror of how
    `cursor` is currently built).
    - `crates/db` cursor helpers already expose `to_cursor((ts,
-     id))` for `TsIdCursor` — reuse for the prev side.
+id))` for `TsIdCursor` — reuse for the prev side.
    - First page: `prev_cursor = None`.
    - Empty page: `prev_cursor = None`.
 3. Backend unit tests: extend each list endpoint's tests with
@@ -109,7 +110,7 @@ once, after both changes settle, avoids rewriting them mid-flight.
    `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
    followed by `npx nx run @rumblefish/api-types:generate`. Stage
    the generated diff alongside the Rust change (`API types
-   freshness` CI gate).
+freshness` CI gate).
 
 ### Phase 2 — frontend simplification (`libs/ui`, `web/src`)
 
@@ -140,6 +141,7 @@ Once vitest + `@testing-library/react` lands in `libs/ui`
 Cases:
 
 **`useCursorPagination`**:
+
 - Mount with pasted `?cursor=ABC` deep link + no `resetKey` change
   → cursor preserved on first render (regression test for the
   `useRef` skip-initial-mount fix from 0238).
@@ -153,6 +155,7 @@ Cases:
   `cursor` untouched.
 
 **`usePageHandlers`**:
+
 - `page === undefined` → `canNext: false`.
 - `has_more: true, cursor: "X"` → `canNext: true`, `handleNext`
   calls `goNext("X")`.
@@ -161,6 +164,7 @@ Cases:
 - `has_more: false` → `canNext: false` regardless of cursor.
 
 **`useTableUrlState`** (cursorParam):
+
 - Two hooks on the same route, `cursor_p` + `cursor_t` →
   independent keys, no collision.
 - `setSort` / `setFilter` clear only the namespaced cursor, not
@@ -175,21 +179,22 @@ Add a Playwright spec under wherever the project keeps Playwright
 (verify existing infra first — check `web/e2e/` or root). Scenarios
 per route:
 
-| Route | Scenarios |
-|-------|-----------|
-| `/ledgers` | Next 3×, Prev 3×, refresh on N=2, share link → new context same page |
-| `/ledgers/:sequence` | Inner Next 2×, prev/next ledger nav resets cursor |
-| `/transactions` | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized |
-| `/assets` | Next + Prev, refresh, share link |
-| `/assets/:id` | Switch asset → cursor drops |
-| `/nfts` | Next + Prev, refresh |
-| `/nfts/:id` | Switch NFT → cursor drops |
-| `/accounts/:id` | Switch account → cursor drops |
-| `/liquidity-pools` | Next + Prev, filter change resets |
-| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop |
-| `/contracts/:id` | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
+| Route                  | Scenarios                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/ledgers`             | Next 3×, Prev 3×, refresh on N=2, share link → new context same page                                 |
+| `/ledgers/:sequence`   | Inner Next 2×, prev/next ledger nav resets cursor                                                    |
+| `/transactions`        | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized                     |
+| `/assets`              | Next + Prev, refresh, share link                                                                     |
+| `/assets/:id`          | Switch asset → cursor drops                                                                          |
+| `/nfts`                | Next + Prev, refresh                                                                                 |
+| `/nfts/:id`            | Switch NFT → cursor drops                                                                            |
+| `/accounts/:id`        | Switch account → cursor drops                                                                        |
+| `/liquidity-pools`     | Next + Prev, filter change resets                                                                    |
+| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop                              |
+| `/contracts/:id`       | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
 
 Common assertions per scenario:
+
 - URL contains expected cursor key.
 - Rendered row count matches API `data.length`.
 - Refresh preserves URL state.
