@@ -114,19 +114,31 @@ once, after both changes settle, avoids rewriting them mid-flight.
 ### Phase 2 — frontend simplification (`libs/ui`, `web/src`)
 
 1. `libs/ui/src/table/useCursorPagination.ts`:
-   - Accept `prevCursor?: string | null` (or expose via a
-     `setPrevCursor` setter the page calls with
-     `data.page.prev_cursor`).
+   - Change `goPrev()` to `goPrev(prevCursor: string)` — symmetric
+     with `goNext(nextCursor: string)`. Internally calls
+     `setCursor(prevCursor)`.
    - Drop the in-memory stack + `MAX_HISTORY` + `FIRST_PAGE`
-     sentinel.
-   - `goPrev()` reads the supplied `prevCursor` and calls
-     `setCursor(prevCursor ?? null)`.
-2. `web/src/pages/*` (13 paginated pages): wire
-   `data?.page.prev_cursor` into `useCursorPagination`. Most call
-   sites already destructure `data?.page` for `usePageHandlers`,
-   so it is one extra line per page.
-3. Verify no callers still depend on `setStack` / `canPrev` derived
-   from stack length. `canPrev = prevCursor !== null` now.
+     sentinel. `canPrev` now derives from `prevCursor !== null`
+     passed into `usePageHandlers` (see step 2), not from internal
+     stack length.
+2. `libs/ui/src/table/usePageHandlers.ts` — **extend to symmetric
+   API** (was only `handleNext` because backend had no prev
+   cursor; now both sides need an extract wrapper):
+   - Signature: `usePageHandlers(page, goNext, goPrev) → { canPrev,
+     canNext, handlePrev, handleNext }`.
+   - `handlePrev` reads `page?.prev_cursor` and calls
+     `goPrev(prevCursor)`. `canPrev = prev_cursor !== null`.
+   - `handleNext` unchanged from current behavior.
+3. `web/src/pages/*` (13 paginated pages):
+   - Destructure `canPrev` + `handlePrev` from `usePageHandlers`
+     instead of `useCursorPagination`.
+   - Pass `goPrev` as third arg to `usePageHandlers`.
+   - `<PaginationControls onPrev={handlePrev} onNext={handleNext} />`
+     — now both wrapped, symmetric.
+4. `libs/ui/src/table/PaginationControls.tsx` — unchanged (already
+   boolean `canPrev` / `canNext` + void callbacks since 0238).
+5. Verify no callers still depend on `useCursorPagination`'s
+   `canPrev` / removed `goPrev()` no-arg form.
 
 ### Phase 3 — unit tests (blocked on 0226)
 
@@ -152,13 +164,17 @@ Cases:
 - `cursorParam: "cursor_p"` → namespaced read/write, default
   `cursor` untouched.
 
-**`usePageHandlers`**:
-- `page === undefined` → `canNext: false`.
-- `has_more: true, cursor: "X"` → `canNext: true`, `handleNext`
+**`usePageHandlers`** (symmetric prev / next after this task):
+- `page === undefined` → `canPrev: false`, `canNext: false`.
+- `has_more: true, cursor: "X"` → `canNext: true`, `handleNext()`
   calls `goNext("X")`.
 - `has_more: true, cursor: null` → `canNext: false` (graceful
   degradation if backend violates contract).
 - `has_more: false` → `canNext: false` regardless of cursor.
+- `prev_cursor: "Y"` → `canPrev: true`, `handlePrev()` calls
+  `goPrev("Y")`.
+- `prev_cursor: null` (first page) → `canPrev: false`.
+- Page navigation back to first → `canPrev: false` again.
 
 **`useTableUrlState`** (cursorParam):
 - Two hooks on the same route, `cursor_p` + `cursor_t` →
@@ -209,7 +225,13 @@ for backend-only PRs.
       list endpoint populates it correctly.
 - [ ] `libs/api-types` regenerated and staged in the same PR.
 - [ ] `useCursorPagination` no longer maintains an in-memory
-      stack; `MAX_HISTORY` and `FIRST_PAGE` removed.
+      stack; `MAX_HISTORY` and `FIRST_PAGE` removed; `goPrev`
+      signature changes to `goPrev(prevCursor: string)`.
+- [ ] `usePageHandlers` returns symmetric `{ canPrev, canNext,
+      handlePrev, handleNext }`. The current next-only shape was a
+      consequence of `goPrev()` being no-arg under the prev-stack
+      hack; with backend `prev_cursor` both sides need the same
+      extract-from-`page` wrapper.
 - [ ] Deep-link + Prev works on every paginated route.
 - [ ] All 13 paginated pages still typecheck / lint / build.
 - [ ] Vitest unit suite for the 3 primitives, covering the cases
@@ -227,7 +249,9 @@ for backend-only PRs.
 
 - `TsIdCursor::to_cursor()` (ADR 0043) — for `prev_cursor` build.
 - `useCursorPagination` — modified, not replaced.
-- `usePageHandlers` — unchanged.
+- `usePageHandlers` — extended to symmetric `{ canPrev, canNext,
+  handlePrev, handleNext }` (was next-only because backend lacked
+  `prev_cursor`).
 - `CURSOR_PARAMS` registry — unchanged.
 - Vitest + `@testing-library/react` — once 0226 ships.
 - Playwright — verify project already has `node_modules` entry
