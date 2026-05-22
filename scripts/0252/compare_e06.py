@@ -110,12 +110,16 @@ def compare(strkey: str, ch: dict, hz: dict, result: EndpointResult) -> list[str
         result.record_field("sequence_number", "tolerance")
         diffs.append(f"sequence_number CH={ch['sequence_number']} HZ={hz.get('sequence')} (tip drift)")
 
-    # 3. last_modified_ledger
+    # 3. last_modified_ledger — CH ends at backfill tip (62,527,999);
+    # Horizon reflects current chain head. Any HZ > CH is post-backfill
+    # live drift (account modified by tx after our snapshot). Mark as
+    # tolerance with explicit "(tip drift)" tag so the per-row TSV
+    # classification recognises it.
     if int(ch["last_seen_ledger"]) >= int(hz.get("last_modified_ledger", 0)):
         result.record_field("last_seen_ledger", "pass")
     else:
         result.record_field("last_seen_ledger", "tolerance")
-        diffs.append(f"last_seen_ledger CH={ch['last_seen_ledger']} HZ={hz.get('last_modified_ledger')}")
+        diffs.append(f"last_seen_ledger CH={ch['last_seen_ledger']} HZ={hz.get('last_modified_ledger')} (tip drift)")
 
     # 4. XLM balance — pick `native` from Horizon balances array
     hz_xlm = "0"
