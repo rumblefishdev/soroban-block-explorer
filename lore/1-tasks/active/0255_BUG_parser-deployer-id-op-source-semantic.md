@@ -54,6 +54,47 @@ history:
       rows in one shot. Task 0252 keeps the divergence as tolerance
       until 0255 lands; the final Phase B report will note the
       finding and the resolution.
+  - date: '2026-05-22'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      **Phase 2 (backfill migration) COMPLETE on Hetzner CH.**
+
+      Operator session: temporary bump of
+      `users.d/timeouts.xml` `max_memory_usage` to 80 GiB →
+      docker restart → build `soroban_contracts_staging_0255` via
+      the migration query in the task body (≈ 15 min wall, partial-
+      merge JOIN) → row count parity verified (live = staging =
+      321,364) → diff count = 2,825 rows (matches the scale probe) →
+      spot-check `CB5GADATQJPVXS5MSWUDYA3HGU56DJZF4H35S3OL5P7W7JZE7IAIEXZ6`
+      confirmed corrected from `GA2TGTW…` (tx source) to
+      `GCNP4JVZFDAQFBPZ76VD6YARZNURD6DIC43HMZAFGBIZ2OLEHYKEPAO2`
+      (op source per stellar.expert canonical) → atomic
+      EXCHANGE TABLES → no-FINAL invariant verified (raw =
+      FINAL = 321,364, delta = 0) → staging dropped →
+      profile cap reverted to 6 GB + container restart.
+
+      ~2,825 contracts now carry the correct op-source attribution
+      in the current backfill state.
+
+      Phase 1 (parser fix) deferred to a dedicated dev session —
+      requires walking SorobanAuthorizationEntry credentials per-tx
+      to extract op-level source, building a
+      `deployer_by_contract: HashMap<contract_id, strkey>` override
+      map analogous to the existing `sac_identity_by_contract`
+      pattern, threading it into `extract_contract_deployments`,
+      plus three XDR test fixtures (single-source / multi-source /
+      fee-bump). Estimated ~200-400 LoC + tests = half-day dev cycle;
+      not appropriate to interleave with the active task 0252 Phase B
+      validation runs.
+
+      Until Phase 1 lands, every fresh deploy ingested via live mode
+      with an explicit per-op `source_account` override will continue
+      to land with `deployer_id = tx_source` (wrong). The migration
+      we just ran corrects the EXISTING backfill snapshot only —
+      it does not preempt future writes. Live mode is gated behind
+      task 0241 cutover, so the window before Phase 1 must close is
+      bounded by 0241's go-live.
 ---
 
 # BUG: parser stores tx-source as deployer_id instead of op-source
@@ -218,8 +259,10 @@ the migrated state. Expected: deployer field mismatch rate drops from
 
 - [ ] Parser fix lands on develop with three new unit tests covering
       single-source, multi-source override, and fee-bump cases.
-- [ ] Backfill migration executed on Hetzner CH (post Snapshot B);
+- [x] Backfill migration executed on Hetzner CH;
       EXCHANGE TABLES verified atomic; row count parity confirmed.
+      _Completed 2026-05-22 — 2,825 corrected rows, no-FINAL invariant
+      preserved (delta = 0)._
 - [ ] Operator runbook at
       `docs/runbooks/0255_deployer_id_backfill_migration.md`
       committed.
