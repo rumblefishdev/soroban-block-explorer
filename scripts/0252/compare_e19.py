@@ -41,24 +41,49 @@ from common import (
 ENDPOINT = "E19"
 TSV = OUT_DIR / "phase_b_e19.tsv"
 
+# CH backfill ends at this ledger; anything Horizon reports past
+# this is live-chain drift (swaps, deposits, withdrawals after our
+# snapshot end). Pre-Phase 6 metric: max(ledgers.sequence) = 62527999.
+CH_BACKFILL_TIP = 62527999
+
 
 def fetch_ch_pool(pool_hex: str) -> dict | None:
+    """Canonical CH schema (per init.sql):
+      liquidity_pools (RMT(last_updated_ledger), ORDER BY pool_id):
+        pool_id, asset_{a,b}_{type,code,issuer_id}, fee_bps,
+        last_updated_ledger.
+      liquidity_pool_snapshots (RMT, partitioned per 500K ledger):
+        pool_id, ledger_sequence, reserve_a, reserve_b, total_shares,
+        tvl, volume, fee_revenue.
+
+    Current state = liquidity_pools FINAL JOIN latest snapshot
+    (argMax by ledger_sequence) on pool_id.
+    """
     sql = f"""
     SELECT
-      lower(hex(pool_id))         AS pool_id_hex,
-      fee_bp,
-      toString(total_shares)      AS total_shares,
-      toString(reserve_a)         AS reserve_a,
-      toString(reserve_b)         AS reserve_b,
-      last_updated_ledger,
-      asset_a_type,
-      asset_a_code,
-      asset_a_issuer_id,
-      asset_b_type,
-      asset_b_code,
-      asset_b_issuer_id
-    FROM liquidity_pools
-    WHERE pool_id = unhex('{pool_hex}')
+      lower(hex(lp.pool_id))            AS pool_id_hex,
+      lp.fee_bps                        AS fee_bps,
+      lp.last_updated_ledger            AS last_updated_ledger,
+      lp.asset_a_type                   AS asset_a_type,
+      lp.asset_a_code                   AS asset_a_code,
+      lp.asset_a_issuer_id              AS asset_a_issuer_id,
+      lp.asset_b_type                   AS asset_b_type,
+      lp.asset_b_code                   AS asset_b_code,
+      lp.asset_b_issuer_id              AS asset_b_issuer_id,
+      toString(s.reserve_a)             AS reserve_a,
+      toString(s.reserve_b)             AS reserve_b,
+      toString(s.total_shares)          AS total_shares
+    FROM liquidity_pools AS lp FINAL
+    LEFT JOIN (
+      SELECT pool_id,
+             argMax(reserve_a, ledger_sequence)    AS reserve_a,
+             argMax(reserve_b, ledger_sequence)    AS reserve_b,
+             argMax(total_shares, ledger_sequence) AS total_shares
+        FROM liquidity_pool_snapshots
+       WHERE pool_id = unhex('{pool_hex}')
+       GROUP BY pool_id
+    ) AS s ON s.pool_id = lp.pool_id
+    WHERE lp.pool_id = unhex('{pool_hex}')
     FORMAT JSONEachRow
     """
     rows = ch_query_json(sql)
@@ -87,6 +112,13 @@ def decimal_close(a: str, b: str, places: int = 7) -> bool:
 def compare(pool_hex: str, ch: dict, hz: dict, result: EndpointResult) -> list[str]:
     diffs: list[str] = []
 
+    # Live-drift detector: if Horizon shows the pool was modified after
+    # CH's backfill tip, reserves + total_shares are expected to differ
+    # (swaps / deposits / withdrawals happened post-snapshot). Mark all
+    # state fields as tolerance instead of fail.
+    hz_lml = int(hz.get("last_modified_ledger", 0) or 0)
+    is_live_drift = hz_lml > CH_BACKFILL_TIP
+
     # 1. pool_id_hex
     if ch["pool_id_hex"].lower() == hz["id"].lower():
         result.record_field("pool_id", "pass")
@@ -94,43 +126,57 @@ def compare(pool_hex: str, ch: dict, hz: dict, result: EndpointResult) -> list[s
         result.record_field("pool_id", "fail")
         diffs.append(f"pool_id CH={ch['pool_id_hex']} HZ={hz['id']}")
 
-    # 2. fee_bp
-    if int(ch["fee_bp"]) == int(hz.get("fee_bp", 0)):
-        result.record_field("fee_bp", "pass")
+    # 2. fee_bps (CH column name; Horizon emits as `fee_bp`)
+    if int(ch["fee_bps"]) == int(hz.get("fee_bp", 0)):
+        result.record_field("fee_bps", "pass")
     else:
-        result.record_field("fee_bp", "fail")
-        diffs.append(f"fee_bp CH={ch['fee_bp']} HZ={hz.get('fee_bp')}")
+        result.record_field("fee_bps", "fail")
+        diffs.append(f"fee_bps CH={ch['fee_bps']} HZ={hz.get('fee_bp')}")
 
-    # 3. total_shares
+    # 3. total_shares — tolerance when live-drift; pass/fail otherwise.
     if decimal_close(ch["total_shares"], hz.get("total_shares", "0")):
         result.record_field("total_shares", "pass")
+    elif is_live_drift:
+        result.record_field("total_shares", "tolerance")
+        diffs.append(f"total_shares CH={ch['total_shares']} HZ={hz.get('total_shares')} (live drift)")
     else:
         result.record_field("total_shares", "fail")
         diffs.append(f"total_shares CH={ch['total_shares']} HZ={hz.get('total_shares')}")
 
-    # 4-5. reserves
+    # 4-5. reserves — same live-drift policy.
     reserves = hz.get("reserves", [])
     hz_a = reserves[0]["amount"] if len(reserves) > 0 else "0"
     hz_b = reserves[1]["amount"] if len(reserves) > 1 else "0"
+
     if decimal_close(ch["reserve_a"], hz_a):
         result.record_field("reserve_a", "pass")
+    elif is_live_drift:
+        result.record_field("reserve_a", "tolerance")
+        diffs.append(f"reserve_a CH={ch['reserve_a']} HZ={hz_a} (live drift)")
     else:
         result.record_field("reserve_a", "fail")
         diffs.append(f"reserve_a CH={ch['reserve_a']} HZ={hz_a}")
+
     if decimal_close(ch["reserve_b"], hz_b):
         result.record_field("reserve_b", "pass")
+    elif is_live_drift:
+        result.record_field("reserve_b", "tolerance")
+        diffs.append(f"reserve_b CH={ch['reserve_b']} HZ={hz_b} (live drift)")
     else:
         result.record_field("reserve_b", "fail")
         diffs.append(f"reserve_b CH={ch['reserve_b']} HZ={hz_b}")
 
-    # 6. last_updated_ledger — Horizon `last_modified_ledger`
-    if int(ch["last_updated_ledger"]) == int(hz.get("last_modified_ledger", 0)):
+    # 6. last_updated_ledger — when CH >= HZ → pass; when HZ > CH BUT
+    # only by post-backfill activity → tolerance (expected drift).
+    ch_lul = int(ch["last_updated_ledger"])
+    if ch_lul == hz_lml:
         result.record_field("last_updated_ledger", "pass")
-    else:
-        # Tolerance: Horizon may not have observed our latest update
-        # if we're sampling the live frontier — rare for static history.
+    elif is_live_drift:
         result.record_field("last_updated_ledger", "tolerance")
-        diffs.append(f"last_updated_ledger CH={ch['last_updated_ledger']} HZ={hz.get('last_modified_ledger')}")
+        diffs.append(f"last_updated_ledger CH={ch_lul} HZ={hz_lml} (live drift past {CH_BACKFILL_TIP})")
+    else:
+        result.record_field("last_updated_ledger", "fail")
+        diffs.append(f"last_updated_ledger CH={ch_lul} HZ={hz_lml}")
 
     # 7. type — both should be "constant_product" for SAMM pools
     hz_type = hz.get("type", "")
@@ -186,7 +232,7 @@ def main() -> int:
         diffs = compare(pool_hex, ch, hz, result)
         if diffs:
             dump_diff(ENDPOINT, pool_hex, ch, hz, diffs)
-            tol = sum(1 for d in diffs if "last_updated_ledger" in d)
+            tol = sum(1 for d in diffs if "live drift" in d)
             fail = len(diffs) - tol
             pass_n = 7 - len(diffs)
             append_tsv_row(TSV, ENDPOINT, pool_hex, pass_n, tol, fail, ";".join(diffs))

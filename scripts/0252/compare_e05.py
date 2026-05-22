@@ -48,15 +48,18 @@ HORIZON_FLOOR = 56657428
 
 
 def fetch_ch_ledger(seq: int) -> dict | None:
+    # Actual ledgers schema is only 6 cols: sequence, hash, closed_at,
+    # protocol_version, transaction_count, base_fee. No operation_count
+    # nor base_reserve — those live elsewhere (operations_appearances
+    # for op count; base_reserve isn't in our schema at all).
     sql = f"""
     SELECT
       sequence,
       lower(hex(hash))    AS hash,
       toString(closed_at) AS closed_at,
+      protocol_version,
       transaction_count,
-      operation_count,
-      base_fee,
-      base_reserve
+      base_fee
     FROM ledgers
     WHERE sequence = {seq}
     FORMAT JSONEachRow
@@ -112,13 +115,12 @@ def compare(seq: int, ch: dict, hz: dict, result: EndpointResult) -> list[str]:
         result.record_field("transaction_count", "fail")
         diffs.append(f"transaction_count CH={ch['transaction_count']} HZ={hz_tx}")
 
-    # 5. operation_count
-    if int(ch["operation_count"]) == int(hz.get("operation_count") or 0):
-        result.record_field("operation_count", "pass")
+    # 5. protocol_version
+    if int(ch["protocol_version"]) == int(hz.get("protocol_version") or 0):
+        result.record_field("protocol_version", "pass")
     else:
-        # Could be Horizon successful-only semantic drift.
-        result.record_field("operation_count", "tolerance")
-        diffs.append(f"operation_count CH={ch['operation_count']} HZ={hz.get('operation_count')} (drift)")
+        result.record_field("protocol_version", "fail")
+        diffs.append(f"protocol_version CH={ch['protocol_version']} HZ={hz.get('protocol_version')}")
 
     # 6. base_fee
     if int(ch["base_fee"]) == int(hz.get("base_fee_in_stroops") or 0):
@@ -126,13 +128,6 @@ def compare(seq: int, ch: dict, hz: dict, result: EndpointResult) -> list[str]:
     else:
         result.record_field("base_fee", "fail")
         diffs.append(f"base_fee CH={ch['base_fee']} HZ={hz.get('base_fee_in_stroops')}")
-
-    # 7. base_reserve
-    if int(ch["base_reserve"]) == int(hz.get("base_reserve_in_stroops") or 0):
-        result.record_field("base_reserve", "pass")
-    else:
-        result.record_field("base_reserve", "fail")
-        diffs.append(f"base_reserve CH={ch['base_reserve']} HZ={hz.get('base_reserve_in_stroops')}")
 
     return diffs
 
@@ -182,14 +177,16 @@ def main() -> int:
             continue
 
         diffs = compare(seq, ch, hz, result)
+        # 6 fields after schema correction (no operation_count, no
+        # base_reserve in the canonical ledgers table).
         if diffs:
             dump_diff(ENDPOINT, key, ch, hz, diffs)
             tol = sum(1 for d in diffs if "drift" in d)
             fail = len(diffs) - tol
-            pass_n = 7 - len(diffs)
+            pass_n = 6 - len(diffs)
             append_tsv_row(TSV, ENDPOINT, key, pass_n, tol, fail, ";".join(diffs))
         else:
-            append_tsv_row(TSV, ENDPOINT, key, 7, 0, 0, "")
+            append_tsv_row(TSV, ENDPOINT, key, 6, 0, 0, "")
 
         if processed % 100 == 0:
             elapsed = int(time.monotonic() - started)

@@ -47,28 +47,36 @@ ENDPOINT = "E03"
 TSV = OUT_DIR / "phase_b_e03.tsv"
 
 
-def pick_one_tx_per_ledger(ledgers: list[int], limit_per_ledger: int = 1) -> list[tuple[int, str]]:
-    """For each sampled ledger, pick `limit_per_ledger` random tx hashes."""
-    seq_list = ",".join(str(L) for L in ledgers)
-    sql = f"""
-    SELECT ledger_sequence, lower(hex(hash)) AS hash
-    FROM (
-      SELECT ledger_sequence, hash,
-             row_number() OVER (PARTITION BY ledger_sequence ORDER BY intHash64(reinterpretAsUInt64(substring(hash, 1, 8)))) AS rn
-      FROM transaction_hash_index
-      WHERE ledger_sequence IN ({seq_list})
-    )
-    WHERE rn <= {limit_per_ledger}
-    FORMAT TabSeparated
+def pick_one_tx_per_ledger(ledgers: list[int], limit_per_ledger: int = 1,
+                           chunk_size: int = 1000) -> list[tuple[int, str]]:
+    """For each sampled ledger, pick `limit_per_ledger` random tx hashes.
+
+    Chunked over `chunk_size` ledgers per query because CH's default
+    `max_query_size` is 256 KiB — a 30K-element IN list with ~9 chars
+    per int + separator easily exceeds that.
     """
-    rows = ch_query(sql).splitlines()
-    out = []
-    for line in rows:
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) == 2:
-            out.append((int(parts[0]), parts[1]))
+    out: list[tuple[int, str]] = []
+    for chunk_start in range(0, len(ledgers), chunk_size):
+        chunk = ledgers[chunk_start:chunk_start + chunk_size]
+        seq_list = ",".join(str(L) for L in chunk)
+        sql = f"""
+        SELECT ledger_sequence, lower(hex(hash)) AS hash
+        FROM (
+          SELECT ledger_sequence, hash,
+                 row_number() OVER (PARTITION BY ledger_sequence ORDER BY intHash64(reinterpretAsUInt64(substring(hash, 1, 8)))) AS rn
+          FROM transaction_hash_index
+          WHERE ledger_sequence IN ({seq_list})
+        )
+        WHERE rn <= {limit_per_ledger}
+        FORMAT TabSeparated
+        """
+        rows = ch_query(sql).splitlines()
+        for line in rows:
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) == 2:
+                out.append((int(parts[0]), parts[1]))
     return out
 
 
