@@ -103,6 +103,7 @@ export {
   isAccountId,
   isContractId,
   isLedgerSequence,
+  isPoolId,
   isTransactionHash,
   isValidIdentifier,
 } from './identifiers/index.js';

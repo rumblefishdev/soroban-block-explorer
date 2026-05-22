@@ -114,9 +114,17 @@ export default function AssetDetailPage() {
         </Box>
       )}
 
-      <SectionErrorBoundary sectionName="asset-transactions">
-        <AssetTransactions assetId={id} />
-      </SectionErrorBoundary>
+      {/* The embedded transactions list fetches by asset id; rendering it
+          while the parent asset query is loading or errored would either
+          show a duplicate skeleton (loading) or a duplicate error banner
+          (4xx/5xx) on top of the unified `NotFoundState` / `GenericErrorState`
+          already rendered in the summary box above. Gate the section
+          strictly on `data` so it appears only when the parent succeeded. */}
+      {asset.data && (
+        <SectionErrorBoundary sectionName="asset-transactions">
+          <AssetTransactions assetId={id} />
+        </SectionErrorBoundary>
+      )}
     </Stack>
   );
 }

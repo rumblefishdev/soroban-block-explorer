@@ -45,10 +45,14 @@ function classifyLpTx(operationTypes: readonly string[]): {
   label: string;
   color: ChipProps['color'];
 } {
+  // Backend `OperationType` enum is SCREAMING_SNAKE_CASE (matches the
+  // Stellar XDR `OperationType` discriminator). Compare against that
+  // form — earlier this file used lowercase strings and silently
+  // hard-failed on every LP transaction (caught by 0251 regression).
   const has = (name: string) => operationTypes.includes(name);
-  if (has('liquidity_pool_deposit'))
+  if (has('LIQUIDITY_POOL_DEPOSIT'))
     return { label: 'Deposit', color: 'emerald' };
-  if (has('liquidity_pool_withdraw'))
+  if (has('LIQUIDITY_POOL_WITHDRAW'))
     return { label: 'Withdrawal', color: 'brown' };
   // Only path_payment_strict_* actually touch the pool's reserves; a
   // standalone manage_*_offer creates / updates a classic DEX offer
@@ -56,7 +60,7 @@ function classifyLpTx(operationTypes: readonly string[]): {
   // surface such tx if a *separate* op in the same tx touched the
   // pool, but in that case the path-payment branch above will fire).
   // Classifying on manage_*_offer would over-label as Trade.
-  if (has('path_payment_strict_send') || has('path_payment_strict_receive'))
+  if (has('PATH_PAYMENT_STRICT_SEND') || has('PATH_PAYMENT_STRICT_RECEIVE'))
     return { label: 'Trade', color: 'blue' };
   throw new Error(
     `classifyLpTx: no recognised LP op kind in operation_types=[${operationTypes.join(
