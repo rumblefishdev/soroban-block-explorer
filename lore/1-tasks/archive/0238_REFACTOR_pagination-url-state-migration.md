@@ -2,7 +2,7 @@
 id: '0238'
 title: 'Migrate pagination from useState pageIndex to URL cursor (finish 0061)'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0061', '0230']
 tags: [priority-medium, effort-medium, layer-frontend, phase-future]
@@ -22,6 +22,10 @@ history:
     status: active
     who: karolkow
     note: Activated to pick up draft and finish URL-cursor migration.
+  - date: 2026-05-22
+    status: completed
+    who: karolkow
+    note: Done. URL-cursor migration shipped.
 ---
 
 # Migrate pagination from useState pageIndex to URL cursor (finish 0061)
