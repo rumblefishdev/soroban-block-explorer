@@ -4,6 +4,7 @@ import {
   DetailSkeleton,
   GenericErrorState,
   isLedgerSequence,
+  isMissingResource,
   NotFoundState,
   RateLimitState,
   SectionErrorBoundary,
@@ -53,7 +54,11 @@ export default function LedgerDetailPage() {
 
   if (isError) {
     const kind = classifyError(error);
-    if (kind === 'not-found') {
+    if (isMissingResource(kind)) {
+      // Backend returns 400 INVALID_SEQUENCE for i64-overflow values
+      // (e.g. `/ledgers/99999999999`); 404 for in-range sequences with
+      // no record. Both are "this ledger isn't here" from the user's
+      // POV — single NotFound state (task 0251 H8).
       return <NotFoundState entity="ledger" identifier={rawSequence} />;
     }
     const retry = () => void refetch();

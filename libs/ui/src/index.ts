@@ -33,6 +33,7 @@ export {
   type EmptyStateVariant,
   SectionErrorBoundary,
   classifyError,
+  isMissingResource,
   type ErrorKind,
 } from './states/index.js';
 
@@ -69,9 +70,6 @@ export type {
 } from './table/index.js';
 
 export {
-  NetworkSwitcher,
-  type Network,
-  type NetworkSwitcherProps,
   NavButton,
   type NavButtonProps,
   type NavButtonSize,
@@ -87,6 +85,7 @@ export {
   Footer,
   type FooterProps,
   type FooterNavItem,
+  PageGridBackdrop,
 } from './layout/index.js';
 
 export {
@@ -104,6 +103,7 @@ export {
   isAccountId,
   isContractId,
   isLedgerSequence,
+  isPoolId,
   isTransactionHash,
   isValidIdentifier,
 } from './identifiers/index.js';

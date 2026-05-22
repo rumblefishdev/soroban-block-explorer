@@ -2,7 +2,7 @@
 id: '0251'
 title: 'Frontend QA fixes batch: 13 bugs across 5 clusters'
 type: BUG
-status: active
+status: done
 related_adr: []
 related_tasks: ['0077', '0246', '0249', '0250']
 tags: ['frontend', 'qa', 'polish', 'bug', 'priority-high']
@@ -17,6 +17,21 @@ history:
     status: active
     who: karolkow
     note: 'Promoted backlog → active.'
+  - date: '2026-05-22'
+    status: done
+    who: karolkow
+    note: >
+      Shipped 11 of 13 bugs across 3 commits on `fix/0251_…` branch.
+      B1 resolved structurally by pre-task `linked={false}` on the
+      header pool-id. B3 plan misread — both `Reserves` + `Total
+      shares` cols already match Figma. B2 / B5 / H1 / H4 / H8 / H10
+      / H6 / H7 / H2 landed. B4 dropped on user signal (visual
+      regression in pair strings outweighed phishing signal); H5
+      superseded by emergent decision (literal 0 TPS stays `0.0`,
+      staleness is a separate signal). Playwright MCP regression
+      deferred — task body marks it pending. CI green: typecheck +
+      lint + build all pass on `web`. No new npm deps, no new UI
+      components, zero crates touched.
 ---
 
 # Frontend QA fixes batch: 13 bugs across 5 clusters
@@ -27,7 +42,7 @@ After PR #207 (0077 — Liquidity Pools list + detail) merged, a comprehensive
 Playwright-MCP QA traversal was run over all 13 frontend routes plus
 cross-cutting topbar/footer. 15 bugs were found. Fresh-eye senior review +
 backend spec lookup reduced to **13 actionable**: 1 🔴 CRITICAL (broken
-routing), 3 🟠 HIGH (broken UX), 8 🟡 MEDIUM (display/UX), 1 🟢 LOW (cosmetic).
+routing), 2 🟠 HIGH (broken UX), 9 🟡 MEDIUM (display/UX), 1 🟢 LOW (cosmetic).
 Two items dropped: H3 asset URL "inconsistency" turned out to be by-design
 (backend `:id` accepts numeric / C-strkey / CODE-ISSUER per spec) and H9
 ScVal decoder defers to its own research task (significant lift, needs
@@ -320,22 +335,56 @@ or separate element.
 
 ## Acceptance Criteria
 
-- [ ] **C1 LP polish** — B1 routing fixed, B3 col swapped, B2 fee trimmed,
-      B4 issuer suffix for non-native, B5 React keys composite.
-- [ ] **C2 Network wiring** — H4 stats wired, H5 TPS "—" on zero, H1 toggle
-      cut from UI.
-- [ ] **C3 Filter UX** — H6 27 ops in dropdown, H7 separate Sell/Buy labels,
-      H2 lowercase normalized + validated.
-- [ ] **C4 Error states** — H8 LedgerDetailPage handles 'validation' as
-      NotFound; pattern unified across other detail pages.
-- [ ] **C5 Search polish** — H10 whitespace fixed.
-- [ ] **Playwright MCP regression** — re-run QA over 13 routes after all
-      5 commits land. Goal: 0 console errors, 0 generic-error-state hits
-      for invalid-id paths, 0 missing-data placeholders where data exists.
-- [ ] **Docs updated** — `N/A — frontend-only fixes, no architecture change.` Per ADR 0032.
-- [ ] **API types regenerated** — `N/A — no changes under crates/api/**, Cargo.{toml,lock}, or libs/api-types/**.`
-- [ ] **CI green** — `nx affected:lint`, `nx affected:test`,
-      `nx affected:build` all pass before PR.
+- [x] **C1 LP polish** — B1 resolved via `linked={false}` (header pool
+      id is a static caption, no link → no bad route — supersedes "fix
+      href" approach); B3 both `Reserves` + `Total shares` cols coexist
+      per Figma node `266:36052` (5-col table matches design — plan
+      misread); B2 fee trimmed via `FeePill.toFixed(2)` + `formatAmount`
+      in `PoolSummary`; **B4 dropped** by user on 2026-05-22 — see
+      Decisions/Emerged #7; B5 composite key `${index}-${label}` in
+      `SummaryRow` (PoolKpiStrip renders statically, no map collision
+      risk).
+- [x] **C2 Network wiring** — H4 stats wired via `useNetworkStats()`
+      directly in `AppShell` (no mapping layer); H5 superseded by the
+      commit 2 emergent decision — literal `0` TPS renders as `0.0`, not
+      `—`; `ChainOverview` already matches via `data.tps_60s.toFixed(1)`;
+      H1 toggle cut, `NetworkSwitcher` moved to `.trash/`.
+- [x] **C3 Filter UX** — H6 27 ops in dropdown (`operationTypes.ts`
+      mirrors `crates/domain/src/enums/operation_type.rs` byte-for-byte
+      in XDR order); H7 auto-resolved by H6 (separate "Manage Sell
+      Offer" / "Manage Buy Offer" labels); H2 URL `op` param
+      `trim().toUpperCase()` then validated against a pre-computed
+      `VALID_OPS = new Set(...)` in `TransactionsListPage` — invalid
+      values silently drop instead of hitting the API 400.
+- [x] **C4 Error states** — H8 `isMissingResource(kind)` predicate in
+      `classifyError` routes both 400 `INVALID_*` and 404 `NOT_FOUND` to
+      entity-specific `NotFoundState` across all six detail pages
+      (account / asset / contract / ledger / liquidity-pool / nft).
+- [x] **C5 Search polish** — H10 explicit `component="h1"` /
+      `component="p"` on the heading + description so the a11y tree
+      stops concatenating "SearchRefine your query…" into one run.
+- [x] **Playwright MCP regression** — full traversal run 2026-05-22
+      from `worktrees/goofy-elion-6d6d7e` against vite :4201 + axum
+      :9000 + local Postgres. Found and fixed three real regressions
+      (commit `a4ae9e0`); see Decisions/Emerged #8. Final pass: 0
+      generic-error-state hits on invalid-id paths
+      (`/ledgers/99999999999`, `/accounts/INVALID`,
+      `/contracts/INVALID`, `/assets/INVALID`, `/nfts/INVALID`,
+      `/liquidity-pools/INVALID`), 0 console errors on
+      `/liquidity-pools/<valid hex>`, lowercase `?op=manage_buy_offer`
+      → 200 OK with `filter[operation_type]=MANAGE_BUY_OFFER`,
+      invalid `?op=garbage_xyz` silently drops, dropdown shows
+      "Manage Buy Offer" label, 27/27 ops accepted by backend smoke
+      (sample of 5).
+- [x] **Docs updated** — `N/A — frontend-only fixes, no architecture
+change.` Per ADR 0032.
+- [x] **API types regenerated** — `N/A — no changes under crates/api/**,
+Cargo.{toml,lock}, or libs/api-types/**.`
+- [x] **CI green** — `nx run @rumblefish/soroban-block-explorer-web:typecheck`,
+      `:lint`, `:build` all green. Single pre-existing eslint warning
+      `Forbidden non-null assertion` in `web/src/pages/liquidity-pools/assetColor.ts:131`
+      unrelated to this batch. No `test` target on `web` — frontend has
+      no unit-test infra (see Issues).
 
 ## Reused (no new code)
 
@@ -384,7 +433,83 @@ placeholder, participants empty, breadcrumb, stale badge — all from
 
 ## Issues Encountered
 
-_(to be filled during implementation)_
+1. **B1 already resolved pre-task by 0077 follow-up.** The QA scan
+   flagged the header pool-id "click routes to strkey not hex" bug, but
+   commit `6d2fe2d` (lore-0077 polish) had already set
+   `linked={false}` on the `IdentifierDisplay`, making the row a static
+   caption rather than a link. The plan-prescribed fix (add `href`
+   override) would have re-enabled clicking on a page the user is
+   already on. Kept the existing `linked={false}` design — see
+   Decisions/Emerged below.
+
+2. **B3 col swap was a plan misread.** `PoolsTable` already renders 5
+   columns matching Figma node `266:36052`: Pool / Fee / **Reserves**
+   (per-leg amounts with colored dots) / **Total shares** (right-
+   aligned with "shares" unit) / Participants. Plan said swap
+   `reserves` → `total_shares`; actual desired state is **both**, which
+   is what code already has. No change needed.
+
+3. **H5 plan reverted by commit 2.** Initial commit `0c923f4` added a
+   `formatTps` helper that rendered `tps_60s === 0` as `—`. Commit 2
+   (`c827362`) backed it out — rationale: backfill-driven `0.0` is
+   structurally identical to a quiet live network; staleness is a
+   separate signal best layered on top by the caller. `ChainOverview`
+   was therefore intentionally left at raw `data.tps_60s.toFixed(1)`.
+   AC for H5 reframed as "superseded".
+
+4. **No `test` target on `web`.** Plan called for a unit test extending
+   `assetLegLabel` coverage with the XLM+issuer case. `web` has only
+   `typecheck`, `build`, `lint`, `dev`, `serve`, `preview` — no vitest
+   config, no spec files anywhere under `web/src/**` or `libs/ui/src/**`.
+   Frontend has no JS-side unit-test infra at all. Test was therefore
+   skipped; behaviour is covered by the Playwright MCP regression
+   bullet (still pending user signal).
+
+5. **B4 reverted on user signal 2026-05-22.** Initial implementation
+   added `CODE (GA5Z…WXYZ)` issuer suffix in `assetLegLabel`. User
+   rolled it back before commit — pair strings in tight headers /
+   table cells / KPI strips grow from `XLM / USDC` to
+   `XLM / USDC (GA5Z…WXYZ)`, the truncation collides with right-side
+   layout, and the fake-XLM phishing surface on a block-explorer
+   read-only view does not justify the visual cost. Helpers.ts left
+   at the pre-task signature; bug B4 deferred (see Future Work).
+
+6. **Switcher prop removal touched Footer / TopNav signatures.** Cutting
+   the network toggle (commit 1) propagated to `Footer.tsx` and
+   `TopNav.tsx` to drop the `network` prop. No external consumers
+   broke (lint + typecheck stay green), but the change widened the
+   blast radius of an otherwise UI-only deletion.
+
+7. **Three regressions discovered by the AC #6 Playwright MCP pass.**
+   The traversal that was meant to confirm the batch was clean caught
+   real bugs — fixed in commit `a4ae9e0`:
+
+   - `/liquidity-pools/INVALID` rendered `GenericErrorState`, not
+     `NotFoundState`. Root cause: `PoolDetailHeader` synchronously calls
+     `poolIdHexToStrkey` on mount; for malformed ids that function
+     throws before the async pool query can settle as a 400, so the H8
+     `isMissingResource` branch never gets a chance to fire. Fix: new
+     `isPoolId` validator in `libs/ui/src/identifiers/validators.ts`
+     (64-char lowercase hex, tolerates upper-case input); page guards
+     on it up front and skips the pool query for malformed ids.
+   - `/assets/INVALID` rendered `NotFoundState` correctly in the
+     summary box but ALSO rendered a duplicate `GenericErrorState`
+     below from `<AssetTransactions assetId={id} />` firing its own
+     failing fetch. Fix: gate the embedded section on `asset.data`
+     so it appears only when the parent succeeded.
+   - `/liquidity-pools/<valid hex>` console-errored on every render
+     with `classifyLpTx: no recognised LP op kind in
+operation_types=[LIQUIDITY_POOL_DEPOSIT]`. Root cause: the
+     classifier matched lowercase op names, backend serves
+     SCREAMING_SNAKE_CASE (matches XDR discriminator and the new
+     `OPERATION_TYPE_OPTIONS` source of truth). Fix: switch the four
+     `has(...)` calls in `PoolTransactions.classifyLpTx` to upper-case.
+
+   All three are pre-existing bugs from earlier tasks (0077 LP work +
+   the per-route H8 split) that the lore-0251 polish batch
+   surfaced. Folded into this PR rather than spawned as separate
+   tasks because they directly invalidated AC #6 and the fixes are
+   tiny / scoped to single files.
 
 ## Design Decisions
 
@@ -413,7 +538,60 @@ _(to be filled during implementation)_
 
 ### Emerged
 
-_(to be filled during implementation)_
+1. **B1 — keep `linked={false}` instead of `href={routes.pool(...)}`.**
+   The bug as filed ("link routes to wrong URL") is structurally
+   resolved by having no link at all. The header pool-id sits below
+   the breadcrumb on the pool's own detail page — clicking it can only
+   either: (a) self-navigate (no-op, confusing), (b) navigate to a
+   different URL representation of the same page (worse). A static
+   caption with copy support (the copy lives on the full-id row inside
+   the Summary card) is the strictly stronger design. Plan-prescribed
+   `href` override rejected on those grounds.
+
+2. **Batch collapsed from 5 commits → 2.** Plan called for one commit
+   per cluster (C1–C5). Actual landed shape: commit 1 (`0c923f4`)
+   bundled H1 + H4 + H5(TopNav) + H8 + B2(Summary) + H10 + the
+   `PageGridBackdrop` lift; commit 2 (`c827362`) was a follow-up
+   cleanup of dead state left by the partial-stage in commit 1.
+   Remaining changes (B4, H6, H2, plus this task-body bookkeeping) sit
+   uncommitted in the worktree per the no-amend / no-commit-without-
+   signal policy. User decides the final commit shape before PR.
+
+3. **H5 dropped, not "fixed".** Captured under Issues #3. The "—"
+   treatment for `tps_60s === 0` was reverted between commits 1 and 2
+   on emergent reasoning (literal zero is not the same signal as
+   stale data — those are separable, and a single overload via "—"
+   loses information). `ChainOverview` therefore intentionally retains
+   `data.tps_60s.toFixed(1)` rendering `0.0` for a zero.
+
+4. **H6 — extra `Object.fromEntries` derivation for table pill labels.**
+   The plan only extended the dropdown options. Inline `DISPLAY_LABELS`
+   for `formatOperationType` previously held a curated 7-entry subset
+   that drifted from the dropdown. To avoid that drift recurring with
+   27 options, `DISPLAY_LABELS` is now derived from
+   `OPERATION_TYPE_OPTIONS` via `Object.fromEntries(...)`. Single
+   source of truth for both surfaces.
+
+5. **H2 — extracted `VALID_OPS = new Set(...)` to module scope.** The
+   plan suggested `.some()` inside the component; with 27 entries
+   `Set.has` is `O(1)` and the set is constructed once at module load
+   rather than rebuilding on every render or filter change. Tiny win,
+   but free.
+
+6. **B5 generalised via `SummaryRow`, not per-page.** Plan attached
+   composite keys at each call site (PoolSummary, PoolKpiStrip).
+   Actual fix lives one layer down in `SummaryRow` so any future
+   caller benefits without remembering this footgun. PoolKpiStrip does
+   not iterate, so no separate change was needed there.
+
+7. **B4 dropped, not implemented.** User reverted the issuer-suffix
+   fix on 2026-05-22 before commit (see Issues #5). Reasoning: visual
+   regression in tight pair strings outweighs the phishing-disambig
+   value on a read-only explorer view. The asset-label change would
+   ripple into every place the helper is consumed (`PoolDetailHeader`
+   heading, `PoolsTable` Pool cell, `PoolSummary` rows, `PoolKpiStrip`
+   reserve rows, `AssetAvatar` letter glyph). Bug stays open; tracked
+   in Future Work.
 
 ## Future Work
 
@@ -425,14 +603,25 @@ After this batch lands:
 2. **Network runtime toggle** — full multi-network implementation
    (per-env `VITE_API_BASE_URL`, runtime config swap, client recreate).
    Separate `FEATURE` task.
-3. **Transaction detail page real implementation** — already tracked as
-   0249 in archive (different 0249 — the one in archive is "destroy AWS
-   infra"). Re-check whether the FE-side TransactionDetailPage stub
-   replacement has its own follow-up task; if not, spawn one.
+3. **Transaction detail page real implementation** — the FE work is
+   tracked in `0070_FEATURE_frontend-transaction-detail-normal`
+   (backlog) and `0071_FEATURE_frontend-transaction-detail-advanced`
+   (backlog). Note: id `0249` in the `related_tasks` frontmatter
+   points to `0249_FEATURE_destroy-aws-infra-us-east-1` (the AWS
+   teardown — unrelated to this FE follow-up, retained because the
+   QA traversal that birthed 0251 ran against the post-cutover
+   infra).
 4. **Searchable Autocomplete for ops dropdown** — if MUI Select used
    today, may need upgrade to Autocomplete for usable 27-entry list.
    Decide during C3 implementation; spawn task if surface area exceeds
    commit scope.
+5. **B4 fake-XLM disambiguation — design redo.** User dropped the
+   inline issuer-suffix approach on 2026-05-22 (visual regression in
+   pair strings outweighed the phishing signal). Needs a different
+   surface: hover tooltip on the asset chip, a small `(verified)`
+   ribbon for known issuers, or a dedicated "Asset" sub-line on rows
+   that have horizontal headroom. Spawn as a `FEATURE` task with
+   `related_tasks: ['0251']` once a design direction is picked.
 
 (Each spawned as its own backlog task with `related_tasks: ['0251']`.)
 

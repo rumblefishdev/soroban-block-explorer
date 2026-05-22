@@ -4,6 +4,7 @@ import {
   classifyError,
   GenericErrorState,
   isAccountId,
+  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -49,7 +50,7 @@ export default function AccountDetailPage() {
   } else if (account.isError) {
     summary = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {classifyError(account.error) === 'not-found' ? (
+        {isMissingResource(classifyError(account.error)) ? (
           <NotFoundState entity="account" identifier={accountId} />
         ) : (
           <GenericErrorState onRetry={() => void account.refetch()} />

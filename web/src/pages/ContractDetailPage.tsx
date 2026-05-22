@@ -5,6 +5,7 @@ import {
   classifyError,
   GenericErrorState,
   isContractId,
+  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
   Tabs,
@@ -58,7 +59,7 @@ export default function ContractDetailPage() {
   } else if (contract.isError) {
     summary = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {classifyError(contract.error) === 'not-found' ? (
+        {isMissingResource(classifyError(contract.error)) ? (
           <NotFoundState entity="contract" identifier={contractId} />
         ) : (
           <GenericErrorState onRetry={() => void contract.refetch()} />

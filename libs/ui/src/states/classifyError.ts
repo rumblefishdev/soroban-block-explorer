@@ -36,3 +36,16 @@ export function classifyError(err: unknown): ErrorKind {
 
   return 'unknown';
 }
+
+/**
+ * From the user's perspective, "no record under id `X`" and "id `X` is
+ * malformed" are the same outcome: the thing they navigated to isn't
+ * here. Detail-page routes carry the identifier in the URL, so a 400
+ * INVALID_<id> (e.g. i64-overflow on `/ledgers/99999999999`) and a 404
+ * NOT_FOUND both warrant the same entity-specific `NotFoundState` —
+ * not the generic "Something went wrong" banner. Use this predicate to
+ * unify the two cases at the detail-page error boundary (task 0251 H8).
+ */
+export function isMissingResource(kind: ErrorKind): boolean {
+  return kind === 'not-found' || kind === 'validation';
+}

@@ -74,7 +74,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
       />
       <SummaryRow
         cells={[
-          { label: 'Fee', value: `${pool.fee_percent}%` },
+          { label: 'Fee', value: `${formatAmount(pool.fee_percent, 2)}%` },
           {
             label: 'Total shares',
             value: formatAmount(pool.total_shares),

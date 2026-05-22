@@ -3,6 +3,7 @@ import {
   classifyError,
   DetailSkeleton,
   GenericErrorState,
+  isMissingResource,
   NotFoundState,
   RateLimitState,
   SectionErrorBoundary,
@@ -82,7 +83,9 @@ export default function NftDetailPage() {
 
   if (isError) {
     const kind = classifyError(error);
-    if (kind === 'not-found') {
+    if (isMissingResource(kind)) {
+      // 400 (e.g. non-numeric or i64-overflow id) and 404 both mean
+      // "this NFT isn't here" — single NotFound (task 0251 H8).
       return <NotFoundState titleOverride="NFT not found" identifier={rawId} />;
     }
     const retry = () => void refetch();

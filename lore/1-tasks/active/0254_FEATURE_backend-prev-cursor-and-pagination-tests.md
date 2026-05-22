@@ -5,7 +5,8 @@ type: FEATURE
 status: active
 related_adr: ['0043']
 related_tasks: ['0238', '0226']
-tags: [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
+tags:
+  [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
 milestone: 2
 links: []
 history:
@@ -99,12 +100,12 @@ once, after both changes settle, avoids rewriting them mid-flight.
 
 1. Extend `PageInfo` (likely `crates/api/src/openapi/schemas.rs`)
    with `prev_cursor: Option<String>` and `#[serde(skip_serializing_if
-   = "Option::is_none")]`.
+= "Option::is_none")]`.
 2. For each list endpoint, compute `prev_cursor` from the FIRST
    row of the returned slice instead of the LAST (mirror of how
    `cursor` is currently built).
    - `crates/db` cursor helpers already expose `to_cursor((ts,
-     id))` for `TsIdCursor` — reuse for the prev side.
+id))` for `TsIdCursor` — reuse for the prev side.
    - First page: `prev_cursor = None`.
    - Empty page: `prev_cursor = None`.
 3. Backend integration tests — **cursor-focused** matrix per list
@@ -131,14 +132,14 @@ once, after both changes settle, avoids rewriting them mid-flight.
      Documents the "cursors are filter-scoped" contract.
    - **Endpoint coverage:** matrix above run against every list
      endpoint, including embedded sub-lists (`LedgerDetail.
-     transactions`, `LiquidityPool.{participants,transactions}`,
+transactions`, `LiquidityPool.{participants,transactions}`,
      `Contract.{events,invocations}`, `Account.transactions`,
      `Asset.transactions`, `Nft.transfers`).
 4. Regenerate OpenAPI:
    `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
    followed by `npx nx run @rumblefish/api-types:generate`. Stage
    the generated diff alongside the Rust change (`API types
-   freshness` CI gate).
+freshness` CI gate).
 
 ### Phase 2 — frontend simplification (`libs/ui`, `web/src`)
 
@@ -154,7 +155,7 @@ once, after both changes settle, avoids rewriting them mid-flight.
    API** (was only `handleNext` because backend had no prev
    cursor; now both sides need an extract wrapper):
    - Signature: `usePageHandlers(page, goNext, goPrev) → { canPrev,
-     canNext, handlePrev, handleNext }`.
+canNext, handlePrev, handleNext }`.
    - `handlePrev` reads `page?.prev_cursor` and calls
      `goPrev(prevCursor)`. `canPrev = prev_cursor !== null`.
    - `handleNext` unchanged from current behavior.
@@ -181,6 +182,7 @@ Once vitest + `@testing-library/react` lands in `libs/ui`
 Cases:
 
 **`useCursorPagination`**:
+
 - Mount with pasted `?cursor=ABC` deep link + no `resetKey` change
   → cursor preserved on first render (regression test for the
   `useRef` skip-initial-mount fix from 0238).
@@ -194,6 +196,7 @@ Cases:
   `cursor` untouched.
 
 **`usePageHandlers`** (symmetric prev / next after this task):
+
 - `page === undefined` → `canPrev: false`, `canNext: false`.
 - `has_more: true, cursor: "X"` → `canNext: true`, `handleNext()`
   calls `goNext("X")`.
@@ -206,6 +209,7 @@ Cases:
 - Page navigation back to first → `canPrev: false` again.
 
 **`useTableUrlState`** (cursorParam):
+
 - Two hooks on the same route, `cursor_p` + `cursor_t` →
   independent keys, no collision.
 - `setSort` / `setFilter` clear only the namespaced cursor, not
@@ -260,21 +264,22 @@ Per-route variations follow in the route matrix below.
 
 #### Per-route table
 
-| Route | Variants on top of the cursor-flow scenarios |
-|-------|-----------|
-| `/ledgers` | Next 3×, Prev 3×, refresh on N=2, share link → new context same page |
-| `/ledgers/:sequence` | Inner Next 2×, prev/next ledger nav resets cursor |
-| `/transactions` | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized |
-| `/assets` | Next + Prev, refresh, share link |
-| `/assets/:id` | Switch asset → cursor drops |
-| `/nfts` | Next + Prev, refresh |
-| `/nfts/:id` | Switch NFT → cursor drops |
-| `/accounts/:id` | Switch account → cursor drops |
-| `/liquidity-pools` | Next + Prev, filter change resets |
-| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop |
-| `/contracts/:id` | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
+| Route                  | Variants on top of the cursor-flow scenarios                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/ledgers`             | Next 3×, Prev 3×, refresh on N=2, share link → new context same page                                 |
+| `/ledgers/:sequence`   | Inner Next 2×, prev/next ledger nav resets cursor                                                    |
+| `/transactions`        | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized                     |
+| `/assets`              | Next + Prev, refresh, share link                                                                     |
+| `/assets/:id`          | Switch asset → cursor drops                                                                          |
+| `/nfts`                | Next + Prev, refresh                                                                                 |
+| `/nfts/:id`            | Switch NFT → cursor drops                                                                            |
+| `/accounts/:id`        | Switch account → cursor drops                                                                        |
+| `/liquidity-pools`     | Next + Prev, filter change resets                                                                    |
+| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop                              |
+| `/contracts/:id`       | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
 
 Common assertions per scenario:
+
 - URL contains expected cursor key.
 - Rendered row count matches API `data.length`.
 - Refresh preserves URL state.
@@ -296,11 +301,11 @@ for backend-only PRs.
 - [ ] `useCursorPagination` no longer maintains an in-memory
       stack; `MAX_HISTORY` and `FIRST_PAGE` removed; `goPrev`
       signature changes to `goPrev(prevCursor: string)`.
-- [ ] `usePageHandlers` returns symmetric `{ canPrev, canNext,
-      handlePrev, handleNext }`. The current next-only shape was a
-      consequence of `goPrev()` being no-arg under the prev-stack
-      hack; with backend `prev_cursor` both sides need the same
-      extract-from-`page` wrapper.
+- [ ] `usePageHandlers` returns a symmetric shape
+      `{ canPrev, canNext, handlePrev, handleNext }`. The current
+      next-only shape was a consequence of `goPrev()` being no-arg
+      under the prev-stack hack; with backend `prev_cursor` both
+      sides need the same extract-from-`page` wrapper.
 - [ ] Backend integration tests cover the cursor matrix per list
       endpoint: first page (`prev_cursor=None`), middle (both set),
       last (`cursor=None`), empty (both `None`), round-trip
@@ -331,7 +336,7 @@ for backend-only PRs.
 - `TsIdCursor::to_cursor()` (ADR 0043) — for `prev_cursor` build.
 - `useCursorPagination` — modified, not replaced.
 - `usePageHandlers` — extended to symmetric `{ canPrev, canNext,
-  handlePrev, handleNext }` (was next-only because backend lacked
+handlePrev, handleNext }` (was next-only because backend lacked
   `prev_cursor`).
 - `CURSOR_PARAMS` registry — unchanged.
 - Vitest + `@testing-library/react` — once 0226 ships.

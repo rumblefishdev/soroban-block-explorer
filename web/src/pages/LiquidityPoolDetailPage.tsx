@@ -3,6 +3,8 @@ import {
   CardSkeleton,
   classifyError,
   GenericErrorState,
+  isMissingResource,
+  isPoolId,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -41,7 +43,21 @@ export default function LiquidityPoolDetailPage() {
   // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
-  const detail = usePoolDetail(poolId);
+  // Pool ids must be a 64-char lowercase hex string. `PoolDetailHeader`
+  // synchronously calls `poolIdHexToStrkey` on mount and throws on a
+  // malformed id, which would crash the page into a generic error
+  // banner instead of the entity-specific NotFoundState routed via H8.
+  // `usePoolDetail` is hardcoded to skip the network when the id is
+  // empty; the guard below covers the non-empty malformed case.
+  const validPoolId = isPoolId(poolId);
+  const detail = usePoolDetail(validPoolId ? poolId : '');
+  if (!validPoolId) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <NotFoundState entity="liquidity-pool" identifier={poolId} />
+      </Box>
+    );
+  }
 
   let summarySection: ReactNode = null;
   let kpiSection: ReactNode = null;
@@ -52,7 +68,7 @@ export default function LiquidityPoolDetailPage() {
     const kind = classifyError(detail.error);
     summarySection = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'not-found' ? (
+        {isMissingResource(kind) ? (
           <NotFoundState entity="liquidity-pool" identifier={poolId} />
         ) : (
           <GenericErrorState onRetry={() => void detail.refetch()} />
