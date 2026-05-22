@@ -465,7 +465,23 @@ Design notes:
   contract FK in other tables (`operations_appearances`, `soroban_events_appearances`,
   `soroban_invocations_appearances`, `assets`, `nfts`) targets `id`
 - `wasm_hash` is `BYTEA(32)` (ADR 0024) and FKs into `wasm_interface_metadata`
-- `deployer_id` is an `accounts.id` surrogate FK (ADR 0026)
+- `deployer_id` is an `accounts.id` surrogate FK (ADR 0026). The attributed
+  account is the **operation-level effective source** of the
+  `CreateContract*` host function: `op.source_account` when the op
+  carries an explicit per-op source override, otherwise the inner
+  `tx.source_account` (fee-bump `feeSource` is never used). For
+  factory-pattern deploys where the `CreateContract*` lives inside an
+  `InvokeContract` auth tree, the deployer is the signer of the
+  enclosing `SorobanAuthorizationEntry` —
+  `SourceAccount` credentials inherit the effective op source; explicit
+  `Address(Account)` credentials carry the signer directly;
+  contract-signed credentials yield no human deployer (the call site
+  falls back to tx source). Built by
+  `xdr_parser::extract_op_source_per_contract`, threaded into
+  `extract_contract_deployments` via the `deployer_by_contract` override
+  map. Task 0255 Phase 1; prior parser revisions stored the inner-tx
+  source unconditionally and misattributed the ~12 % of mainnet deploys
+  with a per-op override
 - `contract_type` is `SMALLINT` backed by the Rust `ContractType` enum (ADR 0031);
   nullable because the two-pass upsert in `persist/write.rs` registers bare StrKey
   references before deployment meta is observed — those rows start NULL and get
