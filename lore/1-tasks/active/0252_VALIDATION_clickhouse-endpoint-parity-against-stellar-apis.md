@@ -168,12 +168,91 @@ FROM account_balances_current FINAL` for relevant types — within
 ### Phase E — Write up + close
 
 1. Author `docs/runbooks/artifacts/endpoint_validation_<YYYYMMDD>.md`
-   per the structure from Phase 6.
+   per the **Reporting Shape** below.
 2. Each unexpected divergence found in B / C / D → spawn a bug task
    (status `backlog`, scope: one endpoint fix) linked back to this
    task ID via `related_tasks`.
 3. If aggregate pass rate ≥ 22/23 endpoints (≥ 95%), declare task
    complete and archive. Otherwise carry to a Phase F revision.
+
+## Reporting Shape
+
+The final artifact at `docs/runbooks/artifacts/endpoint_validation_<YYYYMMDD>.md`
+MUST contain three sections, each answering a different question:
+
+### Section 1 — Per-endpoint detail (23 entries)
+
+For every endpoint, a stanza recording:
+
+- **Endpoint id + path** (e.g. `E03 — GET /transactions/:hash`)
+- **CH tables read** by the query (resolved from the SQL header)
+- **Sample method** (random by ledger DESC / stratified / first row /
+  hand-picked — and the SQL used to materialise the sample set)
+- **Sample size** N
+- **Compared with** (one of: `Horizon REST`, `stellar.expert API`,
+  `Tier 5 hash-set`, `Internal only`, `S3 archive XDR`)
+- **Compare method** (e.g. `hash-set`, `field-by-field (7 fields)`,
+  `cursor walk`, `count + sum`, `interface name list`)
+- **Tolerances applied** with citation to the divergence rationale
+  (e.g. "op_count drift accepted — Horizon successful-only semantics
+  per 0228 Phase 6 Tier 5")
+- **Coverage**: N sampled / total rows in the CH table (with the
+  percent expressed in scientific notation when small)
+- **Per-field accuracy** when field-by-field compare applies — one
+  line per field with pass / N count and percent
+- **Verdict**: PASS / TOL (tolerance-bound only) / FAIL — with the
+  count of unexpected diffs
+
+### Section 2 — Table coverage matrix
+
+One row per CH table in the canonical 17-table set
+(per Phase 6 report). Columns:
+
+| Column                 | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `CH table`             | table name (with current row count from Phase 6) |
+| `Rows`                 | total rows (from `system.parts` active = 1)      |
+| `Sampled rows`         | sum across all endpoints that read this table    |
+| `Endpoints exercising` | comma-separated `E0N` list                       |
+| `Compared via`         | union of external sources used                   |
+| `Compare method`       | union of compare methods used                    |
+| `Pass / Tol / Fail`    | aggregated counts                                |
+
+Empty tables (`nfts`, `nft_ownership` — both 0 per 0228 Phase 6)
+appear with `Sampled rows = 0` and a note "empty by design" in the
+Compare method column.
+
+### Section 3 — Group roll-up
+
+Three short blocks summarising Group A, B, C:
+
+```
+Group A (Horizon-comparable):    N endpoints, M CH tables, K sample compares
+  Pass: X  Tolerance: Y  Fail: Z (Fn description, link to spawned task)
+Group B (stellar.expert):         N endpoints, M tables, K compares
+  Pass: X  Tolerance: Y  Fail: Z
+Group C (internal):               N endpoints, M tables, K compares
+  Pass: X  Tolerance: Y  Fail: Z
+```
+
+Plus an **Overall** line: `K compares, P/23 endpoints PASS (P/23 %)`
+with the go-live verdict derived from the 95 % threshold.
+
+### Source legend (used by Section 1 + 2)
+
+- `Horizon REST` — `horizon.stellar.org/...`
+- `stellar.expert API` — `api.stellar.expert/explorer/public/...`
+- `Tier 5 hash-set` — 0228 Phase 6 hash-set cross-reference
+- `Internal only` — CH cross-row consistency (no external API)
+- `S3 archive XDR` — for pre-Horizon-retention ledgers
+
+### Implementation hint
+
+Each phase script (A/B/C/D) emits a per-endpoint structured TSV row
+to `/tmp/sbe-artifacts/endpoint_validation_<phase>.tsv`. Phase E is a
+small aggregator that reads all four TSVs and emits the three
+sections above as Markdown. Keep the TSV schema stable across phases
+so the aggregator stays simple.
 
 ## Acceptance Criteria
 
