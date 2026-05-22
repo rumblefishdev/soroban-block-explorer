@@ -73,17 +73,35 @@ def pick_one_tx_per_ledger(ledgers: list[int], limit_per_ledger: int = 1) -> lis
 
 
 def fetch_ch_tx(hash_hex: str) -> dict | None:
-    """Statement B of E03 (header). Returns 1 row or empty."""
+    """Statement B of E03 (header). Returns 1 row or empty.
+
+    Pattern (canonical from E03 SQL): use `transaction_hash_dict` to
+    resolve hash → ledger_sequence in O(1), then narrow the scan on
+    `transactions FINAL` to that single ledger partition + hash. The
+    `transaction_hash_index` table itself carries only (hash,
+    ledger_sequence) — no surrogate `id`.
+
+    Joins `accounts FINAL` to resolve `source_id` (Int64) into the
+    StrKey that Horizon emits as `source_account`. `operation_count`
+    lives directly on `transactions` per the actual canonical schema.
+    """
     sql = f"""
-    SELECT id, lower(hex(hash)) AS hash, ledger_sequence, application_order,
-           source_account, fee_charged, lower(hex(memo)) AS memo,
-           successful, signatures
-    FROM transactions FINAL
-    WHERE id = (
-      SELECT id FROM transaction_hash_index
-      WHERE hash = unhex('{hash_hex}')
-      LIMIT 1
-    )
+    WITH dictGet('transaction_hash_dict', 'ledger_sequence',
+                 toString(unhex('{hash_hex}'))) AS lseq
+    SELECT
+      t.id                                 AS id,
+      lower(hex(t.hash))                   AS hash,
+      t.ledger_sequence                    AS ledger_sequence,
+      t.application_order                  AS application_order,
+      a.account_id                         AS source_account,
+      t.fee_charged                        AS fee_charged,
+      t.successful                         AS successful,
+      t.operation_count                    AS operation_count,
+      t.has_soroban                        AS has_soroban
+    FROM transactions AS t FINAL
+    LEFT JOIN accounts AS a FINAL ON a.id = t.source_id
+    WHERE t.ledger_sequence = lseq
+      AND t.hash = unhex('{hash_hex}')
     FORMAT JSONEachRow
     """
     rows = ch_query_json(sql)
@@ -142,21 +160,17 @@ def compare_tx(hash_hex: str, ch: dict, hz: dict, result: EndpointResult) -> lis
         result.record_field("successful", "fail")
         diffs.append(f"successful CH={ch['successful']} HZ={hz.get('successful')}")
 
-    # Field 6: operation_count — Horizon "successful only" drift, tolerated
-    hz_opcount = hz.get("operation_count")
-    if hz_opcount is None:
-        result.record_field("operation_count", "tolerance")
+    # Field 6: operation_count — Horizon documents "successful only" but
+    # empirical Phase 6 Tier 5 showed mixed direction drift. Compare
+    # strict equality first; record as tolerance when they differ
+    # (Horizon semantic noise, not data divergence).
+    ch_opcount = int(ch.get("operation_count", 0))
+    hz_opcount = int(hz.get("operation_count") or 0)
+    if ch_opcount == hz_opcount:
+        result.record_field("operation_count", "pass")
     else:
-        # CH stores .signatures count differently; we compare via op count
-        # from a separate ledger-scoped query later. For now: tolerance.
         result.record_field("operation_count", "tolerance")
-
-    # Field 7: signatures count (array length, may differ if Horizon
-    # paginates separately — treat as tolerance)
-    ch_sig_count = len(ch.get("signatures", []) or [])
-    # Horizon doesn't expose signature count directly on /transactions/{h}
-    # — would need to parse envelope_xdr. Skip for now, record tolerance.
-    result.record_field("signatures", "tolerance")
+        diffs.append(f"operation_count CH={ch_opcount} HZ={hz_opcount} (Horizon semantic drift)")
 
     return diffs
 
@@ -170,10 +184,21 @@ def main() -> int:
     print(f"[E03] {len(ledgers)} ledger samples loaded", file=sys.stderr)
 
     import os
+    import random
     pilot = int(os.environ.get("SBE_PILOT_LIMIT", "0"))
     if pilot > 0:
-        ledgers = ledgers[:pilot]
-        print(f"[E03] PILOT mode — capped to first {pilot} ledgers", file=sys.stderr)
+        # In pilot mode restrict to ledgers Horizon can serve. The
+        # `samples_ledgers.txt` file mixes stratified retention-valid
+        # picks with adversarial edges (min/max per partition); those
+        # adversarial values sit at the head of the sorted file and
+        # are nearly all in the pre-retention half (50.4M → 56.6M).
+        # Pilot wants signal against Horizon, so filter + randomise.
+        HORIZON_FLOOR = 56657428
+        retention = [L for L in ledgers if L >= HORIZON_FLOOR]
+        random.seed(42)
+        ledgers = random.sample(retention, min(pilot, len(retention)))
+        print(f"[E03] PILOT mode — {pilot} random ledgers from {len(retention)} retention-valid",
+              file=sys.stderr)
 
     print(f"[E03] resolving tx hashes (1 per ledger)...", file=sys.stderr)
     pairs = pick_one_tx_per_ledger(ledgers, limit_per_ledger=1)
@@ -202,12 +227,21 @@ def main() -> int:
             continue
 
         diffs = compare_tx(hash_hex, ch, hz, result)
+        # 6 fields total now: hash, ledger, source_account, fee_charged,
+        # successful, operation_count (tolerance-bound).
         if diffs:
             dump_diff(ENDPOINT, hash_hex, ch, hz, diffs)
-            append_tsv_row(TSV, ENDPOINT, hash_hex, 7 - len(diffs), 2, len(diffs),
+            # All `diffs` entries that survived compare_tx() are either
+            # "fail" or "tolerance" — recount via result.fields if needed.
+            # For TSV simplicity: count entries in diffs as "tolerance" if
+            # operation_count, else fail.
+            tol = sum(1 for d in diffs if d.startswith("operation_count"))
+            fail = len(diffs) - tol
+            pass_n = 6 - len(diffs)
+            append_tsv_row(TSV, ENDPOINT, hash_hex, pass_n, tol, fail,
                            ";".join(diffs))
         else:
-            append_tsv_row(TSV, ENDPOINT, hash_hex, 5, 2, 0, "")
+            append_tsv_row(TSV, ENDPOINT, hash_hex, 6, 0, 0, "")
 
         if processed % 100 == 0:
             elapsed = int(time.monotonic() - started)

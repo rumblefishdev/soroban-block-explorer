@@ -43,18 +43,21 @@ ch() {
 
 echo "[1/5] Sampling ledgers..."
 {
+  # 12 buckets in retention range × 2500/bucket = 30K target.
   ch "
     SELECT sequence FROM ledgers
     WHERE sequence >= $HORIZON_FLOOR
     ORDER BY intDiv(sequence - $HORIZON_FLOOR, 500000) ASC, intHash64(sequence) ASC
-    LIMIT 1200 BY intDiv(sequence - $HORIZON_FLOOR, 500000)
+    LIMIT 2500 BY intDiv(sequence - $HORIZON_FLOOR, 500000)
   "
 
   # Adversarial: first + last per 500K partition
   ch "
-    SELECT arrayJoin([min(sequence), max(sequence)]) AS sequence
-      FROM ledgers
-     GROUP BY intDiv(sequence, 500000)
+    SELECT arrayJoin(edges) AS seq_edge FROM (
+      SELECT [min(sequence), max(sequence)] AS edges
+        FROM ledgers
+       GROUP BY intDiv(sequence, 500000)
+    )
   "
 
   # Adversarial: top 200 max-tx ledgers
@@ -78,12 +81,14 @@ echo "  → $L_COUNT ledger samples"
 # ----- 2. Account samples: 30K stratified by id range -----
 
 echo "[2/5] Sampling accounts..."
-# Total accounts ~13.88M. Stratify by id range / 1000 buckets, 30 per bucket
-# = 30K. Use deterministic hash for repeatability.
+# Total accounts ~13.88M, ids are wide-range Int64 surrogates.
+# CH `%` on signed Int64 returns signed result; positiveModulo gives
+# the unsigned 0..bucket-1 needed for clean stratification.
+# 1000 buckets × 30/bucket = 30K target.
 ch "
   SELECT account_id FROM accounts FINAL
-  ORDER BY intDiv(abs(id), 14000000) ASC, intHash64(id) ASC
-  LIMIT 30 BY intDiv(abs(id), 14000000)
+  ORDER BY positiveModulo(id, 1000) ASC, intHash64(id) ASC
+  LIMIT 30 BY positiveModulo(id, 1000)
 " > "$OUT_DIR/samples_accounts.txt"
 
 A_COUNT=$(wc -l < "$OUT_DIR/samples_accounts.txt")
