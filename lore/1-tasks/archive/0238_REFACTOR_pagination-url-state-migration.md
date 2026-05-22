@@ -30,10 +30,11 @@ history:
       vs original task: LP list + pool participants/transactions +
       contract events/invocations). useInfinitePager deleted. New
       primitives: usePageHandlers helper + CURSOR_PARAMS registry
-      for multi-section namespacing. Net +29 lines vs develop (36
-      files, +628/-599). nx typecheck/lint/build green on both
-      libs/ui and web. 3 commits on branch
-      refactor/0238_pagination-url-state-migration.
+      for multi-section namespacing. Net +132 lines vs develop (37
+      files, +854/-722; verified against merge commit 55224f9 — earlier
+      "+29" figure was a stale pre-cleanup count). nx typecheck/lint/build
+      green on both libs/ui and web. PR #211 merged on develop via
+      6 commits on branch refactor/0238_pagination-url-state-migration.
 ---
 
 # Migrate pagination from useState pageIndex to URL cursor (finish 0061)
@@ -142,8 +143,9 @@ user navigates to a different parent entity.
 
 ### Phase 4 — cleanup
 
-- `web/src/pages/useInfinitePager.ts` moved to `.trash/` (zero
-  consumers).
+- `web/src/pages/useInfinitePager.ts` deleted via `git rm` (zero
+  consumers; project `.trash/` convention does not produce a
+  `.trash/` entry in the commit — file is removed outright).
 - `web/src/pages/cursorParams.ts` — `CURSOR_PARAMS` registry for
   namespaced keys: `POOL_PARTICIPANTS`, `POOL_TRANSACTIONS`,
   `CONTRACT_EVENTS`, `CONTRACT_INVOCATIONS`. Prevents accidental
