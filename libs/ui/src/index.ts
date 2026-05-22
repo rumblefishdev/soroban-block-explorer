@@ -50,6 +50,7 @@ export {
   TableEmptyState,
   useTableUrlState,
   useCursorPagination,
+  usePageHandlers,
 } from './table/index.js';
 export type {
   ExplorerTableColumn,
@@ -63,6 +64,8 @@ export type {
   UseTableUrlStateOptions,
   UseTableUrlStateResult,
   UseCursorPaginationResult,
+  PageInfoLike,
+  UsePageHandlersResult,
 } from './table/index.js';
 
 export {

@@ -13,9 +13,10 @@ import {
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { useNftTransfers } from '../../api/index.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -84,14 +85,10 @@ const COLUMN_COUNT = columns.length;
  * of mint / transfer / burn events for one NFT, per the Figma design.
  */
 export function NftTransfers({ nftId }: NftTransfersProps) {
-  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
-
-  // Cursors are NFT-scoped; switching to a different NFT must drop the
-  // URL cursor and stack. `reset` is intentionally absent from deps —
-  // it's a fresh callback each render.
-  useEffect(() => {
-    reset();
-  }, [nftId]);
+  // Cursors are NFT-scoped — drop the URL cursor on NFT switch.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: nftId,
+  });
 
   const { data, isLoading, isError, error, refetch } = useNftTransfers(
     nftId,
@@ -99,12 +96,7 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
   );
 
   const rows = data?.data ?? [];
-  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
-  const canNext = nextCursor !== null;
-
-  const handleNext = () => {
-    if (nextCursor) goNext(nextCursor);
-  };
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -153,8 +145,8 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
       <Box sx={{ minHeight: 200 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
+        canPrev={canPrev}
+        canNext={canNext}
         onPrev={goPrev}
         onNext={handleNext}
       />

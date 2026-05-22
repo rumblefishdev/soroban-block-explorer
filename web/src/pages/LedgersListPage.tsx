@@ -8,6 +8,7 @@ import {
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
+  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { type ReactNode } from 'react';
 
@@ -20,12 +21,7 @@ export default function LedgersListPage() {
   const { data, isLoading, isError, error, refetch } = useLedgersList(cursor);
 
   const rows = data?.data ?? [];
-  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
-  const canNext = nextCursor !== null;
-
-  const handleNext = () => {
-    if (nextCursor) goNext(nextCursor);
-  };
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -73,8 +69,8 @@ export default function LedgersListPage() {
         <Box sx={{ minHeight: 320 }}>{body}</Box>
         <PaginationControls
           caption="Latest results"
-          prevCursor={canPrev ? 'prev' : null}
-          nextCursor={canNext ? 'next' : null}
+          canPrev={canPrev}
+          canNext={canNext}
           onPrev={goPrev}
           onNext={handleNext}
         />

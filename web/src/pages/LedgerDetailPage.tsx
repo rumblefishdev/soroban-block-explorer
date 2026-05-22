@@ -9,8 +9,8 @@ import {
   SectionErrorBoundary,
   TransientErrorState,
   useCursorPagination,
+  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 
 import { useLedgerDetail } from '../api/index.js';
@@ -25,22 +25,22 @@ export default function LedgerDetailPage() {
   const valid = rawSequence != null && isLedgerSequence(rawSequence);
   const sequence = valid ? Number(rawSequence) : Number.NaN;
 
-  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
-
   // Cursors are scoped to a specific ledger's embedded transactions, so
   // navigating to a different ledger (e.g. via LedgerNav prev/next) must
-  // drop any cursor lingering in the URL — otherwise we'd send it to a
-  // ledger that doesn't recognise it.
-  // Intentionally exclude `reset` from deps — it's a fresh callback each
-  // render and would re-trigger the effect on every render.
-  useEffect(() => {
-    reset();
-  }, [sequence]);
+  // drop any cursor lingering in the URL.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: sequence,
+  });
 
   const { data, isLoading, isError, error, refetch } = useLedgerDetail(
     sequence,
     cursor,
     valid
+  );
+
+  const { canNext, handleNext } = usePageHandlers(
+    data?.transactions.page,
+    goNext
   );
 
   if (!valid) {
@@ -76,15 +76,7 @@ export default function LedgerDetailPage() {
 
   const ledger = data;
   const txRows = ledger.transactions.data;
-  const nextCursor = ledger.transactions.page.has_more
-    ? ledger.transactions.page.cursor ?? null
-    : null;
-  const canNext = nextCursor !== null;
   const sequenceLabel = ledger.sequence.toLocaleString('en-US');
-
-  const handleNext = () => {
-    if (nextCursor) goNext(nextCursor);
-  };
 
   return (
     <Stack spacing={3}>

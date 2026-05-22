@@ -12,9 +12,10 @@ import {
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { useAssetTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -67,13 +68,10 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
  * summary and metadata.
  */
 export function AssetTransactions({ assetId }: { assetId: string }) {
-  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
-
-  // Cursors are asset-scoped; switching assets must drop the URL cursor.
-  // `reset` is intentionally absent from deps — fresh callback each render.
-  useEffect(() => {
-    reset();
-  }, [assetId]);
+  // Cursors are asset-scoped — drop the URL cursor on asset switch.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: assetId,
+  });
 
   const { data, isLoading, isError, error, refetch } = useAssetTransactions(
     assetId,
@@ -81,12 +79,7 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
-  const canNext = nextCursor !== null;
-
-  const handleNext = () => {
-    if (nextCursor) goNext(nextCursor);
-  };
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -126,8 +119,8 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
+        canPrev={canPrev}
+        canNext={canNext}
         onPrev={goPrev}
         onNext={handleNext}
       />

@@ -12,9 +12,10 @@ import {
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -68,14 +69,11 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
  * account summary so a failure here never collapses the rest of the page.
  */
 export function AccountTransactions({ accountId }: { accountId: string }) {
-  const { cursor, canPrev, goNext, goPrev, reset } = useCursorPagination();
-
-  // Cursors are account-scoped; switching accounts must drop the URL
-  // cursor. `reset` is intentionally absent from deps — fresh callback
-  // each render.
-  useEffect(() => {
-    reset();
-  }, [accountId]);
+  // Cursors are account-scoped — `resetKey` drops the URL cursor when
+  // the user navigates to a different account.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    resetKey: accountId,
+  });
 
   const { data, isLoading, isError, error, refetch } = useAccountTransactions(
     accountId,
@@ -83,12 +81,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const nextCursor = data?.page.has_more ? data.page.cursor ?? null : null;
-  const canNext = nextCursor !== null;
-
-  const handleNext = () => {
-    if (nextCursor) goNext(nextCursor);
-  };
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -128,8 +121,8 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
+        canPrev={canPrev}
+        canNext={canNext}
         onPrev={goPrev}
         onNext={handleNext}
       />

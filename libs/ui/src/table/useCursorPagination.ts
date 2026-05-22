@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   useTableUrlState,
@@ -7,11 +7,29 @@ import {
 } from './useTableUrlState.js';
 
 /**
+ * Scope identifier extension over `UseTableUrlStateOptions`. When
+ * `resetKey` flips (compared with `Object.is`), the URL cursor +
+ * prev-stack are reset. Use on detail-page sections where the cursor
+ * belongs to a parent entity (`resetKey: poolId`, `resetKey: contractId`).
+ *
+ * Initial mount does NOT reset — a pasted deep link `?cursor=...`
+ * survives the first render.
+ */
+type Options = UseTableUrlStateOptions & { resetKey?: unknown };
+
+/**
  * Marker pushed onto the prev-cursor stack for the "no cursor" page
  * (page 0 / first page). Reserved sentinel — empty string can never be
  * a real cursor value (server contract: opaque non-empty token).
  */
 const FIRST_PAGE = '';
+
+/**
+ * Upper bound on the prev-stack depth. Deep manual paging shouldn't
+ * accumulate unbounded history in a single session; capping at 50
+ * keeps Prev useful for the recent walk without leaking memory.
+ */
+const MAX_HISTORY = 50;
 
 export interface UseCursorPaginationResult
   extends Omit<UseTableUrlStateResult, 'setFilter'> {
@@ -61,15 +79,36 @@ export interface UseCursorPaginationResult
  *                `filterKeys` here for pages that have filters.
  */
 export function useCursorPagination(
-  options?: UseTableUrlStateOptions
+  options?: Options
 ): UseCursorPaginationResult {
   const urlState = useTableUrlState(options);
   const { state, setCursor, setFilter: setFilterRaw, resetCursor } = urlState;
   const [stack, setStack] = useState<string[]>([]);
 
+  const reset = useCallback(() => {
+    setStack([]);
+    resetCursor();
+  }, [resetCursor]);
+
+  // `resetKey` fires reset when the caller's scope identifier flips
+  // (e.g. parent entity id changed). The `useRef` skips the initial
+  // mount so a deep link with a pasted `?cursor=` survives — the cursor
+  // only drops on a *change*, not on first render.
+  const resetKey = options?.resetKey;
+  const prevResetKey = useRef(resetKey);
+  useEffect(() => {
+    if (!Object.is(prevResetKey.current, resetKey)) {
+      prevResetKey.current = resetKey;
+      reset();
+    }
+  }, [resetKey, reset]);
+
   const goNext = useCallback(
     (nextCursor: string) => {
-      setStack((s) => [...s, state.cursor ?? FIRST_PAGE]);
+      setStack((s) => {
+        const next = [...s, state.cursor ?? FIRST_PAGE];
+        return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+      });
       setCursor(nextCursor);
     },
     [state.cursor, setCursor]
@@ -91,11 +130,6 @@ export function useCursorPagination(
     },
     [setFilterRaw]
   );
-
-  const reset = useCallback(() => {
-    setStack([]);
-    resetCursor();
-  }, [resetCursor]);
 
   return {
     state,

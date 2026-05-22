@@ -12,13 +12,15 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { type ReactNode, useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import { useContractEvents } from '../../api/index.js';
+import { CURSOR_PARAMS } from '../cursorParams.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
-import { useInfinitePager } from '../useInfinitePager.js';
 
 type EventRow = PaginatedEventItem['data'][number];
 
@@ -159,23 +161,21 @@ const columns: ExplorerTableColumn<EventRow>[] = [
  * requested limit; pagination is cursor-driven and never derives counts.
  */
 export function ContractEvents({ contractId }: { contractId: string }) {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useContractEvents(contractId);
+  // Namespaced cursor: contract detail tabs between Events + Invocations,
+  // so each tab needs its own URL key. `resetKey` drops the cursor when
+  // the user navigates to a different contract.
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+    cursorParam: CURSOR_PARAMS.CONTRACT_EVENTS,
+    resetKey: contractId,
+  });
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = useInfinitePager(
-    data?.pages ?? [],
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage
+  const { data, isLoading, isError, error, refetch } = useContractEvents(
+    contractId,
+    cursor
   );
+
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -223,9 +223,9 @@ export function ContractEvents({ contractId }: { contractId: string }) {
       <Box sx={{ minHeight: 280 }}>{body}</Box>
       <PaginationControls
         caption="Latest results"
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
-        onPrev={handlePrev}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={goPrev}
         onNext={handleNext}
       />
     </Box>
