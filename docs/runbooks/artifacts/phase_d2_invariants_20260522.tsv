@@ -1,0 +1,7 @@
+invariant	scope	sample_size	mismatches	verdict	note
+D.2.1	account_balances_current sum vs assets.total_supply (asset_type IN 1,2)	100123_full_pop	0	PASS	exact match within 0.0001 epsilon and within 1.0 XLM
+D.2.2	transaction_participants distinct(account_id) vs accounts FINAL count	13884923_total	41	PASS	diff = 41 (bootstrap-only RPC-seeded accounts with first_seen_ledger = 0 per Phase 6); expected
+D.2.3	operations_appearances.transaction_id FK to transactions FINAL	56157	0	PASS	100K-row sample via intHash64 modulo (56,157 actually selected); FK perfectly preserved
+D.2.4	soroban_events distinct (contract_id, ledger_sequence, transaction_id, event_index)	384403116_one_partition	0	PASS	full partition 120 scan; 0 duplicates; ORDER BY tuple uniqueness holds
+D.2.5	soroban_invocations_appearances FK to soroban_contracts AND transactions	100000	0	PASS	100K sample; 100K contract FK matched, 100K tx FK matched, 0 missing on either side
+D.2.6	nfts_pending (contract_id, token_id) has matching nft_ownership_pending row	97676	0	PASS	100K-row sample via cityHash64 modulo (97,676 actually selected); ownership coverage 100%
