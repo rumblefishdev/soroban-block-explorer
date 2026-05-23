@@ -34,6 +34,45 @@ history:
       its smoke Phase 6 verdict (acceptance criteria already met); this
       task does the deeper per-endpoint sweep that 0207 deferred. Both
       can land independently.
+  - date: '2026-05-23'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      **Phase B endpoints E03 + E19 GREEN.**
+
+      E03 (`/transactions` list) — sample 30,294 mainnet tx hashes
+      from Hetzner CH joined against Horizon `/transactions/:hash`;
+      6 canonical fields compared (hash, ledger, source_account,
+      fee_charged, successful, operation_count). 25,115 hashes
+      resolved on Horizon (rest 404 — pre-pruning window or
+      Soroban-only synthetic). **pass=150,690, fail=0, tolerance=0**
+      across all six fields. elapsed 32,050 s ≈ 8h54m. Summary at
+      `/tmp/sbe-artifacts/0252/phase_b_e03_summary.json`.
+
+      E19 (`/liquidity-pools` list) — sample 5,000 LP samples vs
+      Horizon `/liquidity_pools/:id`; 7 fields (pool_id, fee_bps,
+      total_shares, reserve_a, reserve_b, last_updated_ledger, type).
+      **pass=19,929, fail=0, tolerance=6,664** (tolerance bucket
+      concentrated in reserve_a / reserve_b / last_updated_ledger —
+      expected live-data drift between Horizon snapshot and CH
+      sample). elapsed 78 min. Summary at
+      `phase_b_e19_summary.json`.
+
+      Operator notes:
+        - E03 + E19 launched 2026-05-22 from a single ssh session on
+          pts/0 (no tmux). E19 finished cleanly at 15:34. E03 kept
+          running into a session disconnect; reptyr attach failed
+          ("Inappropriate ioctl for device" — process had already
+          lost its controlling tty), but the process was already
+          SIGHUP-immune (`PPID=1, TT=?`, stdout/stderr redirected to
+          `e03_full.log` file fd, not tty). Finished cleanly at 22:43.
+        - Lesson: future runs go straight into `tmux new -d -s …`
+          with `2>&1 | tee` to a log file. Captured in
+          [[ssh-remote-auth]] and [[hetzner-ch-artifacts]] memory.
+
+      Cumulative Phase B coverage so far: E03 ✅, E05, E06, E09, E11
+      (deployer mismatch surfaced — fixed via task 0255 Phase 1),
+      E19 ✅. Remaining endpoints + final Phase B report still to do.
 ---
 
 # VALIDATION: ClickHouse endpoint parity against Horizon / stellar.expert
