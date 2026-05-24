@@ -2,43 +2,37 @@
 """E02 — /transactions list (paginated) compare CH ↔ Horizon.
 
 E03 validates each tx's fields when fetched by hash. E02 validates the
-*list* contract: for a given anchor cursor, does CH return the same set
-of tx hashes as Horizon, with the same row count, in the same ledger
-window?
+*list* contract: for a given ledger, does CH return the same set of tx
+hashes as Horizon?
 
 Compare strategy
 ----------------
-Sequence within a ledger differs across stores:
-  - Horizon orders by application_order DESC within a ledger.
-  - CH `transactions.id` is `cityhash64(network_id || hash)`, so its
-    secondary sort (id DESC) is essentially random per ledger.
+Within-ledger ordering differs by design:
+  - CH `transactions.id` is `cityhash64(network_id || hash)`. The
+    canonical E02 query orders by `(ledger_sequence DESC, id DESC)` —
+    hash-derived, NOT application_order.
+  - Horizon orders by `application_order DESC`.
 
-Therefore: compare as HASH SETS per anchor, not ordered sequences. The
-set equality is the load-bearing assertion; sequence is a no-op claim
-the canonical query never made.
+So a page-vs-page compare on `LIMIT N` slices each ledger differently
+and yields huge spurious "set diffs" (~80-90 %). The load-bearing
+contract is per-ledger SET equality + per-row field correctness. The
+within-ledger sort order is a CH implementation detail with no
+Horizon equivalent; this script intentionally does not assert on it.
 
-Per anchor (one "page" worth):
-  1. Pick anchor_ledger from samples_ledgers.txt (retention-valid only).
-  2. CH:      last 50 tx with ledger_sequence <= anchor_ledger
-              ORDER BY ledger_sequence DESC, id DESC.
-              (Constrained to anchor's 500K partition + the one below
-              if the page spans the boundary; matches canonical query
-              behaviour. We just widen to "intDiv = N or N-1" in our
-              raw SQL — the canonical query is paginated and would
-              fetch the next partition on a follow-up call.)
-  3. Horizon: GET /transactions?cursor=PT&order=desc&limit=50
-              where PT = (anchor_ledger + 1) * 2**32 (paging token
-              boundary; tx within anchor_ledger come back in desc
-              app_order).
+Per anchor (= per ledger):
+  1. Pick `anchor_ledger` from samples_ledgers.txt (retention-valid).
+  2. CH: SELECT all tx WHERE ledger_sequence = anchor_ledger.
+  3. Horizon: paginate `/transactions?cursor=(anchor_ledger+1)*2**32&order=desc`
+     until `ledger < anchor_ledger` — collect all tx with
+     `ledger == anchor_ledger`.
   4. Diff:
-     a. count match — both should return 50 rows when anchor is deep
-        enough; tolerated drift on tail edges.
-     b. hash set equality — strict.
-     c. per-row source_account / fee_charged / successful for the
-        intersection (catches projection-level errors that hash-set
-        compare alone would miss).
+     a. hash set equality — strict.
+     b. per-row source_account / fee_charged / successful on the
+        intersection.
+     c. operation_count drift → tolerance (Horizon "successful only").
 
-Sample size: 600 anchor pages × 50 rows = 30K tx-row compares.
+Sample size: 600 anchors × ~150 tx/ledger avg ≈ 90K tx-row compares;
+also gives 600 per-ledger set-equality verdicts.
 
 Output: TSV row per anchor, JSON diff per mismatched anchor.
 """
@@ -92,17 +86,11 @@ def horizon_paging_token(ledger: int, app_order: int = 0) -> str:
     return str(ledger * (1 << 32) + app_order)
 
 
-def fetch_ch_page(anchor_ledger: int, limit: int = PAGE_LIMIT) -> list[dict]:
-    """Last `limit` tx with ledger_sequence <= anchor_ledger.
-
-    Spans up to two 500K partitions (the anchor's + the one below) to
-    cover the case where the page reaches across the boundary. The
-    canonical query handles this via subsequent paginated calls; for
-    the compare we just widen the WHERE so we get all rows we'd see
-    after one or two cursor-driven pages.
+def fetch_ch_ledger(anchor_ledger: int) -> list[dict]:
+    """All tx in `anchor_ledger`. Partition prune via intDiv to the
+    single 500K bucket the ledger lives in.
     """
-    part_hi = anchor_ledger // 500_000
-    part_lo = part_hi - 1
+    part = anchor_ledger // 500_000
     sql = f"""
     SELECT
         lower(hex(t.hash))                    AS hash,
@@ -114,46 +102,67 @@ def fetch_ch_page(anchor_ledger: int, limit: int = PAGE_LIMIT) -> list[dict]:
         t.operation_count                     AS operation_count
     FROM transactions AS t FINAL
     LEFT JOIN accounts AS src FINAL ON src.id = t.source_id
-    WHERE intDiv(t.ledger_sequence, 500000) IN ({part_lo}, {part_hi})
-      AND t.ledger_sequence <= {anchor_ledger}
-    ORDER BY t.ledger_sequence DESC, t.id DESC
-    LIMIT {limit}
+    WHERE intDiv(t.ledger_sequence, 500000) = {part}
+      AND t.ledger_sequence = {anchor_ledger}
+    ORDER BY t.application_order ASC
     FORMAT JSONEachRow
     """
     return ch_query_json(sql)
 
 
-def fetch_horizon_page(anchor_ledger: int, limit: int = PAGE_LIMIT) -> list[dict]:
-    """Horizon `/transactions?cursor=PT&order=desc&limit=N`.
-
-    Cursor = (anchor_ledger + 1) * 2**32 so the first returned row is
-    the highest-app_order tx in `anchor_ledger`.
+def fetch_horizon_ledger(anchor_ledger: int) -> list[dict]:
+    """All tx with `ledger == anchor_ledger`. Paginate desc from cursor
+    `(anchor_ledger+1) * 2**32` until the first row with `ledger <
+    anchor_ledger` (= we've exhausted the ledger).
     """
     cursor = horizon_paging_token(anchor_ledger + 1, 0)
     url = f"{HORIZON_BASE}/transactions"
-    params = {"cursor": cursor, "order": "desc", "limit": limit,
+    params = {"cursor": cursor, "order": "desc", "limit": 200,
               "include_failed": "true"}
-    for attempt in range(5):
-        r = requests.get(url, params=params, timeout=45)
+
+    out: list[dict] = []
+    page = 0
+    while page < 20:  # absolute cap — a single ledger never holds 4000 tx
+        if page == 0:
+            r = requests.get(url, params=params, timeout=45)
+        else:
+            r = requests.get(url, timeout=45)
+
         if r.status_code == 200:
+            body = r.json()
+            recs = body.get("_embedded", {}).get("records", []) or []
+            if not recs:
+                return out
+            for rec in recs:
+                lseq = int(rec.get("ledger", -1))
+                if lseq < anchor_ledger:
+                    return out
+                if lseq == anchor_ledger:
+                    out.append(rec)
+            next_link = body.get("_links", {}).get("next", {}).get("href")
+            if not next_link:
+                return out
+            url = next_link
+            params = None
+            page += 1
             time.sleep(HORIZON_DELAY)
-            return r.json().get("_embedded", {}).get("records", []) or []
+            continue
+
         if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(2 ** attempt)
+            time.sleep(2 ** min(page, 5))
             continue
         if r.status_code == 404:
-            return []
+            return out
         r.raise_for_status()
-    return []
+    return out
 
 
 def compare_anchor(anchor_ledger: int, ch_rows: list[dict],
                    hz_rows: list[dict], result: EndpointResult) -> list[str]:
-    """Set-based hash compare + intersection field check.
+    """Per-ledger set compare + intersection field check.
 
-    Records 6 logical fields:
-      - count_match        (per anchor)
-      - hash_set_equal     (per anchor)
+    Records 5 fields:
+      - hash_set_equal     (per anchor — load-bearing)
       - source_account     (per intersected row)
       - fee_charged        (per intersected row)
       - successful         (per intersected row)
@@ -164,39 +173,20 @@ def compare_anchor(anchor_ledger: int, ch_rows: list[dict],
     ch_hashes = {r["hash"].lower() for r in ch_rows}
     hz_hashes = {r.get("hash", "").lower() for r in hz_rows if r.get("hash")}
 
-    # Anchor-level: count match.
-    if len(ch_rows) == len(hz_rows):
-        result.record_field("count_match", "pass")
-    else:
-        # Tolerance: tail-edge anchors near retention floor may have
-        # Horizon-side gaps (live drift / pruning latency).
-        if anchor_ledger - PAGE_LIMIT < HORIZON_FLOOR + 200:
-            result.record_field("count_match", "tolerance")
-            diffs.append(f"count CH={len(ch_rows)} HZ={len(hz_rows)} (retention edge)")
-        else:
-            result.record_field("count_match", "fail")
-            diffs.append(f"count CH={len(ch_rows)} HZ={len(hz_rows)}")
-
-    # Anchor-level: hash set equality.
     only_ch = ch_hashes - hz_hashes
     only_hz = hz_hashes - ch_hashes
     if not only_ch and not only_hz:
         result.record_field("hash_set_equal", "pass")
     else:
-        # Tail-edge tolerance, same logic as count.
-        if anchor_ledger - PAGE_LIMIT < HORIZON_FLOOR + 200:
-            result.record_field("hash_set_equal", "tolerance")
-            diffs.append(f"hash_set diff only_ch={len(only_ch)} only_hz={len(only_hz)} (retention edge)")
-        else:
-            result.record_field("hash_set_equal", "fail")
-            sample_only_ch = list(only_ch)[:3]
-            sample_only_hz = list(only_hz)[:3]
-            diffs.append(
-                f"hash_set diff only_ch={len(only_ch)} only_hz={len(only_hz)} "
-                f"sample_ch={sample_only_ch} sample_hz={sample_only_hz}"
-            )
+        sample_only_ch = list(only_ch)[:3]
+        sample_only_hz = list(only_hz)[:3]
+        result.record_field("hash_set_equal", "fail")
+        diffs.append(
+            f"hash_set diff only_ch={len(only_ch)} only_hz={len(only_hz)} "
+            f"ch_count={len(ch_hashes)} hz_count={len(hz_hashes)} "
+            f"sample_ch={sample_only_ch} sample_hz={sample_only_hz}"
+        )
 
-    # Per-row field compare on intersection. Build hash → row maps.
     ch_by_hash = {r["hash"].lower(): r for r in ch_rows}
     hz_by_hash = {r["hash"].lower(): r for r in hz_rows if r.get("hash")}
     inter = ch_hashes & hz_hashes
@@ -267,31 +257,24 @@ def main() -> int:
         processed += 1
 
         try:
-            ch_rows = fetch_ch_page(anchor_ledger)
+            ch_rows = fetch_ch_ledger(anchor_ledger)
         except RuntimeError as e:
             append_tsv_row(TSV, ENDPOINT, key, 0, 0, 1, f"CH_ERROR:{str(e)[:120]}")
             result.fail_total += 1
             continue
 
-        hz_rows = fetch_horizon_page(anchor_ledger)
-        if not hz_rows:
-            append_tsv_row(TSV, ENDPOINT, key, 0, 0, 0, "HZ_EMPTY")
+        hz_rows = fetch_horizon_ledger(anchor_ledger)
+        if not hz_rows and not ch_rows:
+            append_tsv_row(TSV, ENDPOINT, key, 0, 0, 0, "BOTH_EMPTY")
             continue
 
         diffs = compare_anchor(anchor_ledger, ch_rows, hz_rows, result)
 
-        # Compute counts for the TSV row. Rather than recount diff
-        # strings (mix of fail / tolerance), use the result deltas
-        # this anchor produced — easier: just emit aggregate row.
-        pass_n = (
-            (1 if not any(d.startswith("count ") for d in diffs) else 0)
-            + (1 if not any(d.startswith("hash_set ") for d in diffs) else 0)
-        )
-        tol_n = sum(1 for d in diffs if "(retention edge)" in d or "(Horizon semantic drift)" in d)
-        fail_n = sum(1 for d in diffs if "(retention edge)" not in d and "(Horizon semantic drift)" not in d
-                     and (d.startswith("count ") or d.startswith("hash_set ")
-                          or " source_account " in d or " fee_charged " in d
-                          or " successful " in d))
+        # TSV counts: pass=1 means hash_set_equal pass; rest derived
+        # from field deltas implicitly via result aggregation.
+        pass_n = 0 if any(d.startswith("hash_set ") for d in diffs) else 1
+        tol_n = sum(1 for d in diffs if "(Horizon semantic drift)" in d)
+        fail_n = sum(1 for d in diffs if "(Horizon semantic drift)" not in d)
 
         if diffs:
             dump_diff(ENDPOINT, key, ch_rows, hz_rows, diffs)
