@@ -38,6 +38,7 @@ import os
 import random
 import sys
 import time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -178,25 +179,19 @@ def compare_pool(pool_hex: str, ch: dict, hz: dict, result: EndpointResult) -> l
             result.record_field("asset_b_issuer", "fail")
             diffs.append(f"asset_b_issuer CH={ch['asset_b_issuer']!r} HZ={hz_b_issuer!r}")
 
-        # reserve_a / reserve_b — Horizon reports raw stroops as
-        # decimal string (e.g. "1.2345678"); CH stores raw integer
-        # stroops in `s.reserve_a`. Convert Horizon to integer
-        # stroops (× 10^7, drop the decimal).
-        def hz_amount_to_stroops(s: str) -> int:
-            if "." in s:
-                whole, frac = s.split(".", 1)
-                frac = (frac + "0000000")[:7]
-                return int(whole) * 10_000_000 + int(frac)
-            return int(s) * 10_000_000
+        # reserve_a / reserve_b — both stores serialise as 7-decimal
+        # strings (CH `Decimal128(7)` via `toString`, Horizon as JSON
+        # string). Parse both as Decimal for an exact compare.
+        def _dec(v: object) -> Decimal:
+            try:
+                return Decimal(str(v))
+            except (InvalidOperation, ValueError, TypeError):
+                return Decimal("-1")
 
-        try:
-            hz_res_a = hz_amount_to_stroops(hz_reserves[0].get("amount", "0"))
-            hz_res_b = hz_amount_to_stroops(hz_reserves[1].get("amount", "0"))
-        except (ValueError, TypeError):
-            hz_res_a = hz_res_b = -1
-
-        ch_res_a = int(ch.get("reserve_a") or 0)
-        ch_res_b = int(ch.get("reserve_b") or 0)
+        hz_res_a = _dec(hz_reserves[0].get("amount", "0"))
+        hz_res_b = _dec(hz_reserves[1].get("amount", "0"))
+        ch_res_a = _dec(ch.get("reserve_a") or "0")
+        ch_res_b = _dec(ch.get("reserve_b") or "0")
 
         if ch_res_a == hz_res_a:
             result.record_field("reserve_a", "pass")
@@ -211,19 +206,15 @@ def compare_pool(pool_hex: str, ch: dict, hz: dict, result: EndpointResult) -> l
             result.record_field("reserve_b", "tolerance")
             diffs.append(f"reserve_b CH={ch_res_b} HZ={hz_res_b} (live drift)")
 
-    # total_shares — Horizon `total_shares` is decimal stringified.
-    # CH stores raw integer (stroops-like 7-decimal).
-    hz_shares_raw = hz.get("total_shares", "0")
-    try:
-        if "." in str(hz_shares_raw):
-            whole, frac = str(hz_shares_raw).split(".", 1)
-            frac = (frac + "0000000")[:7]
-            hz_shares = int(whole) * 10_000_000 + int(frac)
-        else:
-            hz_shares = int(hz_shares_raw) * 10_000_000
-    except (ValueError, TypeError):
-        hz_shares = -1
-    ch_shares = int(ch.get("total_shares") or 0)
+    # total_shares — both decimal strings; Decimal compare.
+    def _dec_safe(v: object) -> Decimal:
+        try:
+            return Decimal(str(v))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("-1")
+
+    hz_shares = _dec_safe(hz.get("total_shares", "0"))
+    ch_shares = _dec_safe(ch.get("total_shares") or "0")
     if ch_shares == hz_shares:
         result.record_field("total_shares", "pass")
     else:
