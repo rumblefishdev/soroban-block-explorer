@@ -29,8 +29,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// Error returned by [`decode`] when a client-supplied cursor string
 /// cannot be parsed.
@@ -206,9 +206,8 @@ mod tests {
     fn envelope_with_extra_top_level_field_is_rejected() {
         // `deny_unknown_fields` on the envelope catches forged cursors
         // and forward-compat experiments minted by a newer deployment.
-        let bad = URL_SAFE_NO_PAD.encode(
-            br#"{"dir":"next","p":{"ts":"2026-04-24T12:00:00Z","id":42},"extra":1}"#,
-        );
+        let bad = URL_SAFE_NO_PAD
+            .encode(br#"{"dir":"next","p":{"ts":"2026-04-24T12:00:00Z","id":42},"extra":1}"#);
         let err = decode::<TsIdCursor>(&bad).unwrap_err();
         assert!(matches!(err, CursorError::InvalidPayload));
     }
@@ -278,8 +277,7 @@ mod tests {
         // Direction variant must fail decode on the current code rather
         // than silently mapping to Next. Tests `#[serde(rename_all =
         // "snake_case")]` rejection of unknown variants.
-        let bad_json =
-            br#"{"dir":"sideways","p":{"ts":"2026-04-24T12:00:00Z","id":42}}"#;
+        let bad_json = br#"{"dir":"sideways","p":{"ts":"2026-04-24T12:00:00Z","id":42}}"#;
         let bad_b64 = URL_SAFE_NO_PAD.encode(bad_json);
         let err = decode::<TsIdCursor>(&bad_b64).unwrap_err();
         assert!(matches!(err, CursorError::InvalidPayload));

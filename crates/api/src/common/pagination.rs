@@ -273,8 +273,7 @@ mod tests {
     #[test]
     fn ts_id_helper_round_trips_via_envelope() {
         let mut rows = vec![row(1, 0), row(2, 1), row(3, 2), row(4, 3)];
-        let page =
-            finalize_ts_id_page(&mut rows, 3, Direction::Next, true, |r| r.ts, |r| r.id);
+        let page = finalize_ts_id_page(&mut rows, 3, Direction::Next, true, |r| r.ts, |r| r.id);
         assert_eq!(rows.len(), 3);
         assert!(page.next_cursor.is_some());
 

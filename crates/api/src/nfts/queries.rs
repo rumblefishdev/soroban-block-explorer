@@ -17,7 +17,6 @@ use crate::common::cursor::{Direction, direction_sql};
 
 use super::dto::{NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
 
-
 pub struct ResolvedListParams {
     pub limit: i64,
     pub cursor: Option<NftIdCursor>,

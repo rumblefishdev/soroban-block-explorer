@@ -11,7 +11,6 @@ use crate::common::cursor::{Direction, direction_sql};
 
 use super::dto::{ChartDataPoint, PoolListCursor, SharesCursor};
 
-
 /// Internal row carrying both the wire-visible StrKey and the surrogate
 /// `accounts.id` needed for the cursor tie-breaker. The surrogate is
 /// stripped before the API response is built.

@@ -50,12 +50,13 @@ export interface UseCursorPaginationResult
  * URL-as-state cursor pagination. Cursor lives in `?cursor=` query
  * param; `goNext` / `goPrev` rewrite the URL via `useTableUrlState`.
  *
- * Backend emits both forward (`cursor`) and backward (`prev_cursor`)
- * tokens in every `PageInfo`. The hook is a thin URL-binding around
- * those — it does not maintain any client-side cursor history. A pasted
- * deep link `?cursor=X` works identically regardless of how the user
- * landed there: the backend response carries `prev_cursor`, which
- * powers the Prev button without any in-session walk requirement.
+ * Backend emits both forward (`next_cursor`) and backward
+ * (`prev_cursor`) tokens in every `PageInfo`. The hook is a thin
+ * URL-binding around those — it does not maintain any client-side
+ * cursor history. A pasted deep link `?cursor=X` works identically
+ * regardless of how the user landed there: the backend response
+ * carries `prev_cursor`, which powers the Prev button without any
+ * in-session walk requirement.
  *
  * Pairs with `useQuery` (not `useInfiniteQuery`): every distinct cursor
  * produces a distinct React Query `queryKey`, so revisiting a cursor

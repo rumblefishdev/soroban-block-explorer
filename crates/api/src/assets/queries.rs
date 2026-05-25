@@ -13,7 +13,6 @@ use sqlx::{PgPool, Row};
 
 use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
-
 #[derive(Debug, Clone)]
 pub struct AssetRow {
     pub id: i32,

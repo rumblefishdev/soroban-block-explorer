@@ -28,7 +28,6 @@ use crate::transactions::dto::TransactionListItem;
 
 use super::dto::LedgerListItem;
 
-
 // ---------------------------------------------------------------------------
 // Internal row structs (not exposed in API response types)
 // ---------------------------------------------------------------------------

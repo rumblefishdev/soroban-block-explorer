@@ -228,12 +228,14 @@ async fn list_endpoint_returns_paginated_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     let page = &json["page"];
     assert_eq!(page["limit"], 3, "page.limit not echoed: {json}");
-    assert!(page["next_cursor"].is_string() || page["next_cursor"].is_null(), "page.cursor must be string or null");
-    // `cursor` is `Option<String>` with `skip_serializing_if = Option::is_none`
-    // on the empty-page case — either a string or absent is valid.
-    if let Some(c) = page.get("cursor") {
-        assert!(c.is_string() || c.is_null(), "page.cursor bad type: {json}");
-    }
+    assert!(
+        page["next_cursor"].is_string() || page["next_cursor"].is_null(),
+        "page.next_cursor must be string or null: {json}"
+    );
+    assert!(
+        page["prev_cursor"].is_string() || page["prev_cursor"].is_null(),
+        "page.prev_cursor must be string or null: {json}"
+    );
 }
 
 /// Locks the JOIN to `operations_appearances` — the no-filter list test
@@ -260,7 +262,10 @@ async fn list_endpoint_filter_op_type_returns_envelope_against_real_db() {
     assert_eq!(status, StatusCode::OK, "expected 200, got {status}: {json}");
     assert!(json["data"].is_array(), "data not array: {json}");
     assert_eq!(json["page"]["limit"], 3, "page.limit not echoed: {json}");
-    assert!(json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(), "page.cursor must be string or null");
+    assert!(
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
+    );
 }
 
 /// Locks `fetch_operations` against `operations_appearances` with
@@ -683,7 +688,10 @@ async fn assets_list_returns_paginated_envelope_against_real_db() {
     assert_eq!(status, StatusCode::OK, "expected 200, got {status}: {json}");
     assert!(json["data"].is_array(), "data not array: {json}");
     assert_eq!(json["page"]["limit"], 5, "page.limit not echoed: {json}");
-    assert!(json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(), "page.cursor must be string or null");
+    assert!(
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
+    );
 }
 
 /// `filter[type]=native` must return at most the singleton native row
@@ -1050,7 +1058,7 @@ async fn cursor_round_trip_no_overlap_against_real_db() {
     }
     let cursor = page1["page"]["next_cursor"]
         .as_str()
-        .expect("page.cursor present when has_more=true")
+        .expect("page.next_cursor present when more pages exist")
         .to_string();
     let hash1 = data1[0]["hash"].as_str().unwrap().to_string();
 
@@ -1259,7 +1267,8 @@ async fn lp_participants_e2e_sort_filter_pagination() {
         (pct_top - 50.0).abs() < 1e-9,
         "expected ~50.0%, got {pct_top}"
     );
-    assert!(page1["page"]["next_cursor"].is_string(),
+    assert!(
+        page1["page"]["next_cursor"].is_string(),
         "second page must exist (3rd row is filtered, 2nd remains)"
     );
     let cursor = page1["page"]["next_cursor"]
@@ -1297,7 +1306,8 @@ async fn lp_participants_e2e_sort_filter_pagination() {
         "expected ~25.0%, got {pct_mid}"
     );
     // Tail flag — third row is zero-shares, filtered out, so no page 3.
-    assert!(page2["page"]["next_cursor"].is_null(),
+    assert!(
+        page2["page"]["next_cursor"].is_null(),
         "zero-share row must be filtered → page2 is the tail"
     );
 
@@ -1441,7 +1451,11 @@ async fn lp_participants_prev_cursor_round_trip_against_real_db() {
         .await
         .unwrap();
     let (status, page1_prime) = body_json(resp).await;
-    assert_eq!(status, StatusCode::OK, "page1' (via prev_cursor): {page1_prime}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "page1' (via prev_cursor): {page1_prime}"
+    );
     assert_eq!(
         page1_prime["data"][0]["account"]
             .as_str()
@@ -2074,7 +2088,10 @@ async fn ledgers_list_returns_paginated_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     let page = &json["page"];
     assert_eq!(page["limit"], 3, "page.limit: {json}");
-    assert!(page["next_cursor"].is_string() || page["next_cursor"].is_null(), "page.cursor must be string or null");
+    assert!(
+        page["next_cursor"].is_string() || page["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
+    );
 
     // Per-row shape — first row, if present.
     if let Some(row) = json["data"].get(0) {
@@ -3715,7 +3732,10 @@ async fn accounts_transactions_returns_paginated_envelope_against_real_db() {
     );
     assert!(json["data"].is_array(), "data not array: {json}");
     assert!(json["page"]["limit"].is_number(), "page.limit: {json}");
-    assert!(json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(), "page.cursor must be string or null");
+    assert!(
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
+    );
 
     if let Some(row) = json["data"].get(0) {
         for k in [
@@ -4181,14 +4201,14 @@ async fn search_cache_control_no_store_against_real_db() {
 // ---------------------------------------------------------------------------
 // Cursor matrix — direction-aware pagination (task 0254)
 //
-// Validates the `prev_cursor` + `cursor` contract on `GET /v1/ledgers`:
+// Validates the `next_cursor` + `prev_cursor` contract on `GET /v1/ledgers`:
 //
-//   * first page  : `prev_cursor` None,  `cursor` Some
+//   * first page  : `prev_cursor` null, `next_cursor` Some
 //   * middle page : both Some
-//   * last page   : `cursor` None,       `prev_cursor` Some (when input present)
-//   * round-trip  : page1.cursor → page2; page2.prev_cursor → page1' that
-//                   matches the original page 1's row identities.
-//   * walk match  : forward 3× then backward 3× yields the same row
+//   * last page   : `next_cursor` null, `prev_cursor` Some (when input present)
+//   * round-trip  : page1.next_cursor → page2; page2.prev_cursor → page1'
+//                   that matches the original page 1's row identities.
+//   * walk match  : forward 4× then backward 3× yields the same row
 //                   sequences (modulo presentation order).
 //
 // Ledgers chosen as the reference endpoint: simplest cursor payload
@@ -4397,7 +4417,9 @@ async fn ledgers_forward_then_backward_walk_matches() {
             .collect();
         forward_seqs.push(seqs);
         let Some(next) = json["page"]["next_cursor"].as_str() else {
-            eprintln!("DB too small for forward walk (needs ≥4 pages × {LIMIT} = ≥8 ledgers) — skipping");
+            eprintln!(
+                "DB too small for forward walk (needs ≥4 pages × {LIMIT} = ≥8 ledgers) — skipping"
+            );
             return;
         };
         forward_cursors.push(Some(next.to_owned()));
@@ -4453,7 +4475,10 @@ async fn ledgers_forward_then_backward_walk_matches() {
     );
 
     // Backward step 2 of 3: page 3 → page 2.
-    let Some(prev_to_p2) = json_back3["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+    let Some(prev_to_p2) = json_back3["page"]["prev_cursor"]
+        .as_str()
+        .map(str::to_owned)
+    else {
         eprintln!("page 3 (via backward) has no prev_cursor — skipping");
         return;
     };
@@ -4482,7 +4507,10 @@ async fn ledgers_forward_then_backward_walk_matches() {
     );
 
     // Backward step 3 of 3: page 2 → page 1.
-    let Some(prev_to_p1) = json_back2["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+    let Some(prev_to_p1) = json_back2["page"]["prev_cursor"]
+        .as_str()
+        .map(str::to_owned)
+    else {
         eprintln!("page 2 (via backward) has no prev_cursor — skipping");
         return;
     };

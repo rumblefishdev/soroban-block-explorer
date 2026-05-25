@@ -7,7 +7,6 @@ use sqlx::{PgPool, Row};
 
 use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
-
 #[derive(Debug)]
 pub struct AccountHeaderRow {
     /// Surrogate id, threaded into balances query — never on wire.
@@ -167,12 +166,12 @@ pub async fn fetch_transactions(
     );
 
     let raw: Vec<PgRow> = sqlx::query(&sql)
-    .bind(account_id)
-    .bind(limit)
-    .bind(cursor_ts)
-    .bind(cursor_id)
-    .fetch_all(pool)
-    .await?;
+        .bind(account_id)
+        .bind(limit)
+        .bind(cursor_ts)
+        .bind(cursor_id)
+        .fetch_all(pool)
+        .await?;
 
     Ok(raw
         .iter()

@@ -6,7 +6,6 @@ use sqlx::{PgPool, Row};
 
 use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
-
 #[derive(Debug)]
 pub struct TxListRow {
     pub id: i64,
