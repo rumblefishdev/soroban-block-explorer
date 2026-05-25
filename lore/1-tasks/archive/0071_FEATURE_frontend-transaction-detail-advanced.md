@@ -2,7 +2,7 @@
 id: '0071'
 title: 'Frontend: Transaction detail -- advanced mode'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0070']
 tags: [priority-high, effort-medium, layer-frontend-pages]
@@ -13,6 +13,19 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-25
+    status: completed
+    who: FilipDz
+    note: >
+      Shipped on feat/0070_0071_transaction-detail bundled with 0070.
+      Advanced view: OperationJsonDetail (KV-table with op_type / contract_id /
+      function_name / arguments / return_value / auth), HighlightedJson
+      (syntax-highlighted JSON renderer — strings green, numbers yellow,
+      keys/bools blue), EventsSection (merged contract + diagnostic in one
+      table with kind chip + HighlightedJson topics/data), RawDataSection
+      (envelope_xdr / result_xdr / results_meta_xdr collapsible rows with
+      char-count chip + Copy text-button). Mode toggle preserves URL +
+      single useTransactionDetail() shared with normal mode.
 ---
 
 # Frontend: Transaction detail -- advanced mode
@@ -111,15 +124,15 @@ Create `apps/web/src/pages/transaction-detail/AdvancedModeView.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Per-operation detail shows: operation ID, raw type, all parameters, argument values, return values
-- [ ] Null, empty, and zero values are NEVER hidden -- all fields displayed as returned
-- [ ] Events section shows: type, topics, data for each event
-- [ ] Diagnostic events separated from contract events with clear labels
-- [ ] envelope_xdr section: collapsible, default collapsed, copy button, monospace font
-- [ ] result_xdr section: collapsible, default collapsed, copy button, monospace font
-- [ ] Advanced mode uses same API response as normal mode (no separate fetch)
-- [ ] Large data payloads are expandable without breaking page layout
-- [ ] Each section has independent error boundary
+- [x] Per-operation detail shows: operation ID, raw type, all parameters, argument values, return values
+- [x] Null, empty, and zero values are NEVER hidden -- all fields displayed as returned
+- [x] Events section shows: type, topics, data for each event
+- [x] Diagnostic events separated from contract events with clear labels — merged in one table with a colored kind chip (Contract = blue, Diagnostic = neutral) per the Figma design
+- [x] envelope_xdr section: collapsible, default collapsed, copy button, monospace font
+- [x] result_xdr section: collapsible, default collapsed, copy button, monospace font
+- [x] Advanced mode uses same API response as normal mode (no separate fetch)
+- [x] Large data payloads are expandable without breaking page layout
+- [x] Each section has independent error boundary
 
 ## Notes
 

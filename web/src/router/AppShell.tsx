@@ -6,6 +6,7 @@ import {
   TopNav,
   SecondaryNav,
   Footer,
+  grid,
   type Network,
   type NavItem,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -158,7 +159,13 @@ export function AppShell() {
       />
       <Box
         component="main"
-        sx={{ flex: 1, ...(isFullBleed ? {} : { px: 10, py: 4 }) }}
+        sx={{
+          flex: 1,
+          width: '100%',
+          maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,
+          mx: 'auto',
+          ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
+        }}
       >
         <Outlet />
       </Box>

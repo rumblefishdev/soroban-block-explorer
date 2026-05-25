@@ -58,31 +58,30 @@ interface NodePalette {
 }
 
 function nodeStyle(theme: Theme, kind: FlowNodeKind): NodePalette {
-  const dark = theme.palette.mode === 'dark';
   switch (kind) {
     case 'contract':
       return {
-        backgroundColor: scales.blue[600],
+        backgroundColor: scales.blue[900],
         borderColor: scales.blue[600],
         color: theme.palette.common.white,
       };
     case 'destination':
       return {
-        backgroundColor: scales.violet[600],
+        backgroundColor: scales.violet[900],
         borderColor: scales.violet[600],
         color: theme.palette.common.white,
       };
     case 'result':
       return {
-        backgroundColor: dark ? scales.green[950] : scales.green[50],
+        backgroundColor: scales.green[950],
         borderColor: scales.green[600],
-        color: dark ? scales.green[200] : scales.green[800],
+        color: theme.palette.common.white,
       };
     case 'account':
     case 'operation':
     default:
       return {
-        backgroundColor: theme.palette.surface.grayMain,
+        backgroundColor: theme.palette.surface.background,
         borderColor: theme.palette.stroke.defaultHover,
         color: theme.palette.text.primary,
       };
@@ -137,7 +136,7 @@ function FlowNodeCard({ node }: { node: FlowNode }) {
           spacing={1}
         >
           <Stack spacing={0.5} sx={{ minWidth: 0 }}>
-            <Typography variant="bodyBold" sx={{ color: 'inherit' }}>
+            <Typography variant="heading6SemiBold" sx={{ color: 'inherit' }}>
               {node.title}
             </Typography>
             {(node.identifier || node.detail !== undefined) && (
@@ -221,7 +220,11 @@ function FlowNodeCard({ node }: { node: FlowNode }) {
             sx={(theme) => ({
               ml: 2,
               pl: 2,
+              pb: 2,
               borderLeft: `1px dashed ${theme.palette.stroke.default}`,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1.5,
             })}
           >
             {children.map((child) => (

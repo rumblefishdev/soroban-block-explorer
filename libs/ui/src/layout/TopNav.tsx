@@ -2,6 +2,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
+import { grid } from '../theme/grid.js';
 import { monoFontFamily } from '../theme/typography.js';
 import { NetworkSwitcher, type Network } from './NetworkSwitcher.js';
 import { SearchInput } from './SearchInput.js';
@@ -89,73 +90,81 @@ export function TopNav({
     <Box
       component="header"
       sx={(theme) => ({
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        px: 10,
-        py: 1,
+        width: '100%',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.backgroundAlt,
-        width: '100%',
       })}
     >
       <Box
-        display="flex"
-        alignItems="center"
-        gap={2}
-        flex={1}
-        minWidth={0}
-        overflow="hidden"
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          width: '100%',
+          maxWidth: grid.desktop.maxWidth,
+          mx: 'auto',
+          px: `${grid.desktop.margin}px`,
+          py: 1,
+        }}
       >
-        <Box flexShrink={0}>
-          <NetworkSwitcher
-            network={network}
-            onNetworkChange={onNetworkChange}
-          />
-        </Box>
-
         <Box
           display="flex"
           alignItems="center"
-          gap={1.5}
+          gap={2}
+          flex={1}
           minWidth={0}
           overflow="hidden"
         >
-          <Stat
-            label="TPS"
-            value={stats.tps.toFixed(1)}
-            valueColor="text.success"
-          />
-          <StatDivider />
-          <Stat label="Ledger" value={formatNumber(stats.ledger)} />
-          <StatDivider />
-          <Stat label="Accounts" value={formatNumber(stats.accounts)} />
-          <StatDivider />
-          <Stat label="Contracts" value={formatNumber(stats.contracts)} />
-        </Box>
-      </Box>
-
-      <Box sx={{ position: 'relative', flexShrink: 0 }}>
-        <SearchInput
-          value={searchValue}
-          onChange={onSearchChange}
-          onSubmit={onSearchSubmit}
-          onClear={onSearchClear}
-        />
-        {searchOverlaySlot && (
-          <Box
-            sx={(theme) => ({
-              position: 'absolute',
-              top: '100%',
-              right: 0,
-              mt: 0.5,
-              width: 628,
-              zIndex: theme.zIndex.modal,
-            })}
-          >
-            {searchOverlaySlot}
+          <Box flexShrink={0}>
+            <NetworkSwitcher
+              network={network}
+              onNetworkChange={onNetworkChange}
+            />
           </Box>
-        )}
+
+          <Box
+            display="flex"
+            alignItems="center"
+            gap={1.5}
+            minWidth={0}
+            overflow="hidden"
+          >
+            <Stat
+              label="TPS"
+              value={stats.tps.toFixed(1)}
+              valueColor="text.success"
+            />
+            <StatDivider />
+            <Stat label="Ledger" value={formatNumber(stats.ledger)} />
+            <StatDivider />
+            <Stat label="Accounts" value={formatNumber(stats.accounts)} />
+            <StatDivider />
+            <Stat label="Contracts" value={formatNumber(stats.contracts)} />
+          </Box>
+        </Box>
+
+        <Box sx={{ position: 'relative', flexShrink: 0 }}>
+          <SearchInput
+            value={searchValue}
+            onChange={onSearchChange}
+            onSubmit={onSearchSubmit}
+            onClear={onSearchClear}
+          />
+          {searchOverlaySlot && (
+            <Box
+              sx={(theme) => ({
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                mt: 0.5,
+                width: 628,
+                zIndex: theme.zIndex.modal,
+              })}
+            >
+              {searchOverlaySlot}
+            </Box>
+          )}
+        </Box>
       </Box>
     </Box>
   );

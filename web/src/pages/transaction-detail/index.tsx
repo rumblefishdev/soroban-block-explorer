@@ -1,0 +1,145 @@
+import { Box, Stack, Typography } from '@mui/material';
+import {
+  CardSkeleton,
+  classifyError,
+  GenericErrorState,
+  NotFoundState,
+  SectionErrorBoundary,
+} from '@rumblefish/soroban-block-explorer-ui';
+import { useState } from 'react';
+
+import { useTransactionDetail } from '../../api/index.js';
+import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+
+import { EventsSection } from './advanced/EventsSection.js';
+import { RawDataSection } from './advanced/RawDataSection.js';
+import { ModeToggle } from './sections/ModeToggle.js';
+import { OperationsSection } from './sections/OperationsSection.js';
+import { SignaturesTable } from './sections/SignaturesTable.js';
+import { TransactionSummary } from './sections/TransactionSummary.js';
+import { useDetailMode } from './useDetailMode.js';
+import { useTxHashParam } from './useTxHashParam.js';
+
+function shortHash(hash: string): string {
+  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
+}
+
+export default function TransactionDetailPage() {
+  const { hash, valid } = useTxHashParam();
+  const { mode, setMode } = useDetailMode();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const query = useTransactionDetail(valid ? hash : '');
+
+  if (!valid) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <NotFoundState entity="transaction" identifier={hash} />
+      </Box>
+    );
+  }
+
+  if (query.isLoading) {
+    return (
+      <Stack spacing={3}>
+        <Box>
+          <PageBreadcrumb
+            items={[
+              { label: 'Transactions', to: '/transactions' },
+              { label: shortHash(hash) },
+            ]}
+          />
+          <Typography variant="heading5SemiBold" component="h1">
+            Transaction Detail
+          </Typography>
+        </Box>
+        <CardSkeleton />
+        <CardSkeleton />
+        <CardSkeleton />
+      </Stack>
+    );
+  }
+
+  if (query.isError) {
+    const kind = classifyError(query.error);
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        {kind === 'not-found' ? (
+          <NotFoundState entity="transaction" identifier={hash} />
+        ) : (
+          <GenericErrorState onRetry={() => void query.refetch()} />
+        )}
+      </Box>
+    );
+  }
+
+  if (query.data == null) return null;
+  const tx = query.data;
+  const heavy = tx.heavy ?? null;
+
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <PageBreadcrumb
+          items={[
+            { label: 'Transactions', to: '/transactions' },
+            { label: shortHash(hash) },
+          ]}
+        />
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          spacing={2}
+          sx={{ flexWrap: 'wrap' }}
+        >
+          <Typography variant="heading5SemiBold" component="h1">
+            Transaction Detail
+          </Typography>
+          <ModeToggle mode={mode} onChange={setMode} />
+        </Stack>
+      </Box>
+
+      <SectionErrorBoundary sectionName="transaction-summary">
+        <TransactionSummary tx={tx} />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary sectionName="transaction-operations">
+        <OperationsSection
+          tx={tx}
+          mode={mode}
+          selectedIndex={selectedIndex}
+          onSelect={setSelectedIndex}
+        />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary sectionName="transaction-signatures">
+        <SignaturesTable signatures={heavy?.signatures ?? []} />
+      </SectionErrorBoundary>
+
+      {mode === 'advanced' && (
+        <>
+          <SectionErrorBoundary sectionName="transaction-events">
+            <EventsSection
+              contractEvents={heavy?.contract_events ?? []}
+              diagnosticEvents={heavy?.diagnostic_events ?? []}
+            />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary sectionName="transaction-raw-data">
+            <RawDataSection
+              envelopeXdr={heavy?.envelope_xdr}
+              resultXdr={heavy?.result_xdr}
+              resultsMetaXdr={
+                (
+                  heavy as
+                    | { results_meta_xdr?: string | null }
+                    | null
+                    | undefined
+                )?.results_meta_xdr
+              }
+            />
+          </SectionErrorBoundary>
+        </>
+      )}
+    </Stack>
+  );
+}
