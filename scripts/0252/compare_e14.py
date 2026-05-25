@@ -92,29 +92,29 @@ def fetch_ch_events(contract_strkey: str) -> list[dict]:
 
 
 def fetch_se_events(contract_strkey: str) -> list[dict] | None:
+    """Single-attempt fast-fail per URL — see compare_e13 rationale."""
     for path in (
         f"/contract/{contract_strkey}/events",
         f"/contract-event?contract={contract_strkey}",
     ):
         url = f"{STELLAR_EXPERT_BASE}{path}"
         try:
-            r = requests.get(url, timeout=30)
+            r = requests.get(url, timeout=10)
         except requests.RequestException:
             continue
-        if r.status_code == 200:
-            try:
-                body = r.json()
-            except json.JSONDecodeError:
-                continue
-            time.sleep(HORIZON_DELAY)
-            if isinstance(body, dict):
-                recs = body.get("_embedded", {}).get("records") or body.get("records") or body.get("items")
-                if isinstance(recs, list):
-                    return recs
-            if isinstance(body, list):
-                return body
-        elif r.status_code in (429,) or r.status_code >= 500:
-            time.sleep(2)
+        if r.status_code != 200:
+            continue
+        try:
+            body = r.json()
+        except json.JSONDecodeError:
+            continue
+        time.sleep(HORIZON_DELAY)
+        if isinstance(body, dict):
+            recs = body.get("_embedded", {}).get("records") or body.get("records") or body.get("items")
+            if isinstance(recs, list):
+                return recs
+        if isinstance(body, list):
+            return body
     return None
 
 
