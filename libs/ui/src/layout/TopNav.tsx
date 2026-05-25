@@ -4,20 +4,27 @@ import type { ReactNode } from 'react';
 
 import { grid } from '../theme/grid.js';
 import { monoFontFamily } from '../theme/typography.js';
-import { NetworkSwitcher, type Network } from './NetworkSwitcher.js';
 import { SearchInput } from './SearchInput.js';
 
+/**
+ * Slim subset of `GET /v1/network/stats` that TopNav needs to render
+ * its counters. Field names mirror the API exactly so callers can pass
+ * the raw query response through without a mapping layer (structural
+ * typing accepts the wider shape).
+ */
 export interface NetworkStats {
-  tps: number;
-  ledger: number;
-  accounts: number;
-  contracts: number;
+  tps_60s: number;
+  latest_ledger_sequence: number;
+  total_accounts: number;
+  total_contracts: number;
 }
 
 export interface TopNavProps {
-  network: Network;
-  onNetworkChange?: (network: Network) => void;
-  stats: NetworkStats;
+  /** Live network counters. Pass `undefined` to render dashes while the
+   *  underlying query is loading or errored — TopNav handles the
+   *  fallback so callers don't ship visually-misleading hard-coded
+   *  zeros. */
+  stats?: NetworkStats;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -77,8 +84,6 @@ function formatNumber(n: number): string {
 }
 
 export function TopNav({
-  network,
-  onNetworkChange,
   stats,
   searchValue,
   onSearchChange,
@@ -115,13 +120,6 @@ export function TopNav({
           minWidth={0}
           overflow="hidden"
         >
-          <Box flexShrink={0}>
-            <NetworkSwitcher
-              network={network}
-              onNetworkChange={onNetworkChange}
-            />
-          </Box>
-
           <Box
             display="flex"
             alignItems="center"
@@ -131,15 +129,24 @@ export function TopNav({
           >
             <Stat
               label="TPS"
-              value={stats.tps.toFixed(1)}
+              value={stats ? stats.tps_60s.toFixed(1) : '—'}
               valueColor="text.success"
             />
             <StatDivider />
-            <Stat label="Ledger" value={formatNumber(stats.ledger)} />
+            <Stat
+              label="Ledger"
+              value={stats ? formatNumber(stats.latest_ledger_sequence) : '—'}
+            />
             <StatDivider />
-            <Stat label="Accounts" value={formatNumber(stats.accounts)} />
+            <Stat
+              label="Accounts"
+              value={stats ? formatNumber(stats.total_accounts) : '—'}
+            />
             <StatDivider />
-            <Stat label="Contracts" value={formatNumber(stats.contracts)} />
+            <Stat
+              label="Contracts"
+              value={stats ? formatNumber(stats.total_contracts) : '—'}
+            />
           </Box>
         </Box>
 

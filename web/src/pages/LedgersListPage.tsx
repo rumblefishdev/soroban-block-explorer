@@ -7,47 +7,21 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  useCursorPagination,
+  usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 
 import { useLedgersList } from '../api/index.js';
 
 import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    refetch,
-  } = useLedgersList();
+  const { cursor, canPrev, goNext, goPrev } = useCursorPagination();
+  const { data, isLoading, isError, error, refetch } = useLedgersList(cursor);
 
-  const [pageIndex, setPageIndex] = useState(0);
-
-  const pages = data?.pages ?? [];
-  const currentPage = pages[pageIndex];
-  const rows = currentPage?.data ?? [];
-  const canPrev = pageIndex > 0;
-  const canNext = Boolean(currentPage?.page.has_more);
-
-  const handlePrev = useCallback(() => {
-    setPageIndex((index) => Math.max(0, index - 1));
-  }, []);
-
-  const handleNext = useCallback(() => {
-    if (isFetchingNextPage) return;
-    if (pageIndex + 1 < pages.length) {
-      setPageIndex(pageIndex + 1);
-      return;
-    }
-    if (hasNextPage) {
-      void fetchNextPage().then(() => setPageIndex((index) => index + 1));
-    }
-  }, [pageIndex, pages.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const rows = data?.data ?? [];
+  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
 
   let body: ReactNode;
   if (isLoading) {
@@ -95,9 +69,9 @@ export default function LedgersListPage() {
         <Box sx={{ minHeight: 320 }}>{body}</Box>
         <PaginationControls
           caption="Latest results"
-          prevCursor={canPrev ? 'prev' : null}
-          nextCursor={canNext ? 'next' : null}
-          onPrev={handlePrev}
+          canPrev={canPrev}
+          canNext={canNext}
+          onPrev={goPrev}
           onNext={handleNext}
         />
       </Card>

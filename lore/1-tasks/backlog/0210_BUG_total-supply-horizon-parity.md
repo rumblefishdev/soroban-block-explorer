@@ -7,6 +7,7 @@ related_adr: ['0043']
 related_tasks: ['0194', '0197']
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
+milestone: 2
 links:
   - https://developers.stellar.org/docs/data/horizon/api-reference/aggregations/assets/list
 history:

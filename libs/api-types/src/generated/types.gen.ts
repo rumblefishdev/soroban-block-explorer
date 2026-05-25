@@ -991,6 +991,13 @@ export type PaginatedPoolItem = {
     latest_snapshot_at?: string | null;
     latest_snapshot_ledger?: number | null;
     /**
+     * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
+     * Computed from the live table — not dependent on the snapshot
+     * freshness window, so it is populated even on stale pools (where
+     * `tvl`/`volume`/`fee_revenue` are NULL).
+     */
+    participant_count: number;
+    /**
      * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
      */
     pool_id: string;
@@ -1157,6 +1164,13 @@ export type PoolItem = {
   fee_revenue?: string | null;
   latest_snapshot_at?: string | null;
   latest_snapshot_ledger?: number | null;
+  /**
+   * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
+   * Computed from the live table — not dependent on the snapshot
+   * freshness window, so it is populated even on stale pools (where
+   * `tvl`/`volume`/`fee_revenue` are NULL).
+   */
+  participant_count: number;
   /**
    * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
    */
@@ -1934,6 +1948,13 @@ export type ListPoolsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Single-asset filter — matches either `asset_a_code` or
+     * `asset_b_code` case-insensitively (input is trimmed + uppercased
+     * before the query). Intended for the Figma list's free-text
+     * "Filter by asset pair" input.
+     */
+    'filter[asset_code]'?: string | null;
     'filter[asset_a_code]'?: string | null;
     'filter[asset_a_issuer]'?: string | null;
     'filter[asset_b_code]'?: string | null;

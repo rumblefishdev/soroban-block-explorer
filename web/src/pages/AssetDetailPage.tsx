@@ -4,6 +4,7 @@ import {
   Chip,
   classifyError,
   GenericErrorState,
+  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -49,7 +50,7 @@ export default function AssetDetailPage() {
   } else if (asset.isError) {
     summary = (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {classifyError(asset.error) === 'not-found' ? (
+        {isMissingResource(classifyError(asset.error)) ? (
           <NotFoundState entity="asset" identifier={id} />
         ) : (
           <GenericErrorState onRetry={() => void asset.refetch()} />
@@ -113,9 +114,21 @@ export default function AssetDetailPage() {
         </Box>
       )}
 
-      <SectionErrorBoundary sectionName="asset-transactions">
-        <AssetTransactions assetId={id} />
-      </SectionErrorBoundary>
+      {/* `AssetTransactions` is an independent query with its own
+          `TableSkeleton` / error handling, so we keep it mounted while
+          the parent asset query is still loading — that way the page
+          shows a consistent skeleton row (summary card + metadata card
+          + transactions table skeleton) instead of the transactions
+          section popping in only after the parent settles. Only hide
+          on parent error: a 400 / 404 / 5xx on the asset itself means
+          the asset doesn't exist (or the API is degraded), in which
+          case the embedded list would just surface a duplicate banner
+          below the already-routed NotFoundState / GenericErrorState. */}
+      {!asset.isError && (
+        <SectionErrorBoundary sectionName="asset-transactions">
+          <AssetTransactions assetId={id} />
+        </SectionErrorBoundary>
+      )}
     </Stack>
   );
 }

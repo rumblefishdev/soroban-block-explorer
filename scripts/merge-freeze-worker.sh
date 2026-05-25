@@ -44,7 +44,7 @@
 #   merge-freeze-worker.sh --worker NAME [options]
 #
 # Required:
-#   --worker NAME            Worker identifier (e.g. m1, m2, m3, laptop1).
+#   --worker NAME            Worker identifier (e.g. laptop1, laptop2, laptop3).
 #                            Used in the snapshot name and the audit file.
 #
 # Optional:
@@ -71,9 +71,9 @@
 #
 # Examples
 # --------
-#   ./scripts/merge-freeze-worker.sh --worker m1 --range 50457424 55103999 --yes
-#   ./scripts/merge-freeze-worker.sh --worker laptop1 --dry-run
-#   ./scripts/merge-freeze-worker.sh --worker m2 --force-unfreeze --yes
+#   ./scripts/merge-freeze-worker.sh --worker laptop1 --range 50457424 55103999 --yes
+#   ./scripts/merge-freeze-worker.sh --worker laptop2 --dry-run
+#   ./scripts/merge-freeze-worker.sh --worker laptop3 --force-unfreeze --yes
 
 set -euo pipefail
 

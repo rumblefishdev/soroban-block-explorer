@@ -4,11 +4,14 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
+mod asset_aggregates;
 mod bootstrap;
 mod dashboard;
 mod error;
 mod ingest;
+mod nft_reclassify;
 mod partition;
+mod repair_tier1;
 mod resume;
 mod rpc_snapshot;
 mod run;
@@ -140,6 +143,51 @@ enum Command {
         #[arg(long)]
         end: u32,
     },
+
+    /// Tier-1 post-merge column rebuild for the Hetzner CH
+    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
+    /// across 5 state tables (`accounts.first_seen_ledger`,
+    /// `lp_positions.first_deposit_ledger`,
+    /// `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`,
+    /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
+    /// These silently corrupt under cross-machine
+    /// `ReplacingMergeTree` collapse. The remaining 6 columns
+    /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
+    /// tables) are filled by Stage 2 enrichment (task 0231).
+    /// Per-table staging + EXCHANGE TABLES atomic swap. CH-only —
+    /// PG target short-circuits.
+    RepairTier1 {
+        /// Build staging tables and log their row counts, then drop
+        /// them — do not EXCHANGE. Use on laptop 1's local CH as a
+        /// sandbox before running for real on Hetzner.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Recompute `assets.{holder_count, total_supply}` from current
+    /// `account_balances_current` state (task 0228 Phase 5,
+    /// CH analog of task 0194's PG `recompute_asset_aggregates`).
+    /// Staging + EXCHANGE TABLES. CH-only.
+    AssetAggregates {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Post-merge NFT reclassification on the Hetzner CH (task 0228
+    /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
+    /// quarantine promotion):
+    ///
+    /// - Promote `nfts_pending` rows → `nfts` for contracts now
+    ///   classified `Nft`.
+    /// - Drop pending rows for contracts now `Fungible` or `Token`.
+    /// - Drop legacy false positives from hot `nfts` / `nft_ownership`.
+    ///
+    /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
+    /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
+    NftReclassify {
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -208,6 +256,44 @@ async fn main() {
                 stats.staged_accounts,
                 stats.rpc_batches,
                 stats.rpc_errors,
+            );
+        }
+        Command::RepairTier1 { dry_run } => {
+            let stats = repair_tier1::execute(&sink, dry_run)
+                .await
+                .expect("repair_tier1 failed");
+            println!(
+                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} nfts={} nfts_pending={} soroban_contracts={}",
+                stats.dry_run,
+                stats.accounts_rows,
+                stats.lp_positions_rows,
+                stats.nfts_rows,
+                stats.nfts_pending_rows,
+                stats.soroban_contracts_rows,
+            );
+        }
+        Command::AssetAggregates { dry_run } => {
+            let stats = asset_aggregates::execute(&sink, dry_run)
+                .await
+                .expect("asset_aggregates failed");
+            println!(
+                "asset_aggregates completed (dry_run={}): assets_rows={}",
+                stats.dry_run, stats.assets_rows,
+            );
+        }
+        Command::NftReclassify { dry_run } => {
+            let stats = nft_reclassify::execute(&sink, dry_run)
+                .await
+                .expect("nft_reclassify failed");
+            println!(
+                "nft_reclassify completed (dry_run={}): promoted_nfts={} promoted_ownership={} dropped_pending_nfts={} dropped_pending_ownership={} dropped_legacy_nfts={} dropped_legacy_ownership={}",
+                stats.dry_run,
+                stats.promoted_nfts,
+                stats.promoted_ownership,
+                stats.dropped_pending_nfts,
+                stats.dropped_pending_ownership,
+                stats.dropped_legacy_nfts,
+                stats.dropped_legacy_ownership,
             );
         }
     }

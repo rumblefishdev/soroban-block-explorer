@@ -1,0 +1,63 @@
+<!--
+  RBAC quotas backing the per-service users in `services.xml`
+  (task 0240). Mounted at /etc/clickhouse-server/users.d/quotas.xml.
+
+  Quotas are sliding-window (CH `<duration>3600</duration>` = per
+  hour) and per-user, so one consumer's burst cannot starve another.
+  Caps are sized against the pre-cutover workload baseline; revisit
+  before [[task-0239]] Phase 6 (RDS drop) once real prod traffic is
+  observed on CH.
+-->
+<clickhouse>
+    <quotas>
+        <unlimited>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </unlimited>
+
+        <api_throttle>
+            <interval>
+                <duration>3600</duration>
+                <queries>10000</queries>
+                <errors>1000</errors>
+                <result_rows>1000000000</result_rows>
+                <read_rows>1000000000</read_rows>
+                <read_bytes>107374182400</read_bytes>
+                <execution_time>1000</execution_time>
+            </interval>
+        </api_throttle>
+
+        <!-- write-side quotas: queries / read intentionally
+             unbounded (ingestion does both heavily); written_bytes
+             ceiling is a sanity cap to catch a runaway bulk insert,
+             not a real throttle. -->
+        <high_write>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+                <written_bytes>1125899906842624</written_bytes>
+            </interval>
+        </high_write>
+
+        <low_volume>
+            <interval>
+                <duration>3600</duration>
+                <queries>100</queries>
+                <errors>20</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </low_volume>
+    </quotas>
+</clickhouse>

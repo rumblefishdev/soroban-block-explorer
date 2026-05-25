@@ -198,9 +198,22 @@ export function TimeSeriesChart({
             },
           ]}
           sx={{
-            // Figma: the data line carries a soft blue glow.
+            // Figma node `325:24354` — the data line carries a soft
+            // blue glow and the marks are hollow rings (light fill,
+            // brighter blue stroke). MUI X renders marks as `<circle>`
+            // inside `MuiMarkElement-root`; size the circle (`r`),
+            // fill it with the 100 tint, and stroke it with 400 to
+            // match the design.
             '& .MuiLineElement-root': {
+              strokeWidth: 2,
               filter: `drop-shadow(0px 3px 8px ${scales.blue[600]}59)`,
+            },
+            '& .MuiMarkElement-root': {
+              fill: scales.blue[100],
+              stroke: scales.blue[600],
+              strokeWidth: 2,
+              r: 6,
+              scale: '1',
             },
           }}
         />

@@ -29,10 +29,19 @@ export default function SearchResultsPage() {
   return (
     <Stack spacing={3} sx={{ py: 2 }}>
       <Box>
-        <Typography variant="heading4Bold" sx={{ mb: 0.5 }}>
+        {/* Heading needs an explicit `component="h1"` — without it both
+            Typography blocks default to plain divs, so the a11y tree
+            concatenates them into one run ("SearchRefine your query…").
+            Aligning with the other list/detail pages, which all set the
+            heading element explicitly (task 0251 H10). */}
+        <Typography variant="heading4Bold" component="h1" sx={{ mb: 0.5 }}>
           Search
         </Typography>
-        <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodySmRegular"
+          component="p"
+          sx={{ color: 'text.tertiary' }}
+        >
           Refine your query to find transactions, accounts, contracts, tokens,
           NFTs, and liquidity pools.
         </Typography>

@@ -1,0 +1,260 @@
+# Production overlay for the Hetzner ch-prod-01 deployment.
+#
+# Layered on top of the base `docker-compose.yml`:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# ## What this overlay does
+#
+# - Adds Caddy as the TLS + mTLS reverse proxy in front of CH.
+# - Rebinds the CH container ports to the loopback interface only
+#   (`!override` is mandatory — without it Compose appends the new
+#   bindings to the public ones from the base file).
+# - Replaces the dev named volume with bind mounts under `/srv/`
+#   so the data, logs, and backup-staging directories survive
+#   container recreation and are reachable for the Borg backup
+#   cron entry on the host.
+# - Layers in the production-only ClickHouse XML overrides
+#   (`config.d/memory.xml`, `config.d/prometheus.xml`,
+#   `config.d/backups.xml`).
+# - Switches the schema sidecar to a shell-wrapped entrypoint that
+#   reads the prod password from the container env at runtime
+#   (keeps it out of the rendered Compose spec and `docker inspect`
+#   output).
+# - Profiles the local-dev `postgres` service out of the default
+#   composition; the production stack is CH-only.
+# - Pins per-service memory limits so a runaway query / proxy
+#   cannot starve the host OOM-killer of headroom.
+#
+# ## Required environment variables on the host
+#
+#   CH_DOMAIN               public DNS name (Caddy serves on this)
+#   ACME_EMAIL              contact email for Let's Encrypt
+#   CLICKHOUSE_PASSWORD     password for the `default` CH user
+#
+# The Ansible `env_file` role materialises these into /srv/app/.env
+# from the deploy operator's shell environment; Compose reads .env
+# automatically from the project directory.
+
+services:
+  caddy:
+    # Pinned minor version (not `2-alpine` rolling) — Caddy 2.x
+    # has had quoting semantics changes on the `expression`
+    # request matcher between point releases that could change
+    # the safety properties of the CN allowlist. A pinned tag
+    # plus deliberate upgrade in a PR keeps the matcher
+    # behaviour from drifting silently.
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      # Public ingress. 443 carries mTLS + TLS; 80 exists solely
+      # for the Let's Encrypt http-01 challenge and the HTTP→HTTPS
+      # redirect Caddy installs automatically.
+      - '0.0.0.0:80:80'
+      - '0.0.0.0:443:443'
+    volumes:
+      - ./infra-hetzner/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra-hetzner/ca/ca.crt:/etc/caddy/clients-ca.pem:ro
+      # CN allowlist snippet rendered by Ansible (roles/app) from
+      # `allowed_client_cns` in group_vars. We bind-mount the
+      # PARENT directory (`/srv/caddy/`) rather than the single
+      # file. Why: Docker auto-creates a missing bind-mount target
+      # as a directory; mounting only the file would brick Caddy
+      # if the playbook ever runs out of order. Mounting the dir
+      # is safe — Caddy reads `import snippets/cn_allowlist.snippet`
+      # and fails loudly if the file inside the dir is missing,
+      # rather than silently getting wedged.
+      - /srv/caddy:/etc/caddy/snippets:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      # Read by the Caddyfile via {$VAR} substitution.
+      CH_DOMAIN: ${CH_DOMAIN:?CH_DOMAIN must be set}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set}
+    # Caddy is a tiny static binary; 256 MiB is generous. Pinning
+    # prevents an unexpected memory leak from competing with CH
+    # for headroom on the host.
+    mem_limit: 256m
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - default
+    healthcheck:
+      # `caddy validate` confirms the loaded config still parses;
+      # the `:2019` admin endpoint is on the loopback inside the
+      # container so this is a cheap liveness probe.
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:2019/config/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  clickhouse:
+    # `!override` replaces the inherited port list from the base
+    # file. Without this tag Compose APPENDS, which would silently
+    # leave the public `0.0.0.0:8123` and `0.0.0.0:9000` bindings
+    # in place and defeat the whole loopback-only posture.
+    ports: !override
+      - '127.0.0.1:8123:8123'
+      - '127.0.0.1:9000:9000'
+      # No host mapping for 9363 (Prometheus metrics): the listener
+      # inside the container binds to 127.0.0.1 (see config.d/prometheus.xml
+      # for the rationale). A host port mapping with `userland-proxy:
+      # false` cannot reach a container-loopback listener anyway —
+      # publishing it would only create a confusing dead port on
+      # the host. Scrapers reach the endpoint via `docker exec` or
+      # by sharing the container's network namespace.
+    # `!override` on volumes too: the base file mounts a named
+    # volume at /var/lib/clickhouse, prod replaces it with a bind
+    # mount under /srv/ so backups and recovery operate on host
+    # paths instead of an opaque Docker-managed volume.
+    #
+    # WARNING: because !override wipes the inherited list, any
+    # future addition to the base file's CH volumes must be
+    # mirrored here. There is no diagnostic when this drifts;
+    # treat the base file and this list as a paired touch.
+    volumes: !override
+      - /srv/clickhouse-data:/var/lib/clickhouse
+      - /srv/clickhouse-logs:/var/log/clickhouse-server
+      - /srv/backups:/backups
+      # Read-only credentials file for clickhouse-client invocations
+      # from the host-side backup script. Delivered by Ansible's
+      # `app` role (not backup — must land before this compose
+      # mount target) to /etc/soroban-backup/clickhouse-client.xml
+      # with mode 0400 owner=101 group=root. The numeric owner
+      # matches the in-container CH UID; the absence of a host
+      # group prevents an inadvertent leak via whatever daemon
+      # `useradd` happened to allocate GID 101 to (`messagebus`,
+      # `systemd-resolve`, etc.). Used by `--config-file=…` so
+      # the password never enters argv.
+      - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-backup/client.xml:ro
+      # Pilot config files (same in dev and prod — base file
+      # paths have to be redeclared because !override wiped them).
+      - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
+      - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
+      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
+      # Per-service RBAC users + profiles + quotas (task 0240).
+      # `services.xml` defines proxy-trust users (`dev_shared`,
+      # `galexie`, `api_reader`, `ingestion_writer`, `partition_admin`,
+      # `migration_admin`) as `<no_password/>` with `<networks>`
+      # restricted to loopback + the pinned compose bridge subnet
+      # (172.30.0.0/16). `default` is intentionally NOT overridden
+      # here — the image entrypoint owns it (password from
+      # `CLICKHOUSE_PASSWORD` env, loopback-only `<networks>`) and
+      # remains the host-side admin path (sidecar, backup,
+      # SSH→docker exec). External clients reach scoped users via
+      # Caddy proxy-trust, not `default`.
+      - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
+      - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro
+      - ./crates/db-clickhouse/users.d/services.xml:/etc/clickhouse-server/users.d/services.xml:ro
+      # Production-only overrides.
+      - ./crates/db-clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      - ./crates/db-clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      - ./crates/db-clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
+    environment:
+      CLICKHOUSE_USER: default
+      # Fail-fast pattern — Compose refuses to start if the env
+      # variable is unset, so we never silently launch with the
+      # baked-in dev password from the base file. `default` is the
+      # host-side admin user (sidecar, backup, SSH→docker exec);
+      # external clients reach scoped users (`api_reader`, …) or
+      # `dev_shared` via Caddy, none of which need this password.
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    # Hard memory ceiling slightly above the engine-side
+    # `max_server_memory_usage` (100 GiB in config.d/memory.xml).
+    # 108 GiB leaves the engine room to track allocations without
+    # the kernel OOM-killer hitting first.
+    mem_limit: 108g
+    restart: unless-stopped
+
+  db-clickhouse-init:
+    # The sidecar reads credentials from the same host-side
+    # /etc/soroban-backup/clickhouse-client.xml file the backup
+    # script uses (mounted read-only at /etc/clickhouse-backup
+    # /client.xml). This keeps the password entirely OUT of:
+    #
+    #   - The sidecar entry in Compose's rendered spec.
+    #   - `docker inspect db-clickhouse-init` output.
+    #   - The sidecar process's argv (`docker top` /
+    #     `/proc/<pid>/cmdline` from inside the container).
+    #
+    # The matching `clickhouse` service still has CLICKHOUSE_PASSWORD
+    # in its `environment:` block (line ~140) — that is required by
+    # the official image's entrypoint script to seed the `default`
+    # user on first start, and is necessarily visible to anyone
+    # who can `docker inspect clickhouse`. Out of scope for this
+    # task; mitigated only by the host's docker-group membership
+    # being limited to the deploy user.
+    #
+    # `--host=clickhouse` argv overrides the config-file's
+    # `<host>127.0.0.1</host>` because the sidecar reaches CH
+    # via the Docker service name, not loopback. Other
+    # credentials come from the file.
+    #
+    # `user: "101:101"` pins the sidecar to the CH UID/GID so the
+    # 0400 owner=101 credentials file is readable via owner perms
+    # (not via root bypass). The official `clickhouse-server`
+    # image's USER directive defaults to root and the entrypoint
+    # script drops to 101 only for the server process; when we
+    # override the entrypoint to `clickhouse-client` directly the
+    # drop-priv step is skipped, so we set the user explicitly.
+    user: '101:101'
+    entrypoint:
+      - clickhouse-client
+      - --config-file=/etc/clickhouse-backup/client.xml
+      - --host=clickhouse
+      - --port=9000
+      - --multiquery
+      - --queries-file=/init.sql
+    volumes:
+      - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-backup/client.xml:ro
+    # `restart: 'no'` is inherited from the base. Re-runs on every
+    # `docker compose up` because the sidecar exits 0 after
+    # applying init.sql; CH itself does not re-trigger it.
+
+  # The dev Postgres service is profile-gated out of the default
+  # composition. `docker compose up` (no --profile) skips it
+  # entirely in production; `--profile local-only` is never passed
+  # in prod, so this service never starts on the Hetzner box.
+  #
+  # `ports: !override []` is defensive — even if an operator
+  # accidentally invokes `--profile local-only` in prod (copying
+  # a dev command), the service starts with no published ports
+  # rather than exposing a default-credential Postgres publicly.
+  postgres:
+    profiles: [local-only]
+    ports: !override []
+
+  # `postgres-merge` and `postgres-snapshot-source` are gated by
+  # the `db-merge` profile in the base compose file with public
+  # bindings on 5436/5437 and default credentials `postgres/postgres`.
+  # The prod overlay does not need these services and a
+  # `--profile db-merge` invocation here would expose two
+  # publicly-accessible Postgres instances with trivially-known
+  # credentials. Force ports off the public network as a
+  # belt-and-suspenders guard against operator error.
+  postgres-merge:
+    ports: !override []
+
+  postgres-snapshot-source:
+    ports: !override []
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+# Pin compose bridge subnet (task 0240). users.d/services.xml's
+# `<networks>` allowlist lists 172.30.0.0/16 explicitly — without
+# this pin Docker would assign an unpredictable subnet from its
+# default range (172.17.0.0/16, 172.18.0.0/16, …) and the CH
+# `<networks>` ACL would either reject the bridge gateway or have
+# to be widened to 172.16.0.0/12 (every Docker bridge on the host).
+# The pinned range stays stable across `docker network prune` cycles
+# and keeps the services.xml allowlist reviewable.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16

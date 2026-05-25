@@ -274,7 +274,7 @@ Navigation rules:
 | `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
 | `/assets`                | Assets          | `GET /assets`                                                               |
 | `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
-| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
+| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id` (+ `/interface`, `/invocations`, `/events`)   |
 | `/nfts`                  | NFTs            | `GET /nfts`                                                                 |
 | `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                             |
 | `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
@@ -463,11 +463,16 @@ Contract details and interface.
 - Contract summary - contract ID (full, copyable), deployer account (link), deployed at
   ledger (link), WASM hash, SAC badge if applicable
 - Contract interface - list of public functions with parameter names and types, allowing
-  users to understand the contract's API without reading source code
-- Invocations tab - recent invocations table (function name, caller account, status,
-  ledger, timestamp)
-- Events tab - recent events table (event type, topics, data, ledger)
-- Stats - total invocations count, unique callers
+  users to understand the contract's API without reading source code. SAC and pre-upload
+  contracts carry no WASM interface metadata and show an empty state
+- Invocations tab - recent invocations table (transaction hash, caller account, status,
+  ledger, timestamp). The appearance index carries no per-call function name — call
+  detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
+- Events tab - recent events table (event type, topics, data, ledger). Only `contract`
+  and `system` events are returned; the diagnostic-events container is dropped
+  server-side (task 0182)
+- Stats - recent invocations and unique callers over a rolling window (`stats_window`,
+  e.g. last 7 days) — the API exposes windowed counts, not full-history totals
 
 Expanded behavior:
 
@@ -513,8 +518,9 @@ Expanded behavior:
 Paginated table of all liquidity pools.
 
 - Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
-  per asset, fee percentage
-- Filters - asset pair, minimum TVL
+  per asset, fee percentage, participant count (active LP positions; task 0246)
+- Filters - asset (`filter[asset_code]`, case-insensitive single-asset; task 0246)
+  or per-leg `(code, issuer)`, minimum TVL (`filter[min_tvl]`)
 - Cursor-based pagination controls
 
 Expanded behavior:
@@ -526,7 +532,7 @@ Expanded behavior:
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
 - Pool summary - pool ID (full, copyable), asset pair, fee percentage, total shares,
-  reserves per asset
+  reserves per asset, participant count (task 0246)
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
 - Recent transactions - deposits, withdrawals, and trades involving this pool

@@ -230,7 +230,16 @@ From `LedgerEntryChanges`, the parser extracts derived state used by explorer
 entities:
 
 - contract deployments → `soroban_contracts` row (contract_id surrogate, wasm_hash
-  BYTEA 32, deployer_id surrogate, is_sac, contract_type SMALLINT)
+  BYTEA 32, deployer_id surrogate, is_sac, contract_type SMALLINT). The
+  `deployer_id` value is the **operation-level effective source** of the
+  `CreateContract*` host function (`op.source_account` override or inner
+  `tx.source_account` fallback; fee-bump `feeSource` is never used). For
+  factory-pattern deploys nested in an `InvokeContract` auth tree, the
+  deployer is the signer of the enclosing `SorobanAuthorizationEntry`.
+  `xdr_parser::extract_op_source_per_contract` produces the per-contract
+  override map consumed by `extract_contract_deployments`. Task 0255
+  Phase 1; pre-fix the parser stored the inner-tx source unconditionally
+  and misattributed deploys with per-op overrides
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA)
 - account state → `accounts` row + `account_balances_current` entries per

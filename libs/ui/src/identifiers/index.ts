@@ -14,6 +14,7 @@ export {
   isAccountId,
   isContractId,
   isLedgerSequence,
+  isPoolId,
   isTransactionHash,
   isValidIdentifier,
 } from './validators.js';

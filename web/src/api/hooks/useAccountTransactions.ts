@@ -1,23 +1,23 @@
-import { listAccountTransactionsInfiniteOptions } from '@rumblefish/api-types';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { listAccountTransactionsOptions } from '@rumblefish/api-types';
+import { useQuery } from '@tanstack/react-query';
 
 import { listPolicy } from '../polling.js';
 
 const PAGE_SIZE = 20;
 
 /**
- * Fetches the paginated transactions involving an account
- * (`GET /accounts/:account_id/transactions`). Cursor pagination; disabled
- * until an id is present.
+ * `GET /accounts/:account_id/transactions` — cursor-paginated transactions
+ * involving an account. URL-as-state pagination; disabled until id present.
  */
-export const useAccountTransactions = (accountId: string) =>
-  useInfiniteQuery({
-    ...listAccountTransactionsInfiniteOptions({
+export const useAccountTransactions = (
+  accountId: string,
+  cursor: string | null = null
+) =>
+  useQuery({
+    ...listAccountTransactionsOptions({
       path: { account_id: accountId },
-      query: { limit: PAGE_SIZE },
+      query: { limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) },
     }),
     ...listPolicy,
     enabled: accountId.length > 0,
-    initialPageParam: { path: { account_id: accountId } },
-    getNextPageParam: (lastPage) => lastPage.page.cursor ?? undefined,
   });

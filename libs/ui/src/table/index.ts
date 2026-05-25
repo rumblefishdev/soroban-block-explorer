@@ -21,3 +21,5 @@ export type {
 } from './useTableUrlState.js';
 export { useCursorPagination } from './useCursorPagination.js';
 export type { UseCursorPaginationResult } from './useCursorPagination.js';
+export { usePageHandlers } from './usePageHandlers.js';
+export type { PageInfoLike, UsePageHandlersResult } from './usePageHandlers.js';

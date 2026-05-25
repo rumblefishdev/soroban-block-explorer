@@ -1,0 +1,20 @@
+# Copy this file to `inventory.ini` (gitignored) and fill in the
+# real values. The host IP for ch-prod-01 is available in the
+# Hetzner Robot UI; the SSH user starts as `root` for the first
+# playbook run and is replaced by the `deploy` user (created by
+# the `users` role) on subsequent runs.
+
+[ch_prod]
+ch-prod-01 ansible_host=REPLACE_WITH_SERVER_IP
+
+[ch_prod:vars]
+# First-time bootstrap: `ansible_user=root`. Once the `users` role
+# has run (deploy user created, root SSH login disabled), switch
+# to `ansible_user=deploy` and `ansible_become=true`.
+ansible_user=root
+ansible_python_interpreter=/usr/bin/python3
+
+# Connection hardening — refuse to proceed on a host-key change
+# (someone reinstalled the box → re-add to known_hosts deliberately,
+# do not auto-trust).
+ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts

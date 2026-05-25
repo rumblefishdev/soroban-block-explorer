@@ -1,49 +1,8 @@
-STAGING_APP := node dist/bin/staging.js
 PRODUCTION_APP := node dist/bin/production.js
-BASTION_STAGING_APP := node dist/bin/bastion-staging.js
-BASTION_PRODUCTION_APP := node dist/bin/bastion-production.js
 CICD_APP := node dist/bin/cicd.js
 
 build:
 	cd .. && npx nx build @rumblefish/soroban-block-explorer-aws-cdk
-
-# --- Staging ---
-
-synth-staging: build
-	npx cdk --app "$(STAGING_APP)" synth
-
-diff-staging: build
-	npx cdk --app "$(STAGING_APP)" diff
-
-deploy-staging: build
-	npx cdk --app "$(STAGING_APP)" deploy --all --require-approval broadening
-
-deploy-staging-network: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Network --require-approval broadening
-
-deploy-staging-rds: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Rds --require-approval broadening
-
-deploy-staging-ledger-bucket: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-LedgerBucket --require-approval broadening
-
-deploy-staging-migration: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Migration --require-approval broadening
-
-deploy-staging-partition: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Partition --require-approval broadening
-
-deploy-staging-ingestion: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Ingestion --require-approval broadening
-
-deploy-staging-delivery: build
-	npx cdk --app "$(STAGING_APP)" deploy Explorer-staging-Delivery --require-approval broadening
-
-deploy-staging-bastion: build
-	npx cdk --app "$(BASTION_STAGING_APP)" deploy --require-approval broadening
-
-destroy-staging-bastion: build
-	npx cdk --app "$(BASTION_STAGING_APP)" destroy --force
 
 # --- Production ---
 
@@ -56,37 +15,88 @@ diff-production: build
 deploy-production: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
 
+destroy-production: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy --all --force
+
 deploy-production-network: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Network --require-approval broadening
 
-deploy-production-rds: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Rds --require-approval broadening
+destroy-production-network: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Network --force
 
 deploy-production-ledger-bucket: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-LedgerBucket --require-approval broadening
 
+destroy-production-ledger-bucket: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-LedgerBucket --force
+
 deploy-production-migration: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Migration --require-approval broadening
+
+destroy-production-migration: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Migration --force
 
 deploy-production-partition: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Partition --require-approval broadening
 
+destroy-production-partition: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Partition --force
+
+deploy-production-compute: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Compute --require-approval broadening
+
+destroy-production-compute: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Compute --force
+
 deploy-production-ingestion: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Ingestion --require-approval broadening
+
+destroy-production-ingestion: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Ingestion --force
 
 deploy-production-delivery: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Delivery --require-approval broadening
 
-deploy-production-bastion: build
-	npx cdk --app "$(BASTION_PRODUCTION_APP)" deploy --require-approval broadening
+destroy-production-delivery: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Delivery --force
 
-destroy-production-bastion: build
-	npx cdk --app "$(BASTION_PRODUCTION_APP)" destroy --force
+deploy-production-apigateway: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-ApiGateway --require-approval broadening
+
+destroy-production-apigateway: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-ApiGateway --force
+
+deploy-production-observability: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Observability --require-approval broadening
+
+destroy-production-observability: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Observability --force
+
+deploy-production-cloudwatch: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudWatch --require-approval broadening
+
+destroy-production-cloudwatch: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudWatch --force
+
+synth-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" synth Explorer-production-HetznerDns
+
+diff-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" diff Explorer-production-HetznerDns
+
+deploy-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-HetznerDns --require-approval broadening
+
+destroy-production-hetzner-dns: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
 # --- CI/CD (shared, deploy once per account) ---
 
 deploy-cicd: build
 	npx cdk --app "$(CICD_APP)" deploy --require-approval broadening
+
+destroy-cicd: build
+	npx cdk --app "$(CICD_APP)" destroy --all --force
 
 diff-cicd: build
 	npx cdk --app "$(CICD_APP)" diff

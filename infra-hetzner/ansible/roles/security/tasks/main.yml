@@ -1,0 +1,131 @@
+---
+# Host security baseline:
+#   - SSH daemon hardening (no root login, no passwords, key-only)
+#   - Host firewall (ufw)
+#   - SSH brute-force mitigation (fail2ban)
+#   - Automatic security updates (unattended-upgrades)
+#
+# These layer in front of the Hetzner Robot stateless firewall
+# (configured in the `hetzner` role). Defence in depth: an attacker
+# who somehow gets past the network-switch ACL still faces ufw,
+# and a misconfiguration of either alone is not catastrophic.
+
+- name: Install security packages
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+      - unattended-upgrades
+    state: present
+
+- name: Apply SSH hardening drop-in
+  ansible.builtin.copy:
+    src: sshd_hardening.conf
+    dest: /etc/ssh/sshd_config.d/00-soroban-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+    # `sshd -t` validates the merged sshd_config; refuses to
+    # install the drop-in if it would break the daemon. Critical
+    # because a broken sshd_config locks the box on the next
+    # connect attempt.
+    validate: '/usr/sbin/sshd -t -f %s'
+  notify: Reload sshd
+
+- name: Configure ufw default policies (deny inbound, allow outbound)
+  community.general.ufw:
+    direction: '{{ item.direction }}'
+    policy: '{{ item.policy }}'
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+    - { direction: routed, policy: deny }
+
+- name: Allow inbound traffic on the public ports
+  community.general.ufw:
+    rule: allow
+    port: '{{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  loop:
+    - { port: '22', proto: tcp, comment: 'ssh' }
+    - { port: '80', proto: tcp, comment: 'acme http-01 + redirect' }
+    - { port: '443', proto: tcp, comment: 'mtls' }
+
+- name: Enable ufw at boot
+  community.general.ufw:
+    state: enabled
+    logging: 'low'
+
+- name: Configure fail2ban SSH jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    content: |
+      # Managed by infra-hetzner/ansible/roles/security.
+      # Suppresses log spam from drive-by SSH scanners; the
+      # real defence is key-only auth, this is hygiene.
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      maxretry = 5
+      findtime = 600
+      bantime = 3600
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart fail2ban
+
+- name: Ensure fail2ban is enabled and started
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Configure unattended-upgrades — security packages only
+  # `Automatic-Reboot "false"` is a deliberate uptime tradeoff:
+  # security patches that update the kernel / libc / systemd
+  # still install in the background, but the machine does NOT
+  # restart itself at 03:00 to pick them up. Operator decides
+  # when to reboot — typically inside a scheduled maintenance
+  # window aligned with low-traffic hours and an on-call presence.
+  #
+  # The `/var/run/reboot-required` flag is still written by apt
+  # when a reboot is pending, so a periodic check (e.g. login
+  # MOTD, or a future Slack-notify cron) surfaces the backlog.
+  # See the spawned follow-up task for the notification piece.
+  #
+  # `Automatic-Reboot-Time "03:00"` is left in the file so that
+  # if a future operator ever flips Automatic-Reboot back to
+  # "true", the chosen window is already documented (03:00 UTC
+  # = 05:00 CEST = quiet hour for EU traffic).
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades-soroban
+    content: |
+      // Managed by infra-hetzner/ansible/roles/security.
+      // Applies only the security-suite updates Ubuntu publishes;
+      // does NOT pull in the full release-update channel.
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable the unattended-upgrades systemd timer
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades-soroban
+    content: |
+      // Managed by infra-hetzner/ansible/roles/security.
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    owner: root
+    group: root
+    mode: '0644'

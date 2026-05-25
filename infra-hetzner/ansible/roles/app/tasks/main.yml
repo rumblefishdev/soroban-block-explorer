@@ -1,0 +1,397 @@
+---
+# Application stack on the box:
+#   - Repository checkout under /srv/app
+#   - Data / log / backup staging directories under /srv/
+#   - mTLS CA public certificate delivery
+#   - /srv/app/.env rendered from the operator env
+#   - Compose stack started (Caddy + ClickHouse + sidecar)
+#
+# All paths configurable via group_vars/all.yml; ownership chosen
+# so the ClickHouse container can read/write its bind mounts
+# without `chown -R` at startup.
+
+- name: Ensure ClickHouse data directory exists
+  ansible.builtin.file:
+    path: '{{ ch_data_dir }}'
+    state: directory
+    owner: '{{ clickhouse_uid }}'
+    group: '{{ clickhouse_gid }}'
+    mode: '0750'
+
+- name: Ensure ClickHouse logs directory exists
+  ansible.builtin.file:
+    path: '{{ ch_logs_dir }}'
+    state: directory
+    owner: '{{ clickhouse_uid }}'
+    group: '{{ clickhouse_gid }}'
+    mode: '0750'
+
+- name: Ensure backup staging directory exists
+  # ClickHouse writes BACKUP TO Disk('backups', ...) here from
+  # inside the container; the Borg cron then reads from the host
+  # path and pushes to BX21.
+  ansible.builtin.file:
+    path: '{{ backups_dir }}'
+    state: directory
+    owner: '{{ clickhouse_uid }}'
+    group: '{{ clickhouse_gid }}'
+    mode: '0750'
+
+- name: Ensure Caddy host-side config directory exists
+  # Holds Ansible-rendered Caddy fragments that the compose
+  # overlay bind-mounts into the Caddy container. Separate from
+  # the repo checkout so a `git pull` cannot wipe it.
+  ansible.builtin.file:
+    path: /srv/caddy
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Ensure backup-secrets host-side directory exists
+  # Holds the host-side clickhouse-client credentials file that
+  # is bind-mounted into the CH container. The `backup` role
+  # populates the Borg passphrase here later in the play, but
+  # the directory has to exist before `compose up` because the
+  # CH service mounts a file inside it.
+  ansible.builtin.file:
+    path: /etc/soroban-backup
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Deliver clickhouse-client credentials config
+  # Mounted read-only into both the CH container AND the schema
+  # sidecar at /etc/clickhouse-backup/client.xml by the
+  # production compose overlay. Consumed via
+  # `clickhouse-client --config-file=…` so the password never
+  # appears in argv on either the host side or in-container.
+  #
+  # Mode 0400 owner=101 — only the in-container CH UID 101 can
+  # read. We deliberately do NOT set a host group because GID 101
+  # on Ubuntu 24.04 is dynamically allocated to whatever
+  # `useradd` reaches it first (often `messagebus` or
+  # `systemd-resolve`), and any read on the file = plaintext
+  # password leak to that unrelated daemon. With no group bits
+  # and owner-only permissions, only Docker-namespaced UID 101
+  # reaches the file.
+  #
+  # MUST land before `compose up` — otherwise Docker auto-creates
+  # the bind-mount target as a directory, breaking the
+  # `--config-file` path inside the container.
+  ansible.builtin.template:
+    src: clickhouse-client.xml.j2
+    dest: /etc/soroban-backup/clickhouse-client.xml
+    owner: '101'
+    group: root
+    mode: '0400'
+  no_log: true
+  notify: Restart compose stack
+
+- name: Verify ca.crt exists in the operator's local checkout
+  # Earlier the same check ran on the box AFTER the git clone; with
+  # the rsync model the check moves to the controller before the
+  # sync starts, so a missing CA fails before touching the box.
+  ansible.builtin.stat:
+    path: '{{ playbook_dir }}/../../infra-hetzner/ca/ca.crt'
+  register: ca_crt_local
+  delegate_to: localhost
+  become: false
+
+- name: Fail clearly if the CA certificate is missing locally
+  ansible.builtin.assert:
+    that:
+      - ca_crt_local.stat.exists
+    fail_msg: |
+      infra-hetzner/ca/ca.crt is missing from the operator's local
+      checkout. The CA must be bootstrapped once per environment
+      before any deploy:
+        cd infra-hetzner/ca/
+        ./generate-ca.sh
+        # follow the on-screen instructions to move ca.key to the
+        # password manager, then:
+        git add infra-hetzner/ca/ca.crt
+        git commit
+      A teammate who has done this can also share `ca.crt` directly
+      (it is the public half of the CA — no secret).
+
+- name: Assert the operator's local working tree is clean before sync
+  # Refuse to deploy uncommitted state by default — the box would
+  # otherwise run code that no one else can reproduce from git
+  # history. Override with `-e force_dirty=true` for an ad-hoc
+  # smoke test (the next deploy will surface a clean-tree warning
+  # in DEPLOYED_INFO either way).
+  ansible.builtin.command:
+    cmd: git -C "{{ playbook_dir }}/../.." status --porcelain
+  register: git_dirty_check
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Refuse to sync a dirty working tree without explicit opt-in
+  ansible.builtin.assert:
+    that:
+      - git_dirty_check.stdout | trim == ''
+    fail_msg: |
+      Local working tree has uncommitted changes:
+      ----
+      {{ git_dirty_check.stdout }}
+      ----
+      Either commit and re-run, or bypass with `-e force_dirty=true`
+      to deploy the current dirty tree as a one-off (DEPLOYED_INFO
+      will record the dirty status).
+  when: not (force_dirty | default(false) | bool)
+
+- name: Ensure {{ app_repo_dest }} exists with the right owner
+  ansible.builtin.file:
+    path: '{{ app_repo_dest }}'
+    state: directory
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0755'
+
+- name: Sync compose files from local checkout
+  # `--chmod=D755,F644` normalises file modes on the destination —
+  # without it, rsync's archive mode preserves whatever modes the
+  # files happened to have on the operator's laptop (often 0664
+  # from `umask 002` shells, occasionally 0600 leftover from
+  # editor saves). Sensitive files (.env, credentials.xml,
+  # passphrase, etc.) are NEVER delivered via rsync — they go
+  # through dedicated `template:` / `copy:` tasks with explicit
+  # modes. Everything rsync touches is config-only, world-readable
+  # by intent.
+  ansible.posix.synchronize:
+    src: '{{ playbook_dir }}/../../{{ item }}'
+    dest: '{{ app_repo_dest }}/{{ item }}'
+    rsync_opts:
+      - '--chmod=D755,F644'
+  loop:
+    - docker-compose.yml
+    - docker-compose.prod.yml
+
+- name: Sync infra-hetzner/ subtree
+  # `delete: true` keeps the box's copy in lockstep with the
+  # operator's local checkout — files removed locally are removed
+  # from the box too.
+  #
+  # Excludes carve out the bits that must NOT ride along. The
+  # list is defence-in-depth — rsync filters are pattern-based
+  # rather than git-aware, so anything `.gitignore` blocks would
+  # still be pushed if it landed on disk. We explicitly deny:
+  #
+  #   - ca/out/                       issued client certs (private keys)
+  #   - ca/*.key, ca/*.pem            CA private key if temporarily
+  #                                    staged outside tmpfs (a misstep
+  #                                    in the bootstrap flow)
+  #   - ansible/inventory.ini         local-only host data
+  #   - ansible/collections/          ad-hoc galaxy installs
+  #   - ansible/*.retry               ansible session retry files
+  #   - ansible/.vault_pass*          vault password files
+  #   - **/.DS_Store, **/Thumbs.db    OS-metadata cruft
+  ansible.posix.synchronize:
+    src: '{{ playbook_dir }}/../../infra-hetzner/'
+    dest: '{{ app_repo_dest }}/infra-hetzner/'
+    delete: true
+    recursive: true
+    rsync_opts:
+      - '--chmod=D755,F644'
+      - '--exclude=ca/out/'
+      - '--exclude=ca/*.key'
+      - '--exclude=ca/*.pem'
+      - '--exclude=ansible/inventory.ini'
+      - '--exclude=ansible/collections/'
+      - '--exclude=ansible/*.retry'
+      - '--exclude=ansible/.vault_pass*'
+      - '--exclude=ansible/vault*.yml'
+      - '--exclude=ansible/secrets*.yml'
+      - '--exclude=**/.DS_Store'
+      - '--exclude=**/Thumbs.db'
+
+- name: Ensure parent directory exists for ClickHouse subtree syncs
+  # rsync's `--archive` only creates the LAST path component;
+  # if intermediate parents are missing the receive errors with
+  # "No such file or directory". We allowlist-sync three
+  # subdirectories under crates/db-clickhouse/ so the parent
+  # must exist before the loop runs.
+  ansible.builtin.file:
+    path: '{{ app_repo_dest }}/crates/db-clickhouse'
+    state: directory
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0755'
+
+- name: Sync ClickHouse config + schema (no Rust source needed on box)
+  # Allowlist style — only the three subtrees that compose
+  # bind-mounts (config.d/, users.d/, schema/). Rust source,
+  # Cargo.toml, tests etc. stay on the operator's laptop.
+  ansible.posix.synchronize:
+    src: '{{ playbook_dir }}/../../crates/db-clickhouse/{{ item }}/'
+    dest: '{{ app_repo_dest }}/crates/db-clickhouse/{{ item }}/'
+    delete: true
+    recursive: true
+    rsync_opts:
+      - '--chmod=D755,F644'
+      - '--exclude=*.key'
+      - '--exclude=*.pem'
+  loop:
+    - config.d
+    - users.d
+    - schema
+
+- name: Normalise ownership of the synced tree
+  # rsync preserves ownership from the source side, which on macOS
+  # or a multi-user laptop may not map cleanly to the box's UIDs.
+  # An explicit chown -R guarantees the deploy user owns the
+  # whole tree.
+  ansible.builtin.file:
+    path: '{{ app_repo_dest }}'
+    state: directory
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    recurse: true
+
+- name: Record what was deployed
+  # World-readable on purpose — DEPLOYED_INFO is an audit trail,
+  # not a secret. `cat /srv/app/DEPLOYED_INFO` answers the
+  # "which version is running?" question that `git log` answered
+  # under the previous git-clone-on-box model.
+  ansible.builtin.copy:
+    dest: '{{ app_repo_dest }}/DEPLOYED_INFO'
+    content: |
+      sha:          {{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/../.. rev-parse HEAD') }}
+      branch:       {{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/../.. rev-parse --abbrev-ref HEAD') }}
+      dirty:        {{ (git_dirty_check.stdout | trim) != '' }}
+      deployed_at:  {{ ansible_date_time.iso8601 }}
+      deployed_by:  {{ lookup('env', 'USER') }}@{{ lookup('pipe', 'hostname') }}
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0644'
+
+- name: Render /srv/app/.env from operator environment
+  ansible.builtin.template:
+    src: env.j2
+    dest: '{{ app_repo_dest }}/.env'
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    # 0600 so even other members of the deploy group cannot read.
+    # On this box that is academic (single user) but keeps the
+    # file from leaking via accidental world-readable copy.
+    mode: '0600'
+  notify: Restart compose stack
+  no_log: true
+
+- name: Ensure /etc/soroban-app exists (out-of-tree state)
+  # Sibling to /etc/soroban-backup. Holds tiny state files that
+  # need to survive `rsync --delete` against {{ app_repo_dest }} —
+  # specifically the Caddyfile checksum drift sentinel below.
+  ansible.builtin.file:
+    path: /etc/soroban-app
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Compute Caddyfile checksum
+  # `ansible.posix.synchronize`'s `changed` field is true if ANY
+  # file in the synced subtree differs, so wiring its result to
+  # the `Reload caddy` handler would over-trigger on every
+  # infra-hetzner/ edit (README, runbook, ansible-only files,
+  # …). Caddy holds its config in memory and only re-reads it
+  # on SIGUSR1 / `caddy reload` / container restart, so an
+  # unobserved Caddyfile edit would silently keep running the
+  # OLD config until the next full-stack restart. Bridge the
+  # gap with a per-file checksum sentinel kept outside the
+  # rsync target.
+  ansible.builtin.stat:
+    path: '{{ app_repo_dest }}/infra-hetzner/Caddyfile'
+    checksum_algorithm: sha256
+  register: caddyfile_stat
+
+- name: Record Caddyfile checksum (drift detector → Reload caddy)
+  # `copy` with `content:` is idempotent — same content = `ok`,
+  # changed content = `changed` + handler notify. The handler
+  # bounces ONLY the Caddy container, not the whole stack.
+  ansible.builtin.copy:
+    content: "{{ caddyfile_stat.stat.checksum }}\n"
+    dest: /etc/soroban-app/caddyfile.sha256
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload caddy
+  tags: [app, caddy_reload]
+
+- name: Render Caddy CN→ClickHouse user map snippet
+  # The site block in infra-hetzner/Caddyfile imports this file
+  # to obtain the `{ch_user}` map placeholder used in
+  # `header_up X-ClickHouse-User`. The map IS the allowlist —
+  # any CN not in the map yields empty `{ch_user}`, which the
+  # @no_user matcher in Caddyfile rejects with 403 before any
+  # backend hop. Triggers a Caddy-only restart (not a full
+  # compose-stack restart) — a CN rotation should not interrupt
+  # in-flight ClickHouse queries.
+  #
+  # `tags: caddy_reload` carves out a fast path for revocation:
+  #   ansible-playbook ... --tags caddy_reload
+  # runs only the preflight asserts (which are `always`) + this
+  # snippet task + the Reload caddy handler. No rsync, no
+  # compose recreate — the CA-compromise "<5 min revocation"
+  # SLA documented in infra-hetzner/ca/README.md requires this
+  # narrow tag.
+  ansible.builtin.template:
+    src: cn_user_map.snippet.j2
+    dest: /srv/caddy/cn_user_map.snippet
+    owner: root
+    group: root
+    mode: '0644'
+  tags: [app, caddy_reload]
+  notify: Reload caddy
+
+- name: Bring up (or update) the production compose stack
+  community.docker.docker_compose_v2:
+    project_src: '{{ app_repo_dest }}'
+    files:
+      - docker-compose.yml
+      - docker-compose.prod.yml
+    state: present
+    # `recreate: auto` recreates only services whose definition
+    # or image has changed (module's default for `up` without
+    # `--force-recreate`). `pull: missing` keeps reproducibility:
+    # we pull on first deploy / image bump but don't silently
+    # advance digests on every run.
+    recreate: auto
+    pull: missing
+  # Compose reads /srv/app/.env from `project_src` automatically;
+  # that is the single source of truth for the substituted
+  # `${VAR}` placeholders in docker-compose.prod.yml. Setting
+  # task-level `environment:` here would silently mask a missing
+  # or corrupted .env, defeating the fail-fast behaviour of the
+  # `${VAR:?…}` Compose syntax.
+  #
+  # `no_log: true` — `docker_compose_v2` module emits the rendered
+  # project state on -vvv / --diff, which after ${VAR}
+  # interpolation includes the substituted CLICKHOUSE_PASSWORD.
+  # Every other secret-touching task in this role has no_log; this
+  # task is the consumer of those secrets and needs it too.
+  no_log: true
+  notify: Wait for services healthy
+
+- name: Install soroban-stack systemd unit (compose-on-boot)
+  # Owns the boot-time `docker compose up -d` invocation so the
+  # sidecar's `CREATE … IF NOT EXISTS` schema apply runs on every
+  # host reboot. Compose alone cannot do this because the
+  # sidecar's restart policy is `no` (intentional — it should
+  # exit after applying schema, not loop).
+  ansible.builtin.copy:
+    src: soroban-stack.service
+    dest: /etc/systemd/system/soroban-stack.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd
+
+- name: Enable soroban-stack.service at boot
+  ansible.builtin.systemd:
+    name: soroban-stack.service
+    enabled: true
+    daemon_reload: true

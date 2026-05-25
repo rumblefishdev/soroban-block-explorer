@@ -1,0 +1,161 @@
+---
+# Main playbook for the Hetzner ch-prod-01 production deployment.
+#
+# Three plays:
+#   1. preflight     — assert operator environment is correct
+#                      (runs on the controller, not the box)
+#   2. hetzner-side  — Robot API configuration (also controller-side;
+#                      reaches Hetzner's REST endpoint, not the box)
+#   3. host-side     — everything on the box itself: OS hardening,
+#                      Docker, app stack, backup
+#
+# Run with:
+#   ansible-playbook -i inventory.ini site.yml
+#
+# Tags let the operator scope a re-run:
+#   --tags base         OS-level baseline
+#   --tags security     SSH hardening, ufw, fail2ban
+#   --tags docker       Docker install + daemon.json
+#   --tags app          repo, CA cert, env file, compose up
+#   --tags backup       Borg, cron, repo init
+#   --tags hetzner      Robot API side-channel
+#
+# `--check --diff` is supported on every task; use it before
+# applying real changes.
+
+- name: Pre-flight — validate operator environment
+  hosts: localhost
+  gather_facts: false
+  tags: always
+  tasks:
+    - name: Required environment values must be set
+      # `| trim | length > 0` catches the whitespace-only case that
+      # bare `| length > 0` lets through — a typical paste-from-
+      # password-manager mistake where a trailing newline / space
+      # ends up as the entire value.
+      ansible.builtin.assert:
+        that:
+          - hcloud_robot_user | trim | length > 0
+          - hcloud_robot_password | trim | length > 0
+          - clickhouse_password | trim | length > 0
+          - borg_passphrase | trim | length > 0
+          - ch_domain | trim | length > 0
+          - acme_email | trim | length > 0
+          - operator_ssh_pubkeys | trim | length > 0
+          - storagebox_ssh_user | trim | length > 0
+          - storagebox_ssh_host | trim | length > 0
+          - clickhouse_cn_user_pairs | length > 0
+        fail_msg: |
+          One or more required environment variables are not set (or are
+          whitespace-only).
+          Expected, sourced from your shell before invoking ansible-playbook:
+            HCLOUD_ROBOT_USER       (Hetzner Robot webservice user, e.g. #ws+...)
+            HCLOUD_ROBOT_PASSWORD   (Robot webservice password, set in Robot UI)
+            CLICKHOUSE_PASSWORD     (random 32-byte base64 — host-side
+                                     admin only; external clients use
+                                     CLICKHOUSE_CN_USER_MAP via Caddy)
+            BORG_PASSPHRASE         (random 40-byte base64)
+            CH_DOMAIN               (Caddy site address — e.g.
+                                     ch.sorobanscan.rumblefish.dev)
+            ACME_EMAIL              (Let's Encrypt account email)
+            OPERATOR_SSH_PUBKEYS    (one OpenSSH public key per line —
+                                     who can SSH into the deploy user)
+            STORAGEBOX_SSH_USER     (BX21 user, e.g. u123456)
+            STORAGEBOX_SSH_HOST     (BX21 host, e.g. u123456.your-storagebox.de)
+            CLICKHOUSE_CN_USER_MAP  (comma-separated `<cn>:<ch_user>`
+                                     pairs — Caddy uses this both as the
+                                     mTLS allowlist and as the CN→user
+                                     mapping forwarded to ClickHouse;
+                                     dev CNs typically map to `dev_shared`)
+          See infra-hetzner/README.md for the canonical password-manager
+          source for these values.
+
+    - name: Every clickhouse_cn_user_pairs entry must be `<cn>:<user>` with safe chars
+      # Mirrors the validation in infra-hetzner/ca/issue-client-cert.sh
+      # for the CN side and constrains the user side to the CH
+      # username character set. The list is hand-edited and rendered
+      # directly into a Caddy snippet — an entry with backticks /
+      # quotes / regex metachars could break the snippet parse or
+      # silently widen the match. Reject anything outside the safe
+      # character set before we even touch the box.
+      ansible.builtin.assert:
+        that:
+          - item is regex('^[a-zA-Z0-9._-]+:[a-z][a-z0-9_]*$')
+        fail_msg: |
+          Pair '{{ item }}' does not match `<cn>:<user>` with safe chars.
+          CN must match `[a-zA-Z0-9._-]+` (same as the issuance script).
+          ClickHouse user must match `[a-z][a-z0-9_]*` (matches user
+          names defined in crates/db-clickhouse/users.d/services.xml).
+          Fix the entry and re-run.
+      loop: '{{ clickhouse_cn_user_pairs }}'
+
+- name: Hetzner Robot — manage server-side configuration via REST API
+  hosts: localhost
+  gather_facts: false
+  tags: hetzner
+  roles:
+    - role: hetzner
+
+- name: ch-prod-01 — OS, Docker, application stack, backup
+  hosts: ch_prod
+  become: true
+  gather_facts: true
+  pre_tasks:
+    # Detect stale `ansible_user=root` after the first deploy:
+    # the `security` role disables root SSH login at the end of
+    # the first run, and the `users` role created the deploy
+    # user. Subsequent runs must use `ansible_user=deploy`. A
+    # re-run with the stale inventory hangs in SSH auth and
+    # fails opaquely; surface the misconfig explicitly instead.
+    - name: Check if the deploy user already exists on the host
+      # `check_mode: false` forces the command to run even under
+      # `ansible-playbook --check`. Without it, the `command:`
+      # module is skipped in check mode and `deploy_user_check.rc`
+      # ends up undefined/zero — the assertion below would then
+      # fire spuriously every dry-run, blocking legitimate
+      # validation against a fresh box.
+      ansible.builtin.command:
+        cmd: 'id -u {{ deploy_user }}'
+      register: deploy_user_check
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: always
+
+    - name: Refuse to continue with ansible_user=root when deploy user exists
+      ansible.builtin.assert:
+        that:
+          - not (ansible_user == 'root' and deploy_user_check.rc == 0)
+        fail_msg: |
+          The deploy user '{{ deploy_user }}' already exists on this host,
+          but inventory.ini still specifies `ansible_user=root`. Root SSH
+          should already be disabled at this point by the security role;
+          the current run only succeeded because Ansible reused an open
+          control socket from a prior session.
+
+          Update inventory.ini ([ch_prod:vars] block):
+              ansible_user={{ deploy_user }}
+              ansible_become=true
+
+          Then re-run.
+
+          ESCAPE HATCH: if you are retrying a partially-failed deploy
+          where the deploy user was created but the rest of the play
+          did not complete (e.g. authorized_keys was not yet rendered,
+          so SSHing as deploy would fail), add `-e force_root=true` to
+          bypass this check and re-run as root.
+      when: not (force_root | default(false) | bool)
+      tags: always
+  roles:
+    - role: base
+      tags: [base]
+    - role: users
+      tags: [users, security]
+    - role: security
+      tags: [security]
+    - role: docker
+      tags: [docker]
+    - role: app
+      tags: [app]
+    - role: backup
+      tags: [backup]

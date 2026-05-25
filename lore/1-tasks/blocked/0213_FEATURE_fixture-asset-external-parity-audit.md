@@ -6,6 +6,7 @@ status: blocked
 related_adr: ['0043']
 related_tasks:
   ['0188', '0191', '0194', '0195', '0196', '0197', '0199', '0210', '0212']
+milestone: 2
 tags:
   [
     priority-medium,

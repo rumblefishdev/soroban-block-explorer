@@ -1,0 +1,98 @@
+---
+# Deploy user lifecycle + SSH authorisation.
+#
+# SSH access is granted to whatever public keys the operator
+# supplies in the `OPERATOR_SSH_PUBKEYS` env var (one OpenSSH
+# entry per line). The previous github.com/<user>.keys fetch
+# pattern was dropped — no external network dependency at deploy
+# time, no coupling to GitHub account state. Onboarding /
+# offboarding is a single env-var edit + playbook re-run.
+
+- name: Create the deploy group
+  ansible.builtin.group:
+    name: '{{ deploy_user }}'
+    gid: '{{ deploy_user_gid }}'
+    state: present
+
+- name: Create the deploy user
+  ansible.builtin.user:
+    name: '{{ deploy_user }}'
+    uid: '{{ deploy_user_uid }}'
+    group: '{{ deploy_user }}'
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Grant passwordless sudo to the deploy user
+  ansible.builtin.copy:
+    dest: '/etc/sudoers.d/{{ deploy_user }}'
+    # Visudo-syntax check before installing; refuses to write the
+    # file if the syntax would break sudo (which would lock us out
+    # of the box if root SSH is already disabled).
+    content: "{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+
+- name: Ensure ~/.ssh exists for the deploy user
+  ansible.builtin.file:
+    path: '/home/{{ deploy_user }}/.ssh'
+    state: directory
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0700'
+
+- name: Validate every line of OPERATOR_SSH_PUBKEYS parses as an SSH public key
+  # Belt-and-suspenders against a malformed paste in the env var.
+  # A single broken line breaks authorized_keys at sshd parse
+  # time. Validation runs on the controller before we ship the
+  # rendered file to the box.
+  #
+  # `ssh-keygen -l -f -` reads only the FIRST key from stdin and
+  # silently ignores the rest — devs with multiple keys would
+  # have only their first key validated. The loop pipes each
+  # non-empty / non-comment line through `ssh-keygen -l -f
+  # /dev/stdin` separately and counts how many succeeded.
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      tmp="$(mktemp)"
+      trap 'rm -f "$tmp"' EXIT
+      cat > "$tmp"
+      lineno=0
+      validated=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
+        [ -z "$line" ] && continue
+        case "$line" in '#'*) continue ;; esac
+        if ! printf '%s\n' "$line" | ssh-keygen -l -f /dev/stdin >/dev/null 2>&1; then
+          echo "Invalid SSH public key on line ${lineno}: ${line}" >&2
+          exit 1
+        fi
+        validated=$((validated + 1))
+      done < "$tmp"
+      if [ "$validated" -eq 0 ]; then
+        echo "OPERATOR_SSH_PUBKEYS contains no parseable SSH public keys" >&2
+        exit 1
+      fi
+    stdin: '{{ operator_ssh_pubkeys }}'
+    # `set -o pipefail` is a bash extension; Ansible's `shell:`
+    # module defaults to /bin/sh which on Debian/Ubuntu is dash
+    # and does not recognise the option.
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Render authorized_keys from OPERATOR_SSH_PUBKEYS
+  ansible.builtin.copy:
+    dest: '/home/{{ deploy_user }}/.ssh/authorized_keys'
+    content: |
+      # Managed by infra-hetzner/ansible/roles/users — do not edit by hand.
+      # Source: OPERATOR_SSH_PUBKEYS env var on the operator's controller.
+      # Rebuilt from scratch on every playbook run.
+      {{ operator_ssh_pubkeys }}
+    owner: '{{ deploy_user }}'
+    group: '{{ deploy_user }}'
+    mode: '0600'

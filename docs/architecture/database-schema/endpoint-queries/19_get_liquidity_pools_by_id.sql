@@ -7,7 +7,10 @@
 -- Inputs:
 --   $1  :pool_id            BYTEA(32)  raw 32-byte pool id
 -- Indexes:      liquidity_pools PK (pool_id),
---               idx_lps_pool ON (pool_id, created_at DESC).
+--               idx_lps_pool ON (pool_id, created_at DESC),
+--               idx_lpp_shares (pool_id, shares DESC) WHERE shares > 0
+--                  — partial index covering the participant-count
+--                  subquery (task 0246).
 -- Notes:
 --   • Single statement. The latest-snapshot subquery is `LIMIT 1` on
 --     `idx_lps_pool` — one index seek.
@@ -20,6 +23,10 @@
 --     are NULL today (populated by a future TVL-ingestion task).
 --   • Issuer StrKeys via final joins. Native legs (asset_*_type = 0) have
 --     NULL issuer_id; LEFT JOIN yields NULL.
+--   • `participant_count` (task 0246) is a correlated subquery hitting
+--     the partial index `idx_lpp_shares`. Same projection as file 18 so
+--     the wire DTO stays uniform across list + detail. Not snapshot-bound
+--     — populated even on stale pools.
 --   • Sentinel placeholder pools (ADR 0041 / task 0193) are excluded
 --     via `lp.created_at_ledger > 0`. Sentinel rows carry
 --     `created_at_ledger = 0` and minimum-data NULL/0 asset/fee
@@ -42,6 +49,10 @@ SELECT
     -- Frontend §6.14 shows "fee percentage". Conversion done here.
     (lp.fee_bps::numeric / 100)        AS fee_percent,
     lp.created_at_ledger,
+    -- Task 0246: active LP count. Same correlated subquery as file 18.
+    (SELECT COUNT(*) FROM lp_positions lpp
+      WHERE lpp.pool_id = lp.pool_id AND lpp.shares > 0)
+                                       AS participant_count,
     s.ledger_sequence                  AS latest_snapshot_ledger,
     s.reserve_a,
     s.reserve_b,

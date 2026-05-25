@@ -22,9 +22,13 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
         minHeight: 60,
       })}
     >
-      {cells.map((cell) => (
+      {cells.map((cell, index) => (
         <Stack
-          key={cell.label}
+          // Composite key — `cell.label` alone collides when two cells
+          // share a label (e.g. fake-XLM pool legs both rendering as
+          // `XLM reserve` in `PoolSummary`). Prefixing with the array
+          // index guarantees uniqueness regardless of label duplication.
+          key={`${index}-${cell.label}`}
           direction="row"
           spacing={2}
           sx={{

@@ -44,8 +44,8 @@ export function LedgerTransactions({
       </Box>
       <PaginationControls
         caption={`${totalCount.toLocaleString('en-US')} transactions`}
-        prevCursor={canPrev ? 'prev' : null}
-        nextCursor={canNext ? 'next' : null}
+        canPrev={canPrev}
+        canNext={canNext}
         onPrev={onPrev}
         onNext={onNext}
       />

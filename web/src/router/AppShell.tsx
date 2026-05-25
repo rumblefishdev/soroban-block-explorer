@@ -6,11 +6,12 @@ import {
   TopNav,
   SecondaryNav,
   Footer,
+  PageGridBackdrop,
   grid,
-  type Network,
   type NavItem,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { useNetworkStats } from '../api/index.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
 
@@ -22,13 +23,6 @@ const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
 }
-
-const MOCK_STATS = {
-  tps: 0,
-  ledger: 0,
-  accounts: 0,
-  contracts: 0,
-};
 
 function HomeLogo({
   height,
@@ -68,7 +62,10 @@ export function AppShell() {
   const navigate = useNavigate();
   const activePage = useActivePage();
   const { pathname } = useLocation();
-  const [network, setNetwork] = useState<Network>('mainnet');
+  // Live network counters for TopNav. `undefined` while loading or
+  // errored — TopNav renders dashes so we don't ship visually-
+  // misleading hard-coded zeros.
+  const { data: stats } = useNetworkStats();
   const [searchValue, setSearchValue] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -132,9 +129,7 @@ export function AppShell() {
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <TopNav
-        network={network}
-        onNetworkChange={setNetwork}
-        stats={MOCK_STATS}
+        stats={stats}
         searchValue={searchValue}
         onSearchChange={handleSearchChange}
         onSearchSubmit={handleSearchSubmit}
@@ -167,12 +162,17 @@ export function AppShell() {
           ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
         }}
       >
-        <Outlet />
+        {/* Faint grid halo behind every page. The home page adds the
+            warm gold glow pills on top of this same backdrop; every
+            other route shows the grid on its own. */}
+        <PageGridBackdrop />
+        <Box sx={{ position: 'relative', zIndex: 1 }}>
+          <Outlet />
+        </Box>
       </Box>
       <Footer
         logo={<HomeLogo height={47} onClick={handleHomeClick} />}
         navItems={FOOTER_NAV_ITEMS}
-        network={network}
       />
     </Box>
   );

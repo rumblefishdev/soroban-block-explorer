@@ -1,6 +1,3 @@
-export { NetworkSwitcher } from './NetworkSwitcher.js';
-export type { Network, NetworkSwitcherProps } from './NetworkSwitcher.js';
-
 export { NavButton } from './NavButton.js';
 export type { NavButtonProps, NavButtonSize } from './NavButton.js';
 
@@ -15,3 +12,5 @@ export type { SecondaryNavProps, NavItem } from './SecondaryNav.js';
 
 export { Footer } from './Footer.js';
 export type { FooterProps, FooterNavItem } from './Footer.js';
+
+export { PageGridBackdrop } from './PageGridBackdrop.js';

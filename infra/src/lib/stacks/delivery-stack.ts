@@ -70,7 +70,7 @@ export class DeliveryStack extends cdk.Stack {
     const certificate = acm.Certificate.fromCertificateArn(
       this,
       'Certificate',
-      config.certificateArn
+      config.cloudFrontCertificateArn
     );
 
     // ---------------------

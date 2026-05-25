@@ -31,8 +31,18 @@ services:
 
   # ClickHouse pilot store (ADR 0044, task 0204). Stands next to Postgres,
   # not as a replacement. Read-empty for now — populated by a follow-up
-  # ADR/task once the schema stabilises. Same local-dev credential posture
-  # as Postgres: default `default` user with no password.
+  # ADR/task once the schema stabilises.
+  #
+  # Task 0240 split auth two ways: external clients (Caddy in prod,
+  # curl in dev) present a verified mTLS cert that Caddy maps to a
+  # CH user via `X-ClickHouse-User` header (`<no_password/>` users
+  # restricted to the compose bridge subnet 172.30.0.0/16, pinned
+  # at the bottom of this file); host-side consumers (sidecar,
+  # backup script, operator from SSH→docker exec) connect as
+  # `default` with the password from `CLICKHOUSE_PASSWORD`. Dev
+  # cert holders get `dev_shared` (admin, `<no_password/>`) so a
+  # cert alone is enough for dev convenience without exposing the
+  # password-protected `default` over the bridge.
   clickhouse:
     image: clickhouse/clickhouse-server:26.3
     ports:
@@ -63,6 +73,13 @@ services:
       # overrides.
       - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
+      # `dict_reader` user definition. Required because init.sql's
+      # `transaction_hash_dict` SOURCE clause references it.
+      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
+      # Per-service RBAC users + profiles + quotas (task 0240).
+      - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
+      - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro
+      - ./crates/db-clickhouse/users.d/services.xml:/etc/clickhouse-server/users.d/services.xml:ro
     ulimits:
       nofile:
         soft: 262144
@@ -128,3 +145,14 @@ volumes:
   pgdata-merge:
   pgdata-snapshot-source:
   clickhouse-data:
+
+# Pin compose bridge subnet (task 0240). users.d/services.xml's
+# `<networks>` allowlist lists 172.30.0.0/16 explicitly so the
+# `<no_password/>` users in services.xml accept connections from
+# every other container in this compose project. Same pin in
+# docker-compose.prod.yml for parity.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16

@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import type { SortDirection } from './ExplorerTable.js';
 
-const CURSOR_PARAM = 'cursor';
+const DEFAULT_cursorParam = 'cursor';
 const SORT_PARAM = 'sort';
 const DIR_PARAM = 'dir';
 
@@ -18,6 +18,13 @@ export interface UseTableUrlStateOptions {
   defaultSortBy?: string;
   defaultSortDir?: SortDirection;
   filterKeys?: readonly string[];
+  /**
+   * Query-param key for the cursor. Defaults to `'cursor'`. Override
+   * when multiple paginated sections coexist on the same route so each
+   * section gets its own URL key (e.g. `'cursor_p'`, `'cursor_t'` on
+   * the LP detail page) instead of clobbering each other.
+   */
+  cursorParam?: string;
 }
 
 export interface UseTableUrlStateResult {
@@ -31,12 +38,28 @@ export interface UseTableUrlStateResult {
 export function useTableUrlState(
   options: UseTableUrlStateOptions = {}
 ): UseTableUrlStateResult {
-  const { defaultSortBy, defaultSortDir = 'desc', filterKeys = [] } = options;
+  const {
+    defaultSortBy,
+    defaultSortDir = 'desc',
+    filterKeys = [],
+    cursorParam = DEFAULT_cursorParam,
+  } = options;
   const [params, setParams] = useSearchParams();
+
+  // Callers commonly pass `filterKeys` inline (`{ filterKeys: ['q', 'op'] }`),
+  // which yields a new array reference every render. Depending on that array
+  // directly would invalidate the memo every render and re-issue a new
+  // `state` / `state.filters` identity to every downstream effect/memo.
+  // Collapse the array into a stable string key (with `|` separator so
+  // distinct key lists do not collide) and reparse inside the memo — that
+  // way the memo's only array-shaped dep is the string itself, and the
+  // closure captures nothing whose identity changes per render.
+  const filterKeysKey = filterKeys.join('|');
 
   const state = useMemo<TableUrlState>(() => {
     const filters: Record<string, string> = {};
-    for (const key of filterKeys) {
+    const keys = filterKeysKey ? filterKeysKey.split('|') : [];
+    for (const key of keys) {
       const v = params.get(key);
       if (v) filters[key] = v;
     }
@@ -44,12 +67,12 @@ export function useTableUrlState(
     const sortDir: SortDirection =
       rawDir === 'asc' || rawDir === 'desc' ? rawDir : defaultSortDir;
     return {
-      cursor: params.get(CURSOR_PARAM),
+      cursor: params.get(cursorParam),
       sortBy: params.get(SORT_PARAM) ?? defaultSortBy ?? null,
       sortDir,
       filters,
     };
-  }, [params, filterKeys, defaultSortBy, defaultSortDir]);
+  }, [params, filterKeysKey, defaultSortBy, defaultSortDir, cursorParam]);
 
   const update = useCallback(
     (mutator: (next: URLSearchParams) => void) => {
@@ -68,11 +91,11 @@ export function useTableUrlState(
   const setCursor = useCallback(
     (cursor: string | null) => {
       update((next) => {
-        if (cursor) next.set(CURSOR_PARAM, cursor);
-        else next.delete(CURSOR_PARAM);
+        if (cursor) next.set(cursorParam, cursor);
+        else next.delete(cursorParam);
       });
     },
-    [update]
+    [update, cursorParam]
   );
 
   const setSort = useCallback(
@@ -80,10 +103,10 @@ export function useTableUrlState(
       update((next) => {
         next.set(SORT_PARAM, sortBy);
         next.set(DIR_PARAM, sortDir);
-        next.delete(CURSOR_PARAM);
+        next.delete(cursorParam);
       });
     },
-    [update]
+    [update, cursorParam]
   );
 
   const setFilter = useCallback(
@@ -91,10 +114,10 @@ export function useTableUrlState(
       update((next) => {
         if (value) next.set(key, value);
         else next.delete(key);
-        next.delete(CURSOR_PARAM);
+        next.delete(cursorParam);
       });
     },
-    [update]
+    [update, cursorParam]
   );
 
   const resetCursor = useCallback(() => setCursor(null), [setCursor]);

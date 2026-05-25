@@ -33,6 +33,7 @@ export {
   type EmptyStateVariant,
   SectionErrorBoundary,
   classifyError,
+  isMissingResource,
   type ErrorKind,
 } from './states/index.js';
 
@@ -50,6 +51,7 @@ export {
   TableEmptyState,
   useTableUrlState,
   useCursorPagination,
+  usePageHandlers,
 } from './table/index.js';
 export type {
   ExplorerTableColumn,
@@ -63,12 +65,11 @@ export type {
   UseTableUrlStateOptions,
   UseTableUrlStateResult,
   UseCursorPaginationResult,
+  PageInfoLike,
+  UsePageHandlersResult,
 } from './table/index.js';
 
 export {
-  NetworkSwitcher,
-  type Network,
-  type NetworkSwitcherProps,
   NavButton,
   type NavButtonProps,
   type NavButtonSize,
@@ -84,6 +85,7 @@ export {
   Footer,
   type FooterProps,
   type FooterNavItem,
+  PageGridBackdrop,
 } from './layout/index.js';
 
 export {
@@ -101,6 +103,7 @@ export {
   isAccountId,
   isContractId,
   isLedgerSequence,
+  isPoolId,
   isTransactionHash,
   isValidIdentifier,
 } from './identifiers/index.js';

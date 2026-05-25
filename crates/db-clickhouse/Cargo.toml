@@ -8,6 +8,25 @@ description = "ClickHouse pilot — connection layer + schema apply CLI for the 
 name = "db-clickhouse-init"
 path = "src/bin/db-clickhouse-init.rs"
 
+[features]
+default = []
+# Exposes the `mtls` module — builds a `clickhouse::Client` that
+# authenticates to a remote CH endpoint (Caddy reverse proxy on the
+# Hetzner box, task 0240) with a client cert bundle fetched from AWS
+# Secrets Manager via the Parameters and Secrets Lambda Extension
+# (localhost:2773). Used by the indexer Lambda after the PG → CH hard
+# swap (task 0241); the same builder is the foreseen entry point for
+# the api / migration / partition / enrichment Lambdas once their
+# read-path migrations land.
+aws-mtls = [
+    "dep:hyper-util",
+    "dep:hyper-rustls",
+    "dep:rustls",
+    "dep:rustls-pemfile",
+    "dep:rustls-pki-types",
+    "dep:reqwest",
+]
+
 [dependencies]
 # Official ClickHouse Inc.-maintained client (resolves ADR 0044 §Decision §5
 # Q4). Pinned to the latest stable release at task 0204 implementation time
@@ -32,3 +51,23 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
+
+# mTLS feature dependencies (gated by `aws-mtls`). Kept optional so the
+# `db-clickhouse-init` CLI (local dev / CI schema-apply) does not pull
+# the rustls / hyper-util stack — that binary talks to plain HTTP CH on
+# loopback and has no need for client cert plumbing.
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
+# `webpki-tokio` (bundled Mozilla CA roots) is intentionally OFF — we
+# build the server-cert store from the per-secret CA in the mTLS bundle
+# (`mtls.rs::client_with_mtls` → `RootCertStore::empty()` + adds from
+# `bundle.ca_pem`). Pulling Mozilla roots would be dead weight in the
+# final binary.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "aws-lc-rs"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "tls12"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+rustls-pki-types = { version = "1", optional = true }
+# Reused from the workspace `reqwest` (already rustls-tls). Used solely
+# for the localhost:2773 GET against the Secrets Manager Lambda Extension
+# — small surface (one async HTTP call), so we avoid pulling another
+# HTTP client.
+reqwest = { workspace = true, optional = true }
