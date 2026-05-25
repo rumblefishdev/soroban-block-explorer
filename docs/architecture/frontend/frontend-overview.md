@@ -676,7 +676,15 @@ variable is missing, `config.ts` throws a clear error at first page load.
 ## 9. Performance and Error Handling
 
 - **Pagination** - all list views use cursor-based pagination backed by the block
-  explorer's own database
+  explorer's own database. The backend response (`PageInfo`) carries two opaque
+  cursors: `next_cursor` (forward) and `prev_cursor` (backward). Both are
+  direction-aware on the wire (`{dir, p}` envelope per ADR 0008 amendment, task
+  0254), so every page is self-describing — Prev / Next work after refresh, deep
+  link, or share without any client-side cursor history. Frontend hooks
+  (`useCursorPagination` + `usePageHandlers` in `libs/ui/src/table/`) bind URL
+  `?cursor=` to React Query keys; presence of `next_cursor` / `prev_cursor` in
+  the response is the canonical "another page exists" signal (no `has_more`
+  field).
 - **Loading states** - skeleton loaders for all data-dependent sections; spinner for search
 - **Error states** - clear error messages for network failures, 404s (unknown
   hash/account), and rate limit responses; retry affordances where appropriate
