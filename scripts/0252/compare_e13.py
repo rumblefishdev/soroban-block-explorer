@@ -34,9 +34,9 @@ from common import (
     OUT_DIR,
     EndpointResult,
     append_tsv_row,
+    ch_query,
     ch_query_json,
     dump_diff,
-    load_samples,
     read_completed_keys,
     write_tsv_header,
 )
@@ -52,6 +52,31 @@ STELLAR_EXPERT_BASE = os.environ.get(
 
 DEFAULT_SAMPLE = int(os.environ.get("SBE_PHASE_B_CAP", "2000"))
 RECENT_LIMIT = 50  # last N invocations to compare
+
+
+def load_active_contracts(n: int) -> list[str]:
+    """Sample contracts that actually have invocations. The generic
+    `samples_contracts.txt` pool is SAC-dominated (≈ 295 K SAC vs
+    ~3 K non-SAC); SACs never have rows in
+    `soroban_invocations_appearances`, so this script would report
+    `CH_EMPTY` for most of the sample. Pull strkeys directly from
+    the activity table.
+    """
+    sql = f"""
+    WITH active AS (
+        SELECT contract_id AS surrogate
+        FROM soroban_invocations_appearances
+        GROUP BY contract_id
+        ORDER BY cityHash64(contract_id)
+        LIMIT {n * 2}
+    )
+    SELECT sc.contract_id
+    FROM soroban_contracts AS sc FINAL
+    INNER JOIN active AS a ON a.surrogate = sc.id
+    FORMAT TabSeparated
+    """
+    out = ch_query(sql).splitlines()
+    return [c.strip() for c in out if c.strip()]
 
 
 def fetch_ch_invocations(contract_strkey: str) -> list[dict]:
@@ -120,8 +145,9 @@ def main() -> int:
     done_keys = read_completed_keys(TSV, ENDPOINT)
     print(f"[E13] {len(done_keys)} contracts already done", file=sys.stderr)
 
-    contracts = load_samples("samples_contracts.txt")
-    print(f"[E13] {len(contracts)} samples loaded", file=sys.stderr)
+    contracts = load_active_contracts(DEFAULT_SAMPLE)
+    print(f"[E13] {len(contracts)} active contracts loaded from "
+          f"soroban_invocations_appearances", file=sys.stderr)
 
     random.seed(42)
     if DEFAULT_SAMPLE < len(contracts):

@@ -53,12 +53,15 @@ DEFAULT_SAMPLE = int(os.environ.get("SBE_PHASE_B_CAP", "5000"))
 
 
 def fetch_ch_interface(contract_strkey: str) -> dict | None:
+    # `wasm_interface_metadata` has 2 columns: (wasm_hash, metadata).
+    # `metadata` is a String holding SEP-48-derived JSON (per E12 SQL
+    # header note — shape is not yet standardised).
     sql = f"""
     SELECT
         sc.contract_id                              AS contract_id,
         lower(hex(sc.wasm_hash))                    AS wasm_hash_hex,
         sc.is_sac                                   AS is_sac,
-        ifNull(wim.functions, '[]')                 AS functions_json
+        ifNull(wim.metadata, '{{}}')                AS metadata_json
     FROM soroban_contracts AS sc FINAL
     LEFT JOIN wasm_interface_metadata AS wim ON wim.wasm_hash = sc.wasm_hash
     WHERE sc.contract_id = '{contract_strkey}'
@@ -88,20 +91,44 @@ def fetch_se_contract(contract_strkey: str) -> dict | None:
     return None
 
 
-def ch_function_names(functions_json: str) -> set[str]:
-    """`wasm_interface_metadata.functions` is the parser-emitted JSON
-    array; each entry has a `name` field per SEP-48 derivation.
+def ch_function_names(metadata_json: str) -> set[str]:
+    """Parse the SEP-48 metadata JSON from
+    `wasm_interface_metadata.metadata`. Try a few candidate shapes
+    because the wire format is not yet documented in
+    `docs/architecture/**`:
+      * top-level list of `{"name": ...}` entries
+      * `{"functions": [...]}`
+      * `{"interface": {"functions": [...]}}`
     """
     try:
-        arr = json.loads(functions_json)
+        parsed = json.loads(metadata_json)
     except (json.JSONDecodeError, TypeError):
         return set()
-    out = set()
-    if isinstance(arr, list):
-        for e in arr:
-            if isinstance(e, dict) and "name" in e:
-                out.add(str(e["name"]))
-    return out
+
+    def _names_from_list(lst: object) -> set[str]:
+        out: set[str] = set()
+        if isinstance(lst, list):
+            for e in lst:
+                if isinstance(e, dict):
+                    name = e.get("name") or e.get("function")
+                    if isinstance(name, str):
+                        out.add(name)
+                elif isinstance(e, str):
+                    out.add(e)
+        return out
+
+    if isinstance(parsed, list):
+        return _names_from_list(parsed)
+    if isinstance(parsed, dict):
+        for key in ("functions", "exports", "fn"):
+            if key in parsed:
+                names = _names_from_list(parsed[key])
+                if names:
+                    return names
+        iface = parsed.get("interface")
+        if isinstance(iface, dict):
+            return _names_from_list(iface.get("functions"))
+    return set()
 
 
 def se_function_names(body: dict) -> set[str] | None:
@@ -190,7 +217,7 @@ def main() -> int:
             diffs.append(f"is_sac CH={is_sac_ch} SE={is_sac_se} (stellar.expert kind heuristic)")
 
         # function list.
-        ch_fns = ch_function_names(ch.get("functions_json") or "[]")
+        ch_fns = ch_function_names(ch.get("metadata_json") or "{}")
         se_fns = se_function_names(se)
         if se_fns is None:
             result.record_field("functions_set", "tolerance")
