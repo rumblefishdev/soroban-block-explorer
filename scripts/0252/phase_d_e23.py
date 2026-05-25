@@ -63,10 +63,16 @@ def fetch_participants(pool_hex: str, cursor: tuple | None) -> list[dict]:
             f"AND (shares, account_id) < "
             f"(toDecimal128('{_dec_plain(shares)}', 7), toInt64({aid}))"
         )
+    # NOTE: do NOT alias `shares` back to itself via `toString(shares) AS
+    # shares` — CH resolves the WHERE reference to the SELECT alias's
+    # String type, blowing the row compare with the Decimal cursor literal
+    # (ILLEGAL_TYPE_OF_ARGUMENT, CH 26.3.10). `JSONEachRow` already
+    # serialises `Decimal(38,7)` to a string, so the explicit cast is
+    # redundant — drop it.
     sql = f"""
     SELECT
-        toString(shares)                  AS shares,
-        account_id                        AS account_id
+        shares,
+        account_id
     FROM lp_positions FINAL
     WHERE pool_id = unhex('{pool_hex}')
       {cur_pred}
