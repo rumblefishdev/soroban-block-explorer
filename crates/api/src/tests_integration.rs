@@ -1331,6 +1331,135 @@ async fn lp_participants_e2e_sort_filter_pagination() {
     teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
 }
 
+/// SharesCursor (`(shares: NUMERIC(28,7), account_id: i64)`) Prev
+/// round-trip — task 0254 reverse-walk verification for the only
+/// multi-key cursor type with non-trivial Postgres compare semantics.
+///
+/// Forward walk: page 1 (limit=1) → next_cursor C1 → page 2 (cursor=C1)
+/// → response carries prev_cursor P1. Backward walk: send P1 as
+/// `?cursor=` → the same page 1 content reappears. Asserts:
+///
+///   * prev_cursor is non-null on the mid-walk page 2,
+///   * its `dir=prev` envelope decodes correctly server-side,
+///   * NUMERIC(28,7) compare under ASC `>` round-trips byte-identical
+///     to the forward DESC `<` walk (no precision loss, no off-by-one
+///     in shares values),
+///   * the rendered participants list matches page 1's original
+///     account_id ordering (ACC_TOP first), proving the helper's
+///     `rows.reverse()` step lands the page in DESC presentation.
+#[tokio::test]
+async fn lp_participants_prev_cursor_round_trip_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0254 LP participants Prev test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0254 LP participants Prev test");
+            return;
+        }
+    };
+
+    // Distinct fixture from `lp_participants_e2e_sort_filter_pagination`
+    // so the tests can run concurrently without seed/teardown stepping
+    // on each other.
+    const POOL_HEX: &str = "0254000000000000000000000000000000000000000000000000000000000254";
+    const ACC_TOP: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVTOP";
+    const ACC_MID: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVMID";
+    const ACC_ZERO: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVZRO";
+
+    teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
+    setup_lp_e2e_fixture(&pool, POOL_HEX, ACC_TOP, ACC_MID, ACC_ZERO).await;
+
+    // Page 1 (no cursor): expect ACC_TOP, no prev_cursor (first page).
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page1) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "page1: {page1}");
+    let page1_account = page1["data"][0]["account"]
+        .as_str()
+        .expect("page1 account")
+        .to_string();
+    let page1_shares = page1["data"][0]["shares"]
+        .as_str()
+        .expect("page1 shares")
+        .to_string();
+    assert_eq!(page1_account, ACC_TOP, "highest-shares account first");
+    assert!(
+        page1["page"]["prev_cursor"].is_null(),
+        "page1 must not carry prev_cursor: {page1}"
+    );
+    let next_cursor = page1["page"]["next_cursor"]
+        .as_str()
+        .expect("next_cursor present on mid-walk page 1")
+        .to_string();
+
+    // Page 2 via next_cursor: expect ACC_MID + prev_cursor populated.
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page2) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "page2: {page2}");
+    assert_eq!(page2["data"][0]["account"], ACC_MID);
+    let prev_cursor = page2["page"]["prev_cursor"]
+        .as_str()
+        .expect("prev_cursor present on mid-walk page 2 (task 0254)")
+        .to_string();
+
+    // Backward walk via prev_cursor: must return the same content as
+    // the original page 1 (cursor symmetry + NUMERIC compare integrity).
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1&cursor={prev_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page1_prime) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "page1' (via prev_cursor): {page1_prime}");
+    assert_eq!(
+        page1_prime["data"][0]["account"]
+            .as_str()
+            .expect("page1' account"),
+        page1_account,
+        "Prev round-trip must return the original page 1 account_id (ACC_TOP)"
+    );
+    assert_eq!(
+        page1_prime["data"][0]["shares"]
+            .as_str()
+            .expect("page1' shares"),
+        page1_shares,
+        "Prev round-trip must preserve NUMERIC(28,7) shares value byte-identical"
+    );
+
+    teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
+}
+
 async fn setup_lp_e2e_fixture(
     pool: &PgPool,
     pool_hex: &str,

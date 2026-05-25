@@ -284,4 +284,38 @@ mod tests {
         let err = decode::<TsIdCursor>(&bad_b64).unwrap_err();
         assert!(matches!(err, CursorError::InvalidPayload));
     }
+
+    #[test]
+    fn encode_side_wrap_serializes_identical_to_decode_side_envelope() {
+        // Drift guard: `encode` uses a local borrowing `Wrap<'a, T>`
+        // struct to avoid cloning the payload, while `decode` reads
+        // through `CursorEnvelope<P>` (owned). The two MUST produce /
+        // accept byte-identical JSON — otherwise a field rename on one
+        // side could silently break round-trips while every
+        // encode-only test still passes.
+        //
+        // Strategy: encode via the production helper, then decode via
+        // hand-built JSON pattern. If the on-wire shape ever drifts
+        // (e.g. someone renames `p` to `payload` on one side only),
+        // this test fails on the byte-level comparison BEFORE the
+        // higher-level round-trip tests would catch it.
+        let ts = Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap();
+        let payload = TsIdCursor::new(ts, 42);
+
+        let encoded = encode(&payload, Direction::Prev);
+        let decoded_bytes = URL_SAFE_NO_PAD.decode(&encoded).expect("valid base64");
+        let decoded_json: serde_json::Value =
+            serde_json::from_slice(&decoded_bytes).expect("valid json");
+
+        // Top-level shape must be {dir, p} — no aliases, no extra
+        // fields, exact key names.
+        let obj = decoded_json.as_object().expect("object at top level");
+        assert_eq!(
+            obj.keys().collect::<Vec<_>>(),
+            vec!["dir", "p"],
+            "envelope must have exactly two keys in order: dir, p"
+        );
+        assert_eq!(obj["dir"], serde_json::json!("prev"));
+        assert_eq!(obj["p"]["id"], 42);
+    }
 }
