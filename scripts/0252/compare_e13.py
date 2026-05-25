@@ -80,22 +80,52 @@ def load_active_contracts(n: int) -> list[str]:
 
 
 def fetch_ch_invocations(contract_strkey: str) -> list[dict]:
-    sql = f"""
+    # Two-stage to avoid the unpruned 8 B-row JOIN under FINAL — see
+    # compare_e14.fetch_ch_events for the rationale + 28-32 s wild
+    # measurement that motivated the split.
+    sql_ia = f"""
     WITH (SELECT id FROM soroban_contracts FINAL
           WHERE contract_id = '{contract_strkey}' LIMIT 1) AS cid
     SELECT
-        lower(hex(t.hash))                AS tx_hash,
-        ia.ledger_sequence                AS ledger_sequence,
-        ia.transaction_id                 AS transaction_id
-    FROM soroban_invocations_appearances AS ia FINAL
-    INNER JOIN transactions AS t FINAL
-        ON t.id = ia.transaction_id AND t.ledger_sequence = ia.ledger_sequence
-    WHERE ia.contract_id = cid
-    ORDER BY ia.ledger_sequence DESC, ia.transaction_id DESC
+        ledger_sequence,
+        transaction_id
+    FROM soroban_invocations_appearances FINAL
+    WHERE contract_id = cid
+    ORDER BY ledger_sequence DESC, transaction_id DESC
     LIMIT {RECENT_LIMIT}
     FORMAT JSONEachRow
     """
-    return ch_query_json(sql)
+    ias = ch_query_json(sql_ia)
+    if not ias:
+        return []
+    pairs = ",".join(
+        f"({int(r['ledger_sequence'])},{int(r['transaction_id'])})" for r in ias
+    )
+    parts = sorted({int(r["ledger_sequence"]) // 500_000 for r in ias})
+    parts_csv = ",".join(str(p) for p in parts)
+    sql_hash = f"""
+    SELECT
+        ledger_sequence,
+        id                              AS transaction_id,
+        lower(hex(hash))                AS tx_hash
+    FROM transactions FINAL
+    WHERE intDiv(ledger_sequence, 500000) IN ({parts_csv})
+      AND (ledger_sequence, id) IN ({pairs})
+    FORMAT JSONEachRow
+    """
+    hashes = {
+        (int(r["ledger_sequence"]), int(r["transaction_id"])): r["tx_hash"]
+        for r in ch_query_json(sql_hash)
+    }
+    out: list[dict] = []
+    for r in ias:
+        key = (int(r["ledger_sequence"]), int(r["transaction_id"]))
+        out.append({
+            "tx_hash": hashes.get(key, ""),
+            "ledger_sequence": int(r["ledger_sequence"]),
+            "transaction_id": int(r["transaction_id"]),
+        })
+    return out
 
 
 def fetch_se_invocations(contract_strkey: str) -> list[dict] | None:

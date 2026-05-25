@@ -72,23 +72,58 @@ def load_active_contracts(n: int) -> list[str]:
 
 
 def fetch_ch_events(contract_strkey: str) -> list[dict]:
-    sql = f"""
+    # Two-stage: (1) pull the contract-leading sparse-PK slice from
+    # `soroban_events FINAL` (cheap — contract_id is the leading key);
+    # (2) resolve the surrogate tx_id → canonical 64-byte hash in a
+    # batch lookup against `transactions FINAL`, restricting the
+    # scan to the partitions the events came from (intDiv prune).
+    # Without the partition prune the join scans 8 B+ rows under
+    # FINAL — ~28-32 s per call in the wild. With it, sub-second.
+    sql_evs = f"""
     WITH (SELECT id FROM soroban_contracts FINAL
           WHERE contract_id = '{contract_strkey}' LIMIT 1) AS cid
     SELECT
-        lower(hex(t.hash))                AS tx_hash,
-        ev.ledger_sequence                AS ledger_sequence,
-        ev.transaction_id                 AS transaction_id,
-        ev.event_index                    AS event_index
-    FROM soroban_events AS ev FINAL
-    INNER JOIN transactions AS t FINAL
-        ON t.id = ev.transaction_id AND t.ledger_sequence = ev.ledger_sequence
-    WHERE ev.contract_id = cid
-    ORDER BY ev.ledger_sequence DESC, ev.transaction_id DESC, ev.event_index DESC
+        ledger_sequence,
+        transaction_id,
+        event_index
+    FROM soroban_events FINAL
+    WHERE contract_id = cid
+    ORDER BY ledger_sequence DESC, transaction_id DESC, event_index DESC
     LIMIT {RECENT_LIMIT}
     FORMAT JSONEachRow
     """
-    return ch_query_json(sql)
+    evs = ch_query_json(sql_evs)
+    if not evs:
+        return []
+    pairs = ",".join(
+        f"({int(e['ledger_sequence'])},{int(e['transaction_id'])})" for e in evs
+    )
+    parts = sorted({int(e["ledger_sequence"]) // 500_000 for e in evs})
+    parts_csv = ",".join(str(p) for p in parts)
+    sql_hash = f"""
+    SELECT
+        ledger_sequence,
+        id                              AS transaction_id,
+        lower(hex(hash))                AS tx_hash
+    FROM transactions FINAL
+    WHERE intDiv(ledger_sequence, 500000) IN ({parts_csv})
+      AND (ledger_sequence, id) IN ({pairs})
+    FORMAT JSONEachRow
+    """
+    hashes = {
+        (int(r["ledger_sequence"]), int(r["transaction_id"])): r["tx_hash"]
+        for r in ch_query_json(sql_hash)
+    }
+    out: list[dict] = []
+    for e in evs:
+        key = (int(e["ledger_sequence"]), int(e["transaction_id"]))
+        out.append({
+            "tx_hash": hashes.get(key, ""),
+            "ledger_sequence": int(e["ledger_sequence"]),
+            "transaction_id": int(e["transaction_id"]),
+            "event_index": int(e["event_index"]),
+        })
+    return out
 
 
 def fetch_se_events(contract_strkey: str) -> list[dict] | None:
