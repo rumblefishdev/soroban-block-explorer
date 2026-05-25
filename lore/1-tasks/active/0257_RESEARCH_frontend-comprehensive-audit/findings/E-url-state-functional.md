@@ -210,13 +210,50 @@ cells against the intended URL contract.
   **RESOLVED by same fix** — same `useTableUrlState` write path, same
   `setCursor`, just different `cursorParam` key.
 
-### F-E-2 — **STILL STANDS** (verified unchanged post-0254)
+### F-E-2 — **DROPPED — design decision 2026-05-25**
 
 0254 did not touch `web/src/pages/transactions/operationTypes.ts` or
-`TransactionFilters.tsx`. The 13-line diff in `TransactionsListPage.tsx`
-is pagination-only (`useCursorPagination` + `usePageHandlers` import +
-wire). `normalizeOperationType` still does not normalise lowercase
-URL input. Audit-blocker scope reduced from 2 → 1 with F-E-1 resolved.
+`TransactionFilters.tsx`. Technical state unchanged.
+
+**Per user 2026-05-25:** finding **dropped** as a fix-first candidate AND
+as an audit finding worth shipping. Senior design call:
+
+> "URL to URL i po prostu powinien być poprawny i tyle."
+
+**Re-classified as ACCEPT BASELINE:** URLs are part of the app's wire
+contract. The FE owns canonicalisation for the URLs it *produces*
+(dropdown filter writes canonical PascalCase per current behavior); URLs
+the FE *receives* from external paste / hand-typed input are NOT
+normalised. Non-canonical input → API 400 → empty table → expected.
+This matches REST contract discipline: clients are responsible for
+sending well-formed requests; the FE is itself a client to its own API.
+
+**Implications for Wave 4:**
+- **1.6 console + error handling** — when 1.6 marathon hits a paste-link
+  scenario with malformed `?op=` value, **do NOT log it as a console
+  finding**. Record as: "audit baseline: malformed `?op=` value is user
+  error; FE intentionally does not defensively normalise. API 400
+  response is the expected behavior."
+- **1.5 D5 (validation 400)** — cells for E2 (`/transactions`) with
+  malformed filter input render as expected (`NotFound` or own state per
+  H8). Audit measures whether the **rendered state is correct**, not
+  whether the underlying API call could be avoided.
+
+**Gate A fix-first scope:** reduced from 1 → **0**. No audit-blocker
+tasks. Wave 4 unblocked.
+
+**Task file:** spawned `0262_BUG_url-op-filter-case-normalise.md`
+moved to `.trash/0262_BUG_url-op-filter-case-normalise.md.DROPPED-2026-05-25-design-decision`.
+
+**Audit treatment of related symptoms:**
+- MUI Select warning ("non-existent value") — STILL counts as a 🟢 LOW
+  console finding to address separately (could be solved by Select
+  rendering "Unknown filter applied" empty state instead of warn).
+- Empty table on bad input — STILL a UX finding for Wave 6 visual pass:
+  consider showing "Invalid filter — try clearing it" affordance.
+
+Both of these are about **render quality on bad input**, not URL
+normalisation. They survive the F-E-2 drop.
 
 ### F-E-3 — **STILL STANDS**
 

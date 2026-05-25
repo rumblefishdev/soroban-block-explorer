@@ -215,12 +215,12 @@ all are Class B/C deferrable to Gate B.
 **Karol's 0254 branch (direction-aware cursor pagination + prev_cursor
 + ADR 0008 amendment + test suite) merged into audit branch.**
 
-### Fix-first scope after merge: **2 items → 1 item**
+### Fix-first scope after merge: **2 items → 0 items** (1 resolved + 1 dropped)
 
 | Item | Pre-merge state | Post-merge verdict |
 |---|---|---|
 | F-E-1 (URL cursor not written) | 🔴 fix-first audit-blocker | **RESOLVED** via `f646047d` (FE prev-stack drop + wire backend `prev_cursor`) + `78345d49` (backend direction-aware cursor). See `findings/E-url-state-functional.md` Post-merge update section. |
-| F-E-2 (lowercase op normalise) | 🟠 fix-first audit-blocker | **STILL STANDS** — 0254 did not touch `operationTypes.ts`. Only remaining Gate A fix-first item. |
+| F-E-2 (lowercase op normalise) | 🟠 fix-first audit-blocker | **DROPPED 2026-05-25** — per user senior design call: "URL to URL i po prostu powinien być poprawny i tyle." Re-classified as ACCEPT BASELINE (URL = wire contract, FE owns canonicalisation only for URLs it produces; malformed external input → API 400 = expected REST behavior). Task file `0262_BUG_url-op-filter-case-normalise.md` moved to `.trash/`. See `findings/E-url-state-functional.md` F-E-2 section for full rationale + Wave 4 implications. |
 | Vite 7.3.3 CVE bump | Class E off-band | STILL STANDS (`@vitejs/plugin-react@7.3.1` unchanged in merge) |
 | CORS infra comm | Class E off-band | STILL STANDS |
 
@@ -282,7 +282,7 @@ page; now extracted).
 | 1.4 API consistency | `cursor` → `next_cursor` rename consistency (done above — clean) | 0 (done) | done |
 | 1.5 D2/D9 cells for E2/E4/E7/E10/E12 (list pages) | Re-verify pagination URL contract on Next + Prev + refresh + deep-link, per list page | 30 min Playwright | **Wave 4** |
 | 1.5 D2/D9 cells for tab tables (E6, E8, E9, E11, E13) | Same scope on `?cursor_p=` / `?cursor_e=` / `?cursor_i=` per-section cursors | 25 min Playwright | Wave 4 |
-| 1.6 console | API 400 from stale lowercase `?op=` still fires; F-E-2 fix outstanding | 0 (no new scope) | Wave 4 |
+| 1.6 console | F-E-2 DROPPED per design decision. Any API 400 from malformed `?op=` is expected baseline (user error, not FE bug). Record context note, do NOT log as console finding. | 0 (no new scope) | Wave 4 |
 | 1.7 cross-entity links | List page row link rendering untouched by 0254 | 0 (no new scope) | done |
 | 1.9 component reuse | `usePageHandlers` now extracted shared chunk — uniform usage across 13 pages. Confirms hook is the right level of abstraction. | 5 min | Wave 4 |
 | 1.11 P / 1.11b AQ | Re-ran (done above — baseline holds) | 0 (done) | done |
