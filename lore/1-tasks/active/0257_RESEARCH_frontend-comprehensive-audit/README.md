@@ -2,7 +2,7 @@
 id: '0257'
 title: 'Frontend comprehensive audit (pre-launch)'
 type: RESEARCH
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0063', '0064', '0065', '0066', '0068', '0070', '0071', '0072', '0073', '0074', '0075', '0076', '0077', '0246', '0249', '0250', '0251']
 tags: ['frontend', 'audit', 'qa', 'pre-launch', 'priority-high', 'phase-research']
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Task created. Scope built interactively via 9-batch Q&A walkthrough — every sub-phase explicitly confirmed. User chose EXHAUSTIVE depth on state matrix (14×9=126), responsive (14×3=42), Figma fidelity (no time-box). 42 sub-phases total (Track 1: 29, Track 2: 8, Phase 3: 5), ~96.5h. Expected to spawn 20-50 backlog tasks.'
+  - date: '2026-05-25'
+    status: active
+    who: karolkow
+    note: 'Promoted backlog → active via /promote-task. Ready to begin Wave 1 execution.'
 ---
 
 # Frontend comprehensive audit (pre-launch)
