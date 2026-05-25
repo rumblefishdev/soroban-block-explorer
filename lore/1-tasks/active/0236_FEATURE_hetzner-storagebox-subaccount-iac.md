@@ -2,7 +2,7 @@
 id: '0236'
 title: 'FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0227', '0235']
 tags:
@@ -20,6 +20,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0227 — Storage Box subaccount `<storagebox-sub>` was created manually in Hetzner Cloud Console (chroot `/borg-ch-prod-01-repo`, SSH on, password set, **no pubkey wired yet**). Wiring the Borg pubkey and the first end-to-end backup roundtrip are deferred here because Cloud Console UI does not expose SSH key management for subaccounts and the operator preferred to unblock backfill rather than route the pubkey via SFTP-with-password. This task brings the subaccount + pubkey + first-run validation under IaC.'
+  - date: '2026-05-25'
+    status: active
+    who: fmazur
+    note: 'Promoted from backlog to active.'
 ---
 
 # FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API
