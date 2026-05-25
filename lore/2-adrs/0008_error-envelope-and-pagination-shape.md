@@ -2,8 +2,19 @@
 id: '0008'
 title: 'Error envelope and pagination shape for the HTTP API'
 status: accepted
-deciders: [stkrolikiewicz]
-related_tasks: ['0042', '0043', '0046', '0047', '0050', '0051', '0053', '0057']
+deciders: [stkrolikiewicz, karolkow]
+related_tasks:
+  [
+    '0042',
+    '0043',
+    '0046',
+    '0047',
+    '0050',
+    '0051',
+    '0053',
+    '0057',
+    '0254',
+  ]
 related_adrs: ['0005']
 tags: [layer-backend, scope-api-contract]
 links: []
@@ -12,6 +23,17 @@ history:
     status: accepted
     who: stkrolikiewicz
     note: 'ADR created alongside task 0042 (OpenAPI infrastructure). Shapes defined in crates/api/src/openapi/schemas.rs.'
+  - date: 2026-05-24
+    status: accepted
+    who: karolkow
+    note: >
+      Amended (task 0254) with the direction-aware cursor extension:
+      `PageInfo` gains a `prev_cursor: Option<String>` field and drops
+      the redundant `has_more` boolean (subsumed by `cursor.is_some()`);
+      cursor payloads are wrapped in a `{dir, p}` envelope so backend
+      can branch SQL between forward (DESC `<`) and backward (ASC `>`,
+      then reverse) walks. Clean break — legacy cursors (pre-envelope)
+      are rejected with `invalid_cursor`.
 ---
 
 # ADR 0008: Error envelope and pagination shape for the HTTP API
@@ -19,6 +41,7 @@ history:
 **Related:**
 
 - [Task 0042: OpenAPI/Swagger infrastructure setup](../1-tasks/archive/0042_FEATURE_openapi-swagger-infrastructure.md)
+- [Task 0254: Backend `prev_cursor` + pagination test suite](../1-tasks/active/0254_FEATURE_backend-prev-cursor-and-pagination-tests.md) — direction-aware extension
 - [ADR 0005: Rust-only backend API](./0005_rust-only-backend-api.md)
 
 ---
@@ -46,9 +69,9 @@ pub struct ErrorEnvelope {
 }
 
 pub struct PageInfo {
-    pub cursor: Option<String>,   // opaque next-page cursor, None on last page
-    pub limit: u32,               // page size that produced `data`
-    pub has_more: bool,           // true iff further pages exist
+    pub cursor: Option<String>,        // opaque forward cursor, None on last page
+    pub prev_cursor: Option<String>,   // opaque backward cursor, None on first page (task 0254)
+    pub limit: u32,                    // page size that produced `data`
 }
 
 pub struct Paginated<T: ToSchema> {
@@ -75,7 +98,7 @@ Every failure response body across all M2 endpoints must serialise to `ErrorEnve
 
 - **Cursor-based, not offset-based.** The explorer indexes a live ledger stream — new records arrive continuously. Offset pagination over a growing collection produces skipped and duplicated items as pages shift between requests. Cursor pagination gives stable listings regardless of stream advances.
 - **Opaque cursor string.** Encoded as whatever the endpoint needs (base64-encoded `(id, ts)`, sequence number, etc.) — opacity means the backend can change the encoding later without a client migration.
-- **`has_more` boolean on the server side**, not computed from `len(data) == limit`. Explicit `has_more` lets the server answer definitively and handles edge cases (page exactly at the end) without client-side heuristics.
+- **`cursor.is_some()` is the canonical "more pages exist" signal.** The original ADR carried an explicit `has_more: bool` field for the same purpose; task 0254 dropped it as redundant once `Option<String>` already conveys end-of-stream cleanly on both directions (`cursor: None` = last forward page, `prev_cursor: None` = first page). The server still answers definitively — the answer just lives inside the `Option`.
 - **Single generic `Paginated<T>`**. One shape for every list endpoint means one TypeScript type on the frontend, one SDK helper, one error-handling branch. DRY wins here because the shape is genuinely identical everywhere.
 - Aligns with **Stellar Horizon API** conventions (our upstream data source), reducing cognitive load for users coming from Horizon.
 
@@ -159,10 +182,122 @@ Every failure response body across all M2 endpoints must serialise to `ErrorEnve
 
 ---
 
+---
+
+## Cursor direction encoding (task 0254 amendment)
+
+The original ADR specified a one-way cursor (`PageInfo.cursor: Option<String>`)
+— forward walks only, no `prev_cursor`. Task 0238 worked around the lack of a
+backward cursor with an in-memory prev-stack in `useCursorPagination` that
+reset on refresh / remount, breaking the deep-link-then-Prev flow. Task 0254
+introduces a backend `prev_cursor` and removes the FE stack hack. This
+section documents the wire-shape extension and the SQL algebra.
+
+### Decision
+
+`PageInfo` gains a second opaque cursor and drops `has_more`:
+
+```rust
+pub struct PageInfo {
+    pub cursor: Option<String>,        // forward / next — original field
+    pub prev_cursor: Option<String>,   // backward / prev — NEW
+    pub limit: u32,
+}
+```
+
+- `prev_cursor: None` ⇒ first page (the client has not paged forward yet).
+- `cursor: None` ⇒ last page (no further forward continuation).
+
+Both cursor strings are emitted independently — middle pages carry both,
+first pages omit `prev_cursor`, last pages omit `cursor`. The redundant
+`has_more: bool` field was removed: `cursor.is_some()` carries the same
+signal with zero ambiguity ("which is the truth, `cursor` or `has_more`?").
+
+### Cursor wire envelope
+
+Each opaque cursor string is `base64url(JSON(envelope))` where:
+
+```rust
+struct CursorEnvelope<P> {
+    dir: Direction,   // "next" | "prev", REQUIRED
+    p: P,             // resource-specific payload (TsIdCursor, PoolListCursor, …)
+}
+```
+
+- The `dir` discriminant is required (no `#[serde(default)]`) — a missing
+  `dir` decodes as `InvalidPayload`. This forecloses the silent-promotion
+  failure mode where a malformed cursor would be treated as a forward walk.
+- The envelope is nested rather than `#[serde(flatten)]`'d. Flatten buffers
+  through `serde_json::Value`, breaks under `#[serde(deny_unknown_fields)]`
+  on the payload, and silently collides if a future payload declares a
+  `dir` field of its own. Nesting trades ~5 bytes per cursor for clean
+  composition.
+- `#[serde(deny_unknown_fields)]` on `CursorEnvelope` ensures cursors
+  minted by a future deployment with extra envelope fields fail decode on
+  current code instead of being misinterpreted.
+
+### SQL direction branch
+
+Each list endpoint's `fetch_*` accepts a `direction: Direction` argument
+and uses `format!()` to interpolate the comparison operator and ordering
+clause:
+
+| Direction | WHERE | ORDER BY | Post-fetch |
+|-----------|-------|----------|------------|
+| `Next` | `(ts, id) < cursor` | DESC | drop excess row from tail |
+| `Prev` | `(ts, id) > cursor` | ASC | drop excess from tail, then reverse |
+
+The Prev branch fetches in ASC so a row-constructor `>` comparison can
+walk backward through the same indexes. The post-fetch reverse normalises
+to DESC presentation order so handler-side row → DTO mapping is
+direction-agnostic. Multi-key cursor payloads (`SharesCursor`,
+`NftTransferCursor`, `PoolListCursor`) compose identically — Postgres
+row-constructor comparison is lexicographic over the column tuple.
+
+### Finalize-page matrix
+
+`common::pagination::finalize_page` produces the two-cursor `PageInfo`
+from a `limit+1` row slice and a direction:
+
+| `direction` | input cursor | excess | `cursor` (next) | `prev_cursor` |
+|-------------|--------------|--------|------------------|---------------|
+| `Next` | absent (page 1) | yes | last displayed (Next) | None |
+| `Next` | absent (page 1) | no | None | None |
+| `Next` | present (mid) | yes | last displayed (Next) | first displayed (Prev) |
+| `Next` | present (last) | no | None | first displayed (Prev) |
+| `Prev` | present | yes | last displayed (Next)¹ | first displayed (Prev) |
+| `Prev` | present (hit start) | no | last displayed (Next)¹ | None |
+
+¹ Backward walks anchor `cursor` (next continuation) at the oldest
+displayed row unconditionally. The explorer's data is immutable
+(append-only ledger stream), so the cursor anchor was sourced from a
+prior forward fetch and always references a row that still exists in
+the table. No EXISTS check is needed.
+
+### Clean break — no legacy cursor decode
+
+Pre-amendment cursors (bare-payload JSON, no `dir`, no envelope) are
+**rejected** on the new code path with `CursorError::InvalidPayload`,
+surfacing as HTTP 400 `invalid_cursor`. There is no fallback to
+`Direction::Next`. Rationale: silent promotion of a malformed cursor to
+a forward walk is a sharper failure mode than a 400 — a legacy cursor
+that decodes "successfully" but lacks intent is precisely the class of
+bug the envelope is designed to catch. The trade-off is paid once at
+rollout: any in-flight cursor (browser tab open across the deploy) gets
+a 400; the FE shows an error state and the user navigates to first
+page. Acceptable for the explorer's traffic profile.
+
+---
+
 ## References
 
 - [Stripe API errors](https://stripe.com/docs/api/errors) — pattern reference for `code` + `message`
 - [GitHub REST API errors](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#client-errors) — similar minimal envelope
 - [Stellar Horizon API](https://developers.stellar.org/api/introduction/pagination/) — cursor pagination we mirror
 - [RFC 7807 Problem Details](https://datatracker.ietf.org/doc/html/rfc7807) — rejected alternative
-- `crates/api/src/openapi/schemas.rs` — canonical source of the shapes
+- `crates/api/src/openapi/schemas.rs` — canonical source of the `PageInfo` shape (forward + `prev_cursor`)
+- `crates/api/src/common/cursor.rs` — `Direction` enum + `CursorEnvelope` wrapper
+- `crates/api/src/common/pagination.rs` — direction-aware `finalize_page` (matrix above)
+- `libs/ui/src/table/useCursorPagination.ts` — frontend symmetric `goNext` / `goPrev`
+
+
