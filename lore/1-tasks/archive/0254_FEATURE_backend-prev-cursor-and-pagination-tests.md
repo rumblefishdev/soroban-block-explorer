@@ -5,7 +5,8 @@ type: FEATURE
 status: completed
 related_adr: ['0008', '0043']
 related_tasks: ['0238', '0257']
-tags: [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
+tags:
+  [priority-medium, effort-medium, layer-backend, layer-frontend, phase-future]
 milestone: 2
 links: []
 history:
@@ -123,12 +124,12 @@ once, after both changes settle, avoids rewriting them mid-flight.
 
 1. Extend `PageInfo` (likely `crates/api/src/openapi/schemas.rs`)
    with `prev_cursor: Option<String>` and `#[serde(skip_serializing_if
-   = "Option::is_none")]`.
+= "Option::is_none")]`.
 2. For each list endpoint, compute `prev_cursor` from the FIRST
    row of the returned slice instead of the LAST (mirror of how
    `cursor` is currently built).
    - `crates/db` cursor helpers already expose `to_cursor((ts,
-     id))` for `TsIdCursor` — reuse for the prev side.
+id))` for `TsIdCursor` — reuse for the prev side.
    - First page: `prev_cursor = None`.
    - Empty page: `prev_cursor = None`.
 3. Backend integration tests — **cursor-focused** matrix per list
@@ -155,14 +156,14 @@ once, after both changes settle, avoids rewriting them mid-flight.
      Documents the "cursors are filter-scoped" contract.
    - **Endpoint coverage:** matrix above run against every list
      endpoint, including embedded sub-lists (`LedgerDetail.
-     transactions`, `LiquidityPool.{participants,transactions}`,
+transactions`, `LiquidityPool.{participants,transactions}`,
      `Contract.{events,invocations}`, `Account.transactions`,
      `Asset.transactions`, `Nft.transfers`).
 4. Regenerate OpenAPI:
    `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
    followed by `npx nx run @rumblefish/api-types:generate`. Stage
    the generated diff alongside the Rust change (`API types
-   freshness` CI gate).
+freshness` CI gate).
 
 ### Phase 2 — frontend simplification (`libs/ui`, `web/src`)
 
@@ -178,7 +179,7 @@ once, after both changes settle, avoids rewriting them mid-flight.
    API** (was only `handleNext` because backend had no prev
    cursor; now both sides need an extract wrapper):
    - Signature: `usePageHandlers(page, goNext, goPrev) → { canPrev,
-     canNext, handlePrev, handleNext }`.
+canNext, handlePrev, handleNext }`.
    - `handlePrev` reads `page?.prev_cursor` and calls
      `goPrev(prevCursor)`. `canPrev = prev_cursor !== null`.
    - `handleNext` unchanged from current behavior.
@@ -205,6 +206,7 @@ Once vitest + `@testing-library/react` lands in `libs/ui`
 Cases:
 
 **`useCursorPagination`**:
+
 - Mount with pasted `?cursor=ABC` deep link + no `resetKey` change
   → cursor preserved on first render (regression test for the
   `useRef` skip-initial-mount fix from 0238).
@@ -218,6 +220,7 @@ Cases:
   `cursor` untouched.
 
 **`usePageHandlers`** (symmetric prev / next after this task):
+
 - `page === undefined` → `canPrev: false`, `canNext: false`.
 - `has_more: true, cursor: "X"` → `canNext: true`, `handleNext()`
   calls `goNext("X")`.
@@ -230,6 +233,7 @@ Cases:
 - Page navigation back to first → `canPrev: false` again.
 
 **`useTableUrlState`** (cursorParam):
+
 - Two hooks on the same route, `cursor_p` + `cursor_t` →
   independent keys, no collision.
 - `setSort` / `setFilter` clear only the namespaced cursor, not
@@ -284,21 +288,22 @@ Per-route variations follow in the route matrix below.
 
 #### Per-route table
 
-| Route | Variants on top of the cursor-flow scenarios |
-|-------|-----------|
-| `/ledgers` | Next 3×, Prev 3×, refresh on N=2, share link → new context same page |
-| `/ledgers/:sequence` | Inner Next 2×, prev/next ledger nav resets cursor |
-| `/transactions` | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized |
-| `/assets` | Next + Prev, refresh, share link |
-| `/assets/:id` | Switch asset → cursor drops |
-| `/nfts` | Next + Prev, refresh |
-| `/nfts/:id` | Switch NFT → cursor drops |
-| `/accounts/:id` | Switch account → cursor drops |
-| `/liquidity-pools` | Next + Prev, filter change resets |
-| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop |
-| `/contracts/:id` | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
+| Route                  | Variants on top of the cursor-flow scenarios                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/ledgers`             | Next 3×, Prev 3×, refresh on N=2, share link → new context same page                                 |
+| `/ledgers/:sequence`   | Inner Next 2×, prev/next ledger nav resets cursor                                                    |
+| `/transactions`        | Filter change resets cursor, refresh on filtered cursor, lowercase op normalized                     |
+| `/assets`              | Next + Prev, refresh, share link                                                                     |
+| `/assets/:id`          | Switch asset → cursor drops                                                                          |
+| `/nfts`                | Next + Prev, refresh                                                                                 |
+| `/nfts/:id`            | Switch NFT → cursor drops                                                                            |
+| `/accounts/:id`        | Switch account → cursor drops                                                                        |
+| `/liquidity-pools`     | Next + Prev, filter change resets                                                                    |
+| `/liquidity-pools/:id` | Both `?cursor_p=` and `?cursor_t=` independent; switch pool → both drop                              |
+| `/contracts/:id`       | Tab switch Events ↔ Invocations; `?cursor_e=` / `?cursor_i=` namespaced; switch contract → both drop |
 
 Common assertions per scenario:
+
 - URL contains expected cursor key.
 - Rendered row count matches API `data.length`.
 - Refresh preserves URL state.
@@ -326,7 +331,7 @@ In-scope (this task):
       stack; `MAX_HISTORY` and `FIRST_PAGE` removed; `goPrev`
       signature is `goPrev(prevCursor: string | null)`.
 - [x] `usePageHandlers` returns symmetric `{ canPrev, canNext,
-      handlePrev, handleNext }`; `canPrev = page.prev_cursor != null`.
+handlePrev, handleNext }`; `canPrev = page.prev_cursor != null`.
 - [x] Backend integration tests for the cursor matrix on the
       `/ledgers` reference endpoint: first-page omits prev_cursor,
       mid-page emits both, prev_cursor round-trip returns the
@@ -360,7 +365,7 @@ reaches this dimension):
 - `TsIdCursor::to_cursor()` (ADR 0043) — for `prev_cursor` build.
 - `useCursorPagination` — modified, not replaced.
 - `usePageHandlers` — extended to symmetric `{ canPrev, canNext,
-  handlePrev, handleNext }` (was next-only because backend lacked
+handlePrev, handleNext }` (was next-only because backend lacked
   `prev_cursor`).
 - `CURSOR_PARAMS` registry — unchanged.
 - Vitest + `@testing-library/react` — once 0226 ships.
@@ -400,12 +405,12 @@ reaches this dimension):
 - `crates/api/src/common/cursor.rs`: added `Direction` enum
   (`Next` | `Prev`, no `Default` impl), `CursorEnvelope<P>` wrapper
   with `#[serde(deny_unknown_fields)]`, `direction_sql(direction)
-  -> (op, order)` helper. `encode` / `decode` signatures changed
+-> (op, order)` helper. `encode` / `decode` signatures changed
   to carry / extract `Direction`. Legacy bare-payload cursors
   rejected with `InvalidPayload` (clean break per project policy).
 - `crates/api/src/common/pagination.rs`: `finalize_page` rewritten
   as a direction-aware matrix returning `PageInfo { next_cursor,
-  prev_cursor, limit }`. Prev branch fetches ASC + reverses in
+prev_cursor, limit }`. Prev branch fetches ASC + reverses in
   memory. `finalize_ts_id_page` convenience wrapper preserved.
 - `crates/api/src/common/extractors.rs`: `Pagination<P>` gains
   `direction: Direction` field, `has_predecessor() -> bool` and
@@ -418,7 +423,7 @@ reaches this dimension):
 - 13 endpoint handlers + queries: every paginated `fetch_*`
   accepts `direction: Direction` and uses `direction_sql()` to
   interpolate `{op}` and `{order}` into the SQL string. Handlers
-  pass `pagination.direction` to fetch_* and
+  pass `pagination.direction` to fetch\_\* and
   `pagination.has_predecessor()` to `finalize_page`. List endpoints
   refactored to use the canonical `finalize_page` (including the
   previously-inline `list_invocations`); `list_events` keeps a
@@ -440,8 +445,8 @@ reaches this dimension):
 **OpenAPI codegen:**
 
 - `cargo run -p api --bin extract_openapi > libs/api-types/src/
-  openapi.json` regenerated; `npx nx run @rumblefish/api-types:
-  generate` updated `libs/api-types/src/generated/types.gen.ts`.
+openapi.json` regenerated; `npx nx run @rumblefish/api-types:
+generate` updated `libs/api-types/src/generated/types.gen.ts`.
 - `nx run @rumblefish/api-types:check-generated` green.
 
 **Frontend (TypeScript):**
@@ -484,7 +489,7 @@ reaches this dimension):
    ("opaque cursor strings").
 
 3. **ASC + reverse for backward fetches.** Postgres `WHERE
-   (ts, id) > X ORDER BY ASC LIMIT N+1` then `rows.reverse()`
+(ts, id) > X ORDER BY ASC LIMIT N+1` then `rows.reverse()`
    produces a DESC-presentation backward page. Same indexes as
    forward walks, no separate cursor algebra.
 
@@ -513,13 +518,14 @@ reaches this dimension):
    symmetry — wire change, OpenAPI regen, TS type update, FE
    `PageInfoLike` interface, integration test assertions all
    updated atomically. Query param remains `?cursor=<opaque>`
-   (the cursor *string itself* is unchanged, only the response
+   (the cursor _string itself_ is unchanged, only the response
    field name changes).
 
 8. **`Pagination::has_predecessor()` + `fetch_limit()` methods.**
    Every handler had the same idiom: `pagination.cursor.is_some()`
-   + `i64::from(pagination.limit) + 1`. Extracted as methods on
-   `Pagination<P>` for readability.
+
+   - `i64::from(pagination.limit) + 1`. Extracted as methods on
+     `Pagination<P>` for readability.
 
 9. **`direction_sql()` consolidated to `common::cursor`.** The
    `(op, order)` helper was originally duplicated across 7

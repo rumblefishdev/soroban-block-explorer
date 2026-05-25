@@ -26,8 +26,9 @@ type Filters = NonNullable<ListNftsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function NftsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } =
-    useCursorPagination({ filterKeys: ['collection', 'contract'] });
+  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
+    filterKeys: ['collection', 'contract'],
+  });
   const collection = state.filters.collection ?? '';
   const contract = state.filters.contract ?? '';
   const hasFilters = collection !== '' || contract !== '';
@@ -49,7 +50,11 @@ export default function NftsListPage() {
   );
 
   const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   const handleClearFilters = useCallback(() => {
     setFilter('collection', null);

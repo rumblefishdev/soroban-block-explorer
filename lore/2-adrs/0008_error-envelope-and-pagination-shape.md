@@ -4,17 +4,7 @@ title: 'Error envelope and pagination shape for the HTTP API'
 status: accepted
 deciders: [stkrolikiewicz, karolkow]
 related_tasks:
-  [
-    '0042',
-    '0043',
-    '0046',
-    '0047',
-    '0050',
-    '0051',
-    '0053',
-    '0057',
-    '0254',
-  ]
+  ['0042', '0043', '0046', '0047', '0050', '0051', '0053', '0057', '0254']
 related_adrs: ['0005']
 tags: [layer-backend, scope-api-contract]
 links: []
@@ -244,10 +234,10 @@ Each list endpoint's `fetch_*` accepts a `direction: Direction` argument
 and uses `format!()` to interpolate the comparison operator and ordering
 clause:
 
-| Direction | WHERE | ORDER BY | Post-fetch |
-|-----------|-------|----------|------------|
-| `Next` | `(ts, id) < cursor` | DESC | drop excess row from tail |
-| `Prev` | `(ts, id) > cursor` | ASC | drop excess from tail, then reverse |
+| Direction | WHERE               | ORDER BY | Post-fetch                          |
+| --------- | ------------------- | -------- | ----------------------------------- |
+| `Next`    | `(ts, id) < cursor` | DESC     | drop excess row from tail           |
+| `Prev`    | `(ts, id) > cursor` | ASC      | drop excess from tail, then reverse |
 
 The Prev branch fetches in ASC so a row-constructor `>` comparison can
 walk backward through the same indexes. The post-fetch reverse normalises
@@ -261,14 +251,14 @@ row-constructor comparison is lexicographic over the column tuple.
 `common::pagination::finalize_page` produces the two-cursor `PageInfo`
 from a `limit+1` row slice and a direction:
 
-| `direction` | input cursor | excess | `next_cursor` | `prev_cursor` |
-|-------------|--------------|--------|------------------|---------------|
-| `Next` | absent (page 1) | yes | last displayed (Next) | None |
-| `Next` | absent (page 1) | no | None | None |
-| `Next` | present (mid) | yes | last displayed (Next) | first displayed (Prev) |
-| `Next` | present (last) | no | None | first displayed (Prev) |
-| `Prev` | present | yes | last displayed (Next)¹ | first displayed (Prev) |
-| `Prev` | present (hit start) | no | last displayed (Next)¹ | None |
+| `direction` | input cursor        | excess | `next_cursor`          | `prev_cursor`          |
+| ----------- | ------------------- | ------ | ---------------------- | ---------------------- |
+| `Next`      | absent (page 1)     | yes    | last displayed (Next)  | None                   |
+| `Next`      | absent (page 1)     | no     | None                   | None                   |
+| `Next`      | present (mid)       | yes    | last displayed (Next)  | first displayed (Prev) |
+| `Next`      | present (last)      | no     | None                   | first displayed (Prev) |
+| `Prev`      | present             | yes    | last displayed (Next)¹ | first displayed (Prev) |
+| `Prev`      | present (hit start) | no     | last displayed (Next)¹ | None                   |
 
 ¹ Backward walks anchor `next_cursor` at the oldest
 displayed row unconditionally. The explorer's data is immutable
@@ -301,5 +291,3 @@ page. Acceptable for the explorer's traffic profile.
 - `crates/api/src/common/cursor.rs` — `Direction` enum + `CursorEnvelope` wrapper
 - `crates/api/src/common/pagination.rs` — direction-aware `finalize_page` (matrix above)
 - `libs/ui/src/table/useCursorPagination.ts` — frontend symmetric `goNext` / `goPrev`
-
-

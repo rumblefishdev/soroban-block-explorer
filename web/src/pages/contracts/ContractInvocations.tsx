@@ -84,7 +84,11 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   let body: ReactNode;
   if (isLoading) {
