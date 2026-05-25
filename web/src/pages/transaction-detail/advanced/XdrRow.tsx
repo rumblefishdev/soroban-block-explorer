@@ -1,0 +1,138 @@
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import {
+  Box,
+  Button,
+  Collapse,
+  IconButton,
+  Stack,
+  Typography,
+} from '@mui/material';
+import { Chip } from '@rumblefish/soroban-block-explorer-ui';
+import { useCallback, useState } from 'react';
+
+interface XdrRowProps {
+  label: string;
+  value: string;
+}
+
+async function writeClipboard(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  }
+}
+
+export function XdrRow({ label, value }: XdrRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = useCallback(async () => {
+    await writeClipboard(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [value]);
+
+  return (
+    <Box
+      sx={(theme) => ({
+        borderBottom: `1px solid ${theme.palette.stroke.default}`,
+        '&:last-of-type': { borderBottom: 'none' },
+      })}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={2}
+        sx={{ px: 2, py: 1.5, cursor: 'pointer' }}
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+      >
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
+          <IconButton
+            size="small"
+            aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+            sx={{ p: 0.25 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+          >
+            {expanded ? (
+              <KeyboardArrowDownIcon fontSize="small" />
+            ) : (
+              <KeyboardArrowRightIcon fontSize="small" />
+            )}
+          </IconButton>
+          <Typography
+            variant="bodyMonoSmRegular"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            {label}
+          </Typography>
+        </Stack>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            {value.length} chars
+          </Typography>
+          <Chip size="sm" color="neutral" label="base64" />
+        </Stack>
+      </Stack>
+      <Collapse in={expanded} unmountOnExit>
+        <Box
+          sx={(theme) => ({
+            mx: 2,
+            mb: 1,
+            p: 1.5,
+            backgroundColor: theme.palette.surface.grayMainAlt,
+            border: `1px solid ${theme.palette.stroke.default}`,
+            borderRadius: `${theme.shape.radius.s}px`,
+          })}
+        >
+          <Typography
+            component="pre"
+            variant="bodyMonoSmMedium"
+            sx={(theme) => ({
+              m: 0,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              color: theme.palette.text.tertiary,
+            })}
+          >
+            {value}
+          </Typography>
+        </Box>
+        <Box sx={{ px: 2, pb: 2 }}>
+          <Button
+            size="small"
+            variant="text"
+            color="inherit"
+            disableRipple
+            startIcon={<ContentCopyIcon fontSize="small" />}
+            onClick={onCopy}
+            sx={(theme) => ({
+              textTransform: 'none',
+              color: theme.palette.text.primary,
+              p: 0,
+              minWidth: 0,
+              '&:hover': { backgroundColor: 'transparent' },
+            })}
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </Button>
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}

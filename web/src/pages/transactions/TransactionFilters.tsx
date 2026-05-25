@@ -54,6 +54,7 @@ export function TransactionFilters({
         display: 'flex',
         gap: 2,
         p: 2,
+        backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
@@ -62,13 +63,17 @@ export function TransactionFilters({
         onChange={(e) => setDraft(e.target.value)}
         placeholder="Source account or contract ID..."
         aria-label="Filter by source account or contract ID"
-        fullWidth
-        sx={{ flex: 1 }}
+        sx={{ width: 400 }}
         slotProps={{
           input: {
             startAdornment: (
               <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
+                <SearchIcon
+                  sx={(theme) => ({
+                    fontSize: 18,
+                    color: theme.palette.text.tertiary,
+                  })}
+                />
               </InputAdornment>
             ),
           },
@@ -79,7 +84,7 @@ export function TransactionFilters({
         onChange={(e) => onOperationTypeChange(e.target.value)}
         displayEmpty
         aria-label="Filter by operation type"
-        sx={{ minWidth: 240 }}
+        sx={{ width: 280 }}
       >
         <MenuItem value={ALL_OPERATIONS}>All operations type</MenuItem>
         {OPERATION_TYPE_OPTIONS.map((option) => (

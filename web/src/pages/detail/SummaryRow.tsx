@@ -16,8 +16,10 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
       sx={(theme) => ({
         display: 'flex',
         flexDirection: { xs: 'column', sm: 'row' },
+        backgroundColor: theme.palette.surface.grayMain,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         '&:last-of-type': { borderBottom: 'none' },
+        minHeight: 60,
       })}
     >
       {cells.map((cell, index) => (
@@ -29,23 +31,21 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
           key={`${index}-${cell.label}`}
           direction="row"
           spacing={2}
-          sx={(theme) => ({
+          sx={{
             flex: 1,
             minWidth: 0,
-            p: 2,
-            alignItems: 'baseline',
-            borderLeft: {
-              xs: 'none',
-              sm:
-                index > 0
-                  ? `1px solid ${theme.palette.stroke.default}`
-                  : 'none',
-            },
-          })}
+            px: 2,
+            py: 1.25,
+            alignItems: 'center',
+          }}
         >
           <Typography
             variant="bodySmRegular"
-            sx={{ color: 'text.tertiary', minWidth: 140, flexShrink: 0 }}
+            sx={(theme) => ({
+              color: theme.palette.text.primary,
+              minWidth: 140,
+              flexShrink: 0,
+            })}
           >
             {cell.label}
           </Typography>
@@ -54,7 +54,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
             typeof cell.value === 'number' ? (
               <Typography
                 variant="bodySmRegular"
-                sx={{ color: 'text.primary' }}
+                sx={(theme) => ({ color: theme.palette.text.primary })}
               >
                 {cell.value}
               </Typography>

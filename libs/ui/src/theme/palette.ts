@@ -91,5 +91,14 @@ export function createPalette(mode: PaletteMode): PaletteOptions {
 
     surface: { ...c.surface },
     stroke: { ...c.stroke },
+
+    base: { ...c.base },
+    gray: { ...c.gray },
+    green: { ...c.green },
+    red: { ...c.red },
+    yellow: { ...c.yellow },
+    blue: { ...c.blue },
+    violet: { ...c.violet },
+    emerald: { ...c.emerald },
   };
 }

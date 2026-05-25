@@ -2,9 +2,9 @@
 id: '0070'
 title: 'Frontend: Transaction detail -- normal mode'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0071']
 tags: [priority-high, effort-large, layer-frontend-pages]
 milestone: 2
 links: []
@@ -13,6 +13,19 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-05-25
+    status: completed
+    who: FilipDz
+    note: >
+      Shipped on feat/0070_0071_transaction-detail bundled with 0071. 19 new
+      files in web/src/pages/transaction-detail/ (~1.8k LOC). Shared
+      libs/ui changes: palette scales typed + exposed at runtime, +2
+      typography variants (bodyMonoSmMedium, bodySmSemiBold), global
+      scrollbar override, OperationFlowTree children gap + dashed-line
+      extension. Shared detail/SectionCard + SummaryRow restructured
+      (grayMainAlt header, grayMain rows, no vertical divider, equal
+      minHeight). Mock dev API (tools/dev-mock-api.mjs) for local
+      visual walkthrough. Multiple design-parity rounds vs Figma.
 ---
 
 # Frontend: Transaction detail -- normal mode
@@ -155,17 +168,17 @@ Create `apps/web/src/pages/transaction-detail/TransactionDetailPage.tsx`:
 
 ## Acceptance Criteria
 
-- [ ] Base info displays: hash (full, copyable), status badge, ledger sequence (linked), timestamp, fee (XLM + stroops), source account (linked), memo (type + content)
-- [ ] Signatures table shows: signer (linked), weight, signature hex
-- [ ] Mode toggle is prominent and switches between Normal and Advanced without re-fetching
-- [ ] Mode stored in URL query param
-- [ ] Normal mode renders operation flow tree with human-readable summaries
-- [ ] Each tree node shows linked identifiers
-- [ ] Soroban invocations render as nested call tree with function names
-- [ ] Normal mode prioritizes clarity -- no raw XDR shown
-- [ ] 404 state: "Transaction not found" for invalid/missing hashes
-- [ ] Loading skeleton during initial fetch
-- [ ] Param validation: rejects non-64-char-hex hashes
+- [x] Base info displays: hash (full, copyable), status badge, ledger sequence (linked), timestamp, fee (XLM + stroops), source account (linked), memo (type + content)
+- [x] Signatures table shows: signer (linked), weight, signature hex — UI surface ships; real API (`SignatureDto`) only exposes `hint` + `signature`, so `signer` + `weight` are page-local enriched fields (rendered when backend ships them).
+- [x] Mode toggle is prominent and switches between Normal and Advanced without re-fetching
+- [x] Mode stored in URL query param
+- [x] Normal mode renders operation flow tree with human-readable summaries
+- [x] Each tree node shows linked identifiers
+- [x] Soroban invocations render as nested call tree with function names
+- [x] Normal mode prioritizes clarity -- no raw XDR shown
+- [x] 404 state: "Transaction not found" for invalid/missing hashes
+- [x] Loading skeleton during initial fetch
+- [x] Param validation: rejects non-64-char-hex hashes
 
 ## Notes
 

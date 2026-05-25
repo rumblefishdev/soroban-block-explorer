@@ -2,11 +2,8 @@ import { Box, Card, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
 interface SectionCardProps {
-  /** Section heading, e.g. "Summary", "Balances". */
-  title: string;
-  /** Optional secondary text next to the title, e.g. "4 assets". */
+  title: ReactNode;
   meta?: ReactNode;
-  /** Optional element pinned to the right of the header. */
   action?: ReactNode;
   children: ReactNode;
 }
@@ -22,11 +19,15 @@ export function SectionCard({
   children,
 }: SectionCardProps) {
   return (
-    <Card>
+    <Card
+      sx={(theme) => ({
+        backgroundColor: theme.palette.surface.grayMainAlt,
+      })}
+    >
       <Box
         sx={(theme) => ({
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
           gap: 2,
           p: 2,
@@ -36,14 +37,18 @@ export function SectionCard({
           borderBottom: `1px solid ${theme.palette.stroke.default}`,
         })}
       >
-        <Stack direction="row" spacing={1} alignItems="baseline">
-          <Typography variant="heading5SemiBold" component="h2">
-            {title}
-          </Typography>
+        <Stack spacing={0.25}>
+          {typeof title === 'string' ? (
+            <Typography variant="heading5SemiBold" component="h2">
+              {title}
+            </Typography>
+          ) : (
+            title
+          )}
           {meta != null && (
             <Typography
               variant="bodySmRegular"
-              sx={{ color: 'text.secondary' }}
+              sx={(theme) => ({ color: theme.palette.text.secondary })}
             >
               {meta}
             </Typography>
@@ -51,7 +56,13 @@ export function SectionCard({
         </Stack>
         {action}
       </Box>
-      {children}
+      <Box
+        sx={(theme) => ({
+          backgroundColor: theme.palette.surface.grayMain,
+        })}
+      >
+        {children}
+      </Box>
     </Card>
   );
 }
