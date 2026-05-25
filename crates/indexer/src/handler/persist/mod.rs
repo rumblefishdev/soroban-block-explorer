@@ -1,3 +1,13 @@
+// PG persist tree is library-only after the 0241 CH cutover: the
+// indexer Lambda binary no longer compiles it (gated behind
+// `pg-persist`), and downstream consumers live in the dev / bench
+// crates (backfill-runner, backfill-bench). When those build the
+// indexer *bin* target with `pg-persist` enabled, cargo's per-binary
+// dead-code analysis flags every function here because main.rs no
+// longer references it. The lib target uses everything; the warnings
+// are noise — silence them at module level.
+#![allow(dead_code)]
+
 //! ADR 0027 write-path — one atomic DB transaction per ledger.
 //!
 //! Pipeline order matches the FK dependency graph (note the `operations.pool_id`

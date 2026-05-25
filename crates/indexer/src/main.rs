@@ -1,6 +1,9 @@
 //! Ledger Processor Lambda for the Soroban block explorer.
 //!
-//! Processes LedgerCloseMeta payloads from S3 and persists structured data to PostgreSQL.
+//! Processes LedgerCloseMeta payloads from S3 and persists structured
+//! data to ClickHouse on Hetzner (via the Caddy mTLS reverse proxy).
+//!
+//! Task 0241 — PG → CH hard swap.
 
 mod handler;
 
@@ -10,6 +13,10 @@ use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{Error, service_fn};
 use tracing::info;
 
+/// Production CH database — the writer module's `init.sql` creates
+/// every table under the `default` database (`crates/db-clickhouse/schema/init.sql`).
+const CH_DATABASE: &str = "default";
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -17,30 +24,60 @@ async fn main() -> Result<(), Error> {
         .json()
         .init();
 
-    info!("indexer cold start — resolving database credentials");
+    let env_name = std::env::var("ENV_NAME").unwrap_or_else(|_| "unknown".to_string());
+    let mtls_secret_name = std::env::var("MTLS_SECRET_NAME").unwrap_or_default();
+    let ch_domain = std::env::var("CH_DOMAIN").unwrap_or_default();
+    info!(
+        env_name = %env_name,
+        ch_domain = %ch_domain,
+        mtls_secret_name = %mtls_secret_name,
+        "indexer cold start — building mTLS ClickHouse client"
+    );
 
-    let database_url = db::secrets::resolve_or_env()
-        .await
-        .map_err(|e| format!("failed to resolve database URL: {e}"))?;
+    // Eager-init the parser's network-id cache. Surfaces a missing
+    // `STELLAR_NETWORK_PASSPHRASE` as a clean Lambda Init Errors
+    // failure instead of a per-event `parse_ledger` panic.
+    handler::process::init_network_id().map_err(|e| format!("network_id init failed: {e}"))?;
 
-    let db_pool = db::pool::create_pool(&database_url)?;
+    // Cold-start mTLS bundle fetch. Reads MTLS_SECRET_NAME + CH_DOMAIN
+    // from the env (set by `infra/src/lib/stacks/compute-stack.ts`),
+    // hits the Parameters and Secrets Lambda Extension on
+    // localhost:2773, parses the {cert, key, ca} bundle into a rustls
+    // ClientConfig, and assembles a `clickhouse::Client` against
+    // https://{CH_DOMAIN}. Any failure here (missing env, extension
+    // unreachable, bundle malformed) returns from `main` so Lambda
+    // surfaces it via CW `Init Errors`.
+    let ch_client = match db_clickhouse::mtls::client_from_lambda_env(CH_DATABASE).await {
+        Ok(c) => c,
+        Err(e) => {
+            // Surface a structured `error!` line BEFORE propagating —
+            // `lambda_runtime` only logs the error stringly, which
+            // makes the operator hunt for context. With this we get a
+            // structured CW entry tagged with which secret / domain
+            // was attempted, instrumentable via CW Logs Insights.
+            tracing::error!(
+                env_name = %env_name,
+                ch_domain = %ch_domain,
+                mtls_secret_name = %mtls_secret_name,
+                error = %e,
+                "failed to build mTLS CH client"
+            );
+            return Err(format!("failed to build mTLS CH client: {e}").into());
+        }
+    };
+    info!("mTLS ClickHouse client ready");
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let s3_client = S3Client::new(&aws_config);
     let cw_client = CloudWatchClient::new(&aws_config);
     let sqs_client = SqsClient::new(&aws_config);
 
-    // Type-1 enrichment publisher (task 0191). Required env var —
-    // missing/empty value fails Lambda init so the misconfig surfaces
-    // immediately via CW Init Errors instead of silently dropping
-    // enrichment messages on every ledger.
     let enrichment_publisher = handler::enrichment_publish::Publisher::from_env(sqs_client)?;
 
     let state = handler::HandlerState {
         s3_client,
         cw_client,
-        db_pool,
-        classification_cache: handler::persist::ClassificationCache::new(),
+        ch_client,
         enrichment_publisher,
     };
 

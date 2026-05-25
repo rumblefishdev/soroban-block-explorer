@@ -9,7 +9,7 @@ name = "backfill-bench"
 path = "src/main.rs"
 
 [dependencies]
-indexer = { path = "../indexer" }
+indexer = { path = "../indexer", features = ["pg-persist"] }
 xdr-parser = { path = "../xdr-parser" }
 db = { path = "../db" }
 # Reuses `ensure_default_partition` so the bench's bootstrap matches the
