@@ -4358,9 +4358,14 @@ async fn ledgers_prev_cursor_round_trip_returns_original_page() {
 
 #[tokio::test]
 async fn ledgers_forward_then_backward_walk_matches() {
-    // Walk forward 3 pages, capture row sets. Then walk back 3 pages
-    // via prev_cursor. Each backward step must produce the same row
-    // set as the corresponding forward step.
+    // Walk forward 4 pages, capture row sets. Then walk back 3 pages
+    // via prev_cursor (page 4 → 3 → 2 → 1). Each backward step must
+    // produce the same row set as the corresponding forward step,
+    // proving cursor symmetry across the matrix. Loop range tracks
+    // the backward symmetry: we need a page 4 to anchor the backward
+    // walk that visits pages 3, 2, 1, so the last forward fetch
+    // (iter 3) must have a `next_cursor` we can land on but then
+    // re-fetch via the prev_cursor chain.
     let Some(pool) = cursor_matrix_pool().await else {
         return;
     };
@@ -4371,7 +4376,7 @@ async fn ledgers_forward_then_backward_walk_matches() {
     let mut forward_cursors: Vec<Option<String>> = vec![];
     let mut cursor: Option<String> = None;
 
-    for _ in 0..3 {
+    for _ in 0..4 {
         let uri = match &cursor {
             Some(c) => format!("/v1/ledgers?limit={LIMIT}&cursor={c}"),
             None => format!("/v1/ledgers?limit={LIMIT}"),
@@ -4392,18 +4397,19 @@ async fn ledgers_forward_then_backward_walk_matches() {
             .collect();
         forward_seqs.push(seqs);
         let Some(next) = json["page"]["next_cursor"].as_str() else {
-            eprintln!("DB too small for forward walk — skipping");
+            eprintln!("DB too small for forward walk (needs ≥4 pages × {LIMIT} = ≥8 ledgers) — skipping");
             return;
         };
         forward_cursors.push(Some(next.to_owned()));
         cursor = Some(next.to_owned());
     }
 
-    // Now walk backward from the LAST page. Use its prev_cursor.
-    // Fetch the last page again to read its prev_cursor.
+    // Walk backward from page 4. Use `forward_cursors[2]` (the cursor
+    // that fetched page 4 on the forward walk) so we can re-fetch
+    // page 4 and read its prev_cursor.
     let last_uri = format!(
         "/v1/ledgers?limit={LIMIT}&cursor={}",
-        forward_cursors[1].as_ref().unwrap()
+        forward_cursors[2].as_ref().unwrap()
     );
     let resp_last = app
         .clone()
@@ -4416,16 +4422,46 @@ async fn ledgers_forward_then_backward_walk_matches() {
         .await
         .unwrap();
     let (_, json_last) = body_json(resp_last).await;
-    let Some(prev) = json_last["page"]["prev_cursor"].as_str().map(str::to_owned) else {
-        eprintln!("page 3 has no prev_cursor — DB shape unexpected, skipping");
+    let Some(prev_to_p3) = json_last["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+        eprintln!("page 4 has no prev_cursor — DB shape unexpected, skipping");
         return;
     };
-    // Step back from page 3 → expect page 2.
+
+    // Backward step 1 of 3: page 4 → page 3.
+    let resp_back3 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev_to_p3}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json_back3) = body_json(resp_back3).await;
+    let seqs_back3: Vec<i64> = json_back3["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        forward_seqs[2], seqs_back3,
+        "backward step to page 3 must match forward page 3 (forward={:?}, backward={seqs_back3:?})",
+        forward_seqs[2]
+    );
+
+    // Backward step 2 of 3: page 3 → page 2.
+    let Some(prev_to_p2) = json_back3["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+        eprintln!("page 3 (via backward) has no prev_cursor — skipping");
+        return;
+    };
     let resp_back2 = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev}"))
+                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev_to_p2}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4445,7 +4481,7 @@ async fn ledgers_forward_then_backward_walk_matches() {
         forward_seqs[1]
     );
 
-    // Step back from page 2' → expect page 1.
+    // Backward step 3 of 3: page 2 → page 1.
     let Some(prev_to_p1) = json_back2["page"]["prev_cursor"].as_str().map(str::to_owned) else {
         eprintln!("page 2 (via backward) has no prev_cursor — skipping");
         return;

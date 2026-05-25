@@ -668,13 +668,16 @@ export type OperationItem = {
  * the underlying ledger stream advances between requests.
  *
  * Both `next_cursor` (forward / next page) and `prev_cursor` (backward
- * / previous page) are emitted as opaque base64-JSON strings.
- * `Option<String>` carries the entire signal:
+ * / previous page) are **always emitted** as opaque base64-JSON
+ * strings or explicit JSON `null`. Wire shape always carries both
+ * keys — never omitted — so the OpenAPI `nullable: true` declaration
+ * matches the on-wire bytes exactly. `Option<String>` carries the
+ * entire signal:
  *
- * - `next_cursor: None` ⇒ last page (no further forward continuation).
- * - `next_cursor: Some(_)` ⇒ a further forward page exists.
- * - `prev_cursor: None` ⇒ first page (no backward continuation).
- * - `prev_cursor: Some(_)` ⇒ a backward page exists.
+ * - `next_cursor: null` ⇒ last page (no further forward continuation).
+ * - `next_cursor: "..."` ⇒ a further forward page exists.
+ * - `prev_cursor: null` ⇒ first page (no backward continuation).
+ * - `prev_cursor: "..."` ⇒ a backward page exists.
  *
  * Both cursors carry an internal `dir` discriminant (see
  * `crates/api/src/common/cursor.rs::Direction`) so the backend can
@@ -690,12 +693,12 @@ export type PageInfo = {
    */
   limit: number;
   /**
-   * Opaque cursor identifying the next page, absent when the
+   * Opaque cursor identifying the next page. `null` when the
    * client has reached the end of the stream.
    */
   next_cursor?: string | null;
   /**
-   * Opaque cursor identifying the previous page, absent when the
+   * Opaque cursor identifying the previous page. `null` when the
    * response is the first page (the client has not paged forward
    * yet).
    */
