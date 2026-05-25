@@ -7,6 +7,7 @@ import {
   SecondaryNav,
   Footer,
   PageGridBackdrop,
+  grid,
   type NavItem,
 } from '@rumblefish/soroban-block-explorer-ui';
 
@@ -155,8 +156,10 @@ export function AppShell() {
         component="main"
         sx={{
           flex: 1,
-          position: 'relative',
-          ...(isFullBleed ? {} : { px: 10, py: 4 }),
+          width: '100%',
+          maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,
+          mx: 'auto',
+          ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
         }}
       >
         {/* Faint grid halo behind every page. The home page adds the

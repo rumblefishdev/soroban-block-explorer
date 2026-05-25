@@ -121,10 +121,13 @@ export default function TransactionsListPage() {
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="heading3SemiBold" component="h1">
+        <Typography variant="heading5SemiBold" component="h1">
           Transactions list
         </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
+        <Typography
+          variant="bodySmRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
           All indexed transactions on the Stellar network
         </Typography>
       </Box>
@@ -136,7 +139,7 @@ export default function TransactionsListPage() {
           onSearchChange={handleSearchChange}
           onOperationTypeChange={handleOperationTypeChange}
         />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+        <Box>{body}</Box>
         <PaginationControls
           caption="All results"
           canPrev={canPrev}

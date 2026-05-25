@@ -132,6 +132,7 @@ export const typography: TypographyVariantsOptions = {
   bodyRegular: makeBody(16, 400, 1.5),
 
   bodySmBold: makeBody(14, 700, 1.4),
+  bodySmSemiBold: makeBody(14, 600, 1.4),
   bodySmMedium: makeBody(14, 500, 1.4),
   bodySmRegular: makeBody(14, 400, 1.4),
 
@@ -146,6 +147,7 @@ export const typography: TypographyVariantsOptions = {
   bodyMonoBold: makeMono(16, 700, 1.5),
   bodyMonoRegular: makeMono(16, 400, 1.5),
   bodyMonoSmBold: makeMono(14, 700, 1.4),
+  bodyMonoSmMedium: makeMono(14, 500, 1.4),
   bodyMonoSmRegular: makeMono(14, 400, 1.4),
   bodyMonoXsBold: makeMono(12, 700, 1.4),
   bodyMonoXsRegular: makeMono(12, 400, 1.4),

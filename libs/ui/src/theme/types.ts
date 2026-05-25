@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 
+import type { scales } from './colors.js';
 import type { radius } from './radius.js';
 
 interface TypeSurface {
@@ -72,6 +73,7 @@ interface ExplorerBodyVariants {
   bodyMedium: CSSProperties;
   bodyRegular: CSSProperties;
   bodySmBold: CSSProperties;
+  bodySmSemiBold: CSSProperties;
   bodySmMedium: CSSProperties;
   bodySmRegular: CSSProperties;
   bodyXsBold: CSSProperties;
@@ -87,6 +89,7 @@ interface ExplorerMonoVariants {
   bodyMonoBold: CSSProperties;
   bodyMonoRegular: CSSProperties;
   bodyMonoSmBold: CSSProperties;
+  bodyMonoSmMedium: CSSProperties;
   bodyMonoSmRegular: CSSProperties;
   bodyMonoXsBold: CSSProperties;
   bodyMonoXsRegular: CSSProperties;
@@ -105,11 +108,27 @@ declare module '@mui/material/styles' {
   interface Palette {
     surface: TypeSurface;
     stroke: TypeStroke;
+    base: typeof scales.base;
+    gray: typeof scales.gray;
+    green: typeof scales.green;
+    red: typeof scales.red;
+    yellow: typeof scales.yellow;
+    blue: typeof scales.blue;
+    violet: typeof scales.violet;
+    emerald: typeof scales.emerald;
   }
 
   interface PaletteOptions {
     surface?: Partial<TypeSurface>;
     stroke?: Partial<TypeStroke>;
+    base?: typeof scales.base;
+    gray?: typeof scales.gray;
+    green?: typeof scales.green;
+    red?: typeof scales.red;
+    yellow?: typeof scales.yellow;
+    blue?: typeof scales.blue;
+    violet?: typeof scales.violet;
+    emerald?: typeof scales.emerald;
   }
 
   interface TypographyVariants
@@ -209,6 +228,7 @@ declare module '@mui/material/Typography' {
     bodyMedium: true;
     bodyRegular: true;
     bodySmBold: true;
+    bodySmSemiBold: true;
     bodySmMedium: true;
     bodySmRegular: true;
     bodyXsBold: true;
@@ -221,6 +241,7 @@ declare module '@mui/material/Typography' {
     bodyMonoBold: true;
     bodyMonoRegular: true;
     bodyMonoSmBold: true;
+    bodyMonoSmMedium: true;
     bodyMonoSmRegular: true;
     bodyMonoXsBold: true;
     bodyMonoXsRegular: true;

@@ -3,6 +3,29 @@ import { alpha, type Components, type Theme } from '@mui/material/styles';
 import { scales } from './colors.js';
 
 export const overrides: Components<Theme> = {
+  MuiCssBaseline: {
+    styleOverrides: (theme) => ({
+      '*': {
+        scrollbarWidth: 'thin',
+        scrollbarColor: `${theme.palette.stroke.default} transparent`,
+      },
+      '*::-webkit-scrollbar': {
+        width: 6,
+        height: 6,
+      },
+      '*::-webkit-scrollbar-track': {
+        backgroundColor: 'transparent',
+      },
+      '*::-webkit-scrollbar-thumb': {
+        backgroundColor: theme.palette.stroke.default,
+        borderRadius: 3,
+      },
+      '*::-webkit-scrollbar-thumb:hover': {
+        backgroundColor: theme.palette.text.tertiary,
+      },
+    }),
+  },
+
   MuiButton: {
     defaultProps: {
       disableElevation: true,
@@ -734,7 +757,7 @@ export const overrides: Components<Theme> = {
   MuiTableHead: {
     styleOverrides: {
       root: ({ theme }) => ({
-        backgroundColor: theme.palette.surface.grayMainAlt,
+        backgroundColor: theme.palette.surface.backgroundAlt,
       }),
     },
   },

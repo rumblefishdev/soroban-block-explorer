@@ -24,7 +24,10 @@
 ## 1. Purpose and Scope
 
 The indexing pipeline is the system that turns canonical Stellar ledger closes into the
-block explorer's own structured PostgreSQL data model.
+block explorer's own structured ClickHouse data model on the Hetzner box (per
+[ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
+and [ADR 0045](../../../lore/2-adrs/0045_clickhouse-as-prod-store.md);
+task 0241 cut the live-tail indexer over from the legacy PG-on-RDS target).
 
 Its purpose is to ingest chain data once, materialize explorer-facing records, and keep the
 API and frontend independent from third-party explorer services or direct chain parsing at
@@ -34,8 +37,10 @@ This document covers the target design of the indexing pipeline only. It does no
 frontend behavior, backend transport contracts, or the detailed XDR parsing/storage model
 except where those are needed to explain pipeline responsibilities.
 
-This document describes the intended production ingestion model. It is not a description of
-current implementation state in the repository, which is still skeletal.
+This document describes the production ingestion model in its post-0241
+(hard-swap PG → CH) form. Sections marked "intent" or "future" continue to
+describe forward-looking design; the present-tense sections reflect the
+implementation as of the live-tail cutover.
 
 If any statement in this file conflicts with
 [`technical-design-general-overview.md`](../technical-design-general-overview.md), the main
@@ -45,13 +50,16 @@ that source, not an independent redesign.
 ## 2. Architectural Role
 
 The indexing pipeline sits between canonical Stellar data sources and the explorer's owned
-PostgreSQL schema.
+ClickHouse schema (hosted on the Hetzner AX52 box; Lambdas reach it via the Caddy mTLS
+reverse proxy at `ch.sorobanscan.rumblefish.dev`).
 
 Its role is to:
 
 - stream or backfill canonical ledger data into the system
 - parse `LedgerCloseMeta` payloads into structured explorer records
-- persist those records into RDS PostgreSQL
+- persist those records into Hetzner ClickHouse via the Caddy mTLS reverse proxy
+  (per-service client certs map to per-service CH users; see
+  [`security/clickhouse-rbac.md`](../security/clickhouse-rbac.md))
 - derive higher-level explorer entities such as contracts, accounts, assets, NFTs, and
   liquidity pools from canonical ledger artifacts
 - make all normal backend and frontend reads depend on the explorer's own database rather
@@ -64,26 +72,37 @@ materialization boundary.
 
 ### 3.1 End-to-End Flow
 
-The source design defines the indexing pipeline as a fixed event-driven chain:
+The indexing pipeline is a fixed event-driven chain. Post-0241 (live tail) it
+ends at ClickHouse on Hetzner via the mTLS proxy:
 
 ```text
 Stellar Network peers / history archives
-  -> Galexie on ECS Fargate
+  -> Galexie on ECS Fargate (eu-central-1)
   -> S3 bucket: stellar-ledger-data
-  -> Lambda: Ledger Processor
-  -> RDS PostgreSQL
+  -> Lambda: Ledger Processor (eu-central-1, ARM64, out-of-VPC)
+  -> Caddy mTLS reverse proxy (Hetzner AX52)
+  -> ClickHouse 26.x (Hetzner AX52)
 ```
 
-This same flow is used for both live ingestion and historical backfill.
+Historical backfill runs through `crates/backfill-runner` on operator
+workstations and lands directly into the same Hetzner ClickHouse (the
+3-way parallel-backfill merge of task 0228 completed at
+`L_last_closed = 62,527,999`). See §6 for the backfill path.
 
 ### 3.2 Main Runtime Components
 
-The pipeline depends on four primary runtime components:
+The pipeline depends on five primary runtime components:
 
-- **Galexie on ECS Fargate** for canonical ledger export
+- **Galexie on ECS Fargate (eu-central-1)** for canonical ledger export
 - **S3** for transient `LedgerCloseMeta` object storage
-- **Ledger Processor Lambda** for event-driven parsing and persistence
-- **RDS PostgreSQL** as the explorer's owned storage target
+- **Ledger Processor Lambda** for event-driven parsing and persistence (ARM64,
+  out-of-VPC, AWS Parameters and Secrets Lambda Extension for mTLS cert
+  retrieval)
+- **Caddy reverse proxy on Hetzner** terminates mTLS, validates the client
+  cert chain, maps the cert CN → CH user via `CLICKHOUSE_CN_USER_MAP`, and
+  forwards to the local CH on loopback (per
+  [`security/clickhouse-rbac.md`](../security/clickhouse-rbac.md))
+- **ClickHouse 26.x on Hetzner AX52** as the explorer's owned storage target
 
 ### 3.3 Why the Pipeline Is Structured This Way
 
@@ -147,120 +166,103 @@ cadence.
 
 ### 5.2 Live Processing Steps
 
-For each arriving ledger artifact, the current pipeline model is the 14-step
-`persist_ledger` method in `crates/indexer/src/handler/persist/mod.rs` per
-[ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md),
-committed in a single atomic DB transaction:
+For each arriving S3 object the Lambda follows the path below. Per-ledger CH
+atomicity comes from the one-shot `persist_ledger_clickhouse` wrapper
+(`crates/db-clickhouse/src/persist.rs`): open `PartitionWriter` → `write_ledger`
+→ `commit` per ledger. The `ledgers` row is the commit marker — a mid-ledger
+failure leaves no `ledgers` row for that ledger, the Lambda returns Err, S3
+redelivers the whole batch, and `ReplacingMergeTree` collapses any orphan
+non-`ledgers` rows on the next background merge. Already-committed earlier
+ledgers in the same batch keep their `ledgers` rows; redelivery may produce
+duplicate `ledgers` rows for those sequences (see §5.3 note).
 
 1. download and decompress the XDR file from S3
 2. parse `LedgerCloseMeta` using the Rust `stellar-xdr` crate (ADR 0004) and
-   extract the shared canonical data needed from it via `crates/xdr-parser`;
-   persistence-oriented staging/aggregation is then handled in the indexer
-3. resolve every observed StrKey (`G...`, `C...`) to the relevant `BIGINT`
-   surrogate via `accounts` and `soroban_contracts` (two-pass upsert pattern per
-   ADRs [0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md) /
-   [0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md))
-4. write the `ledgers` row (hash as `BYTEA(32)` per
-   [ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md))
-5. write `transactions` rows with typed summary columns only — no raw envelope /
-   result / result-meta XDR per
-   [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md);
-   hash uniqueness flows through the companion `transaction_hash_index` row
-6. aggregate operations by identity (staging-time `HashMap<OpIdentity, i64>`)
-   and write `operations_appearances` rows with `type SMALLINT`
-   ([ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md)),
-   surrogate FKs, `BYTEA pool_id`, and `amount BIGINT` counting collapsed
-   duplicates (per task 0163 — no `transfer_amount`, no `application_order`,
-   no JSONB details; pattern from ADRs 0033/0034). Bulk INSERT with
-   `ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING` for replay
-   idempotency
-7. write `transaction_participants` appearance rows
-8. write `soroban_events_appearances` — one row per `(contract, tx, ledger)`
-   with a non-diagnostic-event count (ADR 0033; full detail re-expanded at read
-   time via `xdr_parser::extract_events`)
-9. write `soroban_invocations_appearances` — one row per trio with invocation-
-   node count and the root-level `caller_id` (ADR 0034)
-10. upsert `soroban_contracts` and `wasm_interface_metadata` on observed
-    deployments + WASM uploads (`wasm_hash` as `BYTEA(32)`, `contract_type`
-    as `SMALLINT`)
-11. derive and upsert `assets` (native, classic_credit, SAC, soroban) per
-    [ADR 0036](../../../lore/2-adrs/0036_rename-tokens-to-assets.md) (table
-    renamed from `tokens`; four `asset_type` variants)
-12. derive and upsert `nfts`, append `nft_ownership` rows
-13. derive and upsert `liquidity_pools`, append `liquidity_pool_snapshots`,
-    upsert `lp_positions`. Per
-    [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md),
-    before the pool UPSERT the persist layer detects orphan
-    `lp_positions.pool_id` (referenced by a position but not in
-    `staged.pool_rows` and not in `liquidity_pools`) and emits a sentinel
-    placeholder pool row (`created_at_ledger=0`, asset/fee fields NULL/0)
-    so the FK from `lp_positions.pool_id` resolves. Sentinels self-heal —
-    the 13a UPSERT replaces all dimension fields with real data when the
-    real pool is later observed (created/updated/restored, or `state` per
-    `extract_liquidity_pools` post-lore-0189). The extractor itself
-    accepts `state` change\*type for `liquidity_pool` entries (lore-0189),
-    capturing the common case where Stellar Core writes a read-only
-    snapshot of a referenced-but-unmodified pool. `volume` and
-    `fee_revenue` columns stay NULL — populated by **task 0199** (per-op
-    extraction from PathPayment `claimedOffers[].amount_sold` + USD
-    denomination via oracle). Per
-    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md),
-    the per-op extraction half is on-chain → indexer and the USD
-    denomination is off-chain → Lambda 2; the off-chain `tvl` (USD
-    oracle) is Lambda 2's responsibility — consolidated under
-    **task 0199** along with `volume` / `fee_revenue` (the former 0195
-    §2b moved when LP analytics were unified into a single owning task,
-    see ADR 0043 matrix). **"Lambda 2"**
-    here is the SQS-driven enrichment worker introduced in task 0191
-    and documented in [`enrichment.md`](./enrichment.md) — it lives
-    outside the Ledger Processor described in §7.1 (which is the only
-    _ingestion-path_ Lambda). Lambda 2 runs off SQS messages emitted
-    by the Ledger Processor after each ledger commit; the two
-    Lambdas share neither code path nor invocation lifecycle.
-14. upsert `accounts` summary and `account_balances_current`
-    (the parallel `account_balance_history` append was removed in task 0159
-    per [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md);
-    chart feature design deferred to launch time). **After** the balance
-    upsert pass, `recompute_asset_aggregates`
-    (`crates/indexer/src/handler/persist/write.rs`) collects every
-    `(asset_code, issuer_id)` pair touched by this ledger's credit-balance
-    writes and trustline removals and runs a single UPDATE that rewrites
-    `assets.holder_count = COUNT(*) FILTER (WHERE balance > 0)`
-    (active-holder semantics, matching Stellar ecosystem convention)
-    and `assets.total_supply = SUM(balance)` from
-    `account_balances_current`. **MVP scope** — Stellar protocol
-    stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply
-    is always derived. Horizon `/assets` aggregates 4 sources
-    (trustlines + claimable_balances + LP reserves + SAC contract
-    holdings); MVP aggregates only trustlines. Material drift on
-    DeFi assets vs Horizon is documented under task 0194 Future Work.
-    Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT
-    introspection on the upsert path; the affected-set is bounded per
-    ledger so the cost stays small. Per
-    [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), both
-    columns are on-chain-derivable from `account_balances_current` and
-    belong to the indexer (list-endpoint + on-chain → indexer); SEP-1
-    `name` for classic credit is off-chain and belongs to Lambda 2
-    (task 0195 §2a, supersedes blocked task 0135 / draft task 0124).
+   extract the shared canonical data via `crates/xdr-parser` —
+   `parse_ledger()` is pure and shared with the backfill path
+3. for each ledger in the batch: call
+   `db_clickhouse::persist::persist_ledger_clickhouse(&client, &parsed.*)`
+   — the same wrapper backfill's `Sink::persist_ledger` fallback drives.
+   It stages rows via
+   `db_clickhouse::persist::stage::prepare_with_sac_overrides`, opens a
+   one-shot `PartitionWriter`, streams the staged rows, and commits. The
+   hybrid-key strategy keeps three high-fan-out hubs (`accounts`,
+   `soroban_contracts`, `transactions`) on a deterministic surrogate
+   `Int64 id` derived from the StrKey / hash via cityhash; the other 12
+   tables use natural composite keys with `LowCardinality(String)`
+   dictionary encoding (per
+   [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md))
+4. retry envelope per ledger: transient errors retry with backoff
+   `[50, 200, 800] ms`. `Error::Network` / `Error::TimedOut` always
+   retry. `Error::BadResponse` is classified by a **denylist**, not an
+   allowlist — the `clickhouse` 0.15 crate carries the raw response
+   body verbatim (it does not expose the HTTP status separately), so a
+   5xx with a body would slip past a `starts_with("502 ")` allowlist
+   and trip the DLQ. We therefore retry every `BadResponse` **except**
+   definitively permanent ones: HTTP 4xx prefixes and known CH semantic
+   exception codes (`UNKNOWN_TABLE`, `TYPE_MISMATCH`,
+   `CANNOT_PARSE_*`, `SYNTAX_ERROR`, auth codes, …). Rationale: the
+   live-tail INSERT is deterministic, so a non-permanent error is
+   almost always infra turbulence; availability beats a marginal retry
+   cost on an unrecognised permanent error (3 wasted retries → same DLQ
+   terminal state). See `is_retryable_bad_response` /
+   `CH_PERMANENT_CODES` in `crates/indexer/src/handler/mod.rs`
+5. emit a CW custom metric `LastProcessedLedgerSequence` after each
+   ledger's commit — fire-and-forget; failures are warn-logged but do not
+   abort the batch
+6. **enrichment SQS publish is stubbed** (task 0241) — the legacy lookup
+   queries hit Postgres, which is frozen post-cutover. Re-enablement
+   awaits the paired CH-aware rewrite of producer + `enrichment-worker`
+   write path. See [`enrichment.md`](./enrichment.md) for the design intent
+   The per-table column-by-column write order, FK dependencies, and the
+   `liquidity_pools` orphan sentinel handling (per
+   [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md))
+   are documented at code-level in the CH writer module
+   (`crates/db-clickhouse/src/persist/writer.rs`) and in the schema file
+   (`crates/db-clickhouse/schema/init.sql`). The aggregate columns (`assets.holder_count`,
+   `assets.total_supply`) are not yet wired in the CH stream-write path — they are
+   re-derived in CH via background `OPTIMIZE` + repair passes per the
+   [task 0228 phase-6 invariants](../../runbooks/0228_phase6_validation.md);
+   the live-tail indexer leaves them to those passes.
+
+The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) used by the
+backfill / bench tools under `--features pg-persist` lives in
+`crates/indexer/src/handler/persist/mod.rs` and follows the order documented in
+[ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md);
+the PG schema's design rationale (BYTEA hashes, surrogate `BIGINT` IDs, etc.)
+remains in effect for those tools per ADRs 0024 / 0026 / 0029 / 0030 / 0031.
 
 ### 5.3 Write Target
 
-The live ingestion path writes directly to the explorer's owned PostgreSQL schema.
+The live ingestion path writes directly to the explorer's owned ClickHouse
+schema on Hetzner. That write includes both:
 
-That write includes both:
-
-- low-level structured explorer records (`ledgers`, `transactions`, `operations_appearances`,
-  `transaction_participants`, and the appearance indexes
-  `soroban_events_appearances` / `soroban_invocations_appearances`)
+- low-level structured explorer records (`ledgers`, `transactions`,
+  `operations_appearances`, `transaction_participants`, and the appearance
+  indexes `soroban_events`, `soroban_invocations_appearances`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
-  `wasm_interface_metadata`, `assets`, `nfts`, `nft_ownership`, `liquidity_pools`,
+  `wasm_interface_metadata`, `assets`, `nfts`, `nft_ownership`,
+  `nfts_pending`, `nft_ownership_pending`, `liquidity_pools`,
   `liquidity_pool_snapshots`, `lp_positions`, `account_balances_current`)
 
-List and partition-pruned reads serve entirely from this persisted state.
-Heavy-field endpoints (E3 `/transactions/:hash`, E14 `/contracts/:id/events`)
-additionally fetch raw `.xdr.zst` from the public Stellar ledger archive and
-re-parse at request time per ADR 0029 — that is a **read-path** dependency, not
-an ingest-path one; the indexing pipeline itself never calls the public archive.
+The full table inventory (17 + 2 quarantine + 1 dictionary = 20 schema
+objects) is in `crates/db-clickhouse/schema/init.sql`.
+
+Per-ledger replay safety: every state table is `ReplacingMergeTree(version)`
+keyed on a column whose value monotonically reflects the latest observation
+(`last_seen_ledger`, `last_updated_ledger`, `current_owner_ledger`,
+`wasm_uploaded_at_ledger`). Replay → re-stage same rows → the next background
+merge collapses the duplicates to the latest version. Fact tables use plain
+`ReplacingMergeTree` over `ORDER BY` (same dedup contract, no version column
+needed because the rows themselves are immutable per `(tx_hash, op_idx)` etc.).
+
+List and partition-pruned reads from the API Lambda hit this CH schema directly
+once that Lambda's read-path migration lands (the API still queries PG in the
+post-0241 "stale window" — task 0243). Heavy-field endpoints (E3
+`/transactions/:hash`, E14 `/contracts/:id/events`) continue to fetch raw
+`.xdr.zst` from the public Stellar ledger archive and re-parse at request
+time per ADR 0029 — that is a **read-path** dependency, not an ingest-path one;
+the indexing pipeline itself never calls the public archive.
 
 ## 6. Historical Backfill Flow
 
@@ -268,24 +270,39 @@ an ingest-path one; the indexing pipeline itself never calls the public archive.
 
 Per [ADR 0010](../../../lore/2-adrs/0010_local-backfill-over-fargate.md),
 historical backfill runs as a **local CLI tool** (`crates/backfill-runner` for
-production runs, `crates/backfill-bench` for benchmarks/prototypes)
-on a developer workstation. It streams from Stellar's **public history
-archives** (the same archives Horizon used for `db reingest`) and writes
-directly to the target RDS.
+production runs, `crates/backfill-bench` for benchmarks) on a developer
+workstation. It streams from Stellar's **public history archives** (the same
+archives Horizon used for `db reingest`) and writes directly to ClickHouse on
+Hetzner via `--target clickhouse`. The historical 3-way parallel-backfill
+merge of [task 0228](../../../lore/1-tasks/archive/0228_FEATURE_parallel-backfill-merge-and-validation/README.md)
+completed at `L_last_closed = 62,527,999` with zero gaps and ≤ 0.01 %
+mismatch against Horizon on 980 stratified samples.
 
-### 6.2 Shared Pipeline, Not Shared Storage
+### 6.2 Shared Code Path, Shared Storage
 
-Backfill and live ingestion share the `process_ledger` **code path** (both
-run the same 14-step `persist_ledger` via `crates/indexer`), but not the
-delivery medium:
+Live ingestion and backfill now write to the same Hetzner CH instance. The
+indexer crate's `parse_ledger` half is shared; the persist half is two-flavored:
 
-- **live:** Galexie (ECS Fargate) → S3 `stellar-ledger-data` → Ledger
-  Processor Lambda → RDS
-- **backfill:** `backfill-runner` (production) or `backfill-bench` (benchmark) CLI → same `process_ledger` call → RDS
+- **live (Lambda):** Galexie (ECS Fargate eu-central-1) → S3
+  `stellar-ledger-data` → Ledger Processor Lambda → Caddy mTLS → Hetzner CH
+- **backfill (CLI):** `backfill-runner --target clickhouse` → same parse path
+  → `db_clickhouse::persist::PartitionWriter` → Hetzner CH
 
-Keeping the write-path identical means backfill and live ingest produce
-byte-for-byte the same rows for a given ledger, and the replay-safe
-derived-state guards work without special-casing.
+The CH writer module (`crates/db-clickhouse/src/persist/writer.rs`) drives
+backfill via **partition-aligned streaming inserts** — open writer →
+`write_ledger × N` → `commit` — so backfill emits one `INSERT` per CH table
+per 64k-ledger partition (≈ 3 100 `INSERT` statements over an 11M-ledger
+backfill, well inside merger comfort). The live-tail indexer reuses the same
+parse half but drives the persist half **per-ledger** via the one-shot
+`persist_ledger_clickhouse` wrapper (open writer → write_ledger → commit per
+ledger) — fewer parts per partition than the long-running backfill writer,
+but appropriate to the per-S3-event Lambda model and to per-ledger commit
+isolation under retry.
+
+The legacy PG sink (`backfill-runner --target postgres`, also used by
+`backfill-bench`) still works under the indexer crate's `pg-persist` feature
+but targets a database that no longer has a production deployment; it is kept
+for parity benches and one-off diffs only.
 
 `backfill-runner` also accepts `--target clickhouse` (task
 [0205](../../../lore/1-tasks/archive/0205_FEATURE_backfill-runner-clickhouse-target-flag.md)
@@ -296,9 +313,11 @@ landed the real writer) to drive the ClickHouse pilot store
 The CH path uses **partition-aligned streaming inserts** —
 `Sink::open_partition` → `write_ledger × N` → `commit` — so the
 server sees one `INSERT` per CH table per backfill partition, not
-per ledger. The default `--target postgres` is unchanged (the
-partition-writer lifecycle is a no-op around the existing per-ledger
-transaction on the PG path). Full design + the `soroban_events` ADR 0044
+per ledger. The `--target postgres` flag still drives the legacy PG
+sink (the partition-writer lifecycle is a no-op around the existing
+per-ledger transaction on the PG path) but targets a database that
+no longer has a production deployment after task 0241. Full design
+plus the `soroban_events` ADR 0044
 §Decision §4a unfold are documented in
 [`docs/architecture/database-schema/clickhouse-pilot.md#writers`](../database-schema/clickhouse-pilot.md#writers).
 
@@ -339,9 +358,16 @@ Its responsibilities are:
 - parse and decode canonical XDR payloads
 - treat ledger sequence as the canonical ordering key for writes
 - extract structured explorer data
-- write chain data and derived state to PostgreSQL
-- keep replay of the same ledger idempotent
+- write chain data and derived state to Hetzner ClickHouse via the Caddy
+  mTLS reverse proxy (cert bundle fetched at cold start from AWS Secrets
+  Manager via the Parameters and Secrets Lambda Extension)
+- keep replay of the same ledger idempotent (per-ledger commit-marker —
+  the `ledgers` row is the last insert per ledger — plus
+  `ReplacingMergeTree` collapse on background merge for the 17 RMT state
+  tables)
 - prevent stale backfill writes from overwriting newer live-derived state
+  (handled by the `ReplacingMergeTree(version_column)` choice — version
+  columns are ledger-derived and monotonic)
 
 The Ledger Processor is the only Lambda worker on the **ingestion path** — it turns raw
 ledger-close artifacts into first-class explorer records. **Inline-eligible** event enrichment
@@ -366,14 +392,19 @@ Allocation rule (codified by [ADR 0043](../../../lore/2-adrs/0043_field-allocati
 
 ### 8.1 Normal Operation
 
-The source design states the normal live path as:
+The normal live path is:
 
 ```text
-Galexie (ECS Fargate) -> S3 (~5-6 s per ledger)
-                       -> Lambda Ledger Processor (~<10 s from ledger close to DB write)
+Galexie (ECS Fargate eu-central-1) -> S3 (~5-6 s per ledger)
+                                    -> Lambda Ledger Processor
+                                    -> Caddy mTLS (Hetzner)
+                                    -> ClickHouse 26.x
+                                    (total ~<10 s from ledger close to DB write)
 ```
 
-This sets the baseline expectation for ingestion freshness.
+This sets the baseline expectation for ingestion freshness. The
+`live-tail-cutover.md` runbook B-2 step expects `< 30 s` lag (Horizon tip vs
+CH max sequence) at steady state.
 
 ### 8.2 Restart and Failure Recovery
 
@@ -385,9 +416,17 @@ The pipeline currently assumes:
   automatically
 - **Permanent processing failure**: failed files remain in S3 and can be replayed by
   re-triggering the Lambda with the S3 key
-- **Replay safety and ordering**: immutable ledger-scoped writes are committed
-  transactionally per ledger, and derived-state updates are monotonic by ledger sequence so
-  older batches cannot regress newer state
+- **Replay safety and ordering**: per-ledger CH writes use the commit-marker
+  pattern (`persist_ledger_clickhouse` wrapper writes the `ledgers` row as
+  the last insert per ledger). A mid-ledger failure leaves no `ledgers`
+  row for that ledger; the Lambda returns Err, S3 redelivers the whole
+  batch, and any already-committed earlier ledgers in the batch may
+  produce duplicate `ledgers` rows on replay (handled via
+  `count(DISTINCT sequence)` per runbook B-2 — `ledgers` itself is plain
+  MergeTree by design). `ReplacingMergeTree(version_column)` collapses any
+  orphan non-`ledgers` rows on the next background merge. Derived-state
+  updates are monotonic by ledger sequence so older replays cannot regress
+  newer state
 
 These are core reliability assumptions of the ingestion architecture.
 
@@ -414,7 +453,9 @@ For the indexing pipeline, that means:
 
 - no hidden dependency on internal-only ingestion services
 - no hidden dependency on external explorer APIs
-- a fully reproducible Galexie -> S3 -> Lambda -> RDS flow
+- a fully reproducible Galexie -> S3 -> Lambda -> CH flow (the CH side is
+  Ansible-managed on a generic Linux box; `infra-hetzner/` is provider-neutral
+  apart from the bare-metal provisioning bit)
 
 ## 9. Boundaries and Delivery Notes
 
