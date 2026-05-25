@@ -333,7 +333,7 @@ pub async fn list_asset_transactions(
         let empty = into_envelope::<AssetTransactionItem>(
             Vec::new(),
             PageInfo {
-                cursor: None,
+                next_cursor: None,
                 prev_cursor: None,
                 limit: pagination.limit,
             },

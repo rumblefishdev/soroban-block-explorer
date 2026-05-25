@@ -13,8 +13,8 @@ use crate::openapi::schemas::{PageInfo, Paginated};
 use super::cursor::{self, Direction};
 
 /// Trim a `limit+1` row slice to `limit` rows and derive the
-/// [`PageInfo`] for the page, including both forward (`cursor`) and
-/// backward (`prev_cursor`) continuations.
+/// [`PageInfo`] for the page, including both forward (`next_cursor`)
+/// and backward (`prev_cursor`) continuations.
 ///
 /// **Inputs**
 ///
@@ -36,8 +36,8 @@ use super::cursor::{self, Direction};
 ///
 /// **Output behaviour**
 ///
-/// | `direction` | `has_predecessor` | `has_excess` | `cursor` (next) | `prev_cursor` |
-/// |-------------|-----------------------|--------------|-----------------|---------------|
+/// | `direction` | `has_predecessor` | `has_excess` | `next_cursor` | `prev_cursor` |
+/// |-------------|-----------------------|--------------|--------------|---------------|
 /// | Next | false (page 1) | true | last displayed (Next) | None |
 /// | Next | false (page 1) | false | None | None |
 /// | Next | true (mid) | true | last displayed (Next) | first displayed (Prev) |
@@ -58,7 +58,7 @@ pub fn finalize_page<Row>(
     let limit_usize = limit as usize;
     let has_excess = rows.len() > limit_usize;
 
-    let (cursor, prev_cursor) = match direction {
+    let (next_cursor, prev_cursor) = match direction {
         Direction::Next => {
             // DESC fetch: rows already in presentation order. Excess is
             // at the tail.
@@ -108,7 +108,7 @@ pub fn finalize_page<Row>(
     };
 
     PageInfo {
-        cursor,
+        next_cursor,
         prev_cursor,
         limit,
     }
@@ -180,7 +180,7 @@ mod tests {
         let mut rows = vec![row(1, 0), row(2, 1), row(3, 2)];
         let page = finalize_page(&mut rows, 5, Direction::Next, false, label);
         assert_eq!(rows.len(), 3);
-        assert!(page.cursor.is_none());
+        assert!(page.next_cursor.is_none());
         assert!(page.prev_cursor.is_none());
         assert_eq!(page.limit, 5);
     }
@@ -192,9 +192,9 @@ mod tests {
         let mut rows = vec![row(1, 0), row(2, 1), row(3, 2), row(4, 3)];
         let page = finalize_page(&mut rows, 3, Direction::Next, false, label);
         assert_eq!(rows.len(), 3);
-        assert_eq!(page.cursor.as_deref(), Some("id-3"));
+        assert_eq!(page.next_cursor.as_deref(), Some("id-3"));
         assert!(page.prev_cursor.is_none());
-        assert!(page.cursor.is_some());
+        assert!(page.next_cursor.is_some());
     }
 
     #[test]
@@ -205,9 +205,9 @@ mod tests {
         let mut rows = vec![row(1, 0), row(2, 1), row(3, 2), row(4, 3)];
         let page = finalize_page(&mut rows, 3, Direction::Next, true, label);
         assert_eq!(rows.len(), 3);
-        assert_eq!(page.cursor.as_deref(), Some("id-3"));
+        assert_eq!(page.next_cursor.as_deref(), Some("id-3"));
         assert_eq!(page.prev_cursor.as_deref(), Some("id-1"));
-        assert!(page.cursor.is_some());
+        assert!(page.next_cursor.is_some());
     }
 
     #[test]
@@ -216,9 +216,9 @@ mod tests {
         // input cursor was present, so prev_cursor anchors at the front.
         let mut rows = vec![row(1, 0), row(2, 1), row(3, 2)];
         let page = finalize_page(&mut rows, 3, Direction::Next, true, label);
-        assert!(page.cursor.is_none());
+        assert!(page.next_cursor.is_none());
         assert_eq!(page.prev_cursor.as_deref(), Some("id-1"));
-        assert!(page.cursor.is_none());
+        assert!(page.next_cursor.is_none());
     }
 
     // ---------- Direction::Prev ----------
@@ -238,8 +238,8 @@ mod tests {
         assert_eq!(page.prev_cursor.as_deref(), Some("id-3"));
         // next_cursor anchors at the oldest displayed (tail of DESC) =
         // the row the user came from when they clicked Prev.
-        assert_eq!(page.cursor.as_deref(), Some("id-1"));
-        assert!(page.cursor.is_some());
+        assert_eq!(page.next_cursor.as_deref(), Some("id-1"));
+        assert!(page.next_cursor.is_some());
     }
 
     #[test]
@@ -251,8 +251,8 @@ mod tests {
         let page = finalize_page(&mut rows, 3, Direction::Prev, true, label);
         assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![3, 2, 1]);
         assert!(page.prev_cursor.is_none());
-        assert_eq!(page.cursor.as_deref(), Some("id-1"));
-        assert!(page.cursor.is_some());
+        assert_eq!(page.next_cursor.as_deref(), Some("id-1"));
+        assert!(page.next_cursor.is_some());
     }
 
     #[test]
@@ -263,9 +263,9 @@ mod tests {
         let mut rows: Vec<Row> = vec![];
         let page = finalize_page(&mut rows, 3, Direction::Prev, true, label);
         assert!(rows.is_empty());
-        assert!(page.cursor.is_none());
+        assert!(page.next_cursor.is_none());
         assert!(page.prev_cursor.is_none());
-        assert!(page.cursor.is_none());
+        assert!(page.next_cursor.is_none());
     }
 
     // ---------- ts_id helper ----------
@@ -276,10 +276,10 @@ mod tests {
         let page =
             finalize_ts_id_page(&mut rows, 3, Direction::Next, true, |r| r.ts, |r| r.id);
         assert_eq!(rows.len(), 3);
-        assert!(page.cursor.is_some());
+        assert!(page.next_cursor.is_some());
 
         let (next_dir, next): (Direction, cursor::TsIdCursor) =
-            cursor::decode(&page.cursor.clone().unwrap()).unwrap();
+            cursor::decode(&page.next_cursor.clone().unwrap()).unwrap();
         assert_eq!(next_dir, Direction::Next);
         assert_eq!(next.id, 3);
         assert_eq!(next.ts.second(), 2);

@@ -28,8 +28,9 @@ history:
     who: karolkow
     note: >
       Amended (task 0254) with the direction-aware cursor extension:
-      `PageInfo` gains a `prev_cursor: Option<String>` field and drops
-      the redundant `has_more` boolean (subsumed by `cursor.is_some()`);
+      `PageInfo` gains a `prev_cursor: Option<String>` field, renames
+      `cursor` → `next_cursor` for symmetry, and drops the redundant
+      `has_more` boolean (subsumed by `next_cursor.is_some()`);
       cursor payloads are wrapped in a `{dir, p}` envelope so backend
       can branch SQL between forward (DESC `<`) and backward (ASC `>`,
       then reverse) walks. Clean break — legacy cursors (pre-envelope)
@@ -69,7 +70,7 @@ pub struct ErrorEnvelope {
 }
 
 pub struct PageInfo {
-    pub cursor: Option<String>,        // opaque forward cursor, None on last page
+    pub next_cursor: Option<String>,   // opaque forward cursor, None on last page (renamed from `cursor` in task 0254 for symmetry with prev_cursor)
     pub prev_cursor: Option<String>,   // opaque backward cursor, None on first page (task 0254)
     pub limit: u32,                    // page size that produced `data`
 }
@@ -98,7 +99,7 @@ Every failure response body across all M2 endpoints must serialise to `ErrorEnve
 
 - **Cursor-based, not offset-based.** The explorer indexes a live ledger stream — new records arrive continuously. Offset pagination over a growing collection produces skipped and duplicated items as pages shift between requests. Cursor pagination gives stable listings regardless of stream advances.
 - **Opaque cursor string.** Encoded as whatever the endpoint needs (base64-encoded `(id, ts)`, sequence number, etc.) — opacity means the backend can change the encoding later without a client migration.
-- **`cursor.is_some()` is the canonical "more pages exist" signal.** The original ADR carried an explicit `has_more: bool` field for the same purpose; task 0254 dropped it as redundant once `Option<String>` already conveys end-of-stream cleanly on both directions (`cursor: None` = last forward page, `prev_cursor: None` = first page). The server still answers definitively — the answer just lives inside the `Option`.
+- **`next_cursor.is_some()` is the canonical "more pages exist" signal.** The original ADR carried an explicit `has_more: bool` field for the same purpose; task 0254 dropped it as redundant once `Option<String>` already conveys end-of-stream cleanly on both directions (`next_cursor: None` = last forward page, `prev_cursor: None` = first page). The server still answers definitively — the answer just lives inside the `Option`.
 - **Single generic `Paginated<T>`**. One shape for every list endpoint means one TypeScript type on the frontend, one SDK helper, one error-handling branch. DRY wins here because the shape is genuinely identical everywhere.
 - Aligns with **Stellar Horizon API** conventions (our upstream data source), reducing cognitive load for users coming from Horizon.
 
@@ -186,7 +187,7 @@ Every failure response body across all M2 endpoints must serialise to `ErrorEnve
 
 ## Cursor direction encoding (task 0254 amendment)
 
-The original ADR specified a one-way cursor (`PageInfo.cursor: Option<String>`)
+The original ADR specified a one-way cursor (`PageInfo.cursor: Option<String>`, renamed to `next_cursor` in this amendment)
 — forward walks only, no `prev_cursor`. Task 0238 worked around the lack of a
 backward cursor with an in-memory prev-stack in `useCursorPagination` that
 reset on refresh / remount, breaking the deep-link-then-Prev flow. Task 0254
@@ -199,19 +200,20 @@ section documents the wire-shape extension and the SQL algebra.
 
 ```rust
 pub struct PageInfo {
-    pub cursor: Option<String>,        // forward / next — original field
+    pub next_cursor: Option<String>,   // forward / next — renamed from `cursor` for symmetry
     pub prev_cursor: Option<String>,   // backward / prev — NEW
     pub limit: u32,
 }
 ```
 
 - `prev_cursor: None` ⇒ first page (the client has not paged forward yet).
-- `cursor: None` ⇒ last page (no further forward continuation).
+- `next_cursor: None` ⇒ last page (no further forward continuation).
 
 Both cursor strings are emitted independently — middle pages carry both,
-first pages omit `prev_cursor`, last pages omit `cursor`. The redundant
-`has_more: bool` field was removed: `cursor.is_some()` carries the same
-signal with zero ambiguity ("which is the truth, `cursor` or `has_more`?").
+first pages omit `prev_cursor`, last pages omit `next_cursor`. The
+redundant `has_more: bool` field was removed: `next_cursor.is_some()`
+carries the same signal with zero ambiguity ("which is the truth,
+`next_cursor` or `has_more`?").
 
 ### Cursor wire envelope
 
@@ -259,7 +261,7 @@ row-constructor comparison is lexicographic over the column tuple.
 `common::pagination::finalize_page` produces the two-cursor `PageInfo`
 from a `limit+1` row slice and a direction:
 
-| `direction` | input cursor | excess | `cursor` (next) | `prev_cursor` |
+| `direction` | input cursor | excess | `next_cursor` | `prev_cursor` |
 |-------------|--------------|--------|------------------|---------------|
 | `Next` | absent (page 1) | yes | last displayed (Next) | None |
 | `Next` | absent (page 1) | no | None | None |
@@ -268,7 +270,7 @@ from a `limit+1` row slice and a direction:
 | `Prev` | present | yes | last displayed (Next)¹ | first displayed (Prev) |
 | `Prev` | present (hit start) | no | last displayed (Next)¹ | None |
 
-¹ Backward walks anchor `cursor` (next continuation) at the oldest
+¹ Backward walks anchor `next_cursor` at the oldest
 displayed row unconditionally. The explorer's data is immutable
 (append-only ledger stream), so the cursor anchor was sourced from a
 prior forward fetch and always references a row that still exists in

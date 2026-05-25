@@ -667,12 +667,12 @@ export type OperationItem = {
  * Stellar Horizon conventions and produces stable listings even when
  * the underlying ledger stream advances between requests.
  *
- * Both `cursor` (forward / next page) and `prev_cursor` (backward /
- * previous page) are emitted as opaque base64-JSON strings.
+ * Both `next_cursor` (forward / next page) and `prev_cursor` (backward
+ * / previous page) are emitted as opaque base64-JSON strings.
  * `Option<String>` carries the entire signal:
  *
- * - `cursor: None` ⇒ last page (no further forward continuation).
- * - `cursor: Some(_)` ⇒ a further forward page exists.
+ * - `next_cursor: None` ⇒ last page (no further forward continuation).
+ * - `next_cursor: Some(_)` ⇒ a further forward page exists.
  * - `prev_cursor: None` ⇒ first page (no backward continuation).
  * - `prev_cursor: Some(_)` ⇒ a backward page exists.
  *
@@ -685,15 +685,15 @@ export type OperationItem = {
  */
 export type PageInfo = {
   /**
-   * Opaque cursor identifying the next page, absent when the
-   * client has reached the end of the stream.
-   */
-  cursor?: string | null;
-  /**
    * Page size that produced `data`. Echoes the client's requested
    * limit (clamped server-side).
    */
   limit: number;
+  /**
+   * Opaque cursor identifying the next page, absent when the
+   * client has reached the end of the stream.
+   */
+  next_cursor?: string | null;
   /**
    * Opaque cursor identifying the previous page, absent when the
    * response is the first page (the client has not paged forward

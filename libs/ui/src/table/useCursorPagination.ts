@@ -23,7 +23,7 @@ export interface UseCursorPaginationResult
   cursor: string | null;
   /**
    * Navigate forward to `nextCursor`. Caller passes the cursor read
-   * from the most recent response's `page.cursor`.
+   * from the most recent response's `page.next_cursor`.
    */
   goNext: (nextCursor: string) => void;
   /**

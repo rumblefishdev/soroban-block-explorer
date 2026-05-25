@@ -2,13 +2,14 @@ import { useCallback } from 'react';
 
 /**
  * Structural shape of the `page` field on a paginated API response.
- * Backend `PageInfo`: optional forward (`cursor`) and backward
+ * Backend `PageInfo`: optional forward (`next_cursor`) and backward
  * (`prev_cursor`) opaque cursors. Presence of either string carries
- * the entire "is there another page" signal — `cursor !== null` means
- * a forward continuation exists, `prev_cursor !== null` a backward one.
+ * the entire "is there another page" signal — `next_cursor !== null`
+ * means a forward continuation exists, `prev_cursor !== null` a
+ * backward one.
  */
 export interface PageInfoLike {
-  cursor?: string | null;
+  next_cursor?: string | null;
   prev_cursor?: string | null;
 }
 
@@ -32,8 +33,8 @@ export interface UsePageHandlersResult {
  * response's `page` field. Pairs with `useCursorPagination`'s `goPrev`
  * / `goNext` to remove repeated cursor extraction boilerplate.
  *
- * Both directions are driven by the backend: `cursor` advances, and
- * `prev_cursor` goes back. The backend computes `prev_cursor` from the
+ * Both directions are driven by the backend: `next_cursor` advances,
+ * and `prev_cursor` goes back. The backend computes both from the
  * direction-aware envelope (see ADR for cursor direction encoding), so
  * deep-link + Prev works on every response, with no client-side cursor
  * stack required.
@@ -43,7 +44,7 @@ export function usePageHandlers(
   goNext: (cursor: string) => void,
   goPrev: (cursor: string | null) => void
 ): UsePageHandlersResult {
-  const nextCursor = page?.cursor ?? null;
+  const nextCursor = page?.next_cursor ?? null;
   const prevCursor = page?.prev_cursor ?? null;
   const canNext = nextCursor !== null;
   const canPrev = prevCursor !== null;

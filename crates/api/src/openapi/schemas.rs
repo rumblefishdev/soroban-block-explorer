@@ -31,12 +31,12 @@ pub struct ErrorEnvelope {
 /// Stellar Horizon conventions and produces stable listings even when
 /// the underlying ledger stream advances between requests.
 ///
-/// Both `cursor` (forward / next page) and `prev_cursor` (backward /
-/// previous page) are emitted as opaque base64-JSON strings.
+/// Both `next_cursor` (forward / next page) and `prev_cursor` (backward
+/// / previous page) are emitted as opaque base64-JSON strings.
 /// `Option<String>` carries the entire signal:
 ///
-/// - `cursor: None` ⇒ last page (no further forward continuation).
-/// - `cursor: Some(_)` ⇒ a further forward page exists.
+/// - `next_cursor: None` ⇒ last page (no further forward continuation).
+/// - `next_cursor: Some(_)` ⇒ a further forward page exists.
 /// - `prev_cursor: None` ⇒ first page (no backward continuation).
 /// - `prev_cursor: Some(_)` ⇒ a backward page exists.
 ///
@@ -51,7 +51,7 @@ pub struct PageInfo {
     /// Opaque cursor identifying the next page, absent when the
     /// client has reached the end of the stream.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
+    pub next_cursor: Option<String>,
     /// Opaque cursor identifying the previous page, absent when the
     /// response is the first page (the client has not paged forward
     /// yet).

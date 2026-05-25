@@ -270,7 +270,7 @@ pub async fn list_invocations(
     let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocation_appearances(
         &state.db,
         contract.id,
-        i64::from(pagination.limit),
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         direction,
     )
