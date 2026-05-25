@@ -120,6 +120,67 @@ history:
       unexpected fails on > 800K field-level compares — well below
       the 0.01 % bound the task plan set for "Rule of Three" 95 %
       confidence.
+  - date: '2026-05-25'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      **Phase D Group C — 9/9 endpoints internal-consistency
+      complete.** Read-only CH-local checks, no Horizon contention,
+      so we launched 7 in parallel tmux sessions after a
+      single-shell pilot of E01 + E08.
+
+      Per-endpoint verdict (TSV + summary at
+      `/tmp/sbe-artifacts/0252/phase_d_eNN_summary.json`):
+
+        - E01 /network/stats           — pass=6 fail=0     (<1 s)
+        - E08 /assets list             — pass=3 fail=0     (4 s)
+        - E10 /assets/:id/transactions — pass=396 fail=0   (26 m, 8 098 rows walked)
+        - E15 /nfts list               — pass=4 fail=0     (sample=0; nfts table empty by design)
+        - E16 /nfts/:id seek           — pass=2 fail=0     (sample=0; same)
+        - E17 /nfts/:id/transfers      — pass=0 fail=0     (sample=0; nft_ownership empty too)
+        - E21 /liquidity-pools/:id/chart — pass=3 000 fail=0 (212 s, 200 pools × 3 interval/window combos)
+        - E22 /search                  — pass=60 fail=0    (218 s, 60 smoke checks; top-tier + prefix + 5 dynamic buckets)
+        - E23 /liquidity-pools/:id/participants — pass=859 fail=1 (3 min after fix; below)
+
+      **E23 fix.** First batch hit 215 / 300 pools failing
+      query_runs on the second-page cursor compare. Two-stage CH
+      bug:
+        1. literal `0` (UInt8) vs `Decimal(38,7)` inside a row
+           compare blew Code 386 — Decimal columns don't auto-promote
+           inside tuple compares. Added explicit `toDecimal128('{x}',
+           7)` cast on the cursor literal.
+        2. The `toString(shares) AS shares` SELECT alias shadowed
+           the raw column in WHERE — CH resolved `(shares,
+           account_id) < (...)` against the String alias, not the
+           Decimal column. Code 43 then complained
+           `No operation less between String and Decimal(38,7)`.
+        Fix: drop the alias entirely; `JSONEachRow` already
+        stringifies Decimal natively. Captured in
+        [[ch-26-sql-gotchas]] memory under "alias-before-FINAL"
+        family.
+
+      **E23 residual fail.** One pool `510faa345a` reported
+      `page_sum=1.55T > total_shares=518B` (≈ 3× excess). Either
+      `lp_positions FINAL` hasn't deduped historical positions or
+      the latest-snapshot `argMax` lags actual reality. Spawned as
+      backlog task 0257 for investigation; not blocking Phase D
+      close.
+
+      **NFT-table empties.** E15/E16/E17 vacuously passed
+      (sample=0) — `nfts` and `nft_ownership` tables empty in the
+      backfill snapshot. Per
+      [[ch-backfill-state]] the live data sits in
+      `nfts_pending` / `nft_ownership_pending` (49 M + 112 M rows,
+      quarantine bucket). Spawned backlog task 0258 to plan
+      coverage against pending tables before NFT endpoints can be
+      reported PASS rather than N/A.
+
+      **Cumulative coverage now 18/23 endpoints.** Remaining:
+      Phase B E07 (`/accounts/:id/transactions` — needs an accounts
+      sample pool); Phase C Group B E12/E13/E14 (stellar.expert
+      contract events / invocations / interface — no Horizon
+      equivalent). Once those land, Phase F latency profile then
+      Phase E aggregator artifact close the task.
 ---
 
 # VALIDATION: ClickHouse endpoint parity against Horizon / stellar.expert
