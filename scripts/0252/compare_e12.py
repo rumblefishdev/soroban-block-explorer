@@ -73,22 +73,26 @@ def fetch_ch_interface(contract_strkey: str) -> dict | None:
 
 
 def fetch_se_contract(contract_strkey: str) -> dict | None:
-    """stellar.expert contract endpoint. The interface (`functions`)
-    is folded into the main contract record on stellar.expert.
+    """stellar.expert contract endpoint. Single-attempt fast-fail —
+    stellar.expert deliberately delays 404 responses (~15 s/call) to
+    discourage scraping. Most of `samples_contracts.txt` is SAC
+    tokens that SE does not surface, so a retry only multiplies the
+    wall without changing the verdict. Cap timeout at 5 s; misses
+    fall through to `SE_MISSING` (neutral skip).
     """
     url = f"{STELLAR_EXPERT_BASE}/contract/{contract_strkey}"
-    for attempt in range(4):
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200:
-            time.sleep(HORIZON_DELAY)
-            return r.json()
-        if r.status_code in (429,) or r.status_code >= 500:
-            time.sleep(2 ** attempt)
-            continue
-        if r.status_code in (400, 404):
-            return None
-        r.raise_for_status()
-    return None
+    try:
+        r = requests.get(url, timeout=5)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        body = r.json()
+    except json.JSONDecodeError:
+        return None
+    time.sleep(HORIZON_DELAY)
+    return body
 
 
 def ch_function_names(metadata_json: str) -> set[str]:
