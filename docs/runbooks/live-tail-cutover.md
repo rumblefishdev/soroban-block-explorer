@@ -765,11 +765,15 @@ Operator on-call until T+24h. Watch:
   by `cloudwatch-stack.ts::GalexieLagAlarm`, NOT the construct ID).
   For production: `production-galexie-ingestion-lag`.
 - `<env>-indexer-ch-write-failures` alarm (CDK
-  `IndexerChWriteFailureAlarm` in `cloudwatch-stack.ts`) — fires when the
-  indexer Lambda logs more than 5 `"ClickHouse write failed"` /
-  `"failed to build mTLS CH client"` lines in a 5-minute window. Pages
-  via the same SNS topic / Slack channel as the other alarms in this
-  stack.
+  `IndexerChWriteFailureAlarm` in `cloudwatch-stack.ts`) — a log
+  MetricFilter on the indexer log group matching the exact JSON
+  `$.fields.message` values `"failed to process S3 record"` (the
+  terminal per-batch failure) and `"failed to build mTLS CH client"`
+  (cold-start mTLS init failure). Fires when their summed count is
+  `> 10` in a 5-minute window. **Counts only post-retry hard failures**
+  — a 5xx burst that the in-band retry envelope recovers from emits no
+  such line, so a recovered ledger does NOT increment this metric.
+  Pages via the same SNS topic / Slack channel as the other alarms.
 - `<env>-ledger-processor-error-rate` alarm — Lambda `Errors` /
   `Invocations` ratio; complements the log-pattern alarm above (the
   in-band retry envelope can succeed without spiking this rate even

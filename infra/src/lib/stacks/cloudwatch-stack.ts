@@ -156,13 +156,16 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Alarm 2b: Indexer ClickHouse write / mTLS init failure (task 0241)
-    // Counts log lines emitted by the post-cutover indexer when CH
-    // writes fail after the in-band retry envelope or when the
-    // mTLS bundle cannot be assembled at cold start. Distinct from
-    // Alarm 2 (Lambda Errors metric): a CH 5xx burst can fail many
-    // ledgers without spiking the Lambda Errors rate if retries
-    // eventually succeed, so we want a direct counter on the
-    // failure-classified log lines.
+    // Counts the indexer's terminal failure log lines: a CH write that
+    // failed AFTER the in-band retry envelope was exhausted, or an
+    // mTLS bundle that could not be assembled at cold start. This is a
+    // POST-RETRY hard-failure counter — a transient 5xx burst that the
+    // retry envelope recovers from emits no matching line and does NOT
+    // increment this metric (the per-retry "…hit transient CH error —
+    // retrying" warn is intentionally not matched here). Complements
+    // Alarm 2 (Lambda Errors metric): it pins the failure to the CH
+    // write / mTLS path specifically, where the Errors rate alone
+    // wouldn't tell you which subsystem broke.
     // ---------------------
     const chWriteFailureFilter = new logs.MetricFilter(
       this,
