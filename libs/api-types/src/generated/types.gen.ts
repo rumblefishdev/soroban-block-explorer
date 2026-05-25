@@ -666,6 +666,22 @@ export type OperationItem = {
  * Cursor-based pagination (not offset) — see ADR 0008. Aligns with
  * Stellar Horizon conventions and produces stable listings even when
  * the underlying ledger stream advances between requests.
+ *
+ * Both `cursor` (forward / next page) and `prev_cursor` (backward /
+ * previous page) are emitted as opaque base64-JSON strings.
+ * `Option<String>` carries the entire signal:
+ *
+ * - `cursor: None` ⇒ last page (no further forward continuation).
+ * - `cursor: Some(_)` ⇒ a further forward page exists.
+ * - `prev_cursor: None` ⇒ first page (no backward continuation).
+ * - `prev_cursor: Some(_)` ⇒ a backward page exists.
+ *
+ * Both cursors carry an internal `dir` discriminant (see
+ * `crates/api/src/common/cursor.rs::Direction`) so the backend can
+ * branch SQL between forward (DESC `<`) and backward (ASC `>`,
+ * reverse for presentation) walks. Clients treat the strings as
+ * opaque tokens — round-tripping them through `?cursor=` is the only
+ * expected use.
  */
 export type PageInfo = {
   /**
@@ -674,14 +690,16 @@ export type PageInfo = {
    */
   cursor?: string | null;
   /**
-   * `true` when further pages exist, `false` on the final page.
-   */
-  has_more: boolean;
-  /**
    * Page size that produced `data`. Echoes the client's requested
    * limit (clamped server-side).
    */
   limit: number;
+  /**
+   * Opaque cursor identifying the previous page, absent when the
+   * response is the first page (the client has not paged forward
+   * yet).
+   */
+  prev_cursor?: string | null;
 };
 
 /**
