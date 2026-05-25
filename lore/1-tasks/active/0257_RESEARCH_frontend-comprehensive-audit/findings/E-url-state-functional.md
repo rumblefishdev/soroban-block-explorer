@@ -1,0 +1,151 @@
+# E — URL state nav functional (1.13, Wave 3)
+
+Read-only Playwright MCP. Goal: verify that filter / cursor / tab state
+lives in the URL so refresh + deep-link both restore the exact view.
+
+URL helpers under test:
+- `libs/ui/src/table/useTableUrlState.ts` — generic param state via
+  `useSearchParams`.
+- `libs/ui/src/table/useCursorPagination.ts` — wraps useTableUrlState,
+  adds in-memory prev-stack.
+- `web/src/pages/cursorParams.ts` — per-section cursor keys for routes
+  with multiple paginated sections.
+
+## Findings
+
+### F-E-1 🔴 CRITICAL `[Class B, Severity CRITICAL]` — Pagination cursor never written to URL
+
+Repro:
+1. Navigate `/transactions` → 20 rows render, URL = `/transactions` (no
+   `?cursor=`).
+2. Locate "Next" button, click it via real Playwright click.
+3. After click + 1s wait: data has paginated (first row changes from
+   `7b9bac...2089` → `328ad9...957f`), but URL stays
+   `/transactions` (no `?cursor=` appended).
+4. Hard-refresh → first page returns.
+
+Same behaviour on `/ledgers`. Both routes use `useCursorPagination` →
+`useTableUrlState.setCursor` → `setParams(..., { replace: true })`.
+Wiring in `TransactionsListPage.tsx:34, 62, 145` looks correct:
+`const { ..., goNext } = useCursorPagination(...)` →
+`usePageHandlers(data?.page, goNext)` → `<PaginationControls onNext={handleNext} />`.
+
+`usePageHandlers.ts:29` correctly reads `page?.has_more ? page.cursor : null`
+and the API does return `page: { cursor: "eyJ...", has_more: true }`
+(verified via `curl http://localhost:9000/v1/transactions?limit=20`).
+
+**Yet `window.location.search` stays empty after Next click.** Root
+cause unconfirmed — possibilities:
+- `useSearchParams` `setParams` not flushing because component remounts on
+  data change?
+- React Router v6.30+ `setParams` race when `placeholderData:
+  keepPreviousData` triggers a re-render before the cursor commit?
+- Some intermediate component eats / discards the `onNext` callback?
+
+Impact: **deep links / refresh on page N → page 1**, defeating the
+entire `useTableUrlState` abstraction (whose stated purpose per code
+comment is "URL-as-state cursor pagination"). Class B routing/contract
+break.
+
+**Triage signal — Gate A candidate.** This is exactly the kind of
+broken URL contract Wave 4 (state matrix) would re-discover repeatedly
+across 14 routes — fix-first means matrix measures intended state.
+Also slots into the "useTableUrlState analysis" Wave 4 sub-phase 1.12:
+if the abstraction is too leaky to do its one job, that's evidence for
+the "drop" side of the trade-off.
+
+### F-E-2 🟠 HIGH `[Class B, Severity HIGH]` — Filter URL key uses lowercase op value while Select expects uppercase
+
+Repro:
+1. Navigate `/transactions?op=invoke_host_function` (lowercase).
+2. Result: 0 rows, MUI warning ×4 ("out-of-range value
+   `invoke_host_function`"), API `GET .../filter[operation_type]=invoke_host_function`
+   → 400.
+3. Navigate `/transactions?op=INVOKE_HOST_FUNCTION` (uppercase) →
+   filter applies, 11 rows render.
+
+`normalizeOperationType` (used in `TransactionsListPage.tsx:40`) is
+supposed to canonicalise URL `op` to backend enum — but verification
+shows it leaves lowercase through, producing the broken API call. Code
+needs to either (a) accept lowercase and uppercase-normalise OR (b)
+reject lowercase explicitly and clear URL param. Currently does neither
+cleanly.
+
+Confirms Wave 2 C-2 (case sensitivity) and Wave 1 H2 (operation enum
+lowercase param). Wave 3 verified live impact.
+
+### F-E-3 🟡 MEDIUM `[Class B, Severity MEDIUM]` — Catch-all 404 has no `<main>` landmark
+
+Repro: Navigate `/foobar` → catch-all renders "Page not found" with a
+"Back to home" button (good). But `document.querySelector('main')`
+returns null — the catch-all 404 page bypasses the `AppShell` `<main>`
+landmark.
+
+Impact: accessibility regression — screen readers skip the page main
+landmark. Also breaks any selector tests relying on `main`.
+
+### F-E-4 ✓ PASS — Filter URL state preserves on hard-refresh
+
+Repro: `/transactions?op=INVOKE_HOST_FUNCTION` → refresh → 11 rows
+still rendered, filter still visible in combobox. Survives correctly.
+
+### F-E-5 ✓ PASS — Trailing slash tolerated
+
+Repro: `/transactions/` (trailing slash) → renders the same list as
+`/transactions`. React Router handles cleanly.
+
+### F-E-6 ✓ PASS — Deep link from raw URL renders
+
+Repro: External nav directly to
+`/accounts/GAHHHEIDIBOTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`,
+`/ledgers/1024`, `/contracts/CUSDCSACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`,
+`/nfts/1`, `/liquidity-pools/fac63b507d747965ff7fb69a48b18c4b19e1cd5b8648925246a386e4d00d87b7`
+— all render with full data, no errors.
+
+### F-E-7 🟡 MEDIUM `[Class D, Severity MEDIUM]` — No URL state for tabs
+
+`/contracts/:id` exposes tabs `Interface / Invocations / Events`.
+`/liquidity-pools/:id` exposes tabs `TVL / Volume / Fees` (for the
+chart). Tab selection NOT reflected in URL. Refresh / deep-link drops
+back to default tab.
+
+Wave 1 finding inventory likely covered the Interface tab. Confirmed
+applies to LP chart tab as well.
+
+### F-E-8 🟢 LOW `[Class D, Severity LOW]` — `?cursor_p=` / `?cursor_e=` / `?cursor_i=` keys defined but their write paths share the same bug
+
+`web/src/pages/cursorParams.ts` defines `cursor_p / cursor_t / cursor_e /
+cursor_i` for multi-section pages. By the same F-E-1 mechanism, those
+also won't appear in URL on Next click. Catalog-only because the same
+fix will resolve them.
+
+## Special / edge cases tested
+
+| Edge case | URL | Result |
+|---|---|---|
+| `?op=` invalid value | `/transactions?op=foo` | API 400, MUI warning, 0 rows |
+| Trailing slash | `/transactions/` | OK |
+| Unknown route | `/foobar` | catch-all 404 renders |
+| Invalid hash id | `/transactions/nothash` | STUB renders (no validation) |
+| Very long query | `/search?q=aaa...x1000` | API 400 → graceful "Search request failed" |
+| XSS attempt | `/search?q=<script>alert(1)</script>` | escaped to text, no injection |
+
+## Class breakdown for E (Wave 3 1.13)
+
+| Class | Count |
+|---|---:|
+| A | 0 |
+| B — routing/contract | 4 (E-1, E-2, E-3, E-8) |
+| C | 0 |
+| D — catalog-only | 1 (E-7) |
+| E | 0 |
+| ✓ pass | 3 (E-4, E-5, E-6) |
+
+## Severity breakdown
+
+| Severity | Count |
+|---|---:|
+| 🔴 CRITICAL | 1 (E-1) |
+| 🟠 HIGH | 1 (E-2) |
+| 🟡 MEDIUM | 2 (E-3, E-7) |
+| 🟢 LOW | 1 (E-8) |
