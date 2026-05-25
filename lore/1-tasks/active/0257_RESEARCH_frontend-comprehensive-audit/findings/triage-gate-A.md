@@ -209,3 +209,95 @@ matrix restored to 1.5 = 14×9 = 126 cells; 2.4 = 14×3 = 42 cells.
 
 None of the new severity escalations promote to fix-first at Gate A;
 all are Class B/C deferrable to Gate B.
+
+## Post-merge update 2026-05-25 (0254 merge @ 6af74d82) — develop @ 68b40058
+
+**Karol's 0254 branch (direction-aware cursor pagination + prev_cursor
++ ADR 0008 amendment + test suite) merged into audit branch.**
+
+### Fix-first scope after merge: **2 items → 1 item**
+
+| Item | Pre-merge state | Post-merge verdict |
+|---|---|---|
+| F-E-1 (URL cursor not written) | 🔴 fix-first audit-blocker | **RESOLVED** via `f646047d` (FE prev-stack drop + wire backend `prev_cursor`) + `78345d49` (backend direction-aware cursor). See `findings/E-url-state-functional.md` Post-merge update section. |
+| F-E-2 (lowercase op normalise) | 🟠 fix-first audit-blocker | **STILL STANDS** — 0254 did not touch `operationTypes.ts`. Only remaining Gate A fix-first item. |
+| Vite 7.3.3 CVE bump | Class E off-band | STILL STANDS (`@vitejs/plugin-react@7.3.1` unchanged in merge) |
+| CORS infra comm | Class E off-band | STILL STANDS |
+
+### Cascade impact
+
+- **0261 audit-blocker task `0261_BUG_url-cursor-not-written.md`** now
+  obsolete. Do not delete (user owns the call) — flag for rename or
+  removal.
+- **Filename ID collision:** Staś's `0261_BUG_parser-missing-pool-id-on-path-payment-ops.md`
+  was spawned same day with same `0261_` prefix. Two files share an ID.
+  Flag for user decision (renumber one, or accept the collision as
+  history given F-E-1 task is obsolete anyway).
+- **F-E-8** (per-section cursor keys) — RESOLVED via same fix.
+- Wave 4 1.5 cells D2 / D9 for every list page + multi-section detail
+  can measure intended URL contract on first pass.
+
+### New audit-surface from 0254
+
+| Concern | Status |
+|---|---|
+| `cursor` → `next_cursor` rename (BREAKING wire format) | FE consumers all updated; `tsc` green (0 errors); no stale `.cursor` references in `web/src` or `libs/ui` consumer code (the 2 hits in `useCursorPagination.ts` are `state.cursor` for URL-local cursor, intentional). |
+| `prev_cursor` field added | Wired via `usePageHandlers.ts:48` (`page?.prev_cursor ?? null`). |
+| `has_more` dropped | No consumer accesses `.has_more` anywhere in `web/src/` (grep clean). |
+| ADR 0008 amendment | Read; canonical URL state expectation = `?cursor=<token>` (single key per section), opaque base64-JSON. No FE-visible discontinuity. |
+| Backend changes (handlers / queries / cursor.rs / pagination.rs) | Out of FE audit scope; ripple effects covered by FE-side wire shape verification above. |
+| Integration test suite `crates/api/src/tests_integration.rs` (+544 LOC) | Out of FE audit scope. Mentioned in 0254 README "defer test suite to 0257" — 0257 does NOT inherit backend test work, it inherits the verified-via-tests FE wire contract. |
+
+### Bundle delta post-merge
+
+| Chunk | Pre-merge (post FilipDz) | Post-0254 merge | Delta |
+|---|---:|---:|---:|
+| main `index-*.js` | 596.20 KB / 189.36 KB gz | 596.20 KB / 189.37 KB gz | +0 raw / +0.01 KB gz (noise) |
+| `LiquidityPoolDetailPage-*.js` | 307.12 KB / 93.81 KB gz | 307.15 KB / 93.81 KB gz | +0.03 KB raw / 0 gz |
+| `TransactionDetailPage-*.js` | 29.97 KB / 9.13 KB gz | 29.97 KB / 9.13 KB gz | 0 / 0 |
+| `usePageHandlers-*.js` | n/a (not separately chunked before) | 2.35 KB / 1.16 KB gz | NEW chunk — page handlers now shared across all paginated pages |
+
+F-AI-1, F-AI-2 STILL STAND at same numbers. New `usePageHandlers`
+shared chunk is a small reuse improvement (was previously inlined per
+page; now extracted).
+
+### Deterministic delta check results
+
+| Check | Result |
+|---|---|
+| `nx run-many -t typecheck` | exit 0, 0 errors (baseline holds; `cursor` → `next_cursor` rename caught zero consumer drift) |
+| `nx run-many -t lint` | 1 problem (0 errors, 1 warning) — same `assetColor.ts:131` baseline |
+| `nx build web` | exit 0, 2.23s, bundle deltas above |
+| `grep -rnE "\.cursor\b" web/src libs/ui/src` (excluding generated) | 2 hits in `useCursorPagination.ts:22,118` — both `state.cursor` (URL-local cursor read), intentional. Zero stale refs to old `page.cursor` API shape. |
+| `grep -rnE "\.has_more\b" web/src libs/ui/src` | 0 hits — clean rename. |
+| `grep -rnE "\.next_cursor\b|\.prev_cursor\b" libs/ui/src` | 4 hits, all in `usePageHandlers.ts:47-50` (correct single consumer). |
+| `grep "as any|@ts-ignore|@ts-expect-error" <touched files>` | 0 hits |
+| `grep "fetch\(|axios" <touched files>` | 0 raw fetches (5 `refetch()` from TanStack — false positive) |
+
+### Re-audit queue (work absorbed into Wave 4)
+
+| Sub-phase | Scope | Effort | Priority |
+|---|---|---:|---|
+| 1.1 OpenAPI adherence | Verify regenerated `types.gen.ts` shape vs `openapi.json`; check no manual fetches in touched files (done above) | 5 min | Wave 4 |
+| 1.4 API consistency | `cursor` → `next_cursor` rename consistency (done above — clean) | 0 (done) | done |
+| 1.5 D2/D9 cells for E2/E4/E7/E10/E12 (list pages) | Re-verify pagination URL contract on Next + Prev + refresh + deep-link, per list page | 30 min Playwright | **Wave 4** |
+| 1.5 D2/D9 cells for tab tables (E6, E8, E9, E11, E13) | Same scope on `?cursor_p=` / `?cursor_e=` / `?cursor_i=` per-section cursors | 25 min Playwright | Wave 4 |
+| 1.6 console | API 400 from stale lowercase `?op=` still fires; F-E-2 fix outstanding | 0 (no new scope) | Wave 4 |
+| 1.7 cross-entity links | List page row link rendering untouched by 0254 | 0 (no new scope) | done |
+| 1.9 component reuse | `usePageHandlers` now extracted shared chunk — uniform usage across 13 pages. Confirms hook is the right level of abstraction. | 5 min | Wave 4 |
+| 1.11 P / 1.11b AQ | Re-ran (done above — baseline holds) | 0 (done) | done |
+| 1.13 URL state | F-E-1 resolved; F-E-2 + F-E-3 + F-E-7 still stand | 0 (done in this pass) | done |
+| 1.16 bundle | Delta captured above | 0 (done) | done |
+| 1.18 Q+AR lore | ADR 0008 amendment + 0254 archive: check task close metadata for completeness | 10 min | Wave 4 |
+
+**Total delta-audit effort: ~75 min**, all absorbable into Wave 4
+baseline. No separate session required.
+
+### Recommendation
+
+- **Wave 4 starts immediately.** F-E-1 resolved removes the #1
+  audit-blocker. F-E-2 single-file fix can either be spawned as
+  audit-blocker (preserves baseline cleanliness) or absorbed as a
+  known-noise tag during 1.6 console review (cheaper). Default: keep
+  audit-blocker for F-E-2, single fix, then start Wave 4.
+- Audit branch tip is now `6af74d82` — pin Wave 4 baseline to this SHA.

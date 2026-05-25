@@ -149,3 +149,81 @@ fix will resolve them.
 | 🟠 HIGH | 1 (E-2) |
 | 🟡 MEDIUM | 2 (E-3, E-7) |
 | 🟢 LOW | 1 (E-8) |
+
+## Post-merge update 2026-05-25 (0254 merge @ 6af74d82) — develop @ 68b40058
+
+### F-E-1 — **RESOLVED in `f646047d` / `78345d49` (merged via `6af74d82`)**
+
+Root cause was **wiring**, not the hook. Pre-merge, list pages called
+`onPrev={goPrev}` directly, where `goPrev` was the no-arg client-side
+prev-stack pop. The hook's `setCursor` (writes URL) was wired into
+`goNext` only — `goPrev` walked an in-memory stack via a different
+path. Wave 3 Playwright observed the symptom on Prev clicks but
+generalised it to "cursor never written" — actually Next *was* writing
+in most pages; Prev was the consistently-broken path.
+
+The 0254 branch removed the client-side prev-stack entirely (commit
+`f646047d`) and re-wired everything through the unified
+`setCursor` → `setParams` → URL write path:
+
+- `libs/ui/src/table/useCursorPagination.ts:91-103` — both `goNext`
+  and `goPrev` now call `setCursor`, which writes `?cursor=` via
+  `useTableUrlState.setCursor` (line 91-99) via
+  `setParams((prev) => { ... }, { replace: true })`.
+- `libs/ui/src/table/useTableUrlState.ts:91-99` — single write path
+  for both directions:
+  ```
+  const setCursor = useCallback(
+    (cursor: string | null) => {
+      update((next) => {
+        if (cursor) next.set(cursorParam, cursor);
+        else next.delete(cursorParam);
+      });
+    },
+    [update, cursorParam]
+  );
+  ```
+- `libs/ui/src/table/usePageHandlers.ts:42-57` — re-derives
+  `handlePrev` + `handleNext` from `page.next_cursor` /
+  `page.prev_cursor`, then delegates to `goNext` / `goPrev` (both →
+  `setCursor` → URL).
+- All 5 list pages (`Transactions`, `Ledgers`, `Assets`, `Nfts`,
+  `LiquidityPools`) + 8 tab tables now follow the same pattern (see
+  e.g. `TransactionsListPage.tsx:34-67`, `LedgersListPage.tsx:20-28`).
+- Pool detail tab tables (`PoolParticipants.tsx`, `PoolTransactions.tsx`)
+  were the most obviously broken pre-merge — they had
+  `onPrev={goPrev}` wired *directly* (no `handlePrev`); 0254 fixes
+  both (see diff above: `onPrev={handlePrev}` now).
+
+**Verification:** Next-click on `/transactions` now writes
+`?cursor=<token>` to URL (URL write path proven by the
+`setParams(..., { replace: true })` line above). Hard-refresh +
+deep-link will both restore. Wave 4 1.5 state matrix can measure D2
+cells against the intended URL contract.
+
+**Action items:**
+- `lore/1-tasks/backlog/0261_BUG_url-cursor-not-written.md` is now
+  **OBSOLETE pending user signal**. Do not delete — user owns the
+  rename/remove decision. Also has filename ID collision with Staś's
+  `0261_BUG_parser-missing-pool-id-on-path-payment-ops.md`.
+- F-E-8 (`cursor_p` / `cursor_e` / `cursor_i` per-section keys)
+  **RESOLVED by same fix** — same `useTableUrlState` write path, same
+  `setCursor`, just different `cursorParam` key.
+
+### F-E-2 — **STILL STANDS** (verified unchanged post-0254)
+
+0254 did not touch `web/src/pages/transactions/operationTypes.ts` or
+`TransactionFilters.tsx`. The 13-line diff in `TransactionsListPage.tsx`
+is pagination-only (`useCursorPagination` + `usePageHandlers` import +
+wire). `normalizeOperationType` still does not normalise lowercase
+URL input. Audit-blocker scope reduced from 2 → 1 with F-E-1 resolved.
+
+### F-E-3 — **STILL STANDS**
+
+Catch-all 404 `<main>` landmark gap unaffected by 0254.
+
+### F-E-4, F-E-5, F-E-6 — **STILL PASS** (no regression risk; 0254 did not change route definitions)
+
+### F-E-7 — **STILL STANDS** (tab URL state — 0254 did not introduce tab refactor)
+
+### F-E-8 — **RESOLVED via F-E-1 fix** (same `setCursor` write path)

@@ -50,3 +50,23 @@
 - Sample 0066 drift suggests other "active" tasks may have similar staleness — recommend Phase 3 task-walker that diffs `status: active` vs body `## Status:` heading.
 - Lack of commitlint + no PR template means Conventional Commits + lore-NNNN scope quality is entirely team-discipline driven. 81% compliance + low audit hit rate suggests team is doing well, but new contributors will not get error feedback.
 - `lore-framework-git` skill exists (per CLAUDE.md) — should mandate one of `feat(lore-NNNN): …` vs `feat(NNNN): …` and a commitlint custom plugin would enforce.
+
+## Post-merge update 2026-05-25 (0254 merge @ 6af74d82) — develop @ 68b40058
+
+### New finding: Q-7 🟡 MEDIUM [Class D] — forward-link expectation mismatch (0254 ↔ 0257)
+
+**Evidence:**
+- 0254 archived task body (`lore/1-tasks/archive/0254_FEATURE_backend-prev-cursor-and-pagination-tests.md`) explicitly defers test suite to 0257:
+  > "(unit + integration completion, FE Playwright CLI e2e for the 13 routes, GitHub Actions CI gate) is **deferred to task 0257** (Frontend comprehensive audit pre-launch), which has 'O testing coverage' already in scope and will spawn a precisely-scoped follow-up"
+- 0257 README "Out of scope (DROPPED — spawn as follow-up tasks in Phase 3)" table:
+  > `| O testing coverage | XXXX_FEATURE_frontend-testing-baseline |`
+- Mismatch: 0254 author treats "O testing coverage" as IN scope of 0257 audit. 0257 actual scope DROPS it and only commits to **spawning** a separate task in Phase 3 (3.2).
+
+**Severity / impact:**
+- No work lost — test suite still gets a spawned task in Phase 3.
+- But "in scope" language in 0254 misrepresents 0257's coverage.
+- Reader of 0254 might expect test suite to be delivered at 0257 audit close. Actual: Phase 3 will spawn a *separate* task that itself needs implementation later.
+
+**Action:** Phase 3 sub-phase 3.2 spawns `XXXX_FEATURE_frontend-testing-baseline` with `related_tasks: ['0238', '0254', '0257']` to make inheritance chain explicit. Add cross-link note to the spawned task's body: "originally deferred from 0254 §Future Work + 0238 manual-QA AC".
+
+**Class D — defer to Phase 3 bulk-spawn (spawning hygiene + cross-refs, no code change).**
