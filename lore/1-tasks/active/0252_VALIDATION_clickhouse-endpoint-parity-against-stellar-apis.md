@@ -73,6 +73,53 @@ history:
       Cumulative Phase B coverage so far: E03 ✅, E05, E06, E09, E11
       (deployer mismatch surfaced — fixed via task 0255 Phase 1),
       E19 ✅. Remaining endpoints + final Phase B report still to do.
+  - date: '2026-05-24'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      **Phase B overnight batch — E02, E04, E18 GREEN.**
+
+      All three launched in detached tmux sessions on Hetzner with
+      `tee` to file-fd logs (per the previous-session lesson). No
+      babysitting required; user disconnected ssh and the runs
+      finished while idle.
+
+      E02 (`/transactions` list, per-ledger set compare): 600 anchor
+      ledgers × ~229 tx/ledger avg. **pass=687,616, fail=0,
+      tolerance=0**. elapsed 26 min. Rewrote the compare mid-pilot —
+      first iteration page-vs-page slicing hit 100 % spurious
+      hash_set_equal fails because CH orders by
+      `(ledger_seq DESC, cityhash64-id DESC)` within a ledger while
+      Horizon orders by `application_order DESC`. By-design CH sort
+      with no Horizon comparator; the load-bearing assertion is
+      per-ledger SET equality + per-row field correctness, not
+      within-ledger sequence. Fix landed before full run.
+
+      E04 (`/ledgers` list, per-ledger detail): 600 anchors × 5
+      fields. **pass=2,985, fail=0, tolerance=0**. elapsed 10 min.
+      Three pre-retention anchors skipped (`HZ_PRE_RETENTION`),
+      consistent with the 56,657,428 retention floor first measured
+      in 0228 Phase 6.
+
+      E18 (`/liquidity-pools` list, per-pool projection): 5,000
+      pools. **pass=27,122, fail=0, tolerance=7,294**. elapsed 131
+      min. Tolerance bucket is reserves / total_shares /
+      latest_snapshot_at — same live-drift class as E19. E18's
+      value-add over E19 is the asset code/issuer projection +
+      latest-snapshot ledgers JOIN; both passed strict across the
+      5K sample.
+
+      Cumulative coverage now **9/23 endpoints**: E02 ✅, E03 ✅,
+      E04 ✅, E05 ✅, E06 ✅, E09 ✅, E11 (deployer fixed via 0255),
+      E18 ✅, E19 ✅. Phase B Group A remaining: E07 (needs accounts
+      sample pool). Phase D Group C (9 internal-consistency
+      endpoints) and Phase C Group B (3 stellar.expert endpoints —
+      E12, E13, E14) ahead.
+
+      Statistical envelope across the 9 GREEN endpoints: 0
+      unexpected fails on > 800K field-level compares — well below
+      the 0.01 % bound the task plan set for "Rule of Three" 95 %
+      confidence.
 ---
 
 # VALIDATION: ClickHouse endpoint parity against Horizon / stellar.expert
