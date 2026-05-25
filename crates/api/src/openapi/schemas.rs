@@ -30,18 +30,38 @@ pub struct ErrorEnvelope {
 /// Cursor-based pagination (not offset) — see ADR 0008. Aligns with
 /// Stellar Horizon conventions and produces stable listings even when
 /// the underlying ledger stream advances between requests.
+///
+/// Both `next_cursor` (forward / next page) and `prev_cursor` (backward
+/// / previous page) are **always emitted** as opaque base64-JSON
+/// strings or explicit JSON `null`. Wire shape always carries both
+/// keys — never omitted — so the OpenAPI `nullable: true` declaration
+/// matches the on-wire bytes exactly. `Option<String>` carries the
+/// entire signal:
+///
+/// - `next_cursor: null` ⇒ last page (no further forward continuation).
+/// - `next_cursor: "..."` ⇒ a further forward page exists.
+/// - `prev_cursor: null` ⇒ first page (no backward continuation).
+/// - `prev_cursor: "..."` ⇒ a backward page exists.
+///
+/// Both cursors carry an internal `dir` discriminant (see
+/// `crates/api/src/common/cursor.rs::Direction`) so the backend can
+/// branch SQL between forward (DESC `<`) and backward (ASC `>`,
+/// reverse for presentation) walks. Clients treat the strings as
+/// opaque tokens — round-tripping them through `?cursor=` is the only
+/// expected use.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PageInfo {
-    /// Opaque cursor identifying the next page, absent when the
+    /// Opaque cursor identifying the next page. `null` when the
     /// client has reached the end of the stream.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
+    pub next_cursor: Option<String>,
+    /// Opaque cursor identifying the previous page. `null` when the
+    /// response is the first page (the client has not paged forward
+    /// yet).
+    pub prev_cursor: Option<String>,
     /// Page size that produced `data`. Echoes the client's requested
     /// limit (clamped server-side).
     #[schema(minimum = 1, maximum = 100)]
     pub limit: u32,
-    /// `true` when further pages exist, `false` on the final page.
-    pub has_more: bool,
 }
 
 /// Canonical envelope for paginated list responses.

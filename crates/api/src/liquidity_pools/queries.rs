@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
+use crate::common::cursor::{Direction, direction_sql};
+
 use super::dto::{ChartDataPoint, PoolListCursor, SharesCursor};
 
 /// Internal row carrying both the wire-visible StrKey and the surrogate
@@ -54,8 +56,8 @@ pub async fn pool_exists(db: &PgPool, pool_id_hex: &str) -> Result<bool, sqlx::E
 
 /// Fetch up to `limit + 1` participants for a pool ordered by
 /// `(shares DESC, account_id DESC)`. The +1 row is the peek used by
-/// `common::pagination::finalize_page` to derive `has_more` and the
-/// next cursor.
+/// `common::pagination::finalize_page` to derive the next / prev
+/// cursors.
 ///
 /// Filters `lpp.shares > 0` so withdrawn participants (zero-share rows
 /// retained by persist for future-history analytics — see task 0162's
@@ -74,17 +76,15 @@ pub(super) async fn fetch_participants(
     pool_id_hex: &str,
     cursor: Option<&SharesCursor>,
     limit: i64,
+    direction: Direction,
 ) -> Result<Vec<ParticipantRow>, sqlx::Error> {
     let (cur_shares, cur_acct): (Option<String>, Option<i64>) = match cursor {
         Some(c) => (Some(c.shares.clone()), Some(c.account_id)),
         None => (None, None),
     };
+    let (op, order) = direction_sql(direction);
 
-    // Static query — single plan, NULL-guarded cursor predicate matches
-    // the canonical spec in `endpoint-queries/23_*.sql`. The
-    // `$3::NUMERIC(28,7) IS NULL` guard short-circuits the keyset on
-    // first-page requests.
-    let rows = sqlx::query(
+    let sql = format!(
         r#"
         WITH latest_snap AS (
             SELECT lps.total_shares
@@ -109,27 +109,25 @@ pub(super) async fn fetch_participants(
           LEFT JOIN latest_snap snap  ON TRUE
          WHERE lpp.pool_id = decode($1, 'hex')
            AND lpp.shares > 0
-           -- Sentinel filter (ADR 0041 / task 0193). Defense-in-depth
-           -- alongside the handler-level `pool_exists()` gate: an EXISTS
-           -- guard at the query body protects future callers that bypass
-           -- the handler. Uncorrelated subquery, one PK seek per call.
            AND EXISTS (
                SELECT 1 FROM liquidity_pools lp
                 WHERE lp.pool_id = decode($1, 'hex')
                   AND lp.created_at_ledger > 0
            )
            AND ($3::numeric IS NULL
-                OR (lpp.shares, lpp.account_id) < ($3::numeric, $4::BIGINT))
-         ORDER BY lpp.shares DESC, lpp.account_id DESC
+                OR (lpp.shares, lpp.account_id) {op} ($3::numeric, $4::BIGINT))
+         ORDER BY lpp.shares {order}, lpp.account_id {order}
          LIMIT $2
-        "#,
-    )
-    .bind(pool_id_hex)
-    .bind(limit)
-    .bind(cur_shares)
-    .bind(cur_acct)
-    .fetch_all(db)
-    .await?;
+        "#
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(pool_id_hex)
+        .bind(limit)
+        .bind(cur_shares)
+        .bind(cur_acct)
+        .fetch_all(db)
+        .await?;
 
     Ok(rows.iter().map(map_participant_row).collect())
 }
@@ -224,18 +222,15 @@ pub struct ResolvedPoolListParams {
 pub async fn fetch_pool_list(
     pool: &PgPool,
     params: &ResolvedPoolListParams,
+    direction: Direction,
 ) -> Result<Vec<PoolRow>, sqlx::Error> {
-    // Cursor binds: $2 BIGINT (created_at_ledger), $3 hex string decoded
-    // to BYTEA inside SQL via `decode($3, 'hex')`. Doing the decode in SQL
-    // (rather than handing sqlx a Vec<u8>) keeps the keyset predicate
-    // textually identical to the canonical query and avoids pulling in a
-    // hex crate just for this site.
     let (cur_ledger, cur_pool_hex): (Option<i64>, Option<String>) = match &params.cursor {
         Some(c) => (Some(c.created_at_ledger), Some(c.pool_id_hex.clone())),
         None => (None, None),
     };
+    let (op, order) = direction_sql(direction);
 
-    let rows = sqlx::query(
+    let sql = format!(
         r#"
         WITH issuer_a AS (
             SELECT id FROM accounts WHERE $5::varchar IS NOT NULL AND account_id = $5
@@ -295,7 +290,7 @@ pub async fn fetch_pool_list(
             -- every sentinel row without rejecting any real pool.
             lp.created_at_ledger > 0
             AND ($2::bigint IS NULL
-             OR (lp.created_at_ledger, lp.pool_id) < ($2, decode($3::varchar, 'hex')))
+             OR (lp.created_at_ledger, lp.pool_id) {op} ($2, decode($3::varchar, 'hex')))
             AND ($4::varchar IS NULL OR lp.asset_a_code = $4)
             AND ($5::varchar IS NULL OR lp.asset_a_issuer_id = (SELECT id FROM issuer_a))
             AND ($6::varchar IS NULL OR lp.asset_b_code = $6)
@@ -312,21 +307,23 @@ pub async fn fetch_pool_list(
             AND ($9::varchar IS NULL
                  OR UPPER(lp.asset_a_code) = $9
                  OR UPPER(lp.asset_b_code) = $9)
-        ORDER BY lp.created_at_ledger DESC, lp.pool_id DESC
+        ORDER BY lp.created_at_ledger {order}, lp.pool_id {order}
         LIMIT $1
-        "#,
-    )
-    .bind(params.limit)
-    .bind(cur_ledger)
-    .bind(cur_pool_hex)
-    .bind(&params.asset_a_code)
-    .bind(&params.asset_a_issuer)
-    .bind(&params.asset_b_code)
-    .bind(&params.asset_b_issuer)
-    .bind(&params.min_tvl)
-    .bind(&params.asset_code)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(params.limit)
+        .bind(cur_ledger)
+        .bind(cur_pool_hex)
+        .bind(&params.asset_a_code)
+        .bind(&params.asset_a_issuer)
+        .bind(&params.asset_b_code)
+        .bind(&params.asset_b_issuer)
+        .bind(&params.min_tvl)
+        .bind(&params.asset_code)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.iter().map(map_pool_row).collect())
 }
@@ -420,13 +417,15 @@ pub async fn fetch_pool_transactions(
     pool_id_hex: &str,
     limit: i64,
     cursor: Option<&crate::common::cursor::TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<PoolTxRow>, sqlx::Error> {
     let (cur_ts, cur_id): (Option<DateTime<Utc>>, Option<i64>) = match cursor {
         Some(c) => (Some(c.ts), Some(c.id)),
         None => (None, None),
     };
+    let (op, order) = direction_sql(direction);
 
-    let rows = sqlx::query(
+    let sql = format!(
         r#"
         -- `matched_ops` deduplicates multi-op-touching-same-pool
         -- transactions to one row per (created_at, transaction_id) via
@@ -457,8 +456,8 @@ pub async fn fetch_pool_transactions(
                      AND lp.created_at_ledger > 0
               )
               AND ($3::timestamptz IS NULL
-                   OR (oa.created_at, oa.transaction_id) < ($3, $4))
-            ORDER BY oa.created_at DESC, oa.transaction_id DESC, oa.id
+                   OR (oa.created_at, oa.transaction_id) {op} ($3, $4))
+            ORDER BY oa.created_at {order}, oa.transaction_id {order}, oa.id
             LIMIT $2 * 4
         )
         SELECT
@@ -484,16 +483,18 @@ pub async fn fetch_pool_transactions(
             WHERE oa.transaction_id = t.id
               AND oa.created_at     = t.created_at
         ) ops ON TRUE
-        ORDER BY t.created_at DESC, t.id DESC
+        ORDER BY t.created_at {order}, t.id {order}
         LIMIT $2
-        "#,
-    )
-    .bind(pool_id_hex)
-    .bind(limit)
-    .bind(cur_ts)
-    .bind(cur_id)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(pool_id_hex)
+        .bind(limit)
+        .bind(cur_ts)
+        .bind(cur_id)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .iter()
@@ -774,7 +775,7 @@ mod sentinel_query_tests {
         seed(&pool).await;
 
         // 1) fetch_participants — would surface the lp_position row.
-        let parts = fetch_participants(&pool, SENTINEL_HEX, None, 10)
+        let parts = fetch_participants(&pool, SENTINEL_HEX, None, 10, Direction::Next)
             .await
             .expect("fetch_participants for sentinel");
         assert!(
@@ -798,7 +799,7 @@ mod sentinel_query_tests {
         );
 
         // 3) fetch_pool_transactions — would surface the seeded tx.
-        let txs = fetch_pool_transactions(&pool, SENTINEL_HEX, 10, None)
+        let txs = fetch_pool_transactions(&pool, SENTINEL_HEX, 10, None, Direction::Next)
             .await
             .expect("fetch_pool_transactions for sentinel");
         assert!(

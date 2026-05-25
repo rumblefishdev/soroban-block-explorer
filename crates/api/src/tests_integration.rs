@@ -229,14 +229,13 @@ async fn list_endpoint_returns_paginated_envelope_against_real_db() {
     let page = &json["page"];
     assert_eq!(page["limit"], 3, "page.limit not echoed: {json}");
     assert!(
-        page["has_more"].is_boolean(),
-        "page.has_more not bool: {json}"
+        page["next_cursor"].is_string() || page["next_cursor"].is_null(),
+        "page.next_cursor must be string or null: {json}"
     );
-    // `cursor` is `Option<String>` with `skip_serializing_if = Option::is_none`
-    // on the empty-page case — either a string or absent is valid.
-    if let Some(c) = page.get("cursor") {
-        assert!(c.is_string() || c.is_null(), "page.cursor bad type: {json}");
-    }
+    assert!(
+        page["prev_cursor"].is_string() || page["prev_cursor"].is_null(),
+        "page.prev_cursor must be string or null: {json}"
+    );
 }
 
 /// Locks the JOIN to `operations_appearances` — the no-filter list test
@@ -264,8 +263,8 @@ async fn list_endpoint_filter_op_type_returns_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     assert_eq!(json["page"]["limit"], 3, "page.limit not echoed: {json}");
     assert!(
-        json["page"]["has_more"].is_boolean(),
-        "page.has_more not bool: {json}"
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
     );
 }
 
@@ -690,8 +689,8 @@ async fn assets_list_returns_paginated_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     assert_eq!(json["page"]["limit"], 5, "page.limit not echoed: {json}");
     assert!(
-        json["page"]["has_more"].is_boolean(),
-        "page.has_more not bool: {json}"
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
     );
 }
 
@@ -1006,7 +1005,7 @@ async fn assets_native_transactions_returns_empty_page_against_real_db() {
         0,
         "native asset must produce empty transactions page: {json}"
     );
-    assert_eq!(json["page"]["has_more"], false);
+    assert!(json["page"]["next_cursor"].is_null());
 }
 
 /// Full request → response → next cursor → request chain.
@@ -1053,13 +1052,13 @@ async fn cursor_round_trip_no_overlap_against_real_db() {
     );
 
     let data1 = page1["data"].as_array().expect("data array").clone();
-    if data1.is_empty() || page1["page"]["has_more"] != true {
+    if data1.is_empty() || !page1["page"]["next_cursor"].is_string() {
         eprintln!("DB has <2 transactions — skipping continuation assertions");
         return;
     }
-    let cursor = page1["page"]["cursor"]
+    let cursor = page1["page"]["next_cursor"]
         .as_str()
-        .expect("page.cursor present when has_more=true")
+        .expect("page.next_cursor present when more pages exist")
         .to_string();
     let hash1 = data1[0]["hash"].as_str().unwrap().to_string();
 
@@ -1091,7 +1090,7 @@ async fn cursor_round_trip_no_overlap_against_real_db() {
         );
     }
     // page2.cursor either advances to a new value or is absent on tail.
-    if let Some(next) = page2["page"]["cursor"].as_str() {
+    if let Some(next) = page2["page"]["next_cursor"].as_str() {
         assert_ne!(
             next, cursor,
             "page2 cursor identical to page1 — no progress"
@@ -1268,11 +1267,11 @@ async fn lp_participants_e2e_sort_filter_pagination() {
         (pct_top - 50.0).abs() < 1e-9,
         "expected ~50.0%, got {pct_top}"
     );
-    assert_eq!(
-        page1["page"]["has_more"], true,
+    assert!(
+        page1["page"]["next_cursor"].is_string(),
         "second page must exist (3rd row is filtered, 2nd remains)"
     );
-    let cursor = page1["page"]["cursor"]
+    let cursor = page1["page"]["next_cursor"]
         .as_str()
         .expect("cursor present when has_more=true")
         .to_string();
@@ -1307,8 +1306,8 @@ async fn lp_participants_e2e_sort_filter_pagination() {
         "expected ~25.0%, got {pct_mid}"
     );
     // Tail flag — third row is zero-shares, filtered out, so no page 3.
-    assert_eq!(
-        page2["page"]["has_more"], false,
+    assert!(
+        page2["page"]["next_cursor"].is_null(),
         "zero-share row must be filtered → page2 is the tail"
     );
 
@@ -1337,6 +1336,139 @@ async fn lp_participants_e2e_sort_filter_pagination() {
     assert!(
         !accounts.contains(&ACC_ZERO),
         "zero-share row must be filtered: {accounts:?}"
+    );
+
+    teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
+}
+
+/// SharesCursor (`(shares: NUMERIC(28,7), account_id: i64)`) Prev
+/// round-trip — task 0254 reverse-walk verification for the only
+/// multi-key cursor type with non-trivial Postgres compare semantics.
+///
+/// Forward walk: page 1 (limit=1) → next_cursor C1 → page 2 (cursor=C1)
+/// → response carries prev_cursor P1. Backward walk: send P1 as
+/// `?cursor=` → the same page 1 content reappears. Asserts:
+///
+///   * prev_cursor is non-null on the mid-walk page 2,
+///   * its `dir=prev` envelope decodes correctly server-side,
+///   * NUMERIC(28,7) compare under ASC `>` round-trips byte-identical
+///     to the forward DESC `<` walk (no precision loss, no off-by-one
+///     in shares values),
+///   * the rendered participants list matches page 1's original
+///     account_id ordering (ACC_TOP first), proving the helper's
+///     `rows.reverse()` step lands the page in DESC presentation.
+#[tokio::test]
+async fn lp_participants_prev_cursor_round_trip_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping 0254 LP participants Prev test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping 0254 LP participants Prev test");
+            return;
+        }
+    };
+
+    // Distinct fixture from `lp_participants_e2e_sort_filter_pagination`
+    // so the tests can run concurrently without seed/teardown stepping
+    // on each other.
+    const POOL_HEX: &str = "0254000000000000000000000000000000000000000000000000000000000254";
+    const ACC_TOP: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVTOP";
+    const ACC_MID: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVMID";
+    const ACC_ZERO: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0254PREVZRO";
+
+    teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
+    setup_lp_e2e_fixture(&pool, POOL_HEX, ACC_TOP, ACC_MID, ACC_ZERO).await;
+
+    // Page 1 (no cursor): expect ACC_TOP, no prev_cursor (first page).
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page1) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "page1: {page1}");
+    let page1_account = page1["data"][0]["account"]
+        .as_str()
+        .expect("page1 account")
+        .to_string();
+    let page1_shares = page1["data"][0]["shares"]
+        .as_str()
+        .expect("page1 shares")
+        .to_string();
+    assert_eq!(page1_account, ACC_TOP, "highest-shares account first");
+    assert!(
+        page1["page"]["prev_cursor"].is_null(),
+        "page1 must not carry prev_cursor: {page1}"
+    );
+    let next_cursor = page1["page"]["next_cursor"]
+        .as_str()
+        .expect("next_cursor present on mid-walk page 1")
+        .to_string();
+
+    // Page 2 via next_cursor: expect ACC_MID + prev_cursor populated.
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page2) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "page2: {page2}");
+    assert_eq!(page2["data"][0]["account"], ACC_MID);
+    let prev_cursor = page2["page"]["prev_cursor"]
+        .as_str()
+        .expect("prev_cursor present on mid-walk page 2 (task 0254)")
+        .to_string();
+
+    // Backward walk via prev_cursor: must return the same content as
+    // the original page 1 (cursor symmetry + NUMERIC compare integrity).
+    let app = build_app(pool.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/liquidity-pools/{POOL_HEX}/participants?limit=1&cursor={prev_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, page1_prime) = body_json(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "page1' (via prev_cursor): {page1_prime}"
+    );
+    assert_eq!(
+        page1_prime["data"][0]["account"]
+            .as_str()
+            .expect("page1' account"),
+        page1_account,
+        "Prev round-trip must return the original page 1 account_id (ACC_TOP)"
+    );
+    assert_eq!(
+        page1_prime["data"][0]["shares"]
+            .as_str()
+            .expect("page1' shares"),
+        page1_shares,
+        "Prev round-trip must preserve NUMERIC(28,7) shares value byte-identical"
     );
 
     teardown_lp_e2e_fixture(&pool, POOL_HEX, &[ACC_TOP, ACC_MID, ACC_ZERO]).await;
@@ -1956,7 +2088,10 @@ async fn ledgers_list_returns_paginated_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     let page = &json["page"];
     assert_eq!(page["limit"], 3, "page.limit: {json}");
-    assert!(page["has_more"].is_boolean(), "page.has_more: {json}");
+    assert!(
+        page["next_cursor"].is_string() || page["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
+    );
 
     // Per-row shape — first row, if present.
     if let Some(row) = json["data"].get(0) {
@@ -2000,11 +2135,11 @@ async fn ledgers_cursor_round_trip_no_overlap_against_real_db() {
     let (status_a, json_a) = body_json(resp_a).await;
     assert_eq!(status_a, StatusCode::OK, "page A: {json_a}");
     let data_a = json_a["data"].as_array().cloned().unwrap_or_default();
-    if data_a.len() < 2 || !json_a["page"]["has_more"].as_bool().unwrap_or(false) {
+    if data_a.len() < 2 || json_a["page"]["next_cursor"].is_null() {
         eprintln!("DB has fewer than 2 ledgers or no more — skipping overlap assertion");
         return;
     }
-    let cursor = json_a["page"]["cursor"].as_str().unwrap().to_owned();
+    let cursor = json_a["page"]["next_cursor"].as_str().unwrap().to_owned();
 
     // Page B
     let resp_b = app
@@ -2296,16 +2431,13 @@ async fn ledgers_detail_embedded_cursor_traversal_against_real_db() {
         .cloned()
         .unwrap_or_default();
     assert!(!txs_a.is_empty(), "page A empty: {json_a}");
-    if !json_a["transactions"]["page"]["has_more"]
-        .as_bool()
-        .unwrap_or(false)
-    {
+    if json_a["transactions"]["page"]["next_cursor"].is_null() {
         eprintln!("ledger {seq} reported <2 retrievable txs — skipping overlap assertion");
         return;
     }
-    let cursor = json_a["transactions"]["page"]["cursor"]
+    let cursor = json_a["transactions"]["page"]["next_cursor"]
         .as_str()
-        .expect("page A has_more=true must include cursor")
+        .expect("forward cursor present when more pages exist")
         .to_owned();
 
     // Page B — same `:sequence`, with the returned cursor.
@@ -3601,8 +3733,8 @@ async fn accounts_transactions_returns_paginated_envelope_against_real_db() {
     assert!(json["data"].is_array(), "data not array: {json}");
     assert!(json["page"]["limit"].is_number(), "page.limit: {json}");
     assert!(
-        json["page"]["has_more"].is_boolean(),
-        "page.has_more: {json}"
+        json["page"]["next_cursor"].is_string() || json["page"]["next_cursor"].is_null(),
+        "page.next_cursor must be string or null"
     );
 
     if let Some(row) = json["data"].get(0) {
@@ -3696,9 +3828,9 @@ async fn accounts_transactions_indexed_account_zero_participations_returns_empty
         json["data"].is_array() && json["data"].as_array().unwrap().is_empty(),
         "data should be empty: {json}"
     );
-    assert_eq!(json["page"]["has_more"], false, "has_more: {json}");
+    assert!(json["page"]["next_cursor"].is_null(), "has_more: {json}");
     assert!(
-        json["page"]["cursor"].is_null(),
+        json["page"]["next_cursor"].is_null(),
         "cursor should be absent: {json}"
     );
 }
@@ -3752,11 +3884,11 @@ async fn accounts_transactions_cursor_round_trip_no_overlap_against_real_db() {
     let (status_a, json_a) = body_json(resp_a).await;
     assert_eq!(status_a, StatusCode::OK, "page A: {json_a}");
     let data_a = json_a["data"].as_array().cloned().unwrap_or_default();
-    if data_a.len() < 2 || !json_a["page"]["has_more"].as_bool().unwrap_or(false) {
+    if data_a.len() < 2 || json_a["page"]["next_cursor"].is_null() {
         eprintln!("DB returned fewer than 2 + has_more — skipping overlap assertion");
         return;
     }
-    let cursor = json_a["page"]["cursor"].as_str().unwrap().to_owned();
+    let cursor = json_a["page"]["next_cursor"].as_str().unwrap().to_owned();
 
     let resp_b = app
         .oneshot(
@@ -4064,4 +4196,344 @@ async fn search_cache_control_no_store_against_real_db() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
+}
+
+// ---------------------------------------------------------------------------
+// Cursor matrix — direction-aware pagination (task 0254)
+//
+// Validates the `next_cursor` + `prev_cursor` contract on `GET /v1/ledgers`:
+//
+//   * first page  : `prev_cursor` null, `next_cursor` Some
+//   * middle page : both Some
+//   * last page   : `next_cursor` null, `prev_cursor` Some (when input present)
+//   * round-trip  : page1.next_cursor → page2; page2.prev_cursor → page1'
+//                   that matches the original page 1's row identities.
+//   * walk match  : forward 4× then backward 3× yields the same row
+//                   sequences (modulo presentation order).
+//
+// Ledgers chosen as the reference endpoint: simplest cursor payload
+// (`TsIdCursor`), immutable table, deterministic ordering. Other
+// endpoints follow the same algebra — extend this pattern when the
+// integration matrix is widened.
+// ---------------------------------------------------------------------------
+
+/// Helper: open the running test DB or skip cleanly. Mirrors the
+/// idiom used by every other DB-touching test in this module.
+async fn cursor_matrix_pool() -> Option<PgPool> {
+    let database_url = std::env::var("DATABASE_URL").ok()?;
+    PgPool::connect(&database_url).await.ok()
+}
+
+#[tokio::test]
+async fn ledgers_first_page_omits_prev_cursor() {
+    let Some(pool) = cursor_matrix_pool().await else {
+        eprintln!("DATABASE_URL unset/unreachable — skipping cursor matrix test");
+        return;
+    };
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/ledgers?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let data = json["data"].as_array().cloned().unwrap_or_default();
+    if data.is_empty() {
+        eprintln!("DB empty — skipping first-page assertion");
+        return;
+    }
+    assert!(
+        json["page"]["prev_cursor"].is_null(),
+        "first page must omit prev_cursor: {json}"
+    );
+    if json["page"]["next_cursor"].is_string() {
+        assert!(
+            json["page"]["next_cursor"].as_str().is_some(),
+            "has_more=true requires cursor: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn ledgers_middle_page_emits_both_cursors() {
+    let Some(pool) = cursor_matrix_pool().await else {
+        return;
+    };
+    let app = build_app(pool);
+
+    // Page 1.
+    let resp1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/ledgers?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json1) = body_json(resp1).await;
+    let Some(cursor1) = json1["page"]["next_cursor"].as_str() else {
+        eprintln!("page 1 has no cursor — DB too small, skipping");
+        return;
+    };
+
+    // Page 2 — should expose both cursors (if more rows follow).
+    let resp2 = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit=2&cursor={cursor1}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status2, json2) = body_json(resp2).await;
+    assert_eq!(status2, StatusCode::OK, "{json2}");
+    assert!(
+        json2["page"]["prev_cursor"].as_str().is_some(),
+        "middle page must emit prev_cursor: {json2}"
+    );
+    // `cursor` Some when more pages follow; None on the tail. Both
+    // valid on this assertion — we only insist prev_cursor is set.
+}
+
+#[tokio::test]
+async fn ledgers_prev_cursor_round_trip_returns_original_page() {
+    // Walk forward to page 2, then use page 2's `prev_cursor` to walk
+    // backward to page 1'. Assert page 1' is the same set of rows
+    // as the original page 1 (cursor symmetry).
+    let Some(pool) = cursor_matrix_pool().await else {
+        return;
+    };
+    let app = build_app(pool);
+
+    let resp1 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/ledgers?limit=3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json1) = body_json(resp1).await;
+    let seqs1: Vec<i64> = json1["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+    let Some(cursor1) = json1["page"]["next_cursor"].as_str().map(str::to_owned) else {
+        eprintln!("DB too small for round-trip test — skipping");
+        return;
+    };
+
+    let resp2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit=3&cursor={cursor1}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json2) = body_json(resp2).await;
+    let Some(prev2) = json2["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+        eprintln!("page 2 has no prev_cursor — skipping");
+        return;
+    };
+
+    let resp1b = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit=3&cursor={prev2}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status1b, json1b) = body_json(resp1b).await;
+    assert_eq!(status1b, StatusCode::OK, "{json1b}");
+    let seqs1b: Vec<i64> = json1b["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+
+    assert_eq!(
+        seqs1, seqs1b,
+        "prev_cursor round-trip must yield identical rows (page 1 = {seqs1:?}, page 1' via prev_cursor = {seqs1b:?})"
+    );
+}
+
+#[tokio::test]
+async fn ledgers_forward_then_backward_walk_matches() {
+    // Walk forward 4 pages, capture row sets. Then walk back 3 pages
+    // via prev_cursor (page 4 → 3 → 2 → 1). Each backward step must
+    // produce the same row set as the corresponding forward step,
+    // proving cursor symmetry across the matrix. Loop range tracks
+    // the backward symmetry: we need a page 4 to anchor the backward
+    // walk that visits pages 3, 2, 1, so the last forward fetch
+    // (iter 3) must have a `next_cursor` we can land on but then
+    // re-fetch via the prev_cursor chain.
+    let Some(pool) = cursor_matrix_pool().await else {
+        return;
+    };
+    let app = build_app(pool);
+
+    const LIMIT: u32 = 2;
+    let mut forward_seqs: Vec<Vec<i64>> = vec![];
+    let mut forward_cursors: Vec<Option<String>> = vec![];
+    let mut cursor: Option<String> = None;
+
+    for _ in 0..4 {
+        let uri = match &cursor {
+            Some(c) => format!("/v1/ledgers?limit={LIMIT}&cursor={c}"),
+            None => format!("/v1/ledgers?limit={LIMIT}"),
+        };
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "forward: {json}");
+        let seqs: Vec<i64> = json["data"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|r| r["sequence"].as_i64().unwrap())
+            .collect();
+        forward_seqs.push(seqs);
+        let Some(next) = json["page"]["next_cursor"].as_str() else {
+            eprintln!(
+                "DB too small for forward walk (needs ≥4 pages × {LIMIT} = ≥8 ledgers) — skipping"
+            );
+            return;
+        };
+        forward_cursors.push(Some(next.to_owned()));
+        cursor = Some(next.to_owned());
+    }
+
+    // Walk backward from page 4. Use `forward_cursors[2]` (the cursor
+    // that fetched page 4 on the forward walk) so we can re-fetch
+    // page 4 and read its prev_cursor.
+    let last_uri = format!(
+        "/v1/ledgers?limit={LIMIT}&cursor={}",
+        forward_cursors[2].as_ref().unwrap()
+    );
+    let resp_last = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&last_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json_last) = body_json(resp_last).await;
+    let Some(prev_to_p3) = json_last["page"]["prev_cursor"].as_str().map(str::to_owned) else {
+        eprintln!("page 4 has no prev_cursor — DB shape unexpected, skipping");
+        return;
+    };
+
+    // Backward step 1 of 3: page 4 → page 3.
+    let resp_back3 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev_to_p3}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json_back3) = body_json(resp_back3).await;
+    let seqs_back3: Vec<i64> = json_back3["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        forward_seqs[2], seqs_back3,
+        "backward step to page 3 must match forward page 3 (forward={:?}, backward={seqs_back3:?})",
+        forward_seqs[2]
+    );
+
+    // Backward step 2 of 3: page 3 → page 2.
+    let Some(prev_to_p2) = json_back3["page"]["prev_cursor"]
+        .as_str()
+        .map(str::to_owned)
+    else {
+        eprintln!("page 3 (via backward) has no prev_cursor — skipping");
+        return;
+    };
+    let resp_back2 = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev_to_p2}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json_back2) = body_json(resp_back2).await;
+    let seqs_back2: Vec<i64> = json_back2["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        forward_seqs[1], seqs_back2,
+        "backward step to page 2 must match forward page 2 (forward={:?}, backward={seqs_back2:?})",
+        forward_seqs[1]
+    );
+
+    // Backward step 3 of 3: page 2 → page 1.
+    let Some(prev_to_p1) = json_back2["page"]["prev_cursor"]
+        .as_str()
+        .map(str::to_owned)
+    else {
+        eprintln!("page 2 (via backward) has no prev_cursor — skipping");
+        return;
+    };
+    let resp_back1 = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/ledgers?limit={LIMIT}&cursor={prev_to_p1}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, json_back1) = body_json(resp_back1).await;
+    let seqs_back1: Vec<i64> = json_back1["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r["sequence"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        forward_seqs[0], seqs_back1,
+        "backward step to page 1 must match forward page 1 (forward={:?}, backward={seqs_back1:?})",
+        forward_seqs[0]
+    );
 }

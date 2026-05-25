@@ -77,6 +77,11 @@ pub const INVALID_SEQUENCE: &str = "invalid_sequence";
 /// cause is logged server-side and never returned to the client.
 pub const DB_ERROR: &str = "db_error";
 
+/// Archive XDR fetch (S3, per ADR 0029) failed or returned incomplete
+/// data. Surfaces as HTTP 500; per project policy S3 is a hard
+/// dependency for endpoints that runtime-fetch ledger XDR.
+pub const ARCHIVE_ERROR: &str = "archive_error";
+
 /// `q` query parameter on `/v1/search` failed shape validation: missing,
 /// empty after trim, or longer than the per-endpoint byte cap
 /// (`search::handlers::MAX_Q_LEN`, currently 256). Distinct from

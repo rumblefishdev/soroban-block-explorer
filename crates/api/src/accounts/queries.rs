@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
 #[derive(Debug)]
 pub struct AccountHeaderRow {
@@ -128,11 +128,13 @@ pub async fn fetch_transactions(
     account_id: i64,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<AccountTxRow>, sqlx::Error> {
     let cursor_ts = cursor.map(|c| c.ts);
     let cursor_id = cursor.map(|c| c.id);
+    let (op, order) = direction_sql(direction);
 
-    let raw: Vec<PgRow> = sqlx::query(
+    let sql = format!(
         "SELECT \
              t.id, \
              encode(t.hash, 'hex')          AS hash, \
@@ -158,16 +160,18 @@ pub async fn fetch_transactions(
                AND oa.created_at     = t.created_at \
          ) ops ON TRUE \
          WHERE tp.account_id = $1 \
-           AND ($3::timestamptz IS NULL OR (tp.created_at, tp.transaction_id) < ($3, $4)) \
-         ORDER BY tp.created_at DESC, tp.transaction_id DESC \
-         LIMIT $2",
-    )
-    .bind(account_id)
-    .bind(limit)
-    .bind(cursor_ts)
-    .bind(cursor_id)
-    .fetch_all(pool)
-    .await?;
+           AND ($3::timestamptz IS NULL OR (tp.created_at, tp.transaction_id) {op} ($3, $4)) \
+         ORDER BY tp.created_at {order}, tp.transaction_id {order} \
+         LIMIT $2"
+    );
+
+    let raw: Vec<PgRow> = sqlx::query(&sql)
+        .bind(account_id)
+        .bind(limit)
+        .bind(cursor_ts)
+        .bind(cursor_id)
+        .fetch_all(pool)
+        .await?;
 
     Ok(raw
         .iter()

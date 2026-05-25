@@ -23,7 +23,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 use crate::transactions::dto::TransactionListItem;
 
 use super::dto::LedgerListItem;
@@ -99,7 +99,8 @@ impl From<LedgerTxRow> for TransactionListItem {
 /// Fetch one page of ledgers ordered by `(closed_at DESC, sequence DESC)`.
 ///
 /// `limit` is the requested page size; the caller is expected to pass
-/// `limit + 1` so the pagination layer can detect `has_more`. Cursor is
+/// `limit + 1` so the pagination layer can detect a further page via
+/// the extra peek row. Cursor is
 /// the project-default `TsIdCursor` — `cursor.ts` carries the row's
 /// `closed_at` and `cursor.id` carries the row's `sequence`. Mapping is
 /// fine because cursors are opaque per ADR 0008 (clients never construct
@@ -108,11 +109,13 @@ pub async fn fetch_list(
     pool: &PgPool,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<LedgerListItem>, sqlx::Error> {
     let cursor_closed_at = cursor.map(|c| c.ts);
     let cursor_sequence = cursor.map(|c| c.id);
+    let (op, order) = direction_sql(direction);
 
-    sqlx::query_as::<_, LedgerListItem>(
+    let sql = format!(
         "SELECT \
             l.sequence, \
             encode(l.hash, 'hex')   AS hash, \
@@ -122,15 +125,17 @@ pub async fn fetch_list(
             l.base_fee \
         FROM ledgers l \
         WHERE $2::timestamptz IS NULL \
-           OR (l.closed_at, l.sequence) < ($2, $3) \
-        ORDER BY l.closed_at DESC, l.sequence DESC \
-        LIMIT $1",
-    )
-    .bind(limit)
-    .bind(cursor_closed_at)
-    .bind(cursor_sequence)
-    .fetch_all(pool)
-    .await
+           OR (l.closed_at, l.sequence) {op} ($2, $3) \
+        ORDER BY l.closed_at {order}, l.sequence {order} \
+        LIMIT $1"
+    );
+
+    sqlx::query_as::<_, LedgerListItem>(&sql)
+        .bind(limit)
+        .bind(cursor_closed_at)
+        .bind(cursor_sequence)
+        .fetch_all(pool)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -188,18 +193,21 @@ pub async fn fetch_by_sequence(
 /// `closed_at`), so only one monthly partition is touched. Cursor is
 /// `(created_at, id) DESC` reusing the `TsIdCursor` codec — same
 /// convention as the top-level `GET /v1/transactions`. Caller passes
-/// `limit + 1` for `has_more` detection.
+/// `limit + 1` so the pagination layer can detect a further page via
+/// the extra peek row.
 pub async fn fetch_transactions(
     pool: &PgPool,
     ledger_sequence: i64,
     closed_at: DateTime<Utc>,
     cursor: Option<&TsIdCursor>,
     limit: i64,
+    direction: Direction,
 ) -> Result<Vec<LedgerTxRow>, sqlx::Error> {
     let cursor_ts = cursor.map(|c| c.ts);
     let cursor_id = cursor.map(|c| c.id);
+    let (op, order) = direction_sql(direction);
 
-    sqlx::query_as::<_, LedgerTxRow>(
+    let sql = format!(
         "SELECT \
             t.id, \
             encode(t.hash, 'hex')          AS hash, \
@@ -242,15 +250,17 @@ pub async fn fetch_transactions(
         ) ctr ON TRUE \
         WHERE t.ledger_sequence = $1 \
           AND t.created_at      = $2 \
-          AND ($3::timestamptz IS NULL OR (t.created_at, t.id) < ($3, $4)) \
-        ORDER BY t.created_at DESC, t.id DESC \
-        LIMIT $5",
-    )
-    .bind(ledger_sequence)
-    .bind(closed_at)
-    .bind(cursor_ts)
-    .bind(cursor_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
+          AND ($3::timestamptz IS NULL OR (t.created_at, t.id) {op} ($3, $4)) \
+        ORDER BY t.created_at {order}, t.id {order} \
+        LIMIT $5"
+    );
+
+    sqlx::query_as::<_, LedgerTxRow>(&sql)
+        .bind(ledger_sequence)
+        .bind(closed_at)
+        .bind(cursor_ts)
+        .bind(cursor_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
 }

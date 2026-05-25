@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
 #[derive(Debug)]
 pub struct ContractRow {
@@ -142,7 +142,9 @@ pub async fn fetch_invocation_appearances(
     contract_surrogate_id: i64,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, sqlx::Error> {
+    let (op, order) = direction_sql(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sia.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \
@@ -158,13 +160,15 @@ pub async fn fetch_invocation_appearances(
     );
     qb.push_bind(contract_surrogate_id);
     if let Some(c) = cursor {
-        qb.push(" AND (sia.created_at, sia.transaction_id) < (");
+        qb.push(format!(" AND (sia.created_at, sia.transaction_id) {op} ("));
         qb.push_bind(c.ts);
         qb.push(", ");
         qb.push_bind(c.id);
         qb.push(")");
     }
-    qb.push(" ORDER BY sia.created_at DESC, sia.transaction_id DESC LIMIT ");
+    qb.push(format!(
+        " ORDER BY sia.created_at {order}, sia.transaction_id {order} LIMIT "
+    ));
     qb.push_bind(limit + 1);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
@@ -199,7 +203,9 @@ pub async fn fetch_event_appearances(
     contract_surrogate_id: i64,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<EventAppearanceRow>, sqlx::Error> {
+    let (op, order) = direction_sql(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sea.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \
@@ -213,13 +219,15 @@ pub async fn fetch_event_appearances(
     );
     qb.push_bind(contract_surrogate_id);
     if let Some(c) = cursor {
-        qb.push(" AND (sea.created_at, sea.transaction_id) < (");
+        qb.push(format!(" AND (sea.created_at, sea.transaction_id) {op} ("));
         qb.push_bind(c.ts);
         qb.push(", ");
         qb.push_bind(c.id);
         qb.push(")");
     }
-    qb.push(" ORDER BY sea.created_at DESC, sea.transaction_id DESC LIMIT ");
+    qb.push(format!(
+        " ORDER BY sea.created_at {order}, sea.transaction_id {order} LIMIT "
+    ));
     qb.push_bind(limit + 1);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;

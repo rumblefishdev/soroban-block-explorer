@@ -69,15 +69,17 @@ pub async fn list_nfts(
         return resp;
     }
 
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
     let resolved = ResolvedListParams {
-        limit: i64::from(pagination.limit) + 1,
+        limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         filter_collection: params.filter_collection,
         filter_contract_id: params.filter_contract_id,
         filter_name: params.filter_name,
     };
 
-    let mut rows = match fetch_list(&state.db, &resolved).await {
+    let mut rows = match fetch_list(&state.db, &resolved, direction).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in list_nfts: {e}");
@@ -85,9 +87,13 @@ pub async fn list_nfts(
         }
     };
 
-    let page = finalize_page(&mut rows, pagination.limit, |r| {
-        cursor::encode(&NftIdCursor { id: r.id })
-    });
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&NftIdCursor { id: r.id }, dir),
+    );
 
     let mut resp = Json(into_envelope(rows, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -216,23 +222,41 @@ pub async fn list_nft_transfers(
         }
     }
 
-    let fetch_limit = i64::from(pagination.limit) + 1;
-    let mut rows =
-        match fetch_transfers(&state.db, id, pagination.cursor.as_ref(), fetch_limit).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("DB error in fetch_transfers({id}): {e}");
-                return errors::internal_error(errors::DB_ERROR, "database error");
-            }
-        };
+    let fetch_limit = pagination.fetch_limit();
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
+    let mut rows = match fetch_transfers(
+        &state.db,
+        id,
+        pagination.cursor.as_ref(),
+        fetch_limit,
+        direction,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error in fetch_transfers({id}): {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
 
-    let page = finalize_page(&mut rows, pagination.limit, |last| {
-        cursor::encode(&NftTransferCursor {
-            created_at: last.created_at,
-            ledger_sequence: last.ledger_sequence,
-            event_order: last.event_order,
-        })
-    });
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, last| {
+            cursor::encode(
+                &NftTransferCursor {
+                    created_at: last.created_at,
+                    ledger_sequence: last.ledger_sequence,
+                    event_order: last.event_order,
+                },
+                dir,
+            )
+        },
+    );
 
     let mut resp = Json(into_envelope(rows, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);

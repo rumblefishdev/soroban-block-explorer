@@ -71,7 +71,7 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
 export function AccountTransactions({ accountId }: { accountId: string }) {
   // Cursors are account-scoped — `resetKey` drops the URL cursor when
   // the user navigates to a different account.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     resetKey: accountId,
   });
 
@@ -81,7 +81,11 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   let body: ReactNode;
   if (isLoading) {
@@ -123,7 +127,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
         caption="Latest results"
         canPrev={canPrev}
         canNext={canNext}
-        onPrev={goPrev}
+        onPrev={handlePrev}
         onNext={handleNext}
       />
     </SectionCard>

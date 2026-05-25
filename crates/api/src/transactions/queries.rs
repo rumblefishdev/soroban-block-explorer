@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
 #[derive(Debug)]
 pub struct TxListRow {
@@ -99,8 +99,14 @@ fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bo
     *has_where = true;
 }
 
-fn push_cursor_predicate(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, cursor: &TsIdCursor) {
-    qb.push(" (t.created_at, t.id) < (");
+fn push_cursor_predicate(
+    qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
+    cursor: &TsIdCursor,
+    op: &str,
+) {
+    qb.push(" (t.created_at, t.id) ");
+    qb.push(op);
+    qb.push(" (");
     qb.push_bind(cursor.ts);
     qb.push(", ");
     qb.push_bind(cursor.id);
@@ -172,24 +178,35 @@ const LIST_LATERAL_BLOCKS: &str = "\
 pub async fn fetch_list(
     pool: &PgPool,
     params: &ResolvedListParams,
+    direction: Direction,
 ) -> Result<Vec<TxListRow>, sqlx::Error> {
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
+    let (op, order) = direction_sql(direction);
 
     match (&params.contract_id, params.op_type) {
         (Some(cid), op_type_opt) => {
             qb.push("WITH matched_tx AS (SELECT DISTINCT created_at, transaction_id FROM (");
-            push_contract_union_arm(&mut qb, "operations_appearances", cid, &params.cursor);
+            push_contract_union_arm(&mut qb, "operations_appearances", cid, &params.cursor, op);
             qb.push(" UNION ");
             push_contract_union_arm(
                 &mut qb,
                 "soroban_invocations_appearances",
                 cid,
                 &params.cursor,
+                op,
             );
             qb.push(" UNION ");
-            push_contract_union_arm(&mut qb, "soroban_events_appearances", cid, &params.cursor);
+            push_contract_union_arm(
+                &mut qb,
+                "soroban_events_appearances",
+                cid,
+                &params.cursor,
+                op,
+            );
 
-            qb.push(") u ORDER BY created_at DESC, transaction_id DESC LIMIT ");
+            qb.push(format!(
+                ") u ORDER BY created_at {order}, transaction_id {order} LIMIT "
+            ));
             // 4× over-fetch — a single tx may appear in up to all three arms.
             qb.push_bind(params.limit * 4);
             qb.push(") ");
@@ -230,13 +247,15 @@ pub async fn fetch_list(
             );
             qb.push_bind(op_type);
             if let Some(c) = &params.cursor {
-                qb.push(" AND (oa.created_at, oa.transaction_id) < (");
+                qb.push(format!(" AND (oa.created_at, oa.transaction_id) {op} ("));
                 qb.push_bind(c.ts);
                 qb.push(", ");
                 qb.push_bind(c.id);
                 qb.push(")");
             }
-            qb.push(" ORDER BY oa.created_at DESC, oa.transaction_id DESC, oa.id LIMIT ");
+            qb.push(format!(
+                " ORDER BY oa.created_at {order}, oa.transaction_id {order}, oa.id LIMIT "
+            ));
             qb.push_bind(params.limit * 4);
             qb.push(") ");
 
@@ -256,7 +275,7 @@ pub async fn fetch_list(
             // Re-applied: CTE LIMIT $1*4 may overshoot the cursor boundary.
             if let Some(cursor) = &params.cursor {
                 push_glue(&mut qb, &mut has_where);
-                push_cursor_predicate(&mut qb, cursor);
+                push_cursor_predicate(&mut qb, cursor, op);
             }
         }
 
@@ -277,12 +296,14 @@ pub async fn fetch_list(
             }
             if let Some(cursor) = &params.cursor {
                 push_glue(&mut qb, &mut has_where);
-                push_cursor_predicate(&mut qb, cursor);
+                push_cursor_predicate(&mut qb, cursor, op);
             }
         }
     }
 
-    qb.push(" ORDER BY t.created_at DESC, t.id DESC LIMIT ");
+    qb.push(format!(
+        " ORDER BY t.created_at {order}, t.id {order} LIMIT "
+    ));
     qb.push_bind(params.limit + 1);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
@@ -294,6 +315,7 @@ fn push_contract_union_arm<'q>(
     table: &'static str,
     cid_strkey: &'q str,
     cursor: &Option<TsIdCursor>,
+    op: &str,
 ) {
     qb.push("SELECT created_at, transaction_id FROM ");
     qb.push(table);
@@ -301,7 +323,9 @@ fn push_contract_union_arm<'q>(
     qb.push_bind(cid_strkey);
     qb.push(")");
     if let Some(c) = cursor {
-        qb.push(" AND (created_at, transaction_id) < (");
+        qb.push(" AND (created_at, transaction_id) ");
+        qb.push(op);
+        qb.push(" (");
         qb.push_bind(c.ts);
         qb.push(", ");
         qb.push_bind(c.id);
