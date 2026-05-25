@@ -42,7 +42,6 @@ from common import (
     ch_query,
     ch_query_json,
     dump_diff,
-    load_samples,
     read_completed_keys,
     write_tsv_header,
 )
@@ -57,6 +56,28 @@ HORIZON_FLOOR = 56657428
 CH_TIP_FLOOR = 62525000
 
 DEFAULT_ANCHORS = int(os.environ.get("SBE_E20_ANCHORS", "200"))
+
+
+def load_active_pools(n: int) -> list[str]:
+    """Sample pools that have retention-valid op-appearance activity.
+    `samples_pools.txt` includes pools that were created but never
+    traded — those yield `NO_LEDGER` on every anchor. Pull pool hex
+    keys directly from `operations_appearances` so the sample is
+    100 % retention-valid.
+    """
+    sql = f"""
+    SELECT lower(hex(pool_id)) AS pool_hex
+    FROM operations_appearances
+    WHERE pool_id IS NOT NULL
+      AND ledger_sequence > {HORIZON_FLOOR}
+      AND ledger_sequence <= {CH_TIP_FLOOR}
+    GROUP BY pool_id
+    ORDER BY cityHash64(pool_id)
+    LIMIT {n * 2}
+    FORMAT TabSeparated
+    """
+    out = ch_query(sql).splitlines()
+    return [p.strip() for p in out if p.strip()]
 
 
 def sample_ledger_for_pool(pool_hex: str) -> int | None:
@@ -241,11 +262,12 @@ def main() -> int:
     done_keys = read_completed_keys(TSV, ENDPOINT)
     print(f"[E20] {len(done_keys)} anchors already done", file=sys.stderr)
 
-    pools = load_samples("samples_pools.txt")
+    pools = load_active_pools(DEFAULT_ANCHORS)
+    print(f"[E20] {len(pools)} active pools loaded from "
+          f"operations_appearances", file=sys.stderr)
     random.seed(42)
     random.shuffle(pools)
     pools = pools[:DEFAULT_ANCHORS]
-    print(f"[E20] {len(pools)} pool samples", file=sys.stderr)
 
     pilot = int(os.environ.get("SBE_PILOT_LIMIT", "0"))
     if pilot > 0:
