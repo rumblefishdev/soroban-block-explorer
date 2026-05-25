@@ -29,8 +29,9 @@ const PAGE_SIZE = 20;
  * contract, with asset-code search and an asset-type filter. Cursor paginated.
  */
 export default function AssetsListPage() {
-  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
-    useCursorPagination({ filterKeys: ['code', 'type'] });
+  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
+    filterKeys: ['code', 'type'],
+  });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
@@ -48,7 +49,11 @@ export default function AssetsListPage() {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('code', value || null),
@@ -130,7 +135,7 @@ export default function AssetsListPage() {
           caption="Latest results"
           canPrev={canPrev}
           canNext={canNext}
-          onPrev={goPrev}
+          onPrev={handlePrev}
           onNext={handleNext}
         />
       </Card>

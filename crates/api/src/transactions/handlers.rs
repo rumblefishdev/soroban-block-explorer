@@ -80,6 +80,8 @@ pub async fn list_transactions(
         return resp;
     }
 
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
         limit: i64::from(pagination.limit),
         cursor: pagination.cursor,
@@ -88,17 +90,25 @@ pub async fn list_transactions(
         op_type,
     };
 
-    // Fetch limit+1 rows (extra row used to determine has_more).
-    let mut rows: Vec<super::queries::TxListRow> = match fetch_list(&state.db, &resolved).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("DB error in list_transactions: {e}");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
+    // Fetch limit+1 rows — extra peek drives forward-continuation detection.
+    let mut rows: Vec<super::queries::TxListRow> =
+        match fetch_list(&state.db, &resolved, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("DB error in list_transactions: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
 
     // Trim limit+1 → limit, derive page info with cursor built from last row.
-    let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.created_at, |r| r.id);
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |r| r.created_at,
+        |r| r.id,
+    );
 
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
     // belong on the transaction detail endpoint (E3) inside the E3 heavy

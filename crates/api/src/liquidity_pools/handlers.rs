@@ -71,12 +71,15 @@ pub async fn list_participants(
 
     // Fetch limit + 1 so `finalize_page` can detect a next page without
     // a separate count query.
-    let fetch_limit = i64::from(pagination.limit) + 1;
+    let fetch_limit = pagination.fetch_limit();
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
     let mut rows = match fetch_participants(
         &state.db,
         &pool_id,
         pagination.cursor.as_ref(),
         fetch_limit,
+        direction,
     )
     .await
     {
@@ -87,15 +90,25 @@ pub async fn list_participants(
         }
     };
 
-    // Cursor builder gets the kept tail row directly — both the wire
-    // `shares` (NUMERIC string) and the internal `account_id_surrogate`
-    // BIGINT travel inside the opaque payload, never on the wire.
-    let page = finalize_page(&mut rows, pagination.limit, |last| {
-        cursor::encode(&SharesCursor {
-            shares: last.shares.clone(),
-            account_id: last.account_id_surrogate,
-        })
-    });
+    // Cursor builder gets the kept tail / head row directly — both the
+    // wire `shares` (NUMERIC string) and the internal
+    // `account_id_surrogate` BIGINT travel inside the opaque payload,
+    // never on the wire.
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, last| {
+            cursor::encode(
+                &SharesCursor {
+                    shares: last.shares.clone(),
+                    account_id: last.account_id_surrogate,
+                },
+                dir,
+            )
+        },
+    );
 
     let data: Vec<ParticipantItem> = rows
         .into_iter()
@@ -272,8 +285,10 @@ pub async fn list_pools(
         );
     }
 
+    let has_predecessor = pagination.has_predecessor();
+    let direction = pagination.direction;
     let resolved = ResolvedPoolListParams {
-        limit: i64::from(pagination.limit) + 1,
+        limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         asset_a_code: params.filter_asset_a_code,
         asset_a_issuer: params.filter_asset_a_issuer,
@@ -283,7 +298,7 @@ pub async fn list_pools(
         asset_code: normalize_asset_code(params.filter_asset_code),
     };
 
-    let mut rows = match fetch_pool_list(&state.db, &resolved).await {
+    let mut rows = match fetch_pool_list(&state.db, &resolved, direction).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in list_pools: {e}");
@@ -291,12 +306,21 @@ pub async fn list_pools(
         }
     };
 
-    let page = finalize_page(&mut rows, pagination.limit, |r| {
-        cursor::encode(&PoolListCursor {
-            created_at_ledger: r.created_at_ledger,
-            pool_id_hex: r.pool_id_hex.clone(),
-        })
-    });
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| {
+            cursor::encode(
+                &PoolListCursor {
+                    created_at_ledger: r.created_at_ledger,
+                    pool_id_hex: r.pool_id_hex.clone(),
+                },
+                dir,
+            )
+        },
+    );
     let data: Vec<PoolItem> = rows.into_iter().map(map_pool_item).collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
@@ -380,8 +404,9 @@ pub async fn list_pool_transactions(
     let mut rows = match fetch_pool_transactions(
         &state.db,
         &pool_id,
-        i64::from(pagination.limit) + 1,
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        pagination.direction,
     )
     .await
     {
@@ -392,7 +417,14 @@ pub async fn list_pool_transactions(
         }
     };
 
-    let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.created_at, |r| r.id);
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.created_at,
+        |r| r.id,
+    );
     let data: Vec<PoolTransactionItem> = rows
         .into_iter()
         .map(|r| PoolTransactionItem {

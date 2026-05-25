@@ -49,12 +49,15 @@ pub async fn list_ledgers(
     State(state): State<AppState>,
     pagination: Pagination<TsIdCursor>,
 ) -> Response {
-    // Fetch limit+1 rows — the extra row drives `has_more` detection in
-    // `finalize_ts_id_page` below.
+    // Fetch limit+1 rows — the extra peek row drives forward-continuation
+    // detection in `finalize_ts_id_page` below (cursor: Some/None). Direction
+    // propagates straight from the cursor envelope so the SQL walks DESC
+    // (Next) or ASC (Prev).
     let mut rows: Vec<LedgerListItem> = match fetch_list(
         &state.db,
-        i64::from(pagination.limit) + 1,
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        pagination.direction,
     )
     .await
     {
@@ -67,7 +70,14 @@ pub async fn list_ledgers(
 
     // Cursor maps closed_at → ts, sequence → id. Field names are opaque
     // to the client (cursor wire format is base64(JSON), per ADR 0008).
-    let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.closed_at, |r| r.sequence);
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.closed_at,
+        |r| r.sequence,
+    );
 
     let mut resp = Json(into_envelope(rows, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -142,7 +152,8 @@ pub async fn get_ledger(
         header_row.sequence,
         header_row.closed_at,
         pagination.cursor.as_ref(),
-        i64::from(pagination.limit) + 1,
+        pagination.fetch_limit(),
+        pagination.direction,
     )
     .await
     {
@@ -153,7 +164,14 @@ pub async fn get_ledger(
         }
     };
 
-    let tx_page = finalize_ts_id_page(&mut tx_rows, pagination.limit, |r| r.created_at, |r| r.id);
+    let tx_page = finalize_ts_id_page(
+        &mut tx_rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.created_at,
+        |r| r.id,
+    );
 
     let tx_data: Vec<TransactionListItem> = tx_rows.into_iter().map(Into::into).collect();
 

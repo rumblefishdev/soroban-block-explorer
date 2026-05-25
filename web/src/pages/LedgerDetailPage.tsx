@@ -29,7 +29,7 @@ export default function LedgerDetailPage() {
   // Cursors are scoped to a specific ledger's embedded transactions, so
   // navigating to a different ledger (e.g. via LedgerNav prev/next) must
   // drop any cursor lingering in the URL.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     resetKey: sequence,
   });
 
@@ -39,9 +39,10 @@ export default function LedgerDetailPage() {
     valid
   );
 
-  const { canNext, handleNext } = usePageHandlers(
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
     data?.transactions.page,
-    goNext
+    goNext,
+    goPrev
   );
 
   if (!valid) {
@@ -132,7 +133,7 @@ export default function LedgerDetailPage() {
           totalCount={ledger.transaction_count}
           canPrev={canPrev}
           canNext={canNext}
-          onPrev={goPrev}
+          onPrev={handlePrev}
           onNext={handleNext}
         />
       </SectionErrorBoundary>

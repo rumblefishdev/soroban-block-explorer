@@ -31,8 +31,9 @@ type Filters = NonNullable<ListTransactionsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
-  const { state, cursor, canPrev, goNext, goPrev, setFilter } =
-    useCursorPagination({ filterKeys: ['q', 'op'] });
+  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
+    filterKeys: ['q', 'op'],
+  });
   const q = state.filters.q ?? '';
   // Normalise the URL `op` param against the backend enum — see
   // `normalizeOperationType` for the why. Bad / lowercase values
@@ -59,7 +60,11 @@ export default function TransactionsListPage() {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),
@@ -144,7 +149,7 @@ export default function TransactionsListPage() {
           caption="All results"
           canPrev={canPrev}
           canNext={canNext}
-          onPrev={goPrev}
+          onPrev={handlePrev}
           onNext={handleNext}
         />
       </Card>

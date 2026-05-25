@@ -17,11 +17,15 @@ import { useLedgersList } from '../api/index.js';
 import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination();
+  const { cursor, goNext, goPrev } = useCursorPagination();
   const { data, isLoading, isError, error, refetch } = useLedgersList(cursor);
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
+    data?.page,
+    goNext,
+    goPrev
+  );
 
   let body: ReactNode;
   if (isLoading) {
@@ -71,7 +75,7 @@ export default function LedgersListPage() {
           caption="Latest results"
           canPrev={canPrev}
           canNext={canNext}
-          onPrev={goPrev}
+          onPrev={handlePrev}
           onNext={handleNext}
         />
       </Card>

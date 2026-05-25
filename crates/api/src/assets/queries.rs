@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
 #[derive(Debug, Clone)]
 pub struct AssetRow {
@@ -112,7 +112,10 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
 pub async fn fetch_list(
     pool: &PgPool,
     params: &ResolvedListParams,
+    direction: Direction,
 ) -> Result<Vec<AssetRow>, sqlx::Error> {
+    let (op, order) = direction_sql(direction);
+
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(ASSET_SELECT);
     let mut has_where = false;
 
@@ -132,11 +135,11 @@ pub async fn fetch_list(
     }
     if let Some(cursor) = &params.cursor {
         push_glue(&mut qb, &mut has_where);
-        qb.push(" a.id < ");
+        qb.push(format!(" a.id {op} "));
         qb.push_bind(cursor.id);
     }
 
-    qb.push(" ORDER BY a.id DESC LIMIT ");
+    qb.push(format!(" ORDER BY a.id {order} LIMIT "));
     qb.push_bind(params.limit + 1);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
@@ -204,9 +207,11 @@ pub async fn fetch_transactions(
     identity: &AssetIdentity<'_>,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    direction: Direction,
 ) -> Result<Vec<AssetTxRow>, sqlx::Error> {
     let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
     let has_contract = identity.contract_id.is_some();
+    let (op, order) = direction_sql(direction);
 
     // Defensive: never emit `WHERE ()`. The upstream handler routes through
     // `asset_predicate_present`, but `pub fn` callers in the future could
@@ -245,19 +250,19 @@ pub async fn fetch_transactions(
     qb.push(")");
 
     if let Some(c) = cursor {
-        qb.push(" AND (oa.created_at, oa.transaction_id) < (");
+        qb.push(format!(" AND (oa.created_at, oa.transaction_id) {op} ("));
         qb.push_bind(c.ts);
         qb.push(", ");
         qb.push_bind(c.id);
         qb.push(")");
     }
 
-    qb.push(
-        " ORDER BY oa.created_at DESC, oa.transaction_id DESC, oa.id \
-          LIMIT ",
-    );
+    qb.push(format!(
+        " ORDER BY oa.created_at {order}, oa.transaction_id {order}, oa.id \
+          LIMIT "
+    ));
     qb.push_bind(limit * 4);
-    qb.push(
+    qb.push(format!(
         ") \
          SELECT t.id, encode(t.hash, 'hex') AS hash, t.ledger_sequence, \
                 a.account_id AS source_account, t.successful, t.fee_charged, \
@@ -274,9 +279,9 @@ pub async fn fetch_transactions(
              WHERE oa2.transaction_id = t.id \
                AND oa2.created_at     = t.created_at \
          ) ops ON TRUE \
-         ORDER BY t.created_at DESC, t.id DESC \
-         LIMIT ",
-    );
+         ORDER BY t.created_at {order}, t.id {order} \
+         LIMIT "
+    ));
     qb.push_bind(limit + 1);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;

@@ -132,8 +132,9 @@ pub async fn list_account_transactions(
     let mut rows = match fetch_transactions(
         &state.db,
         header.id,
-        i64::from(pagination.limit) + 1,
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        pagination.direction,
     )
     .await
     {
@@ -144,7 +145,14 @@ pub async fn list_account_transactions(
         }
     };
 
-    let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.created_at, |r| r.id);
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.created_at,
+        |r| r.id,
+    );
     let data: Vec<AccountTransactionItem> = rows
         .into_iter()
         .map(|r| AccountTransactionItem {
