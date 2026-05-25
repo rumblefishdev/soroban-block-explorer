@@ -86,7 +86,7 @@ const COLUMN_COUNT = columns.length;
  */
 export function NftTransfers({ nftId }: NftTransfersProps) {
   // Cursors are NFT-scoped — drop the URL cursor on NFT switch.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     resetKey: nftId,
   });
 
@@ -96,7 +96,7 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
 
   let body: ReactNode;
   if (isLoading) {
@@ -147,7 +147,7 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
         caption="Latest results"
         canPrev={canPrev}
         canNext={canNext}
-        onPrev={goPrev}
+        onPrev={handlePrev}
         onNext={handleNext}
       />
     </Card>

@@ -75,7 +75,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   // Namespaced cursor: LP detail mounts PoolParticipants + PoolTransactions
   // simultaneously, so each section needs its own URL key. `resetKey`
   // drops the cursor when the user navigates to a different pool.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     cursorParam: CURSOR_PARAMS.POOL_PARTICIPANTS,
     resetKey: poolId,
   });
@@ -86,7 +86,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
 
   let body: ReactNode;
   if (isLoading) {
@@ -136,7 +136,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
         caption="Latest results"
         canPrev={canPrev}
         canNext={canNext}
-        onPrev={goPrev}
+        onPrev={handlePrev}
         onNext={handleNext}
       />
     </SectionCard>

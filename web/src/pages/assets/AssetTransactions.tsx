@@ -69,7 +69,7 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
  */
 export function AssetTransactions({ assetId }: { assetId: string }) {
   // Cursors are asset-scoped — drop the URL cursor on asset switch.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     resetKey: assetId,
   });
 
@@ -79,7 +79,7 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
 
   let body: ReactNode;
   if (isLoading) {
@@ -121,7 +121,7 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
         caption="Latest results"
         canPrev={canPrev}
         canNext={canNext}
-        onPrev={goPrev}
+        onPrev={handlePrev}
         onNext={handleNext}
       />
     </SectionCard>

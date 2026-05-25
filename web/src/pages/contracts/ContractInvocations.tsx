@@ -73,7 +73,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   // Namespaced cursor: contract detail tabs between Events + Invocations.
   // `resetKey` drops the cursor when the user navigates to a different
   // contract.
-  const { cursor, canPrev, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev } = useCursorPagination({
     cursorParam: CURSOR_PARAMS.CONTRACT_INVOCATIONS,
     resetKey: contractId,
   });
@@ -84,7 +84,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   );
 
   const rows = data?.data ?? [];
-  const { canNext, handleNext } = usePageHandlers(data?.page, goNext);
+  const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(data?.page, goNext, goPrev);
 
   let body: ReactNode;
   if (isLoading) {
@@ -136,7 +136,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
         caption="Latest results"
         canPrev={canPrev}
         canNext={canNext}
-        onPrev={goPrev}
+        onPrev={handlePrev}
         onNext={handleNext}
       />
     </Box>
