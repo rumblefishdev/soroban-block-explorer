@@ -39,12 +39,30 @@ PAGES = 3
 LIMIT = 50
 
 
+def _dec_plain(d: Decimal) -> str:
+    """Format a Decimal as a plain (non-scientific) string so CH's
+    `toDecimal128(literal, 7)` can parse it. `str(Decimal('0E-7'))` is
+    `'0E-7'`, which CH refuses; `format(d, 'f')` gives `'0.0000000'`.
+    """
+    try:
+        return format(d, 'f')
+    except (InvalidOperation, ValueError):
+        return "0"
+
+
 def fetch_participants(pool_hex: str, cursor: tuple | None) -> list[dict]:
     if cursor is None:
         cur_pred = ""
     else:
         shares, aid = cursor
-        cur_pred = f"AND (shares, account_id) < ({shares}, {aid})"
+        # Both literals cast explicitly so CH does not have to guess a
+        # supertype for the row comparison
+        # `(Decimal(38,7), Int64) < (UInt8, Int64)` (Code 386 in
+        # CH 26.3.10).
+        cur_pred = (
+            f"AND (shares, account_id) < "
+            f"(toDecimal128('{_dec_plain(shares)}', 7), toInt64({aid}))"
+        )
     sql = f"""
     SELECT
         toString(shares)                  AS shares,
