@@ -104,3 +104,14 @@ junior reader.
 | 🟠 HIGH | 1 (L-1) |
 | 🟡 MEDIUM | 2 (L-2, L-6) |
 | 🟢 LOW | 0 |
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**Search → tx detail redirect:** Previously redirected to stub (table
+row 1, "✓ redirect works" but landing was empty). Now redirects to a
+real page with hash validation + loading skeleton + error states +
+data sections. Search result-row first-hit click on a tx hit lands at
+`/transactions/:hash` and renders Filip's page. No L-finding changed.
+
+**F-L-1, F-L-2, F-L-3, F-L-4, F-L-5, F-L-6:** STILL STAND. Filip didn't
+touch search.

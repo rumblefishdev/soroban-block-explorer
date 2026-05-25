@@ -138,3 +138,39 @@ hash
 | 🟠 HIGH | 3 (K-1 inherited, K-2, K-3) |
 | 🟡 MEDIUM | 1 (K-4) |
 | 🟢 LOW | 2 (K-5, K-6) |
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**F-K-1 (🟠 HIGH — Wave 1 A1 stub confirmation):** **RESOLVED** in commit
+`a2c1b205`. Real TxDetail page lives at
+`web/src/pages/transaction-detail/index.tsx`; invalid hash now renders
+`NotFoundState entity="transaction"` (line 36). The "outbound from tx
+detail" matrix row also becomes measurable — accounts surface via
+`IdentifierWithCopy type="account"` on source + signatures + flow tree
+destination; contracts surface via `IdentifierWithCopy type="contract"`
+in `OperationJsonDetail` and the `OperationFlowTree` invocation nodes.
+**1.7 re-run scope for E3-outbound:** ~20 min Playwright pass (see
+worklog Phase 4 re-audit queue).
+
+**Validation gap (was "no validation" — A1 cascade):** **RESOLVED.**
+`useTxHashParam.ts:9-12` validates via `isTransactionHash` (libs/ui
+identifier validator); `/transactions/nothash` now renders
+`NotFoundState` instead of stub.
+
+**F-K-2, F-K-3, F-K-4, F-K-5, F-K-6:** STILL STAND. Filip didn't touch
+pool detail or account detail areas.
+
+**NEW FINDING — F-K-7 🟡 MEDIUM `[Class B]` — E3 tx-detail does NOT link to
+ledger detail.** `TransactionSummary.tsx:148-155` renders the ledger
+sequence as `<IdentifierDisplay value={String(tx.ledger_sequence)}
+type="ledger" />`. Need Playwright verification whether
+`IdentifierDisplay type="ledger"` renders an `<a href>` to
+`/ledgers/:seq` (it should, per L1 type-defaults map) — if not, this is
+a missing cross-entity link. Defer concrete verdict to delta Playwright.
+
+**NEW FINDING — F-K-8 🟡 MEDIUM `[Class C]` — Soroban call tree destination
+account routing.** `toFlowNodes.tsx:163-171` collects a
+`destination_account` from heavy `invocations` recursion and renders it
+as `{ kind: 'destination', identifier: { value, type: 'account' } }`.
+Routing through `OperationFlowTree` (libs/ui) needs confirmation it
+exposes the identifier as a clickable link — verify in delta pass.

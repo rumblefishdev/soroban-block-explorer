@@ -129,7 +129,10 @@ Three `audit-blocker`-tagged backlog tasks to spawn + land before Wave 4 starts:
    - **AC:** `?op=invoke_host_function` (lowercase) round-trips to canonical case; no MUI warning; API returns 200 with rows.
    - **Related:** 0257, 0251 (H2 — same root cause area)
 
-3. **NO audit-blocker spawn for E3** — F-K-1 + A1 — **RESOLVED 2026-05-25 per user signal:**
+3. **NO audit-blocker spawn for E3** — F-K-1 + A1 — **RESOLVED 2026-05-25:**
+   merged via develop (commit `a2c1b205`, PR #215). E3 row now measurable.
+   Delta-audit scope queued (see worklog Phase 4 re-audit queue).
+   Original context for the record (was Path B before merge):
    - **Context:** 0070 + 0071 (TxDetail normal + advanced) are in-flight by
      **FilipDz** on local branches not yet pushed to origin (verified: zero
      remote refs matching `0070|0071|tx-detail|transaction-detail`).
@@ -182,3 +185,27 @@ Do NOT fix-first at Gate A:
 - Future Work backlog spawning — literally Phase 3 sub-phase 3.2
 - Type-safety flag toggles — invalidates current baseline, Phase 3 dedicated task
 - Bundle size optimization — Wave 6 measures post-fix; defer to Gate B
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**Action item #3 (E3 baseline decision):** **RESOLVED 2026-05-25** —
+merged via develop (commit `a2c1b205`). E3 row now measurable. Delta-audit
+scope queued (see worklog Phase 4 re-audit queue).
+
+**Net Gate A fix-first scope unchanged:** 2 audit-blocker tasks
+(F-E-1 cursor URL write + F-E-2 lowercase op normalise) + 1 off-band
+(Vite 7.3.3 CVE bump) + 1 communication (CORS infra question).
+
+**Wave 4 plan adjustment:** E3 row now in-scope across 1.5 / 1.6 / 1.7 /
+2.0 / 2.1 / 2.4 (was N/A — Path B markers no longer needed). Effective
+matrix restored to 1.5 = 14×9 = 126 cells; 2.4 = 14×3 = 42 cells.
+
+**Severity escalations from post-merge findings:**
+- J-4 (STROOPS_PER_XLM gap) bumps 🟡 → 🟠 HIGH (duplicate realised in tx-detail)
+- J-7 (truncation re-impls) bumps 🟡 → 🟠 HIGH (count went from 2 → 6)
+- F-J-16 NEW 🟠 HIGH (duplicate `formatFee` function)
+- F-K-7, F-K-8 NEW 🟡 MEDIUM (E3 outbound link verification — defer to delta)
+- F-AI-10 NEW 🟡 MEDIUM (E3 chunk composition)
+
+None of the new severity escalations promote to fix-first at Gate A;
+all are Class B/C deferrable to Gate B.

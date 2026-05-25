@@ -108,3 +108,29 @@ console-leak grep.
    opportunity (cluster in 1.9c).
 4. **🟢 LOW (F-P-8):** Add `grep -r "console\." web/dist/assets/*.js`
    step to CI build job.
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+Re-ran `nx run-many -t typecheck` + `nx run-many -t lint` against
+post-merge tree.
+
+| Target | Result | Δ vs Wave 1 |
+|---|---|---|
+| `typecheck` (4 projects + 2 deps) | exit 0, "Successfully ran target typecheck" | 0 new errors |
+| `lint` (JS subset + Rust) | exit 0, **1 problem (0 errors, 1 warning)** | 0 new |
+
+**F-P-1 (🟡 MEDIUM — lint warning at `assetColor.ts:131`):** STILL STANDS,
+unchanged. The 1 warning still fires at the same site. Filip's PR added
+~1799 LOC across new tx-detail files with **zero new errors and zero new
+warnings**. Lint discipline holds.
+
+**F-P-2, F-P-3, F-P-4, F-P-5, F-P-6, F-P-8:** STILL STAND (no infra
+changes).
+
+**F-P-7 (longest file):** Filip's longest new file =
+`web/src/pages/transaction-detail/sections/OperationPicker.tsx` 204 LOC
+(below the 233-LOC `ContractEvents` baseline). New normal/toFlowNodes.tsx
+= 206 LOC. Neither crosses the 250-LOC threshold. Baseline list unchanged.
+
+**Code-quality conclusion:** Filip's PR is clean by lint+tsc baseline.
+No new P findings.

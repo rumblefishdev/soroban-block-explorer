@@ -40,3 +40,63 @@ Grep-driven sweep across `web/src/` + `libs/ui/src/`.
 3. **J-3 (🟡 MEDIUM, Class C):** `TopNav.formatNumber` duplicates `formatCompactAmount` across libs/ui ↔ web boundary.
 4. **J-4 (🟡 MEDIUM, Class D):** `STROOPS_PER_XLM` constant lives in 1 site; no shared util — drift risk if reused.
 5. **J-2 (🟡 MEDIUM, Class D):** 9 direct `toLocaleString('en-US')` calls bypass `formatAmount` (all integer counts, semantically OK but inconsistent).
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**J-3 (🟡 MEDIUM — `TopNav.formatNumber` duplicate):** STILL STANDS.
+Filip's `TopNav.tsx:78-84` reimplements `formatNumber` (1.6M-style suffix
++ `toLocaleString` fallback) unchanged. Same root cause as Wave 2:
+`libs/ui` cannot import `formatCompactAmount` from `web/src/pages/pool-detail/helpers.ts`.
+
+**J-4 (🟡 MEDIUM — `STROOPS_PER_XLM` single site):** **PARTIALLY DEGRADED.**
+Filip added a SECOND site at `web/src/pages/transaction-detail/shared/formatFee.ts:3`:
+
+```ts
+const STROOPS_PER_XLM = 10_000_000n; // BigInt vs Number — encoding differs
+```
+
+This is the third copy if you count `web/src/pages/transactions/formatters.ts:1`
+which also defines `STROOPS_PER_XLM = 10_000_000`. Now 2 sites with the
+same magic number, slightly different implementations (BigInt-safe vs
+Number path). **Drift risk realised.** Promotes J-4 from gap-with-risk to
+gap-with-duplicate-realised. Severity bumps from 🟡 → **🟠 HIGH**.
+
+**J-5 (🟡 MEDIUM — absolute UTC depth inconsistency):** **PARTIALLY
+RESOLVED.** Filip's `TransactionSummary.tsx:62-73` adds a local
+`formatUtcAbsolute(value)` that returns `YYYY-MM-DD HH:mm:ss UTC` —
+matches the existing `web/src/pages/transactions/formatters.ts:22`
+`formatAbsoluteUtc` BUT is a different implementation (re-implemented
+inline with `getUTC*` calls instead of imported). Now TWO `formatAbsoluteUtc`-style
+helpers exist. Tx detail page DOES surface absolute UTC, narrowing the
+inconsistency, but introduces a new local re-implementation. Net: per-route
+coverage improved, but cross-page formatter consolidation worsened.
+
+**J-7 (🟡 MEDIUM — `shortId`/`shortStr` truncation re-impls):** **DEGRADED.**
+Filip's PR adds **4 more local truncation functions:**
+- `web/src/pages/transaction-detail/index.tsx:23` `shortHash(hash)` — 6+4
+- `web/src/pages/transaction-detail/normal/humanizeOp.ts:5` `shortId(value)` — 6+4
+- `web/src/pages/transaction-detail/advanced/EventsSection.tsx:29` `shortenStrKey(value)` — 5+4
+- `web/src/pages/transaction-detail/sections/SignaturesTable.tsx:29` `truncateHex(hex, head=12, tail=12)` — 12+12
+
+Plus existing `web/src/pages/AccountDetailPage.tsx:22` `shortId(id)` 4+4
+and `web/src/pages/contracts/ContractEvents.tsx:46` `shortStr(value)` 14.
+**Total: 6 local truncation impls** (was 2). All bypass
+`libs/ui/src/identifiers/truncate.ts:21` `truncateMiddle` + per-type
+`getDefaultTruncation`. J-7 severity bumps from 🟡 → **🟠 HIGH**.
+
+**NEW FINDING — F-J-16 🟠 HIGH `[Class C]` — Fee formatter divergence in tx detail.**
+`web/src/pages/transaction-detail/shared/formatFee.ts:5-13` implements a
+new `formatFee(stroops: number): string` using BigInt arithmetic + manual
+trailing-zero strip, distinct from `web/src/pages/transactions/formatters.ts`'s
+`formatFee` (which uses Number division). Two `formatFee` functions now
+exist, both in `web/src/pages/`, importable by accident depending on the
+import path. Imports in tx detail go to `shared/formatFee.js`; everywhere
+else uses `transactions/formatters.js`. Drift hazard high.
+
+**NEW FINDING — F-J-17 🟡 MEDIUM `[Class C]` — `formatStroops` introduced as
+a 3rd entry point for stroop display.** `formatFee.ts:15-18` wraps
+`formatAmount` for stroop integers. Not bad in itself, but it's a third
+naming convention for "format a stroop number" (alongside `formatFee`
+returning `"X XLM"` and raw `.toLocaleString('en-US')` in ledger pages).
+
+**J-1, J-2, J-6, J-8 – J-15:** STILL STAND (no semantic change).

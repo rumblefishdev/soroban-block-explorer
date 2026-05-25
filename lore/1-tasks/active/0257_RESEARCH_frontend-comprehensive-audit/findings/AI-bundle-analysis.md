@@ -135,3 +135,48 @@ nearly as big as the rest combined.
 2. **🟠 HIGH (F-AI-2):** Spawn `XXXX_REFACTOR_frontend-lp-chart-lazy-load` — lazy `PoolCharts` inside `LiquidityPoolDetailPage` so charts load on tab activation, not page load.
 3. **🟡 MEDIUM (F-AI-7):** Add `rollup-plugin-visualizer` dev-dep + CI artifact upload of the treemap on every build.
 5. **🟢 LOW:** Re-check after F-AI-1 lands whether SearchOutlined chunk normalises.
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+Re-ran `nx run @rumblefish/soroban-block-explorer-web:build`. Exit 0, 2.40s.
+
+**Bundle delta (vs Wave 1 baseline):**
+
+| Chunk | Wave 1 | Post-merge | Δ |
+|---|---:|---:|---:|
+| `index-*.js` (main eager) | 594.55 KB / 188.87 KB gz | **596.20 KB / 189.36 KB gz** | +1.65 KB / +0.49 KB gz |
+| `LiquidityPoolDetailPage-*.js` | 313.11 KB / 95.57 KB gz | 307.12 KB / 93.81 KB gz | −5.99 KB / −1.76 KB gz |
+| `TransactionDetailPage-*.js` | 0.95 KB / 0.50 KB gz (stub) | **29.97 KB / 9.13 KB gz** | **+29.02 KB / +8.63 KB gz** |
+| `SearchOutlined-*.js` | 67.33 KB / 20.21 KB gz | 67.27 KB / 20.19 KB gz | flat |
+| `ContractDetailPage-*.js` | 21.72 KB / 7.00 KB gz | 17.99 KB / 5.89 KB gz | −3.73 KB / −1.11 KB gz |
+| `HomePage-*.js` | 13.54 KB / 4.48 KB gz | 13.62 KB / 4.52 KB gz | flat |
+| `cursorParams-*.js` | 16.62 KB / 5.82 KB gz | 16.62 KB / 5.83 KB gz | flat |
+
+**F-AI-1 + F-AI-2 (🟠 HIGH — main bundle 594KB / LP chunk 313KB):** STILL
+STAND. Main bundle moved +1.65KB raw / +0.49KB gz (still above Vite
+500KB warning). LP detail chunk actually shrank by ~6KB raw — likely
+from theme/grid refactor de-duplicating something.
+
+**F-AI-3, F-AI-4, F-AI-5, F-AI-6, F-AI-7, F-AI-8, F-AI-9:** STILL STAND.
+No structural change.
+
+**NEW FINDING — F-AI-10 🟡 MEDIUM `[Class B, Severity MEDIUM]` —
+TxDetail chunk = 29.97 KB / 9.13 KB gz.** Per Vite's per-route
+code-split, this is the new E3 lazy chunk. Modest size; well below the
+500KB warning. **Composition concern:** the chunk pulls in `Collapse-*`
+(already shared, 3.91KB), `ToggleButtonGroup-*` (NEW shared chunk,
+6.10KB / 1.99KB gz), `KeyboardArrowDown-*` (NEW shared chunk, 6.58KB /
+2.31KB gz), `SummaryRow-*` (4.74KB / 1.97KB gz). The
+`ToggleButtonGroup` + `KeyboardArrowDown` chunks are new shared
+artifacts introduced by the tx-detail page (`ModeToggle.tsx` +
+`XdrRow.tsx` expander). Bundle growth is contained.
+
+**NEW FINDING — F-AI-11 🟢 LOW — `TransactionsListPage-*` grew slightly.**
+Wave 1: 3.55 KB / 1.75 KB gz; post-merge: 3.70 KB / 1.80 KB gz.
++0.15 KB raw. Likely from the `web/src/pages/TransactionsListPage.tsx`
+9-line edit. Informational.
+
+**Net bundle conclusion:** Filip's PR adds **~29 KB raw / ~9 KB gz**
+of lazy-loaded code for the E3 route, no new direct deps, no Vite warning
+on the new chunk. Main-bundle creep ~+0.5 KB gz is from incidental
+re-bundling. No additional bundle finding promotes from MEDIUM → HIGH.

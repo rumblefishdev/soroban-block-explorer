@@ -193,3 +193,31 @@ Priority spawning list, by severity:
 9. **🟢 LOW:** Spawn `XXXX_REFACTOR_frontend-error-throw-monitoring-audit`
    — `assetLegLabel` / `classifyLpTx` throw on schema drift; verify
    `SectionErrorBoundary` reports surface to ops.
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**A1 (🔴 CRITICAL — TxDetail stub):** **RESOLVED** in commit `a2c1b205`
+(`feat(lore-0070): add transaction detail page`, merged via PR #215).
+`web/src/pages/TransactionDetailPage.tsx` is now a 9-line re-export shim;
+real page lives at `web/src/pages/transaction-detail/index.tsx` (145 LOC)
+with normal/advanced mode toggle, 20+ supporting files (1799 LOC total),
+TanStack hook `useTransactionDetail` → generated `getTransactionOptions`,
+hash validation via `isTransactionHash`, `NotFoundState` for invalid hashes,
+`GenericErrorState` with `classifyError`, `SectionErrorBoundary` wrapping
+every section. Cascade dissolved: 1.5 E3 row now measurable; 1.7
+outbound-from-E3 row now measurable (operations table → account / contract
+identifiers via `IdentifierWithCopy` + `IdentifierDisplay`).
+
+**A2 (🟠 HIGH — 0066 task body drift):** STILL STANDS. Filip's PR didn't
+touch lore.
+
+**A3 (🟠 HIGH — 25/28 Future Work gap):** STILL STANDS. 0070 + 0071 fall
+out of the spawned-or-tracked set (now ✓), but the 23 other gaps remain.
+
+**A4 (🟡 MEDIUM — 0226 test infra blocked):** STILL STANDS.
+
+**A5 (🟡 MEDIUM — 0199/0215 LP blocked):** STILL STANDS.
+
+**Recommendations 1 & 2 (LAUNCH BLOCKERS):**
+- Item 1 (TxDetail) — **RESOLVED** by Filip.
+- Item 2 (Contracts list page + `/contracts` nav) — STILL STANDS.

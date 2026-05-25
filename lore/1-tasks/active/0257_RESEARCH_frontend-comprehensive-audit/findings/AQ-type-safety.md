@@ -155,3 +155,64 @@ Type safety is **good baseline + 1 strong miss**.
    `exactOptionalPropertyTypes` flip; small batch, fixes 0-handful.
 4. **🟡 MEDIUM (F-AQ-3):** Add `assertNever` helper to `libs/ui/src/utils/`
    and adopt in 4 existing switches.
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+**F-AQ-1, F-AQ-2:** STILL STAND (tsconfig unchanged).
+
+**F-AQ-3 (🟡 — switch exhaustiveness):** PARTIALLY DEGRADED. Filip's PR
+adds switches at:
+- `web/src/pages/transaction-detail/normal/humanizeOp.ts:36-61` —
+  switch on `light.type_name` (string, not literal union). 4 cases +
+  fall-through to default `return \`${opLabel} processed\``. No
+  `assertNever` (and can't be — discriminant is `string`, not narrowed).
+- `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:9-19` —
+  switch on `TokenKind` (string-literal union). 5 cases, no default,
+  returns each branch. `noImplicitReturns` will catch new union members.
+
+Net: 2 new switches, neither uses `assertNever`. Same pattern as Wave 1
+baseline. Severity unchanged.
+
+**F-AQ-4 (🟠 HIGH — zero branded ID types):** STILL STANDS, DEGRADED.
+Filip's PR threads `string` IDs through new types without branding.
+Examples:
+- `useTxHashParam.ts:5-7` `{ hash: string }` — could be `TransactionHash`
+- `OperationPicker.tsx` accepts `OperationItem` with no `OperationId` brand
+- `humanizeOp.ts` `shortId(value: string)` accepts any string
+
+Adding tx-detail surface enlarges the unbranded-ID surface area.
+
+**F-AQ-5, F-AQ-6:** STILL STAND.
+
+**NEW FINDING — F-AQ-7 🟡 MEDIUM `[Class B, Severity MEDIUM]` — `unknown` +
+runtime probes for heavy XDR shapes.** Filip's tx-detail pages use
+`unknown` + manual shape probes for the heavy `details` field:
+- `humanizeOp.ts:9-25` — `fnNameFromHeavy`, `summaryFromHeavy` cast
+  `details` as `{ function_name?: unknown; summary?: unknown }`
+- `toFlowNodes.tsx:27-39` — `asObject`, `asString`, `asNestedCalls`
+  helpers narrow `unknown`
+- `OperationJsonDetail.tsx:13-30` — `pickDetailValue(details, key)` with
+  `key in details` runtime probe
+
+This is the *correct* defensive pattern given that backend `details` is
+a `Record<string, unknown>`-style JSONB blob with no schema lock. But it
+indicates an OpenAPI gap: `XdrOperationDto.details` should be typed
+more strictly (probably a discriminated union by `op_type`). Cross-refs
+to 0075 future-work item "Document `wasm_interface_metadata` JSONB shape"
+in archaeology. New ID for the AQ batch.
+
+**NEW FINDING — F-AQ-8 🟡 MEDIUM `[Class C, Severity MEDIUM]` — Triple
+cast in `RawDataSection`.** `index.tsx:131-138` (parent):
+
+```ts
+resultsMetaXdr={
+  (heavy as | { results_meta_xdr?: string | null } | null | undefined)
+    ?.results_meta_xdr
+}
+```
+
+Three-level cast (`heavy` → object-with-optional-field → optional access)
+because `XdrOperationDto`-like type doesn't expose `results_meta_xdr`.
+Indicates **api-types codegen drift** — the field exists in the API but
+isn't surfaced in the generated TS shape. Worth a backend openapi schema
+audit; in the FE this is the same problem class as F-AQ-7.

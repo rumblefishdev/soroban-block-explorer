@@ -35,3 +35,39 @@
 
 - All three quick-win areas (DM / DN / CA) point to the same root cause: **Footer was built from Figma static content without wiring data + interaction layers.** Single coherent refactor task spawn target.
 - Per project CLAUDE.md `feedback_figma_first`, this would be the explicit deviation note: "Footer rendered 1:1 visual but data/interaction unwired pending follow-up task".
+
+## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
+
+Filip's PR touched `libs/ui/src/layout/Footer.tsx` (186 LOC). Spot check
+confirms **layout-only refactor** (added `grid.desktop.maxWidth` /
+`grid.desktop.margin` container wrapper from new `libs/ui/src/theme/grid.js`).
+Data wiring unchanged.
+
+**DM-1 (🟠 HIGH — "All systems operational" hardcoded):** STILL STANDS.
+`Footer.tsx:114-116` renders the literal string unconditionally inside
+the green-status pill. No `useHealthQuery`, no probe added. Same bug.
+
+**CA-1 (🟠 HIGH — Terms / Privacy / Cookies dead `<span>`):** STILL STANDS.
+`Footer.tsx:25-29` still defines:
+
+```ts
+const LEGAL: FooterNavItem[] = [
+  { label: 'Terms of Service' },
+  { label: 'Privacy Policy' },
+  { label: 'Cookies' },
+];
+```
+
+— no `href`. `FooterLink` (line 31-50) renders `component={href ? 'a' : 'span'}`
+exactly as before.
+
+**CA-2 (🟠 HIGH — Resources dead `<span>`):** STILL STANDS. Same pattern,
+`Footer.tsx:18-23` — `RESOURCES` all label-only.
+
+**DM-2 (🟢 LOW — no `/health` probe):** STILL STANDS.
+**DN-1 (🟠 HIGH — no build version in UI):** STILL STANDS.
+**DN-2 (🟡 MEDIUM — no vite `define` block):** STILL STANDS.
+**CA-3, CA-4:** STILL STAND.
+
+**Net:** Footer refactor was visual/layout only. All data + interaction
+gaps cataloged in Wave 2 remain.
