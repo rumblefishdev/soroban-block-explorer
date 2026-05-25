@@ -13,7 +13,10 @@
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
+use crate::common::cursor::{Direction, direction_sql};
+
 use super::dto::{NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
+
 
 pub struct ResolvedListParams {
     pub limit: i64,
@@ -56,11 +59,14 @@ fn map_nft_item(r: &PgRow) -> NftItem {
 pub async fn fetch_list(
     pool: &PgPool,
     params: &ResolvedListParams,
+    direction: Direction,
 ) -> Result<Vec<NftItem>, sqlx::Error> {
     let cur_id: Option<i32> = params.cursor.as_ref().map(|c| c.id);
+    let (op, order) = direction_sql(direction);
 
-    // Static SQL — single plan; NULL guards short-circuit absent filters.
-    let rows = sqlx::query(
+    // Static query plan per direction. SQL fragments `{op}` and `{order}`
+    // are hardcoded literals (`<`/`>`, `DESC`/`ASC`) — no injection risk.
+    let sql = format!(
         r#"
         WITH ct AS (
             SELECT id
@@ -82,21 +88,23 @@ pub async fn fetch_list(
         JOIN      soroban_contracts sc  ON sc.id = n.contract_id
         LEFT JOIN accounts          own ON own.id = n.current_owner_id
         WHERE
-            ($2::int     IS NULL OR n.id < $2)
+            ($2::int     IS NULL OR n.id {op} $2)
             AND ($3::varchar IS NULL OR n.collection_name = $3)
             AND ($4::varchar IS NULL OR n.contract_id = (SELECT id FROM ct))
             AND ($5::text    IS NULL OR n.name ILIKE '%' || $5 || '%')
-        ORDER BY n.id DESC
+        ORDER BY n.id {order}
         LIMIT $1
-        "#,
-    )
-    .bind(params.limit)
-    .bind(cur_id)
-    .bind(&params.filter_collection)
-    .bind(&params.filter_contract_id)
-    .bind(&params.filter_name)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(params.limit)
+        .bind(cur_id)
+        .bind(&params.filter_collection)
+        .bind(&params.filter_contract_id)
+        .bind(&params.filter_name)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.iter().map(map_nft_item).collect())
 }
@@ -143,6 +151,7 @@ pub async fn fetch_transfers(
     nft_id: i32,
     cursor: Option<&NftTransferCursor>,
     limit: i64,
+    direction: Direction,
 ) -> Result<Vec<NftTransferItem>, sqlx::Error> {
     let (cur_ts, cur_ledger, cur_order): (
         Option<chrono::DateTime<chrono::Utc>>,
@@ -156,8 +165,19 @@ pub async fn fetch_transfers(
         ),
         None => (None, None, None),
     };
+    let (op, order) = direction_sql(direction);
 
-    let rows = sqlx::query(
+    // Direction caveat: the LEAD window walks DESC to compute the
+    // previous owner (oldest event below the current row). When fetching
+    // Prev (ASC), the LEAD direction would invert — but the caller
+    // reverses the resulting rows in `finalize_page` to restore DESC
+    // presentation order. The window function still computes owners in
+    // DESC order so that previous-owner semantics stay correct after the
+    // outer reverse: we ALWAYS read the window in DESC, regardless of
+    // fetch direction. This is achieved by keeping the `OVER (... ORDER
+    // BY ... DESC)` hardcoded; only the outer ORDER BY + cursor
+    // predicate swap.
+    let sql = format!(
         r#"
         SELECT
             no.created_at,
@@ -165,24 +185,6 @@ pub async fn fetch_transfers(
             no.event_order,
             nft_event_type_name(no.event_type)  AS event_type_name,
             no.event_type                       AS event_type,
-            -- `from_account` is the owner BEFORE this event = owner AFTER the
-            -- previous (older) event. With ORDER BY ... DESC the older event
-            -- sits at the FOLLOWING window position, so we use LEAD (not LAG):
-            --   LAG  on DESC window → row at i-1 = newer event (wrong)
-            --   LEAD on DESC window → row at i+1 = older event = previous owner
-            -- The mint row (oldest event, last in DESC window) yields NULL via
-            -- LEAD's default-when-no-following-row, which is exactly what we
-            -- want — frontend renders NULL as "(mint)". Canonical SQL
-            -- `17_get_nfts_transfers.sql` historically used LAG and was
-            -- corrected together with this site.
-            --
-            -- Pagination boundary: caller fetches `limit + 1` (peek-for-
-            -- has-more). The peek row is included in the window input, so
-            -- LEAD on the last KEPT row reads the peek row's owner — the
-            -- correct previous-owner across the cut. `finalize_page` then
-            -- drops the peek. The only remaining NULL `from_account` is the
-            -- mint event (oldest, no row below in table or page), which is
-            -- the intended "(mint)" sentinel.
             LEAD(own.account_id) OVER (
                 PARTITION BY no.nft_id
                 ORDER BY no.created_at DESC,
@@ -198,18 +200,20 @@ pub async fn fetch_transfers(
               AND t.created_at = no.created_at
         WHERE no.nft_id = $1
           AND ($3::timestamptz IS NULL
-               OR (no.created_at, no.ledger_sequence, no.event_order) < ($3, $4, $5))
-        ORDER BY no.created_at DESC, no.ledger_sequence DESC, no.event_order DESC
+               OR (no.created_at, no.ledger_sequence, no.event_order) {op} ($3, $4, $5))
+        ORDER BY no.created_at {order}, no.ledger_sequence {order}, no.event_order {order}
         LIMIT $2
-        "#,
-    )
-    .bind(nft_id)
-    .bind(limit)
-    .bind(cur_ts)
-    .bind(cur_ledger)
-    .bind(cur_order)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+
+    let rows = sqlx::query(&sql)
+        .bind(nft_id)
+        .bind(limit)
+        .bind(cur_ts)
+        .bind(cur_ledger)
+        .bind(cur_order)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .iter()

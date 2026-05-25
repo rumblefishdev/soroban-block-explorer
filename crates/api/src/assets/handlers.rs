@@ -109,6 +109,8 @@ pub async fn list_assets(
         return resp;
     }
 
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
         limit: i64::from(pagination.limit),
         cursor: pagination.cursor,
@@ -116,7 +118,7 @@ pub async fn list_assets(
         asset_code: params.filter_code,
     };
 
-    let mut rows: Vec<AssetRow> = match fetch_list(&state.db, &resolved).await {
+    let mut rows: Vec<AssetRow> = match fetch_list(&state.db, &resolved, direction).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in list_assets: {e}");
@@ -124,9 +126,13 @@ pub async fn list_assets(
         }
     };
 
-    let page = finalize_page(&mut rows, pagination.limit, |r| {
-        cursor::encode(&AssetIdCursor { id: r.id })
-    });
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&AssetIdCursor { id: r.id }, dir),
+    );
     let data: Vec<AssetItem> = rows.into_iter().map(map_item).collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
@@ -328,8 +334,8 @@ pub async fn list_asset_transactions(
             Vec::new(),
             PageInfo {
                 cursor: None,
+                prev_cursor: None,
                 limit: pagination.limit,
-                has_more: false,
             },
         );
         let mut resp = Json(empty).into_response();
@@ -342,6 +348,7 @@ pub async fn list_asset_transactions(
         &identity,
         i64::from(pagination.limit),
         pagination.cursor.as_ref(),
+        pagination.direction,
     )
     .await
     {
@@ -352,7 +359,14 @@ pub async fn list_asset_transactions(
         }
     };
 
-    let page = finalize_ts_id_page(&mut rows, pagination.limit, |r| r.created_at, |r| r.id);
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.created_at,
+        |r| r.id,
+    );
     let data: Vec<AssetTransactionItem> = rows
         .into_iter()
         .map(|r| AssetTransactionItem {

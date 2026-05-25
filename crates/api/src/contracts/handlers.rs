@@ -14,8 +14,9 @@ use xdr_parser::EventSource;
 use crate::common::cache_control;
 use crate::common::cursor::{self, TsIdCursor};
 use crate::common::extractors::Pagination;
+use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::{errors, path};
-use crate::openapi::schemas::{ErrorEnvelope, PageInfo, Paginated};
+use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::runtime_enrichment::stellar_archive::extractors::collect_tx_metas;
 use crate::state::AppState;
 
@@ -264,11 +265,14 @@ pub async fn list_invocations(
         }
     };
 
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
     let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocation_appearances(
         &state.db,
         contract.id,
         i64::from(pagination.limit),
         pagination.cursor.as_ref(),
+        direction,
     )
     .await
     {
@@ -279,16 +283,16 @@ pub async fn list_invocations(
         }
     };
 
-    let db_had_more = rows.len() > pagination.limit as usize;
-    if db_had_more {
-        rows.truncate(pagination.limit as usize);
-    }
-    let next_cursor = if db_had_more {
-        rows.last()
-            .map(|r| cursor::encode(&TsIdCursor::new(r.created_at, r.transaction_id)))
-    } else {
-        None
-    };
+    // Standard bidirectional pagination — invocations have no expansion
+    // ambiguity (one DB row → one wire item), so the canonical helper
+    // does the cursor matrix + reverse-on-Prev work.
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&TsIdCursor::new(r.created_at, r.transaction_id), dir),
+    );
 
     let data: Vec<InvocationItem> = rows
         .into_iter()
@@ -302,15 +306,7 @@ pub async fn list_invocations(
         })
         .collect();
 
-    let mut resp = Json(Paginated {
-        data,
-        page: PageInfo {
-            cursor: next_cursor,
-            limit: pagination.limit,
-            has_more: db_had_more,
-        },
-    })
-    .into_response();
+    let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
@@ -353,11 +349,14 @@ pub async fn list_events(
         }
     };
 
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
     let mut rows: Vec<EventAppearanceRow> = match fetch_event_appearances(
         &state.db,
         contract.id,
-        i64::from(pagination.limit),
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        direction,
     )
     .await
     {
@@ -368,82 +367,56 @@ pub async fn list_events(
         }
     };
 
-    let db_had_more = rows.len() > pagination.limit as usize;
-    if db_had_more {
-        rows.truncate(pagination.limit as usize);
-    }
+    // Cursor matrix (truncate excess + reverse-on-Prev) handled by the
+    // canonical helper. `rows` mutates in place: post-call it carries
+    // exactly the displayed page in DESC presentation order regardless
+    // of fetch direction.
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&TsIdCursor::new(r.created_at, r.transaction_id), dir),
+    );
 
+    // Archive XDR fetch (runtime, ADR 0029). Hard-fail policy: if any
+    // requested ledger is missing from the response, surface 500 — the
+    // explorer treats archive outages as fail-fast rather than silently
+    // dropping events or stalling cursor. Per project policy: assume S3
+    // doesn't fail; when it does, the client retries.
     let sequences: Vec<i64> = rows.iter().map(|r| r.ledger_sequence).collect();
     let ledger_map = fetch_unique_ledgers(&state, &sequences).await;
     let parsed = build_parsed_ledgers(&ledger_map, &state.network_id);
 
-    let expanded = expand_events(&rows, &parsed, &contract_id);
-    let stopped_short = expanded
-        .last_consecutive_idx
-        .map_or(!rows.is_empty(), |idx| idx + 1 < rows.len());
-    let has_more = db_had_more || stopped_short;
-
-    // Cursor advances only past consecutively-expanded rows so a transient
-    // archive outage never creates a permanent hole. If no row expanded,
-    // echo the incoming cursor so clients retry the same page instead of
-    // restarting from the top (avoids duplicates / infinite loops).
-    let next_cursor = match expanded.last_consecutive_idx {
-        Some(idx) => Some(cursor::encode(&TsIdCursor::new(
-            rows[idx].created_at,
-            rows[idx].transaction_id,
-        ))),
-        None => pagination.cursor.as_ref().map(cursor::encode),
+    let items = match expand_events(&rows, &parsed, &contract_id) {
+        Ok(v) => v,
+        Err(()) => {
+            tracing::error!("archive XDR expansion failed for contract {contract_id}");
+            return errors::internal_error(errors::ARCHIVE_ERROR, "archive XDR fetch failed");
+        }
     };
 
-    let mut resp = Json(Paginated {
-        data: expanded.items,
-        page: PageInfo {
-            cursor: next_cursor,
-            limit: pagination.limit,
-            has_more,
-        },
-    })
-    .into_response();
+    let mut resp = Json(into_envelope(items, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
 
-struct ExpandedPage<T> {
-    items: Vec<T>,
-    /// Highest `i` such that every row in `rows[0..=i]` was expanded
-    /// successfully. Cursor advances only past this index.
-    last_consecutive_idx: Option<usize>,
-}
-
+/// Expand appearance rows into wire [`EventItem`]s using the archive
+/// XDR fetched into `parsed`. Returns `Err(())` on any gap (missing
+/// ledger, missing tx, missing tx_meta) so the handler can return a
+/// proper 500. Per project policy archive failures are hard, but they
+/// surface as graceful HTTP errors — not panics.
 fn expand_events(
     rows: &[EventAppearanceRow],
     parsed: &HashMap<u32, ParsedLedger<'_>>,
     contract_id: &str,
-) -> ExpandedPage<EventItem> {
+) -> Result<Vec<EventItem>, ()> {
     let mut items = Vec::with_capacity(rows.len());
-    let mut last_consecutive_idx: Option<usize> = None;
-    for (i, row) in rows.iter().enumerate() {
-        let Ok(seq) = u32::try_from(row.ledger_sequence) else {
-            tracing::warn!(
-                "out-of-u32-range ledger_sequence {} on event row — stopping",
-                row.ledger_sequence
-            );
-            break;
-        };
-        let Some(ledger) = parsed.get(&seq) else {
-            break;
-        };
-        let Some(idx) = ledger.tx_index_by_hash(&row.transaction_hash) else {
-            tracing::warn!(
-                "tx {} missing from fetched ledger {} — stopping event page expansion",
-                row.transaction_hash,
-                ledger.ledger_sequence
-            );
-            break;
-        };
-        let Some(tm) = ledger.tx_metas.get(idx).copied() else {
-            break;
-        };
+    for row in rows {
+        let seq = u32::try_from(row.ledger_sequence).map_err(|_| ())?;
+        let ledger = parsed.get(&seq).ok_or(())?;
+        let idx = ledger.tx_index_by_hash(&row.transaction_hash).ok_or(())?;
+        let tm = ledger.tx_metas.get(idx).copied().ok_or(())?;
         let events = xdr_parser::extract_events(
             tm,
             &row.transaction_hash,
@@ -477,10 +450,6 @@ fn expand_events(
                 data: event.data,
             });
         }
-        last_consecutive_idx = Some(i);
     }
-    ExpandedPage {
-        items,
-        last_consecutive_idx,
-    }
+    Ok(items)
 }

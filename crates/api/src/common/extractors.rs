@@ -16,7 +16,7 @@ use axum::response::Response;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use super::cursor::{self, CursorError};
+use super::cursor::{self, CursorError, Direction};
 use super::errors;
 
 /// Default page size when the client omits `?limit=` (matches ADR 0008
@@ -44,10 +44,32 @@ struct PaginationRaw {
 /// Generic over `P` — the resource-specific cursor payload. Use
 /// [`cursor::TsIdCursor`](super::cursor::TsIdCursor) for the common
 /// `(created_at, id)` case.
+///
+/// `direction` is extracted from the cursor envelope (or
+/// [`Direction::Next`] when the client did not send a cursor — first-page
+/// requests are forward by definition). Handlers branch their SQL on this
+/// field to walk forward (DESC) or backward (ASC + in-memory reverse).
 #[derive(Debug)]
 pub struct Pagination<P> {
     pub limit: u32,
     pub cursor: Option<P>,
+    pub direction: Direction,
+}
+
+impl<P> Pagination<P> {
+    /// `true` when the request carried a `?cursor=`. Used by
+    /// [`common::pagination::finalize_page`] to decide whether to emit a
+    /// `prev_cursor` on a forward walk (first-page requests have no
+    /// predecessor).
+    pub fn has_predecessor(&self) -> bool {
+        self.cursor.is_some()
+    }
+
+    /// `pagination.limit + 1` as `i64` — the "fetch one extra row for
+    /// peek" idiom every paginated query uses to detect a further page.
+    pub fn fetch_limit(&self) -> i64 {
+        i64::from(self.limit) + 1
+    }
 }
 
 impl<P: DeserializeOwned> Pagination<P> {
@@ -55,8 +77,12 @@ impl<P: DeserializeOwned> Pagination<P> {
     /// limit policy ([`DEFAULT_LIMIT`] / [`MAX_LIMIT`]).
     fn resolve_default(limit: Option<&str>, cursor: Option<&str>) -> Result<Self, Response> {
         let limit = validate_limit(limit)?;
-        let cursor = decode_cursor::<P>(cursor)?;
-        Ok(Pagination { limit, cursor })
+        let (direction, cursor) = decode_cursor::<P>(cursor)?;
+        Ok(Pagination {
+            limit,
+            cursor,
+            direction,
+        })
     }
 }
 
@@ -88,13 +114,17 @@ fn validate_limit(raw: Option<&str>) -> Result<u32, Response> {
     Ok(parsed)
 }
 
-fn decode_cursor<P: DeserializeOwned>(raw: Option<&str>) -> Result<Option<P>, Response> {
+fn decode_cursor<P: DeserializeOwned>(
+    raw: Option<&str>,
+) -> Result<(Direction, Option<P>), Response> {
     let Some(s) = raw else {
-        return Ok(None);
+        // First-page requests carry no cursor → forward direction by
+        // definition.
+        return Ok((Direction::Next, None));
     };
 
     match cursor::decode::<P>(s) {
-        Ok(p) => Ok(Some(p)),
+        Ok((dir, p)) => Ok((dir, Some(p))),
         Err(CursorError::InvalidBase64) | Err(CursorError::InvalidPayload) => Err(
             errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired"),
         ),
@@ -217,17 +247,32 @@ mod tests {
 
     #[test]
     fn cursor_none_when_missing() {
-        let result: Option<TsIdCursor> = decode_cursor(None).unwrap();
+        let (dir, result): (Direction, Option<TsIdCursor>) = decode_cursor(None).unwrap();
+        assert_eq!(dir, Direction::Next);
         assert!(result.is_none());
     }
 
     #[test]
     fn cursor_decoded_when_valid() {
-        let encoded = cursor::encode(&TsIdCursor::new(
-            Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(),
-            42,
-        ));
-        let decoded: Option<TsIdCursor> = decode_cursor(Some(&encoded)).unwrap();
+        let encoded = cursor::encode(
+            &TsIdCursor::new(Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(), 42),
+            Direction::Next,
+        );
+        let (dir, decoded): (Direction, Option<TsIdCursor>) =
+            decode_cursor(Some(&encoded)).unwrap();
+        assert_eq!(dir, Direction::Next);
+        assert_eq!(decoded.unwrap().id, 42);
+    }
+
+    #[test]
+    fn cursor_decoded_propagates_prev_direction() {
+        let encoded = cursor::encode(
+            &TsIdCursor::new(Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(), 42),
+            Direction::Prev,
+        );
+        let (dir, decoded): (Direction, Option<TsIdCursor>) =
+            decode_cursor(Some(&encoded)).unwrap();
+        assert_eq!(dir, Direction::Prev);
         assert_eq!(decoded.unwrap().id, 42);
     }
 
@@ -272,10 +317,10 @@ mod tests {
         use axum::extract::FromRequestParts;
         use axum::http::Request;
 
-        let encoded = cursor::encode(&TsIdCursor::new(
-            Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(),
-            42,
-        ));
+        let encoded = cursor::encode(
+            &TsIdCursor::new(Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(), 42),
+            Direction::Next,
+        );
         let uri = format!("/?limit=10&cursor={encoded}&filter%5Bsource_account%5D=GAA");
         let req = Request::builder().uri(&uri).body(()).unwrap();
         let (mut parts, _) = req.into_parts();
@@ -284,6 +329,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(p.limit, 10);
+        assert_eq!(p.direction, Direction::Next);
+        assert_eq!(p.cursor.unwrap().id, 42);
+    }
+
+    #[tokio::test]
+    async fn extractor_propagates_prev_direction() {
+        // Prev-direction cursor in the wire: extractor must surface
+        // `direction = Prev` so handlers branch the SQL accordingly.
+        use axum::extract::FromRequestParts;
+        use axum::http::Request;
+
+        let encoded = cursor::encode(
+            &TsIdCursor::new(Utc.with_ymd_and_hms(2026, 4, 24, 12, 0, 0).unwrap(), 42),
+            Direction::Prev,
+        );
+        let uri = format!("/?limit=10&cursor={encoded}");
+        let req = Request::builder().uri(&uri).body(()).unwrap();
+        let (mut parts, _) = req.into_parts();
+
+        let p: Pagination<TsIdCursor> = Pagination::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+        assert_eq!(p.direction, Direction::Prev);
         assert_eq!(p.cursor.unwrap().id, 42);
     }
 }
