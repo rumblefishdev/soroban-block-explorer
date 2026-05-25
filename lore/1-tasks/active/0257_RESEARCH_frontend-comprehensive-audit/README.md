@@ -4,8 +4,28 @@ title: 'Frontend comprehensive audit (pre-launch)'
 type: RESEARCH
 status: active
 related_adr: ['0032']
-related_tasks: ['0063', '0064', '0065', '0066', '0068', '0070', '0071', '0072', '0073', '0074', '0075', '0076', '0077', '0246', '0249', '0250', '0251']
-tags: ['frontend', 'audit', 'qa', 'pre-launch', 'priority-high', 'phase-research']
+related_tasks:
+  [
+    '0063',
+    '0064',
+    '0065',
+    '0066',
+    '0068',
+    '0070',
+    '0071',
+    '0072',
+    '0073',
+    '0074',
+    '0075',
+    '0076',
+    '0077',
+    '0246',
+    '0249',
+    '0250',
+    '0251',
+  ]
+tags:
+  ['frontend', 'audit', 'qa', 'pre-launch', 'priority-high', 'phase-research']
 links:
   - 'Prior QA pass: 0251 (frontend QA fixes batch, 13 bugs across 5 clusters, merged on develop 2026-05-24)'
 history:
@@ -85,6 +105,7 @@ This audit is the gate before declaring frontend ready for launch.
 **1.0 Archaeology (~2h)**
 
 Sweep FE tasks (0063-0077, 0249-0251) for:
+
 - `## Future Work` from each archived task → known deferred list
 - `## Issues Encountered` → known broken/workaround state
 - `## Design Decisions (Emerged)` → autonomous decisions worth audit
@@ -159,6 +180,7 @@ E8 `/assets/:id`, E9 `/contracts/:id`, E10 `/nfts`, E11 `/nfts/:id`,
 E12 `/liquidity-pools`, E13 `/liquidity-pools/:id`, E14 `/search`.
 
 **States (9):**
+
 - D1 Loading skeleton (right shape, right rows, no white screen)
 - D2 Success render
 - D3 Empty (entity-specific message + action)
@@ -193,6 +215,7 @@ Output: `findings/D-state-coverage-matrix.csv`.
 **1.7 Cross-entity link integrity (~2h)**
 
 Matrix N×N entity types — żaden dead link:
+
 - Account in tx row → account page works?
 - Account balance row → asset page works?
 - Asset issuer link → account page works?
@@ -247,7 +270,7 @@ Matrix N×N entity types — żaden dead link:
 **1.10 Z Senior craft (~1.5h, split from Z+AA+AB+AD merged per user)**
 
 - Anything a senior FE-developer would write completely differently?
-- Naming idiomatic (PascalCase components, use* hooks, lowercase helpers, Type/Item suffix)?
+- Naming idiomatic (PascalCase components, use\* hooks, lowercase helpers, Type/Item suffix)?
 - File structure discoverable (juniors find files in 30s)?
 - Code smells (god components, magic numbers, deep prop drilling, exception swallowing)?
 - Each public API has JSDoc?
@@ -427,6 +450,7 @@ analysis + recommendation (keep / refactor / drop).
 **2.0 Playwright MCP full re-pass (~4h)**
 
 Same methodology as 0251-birthing pass, against post-fix baseline. All 14 routes:
+
 - Happy path snapshot
 - Invalid id / 404 / 400 / 500 scenarios
 - Empty filter / no data
@@ -496,6 +520,7 @@ Full matrix: every route × every breakpoint.
 **Breakpoints (3):** mobile 375px / tablet 768px / desktop 1280px.
 
 Per cell:
+
 - Layout breaks?
 - Tables responsive (horizontal scroll / card layout)?
 - TopNav responsive (hamburger menu)?
@@ -561,12 +586,12 @@ conventions, error state taxonomy).
 
 ## Total effort
 
-| Track | Sub-phases | Hours |
-|---|---|---|
-| Track 1 (code-level) | 29 | ~63 |
-| Track 2 (visual + UX) | 8 | ~25.5 |
-| Phase 3 (consolidation) | 5 | ~8 |
-| **Total** | **42** | **~96.5** |
+| Track                   | Sub-phases | Hours     |
+| ----------------------- | ---------- | --------- |
+| Track 1 (code-level)    | 29         | ~63       |
+| Track 2 (visual + UX)   | 8          | ~25.5     |
+| Phase 3 (consolidation) | 5          | ~8        |
+| **Total**               | **42**     | **~96.5** |
 
 **Calendar:** ~8 working days @ 12h focused, or ~12 days @ 8h normal, or
 2-2.5 weeks part-time.
@@ -576,22 +601,22 @@ conventions, error state taxonomy).
 User confirmed 2026-05-24: all 14 dropped areas stay dropped. Spawn as
 separate backlog tasks during Phase 3.
 
-| Dropped area | Follow-up task name |
-|---|---|
-| O testing coverage | `XXXX_FEATURE_frontend-testing-baseline` |
-| N i18n readiness | `XXXX_FEATURE_frontend-i18n` (warunkowo) |
-| AJ asset optimization | spawn if perf issues found in audit |
-| AT animation polish | spawn if specific complaint surfaces |
-| S browser compat matrix | `XXXX_FEATURE_browser-compat-ci` |
-| T production parity | post-prod-up audit |
-| BR Open Graph / Twitter cards | `XXXX_FEATURE_frontend-og-meta` |
-| BM long-running tab leaks | `XXXX_RESEARCH_frontend-memory-leaks` |
-| BJ WebSocket / SSE | `XXXX_RESEARCH_frontend-realtime` |
-| BV offline / service worker | `XXXX_FEATURE_frontend-pwa` |
-| BZ GDPR / cookie banner | `XXXX_COMPLIANCE_frontend-gdpr` |
-| CE command palette | `XXXX_FEATURE_frontend-command-palette` |
-| CF export CSV/JSON | `XXXX_FEATURE_frontend-data-export` |
-| BO session replay | skip unless team requests |
+| Dropped area                  | Follow-up task name                      |
+| ----------------------------- | ---------------------------------------- |
+| O testing coverage            | `XXXX_FEATURE_frontend-testing-baseline` |
+| N i18n readiness              | `XXXX_FEATURE_frontend-i18n` (warunkowo) |
+| AJ asset optimization         | spawn if perf issues found in audit      |
+| AT animation polish           | spawn if specific complaint surfaces     |
+| S browser compat matrix       | `XXXX_FEATURE_browser-compat-ci`         |
+| T production parity           | post-prod-up audit                       |
+| BR Open Graph / Twitter cards | `XXXX_FEATURE_frontend-og-meta`          |
+| BM long-running tab leaks     | `XXXX_RESEARCH_frontend-memory-leaks`    |
+| BJ WebSocket / SSE            | `XXXX_RESEARCH_frontend-realtime`        |
+| BV offline / service worker   | `XXXX_FEATURE_frontend-pwa`              |
+| BZ GDPR / cookie banner       | `XXXX_COMPLIANCE_frontend-gdpr`          |
+| CE command palette            | `XXXX_FEATURE_frontend-command-palette`  |
+| CF export CSV/JSON            | `XXXX_FEATURE_frontend-data-export`      |
+| BO session replay             | skip unless team requests                |
 
 ## Acceptance Criteria
 
@@ -885,7 +910,7 @@ _(to be filled during audit)_
    - Z+AA+AB+AD → 1.10 + 1.10b + 1.10c + 1.10d (senior craft / overengineering / hallucination / maintenance cost)
    - P+AQ → 1.11 + 1.11b (code quality / type safety depth)
    - AG+AP → 2.2 + 2.2b (performance / loading patterns)
-   Granular = more deliverables, more focused findings per file.
+     Granular = more deliverables, more focused findings per file.
 9. **Kept merged per user 2026-05-24:**
    - Q+AR → 1.18 (lore process + commit conventions) — same code area
    - F+CH → 2.5 (a11y + color blindness) — same audit pass

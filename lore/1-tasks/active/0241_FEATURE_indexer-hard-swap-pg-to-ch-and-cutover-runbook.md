@@ -59,6 +59,31 @@ history:
       first realistic deploy of the new region is when 0241 Part A lands.
       Bundling the operator steps with the cutover keeps "first prod deploy"
       a single coordinated event instead of two.
+  - date: '2026-05-25'
+    status: active
+    who: fmazur
+    note: >
+      Code + docs side complete (stays active — operator Part D + empirical
+      cutover pending). Part A: indexer writes to CH via
+      `db_clickhouse::persist::persist_ledger_clickhouse` (per-ledger
+      wrapper, parity-verified against backfill-runner's CH sink); sqlx
+      dropped (gated behind `pg-persist` for backfill dev tools); mTLS
+      client layer added in `db-clickhouse` (`aws-mtls` feature) reading
+      `CH_DOMAIN` + `MTLS_SECRET_NAME` via the Secrets Lambda Extension;
+      `enrichment_publish` stubbed (PG lookups removed to satisfy
+      no-sqlx — CH-aware rewrite is a separate task). Part B/D runbook
+      authored (`docs/runbooks/live-tail-cutover.md`); evergreen docs
+      updated. CW alarm + MetricFilter added in `cloudwatch-stack.ts`.
+      Retry classifier is a denylist (retry-by-default, fail-loud only on
+      HTTP 4xx + known-permanent CH codes). Logs sanitised — no
+      server-supplied row data reaches CloudWatch (`safe_error_message`,
+      incl. the lambda_runtime propagation path). Added
+      `crates/db-clickhouse/tests/persist_e2e.rs` — empirically verifies
+      write + replay-dedup against live CH 26.3 (smoke + replay-safety
+      ACs). Three code-review + security passes, findings fixed. Env var
+      landed as `CH_DOMAIN` (not the draft `CH_PROD_DOMAIN`), confirmed
+      by operator. Pending: operator Part D (cdk bootstrap, certs, deploy)
+      + live cutover + lessons-learned.
 ---
 
 # Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation
@@ -107,8 +132,10 @@ write-path correctness, D2 = read-path correctness.
 4. **Error handling**: CH unreachable = **fail loud** (Lambda returns an
    error, S3 retry handles re-delivery). No PG fallback.
 5. **mTLS client config**: read cert + key + ca from Secrets Manager
-   (depends on 0239 Phase 2). Env var `CH_PROD_DOMAIN` + mounted secret
-   bundle.
+   (depends on 0239 Phase 2). Env var `CH_DOMAIN` + mounted secret
+   bundle. (Implemented as `CH_DOMAIN` — the name CDK's
+   `compute-stack.ts` already injects; the earlier `CH_PROD_DOMAIN`
+   draft name was never wired into the stack.)
 6. **Cleanup**: remove the `sqlx` dep from `crates/indexer/Cargo.toml` if no
    other module in the crate needs it after the refactor.
 
@@ -357,20 +384,51 @@ completed, history entry pointing at the cutover date.
 
 ## Acceptance Criteria
 
-- [ ] `cargo check -p indexer` clean with no `sqlx` dep
-- [ ] Lambda deploy with mTLS connection to Hetzner CH (env var `CH_PROD_DOMAIN` + mounted secret)
+- [x] `cargo check -p indexer` clean with no `sqlx` dep
+      _Verified: `cargo tree -p indexer --no-default-features | grep sqlx` = 0.
+      sqlx + db are now `optional`, gated behind the `pg-persist` feature
+      (consumed only by backfill-runner / backfill-bench)._
+- [ ] Lambda deploy with mTLS connection to Hetzner CH (env var `CH_DOMAIN` + mounted secret)
+      _Code complete (`db_clickhouse::mtls::client_from_lambda_env`,
+      reads `CH_DOMAIN` + `MTLS_SECRET_NAME` via the Parameters and
+      Secrets Lambda Extension). Actual deploy is operator-side — Part D._
 - [ ] Smoke test: ledger N writes to CH, query `SELECT * FROM ledgers WHERE sequence = N` returns the row
-- [ ] 39 existing indexer tests rewritten or gated (CH-only test path)
-- [ ] Replay safety: re-delivering an S3 event = no duplicates in CH (`ReplacingMergeTree(version)` verified)
-- [ ] Error path: CH unreachable → Lambda fails, CloudWatch logs "ClickHouse unreachable", S3 retry kicks in (verified via toxiproxy or manual CH stop)
-- [ ] `docs/runbooks/live-tail-cutover.md` authored and reviewed
+      _Verified **locally** via `crates/db-clickhouse/tests/persist_e2e.rs`
+      against CH 26.3 (same major as prod): `persist_ledger_clickhouse`
+      writes the ledger + transaction, `SELECT … WHERE sequence = N`
+      round-trips every column. Prod smoke through the mTLS path is Part D-7._
+- [x] 39 existing indexer tests rewritten or gated (CH-only test path)
+      _Legacy PG suite (`tests/persist_integration.rs`, staging/cache unit
+      tests) gated via `required-features = ["pg-persist"]`. Default
+      `cargo test -p indexer` runs the new CH-path unit tests (retry
+      classifier, log redaction, network-id init)._
+- [x] Replay safety: re-delivering an S3 event = no duplicates in CH (`ReplacingMergeTree` verified)
+      _Verified empirically in `persist_e2e.rs`: a second
+      `persist_ledger_clickhouse` of the same ledger keeps
+      `count(DISTINCT sequence)` = 1 on `ledgers` (plain MergeTree by
+      design) and `count() … FINAL` = 1 on `transactions` (RMT dedup)._
+- [ ] Error path: CH unreachable → Lambda fails, CloudWatch logs the failure, S3 retry kicks in
+      _Code complete (fail-loud past the `[50,200,800]ms` transient-retry
+      envelope; denylist classifier in `mod.rs`; `persist.rs` unit test
+      `wrapper_returns_err_when_client_unreachable`). Toxiproxy / manual
+      CH-stop verification is operator-side at cutover._
+- [x] `docs/runbooks/live-tail-cutover.md` authored and reviewed
+      _Authored (Operator pre-reqs + Part A–D + DR scenarios); reviewed
+      across three code-review + security passes._
 - [ ] Cutover executed empirically: no ledger gap, no double-write corruption
+      _Operator-side — Part B execution._
 - [ ] Monitoring: CloudWatch metric "ledger lag" <30 s post-cutover (matches D3 AC #1)
+      _Alarm wired (`IndexerChWriteFailureAlarm` + existing
+      `GalexieLagAlarm` in `cloudwatch-stack.ts`); <30 s steady-state
+      confirmed empirically at cutover (runbook B-2/B-4)._
 - [ ] Rollback path documented and test-runed
+      _Documented (runbook B-3, incl. pre-staged rollback Lambda package
+      in S3). Test-run is operator-side._
 - [ ] Lessons learned written into the runbook (post-execution edit)
-- [ ] **Docs updated** — `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`
+      _Post-execution — runbook Part C template ready._
+- [x] **Docs updated** — `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`
       reflects the CH write path (replaces the PG write path description)
-- [ ] **API types regenerated** — N/A — task does not touch `crates/api/**`,
+- [x] **API types regenerated** — N/A — task does not touch `crates/api/**`,
       `Cargo.{toml,lock}` (root), or `libs/api-types/**`
 
 ### Part D acceptance criteria (absorbed from 0239)

@@ -9,7 +9,10 @@ name = "backfill-runner"
 path = "src/main.rs"
 
 [dependencies]
-indexer = { path = "../indexer" }
+# Task 0241 — indexer's PG persist tree is now feature-gated behind
+# `pg-persist`. backfill-runner's Postgres sink (`--target postgres`)
+# still drives the 15-step PG flow, so we opt into the feature here.
+indexer = { path = "../indexer", features = ["pg-persist"] }
 xdr-parser = { path = "../xdr-parser" }
 db = { path = "../db" }
 # ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently

@@ -4,6 +4,7 @@ import * as chatbot from 'aws-cdk-lib/aws-chatbot';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -146,6 +147,76 @@ export class CloudWatchStack extends cdk.Stack {
           label: 'Error Rate',
         }),
         threshold: config.processorErrorRateThreshold,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
+    // Alarm 2b: Indexer ClickHouse write / mTLS init failure (task 0241)
+    // Counts the indexer's terminal failure log lines: a CH write that
+    // failed AFTER the in-band retry envelope was exhausted, or an
+    // mTLS bundle that could not be assembled at cold start. This is a
+    // POST-RETRY hard-failure counter — a transient 5xx burst that the
+    // retry envelope recovers from emits no matching line and does NOT
+    // increment this metric (the per-retry "…hit transient CH error —
+    // retrying" warn is intentionally not matched here). Complements
+    // Alarm 2 (Lambda Errors metric): it pins the failure to the CH
+    // write / mTLS path specifically, where the Errors rate alone
+    // wouldn't tell you which subsystem broke.
+    // ---------------------
+    const chWriteFailureFilter = new logs.MetricFilter(
+      this,
+      'IndexerChWriteFailureFilter',
+      {
+        logGroup: logs.LogGroup.fromLogGroupName(
+          this,
+          'ProcessorLogGroupRef',
+          `/aws/lambda/${processorFunction.functionName}`
+        ),
+        // JSON-anchored match on `$.fields.message` — the indexer
+        // Lambda uses `tracing_subscriber::fmt().json()`, so each log
+        // line is `{"fields":{"message":"...","error":"..."},...}`.
+        // A bare substring filter would match the second message
+        // accidentally through `fields.error` (which Display-formats
+        // `HandlerError::ClickHouse` to "ClickHouse write failed: ..."),
+        // and any future variant rewording would silently break the
+        // alarm. Match on the exact event message strings emitted by
+        // `mod.rs::handler` and `main.rs` cold-start.
+        filterPattern: logs.FilterPattern.any(
+          logs.FilterPattern.stringValue(
+            '$.fields.message',
+            '=',
+            'failed to process S3 record'
+          ),
+          logs.FilterPattern.stringValue(
+            '$.fields.message',
+            '=',
+            'failed to build mTLS CH client'
+          )
+        ),
+        metricNamespace: 'SorobanBlockExplorer/Indexer',
+        metricName: 'ChWriteFailures',
+        metricValue: '1',
+        defaultValue: 0,
+      }
+    );
+    withActions(
+      new cloudwatch.Alarm(this, 'IndexerChWriteFailureAlarm', {
+        alarmName: `${config.envName}-indexer-ch-write-failures`,
+        alarmDescription:
+          'Indexer Lambda logged a CH write failure (post-retry hard error or mTLS init failure).',
+        metric: chWriteFailureFilter.metric({
+          period: cdk.Duration.minutes(5),
+          statistic: cloudwatch.Stats.SUM,
+        }),
+        // Threshold tuned to survive a planned Caddy reload window
+        // (~30 s = up to ~10 ledger events post-retry-exhaustion).
+        // Raise further if observed false-alarms during routine
+        // operational maintenance.
+        threshold: 10,
         comparisonOperator:
           cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
         evaluationPeriods: 1,

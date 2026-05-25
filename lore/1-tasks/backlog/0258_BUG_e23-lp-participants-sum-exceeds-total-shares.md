@@ -98,7 +98,7 @@ lp_positions FINAL` on Hetzner CH as a one-shot.
 - [ ] Root cause identified (a / b / c).
 - [ ] Fix landed (parser, schema, or runbook OPTIMIZE).
 - [ ] E23 re-run on 5K pools reports `shares_bounded_by_total.fail
-    = 0`.
+= 0`.
 - [ ] **Docs updated** — if the fix touches parser, update
       `docs/architecture/xdr-parsing/xdr-parsing-overview.md`;
       if schema/OPTIMIZE, update

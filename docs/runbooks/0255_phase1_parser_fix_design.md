@@ -150,7 +150,7 @@ loop. **Reject** — too invasive for a focused bug fix.
 
 1. **Add helper** `crates/xdr-parser/src/lib.rs` →
    `pub fn extract_op_source_per_contract(tx: &Transaction, tx_source: &str)
- -> Vec<(String, String)>`.
+-> Vec<(String, String)>`.
    New file `crates/xdr-parser/src/op_source.rs` or extend
    `crates/xdr-parser/src/sac.rs` if logically close.
 
