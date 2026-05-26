@@ -46,10 +46,13 @@ fn parse_nft_path(
 ) -> Result<(String, String), axum::response::Response> {
     path::strkey(contract, 'C', "contract_id")?;
 
-    if token_id.is_empty() || token_id.len() > 128 || !token_id.is_ascii() {
+    if token_id.is_empty()
+        || token_id.len() > 128
+        || !token_id.bytes().all(|b| b.is_ascii_graphic())
+    {
         return Err(errors::bad_request_with_details(
             errors::INVALID_ID,
-            "token_id must be a non-empty ASCII string of at most 128 characters",
+            "token_id must be a non-empty printable-ASCII string of at most 128 characters",
             serde_json::json!({ "param": "token_id", "received": token_id }),
         ));
     }
