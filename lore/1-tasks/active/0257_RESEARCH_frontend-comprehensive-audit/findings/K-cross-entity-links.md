@@ -174,3 +174,51 @@ account routing.** `toFlowNodes.tsx:163-171` collects a
 as `{ kind: 'destination', identifier: { value, type: 'account' } }`.
 Routing through `OperationFlowTree` (libs/ui) needs confirmation it
 exposes the identifier as a clickable link — verify in delta pass.
+
+## Post-Gate-B research finding — PoolAssetLeg schema gap
+
+### F-K-9 🟠 HIGH `[Class B routing/contract]` — `PoolAssetLeg` lacks linkable asset identifier
+
+**Date added:** 2026-05-25 (during 0263 correctness research, post-Gate-B)
+
+**Trigger:** Verifying task 0263 (pool detail reserve labels Link wrap) — proposed `routes.asset(...)` call needed an asset ID. Inspection of generated types revealed PoolAssetLeg doesn't carry one.
+
+**Evidence:**
+
+- `libs/api-types/src/generated/types.gen.ts:1155-1166` — `PoolAssetLeg` shape:
+  ```ts
+  type PoolAssetLeg = {
+    asset_code: string;
+    asset_type: string;
+    asset_type_name: string;
+    issuer?: string | null;
+  };
+  ```
+  **No `id`, no `contract_id`.**
+
+- Asset endpoint accepted formats (per `crates/api/src/assets/handlers.rs:get_asset`):
+  - numeric `assets.id`
+  - contract C-strkey (56 chars)
+  - `code-issuer` composite (e.g. `USDC-GA...XYZ`)
+
+- Pool reserve leg-by-type capability to link:
+  | Leg type | Has `code`? | Has `issuer`? | Linkable from PoolAssetLeg? |
+  |---|---|---|---|
+  | Native (XLM) | ✓ (`XLM`) | ✗ | **No** — no `id`, no `issuer`, no `contract_id` |
+  | Classic credit (e.g. USDC) | ✓ | ✓ | **Partial** — `code-issuer` composite works ✓ |
+  | SAC (Stellar Asset Contract) | ✓ | ✓ (maybe) | **No** — canonical link target = `contract_id` (C-strkey), not in shape |
+  | Soroban contract token | ✓ | ✗ | **No** — needs `contract_id`, not in shape |
+
+**Severity / impact:**
+
+- Audit Wave 3 1.7 cross-entity link integrity sweep flagged the symptom (F-K-2 reserve labels plain text) but didn't dig to the schema cause.
+- Backend response shape is the root blocker. FE Link wrap (F-K-2 fix) cannot ship without adding a linkable identifier to the wire format.
+- Cross-task implication: every pool reserve, every pool list row's reserve display, every pool history surface that surfaces a leg-by-leg breakdown is affected.
+
+**Class:** B routing/contract — backend wire format affects what the FE can route.
+
+**Action:** Backend extends `PoolAssetLeg` with linkable identifier (`asset_id` numeric, `contract_id` C-strkey, or both — team decision). FE consumes via Link wrap. Folded into task 0263 scope per user 2026-05-25 (instead of spawning separate 0266) — single full-stack feature, atomic PR, one OpenAPI regen.
+
+**Estimate:** ~30min backend (schema extend + populate in pool queries + test) + ~10min FE (Link wrap × 2) + ~5min API types regen = ~45min total (full-stack PR).
+
+**Status:** Spawned into task 0263 (rewritten 2026-05-25). See `lore/1-tasks/backlog/0263_BUG_pool-detail-cross-entity-links-backend-and-fe.md`.

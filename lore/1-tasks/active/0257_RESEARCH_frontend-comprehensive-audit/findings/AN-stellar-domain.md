@@ -101,3 +101,78 @@ Cross-reference U-component-reuse.md F-U-4. Two `STROOPS_PER_XLM` constants (num
 ## Delta-audit pointer
 
 Per Gate A note on FilipDz merge: `transaction-detail/advanced/` XDR patterns reviewed above (F-AN-2). Strkey/hex usage there: pool IDs not present in tx-detail context; contract IDs displayed as C-strkey via `Chip` + `truncateMiddle` ✓. Op-type mapping uses `formatOperationType` from `transactions/operationTypes.ts` consistently ✓ (per F-AN-3 evidence list). Network passphrase still unused (FE doesn't sign).
+
+## Post-Gate-B research finding — strkey convention cross-cutting
+
+### F-AN-8 🟠 HIGH [Class B routing/contract] — Pool ID format is hex-only across backend + URL, anti-convention vs Stellar ecosystem
+
+**Date added:** 2026-05-25 (post-Gate-B during 0264 fix design)
+
+**Trigger:** Investigating 0264 fix correctness (F-L-1 search strkey gap) surfaced systemic convention issue.
+
+**Per-endpoint format inventory (backend `crates/api/src/*/handlers.rs`):**
+
+| Endpoint | Accepts | Industry standard | Verdict |
+|---|---|---|---|
+| `/v1/accounts/:id` | strkey `G...` (`path::strkey(_, 'G', _)`) | strkey | ✓ canonical |
+| `/v1/contracts/:id` | strkey `C...` (`path::strkey(_, 'C', _)`) | strkey | ✓ canonical |
+| `/v1/transactions/:hash` | hex hash (`path::parse_hash`) | hex | ✓ tx hash = hex industry-wide |
+| `/v1/ledgers/:seq` | numeric | numeric | ✓ |
+| `/v1/assets/:id` | polymorphic: numeric `assets.id` OR contract strkey `C...` OR `code-issuer` composite | mixed | ⚠ polymorphic by design (accepted) |
+| `/v1/nfts/:id` | `parse_nft_id` (TBD) | ? | ? (verify) |
+| **`/v1/liquidity-pools/:id`** | **hex 64-lowercase ONLY** (`path::pool_id_hex`) | **strkey L...** | **❌ outlier vs ecosystem** |
+
+**Industry convention (Stellar / Soroban):**
+- Strkey is canonical human-facing ID per CAP-38 + Stellar SDK. G/C/L/M/T/X/S prefix encodes type.
+- Horizon API `/liquidity_pools/<id>` accepts BOTH hex and strkey; returns canonical strkey.
+- stellar.expert URLs use canonical forms (strkey-first for accounts/contracts/pools; hex for tx hashes).
+- Stellar Lab + Soroban CLI: strkey-first.
+
+**FE side inconsistency** (`web/src/pages/liquidity-pools/PoolsTable.tsx`, `pool-detail/PoolSummary.tsx`):
+```
+PoolsTable.tsx:
+  const strkey = poolIdHexToStrkey(row.pool_id);     // converts to strkey...
+  href={routes.pool(row.pool_id)}                    // ...but URL uses hex
+
+PoolSummary.tsx:
+  value={poolIdHexToStrkey(pool.pool_id)}            // display = strkey
+  href={routes.pool(pool.pool_id)}                   // URL = hex
+```
+
+**Consequences:**
+- User sees strkey `L...` in UI display + copy button.
+- URL bar shows hex (`/liquidity-pools/<64-hex>`).
+- User copies strkey display → pastes into our search → **F-L-1 fail** (search backend requires hex).
+- User pastes strkey from external explorer (stellar.expert / Horizon) → **search fail**.
+- User copies hex URL from our URL bar → works internally, but external context expects strkey.
+
+**Root cause:** original pool implementation (0077) chose hex for backend path because SHA-256 hash is naturally hex (32 bytes raw). Strkey wrapping was added later as display-only enhancement, never wired through to URL routing or backend acceptance.
+
+**Recommended fix (Path A, cross-cutting):**
+1. `crates/api/src/common/path.rs` — add `pool_id_or_strkey` validator that accepts hex 64-lower OR strkey `L...` (56 chars base32 with checksum). Convert strkey → hex internally before DB lookup.
+2. `crates/api/src/search/queries.rs` — search classifier detects `L...` prefix, dispatches pool lookup.
+3. `crates/api/src/liquidity_pools/handlers.rs` — every pool handler uses the new validator; internal conversion at boundary.
+4. `web/src/router/routes.ts` — pool URL builder accepts both forms; canonical = strkey going forward (URL bar shows `L...`).
+5. `web/src/pages/liquidity-pools/PoolsTable.tsx` + `pool-detail/PoolSummary.tsx` — wire `href` to strkey, not hex.
+6. `web/src/pages/LiquidityPoolDetailPage.tsx` — `useParams` accepts both; converts to canonical hex internally before TanStack query key (so cache keys stable).
+7. Backwards compatibility: old hex URLs still resolve (validator accepts both forms for ~3 months, then deprecate hex URL form).
+
+**Verify also:**
+- `/v1/nfts/:id` accepts strkey? (NFT IDs in Stellar can be SAC contract addresses or other forms — check `parse_nft_id`)
+- Asset endpoint polymorphic acceptance is OK by design but worth documenting in API docs
+
+**Severity:** 🟠 HIGH (was 🟡 MEDIUM if only display drift, but cross-explorer-paste fail + URL/display divergence promotes to HIGH).
+
+**Class:** B routing/contract — backend wire format affects routing surface; FE URL canonical form affects external interop.
+
+**Effort:** ~3-5h backend (validator + search classifier + handler boundary conversions) + ~1-2h FE (URL builders + display/href alignment + useParams accepting both forms).
+
+**Phase 3 spawn candidate:** `XXXX_REFACTOR_strkey-canonical-everywhere` — bundles F-L-1 + F-K-4 + F-AN-8 into one cross-cutting refactor. Replaces task 0264's narrower scope.
+
+**Impact on Gate B fix-first 0264:**
+- Original 0264 task (FE search preprocess only) is **narrower than the actual problem**.
+- Either:
+  - (a) **Drop 0264**, spawn broader `XXXX_REFACTOR_strkey-canonical-everywhere` Phase 3 task. Wave 6 records F-L-1 as audit baseline, Phase 3 cluster fix.
+  - (b) **Rewrite 0264** to scope = backend Path A canonical fix (broader effort ~3-5h instead of ~1h).
+  - (c) Keep 0264 as **partial FE preprocess** (search-input-only), Phase 3 task does the rest cross-cutting.
+- User decision required.
