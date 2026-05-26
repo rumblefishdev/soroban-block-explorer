@@ -238,3 +238,17 @@ update are:
 3. `web/src/pages/LiquidityPoolDetailPage.tsx` — gate `<PoolCharts/>`, `<PoolParticipants/>`, `<PoolTransactions/>`
 
 See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-D-2 — **RESOLVED** in `473de2a2` + `9e88114b`
+
+Composite NotFound dual error blocks fix landed via Gate B batch (PR #219 merged develop 2026-05-26). All 3 affected detail pages now render single NotFound block on valid-format-404 IDs:
+
+- **`web/src/pages/AccountDetailPage.tsx`** — render-gates `<AccountTransactions/>` on `!account.isError`
+- **`web/src/pages/ContractDetailPage.tsx`** — render-gates tab strip on `!contract.isError`
+- **`web/src/pages/LiquidityPoolDetailPage.tsx`** — render-gates `PoolCharts` + `PoolParticipants` + `PoolTransactions` on `!detail.isError` (LP scope added 2026-05-26 in `9e88114b` after post-activation cross-check confirmed LP also affected — matches pre-Wave-6 sweep correction)
+
+Reference pattern `AssetDetailPage.tsx:127` (E8 already gated) — applied consistently across E6 + E9 + E13.
+
+Originally task 0262 scoped account + contract only. User extended to pool detail (E13) on activation per sweep recommendation. AC `[x] Valid-format-404 IDs render single NotFound block on E6, E9, and E13`.

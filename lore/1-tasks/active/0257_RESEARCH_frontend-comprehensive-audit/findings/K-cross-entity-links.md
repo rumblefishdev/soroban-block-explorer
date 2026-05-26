@@ -283,3 +283,31 @@ sequence in the UI being linked. May be deliberate Figma intent or
 oversight. Defer to Gate B visual audit.
 
 See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-K-2 — **RESOLVED** in `473de2a2` + `a5f15166`
+
+Pool detail reserve labels wrapped in router `<Link to={routes.asset(...)}>` across **3 sites** (post-sweep scope correction from initial 1 site):
+
+- `web/src/pages/pool-detail/PoolSummary.tsx` (AssetReserveCell) — via `legHref` precedence
+- `web/src/pages/pool-detail/PoolKpiStrip.tsx` — per-leg KPI subtitle (NEW per sweep — `a5f15166`)
+- `web/src/pages/liquidity-pools/PoolsTable.tsx` — reserve column asset codes on list page (NEW per sweep — `a5f15166`)
+
+Unblocked by backend `PoolAssetLeg` schema extension (see F-K-9 below).
+
+### F-K-3 — **RESOLVED** in `473de2a2`
+
+`PoolParticipants.tsx` "Since ledger" column wrapped in `<Link to={routes.ledger(seq)}>`. Per task 0263 acceptance criterion `[x] PoolParticipants.tsx wraps Since-ledger cell in RouterLink`.
+
+### F-K-9 — **RESOLVED** in `473de2a2`
+
+`PoolAssetLeg` backend schema extended with linkable identifier; `crates/api/src/liquidity_pools/queries.rs` populates new field; OpenAPI regen committed (`libs/api-types/src/openapi.json` + `libs/api-types/src/generated/types.gen.ts`); FE consumes via the 3-site Link wrap above. Full-stack atomic landing per merged 0263 task body.
+
+### F-K-4 — **STILL OPEN** (search portion deferred)
+
+Empty-state hint `L...` addition deferred to `future-search-followup` follow-up task per 0264 Gate B mid-PR scope correction (search-related Phases 3 + 9 + 10 + Fala 3 reverted; full search work spawned separately). See 0264 archive task body §Issues for deferral rationale.
+
+### F-K-5 + F-K-6 + F-K-7 + F-K-8 — **STATUS UNCHANGED**
+
+Account self-link (K-5), missing source-account column for accounts list (K-6), E3 tx-detail ledger link verification (K-7), Soroban call tree destination account routing (K-8) — none touched by Gate B batch. Will surface in Wave 6 Track 2 Playwright re-pass if remaining issues.

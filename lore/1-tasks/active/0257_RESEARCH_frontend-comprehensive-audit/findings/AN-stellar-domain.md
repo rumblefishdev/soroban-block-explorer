@@ -176,3 +176,16 @@ PoolSummary.tsx:
   - (b) **Rewrite 0264** to scope = backend Path A canonical fix (broader effort ~3-5h instead of ~1h).
   - (c) Keep 0264 as **partial FE preprocess** (search-input-only), Phase 3 task does the rest cross-cutting.
 - User decision required.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-AN-8 — **RESOLVED** in `473de2a2` + `db327f7b` + `863a597a` + `9c3db048` + `4716d5f3`
+
+Strkey canonical convention shipped across the full surface via task 0264 Gate B batch. Effective coverage:
+
+- **Pool endpoint:** `crates/api/src/common/path.rs::pool_id_strkey` validator (strkey-only, returns hex internal); 4 pool handlers consume it; wire response field `pool_id` returns strkey; `cargo test` regression cases for strkey accept + hex reject + garbage reject.
+- **FE pool URLs:** `routes.pool(...)` callers pass strkey; `isPoolId` validator updated; `LiquidityPoolDetailPage.tsx` `useParams` consumes strkey.
+- **NFT route — bonus refactor:** original task body scoped Phase 8 as "verify NFT canonical" (assumed clean). Post-activation audit + stellar.expert convention check found `/v1/nfts/:i32` numeric DB surrogate. **Upgraded to full route refactor:** `/v1/nfts/:contract_id/:token_id` composite path; `parse_nft_path` validates C-strkey + opaque token_id; `get_nft_detail` + `list_nft_transfers` lookup by composite; `nft_id i32` surrogate kept internal-only (cursor/joins). FE composite path `/nfts/:contractId/:tokenId` consumed by `NftDetailPage`; NFT list rows + cross-entity NFT references updated.
+- **Evergreen doc:** `docs/architecture/api/url-conventions.md` created with full per-endpoint table + rationale + ADR-0032 cross-link (`863a597a` restore commit).
+
+**Search portion deferred** — Phase 3 (backend search classifier `L...` decode), Phase 9 (no-op confirm), Phase 10 (FE empty-state hint), plus search output strkey alignment for pool + NFT composite — captured in `future-search-followup` task. F-L-1 + F-K-4 STILL OPEN as of Gate B close. See 0264 archive task body §Issues #5 for deferral rationale (4 in-flight subagent commits reverted to keep batch focused).

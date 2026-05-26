@@ -91,3 +91,9 @@ All justified. Class D informational; no action.
 ## Top concern
 
 **F-AE-5 + F-D-2 (composite NotFound)** — Gate B fix-first candidate. Sub-section query gating is a small refactor with high UX dividend.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-AE-5 — **RESOLVED** in `473de2a2` + `9e88114b`
+
+Paired with F-D-2 (composite NotFound). Sub-section queries no longer fire on parent 404 → console no longer emits duplicate API 404 traces from sub-section TanStack hooks during valid-format-404 navigation. Fix same as F-D-2 (render-gates added on account / contract / LP detail pages).

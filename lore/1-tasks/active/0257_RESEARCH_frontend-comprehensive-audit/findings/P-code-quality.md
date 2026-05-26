@@ -134,3 +134,15 @@ changes).
 
 **Code-quality conclusion:** Filip's PR is clean by lint+tsc baseline.
 No new P findings.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-P-1 — **STILL STANDS** (verified post-merge)
+
+`web/src/pages/liquidity-pools/assetColor.ts:131` non-null assertion (`FALLBACK_PALETTE[hash(legKey(leg)) % FALLBACK_PALETTE.length]!`) NOT touched by Gate B batch despite `PoolsTable.tsx` (same directory) being heavily modified for F-K-2 link wraps. Lint baseline remains: **0 errors, 1 warning** at the same file:line.
+
+Fix candidate: `noUncheckedIndexedAccess` flag (F-AQ-1) would catch this at type level; alternative inline fix = explicit length check or `?? fallback` ternary. Phase 3 code-quality cluster candidate.
+
+### F-P-2 through F-P-8 — **STATUS UNCHANGED**
+
+Other Wave 1 P findings (eslint warning count, `console.log` leftover sweep, dead code) not addressed by Gate B batch. Defer to Phase 3 code-quality cluster.

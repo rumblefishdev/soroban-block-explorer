@@ -157,3 +157,19 @@ worth bumping in a dedicated PR with a full `format:write` follow-up.
 5. **🟢 LOW (F-CO-2):** Allowlist `lodash-es` via `cargo-lambda-cdk` in
    `npm audit` config (confirm not user-reachable first).
 6. **🟢 LOW (F-CO-8):** Bundle prettier 2→3 with eslint bump.
+
+## Gate B merge resolution 2026-05-26 — develop @ cdb0c81d (PR #219)
+
+### F-CO-1 — **RESOLVED** in `473de2a2`
+
+Vite bumped 7.3.1 → 7.3.3 via single-line `npm i vite@7.3.3 --save-dev`. `package.json` `^7.0.0` semver unchanged (7.3.3 within range); only `package-lock.json` pinned to 7.3.3. All 3 dev-server CVEs closed:
+
+- GHSA-4w7w-66w2-5vf9 (moderate) — Path Traversal in Optimized Deps `.map` Handling
+- GHSA-v2wj-q39q-566r (high) — `server.fs.deny` bypass via query strings
+- GHSA-p9ff-h696-f583 (high) — arbitrary file read via WebSocket
+
+`nx build web` exits 0 post-bump; `npx nx dev` smoke OK (server starts, route `/` serves 200); `npm audit` (without `--omit=dev`) no longer lists the 3 advisories.
+
+### F-CO-6 (mui triple-version) — **STATUS UNCHANGED**
+
+`@mui/utils` triple-version (7.3.9, 9.0.0, 9.0.1) in lockfile not addressed by Gate B batch. Defer to Phase 3 dep-hygiene cluster spawn.
