@@ -15,6 +15,7 @@ use crate::common::extractors::Pagination;
 use crate::common::filters;
 use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
 use crate::common::path;
+use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
@@ -33,7 +34,7 @@ use super::queries::{
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — 64-char lowercase hex (BYTEA) per ADR 0024."),
+         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -53,14 +54,15 @@ pub async fn list_participants(
     Path(pool_id): Path<String>,
     pagination: Pagination<SharesCursor>,
 ) -> Response {
-    if let Err(resp) = path::pool_id_hex(&pool_id, "pool_id") {
-        return resp;
-    }
+    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
+        Ok(hex) => hex,
+        Err(resp) => return resp,
+    };
 
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    match pool_exists(&state.db, &pool_id).await {
+    match pool_exists(&state.db, &pool_id_hex).await {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -76,7 +78,7 @@ pub async fn list_participants(
     let direction = pagination.direction;
     let mut rows = match fetch_participants(
         &state.db,
-        &pool_id,
+        &pool_id_hex,
         pagination.cursor.as_ref(),
         fetch_limit,
         direction,
@@ -173,18 +175,20 @@ fn normalize_asset_code(raw: Option<String>) -> Option<String> {
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
     PoolItem {
-        pool_id: row.pool_id_hex,
+        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex),
         asset_a: PoolAssetLeg {
             asset_type_name: row.asset_a_type_name,
             asset_type: row.asset_a_type,
             asset_code: row.asset_a_code,
             issuer: row.asset_a_issuer,
+            contract_id: row.asset_a_contract_id,
         },
         asset_b: PoolAssetLeg {
             asset_type_name: row.asset_b_type_name,
             asset_type: row.asset_b_type,
             asset_code: row.asset_b_code,
             issuer: row.asset_b_issuer,
+            contract_id: row.asset_b_contract_id,
         },
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
@@ -334,7 +338,7 @@ pub async fn list_pools(
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — 64-char lowercase hex (BYTEA(32)) per ADR 0024."),
+         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
     ),
     responses(
         (status = 200, description = "Pool detail", body = PoolItem),
@@ -344,11 +348,12 @@ pub async fn list_pools(
     ),
 )]
 pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>) -> Response {
-    if let Err(resp) = path::pool_id_hex(&pool_id, "pool_id") {
-        return resp;
-    }
+    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
+        Ok(hex) => hex,
+        Err(resp) => return resp,
+    };
 
-    let row = match fetch_pool_by_id(&state.db, &pool_id).await {
+    let row = match fetch_pool_by_id(&state.db, &pool_id_hex).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -368,7 +373,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — 64-char lowercase hex (BYTEA(32))."),
+         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -388,11 +393,12 @@ pub async fn list_pool_transactions(
     Path(pool_id): Path<String>,
     pagination: Pagination<TsIdCursor>,
 ) -> Response {
-    if let Err(resp) = path::pool_id_hex(&pool_id, "pool_id") {
-        return resp;
-    }
+    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
+        Ok(hex) => hex,
+        Err(resp) => return resp,
+    };
 
-    match pool_exists(&state.db, &pool_id).await {
+    match pool_exists(&state.db, &pool_id_hex).await {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -403,7 +409,7 @@ pub async fn list_pool_transactions(
 
     let mut rows = match fetch_pool_transactions(
         &state.db,
-        &pool_id,
+        &pool_id_hex,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
@@ -475,7 +481,7 @@ fn interval_seconds(interval: &str) -> i64 {
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — 64-char lowercase hex (BYTEA(32))."),
+         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
         ChartParams,
     ),
     responses(
@@ -490,9 +496,10 @@ pub async fn get_pool_chart(
     Path(pool_id): Path<String>,
     Query(params): Query<ChartParams>,
 ) -> Response {
-    if let Err(resp) = path::pool_id_hex(&pool_id, "pool_id") {
-        return resp;
-    }
+    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
+        Ok(hex) => hex,
+        Err(resp) => return resp,
+    };
 
     // All three params are optional. Defaults are tuned per interval so a
     // bare `?` request produces a useful chart without bucket-cap
@@ -574,7 +581,7 @@ pub async fn get_pool_chart(
         );
     }
 
-    match pool_exists(&state.db, &pool_id).await {
+    match pool_exists(&state.db, &pool_id_hex).await {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -583,7 +590,7 @@ pub async fn get_pool_chart(
         }
     }
 
-    let data_points = match fetch_pool_chart(&state.db, &pool_id, &interval, from, to).await {
+    let data_points = match fetch_pool_chart(&state.db, &pool_id_hex, &interval, from, to).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
@@ -649,6 +656,71 @@ mod normalize_asset_code_tests {
         assert_eq!(
             normalize_asset_code(Some("usdc🪙".into())),
             Some("USDC🪙".into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod map_pool_item_tests {
+    use super::*;
+    use crate::liquidity_pools::queries::PoolRow;
+
+    fn base_row() -> PoolRow {
+        PoolRow {
+            pool_id_hex: "0".repeat(64),
+            asset_a_type: 0,
+            asset_a_type_name: Some("native".into()),
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_a_contract_id: None,
+            asset_b_type: 1,
+            asset_b_type_name: Some("credit_alphanum4".into()),
+            asset_b_code: Some("USDC".into()),
+            asset_b_issuer: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
+            asset_b_contract_id: None,
+            fee_bps: 30,
+            fee_percent: "0.30".into(),
+            created_at_ledger: 100,
+            participant_count: 0,
+            latest_snapshot_ledger: None,
+            reserve_a: None,
+            reserve_b: None,
+            total_shares: None,
+            tvl: None,
+            volume: None,
+            fee_revenue: None,
+            latest_snapshot_at: None,
+        }
+    }
+
+    #[test]
+    fn native_leg_has_no_contract_id() {
+        let item = map_pool_item(base_row());
+        assert_eq!(item.asset_a.asset_type, 0, "asset_a is native");
+        assert_eq!(item.asset_a.contract_id, None);
+        assert_eq!(item.asset_b.asset_type, 1, "asset_b is classic credit");
+    }
+
+    #[test]
+    fn classic_credit_leg_surfaces_issuer_and_no_sac_mirror() {
+        let item = map_pool_item(base_row());
+        assert_eq!(item.asset_b.asset_code.as_deref(), Some("USDC"));
+        assert!(item.asset_b.issuer.is_some());
+        assert_eq!(
+            item.asset_b.contract_id, None,
+            "no SAC mirror in `assets` → contract_id stays None"
+        );
+    }
+
+    #[test]
+    fn sac_mirror_contract_id_propagates_to_response() {
+        let mut row = base_row();
+        row.asset_b_contract_id =
+            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into());
+        let item = map_pool_item(row);
+        assert_eq!(
+            item.asset_b.contract_id.as_deref(),
+            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB")
         );
     }
 }

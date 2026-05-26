@@ -12,6 +12,7 @@ use crate::common::extractors::Pagination;
 use crate::common::filters;
 use crate::common::pagination::{finalize_ts_id_page, into_envelope};
 use crate::common::path;
+use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
 use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
@@ -343,7 +344,7 @@ fn db_operations(op_rows: &[super::queries::OpRow]) -> Vec<OperationItem> {
             contract_id: op.contract_id.clone(),
             asset_code: op.asset_code.clone(),
             asset_issuer: op.asset_issuer.clone(),
-            pool_id: op.pool_id.clone(),
+            pool_id: op.pool_id.as_deref().map(pool_id_hex_to_strkey),
             application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,

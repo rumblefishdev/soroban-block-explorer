@@ -2,7 +2,7 @@
 id: '0260'
 title: 'OPS: CH Snapshot B + rsync to M2 — pre-0241-deploy baseline'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0228', '0252', '0241', '0256']
 tags: [priority-high, effort-medium, ops, hetzner, backup]
@@ -28,6 +28,12 @@ history:
       zstd) on Hetzner and one local backfill on the M2 (also large)
       that both pre-date 0252 + 0255. Free both before taking the
       new snapshot — neither is needed once Snapshot B lands on M2.
+  - date: '2026-05-26'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated for execution — pre-0241-deploy snapshot sequence
+      kicks off.
 ---
 
 # OPS: CH Snapshot B + rsync to M2

@@ -134,7 +134,9 @@ pub struct OperationItem {
     /// Asset code (≤12 chars) for classic asset operations.
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
-    /// Hex-encoded liquidity pool ID.
+    /// Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
+    /// from the DB hex form at the response boundary so cross-entity
+    /// link targets match the `/v1/liquidity-pools/:id` route shape.
     pub pool_id: Option<String>,
     /// 1-based per-tx apply position carrying on-chain operation order
     /// (task 0192). For folded appearance rows (multiple identical-identity

@@ -113,35 +113,39 @@ export default function ContractDetailPage() {
         {summary}
       </SectionErrorBoundary>
 
-      <Card>
-        <Box
-          sx={(theme) => ({
-            // Tab bar sits on the darker surface (Figma "Table sections").
-            backgroundColor: theme.palette.surface.grayMainAlt,
-            borderBottom: `1px solid ${theme.palette.stroke.default}`,
-            px: 1,
-          })}
-        >
-          <Tabs
-            tabs={tabs}
-            activeKey={activeKey}
-            onChange={setActiveKey}
-            aria-label="Contract sections"
-          />
-        </Box>
-        <SectionErrorBoundary
-          key={activeKey}
-          sectionName={`contract-${activeKey}`}
-        >
-          {activeKey === 'interface' && (
-            <ContractInterface contractId={contractId} />
-          )}
-          {activeKey === 'invocations' && (
-            <ContractInvocations contractId={contractId} />
-          )}
-          {activeKey === 'events' && <ContractEvents contractId={contractId} />}
-        </SectionErrorBoundary>
-      </Card>
+      {!contract.isError && (
+        <Card>
+          <Box
+            sx={(theme) => ({
+              // Tab bar sits on the darker surface (Figma "Table sections").
+              backgroundColor: theme.palette.surface.grayMainAlt,
+              borderBottom: `1px solid ${theme.palette.stroke.default}`,
+              px: 1,
+            })}
+          >
+            <Tabs
+              tabs={tabs}
+              activeKey={activeKey}
+              onChange={setActiveKey}
+              aria-label="Contract sections"
+            />
+          </Box>
+          <SectionErrorBoundary
+            key={activeKey}
+            sectionName={`contract-${activeKey}`}
+          >
+            {activeKey === 'interface' && (
+              <ContractInterface contractId={contractId} />
+            )}
+            {activeKey === 'invocations' && (
+              <ContractInvocations contractId={contractId} />
+            )}
+            {activeKey === 'events' && (
+              <ContractEvents contractId={contractId} />
+            )}
+          </SectionErrorBoundary>
+        </Card>
+      )}
     </Stack>
   );
 }

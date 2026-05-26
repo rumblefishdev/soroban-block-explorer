@@ -59,9 +59,9 @@ REST API with polling-based updates for new transactions and events.
                │  /assets/:id                ── GET /assets/:id ─────────┤   │
                │  /contracts/:id             ── GET /contracts/:id ──────┤   │
                │  /nfts                      ── GET /nfts ───────────────┤   │
-               │  /nfts/:id                  ── GET /nfts/:id ───────────┤   │
+               │  /nfts/:contract_id/:token_id                  ── GET /nfts/:contract_id/:token_id ───────────┤   │
                │  /liquidity-pools           ── GET /liquidity-pools ────┤   │
-               │  /liquidity-pools/:id       ── GET /liquidity-pools/:id ┤   │
+               │  /liquidity-pools/:strkey       ── GET /liquidity-pools/:strkey ┤   │
                │  /search?q=                 ── GET /search ─────────────┘   │
                │                                         │                   │
                └─────────────────────────────────────────┼───────────────────┘
@@ -74,22 +74,22 @@ REST API with polling-based updates for new transactions and events.
 
 ### 1.3 Routes and Pages
 
-| Route                    | Page            | Primary API Endpoint(s)                                                     |
-| ------------------------ | --------------- | --------------------------------------------------------------------------- |
-| `/`                      | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10` |
-| `/transactions`          | Transactions    | `GET /transactions`                                                         |
-| `/transactions/:hash`    | Transaction     | `GET /transactions/:hash`                                                   |
-| `/ledgers`               | Ledgers         | `GET /ledgers`                                                              |
-| `/ledgers/:sequence`     | Ledger          | `GET /ledgers/:sequence`                                                    |
-| `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
-| `/assets`                | Assets          | `GET /assets`                                                               |
-| `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
-| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
-| `/nfts`                  | NFTs            | `GET /nfts`                                                                 |
-| `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                             |
-| `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
-| `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
-| `/search?q=`             | Search Results  | `GET /search`                                                               |
+| Route                          | Page            | Primary API Endpoint(s)                                                     |
+| ------------------------------ | --------------- | --------------------------------------------------------------------------- |
+| `/`                            | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10` |
+| `/transactions`                | Transactions    | `GET /transactions`                                                         |
+| `/transactions/:hash`          | Transaction     | `GET /transactions/:hash`                                                   |
+| `/ledgers`                     | Ledgers         | `GET /ledgers`                                                              |
+| `/ledgers/:sequence`           | Ledger          | `GET /ledgers/:sequence`                                                    |
+| `/accounts/:accountId`         | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
+| `/assets`                      | Assets          | `GET /assets`                                                               |
+| `/assets/:id`                  | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
+| `/contracts/:contractId`       | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
+| `/nfts`                        | NFTs            | `GET /nfts`                                                                 |
+| `/nfts/:contract_id/:token_id` | NFT             | `GET /nfts/:contract_id/:token_id`                                          |
+| `/liquidity-pools`             | Liquidity Pools | `GET /liquidity-pools`                                                      |
+| `/liquidity-pools/:strkey`     | Liquidity Pool  | `GET /liquidity-pools/:strkey`                                              |
+| `/search?q=`                   | Search Results  | `GET /search`                                                               |
 
 #### Home (`/`)
 
@@ -197,7 +197,7 @@ List of NFTs on the Stellar network (Soroban-based NFT contracts).
 - Filters — collection, contract ID
 - Cursor-based pagination controls
 
-#### NFT (`/nfts/:id`)
+#### NFT (`/nfts/:contract_id/:token_id`)
 
 Single NFT overview.
 
@@ -216,7 +216,7 @@ Paginated table of all liquidity pools.
 - Filters — asset pair, minimum TVL
 - Cursor-based pagination controls
 
-#### Liquidity Pool (`/liquidity-pools/:id`)
+#### Liquidity Pool (`/liquidity-pools/:strkey`)
 
 - Pool summary — pool ID (full, copyable), asset pair, fee percentage, total shares,
   reserves per asset
@@ -396,22 +396,22 @@ types, return types).
 **`GET /nfts`** — Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]`, `filter[contract_id]`.
 
-**`GET /nfts/:id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
+**`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL.
 
-**`GET /nfts/:id/transfers`** — Transfer history for a single NFT.
+**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT.
 
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** — Paginated list of pools. Query params: `limit`, `cursor`,
 `filter[assets]`, `filter[min_tvl]`.
 
-**`GET /liquidity-pools/:id`** — Pool detail: asset pair, fee, reserves, total shares, TVL.
+**`GET /liquidity-pools/:strkey`** — Pool detail: asset pair, fee, reserves, total shares, TVL.
 
-**`GET /liquidity-pools/:id/transactions`** — Deposits, withdrawals, and trades for this
+**`GET /liquidity-pools/:strkey/transactions`** — Deposits, withdrawals, and trades for this
 pool.
 
-**`GET /liquidity-pools/:id/chart`** — Time-series data for TVL, volume, and fee revenue.
+**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
 Query params: `interval` (1h/1d/1w), `from`, `to`.
 
 #### Search
