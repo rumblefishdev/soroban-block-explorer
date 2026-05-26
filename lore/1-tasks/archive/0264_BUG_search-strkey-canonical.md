@@ -2,7 +2,7 @@
 id: '0264'
 title: 'Strkey canonical everywhere — strkey-only (no legacy hex compat) + per-endpoint sweep (closes F-L-1 + F-K-4 + F-AN-8)'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0008', '0032']
 related_tasks: ['0257', '0060', '0077']
 tags:
@@ -35,6 +35,10 @@ history:
     status: active
     who: karolkow
     note: 'Scope expansion (Phase 8 NFT route refactor) — post-activation audit + stellar.expert convention check found NFT endpoint `/v1/nfts/:i32` uses internal DB surrogate PK (`parse_nft_id` accepts only `i32`). stellar.expert addresses Soroban tokens via contract address (`/explorer/public/contract/C...`); no separate `/nft/N` route exists. To honor "strkey canonical everywhere" intent, Phase 8 is upgraded from verify-only to refactor: external NFT route changes to `/v1/nfts/:contract-strkey/:token_id` composite path. Internal `nft_id i32` PK kept as cursor/join key only. Effort +2-3h backend + +1h FE.'
+  - date: '2026-05-26'
+    status: completed
+    who: karolkow
+    note: 'Implemented in 473de2a2. Phases delivered: 1 (pool_id_strkey validator), 2 (4 pool handlers strkey input + decode), 4 (wire shape strkey via pool_id_hex_to_strkey helper), 5-7 (FE routes.pool + isPoolId strkey + LiquidityPoolDetailPage useParams strkey, poolIdStrkey.ts deleted), 8a-c (NFT route composite refactor backend + FE), 11 (docs/architecture/api/url-conventions.md created), 12 (verify + OpenAPI regen). 130 lib tests + 236 bin tests pass. Manual UI verification via Playwright MCP confirms strkey-only enforcement (hex pool 400, strkey pool 404-or-200), NFT composite route works (Punk #1 renders), pool list links all strkey form. **Deferred: Phases 3 + 9 + 10 (search endpoint) + Fala 3 (search output strkey alignment) — spawned as future-search-followup follow-up.** F-AN-8 RESOLVED in this commit. F-L-1 + F-K-4 stay OPEN, blocked on future-search-followup.'
 ---
 
 # Strkey canonical everywhere — strkey-only + per-endpoint sweep
@@ -444,37 +448,41 @@ Add to ADR-0032 evergreen docs gate scope.
 
 ## Acceptance Criteria
 
-- [ ] `crates/api/src/common/path.rs` exposes `pool_id_strkey` validator
+- [x] `crates/api/src/common/path.rs` exposes `pool_id_strkey` validator
       (strkey-only, returns hex internal)
-- [ ] All 4 pool handlers (`get_pool`, `get_pool_chart`,
+- [x] All 4 pool handlers (`get_pool`, `get_pool_chart`,
       `list_pool_transactions`, `list_pool_participants`) use the new validator
-- [ ] Backend search classifier dispatches `L...` strkey input to pool lookup
-- [ ] Backend wire response `pool_id` field returns strkey form
-- [ ] FE `routes.pool(...)` callers pass strkey
-- [ ] FE `isPoolId` validator updated to check strkey (not hex)
-- [ ] `LiquidityPoolDetailPage.tsx` `useParams` consumes strkey
-- [ ] FE search empty-state hint lists `L...` alongside `G...` and `C...`
-- [ ] **Per-endpoint sweep:** every endpoint with an `:id` / `:hash`
-      param verified canonical (or documented exception)
-- [ ] **Phase 8a NFT backend:** route refactored from `/v1/nfts/:i32`
+- [ ] Backend search classifier dispatches `L...` strkey input to pool lookup (deferred to future-search-followup — Phase 3)
+- [x] Backend wire response `pool_id` field returns strkey form
+- [x] FE `routes.pool(...)` callers pass strkey
+- [x] FE `isPoolId` validator updated to check strkey (not hex)
+- [x] `LiquidityPoolDetailPage.tsx` `useParams` consumes strkey
+- [ ] FE search empty-state hint lists `L...` alongside `G...` and `C...` (deferred to future-search-followup — Phase 10)
+- [x] **Per-endpoint sweep:** every endpoint with an `:id` / `:hash`
+      param verified canonical (or documented exception) — see
+      `docs/architecture/api/url-conventions.md`
+- [x] **Phase 8a NFT backend:** route refactored from `/v1/nfts/:i32`
       to `/v1/nfts/:contract_id/:token_id`; `parse_nft_path` validates
       C-strkey + opaque token_id; `get_nft_detail` + `list_nft_transfers`
       lookup by composite; `nft_id i32` surrogate kept internal-only
       (cursor, joins)
-- [ ] **Phase 8b NFT FE:** `routes.nft(contractId, tokenId)` composite;
+- [x] **Phase 8b NFT FE:** `routes.nft(contractId, tokenId)` composite;
       AppRouter `/nfts/:contractId/:tokenId`; `NftDetailPage` reads
       both useParams; `useNftDetail` hook accepts composite; all
       callsites updated
-- [ ] **Phase 8c NFT FE list:** NFT list rows + cross-entity NFT
+- [x] **Phase 8c NFT FE list:** NFT list rows + cross-entity NFT
       references Link to composite path
-- [ ] `docs/architecture/api/url-conventions.md` created with full
+- [x] `docs/architecture/api/url-conventions.md` created with full
       per-endpoint table + rationale + ADR-0032 cross-link
-- [ ] `cargo test -p api` regression cases for strkey accept + hex
-      reject + garbage reject
-- [ ] FE manual paste-strkey-into-search test passes
+- [x] `cargo test -p api` regression cases for strkey accept + hex
+      reject + garbage reject (path validator unit tests + integration
+      tests via tests_integration.rs updated to L-strkey form)
+- [ ] FE manual paste-strkey-into-search test passes (deferred to future-search-followup
+      — Phase 3 brake)
 - [ ] Audit branch `research/0257_frontend-comprehensive-audit` rebased
-      onto develop post-merge
-- [ ] Findings `F-L-1` + `F-K-4` + `F-AN-8` marked `RESOLVED in <SHA>`
+      onto develop (post-merge)
+- [ ] Findings `F-L-1` (deferred to future-search-followup) + `F-K-4` (deferred to future-search-followup) + `F-AN-8` (RESOLVED in `473de2a2`, post-merge SHA reference
+      pending) marked in audit findings docs
 - [ ] **Docs updated** — `docs/architecture/api/url-conventions.md`
       created (Phase 11) + `docs/architecture/frontend/frontend-overview.md`
       cross-link added. Per ADR 0032.
@@ -508,3 +516,89 @@ Add to ADR-0032 evergreen docs gate scope.
 - 14 spawn candidates from Phase 3 (Out-of-scope follow-ups in task
   README) include `XXXX_DOCS_api-url-conventions` which is now folded
   into this task as Phase 11 — drop from Phase 3 spawn list.
+
+## Implementation Notes
+
+Landed in commit `473de2a2` (Gate B batch). **Phases delivered: 1, 2, 4, 5-7, 8a-c, 11, 12. Deferred: 3, 9, 10, Fala 3 — spawned as future-search-followup.**
+
+**Backend** (~10 files):
+
+- `crates/api/Cargo.toml` — added `stellar-strkey = "0.0.16"` dep.
+- `crates/api/src/common/path.rs` — `pool_id_strkey(value, param) -> Result<String, Response>`: decodes L-strkey via `stellar_strkey::LiquidityPool::from_string`, returns 64-char lowercase-hex via `hex::encode(bytes)`. CRC-strict (unlike `strkey()` for G/C which is shape-only — pool internal form is the hash, not the strkey itself). Hex input rejected with informative envelope (`hint: use the strkey (L...) returned by /v1/liquidity-pools`). 7 unit tests added.
+- `crates/api/src/common/strkey.rs` — `pool_id_hex_to_strkey(hex_str) -> String`: inverse of `pool_id_strkey`. Uses `hex::decode` + `stellar_strkey::LiquidityPool([u8; 32]).to_string().to_string()` (double `.to_string()` intentional: inherent returns `heapless::String<56>`, second call via `Display` bridges to `std::String`). Panics on malformed input — DB-trusted, invariant-protected. 3 unit tests (round-trip + short-input panic).
+- `crates/api/src/liquidity_pools/handlers.rs` — 4 handlers (`list_participants`, `get_pool`, `list_pool_transactions`, `get_pool_chart`) decode strkey input via `pool_id_strkey`, pass `pool_id_hex` to DB queries. `map_pool_item` encodes `row.pool_id_hex` → strkey for wire via `pool_id_hex_to_strkey`. utoipa param descriptions updated to "SEP-23 strkey (`L...`, 56 chars)".
+- `crates/api/src/transactions/handlers.rs` — `OperationItem.pool_id` field encoded to strkey via `pool_id_hex_to_strkey` (operations carry pool refs in tx detail responses).
+- `crates/api/src/nfts/handlers.rs` — `parse_nft_id(raw)` → `parse_nft_path(contract, token_id)`. Validates C-strkey via existing `path::strkey('C')`; token_id non-empty, ASCII, ≤128 chars. `get_nft_detail` + `list_nft_transfers` rewrote to take `Path<(String, String)>`. `list_nft_transfers` resolves composite to internal `nft_id i32` once for transfers JOIN.
+- `crates/api/src/nfts/queries.rs` — `fetch_by_id(i32)` → `fetch_by_composite(&str, &str)`; `nft_exists(i32) -> bool` → `nft_exists_by_composite(&str, &str) -> Option<i32>`. WHERE `sc.contract_id = $1 AND n.token_id = $2`. JOIN `soroban_contracts sc` to resolve C-strkey to BIGINT FK.
+- `crates/api/src/main.rs` — `api_docs_json_contains_nfts_paths` doc-test updated to assert composite paths.
+- `crates/api/src/tests_integration.rs` — 5 NFT integration tests + 6 LP integration tests updated. All hex pool ID literals (`"0".repeat(64)`) replaced with L-strkey form `LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR` (zero-payload L-strkey).
+- `crates/api/src/assets/handlers.rs` — deduplicated local `is_strkey_shape` copy; imports from `crate::common::strkey::is_strkey_shape` (single source of truth).
+
+**Frontend** (~10 files):
+
+- `web/src/router/routes.ts` — `routes.pool(strkey)` (1-arg, doc updated to strkey); `routes.nft(contractId, tokenId)` (2-arg composite, encodes only token_id since C-strkey is URL-safe by construction).
+- `web/src/router/index.tsx` — route `nfts/:id` → `nfts/:contractId/:tokenId`.
+- `web/src/api/hooks/useNftDetail.ts`, `useNftTransfers.ts` — signatures `(contractId, tokenId, ...)`; pass `{ path: { contract_id, token_id } }` to api-types generated client.
+- `web/src/pages/NftDetailPage.tsx` — reads `contractId` + `tokenId` from `useParams`. `tokenId` is taken **directly from useParams** (react-router-dom v6+ already URL-decodes path params — earlier manual `decodeURIComponent` removed to prevent double-decode of `%` literals). Validates via `isContractId(contractId)` + `0 < tokenId.length <= 128`.
+- `web/src/pages/nft-detail/NftTransfers.tsx` — props `{ contractId, tokenId }`, useCursorPagination resetKey composite.
+- `web/src/pages/nfts/NftNameCell.tsx` — list cell `routes.nft(row.contract_id, row.token_id)`.
+- `web/src/pages/liquidity-pools/PoolsTable.tsx` — dropped `poolIdHexToStrkey` import + call (backend now returns strkey directly); `IdentifierDisplay value={row.pool_id}` consumes wire strkey.
+- `web/src/pages/pool-detail/{PoolSummary,PoolDetailHeader}.tsx` — dropped `poolIdHexToStrkey` calls.
+- `web/src/pages/LiquidityPoolDetailPage.tsx` — `useParams` strkey-only.
+- `libs/ui/src/identifiers/validators.ts` — `isPoolId` regex `/^L[A-Z2-7]{55}$/` (was 64-char lowercase hex).
+
+**Deleted**: `web/src/utils/poolIdStrkey.ts` (92 LOC manual SEP-23 encoder) — no longer needed since backend returns strkey directly. Moved to `.trash/` per project policy.
+
+**Codegen**: `libs/api-types/src/{openapi.json,generated/}` regen committed. NFT path types now `{ contract_id: string; token_id: string }`; pool path/response shapes use strkey.
+
+**Doc**: `docs/architecture/api/url-conventions.md` (76 lines) created. Per-endpoint table covering 7 endpoints (accounts, contracts, liquidity-pools, nfts, assets, transactions, ledgers) with canonical form + validator + rationale. ADR 0032 cross-link.
+
+**Tests**: 130 lib tests + 236 bin tests pass. `cargo check -p api` clean.
+
+## Issues Encountered
+
+- **Heapless vs std String bridge in `pool_id_hex_to_strkey`**: `stellar_strkey::LiquidityPool::to_string()` returns `heapless::String<56>` (no_std, inherent method takes precedence over `Display::to_string` trait method). Single `.to_string()` returns heapless, function signature requires `std::String` — double `.to_string()` needed to bridge. Comment in code locks the invariant against well-meaning "fix" attempts (CodeRabbit AI review actually flagged this and recommended single call — verified manually that single call breaks compilation with E0308).
+
+- **`cargo lambda watch` requires `/lambda-url/<fn-name>/` prefix for HTTP routing** when running multi-function packages (api + extract_openapi bins). Discovered during local stack verification — initial curl to `/v1/...` returned a "default function disabled" message. Worked around by setting `VITE_API_BASE_URL='http://localhost:9000/lambda-url/api'` for FE. Documented in `crates/api/Cargo.toml` is which functions get bundled.
+
+- **lint-staged stash race during commit**: first attempt to commit the activate-task changes lost the staged content because `git mv` only stages the rename, not the in-place edits made via Edit before mv. lint-staged "Restoring unstaged changes" wiped the YAML status flip + history append back to the working tree, leaving the commit with only the rename. Workaround: explicit `git add` before commit + verify via `git diff --cached`. Documented in this task's history entries so future sessions don't trip on the same flow.
+
+- **Integration tests held literal hex pool IDs** (`"0".repeat(64)`) for invalid-request envelope tests. After Phase 1 (strkey-only validator) those tests started returning the new "must be L-strkey" envelope on the **first** validation step, masking the actual `?interval=1m` / `?from=after?to=` validations they were exercising. Fixed by replacing 6 occurrences of the hex literal with the zero-payload L-strkey (`LAAA...BLIR`) so requests pass path validation and reach the param/range validators.
+
+- **Search endpoint scope deferred mid-PR**: 4 in-flight subagent commits' worth of search work (Phase 3 classifier L-decode, Phase 9 no-op confirm, Phase 10 FE hint, Fala 3 search output strkey alignment for pool + NFT composite) was reverted from working tree per user decision to keep the Gate B batch focused. Lost some staged content along the way (mishandled `git checkout HEAD --` instead of `git restore --staged`); recovered via dangling-blob retrieval (`git fsck --lost-found` + blob content matching) and committed only the minimum required to keep the batch compiling (the `pool_id_hex_to_strkey` helper). Full search work captured in future-search-followup follow-up with recovery hints.
+
+## Design Decisions
+
+### From Plan
+
+1. **Strkey-only on path validator, no legacy hex compat**: per task body — project is pre-deploy, no existing hex bookmarks to preserve. Backend rejects hex with informative 400 (`hint: use the strkey (L...) returned by /v1/liquidity-pools`). Cleaner than maintaining a transition period.
+
+2. **CRC-strict pool validator, shape-only G/C validator**: pool internal DB form is the hash (BYTEA(32)), so a wrong-CRC L-strkey can't decode and must reject at validator. G/C path validators stay shape-only per ADR 0037 — wrong-CRC G/C strkeys fall through to DB miss → 404 (same UX as non-existent address). Asymmetry intentional and documented in `common/path.rs` doc comments.
+
+3. **Phase 8 NFT route refactor (composite path)**: stellar.expert convention check confirmed Soroban tokens addressed via contract URL (`/explorer/public/contract/C...`) — no separate `/nft/N` route exists in ecosystem. Internal `nft_id i32` surrogate stays as DB PK + cursor key, but external route becomes `/v1/nfts/:contract_id/:token_id` composite. Matches CAP-46-6 token contract interface.
+
+4. **`hex` crate over manual loops**: `hex::encode(bytes)` + `hex::decode(s)` replace manual `for b in &bytes { write!(&mut s, "{b:02x}") }` and `u8::from_str_radix(pair, 16)` loops. `hex` already a workspace dep, no new cost.
+
+### Emerged
+
+5. **`docs/architecture/api/url-conventions.md` created** (not in original Phase 11 scope): per-endpoint table + rationale formalising the strkey-canonical convention. Cross-links ADR 0032 (evergreen docs gate). Replaces what was loosely planned as inline doc comments — promoted to standalone evergreen doc because the convention spans 7 endpoints + has 3 documented exceptions (assets polymorphic, transactions hex, ledgers numeric).
+
+6. **`assets/handlers.rs::is_strkey_shape` deduped against `common/strkey::is_strkey_shape`**: pre-existing duplicate, surfaced during sweep. Removed local copy + imported from common. Not in original task scope but landed in same commit because the change is trivial + lowered drift surface.
+
+7. **Search portion deferred mid-batch to future-search-followup**: see Issues §5. User decision after first round of subagent commits — Phase 3 + 9 + 10 + Fala 3 collectively form a coherent "search endpoint strkey + output alignment" unit that can ship independently. Cleaner to land 85% of 0264 with the deferred portion explicitly tracked than to keep the in-flight changes hanging.
+
+8. **`pool_id_hex_to_strkey` panics on malformed input** (rather than `Result`): the helper operates on values flowing from the DB through `BYTEA(32)` columns, which Postgres enforces. A panic here surfaces a DB invariant violation loudly — preferable to silently mapping a corrupted row to an empty wire field. Tests cover the panic explicitly.
+
+9. **`P0264 Phase 8 (NFT)` scope upgrade from "verify-only" to "refactor"**: task body originally listed Phase 8 as "verify each endpoint accepts canonical form". Post-activation audit + stellar.expert convention check found NFT external URL used a numeric DB surrogate (`/v1/nfts/:i32`) — violates "strkey canonical everywhere" spirit. Upgraded to a full route refactor adding ~2-3h backend + ~1h FE effort to the task. Captured as a separate history entry on the task body.
+
+10. **vite `^7.0.0` semver line in `package.json` unchanged**: task 0265 ships in the same batch and explicitly says `package.json` line stays `^7.0.0`; only `package-lock.json` pins 7.3.3. Initial `npm install vite@^7.3.3 --save-dev` bumped the semver floor; reverted to `^7.0.0` per AC (semver still allows 7.3.3 resolution).
+
+## Future Work
+
+**Spawned as backlog tasks**:
+
+- **future-search-followup** — Search strkey canonical + output gaps. Covers Phases 3, 9, 10 (deferred from this task) + Fala 3 (search output strkey alignment for pool + NFT composite) + a handful of UX gaps surfaced during senior review (M-strkey muxed → G resolution, asset composite redirect, ledger numeric redirect). F-L-1 + F-K-4 stay OPEN until future-search-followup lands.
+
+**Architectural follow-up not yet spawned** (consider if scope grows):
+
+- Refactor `IdentifierDisplay` in `libs/ui` to accept `href` as a prop, drop the duplicated route table in `libs/ui/src/identifiers/routes.ts`. Single source of truth for URL conventions in `web/src/router/routes.ts`. Identified during senior review during 0263 / 0264 review pass — kept as future task to avoid blowing scope.

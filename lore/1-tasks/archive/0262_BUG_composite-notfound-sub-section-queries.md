@@ -2,7 +2,7 @@
 id: '0262'
 title: 'Composite NotFound — Account + Contract + LP detail sub-section queries fire alongside parent 404 (dual error blocks)'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0257', '0073', '0075']
 tags:
@@ -24,6 +24,10 @@ history:
     status: active
     who: karolkow
     note: 'Scope expansion — post-activation cross-check audit found LiquidityPoolDetailPage.tsx ALSO affected on valid-strkey-but-404 path: detail.isError gates only summary at L67-77; PoolCharts (L96), PoolParticipants (L98-100), PoolTransactions (L101-103) render unconditionally. Original task claim "LP early-returns on invalid pool ID" covered only format-invalid case (L54-60), not 404 case. 3 pages affected, not 2. Asset (L127 gate) confirmed SAFE; Ledger/Tx/NFT use full-page early-return — SAFE.'
+  - date: '2026-05-26'
+    status: completed
+    who: karolkow
+    note: 'Implemented in 473de2a2 (Gate B batch). 3 pages render-gated (Account/Contract/LP). Manual UI verification done via Playwright MCP against local stack (cargo lambda watch + nx dev :4201 + Postgres :5433 from feat-0077 worktree): valid-format-404 IDs render single NotFound block on E6/E9/E13; garbage IDs hit early-return validator unchanged. Sub-queries still fire network on LP 404 (4× 404 in console) but render-gated per AC — render-gate scope only, not query-disable scope.'
 ---
 
 # Composite NotFound — Account + Contract + LP detail dual error blocks
@@ -206,19 +210,19 @@ scenario renders single error block on E6 + E9 + E13.
 
 ## Acceptance Criteria
 
-- [ ] `AccountDetailPage.tsx` render-gates `<AccountTransactions/>` on
+- [x] `AccountDetailPage.tsx` render-gates `<AccountTransactions/>` on
       `!account.isError`
-- [ ] `ContractDetailPage.tsx` render-gates tab strip on `!contract.isError`
-- [ ] `LiquidityPoolDetailPage.tsx` render-gates PoolCharts +
+- [x] `ContractDetailPage.tsx` render-gates tab strip on `!contract.isError`
+- [x] `LiquidityPoolDetailPage.tsx` render-gates PoolCharts +
       PoolParticipants + PoolTransactions on `!detail.isError`
-- [ ] Valid-format-404 IDs render single NotFound block on E6, E9, **and E13**
-- [ ] Valid IDs still load all tabs/sections normally; no regression
-- [ ] Garbage IDs still hit early-return validator (unchanged behavior)
-- [ ] Audit branch `research/0257_frontend-comprehensive-audit` rebased onto develop post-merge
-- [ ] Finding `F-D-2` in `D-state-coverage-matrix.md` marked `RESOLVED in <SHA>` (note: max 2 blocks on E6+E9, up to 4 on E13)
-- [ ] Finding `F-AE-5` in `M-AE-console-error-handling.md` marked `RESOLVED in <SHA>`
-- [ ] **Docs updated** — `N/A — bug fix, no architecture change`. Per ADR 0032.
-- [ ] **API types regenerated** — `N/A — frontend-only`.
+- [x] Valid-format-404 IDs render single NotFound block on E6, E9, **and E13**
+- [x] Valid IDs still load all tabs/sections normally; no regression
+- [x] Garbage IDs still hit early-return validator (unchanged behavior)
+- [ ] Audit branch `research/0257_frontend-comprehensive-audit` rebased onto develop post-merge (post-merge)
+- [ ] Finding `F-D-2` in `D-state-coverage-matrix.md` marked `RESOLVED in <SHA>` (post-merge, SHA `473de2a2` pre-merge)
+- [ ] Finding `F-AE-5` in `M-AE-console-error-handling.md` marked `RESOLVED in <SHA>` (post-merge)
+- [x] **Docs updated** — `N/A — bug fix, no architecture change`. Per ADR 0032.
+- [x] **API types regenerated** — `N/A — frontend-only`.
 
 ## Notes
 
@@ -234,3 +238,44 @@ scenario renders single error block on E6 + E9 + E13.
   404 case (L67-77 gates summary only).
 - Could batch with 0263 in same PR if implementer prefers (both are FE
   polish in pages/ subdirectory; both touch LiquidityPoolDetailPage).
+
+## Implementation Notes
+
+Landed in commit `473de2a2` (Gate B batch, 4 tasks bundled).
+
+**3 files touched** (render-gate JSX wrap pattern, mirrors `AssetDetailPage.tsx:127`):
+
+- `web/src/pages/AccountDetailPage.tsx` — wrapped `<SectionErrorBoundary sectionName="account-transactions">` in `{!account.isError && (...)}`
+- `web/src/pages/ContractDetailPage.tsx` — wrapped the entire `<Card>` containing Tabs nav + active-tab body in `{!contract.isError && (...)}`. Single guard covers all 3 tabs (Interface / Invocations / Events) + the tab nav itself. Tab nav disappears on parent 404 — desirable.
+- `web/src/pages/LiquidityPoolDetailPage.tsx` — wrapped the 3 sibling `SectionErrorBoundary`s (`pool-charts`, `pool-participants`, `pool-transactions`) in `{!detail.isError && (<>...</>)}`. KPI strip + summary remain handled by their own `isError` branch inside the conditional render above.
+
+**Manual verification** (Playwright MCP against local stack — backend `cargo lambda watch -p 9000`, FE `nx dev :4201`, Postgres `:5433`):
+
+| Route                                                  | Result                                           |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| `/accounts/GAAA…AAAT` (valid-format, not in DB)        | 1 NotFound block, 0 stacked errors ✅            |
+| `/contracts/CAAA…AAAJ` (valid-format, not in DB)       | 1 NotFound block, 0 tabs rendered ✅             |
+| `/liquidity-pools/LAAA…BLIR` (valid strkey, not in DB) | 1 NotFound block, 0 sub-sections rendered ✅     |
+| `/accounts/garbage` (invalid format)                   | Single NotFoundState (early-return unchanged) ✅ |
+
+## Issues Encountered
+
+- **Sub-section queries still fire network on parent 404 — by design**. The render-gate only suppresses the error UI; React Query hooks inside the gated children still issue HTTP requests during the brief moment the parent query is in-flight, and once parent errors the hooks aren't unmounted because the gate evaluation happens on parent's `isError`. Observed in browser console for LP route: 4× 404 responses (parent + 3 sub-queries). Per AC the requirement was "single NotFound block on screen", not "no wasted network on 404". Treating this as out-of-scope rather than a regression — call out for follow-up if cold-network UX becomes important.
+
+## Design Decisions
+
+### From Plan
+
+1. **Render-gate at parent level, not `enabled` flag at hook level**: task body listed both options. Picked render-gate because it mirrors the existing pattern at `AssetDetailPage.tsx:127` — keeping E6/E9/E13 + E8 (asset, already correct) symmetric. Easier to audit consistency.
+
+2. **For Contract: gate the whole `<Card>` containing Tabs + body, not per-tab `enabled` flags**: simpler, single guard covers all 3 tabs and the tab nav. Tab nav disappearing on 404 is a feature — caller shouldn't see a nav strip pointing at sections of a contract that doesn't exist.
+
+### Emerged
+
+3. **LP scope-correction added post-activation (2026-05-26)**: original task body claimed LP early-returned on invalid pool ID. True for malformed-strkey, but **not** for valid-strkey-but-404. Cross-check audit found `LiquidityPoolDetailPage.tsx:67-77` gates only the summary slot; PoolCharts/PoolParticipants/PoolTransactions render unconditionally. Scope expanded from 2 → 3 pages, effort estimate 30-45min → 45-60min. Asset (`AssetDetailPage.tsx:127`) confirmed safe; Ledger/Tx/NFT use full-page early-return — safe.
+
+4. **`SectionErrorBoundary` wrappers kept inside the gate**, not removed. The boundary now wraps an unmounted child when parent errors, which is a no-op — but keeps the JSX consistent with the happy-path render. Removing the boundary would couple gate semantics to layout structure.
+
+## Future Work
+
+None for this task — render-gate scope is fully closed. Follow-up consideration (out of scope, not spawned as separate task because no real UX impact yet): pre-suppress sub-query network fan-out via `enabled: !parent.isError` on each hook. Only worth doing if cold-network 404 cost becomes a measured problem.
