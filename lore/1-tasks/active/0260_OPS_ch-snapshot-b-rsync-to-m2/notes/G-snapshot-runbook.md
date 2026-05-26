@@ -315,14 +315,28 @@ diff /tmp/snapshot_b_remote.md5 /tmp/snapshot_b_local.md5
 # Zero-diff = green.
 ```
 
-## 9. Final Snapshot A delete
+## 9. Snapshot A removal — single-step
 
-Only after Phase 3 verification (rsync + md5) is green:
+⚠ Earlier draft of this runbook proposed `mv` to `.trash_*` for
+a recovery window. That is **wrong on a single-filesystem box**:
+`mv` only rewrites the directory entry, the 692 GiB of blocks
+stay allocated, so post-`mv` `df` shows the same free space.
+There is no other large filesystem on `sorban-prod` to receive
+the rename.
+
+Single-step delete is the correct path. The risk surface is
+narrower than it looks: the live `/srv/clickhouse-data` is the
+source of truth, the indexer write path is off pre-0241, and
+a failed Snapshot B is recoverable by re-running BACKUP against
+the same live state. A's job as a Phase 5 rollback gate ended
+when 0252 closed.
 
 ```bash
-ssh sorban-prod 'rm -rf /srv/backups/.trash_pre_repair_<YYYYMMDD>'
-ssh sorban-prod 'df -h /srv'
+ssh sorban-prod 'rm -rf /srv/backups/pre_repair_20260521_1502'
+ssh sorban-prod 'df -h /srv'   # confirm ~972 GiB free
 ```
+
+Capture freed bytes for the README history entry.
 
 ## Open questions for operator
 
@@ -333,9 +347,13 @@ ssh sorban-prod 'df -h /srv'
    current live value is 6 GiB (no bump in place). No record of a
    bump in box bash history during Snapshot A creation. Plan: try
    Snapshot B at 6 GiB first; bump only on `MEMORY_LIMIT_EXCEEDED`.
-3. Where on M2 does the old Soroban-era backfill live? Size?
-4. Is wireguard between M2 and Hetzner configured, or is direct
-   SSH on the management interface the actual transport?
+3. ~~Where on M2 does the old Soroban-era backfill live? Size?~~
+   **Resolved**: "M2" = fishuser-HERO. Backfill was the live
+   Docker volume `soroban-block-explorer_clickhouse-data`
+   (367 GiB) at `/var/lib/docker/volumes/…/_data`. Removed
+   2026-05-26 (Phase 1), 760 GiB free now.
+4. ~~Wireguard or SSH?~~ **Resolved**: direct SSH on alias
+   `sorban-prod` from fishuser-HERO. No wireguard configured.
 5. ~~Does the `transaction_hash_dict` dictionary need explicit
    BACKUP coverage?~~ **Resolved**: `BACKUP DATABASE default`
    covers all tables + dictionaries in the database atomically;
