@@ -1,8 +1,8 @@
 ---
-id: '0266'
+id: '0270'
 title: 'Search strkey canonical output + redirect coverage gaps (deferred from 0264 + senior review)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0264', '0262', '0263', '0265', '0257']
 tags:
@@ -25,6 +25,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0264 deferred scope + senior review redirect-coverage gaps. Merges T1 (Phase 3/9/10 + Fala 3 search-output strkey alignment) and T3 (Gap A/B/D redirect coverage: muxed M→G, asset composite, ledger numeric). Also closes the routing regression introduced by 0264 Phase 8a: NFT search hits currently route to `/nfts/<surrogate>` which React Router cannot match (composite route lands in Phase 8a, but `routeForHit` / `SearchHit` do not yet carry composite payload — explicit NFT short-circuit was reverted in 4716d5f3 to defer the proper fix here). F-L-1 + F-K-4 stay OPEN until this task lands.'
+  - date: '2026-05-26'
+    status: active
+    who: karolkow
+    note: 'Activated after parent PR #219 merged (cdb0c81d). Starting implementation on fresh feature branch.'
 ---
 
 # Search strkey canonical output + redirect coverage gaps
