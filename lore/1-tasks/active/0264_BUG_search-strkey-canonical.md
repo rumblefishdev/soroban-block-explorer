@@ -2,7 +2,7 @@
 id: '0264'
 title: 'Strkey canonical everywhere — strkey-only (no legacy hex compat) + per-endpoint sweep (closes F-L-1 + F-K-4 + F-AN-8)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0008', '0032']
 related_tasks: ['0257', '0060', '0077']
 tags:
@@ -27,6 +27,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0257 Gate B (F-L-1 + F-K-4, Class B 🟠 HIGH) and post-Gate-B research (F-AN-8 cross-cutting Stellar convention). Audit-blocker: must land before Wave 6 — closes 3 audit findings + aligns project with Stellar ecosystem strkey canonical convention. Scope widened per user senior calls 2026-05-25: (1) strkey-only (no legacy hex backwards-compat — project is pre-deploy, no existing user bookmarks to preserve); (2) per-endpoint sweep formal verification + evergreen docs.'
+  - date: '2026-05-26'
+    status: active
+    who: karolkow
+    note: 'Activated as part of Gate B fix-first batch (0262/0263/0264 + 0265 off-band CVE) on shared branch.'
 ---
 
 # Strkey canonical everywhere — strkey-only + per-endpoint sweep

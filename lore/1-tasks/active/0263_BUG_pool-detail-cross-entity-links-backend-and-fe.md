@@ -2,7 +2,7 @@
 id: '0263'
 title: 'Pool detail cross-entity links — PoolAssetLeg backend schema extension + FE Link wraps (reserves + Since-ledger)'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0257', '0077', '0246']
 tags:
@@ -17,6 +17,10 @@ tags:
   ]
 links:
   - 'Finding F-K-2 + F-K-3: lore/1-tasks/active/0257_RESEARCH_frontend-comprehensive-audit/findings/K-cross-entity-links.md'
+  - date: '2026-05-26'
+    status: active
+    who: karolkow
+    note: 'Activated as part of Gate B fix-first batch (0262/0263/0264 + 0265 off-band CVE) on shared branch.'
   - 'Finding F-K-9 (NEW): lore/1-tasks/active/0257_RESEARCH_frontend-comprehensive-audit/findings/K-cross-entity-links.md — PoolAssetLeg schema gap'
   - 'Audit context: lore/1-tasks/active/0257_RESEARCH_frontend-comprehensive-audit/findings/triage-gate-B.md'
   - 'Originating tasks: 0077 (LP list + detail), 0246 (backend LP API extensions)'
@@ -246,7 +250,7 @@ Add Playwright assertion (gated on 0226): pool detail reserve label has
 - [ ] **Docs updated** — `docs/architecture/api/<liquidity-pools>.md`
       (if exists) reflects new `PoolAssetLeg` field. Per ADR 0032. If no
       relevant doc exists, mark `N/A — backend schema extension matches
-    ADR 0032 evergreen docs gate trigger; doc to be added in Phase 3 batch task XXXX_DOCS_evergreen-architecture-sync per audit Wave 5 F-A-3`.
+  ADR 0032 evergreen docs gate trigger; doc to be added in Phase 3 batch task XXXX_DOCS_evergreen-architecture-sync per audit Wave 5 F-A-3`.
 - [ ] **API types regenerated** — handled in Phase 3 (backend) above.
 
 ## Notes
