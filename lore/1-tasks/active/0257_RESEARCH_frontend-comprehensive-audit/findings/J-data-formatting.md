@@ -100,3 +100,60 @@ naming convention for "format a stroop number" (alongside `formatFee`
 returning `"X XLM"` and raw `.toLocaleString('en-US')` in ledger pages).
 
 **J-1, J-2, J-6, J-8 – J-15:** STILL STAND (no semantic change).
+
+---
+
+## Exhaustive formatter dup sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: J-2 cited 7 sites, J-3 cited 3 sites. Re-grep to confirm
+exhaustive across whole tree.
+
+### `toLocaleString('en-US')` — exhaustive count
+
+| File:line | Use |
+|---|---|
+| `web/src/pages/LedgerDetailPage.tsx:85` | sequence label |
+| `web/src/pages/ledgers/LedgerSummary.tsx:29` | base fee stroops display |
+| `web/src/pages/ledgers/LedgerSummary.tsx:74` | sequence |
+| `web/src/pages/ledgers/LedgerSummary.tsx:115` | transaction count |
+| `web/src/pages/ledgers/LedgersTable.tsx:63` | transaction_count cell |
+| `web/src/pages/ledgers/LedgerTransactions.tsx:46` | totalCount caption |
+| `web/src/pages/nft-detail/NftSummary.tsx:88` | minted_at_ledger |
+| `libs/ui/src/identifiers/IdentifierDisplay.tsx:73` | ledger formatForDisplay (internal util) |
+| `libs/ui/src/visualization/Tabs.tsx:42` | tab count badge |
+| `libs/ui/src/layout/TopNav.tsx:83` | formatNumber util |
+
+**Exhaustive count: 10.** J-2 cited 7 (off by 3); F-U-2 cited 10 (correct).
+Severity unchanged 🟡 MEDIUM.
+
+### `toFixed` bypassing canonical formatter — exhaustive count
+
+| File:line | Use |
+|---|---|
+| `web/src/pages/home/ChainOverview.tsx:53` | `tps_60s.toFixed(1)` |
+| `web/src/pages/liquidity-pools/FeePill.tsx:24` | `n.toFixed(2)%` |
+| `libs/ui/src/layout/TopNav.tsx:81` | `value.toFixed(1)M` (formatNumber internal) |
+| `libs/ui/src/layout/TopNav.tsx:132` | `stats.tps_60s.toFixed(1)` |
+| `web/src/pages/transactions/formatters.ts:14` | `xlm.toFixed(7)` — **canonical formatter**, not bypass |
+
+**Exhaustive bypass count: 4.** J-3 cited 3 (missed 1 — `TopNav.tsx:132`
+TPS display is distinct from line 81 internal `formatNumber` util).
+Severity unchanged 🟡 MEDIUM.
+
+### STROOPS_PER_XLM constants
+
+Confirmed 2 sites (transactions/formatters.ts + transaction-detail/shared/formatFee.ts).
+See `U-component-reuse.md` exhaustive sweep section for details.
+
+### formatFee functions
+
+Confirmed 2 sites (J-16 stands). Plus `formatStroops` (J-17) third entry
+point for stroop display.
+
+### Conclusion
+
+J-2 / J-3 counts had minor under-cites (-3 and -1 respectively) but no
+severity escalation needed. Drift risk realized for `STROOPS_PER_XLM` and
+`formatFee` (already reflected in J-4 🟠 + F-J-16 🟠).
+
+See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.

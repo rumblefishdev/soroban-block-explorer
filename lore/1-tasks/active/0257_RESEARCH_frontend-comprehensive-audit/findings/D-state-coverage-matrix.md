@@ -201,3 +201,40 @@ None. Cursor pagination, namespace isolation (`cursor_p`/`cursor_t`/`cursor_e`/`
 ### Out-of-scope observation (not a finding)
 
 Console error count on the transactions list page = 1 (the `favicon.ico` 404 already catalogued as F-AE-1). No new errors from the cursor-paginated requests.
+
+---
+
+## Exhaustive composite-NotFound sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: F-D-2 originally cited "account + contract" (E6/E8/E9). Exhaustive
+walk of all 7 detail pages corrects the scope: **E8 asset is clean**
+(render-gate at line 127), but **E13 pool is newly identified as affected**.
+
+| Page | Sub-sections (count + own queries?) | Parent isError pattern | Dual-block on 404? |
+|---|---|---|---|
+| E3 transaction (`web/src/pages/transaction-detail/index.tsx`) | 5 sections, all read from single `useTransactionDetail` parent — NO own queries | Early-return at lines 62-73 | **NO** — single query |
+| E5 ledger (`web/src/pages/LedgerDetailPage.tsx`) | 2 sections, embedded transactions — NO own queries | Early-return at lines 56-77 | **NO** — single query |
+| E6 account (`web/src/pages/AccountDetailPage.tsx`) | 3 sections — `AccountTransactions` fires own `useAccountTransactions` | Sub-section unconditional mount (line 90-92) | **YES** (F-D-2 confirmed) |
+| E8 asset (`web/src/pages/AssetDetailPage.tsx`) | 3 sections — `AssetTransactions` fires own `useAssetTransactions` | **Render-gate** at line 127: `{!asset.isError && <AssetTransactions/>}` | **NO** — gate present (F-D-2 was wrong about E8) |
+| E9 contract (`web/src/pages/ContractDetailPage.tsx`) | 4 sections — Interface + Invocations + Events all fire own queries | Unconditional mount inside tab Card | **YES** — worst case 4 error blocks (F-D-2 confirmed) |
+| E11 NFT (`web/src/pages/NftDetailPage.tsx`) | 4 sections — `NftTransfers` fires own `useNftTransfers` | Early-return at lines 84-103 | **NO** — sub-sections never mount on parent error |
+| E13 pool (`web/src/pages/LiquidityPoolDetailPage.tsx`) | 6 sections — Charts + Participants + Transactions all fire own queries | Sub-sections unconditional mount (lines 95-103) | **YES — NEW; not in original F-D-2 scope** |
+
+### F-D-2 scope correction (post-exhaustive)
+
+- **Original count:** 3 cells affected (E6/D4, E8/D4, E9/D4)
+- **Exhaustive corrected count:** 3 cells affected — but **different set**: E6/D4, E9/D4, **E13/D4** (NEW); E8/D4 is **clean** (was wrong)
+- **Net delta:** swap E8 → E13; total still 3 affected pages
+- **Reference implementation:** `AssetDetailPage.tsx:127` — `{!asset.isError && <AssetTransactions/>}` is the recommended gate pattern
+
+### Note: task 0262 ownership
+
+User owns task 0262 (composite NotFound) extension on their branch.
+This sweep is report-only — the 3 affected pages for the user's task-body
+update are:
+
+1. `web/src/pages/AccountDetailPage.tsx` — gate `<AccountTransactions/>`
+2. `web/src/pages/ContractDetailPage.tsx` — gate the tab Card or early-return on parent error before mounting tabs
+3. `web/src/pages/LiquidityPoolDetailPage.tsx` — gate `<PoolCharts/>`, `<PoolParticipants/>`, `<PoolTransactions/>`
+
+See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.

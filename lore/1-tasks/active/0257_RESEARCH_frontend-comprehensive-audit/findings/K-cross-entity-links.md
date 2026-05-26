@@ -222,3 +222,64 @@ exposes the identifier as a clickable link — verify in delta pass.
 **Estimate:** ~30min backend (schema extend + populate in pool queries + test) + ~10min FE (Link wrap × 2) + ~5min API types regen = ~45min total (full-stack PR).
 
 **Status:** Spawned into task 0263 (rewritten 2026-05-25). See `lore/1-tasks/backlog/0263_BUG_pool-detail-cross-entity-links-backend-and-fe.md`.
+
+---
+
+## Exhaustive cross-entity link sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: Wave 3 1.7 was Playwright-driven; this sweep is the code-grep
+complement to confirm no additional unlinked identifiers exist.
+
+### Linked identifier surfaces (clean — using IdentifierDisplay/IdentifierWithCopy/RouterLink)
+
+22 files / 80 component-call sites grep-verified using
+`IdentifierDisplay` or `IdentifierWithCopy`, plus dedicated `<Link
+component={RouterLink}>` patterns in:
+`web/src/pages/accounts/AccountBalances.tsx` (asset code → asset detail);
+`web/src/pages/assets/AssetsTable.tsx` (asset code → asset detail);
+`web/src/pages/nfts/NftNameCell.tsx` (NFT name → NFT detail);
+`web/src/pages/home/ViewAllLink.tsx`;
+`web/src/pages/ledgers/LedgerNav.tsx`;
+`web/src/pages/detail/PageBreadcrumb.tsx`;
+`web/src/pages/LedgerDetailPage.tsx` (ledger breadcrumb);
+`web/src/pages/NftDetailPage.tsx` (NFT breadcrumb).
+
+### Unlinked identifier renderings — NEW EXHAUSTIVE LIST
+
+| File:line | Identifier | Type | Render mode | Link target | Severity | Finding |
+|---|---|---|---|---|---|---|
+| `web/src/pages/pool-detail/PoolSummary.tsx:33-34` | reserve asset code | asset | plain `Typography` in AssetReserveCell | `/assets/:id` | 🟠 | **F-K-2** (existing) |
+| `web/src/pages/pool-detail/PoolKpiStrip.tsx:82-83,88-89` | reserve label + subtitle asset code | asset | plain `Typography` in KpiCell | `/assets/:id` | 🟠 | **EXTENDS F-K-2** — additional pool detail surface |
+| `web/src/pages/liquidity-pools/PoolsTable.tsx:97-105` | reserve column asset code (list page) | asset | plain `Typography` in reserves stack | `/assets/:id` | 🟠 | **EXTENDS F-K-2** — list-page surface |
+| `web/src/pages/pool-detail/PoolParticipants.tsx:57-59` | `first_deposit_ledger` "Since ledger" | ledger | plain `Typography` w/ `formatAmount` | `/ledgers/:seq` | 🟠 | **F-K-3** (existing) |
+| `web/src/pages/nft-detail/NftSummary.tsx:87-89` | `minted_at_ledger` | ledger | plain `Typography` w/ inline comment "Plain Satoshi text per Figma" | `/ledgers/:seq` | 🟡 | **NEW — F-EX-1** |
+| `web/src/pages/contracts/ContractEvents.tsx:78-90` | event topic strings (when string-typed) | unknown (could be account/contract) | plain colored `Typography` w/ `shortStr` 4/4 truncate | unclear — topics are unstructured | 🟢 | informational; topics may carry addresses |
+| `web/src/pages/contracts/ContractEvents.tsx:96-126` | event data cell | freeform JSON | plain `Typography` middle-truncated | N/A | N/A | not an identifier |
+
+### Implication for task 0263
+
+Original task 0263 scope: pool detail reserve labels (PoolSummary) +
+PoolAssetLeg backend schema extend.
+
+**Exhaustive surface (3 sites, same backend schema root cause F-K-9):**
+
+1. `web/src/pages/pool-detail/PoolSummary.tsx` (2 reserve cells)
+2. `web/src/pages/pool-detail/PoolKpiStrip.tsx` (2 reserve KPI cells) — **NEW**
+3. `web/src/pages/liquidity-pools/PoolsTable.tsx` (list page reserves column) — **NEW**
+
+All 3 unblocked by same backend `PoolAssetLeg` extension. Recommend user
+extend task 0263 to confirm FE Link wrap applies to all 3.
+
+### Implication for task 0264 — none
+
+No additional endpoints with strkey/hex form drift discovered. Pool is
+the only case.
+
+### Other observation — F-EX-1 (NFT minted_at_ledger plain text)
+
+The `NftSummary.tsx:88` comment explicitly says "Plain Satoshi text per
+Figma — not a mono/linked identifier." Tension with every other ledger-
+sequence in the UI being linked. May be deliberate Figma intent or
+oversight. Defer to Gate B visual audit.
+
+See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.

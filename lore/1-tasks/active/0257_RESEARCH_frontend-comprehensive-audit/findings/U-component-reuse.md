@@ -81,3 +81,68 @@ Multiple ad-hoc implementations:
 5 findings: 0 🔴, 2 🟠 (F-U-3, F-U-4 escalations from Gate A), 3 🟡.
 
 Component reuse is healthy. Main concerns: SectionCard hoist (visual chrome), truncation helper unification, stroops/XLM constant dedup.
+
+---
+
+## Exhaustive truncation re-impl sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: F-U-3 cited "6 ad-hoc implementations". Confirm count is exhaustive
+across `web/src/` + `libs/ui/src/` + `libs/api-types/src/`
+(excluding `generated/`).
+
+### Greps applied
+
+- `slice(0,` and `slice(-` (raw substring truncation)
+- function name declarations: `function shortHash|shortId|shortStr|shortenStrKey|truncateMiddle|truncateHex`
+
+### Result: 6 named ad-hoc impls — F-U-3 CONFIRMED exhaustive
+
+| File:line | Function | head/tail | Used in |
+|---|---|---|---|
+| `web/src/pages/AccountDetailPage.tsx:22` | `shortId(id)` | 4/4 | breadcrumb crumb |
+| `web/src/pages/contracts/ContractEvents.tsx:46` | `shortStr(value)` | 4/4 (when >14) | topic JSON strings |
+| `web/src/pages/contracts/ContractEvents.tsx:107` | inline `data.slice(0,10)…slice(-10)` | 10/10 | event data cell (same file) |
+| `web/src/pages/transaction-detail/index.tsx:23` | `shortHash(hash)` | 6/4 (when >12) | tx breadcrumb |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:5` | `shortId(value)` | 6/4 (when >12) | op flow tree labels |
+| `web/src/pages/transaction-detail/advanced/EventsSection.tsx:29` | `shortenStrKey(value)` | 5/4 (when >12) | event topic identifiers |
+| `web/src/pages/transaction-detail/sections/SignaturesTable.tsx:29` | `truncateHex(hex, 12, 12)` | 12/12 | signature hex |
+
+**End-truncation (different category, NOT counted):**
+- `web/src/pages/nft-detail/NftMetadata.tsx:33` — `text.slice(0, MAX_VALUE_LEN)…` (end-only truncation of freeform JSON values, not middle-truncate identifier display)
+
+**Canonical util available:** `libs/ui/src/identifiers/truncate.ts:21` exports `truncateMiddle` + `getDefaultTruncation(type)` map. Already consumed by `ContractDetailPage.tsx:88` (uses canonical util — proof-of-pattern).
+
+**Conclusion:** F-U-3 count of 6 confirmed exhaustive; no severity change.
+Severity 🟠 HIGH stands.
+
+---
+
+## Exhaustive STROOPS_PER_XLM sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: F-U-4 cited "2 STROOPS_PER_XLM constants". Confirm count is exhaustive.
+
+### Greps applied
+
+- `STROOPS_PER_XLM`, `STROOP_PER_XLM`, `STROOPS`, `STROOP_DIVISOR`
+- `10_000_000`, `10000000`, `10_000_000n`, `1e7`
+- `stroopsToXlm`, `xlmToStroops`, `fromStroops`, `toStroops`, `convertStroops`
+- `formatFee`, `formatStroops`
+
+### Result: confirmed exhaustive
+
+| Constant location | Type | Value |
+|---|---|---|
+| `web/src/pages/transactions/formatters.ts:1` | `number` | `10_000_000` |
+| `web/src/pages/transaction-detail/shared/formatFee.ts:3` | `bigint` | `10_000_000n` |
+
+**Count: 2** — matches F-U-4. No `1e7` literals found; no other stroop divisors.
+
+| `formatFee` impl | Approach |
+|---|---|
+| `web/src/pages/transactions/formatters.ts:11` | Number-based, `xlm.toFixed(7).replace(/\.?0+$/, '')` |
+| `web/src/pages/transaction-detail/shared/formatFee.ts:5` | BigInt-based, whole/frac split |
+
+Plus `formatStroops` at `transaction-detail/shared/formatFee.ts:15`
+(third entry point — captured by F-J-17).
+
+**Conclusion:** F-U-4 count confirmed; no severity change. Severity 🟠 HIGH stands.

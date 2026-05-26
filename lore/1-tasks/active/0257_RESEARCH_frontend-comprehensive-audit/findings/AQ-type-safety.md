@@ -216,3 +216,80 @@ because `XdrOperationDto`-like type doesn't expose `results_meta_xdr`.
 Indicates **api-types codegen drift** — the field exists in the API but
 isn't surfaced in the generated TS shape. Worth a backend openapi schema
 audit; in the FE this is the same problem class as F-AQ-7.
+
+---
+
+## Exhaustive cast & type-escape sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: F-AQ-7 cited 3 files in `transaction-detail/advanced/`.
+Re-grep to confirm exhaustive across whole tree.
+
+### `as unknown as` — true cross-runtime type-escape (1 site, baseline preserved)
+
+| File:line | Reason |
+|---|---|
+| `libs/ui/src/timestamps/useNow.ts:18` | `setInterval` return type cross-platform polyfill |
+
+**Wave 1 baseline of "single legitimate `as unknown as`" still holds post-Filip merge.**
+
+### `as any` / `@ts-ignore` / `@ts-expect-error` — 0 sites
+
+**Wave 1 baseline of "zero `any` / `@ts-ignore`" still holds post-Filip merge.**
+
+### Structural inline casts `(x as { ... })`
+
+| File:line | Cast | Reason |
+|---|---|---|
+| `web/src/api/client.ts:20` | `error as { message: unknown }` | error normalisation |
+| `web/src/api/QueryProvider.tsx:14` | `error as { status?: number }` | retry policy classifier |
+| `web/src/api/queryKeys.ts:39` | `head as { _id?: unknown }` | SDK_IDS_BY_RESOURCE probe |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:12` | `details as { function_name?: unknown }` | heavy XDR shape probe |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:21` | `details as { summary?: unknown }` | heavy XDR shape probe |
+| `libs/ui/src/states/classifyError.ts:23` | `err as { status: unknown }` | error classifier |
+
+**Count: 6.** F-AQ-7 cited "3 files in `transaction-detail/advanced/`" —
+exhaustive count includes 3 API-layer + 2 tx-detail/normal + 1 libs/ui/states.
+
+### `as Record<string, unknown>` (defensive narrowing prep)
+
+| File:line | Cast |
+|---|---|
+| `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:21` | `details as Record<string, unknown>` |
+| `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:23` | `details as Record<string, unknown>` |
+| `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:63` | `value as Record<string, unknown>` |
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:29` | `value as Record<string, unknown>` |
+
+**Count: 4.** All in transaction-detail. F-AQ-7's "3 files in advanced/"
+roughly maps to OperationJsonDetail + HighlightedJson + EventsSection
+(the latter via `'contract' as const` which is safe), with toFlowNodes
+in `/normal/` not `/advanced/` adding a 4th distinct file.
+
+### Other domain-specific casts
+
+| File:line | Cast | Notes |
+|---|---|---|
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:38` | `value as NestedCallShape[]` | post-`Array.isArray` narrow — safe |
+| `web/src/pages/pool-detail/PoolCharts.tsx:190` | `key as ChartMetric` | Tabs.onChange callback string → literal union |
+| `web/src/pages/transaction-detail/index.tsx:131-138` | `heavy as | { results_meta_xdr?: ... } | ...` | F-AQ-8 cited; OpenAPI codegen drift |
+
+### Conclusion
+
+**Total type-escape sites across tree (non-`as const`):** ~14
+- 1× `as unknown as`
+- 6× structural inline casts
+- 4× `as Record<string, unknown>`
+- 3× domain-specific casts
+
+**Across 8 distinct files in `web/src/pages/transaction-detail/`** (Filip's
+heavy-XDR domain) + **3 API-layer files** + **2 libs/ui files** + 1 pool
+chart file.
+
+F-AQ-7 said "3 files in advanced/" — exhaustive count is **broader surface
+area than cited** but pattern unchanged: every instance is defensive
+narrowing of backend JSONB blobs (`Record<string, unknown>` shape) — the
+correct defensive pattern. Real fix: stricter OpenAPI schema for `details`
+field. **Severity 🟡 MEDIUM unchanged.**
+
+**Wave 1 baseline guarantees (`zero as any / @ts-ignore`) still hold.**
+
+See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.

@@ -78,3 +78,81 @@ Therefore the choice is **not** "useTableUrlState vs TanStack-native"; it's "use
 2 1.12 findings + EXTRA analysis verdict KEEP.
 
 Total Wave 4 1.12 findings: 0 🔴, 0 🟠, 1 🟡, 1 🟢. Plus EXTRA decision artifact.
+
+---
+
+## Exhaustive URL-state consumer sweep 2026-05-26 (pre-Wave-6)
+
+Trigger: AL Part 2 verdict KEEP for `useTableUrlState`. Confirm exhaustive
+consumer list and verify no pages bypass the abstraction.
+
+### `useCursorPagination` consumers (13 call sites)
+
+**List pages (5):**
+- `web/src/pages/TransactionsListPage.tsx:34`
+- `web/src/pages/LedgersListPage.tsx:20`
+- `web/src/pages/AssetsListPage.tsx:32`
+- `web/src/pages/NftsListPage.tsx:29`
+- `web/src/pages/LiquidityPoolsListPage.tsx:34`
+
+**Detail-page tab/section tables (8):**
+- `web/src/pages/LedgerDetailPage.tsx:32` (parent ledger transactions)
+- `web/src/pages/accounts/AccountTransactions.tsx:74`
+- `web/src/pages/assets/AssetTransactions.tsx:72`
+- `web/src/pages/contracts/ContractInvocations.tsx:76`
+- `web/src/pages/contracts/ContractEvents.tsx:167`
+- `web/src/pages/nft-detail/NftTransfers.tsx:89`
+- `web/src/pages/pool-detail/PoolParticipants.tsx:78`
+- `web/src/pages/pool-detail/PoolTransactions.tsx:122`
+
+All consumers use the shared hook + namespaced `CURSOR_PARAMS.*` constants
+where multiple sections coexist (pool detail, contract detail). Consistent.
+
+### `useTabUrlState` consumers (1)
+
+- `web/src/pages/ContractDetailPage.tsx:43` — `interface/invocations/events` tabs
+
+### `useDetailMode` (parallel URL-state pattern; F-U-5 already flagged)
+
+- `web/src/pages/transaction-detail/index.tsx:29` — `?mode=normal|advanced`
+- Defined in `web/src/pages/transaction-detail/useDetailMode.ts` (raw `useSearchParams`)
+- Per AL Part 2 verdict: KEEP for now; revisit if 3rd URL-state surface emerges
+
+### Raw `useSearchParams` consumers (1)
+
+- `web/src/pages/SearchResultsPage.tsx:12` — single `q=` query param
+- **Legitimate** — not a table cursor/filter scenario; AL Part 2 boundary correct
+
+### useState that could be URL state (review opportunity)
+
+| File:line | State | Currently | Disposition |
+|---|---|---|---|
+| `web/src/pages/transaction-detail/index.tsx:30` | `selectedIndex` | useState | F-AL-1 — deliberate; defer Gate B |
+| `web/src/pages/transaction-detail/sections/OperationPicker.tsx:59` | `typeFilter` | useState | ephemeral in-page filter; correct |
+| `web/src/pages/pool-detail/PoolCharts.tsx:128-129` | `metric`, `period` | useState | **NEW — F-EX-2** 🟢 LOW |
+
+### F-EX-2 [Class C, Severity 🟢] — Pool chart metric/period in useState, not URL
+
+**Location:** `web/src/pages/pool-detail/PoolCharts.tsx:128-129`
+
+```ts
+const [metric, setMetric] = useState<ChartMetric>('tvl');
+const [period, setPeriod] = useState<ChartPeriod>('30D');
+```
+
+**Trade-off:** moving to URL (`?chart=tvl&range=30D`) would let users
+deep-link "this pool's volume over 7 days". Currently refresh resets to
+TVL / 30D.
+
+**Class:** C — same family as F-AL-1.
+
+**Severity:** 🟢 LOW — deliberate vs deep-link trade-off; defer Gate B
+with Figma cross-reference (chart-tab Figma intent).
+
+### Conclusion
+
+URL-state consumer count consistent with AL Part 2 KEEP verdict. No pages
+bypass `useTableUrlState`. Only new candidate is F-EX-2 (pool chart
+metric/period) — low-severity deep-link enhancement.
+
+See also `findings/exhaustive-sweep-2026-05-26.md` for full sweep details.
