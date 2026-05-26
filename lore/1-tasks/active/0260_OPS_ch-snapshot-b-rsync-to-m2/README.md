@@ -8,8 +8,9 @@ related_tasks: ['0228', '0252', '0241', '0256']
 tags: [priority-high, effort-medium, ops, hetzner, backup]
 milestone: 1
 links:
-  - lore/1-tasks/active/0252_VALIDATION_clickhouse-endpoint-parity-against-stellar-apis.md
+  - lore/1-tasks/archive/0252_VALIDATION_clickhouse-endpoint-parity-against-stellar-apis.md
   - lore/1-tasks/active/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md
+  - notes/G-snapshot-runbook.md
 history:
   - date: '2026-05-25'
     status: backlog
@@ -34,6 +35,48 @@ history:
     note: >
       Activated for execution — pre-0241-deploy snapshot sequence
       kicks off.
+  - date: '2026-05-26'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 0 (pre-flight) partial. Verified 0252 closed
+      (artifact `docs/runbooks/artifacts/endpoint_validation_20260525.md`).
+      Task converted file→directory; drafted operator runbook
+      skeleton at `notes/G-snapshot-runbook.md` covering disk
+      audit, table enumeration, BACKUP command shape (with TODOs
+      for operator to fill from Snapshot A shell history),
+      memory-cap bump, row-count drift check, rsync, and md5
+      verification. Open questions captured in the note.
+      Remaining Phase 0 (disk audit, transport check, M2
+      backfill location) blocked on SSH key load + operator
+      input.
+  - date: '2026-05-26'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 0 complete. Live audits captured in runbook:
+      Hetzner has 280 GiB free pre-A-delete (Snapshot A is
+      692 GiB, real path is `pre_repair_20260521_1502` —
+      task body's trailing `]` was a transcription error,
+      now corrected). CH `default` has 20 entities (18 RMT,
+      2 MT, 1 Dictionary `transaction_hash_dict`) — matches
+      schema. `max_memory_usage` at 6 GiB; will attempt
+      Snapshot B at default cap, bump only on OOM.
+      `system.backups` clean, no residual FAILED rows. No
+      OPTIMIZE active at audit. Topology resolved: "M2" in
+      the task body = fishuser-HERO (Linux worker that ran
+      0228 backfill leg). fishuser-HERO has 393 GiB free → 760
+      GiB after deleting the orphaned backfill Docker volume
+      (`soroban-block-explorer_clickhouse-data`, 367 GiB,
+      idle since 2026-05-21). Headroom on the receiver
+      post-rsync = 9 % — below the 15 % comfort threshold
+      but acceptable. Transport = direct SSH `sorban-prod`
+      (no wireguard). BACKUP command shape recovered from
+      box bash history: `BACKUP DATABASE default TO
+      Disk('backups', '<name>')`. Original plan's Phase 1
+      assumption ("free disk on M2") was directionally right —
+      delete is needed — but the target is a live Docker volume,
+      not a static copy.
 ---
 
 # OPS: CH Snapshot B + rsync to M2
@@ -95,12 +138,19 @@ local backfill on M2 are both freed first to make room.
 
 ## Notes
 
-- Snapshot A path has a quoting artefact in its name
-  (`pre_repair_20260521_1502]/`) — trailing `]` from the original
-  BACKUP command; harmless, captured in [[hetzner-ch-artifacts]].
+- Snapshot A path is `/srv/backups/pre_repair_20260521_1502`
+  (no trailing `]` — earlier captures in [[hetzner-ch-artifacts]]
+  and this task's history transcribed a stray `]` that does not
+  exist on disk; confirmed via `ls -la /srv/backups/` 2026-05-26).
 - Hetzner CH server profile cap is 6 GB by default
   (`max_memory_usage` in `users.d/timeouts.xml`). BACKUP queries
   may need a temporary bump; revert after.
 - M2 owner is stkrolikiewicz; the local backfill copy was used
   during 0228 Phase 5 cross-machine cross-checks and has not been
   consulted since.
+- "M2" in this task body = the **fishuser-HERO** Linux worker
+  host (which ran one leg of the 0228 parallel backfill).
+  Confirmed 2026-05-26 — see Phase 0 history entry. The
+  backfill copy is the live Docker volume
+  `soroban-block-explorer_clickhouse-data` on fishuser-HERO
+  (367 GiB, idle since 2026-05-21).
