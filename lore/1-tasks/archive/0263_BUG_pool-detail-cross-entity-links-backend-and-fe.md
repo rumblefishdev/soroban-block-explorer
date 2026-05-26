@@ -67,7 +67,7 @@ This task ships the full fix as a single full-stack feature:
 - **Backend**: extend `PoolAssetLeg` to include linkable identifier
 - **FE**: wrap reserve labels in `<RouterLink>`, wrap Since-ledger in `<RouterLink>`
 
-## Status: Backlog
+## Status: Completed
 
 **Audit-blocker for task 0257 (FE comprehensive audit).** Must land
 before Wave 6 (Track 2 visual + UX). Without fix:

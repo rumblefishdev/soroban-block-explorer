@@ -61,7 +61,7 @@ This task ships canonical strkey across the full surface:
 - Per-endpoint sweep documents accepted format for every entity (G/C/L/numeric/hex-hash/polymorphic)
 - Evergreen doc `docs/architecture/api/url-conventions.md` codifies convention
 
-## Status: Backlog
+## Status: Completed
 
 **Audit-blocker for task 0257 (FE comprehensive audit).** Must land
 before Wave 6 (Track 2 visual + UX). Closes:

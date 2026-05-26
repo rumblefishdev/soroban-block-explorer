@@ -64,7 +64,7 @@ Garbage IDs (e.g. `/accounts/garbage`) hit early-return validators
 the dual-block case**. The bug is only observable on **valid-format
 IDs that 404 on the API** (account/contract that doesn't exist in DB).
 
-## Status: Backlog
+## Status: Completed
 
 **Audit-blocker for task 0257 (FE comprehensive audit).** Must land
 before Wave 6 (Track 2 visual + UX). Without fix, Wave 6 2.0 Playwright
