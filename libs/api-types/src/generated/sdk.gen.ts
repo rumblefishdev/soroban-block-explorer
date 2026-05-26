@@ -319,7 +319,7 @@ export const getNft = <ThrowOnError extends boolean = false>(
   options: Options<GetNftData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetNftResponses, GetNftErrors, ThrowOnError>({
-    url: '/v1/nfts/{id}',
+    url: '/v1/nfts/{contract_id}/{token_id}',
     ...options,
   });
 
@@ -330,7 +330,7 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
     ListNftTransfersResponses,
     ListNftTransfersErrors,
     ThrowOnError
-  >({ url: '/v1/nfts/{id}/transfers', ...options });
+  >({ url: '/v1/nfts/{contract_id}/{token_id}/transfers', ...options });
 
 /**
  * Unified search across all entity types.

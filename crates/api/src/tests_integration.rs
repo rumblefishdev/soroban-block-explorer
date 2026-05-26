@@ -1133,7 +1133,7 @@ async fn lp_participants_invalid_limit_returns_envelope_before_db() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      participants?limit=abc",
                 )
                 .body(Body::empty())
@@ -1154,7 +1154,7 @@ async fn lp_participants_invalid_cursor_returns_envelope_before_db() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      participants?cursor=not!!base64",
                 )
                 .body(Body::empty())
@@ -3135,12 +3135,39 @@ fn u32_try_from_invariants_relied_on_by_handlers() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn nfts_invalid_id_returns_400_envelope() {
+async fn nfts_invalid_contract_returns_400_envelope() {
+    // Per task 0264 Phase 8a, the NFT route is now keyed by
+    // `(contract C-strkey, token_id)` rather than by the internal
+    // `nfts.id` surrogate. A malformed contract strkey trips the
+    // `path::strkey('C', _)` validator → `invalid_contract_id`.
     let app = lazy_app();
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/nfts/not-a-number")
+                .uri("/v1/nfts/not-a-strkey/42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "invalid_contract_id");
+    assert_eq!(json["details"]["param"], "contract_id");
+}
+
+#[tokio::test]
+async fn nfts_invalid_token_id_returns_400_envelope() {
+    // Shape-valid contract C-strkey but an empty token_id segment slot is
+    // not routable; we exercise the "too long" branch instead, which
+    // trips `parse_nft_path` with `invalid_id`.
+    let app = lazy_app();
+    let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ";
+    let long_token = "a".repeat(200);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/nfts/{contract}/{long_token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3149,6 +3176,7 @@ async fn nfts_invalid_id_returns_400_envelope() {
     let (status, json) = body_json(resp).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json["code"], "invalid_id");
+    assert_eq!(json["details"]["param"], "token_id");
 }
 
 #[tokio::test]
@@ -3188,12 +3216,14 @@ async fn nfts_filter_name_rejects_wildcard_literals() {
 }
 
 #[tokio::test]
-async fn nfts_transfers_invalid_id_returns_400_envelope() {
+async fn nfts_transfers_invalid_contract_returns_400_envelope() {
+    // Same composite-shape validation as the detail endpoint — bad
+    // C-strkey in the path → `invalid_contract_id`.
     let app = lazy_app();
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/nfts/0/transfers")
+                .uri("/v1/nfts/not-a-strkey/42/transfers")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3201,7 +3231,7 @@ async fn nfts_transfers_invalid_id_returns_400_envelope() {
         .unwrap();
     let (status, json) = body_json(resp).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json["code"], "invalid_id");
+    assert_eq!(json["code"], "invalid_contract_id");
 }
 
 // ---------------------------------------------------------------------------
@@ -3305,7 +3335,7 @@ async fn lp_chart_invalid_interval_returns_400_envelope() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      chart?interval=1m&from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z",
                 )
                 .body(Body::empty())
@@ -3339,7 +3369,7 @@ async fn lp_chart_omitted_params_use_defaults_then_404_for_missing_pool() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      chart",
                 )
                 .body(Body::empty())
@@ -3361,7 +3391,7 @@ async fn lp_chart_range_exceeds_bucket_cap_returns_400_envelope() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      chart?interval=1h&from=1926-01-01T00:00:00Z&to=2026-01-01T00:00:00Z",
                 )
                 .body(Body::empty())
@@ -3383,7 +3413,7 @@ async fn lp_chart_from_after_to_returns_400_envelope() {
             Request::builder()
                 .uri(
                     "/v1/liquidity-pools/\
-                     0000000000000000000000000000000000000000000000000000000000000000/\
+                     LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABLIR/\
                      chart?interval=1h&from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z",
                 )
                 .body(Body::empty())

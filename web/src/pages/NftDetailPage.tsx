@@ -3,6 +3,7 @@ import {
   classifyError,
   DetailSkeleton,
   GenericErrorState,
+  isContractId,
   isMissingResource,
   NotFoundState,
   RateLimitState,
@@ -60,10 +61,17 @@ function Breadcrumb({
 }
 
 export default function NftDetailPage() {
-  const { id: rawId } = useParams<{ id: string }>();
-  // The detail route is keyed by the numeric `nfts.id` surrogate.
-  const valid = rawId != null && /^\d+$/.test(rawId) && Number(rawId) > 0;
-  const id = valid ? Number(rawId) : Number.NaN;
+  // react-router-dom v6+ already URL-decodes path params, so the value
+  // here is the canonical token_id; manual decodeURIComponent would
+  // double-decode any `%` literal in the token (e.g. `foo%bar`).
+  const { contractId = '', tokenId = '' } = useParams<{
+    contractId: string;
+    tokenId: string;
+  }>();
+  // contract_id must be a valid C-strkey; token_id is opaque (≤128 ASCII).
+  const valid =
+    isContractId(contractId) && tokenId !== '' && tokenId.length <= 128;
+  const identifier = `${contractId}/${tokenId}`;
 
   const {
     data: nft,
@@ -71,10 +79,12 @@ export default function NftDetailPage() {
     isError,
     error,
     refetch,
-  } = useNftDetail(id, valid);
+  } = useNftDetail(contractId, tokenId, valid);
 
   if (!valid) {
-    return <NotFoundState titleOverride="NFT not found" identifier={rawId} />;
+    return (
+      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
+    );
   }
 
   if (isLoading) {
@@ -84,9 +94,11 @@ export default function NftDetailPage() {
   if (isError) {
     const kind = classifyError(error);
     if (isMissingResource(kind)) {
-      // 400 (e.g. non-numeric or i64-overflow id) and 404 both mean
-      // "this NFT isn't here" — single NotFound (task 0251 H8).
-      return <NotFoundState titleOverride="NFT not found" identifier={rawId} />;
+      // 400 (e.g. malformed strkey / oversized token_id) and 404 both
+      // mean "this NFT isn't here" — single NotFound (task 0251 H8).
+      return (
+        <NotFoundState titleOverride="NFT not found" identifier={identifier} />
+      );
     }
     const retry = () => void refetch();
     return (
@@ -103,7 +115,9 @@ export default function NftDetailPage() {
   }
 
   if (!nft) {
-    return <NotFoundState titleOverride="NFT not found" identifier={rawId} />;
+    return (
+      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
+    );
   }
 
   const title = nft.name?.trim() || `Token ${nft.token_id}`;
@@ -153,7 +167,7 @@ export default function NftDetailPage() {
       </Box>
 
       <SectionErrorBoundary sectionName="NFT transfer history">
-        <NftTransfers nftId={id} />
+        <NftTransfers contractId={contractId} tokenId={tokenId} />
       </SectionErrorBoundary>
     </Stack>
   );

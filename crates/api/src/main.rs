@@ -374,7 +374,14 @@ mod tests {
             .await
             .unwrap();
         let spec: Value = serde_json::from_slice(&bytes).unwrap();
-        for path in ["/v1/nfts", "/v1/nfts/{id}", "/v1/nfts/{id}/transfers"] {
+        // Per task 0264 Phase 8a, the NFT detail / transfers routes are
+        // keyed by the `(contract_id, token_id)` composite rather than
+        // by the internal `nfts.id i32` surrogate.
+        for path in [
+            "/v1/nfts",
+            "/v1/nfts/{contract_id}/{token_id}",
+            "/v1/nfts/{contract_id}/{token_id}/transfers",
+        ] {
             assert!(
                 spec["paths"][path].is_object(),
                 "spec missing {path} path: {spec}"

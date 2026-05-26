@@ -31,6 +31,10 @@ history:
     status: active
     who: karolkow
     note: 'Activated as part of Gate B fix-first batch (0262/0263/0264 + 0265 off-band CVE) on shared branch.'
+  - date: '2026-05-26'
+    status: active
+    who: karolkow
+    note: 'Scope expansion (Phase 8 NFT route refactor) — post-activation audit + stellar.expert convention check found NFT endpoint `/v1/nfts/:i32` uses internal DB surrogate PK (`parse_nft_id` accepts only `i32`). stellar.expert addresses Soroban tokens via contract address (`/explorer/public/contract/C...`); no separate `/nft/N` route exists. To honor "strkey canonical everywhere" intent, Phase 8 is upgraded from verify-only to refactor: external NFT route changes to `/v1/nfts/:contract-strkey/:token_id` composite path. Internal `nft_id i32` PK kept as cursor/join key only. Effort +2-3h backend + +1h FE.'
 ---
 
 # Strkey canonical everywhere — strkey-only + per-endpoint sweep
@@ -273,23 +277,89 @@ canonical form acceptance:
 
 **File:** `crates/api/src/{accounts,assets,contracts,nfts,transactions,ledgers,liquidity_pools}/handlers.rs`
 
-| Endpoint                  | Verify                                                             | If outlier → fix in this task           | Document in url-conventions.md                         |
-| ------------------------- | ------------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------ |
-| `/v1/accounts/:id`        | `path::strkey(_, 'G', _)` accepts G-strkey only                    | already ✓                               | ✓ strkey G                                             |
-| `/v1/contracts/:id`       | `path::strkey(_, 'C', _)` accepts C-strkey only                    | already ✓                               | ✓ strkey C                                             |
-| `/v1/liquidity-pools/:id` | `path::pool_id_strkey` (this task)                                 | fixed in Phase 1-2                      | ✓ strkey L                                             |
-| `/v1/nfts/:id`            | read `parse_nft_id` — accepts C-strkey for SAC contract addresses? | if hex-only → fix to strkey             | ✓ strkey C (SAC)                                       |
-| `/v1/assets/:id`          | polymorphic: numeric ID / C-strkey / `code-issuer`                 | OK (Wave 5 1.2 accepted polymorphism)   | ⚠ polymorphic — document each form                     |
-| `/v1/transactions/:hash`  | `path::parse_hash` accepts hex 64-lower                            | OK (tx hash = hex per Stellar protocol) | ✓ hex 64-lower (tx hash is bytes, not strkey-eligible) |
-| `/v1/ledgers/:seq`        | numeric                                                            | OK (ledger seq is u32, no strkey)       | ✓ numeric u32                                          |
+| Endpoint                              | Verify                                             | Action in this task        | Document in url-conventions.md     |
+| ------------------------------------- | -------------------------------------------------- | -------------------------- | ---------------------------------- |
+| `/v1/accounts/:id`                    | `path::strkey(_, 'G', _)` accepts G-strkey only    | already ✓                  | ✓ strkey G                         |
+| `/v1/contracts/:id`                   | `path::strkey(_, 'C', _)` accepts C-strkey only    | already ✓                  | ✓ strkey C                         |
+| `/v1/liquidity-pools/:id`             | `path::pool_id_strkey` (this task)                 | fixed in Phase 1-2         | ✓ strkey L                         |
+| `/v1/nfts/:contract-strkey/:token_id` | composite path (was `/v1/nfts/:i32` surrogate PK)  | **refactor (Phase 8a-8c)** | ✓ strkey C + numeric token_id      |
+| `/v1/assets/:id`                      | polymorphic: numeric ID / C-strkey / `code-issuer` | OK (Wave 5 1.2 accepted)   | ⚠ polymorphic — document each form |
+| `/v1/transactions/:hash`              | `path::parse_hash` accepts hex 64-lower            | OK (tx hash protocol)      | ✓ hex 64-lower                     |
+| `/v1/ledgers/:seq`                    | numeric                                            | OK (ledger seq counter)    | ✓ numeric u32                      |
 
-If NFT (Phase 8b) found hex-only → add to scope; convert to strkey
-acceptance same pattern as pool.
+**Phase 8a — Backend NFT route refactor**
 
-If asset polymorphic acceptance reveals C-strkey path is buggy → add
-to scope.
+**File:** `crates/api/src/nfts/handlers.rs`, `crates/api/src/nfts/queries.rs`,
+`crates/api/src/lib.rs` (route registration)
 
-Otherwise: pure documentation phase for already-correct endpoints.
+Rationale: stellar.expert addresses Soroban tokens via contract URL
+`/explorer/public/contract/{C-strkey}`. No separate NFT route with
+numeric ID exists in the ecosystem. Our explorer has individual NFT
+records keyed by `(contract_id, token_id)` in DB (NFT-instance level,
+not collection-level). Internal surrogate `nft_id i32` PK is fine for
+cursors/joins but MUST NOT leak to external URL.
+
+Changes:
+
+1. Replace `parse_nft_id(raw: &str) -> Result<i32, ...>` with
+   `parse_nft_path(contract: &str, token_id: &str) -> Result<(String, String), ...>`
+   accepting C-strkey + token*id (validate strkey via existing
+   `path::strkey('C', *)` helper, validate token_id as opaque string —
+   token_id is contract-defined and may be u64 or string).
+2. Update route registration: `/v1/nfts/:id` → `/v1/nfts/:contract_id/:token_id`.
+3. Update `get_nft_detail` handler: lookup by `(contract_id, token_id)`
+   composite, not `nft_id i32`. Internal query may still join via PK.
+4. Update `list_nft_transfers` handler: same composite path param.
+5. Keep `nft_id i32` in cursor payload (internal — opaque to clients)
+   for stable pagination across composite paths.
+
+```rust
+// Before
+fn parse_nft_id(raw: &str) -> Result<i32, Response> {
+    raw.parse::<i32>().map_err(...)
+}
+
+// After
+fn parse_nft_path(
+    contract: &str,
+    token_id: &str,
+) -> Result<(String, String), Response> {
+    path::strkey_str(contract, 'C')?;
+    if token_id.is_empty() || token_id.len() > 128 {
+        return Err(...);
+    }
+    Ok((contract.to_string(), token_id.to_string()))
+}
+```
+
+**Phase 8b — FE NFT route + URL builder**
+
+**File:** `web/src/router/routes.ts`, `web/src/pages/NftDetailPage.tsx`,
+`web/src/router/AppRouter.tsx` (or whichever owns NFT route declaration)
+
+Changes:
+
+1. `routes.nft(contractId: string, tokenId: string)` returns
+   `/nfts/${contractId}/${tokenId}`. Drop any `routes.nft(id: number)`
+   form.
+2. AppRouter route path: `/nfts/:id` → `/nfts/:contractId/:tokenId`.
+3. `NftDetailPage.tsx`: read both `contractId` + `tokenId` from
+   `useParams`; pass both to `useNftDetail` hook.
+4. `useNftDetail` API hook: accept composite, call
+   `/v1/nfts/${contractId}/${tokenId}`.
+5. All `routes.nft(...)` callsites — grep + update to pass composite.
+
+**Phase 8c — FE NFT list table → composite link**
+
+**File:** `web/src/pages/Nfts*` (NFT list page) + any cross-entity
+references (e.g. account NFT holdings, contract-issued NFT list).
+
+Each NFT row's Link wraps composite `(contract_id, token_id)`. If the
+row entity is `NftItem`, both fields are already present.
+
+Asset polymorphic exception (Phase 8 footnote): if asset polymorphic
+acceptance reveals C-strkey path is buggy → add to scope. Otherwise
+documentation-only for assets.
 
 ### Phase 9 — Backend: search empty-state response includes L
 
@@ -323,15 +393,15 @@ strkey-eligible by protocol.
 
 ## Per-endpoint path parameter formats
 
-| Endpoint                  | Path param            | Form          | Validator              | Rationale                                                                                                            |
-| ------------------------- | --------------------- | ------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `/v1/accounts/:id`        | account ID            | strkey `G...` | `path::strkey('G')`    | CAP-38 canonical                                                                                                     |
-| `/v1/contracts/:id`       | contract ID           | strkey `C...` | `path::strkey('C')`    | CAP-38 canonical                                                                                                     |
-| `/v1/liquidity-pools/:id` | pool ID               | strkey `L...` | `path::pool_id_strkey` | CAP-38 canonical                                                                                                     |
-| `/v1/nfts/:id`            | NFT ID (SAC contract) | strkey `C...` | `parse_nft_id`         | NFTs are SAC contracts                                                                                               |
-| `/v1/assets/:id`          | asset ID              | polymorphic   | `parse_asset_id`       | numeric `assets.id` (internal) OR strkey `C...` (SAC) OR `code-issuer` composite (classic). Documented as exception. |
-| `/v1/transactions/:hash`  | tx hash               | hex 64-lower  | `path::parse_hash`     | Tx hash is raw bytes per Stellar protocol; no strkey form exists.                                                    |
-| `/v1/ledgers/:seq`        | ledger sequence       | numeric u32   | direct parse           | Ledger seq is a counter, not an identifier.                                                                          |
+| Endpoint                          | Path param      | Form                     | Validator              | Rationale                                                                                                                                                                                                      |
+| --------------------------------- | --------------- | ------------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/v1/accounts/:id`                | account ID      | strkey `G...`            | `path::strkey('G')`    | CAP-38 canonical                                                                                                                                                                                               |
+| `/v1/contracts/:id`               | contract ID     | strkey `C...`            | `path::strkey('C')`    | CAP-38 canonical                                                                                                                                                                                               |
+| `/v1/liquidity-pools/:id`         | pool ID         | strkey `L...`            | `path::pool_id_strkey` | CAP-38 canonical                                                                                                                                                                                               |
+| `/v1/nfts/:contract_id/:token_id` | NFT instance    | strkey `C...` + token_id | `parse_nft_path`       | NFT = (contract, token_id) composite. stellar.expert addresses Soroban tokens via contract URL; no numeric NFT route exists in ecosystem. Internal `nft_id i32` surrogate PK is internal-only (cursor, joins). |
+| `/v1/assets/:id`                  | asset ID        | polymorphic              | `parse_asset_id`       | numeric `assets.id` (internal) OR strkey `C...` (SAC) OR `code-issuer` composite (classic). Documented as exception.                                                                                           |
+| `/v1/transactions/:hash`          | tx hash         | hex 64-lower             | `path::parse_hash`     | Tx hash is raw bytes per Stellar protocol; no strkey form exists.                                                                                                                                              |
+| `/v1/ledgers/:seq`                | ledger sequence | numeric u32              | direct parse           | Ledger seq is a counter, not an identifier.                                                                                                                                                                    |
 
 ## FE URL builder conventions
 
@@ -385,8 +455,18 @@ Add to ADR-0032 evergreen docs gate scope.
 - [ ] `LiquidityPoolDetailPage.tsx` `useParams` consumes strkey
 - [ ] FE search empty-state hint lists `L...` alongside `G...` and `C...`
 - [ ] **Per-endpoint sweep:** every endpoint with an `:id` / `:hash`
-      param verified canonical (or documented exception); NFT endpoint
-      verified strkey-compatible (Phase 8) — fix if hex-only found
+      param verified canonical (or documented exception)
+- [ ] **Phase 8a NFT backend:** route refactored from `/v1/nfts/:i32`
+      to `/v1/nfts/:contract_id/:token_id`; `parse_nft_path` validates
+      C-strkey + opaque token_id; `get_nft_detail` + `list_nft_transfers`
+      lookup by composite; `nft_id i32` surrogate kept internal-only
+      (cursor, joins)
+- [ ] **Phase 8b NFT FE:** `routes.nft(contractId, tokenId)` composite;
+      AppRouter `/nfts/:contractId/:tokenId`; `NftDetailPage` reads
+      both useParams; `useNftDetail` hook accepts composite; all
+      callsites updated
+- [ ] **Phase 8c NFT FE list:** NFT list rows + cross-entity NFT
+      references Link to composite path
 - [ ] `docs/architecture/api/url-conventions.md` created with full
       per-endpoint table + rationale + ADR-0032 cross-link
 - [ ] `cargo test -p api` regression cases for strkey accept + hex
@@ -406,17 +486,23 @@ Add to ADR-0032 evergreen docs gate scope.
 
 ## Notes
 
-- Effort: ~3-5h backend (validator + 4 handlers + response shape + search
-  classifier + per-endpoint sweep) + ~1-2h FE (URL builder + 3 callsites
-  - validator + useParams + empty-state hint) + ~1h docs + ~30min API
-    types regen = **~6-9h total**.
+- Effort: ~3-5h backend pool (validator + 4 handlers + response shape +
+  search classifier) + ~2-3h backend NFT refactor (Phase 8a) + ~1-2h FE
+  pool (URL builder + 3 callsites + validator + useParams + empty-state
+  hint) + ~1h FE NFT (Phase 8b-8c) + ~1h docs + ~30min API types regen =
+  **~9-13h total** (revised 2026-05-26 from ~6-9h after Phase 8 NFT scope
+  upgrade).
 - Pre-launch: hex rejected with informative error. No transition period
   needed.
 - Pairs cleanly with 0262 (composite NotFound) + 0263 (pool detail Link
   wraps) — all three touch pool detail surface. Consider single PR with
   sub-commits, or 2 PRs (backend + FE).
-- Phase 8 NFT verify is cheap insurance. If `parse_nft_id` already
-  accepts strkey, scope unchanged.
+- Phase 8 NFT scope upgrade decision: stellar.expert convention check
+  confirmed Soroban tokens addressed via contract URL only; our
+  `/v1/nfts/:i32` numeric surrogate violates "strkey canonical
+  everywhere" intent. Composite `(contract_id, token_id)` matches
+  CAP-46-6 token contract interface (each NFT instance is identified
+  by token_id within a contract).
 - Phase 11 evergreen doc codifies convention to prevent future drift
   (same anti-pattern that produced F-AN-8 in the first place).
 - 14 spawn candidates from Phase 3 (Out-of-scope follow-ups in task

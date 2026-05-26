@@ -156,10 +156,16 @@ pub struct PoolRow {
     pub asset_a_type_name: Option<String>,
     pub asset_a_code: Option<String>,
     pub asset_a_issuer: Option<String>,
+    /// C-strkey of the SAC mirror for the asset-A leg, when an
+    /// `assets` row with `asset_type = 2` exists for
+    /// `(asset_a_code, asset_a_issuer_id)`. `None` otherwise. Task 0263.
+    pub asset_a_contract_id: Option<String>,
     pub asset_b_type: i16,
     pub asset_b_type_name: Option<String>,
     pub asset_b_code: Option<String>,
     pub asset_b_issuer: Option<String>,
+    /// C-strkey of the SAC mirror for the asset-B leg. See `asset_a_contract_id`.
+    pub asset_b_contract_id: Option<String>,
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
@@ -183,10 +189,12 @@ fn map_pool_row(r: &PgRow) -> PoolRow {
         asset_a_type_name: r.get("asset_a_type_name"),
         asset_a_code: r.get("asset_a_code"),
         asset_a_issuer: r.get("asset_a_issuer"),
+        asset_a_contract_id: r.get("asset_a_contract_id"),
         asset_b_type: r.get("asset_b_type"),
         asset_b_type_name: r.get("asset_b_type_name"),
         asset_b_code: r.get("asset_b_code"),
         asset_b_issuer: r.get("asset_b_issuer"),
+        asset_b_contract_id: r.get("asset_b_contract_id"),
         fee_bps: r.get("fee_bps"),
         fee_percent: r.get("fee_percent"),
         created_at_ledger: r.get("created_at_ledger"),
@@ -244,10 +252,17 @@ pub async fn fetch_pool_list(
             lp.asset_a_type                     AS asset_a_type,
             lp.asset_a_code,
             iss_a.account_id                    AS asset_a_issuer,
+            -- Task 0263: SAC mirror look-up. Pool legs only carry classic
+            -- XDR `AssetType` so SAC / Soroban legs are not directly
+            -- representable; this surfaces the C-strkey of an SAC mirror
+            -- when one exists in `assets` for the classic credit identity
+            -- `(code, issuer_id)`. NULL when no SAC mirror is registered.
+            sac_a.contract_id                   AS asset_a_contract_id,
             asset_type_name(lp.asset_b_type)    AS asset_b_type_name,
             lp.asset_b_type                     AS asset_b_type,
             lp.asset_b_code,
             iss_b.account_id                    AS asset_b_issuer,
+            sac_b.contract_id                   AS asset_b_contract_id,
             lp.fee_bps,
             (lp.fee_bps::numeric / 100)::text   AS fee_percent,
             lp.created_at_ledger,
@@ -269,6 +284,23 @@ pub async fn fetch_pool_list(
         FROM liquidity_pools lp
         LEFT JOIN accounts iss_a ON iss_a.id = lp.asset_a_issuer_id
         LEFT JOIN accounts iss_b ON iss_b.id = lp.asset_b_issuer_id
+        -- Task 0263: SAC mirror look-up per leg. Two-step JOIN
+        -- (assets → soroban_contracts) is hit via
+        -- `uidx_assets_classic_asset (asset_code, issuer_id) WHERE asset_type IN (1, 2)`;
+        -- restricted to `asset_type = 2` (SAC) so unrelated classic_credit
+        -- rows are skipped. NULL when no mirror exists.
+        LEFT JOIN assets sac_a_row
+               ON sac_a_row.asset_code = lp.asset_a_code
+              AND sac_a_row.issuer_id  = lp.asset_a_issuer_id
+              AND sac_a_row.asset_type = 2
+        LEFT JOIN soroban_contracts sac_a
+               ON sac_a.id = sac_a_row.contract_id
+        LEFT JOIN assets sac_b_row
+               ON sac_b_row.asset_code = lp.asset_b_code
+              AND sac_b_row.issuer_id  = lp.asset_b_issuer_id
+              AND sac_b_row.asset_type = 2
+        LEFT JOIN soroban_contracts sac_b
+               ON sac_b.id = sac_b_row.contract_id
         LEFT JOIN LATERAL (
             SELECT
                 lps.ledger_sequence,
@@ -343,10 +375,13 @@ pub async fn fetch_pool_by_id(
             lp.asset_a_type                    AS asset_a_type,
             lp.asset_a_code,
             iss_a.account_id                   AS asset_a_issuer,
+            -- Task 0263: see SAC-mirror look-up in `fetch_pool_list`.
+            sac_a.contract_id                  AS asset_a_contract_id,
             asset_type_name(lp.asset_b_type)   AS asset_b_type_name,
             lp.asset_b_type                    AS asset_b_type,
             lp.asset_b_code,
             iss_b.account_id                   AS asset_b_issuer,
+            sac_b.contract_id                  AS asset_b_contract_id,
             lp.fee_bps,
             (lp.fee_bps::numeric / 100)::text  AS fee_percent,
             lp.created_at_ledger,
@@ -367,6 +402,18 @@ pub async fn fetch_pool_by_id(
         FROM liquidity_pools lp
         LEFT JOIN accounts iss_a ON iss_a.id = lp.asset_a_issuer_id
         LEFT JOIN accounts iss_b ON iss_b.id = lp.asset_b_issuer_id
+        LEFT JOIN assets sac_a_row
+               ON sac_a_row.asset_code = lp.asset_a_code
+              AND sac_a_row.issuer_id  = lp.asset_a_issuer_id
+              AND sac_a_row.asset_type = 2
+        LEFT JOIN soroban_contracts sac_a
+               ON sac_a.id = sac_a_row.contract_id
+        LEFT JOIN assets sac_b_row
+               ON sac_b_row.asset_code = lp.asset_b_code
+              AND sac_b_row.issuer_id  = lp.asset_b_issuer_id
+              AND sac_b_row.asset_type = 2
+        LEFT JOIN soroban_contracts sac_b
+               ON sac_b.id = sac_b_row.contract_id
         LEFT JOIN LATERAL (
             SELECT
                 lps.ledger_sequence,

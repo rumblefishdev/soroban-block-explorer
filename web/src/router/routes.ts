@@ -15,10 +15,16 @@ export const routes = {
   contract: (contractId: string) => `/contracts/${contractId}`,
 
   nfts: '/nfts',
-  nft: (id: string) => `/nfts/${encodeURIComponent(id)}`,
+  // Composite key `(contract_id, token_id)`: `contract_id` is the C-strkey
+  // of the issuing contract (56 chars), `tokenId` is an opaque
+  // contract-defined string (≤128 ASCII) — encode to guard `/`, `?`, `#`.
+  nft: (contractId: string, tokenId: string) =>
+    `/nfts/${contractId}/${encodeURIComponent(tokenId)}`,
 
   pools: '/liquidity-pools',
-  pool: (id: string) => `/liquidity-pools/${encodeURIComponent(id)}`,
+  // `strkey` is the CAP-38 `L...` form (56 chars, base32). Canonical
+  // everywhere — backend `/v1/liquidity-pools/:id` accepts strkey only.
+  pool: (strkey: string) => `/liquidity-pools/${encodeURIComponent(strkey)}`,
 
   search: (q: string) => `/search?q=${encodeURIComponent(q)}`,
 } as const;

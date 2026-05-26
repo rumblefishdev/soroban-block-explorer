@@ -24,8 +24,10 @@ import { TransactionTime } from '../transactions/TransactionTime.js';
 import { NftEventBadge } from './NftEventBadge.js';
 
 interface NftTransfersProps {
-  /** Numeric `nfts.id` surrogate. */
-  nftId: number;
+  /** Issuing contract C-strkey. */
+  contractId: string;
+  /** Opaque contract-defined token id (≤128 ASCII). */
+  tokenId: string;
 }
 
 function Dash() {
@@ -84,14 +86,15 @@ const COLUMN_COUNT = columns.length;
  * Transfer-history section of the NFT detail page — a cursor-paginated table
  * of mint / transfer / burn events for one NFT, per the Figma design.
  */
-export function NftTransfers({ nftId }: NftTransfersProps) {
+export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   // Cursors are NFT-scoped — drop the URL cursor on NFT switch.
   const { cursor, goNext, goPrev } = useCursorPagination({
-    resetKey: nftId,
+    resetKey: `${contractId}/${tokenId}`,
   });
 
   const { data, isLoading, isError, error, refetch } = useNftTransfers(
-    nftId,
+    contractId,
+    tokenId,
     cursor
   );
 

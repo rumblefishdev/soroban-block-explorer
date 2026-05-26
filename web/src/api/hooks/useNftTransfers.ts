@@ -4,19 +4,23 @@ import { useQuery } from '@tanstack/react-query';
 import { listPolicy } from '../polling.js';
 
 /**
- * `GET /nfts/:id/transfers` — cursor-paginated ownership history (mint /
- * transfer / burn) for one NFT. URL-as-state pagination.
+ * `GET /v1/nfts/:contractId/:tokenId/transfers` — cursor-paginated
+ * ownership history (mint / transfer / burn) for one NFT, keyed by
+ * the composite `(contract_id, token_id)` external path.
+ *
+ * URL-as-state pagination.
  */
 export const useNftTransfers = (
-  id: number,
+  contractId: string,
+  tokenId: string,
   cursor: string | null = null,
   enabled = true
 ) =>
   useQuery({
     ...listNftTransfersOptions({
-      path: { id },
+      path: { contract_id: contractId, token_id: tokenId },
       query: cursor ? { cursor } : undefined,
     }),
     ...listPolicy,
-    enabled: enabled && Number.isInteger(id) && id > 0,
+    enabled: enabled && contractId !== '' && tokenId !== '',
   });

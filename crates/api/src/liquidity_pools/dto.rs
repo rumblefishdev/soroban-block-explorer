@@ -89,6 +89,22 @@ pub struct PoolListParams {
 /// One leg of an LP's asset pair. Surfaces both the decoded
 /// `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
 /// SMALLINT — same contract as `assets/dto::AssetItem`.
+///
+/// Linkable identifiers (task 0263 / F-K-9):
+///   * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
+///     address in classic Stellar protocol; SAC mirror is network-dependent).
+///   * `contract_id` — C-strkey of the SAC mirror for a classic credit
+///     leg (populated when an `assets` row with `asset_type = 2`
+///     exists for `(asset_code, issuer)` and carries a
+///     `soroban_contracts.contract_id`). `None` for legs without an
+///     SAC mirror. Pool legs only carry XDR `AssetType` (native /
+///     credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
+///     so SAC / Soroban legs are not directly representable here;
+///     `contract_id` surfaces the SAC mirror look-up so the FE can
+///     route the user to the canonical contract detail page when
+///     available.
+///   * `issuer` — G-strkey for classic credit legs (existing); FE uses
+///     it as the link target when no `contract_id` is present.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
     /// `native | classic_credit | sac | soroban`. `null` only on schema drift.
@@ -97,6 +113,10 @@ pub struct PoolAssetLeg {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
+    /// C-strkey of the SAC mirror, when a matching `assets` row
+    /// (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
+    /// native legs and for classic credit legs without an SAC mirror.
+    pub contract_id: Option<String>,
 }
 
 /// One pool row returned by the list endpoint. Shape pinned to canonical
@@ -106,7 +126,10 @@ pub struct PoolAssetLeg {
 /// `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
-    /// 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
+    /// SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
+    /// 0024; the handler encodes to strkey at the response boundary so
+    /// the wire shape matches the Stellar ecosystem canonical form
+    /// (CAP-38 / SEP-23).
     pub pool_id: String,
     pub asset_a: PoolAssetLeg,
     pub asset_b: PoolAssetLeg,
@@ -199,6 +222,8 @@ pub struct ChartDataPoint {
 /// `GET /v1/liquidity-pools/:id/chart` response.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartResponse {
+    /// Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
+    /// client supplied in the path.
     pub pool_id: String,
     pub interval: String,
     pub from: DateTime<Utc>,

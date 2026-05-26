@@ -76,7 +76,7 @@ export function NftNameCell({ row }: NftNameCellProps) {
       <Stack sx={{ minWidth: 0 }}>
         <Link
           component={RouterLink}
-          to={routes.nft(String(row.id))}
+          to={routes.nft(row.contract_id, row.token_id)}
           variant="bodySmMedium"
           underline="hover"
           sx={{ color: 'text.primary' }}

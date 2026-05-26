@@ -7,7 +7,6 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
-import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
 import { formatAmount } from '../format.js';
 // `assetLegLabel` lives in the detail-page helpers but the labelling
 // rules apply equally to the list — reuse the shared helper rather than
@@ -48,10 +47,6 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
         row.asset_b
       )}`;
-      // Display the SEP-23 `L...` strkey (Stellar canonical user-facing
-      // form), but keep the link target on the raw hex so the backend
-      // route still resolves.
-      const strkey = poolIdHexToStrkey(row.pool_id);
       return (
         <Stack
           direction="row"
@@ -68,7 +63,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
               {pair}
             </Typography>
             <IdentifierDisplay
-              value={strkey}
+              value={row.pool_id}
               type="pool"
               href={routes.pool(row.pool_id)}
             />

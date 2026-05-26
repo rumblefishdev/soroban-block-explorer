@@ -108,6 +108,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "stellar-strkey 0.0.16",
  "stellar-xdr",
  "thiserror",
  "tokio",

@@ -62,7 +62,7 @@ export const router = createBrowserRouter([
 
       { path: 'nfts', element: page(() => import('../pages/NftsListPage.js')) },
       {
-        path: 'nfts/:id',
+        path: 'nfts/:contractId/:tokenId',
         element: page(() => import('../pages/NftDetailPage.js')),
       },
 
