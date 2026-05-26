@@ -13,7 +13,7 @@ tags:
     layer-indexer,
     data-completeness,
   ]
-milestone: 1
+milestone: 2
 links:
   - crates/xdr-parser/src/operation.rs
   - docs/architecture/database-schema/endpoint-queries-clickhouse/20_get_liquidity_pools_transactions.sql
