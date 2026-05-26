@@ -90,7 +90,11 @@ pub struct PoolListParams {
 /// `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
 /// SMALLINT — same contract as `assets/dto::AssetItem`.
 ///
-/// Linkable identifiers (task 0263 / F-K-9):
+/// Linkable identifiers (task 0263 / F-K-9). All link targets are the
+/// **asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic
+/// and accepts both C-strkey (SAC) and `code-issuer` composite, so all
+/// non-native legs resolve to the same asset row.
+///
 ///   * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
 ///     address in classic Stellar protocol; SAC mirror is network-dependent).
 ///   * `contract_id` — C-strkey of the SAC mirror for a classic credit
@@ -101,10 +105,10 @@ pub struct PoolListParams {
 ///     credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
 ///     so SAC / Soroban legs are not directly representable here;
 ///     `contract_id` surfaces the SAC mirror look-up so the FE can
-///     route the user to the canonical contract detail page when
-///     available.
-///   * `issuer` — G-strkey for classic credit legs (existing); FE uses
-///     it as the link target when no `contract_id` is present.
+///     route to the asset detail page via `/assets/${contract_id}`.
+///   * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE
+///     routes to `/assets/${asset_code}-${issuer}` (composite form
+///     accepted by `parse_asset_id`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
     /// `native | classic_credit | sac | soroban`. `null` only on schema drift.
