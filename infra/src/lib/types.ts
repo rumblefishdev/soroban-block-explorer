@@ -142,7 +142,7 @@ export interface EnvironmentConfig {
   /** Slack channel ID for AWS Chatbot alarm notifications. */
   readonly slackChannelId: string;
 
-  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, MigrationStack, PartitionStack, HetznerDnsStack)
+  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, HetznerDnsStack)
 
   /**
    * FQDN that Route 53 maps to the Hetzner ClickHouse box. Used as both

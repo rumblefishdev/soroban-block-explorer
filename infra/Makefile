@@ -30,18 +30,6 @@ deploy-production-ledger-bucket: build
 destroy-production-ledger-bucket: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-LedgerBucket --force
 
-deploy-production-migration: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Migration --require-approval broadening
-
-destroy-production-migration: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Migration --force
-
-deploy-production-partition: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Partition --require-approval broadening
-
-destroy-production-partition: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Partition --force
-
 deploy-production-compute: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Compute --require-approval broadening
 

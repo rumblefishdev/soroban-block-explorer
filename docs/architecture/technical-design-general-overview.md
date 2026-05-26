@@ -936,12 +936,13 @@ Cross-cutting schema disciplines applied to every table:
   `soroban_contracts.contract_type`, `nft_ownership.event_type`, etc.) is `SMALLINT`
   backed by a Rust `#[repr(i16)]` enum with a `CHECK` range constraint and a
   `<name>_name(ty)` SQL helper for psql/BI.
-- **Monthly range partitioning on `created_at`** for high-volume child tables
-  (see §6.12). Partitions follow the `<table>_y{YYYY}m{MM}` naming convention and are
-  provisioned by the partition-management Lambda in `crates/db-partition-mgmt`
-  (see task 0139). The same crate ships a `bin/cli` that runs the identical
-  `ensure_all_partitions` code path against `DATABASE_URL` for local docker DBs
-  and one-shot staging bootstrap before the EventBridge cron takes over.
+- **Range partitioning on ledger sequence** for high-volume child tables
+  (see §6.12). On ClickHouse each MergeTree table declares
+  `PARTITION BY intDiv(sequence, 500000)` (500k-ledger blocks) and the engine
+  creates the parts automatically on insert — there is no provisioning step.
+  (The PG-era partition-management Lambda `crates/db-partition-mgmt`, which
+  pre-created monthly `<table>_y{YYYY}m{MM}` partitions, was removed with the
+  PG→CH cutover — task 0241.)
 - **No raw XDR in the DB** ([ADR 0029](../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)):
   `transactions` carries only typed summary columns. Full envelope / result / result-meta
   XDR for E3 `/transactions/:hash` and decoded event / invocation payloads for
@@ -1196,9 +1197,10 @@ Unpartitioned anchors and registries:
 `wasm_interface_metadata`, `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
 `account_balances_current`.
 
-Partition names follow `<table>_y{YYYY}m{MM}` (e.g. `operations_y2026m04`). The
-partition-management Lambda in `crates/db-partition-mgmt` provisions partitions two
-months ahead of the leading edge and drops only if storage constraints require it.
+On ClickHouse, partitions are 500k-ledger blocks (`PARTITION BY
+intDiv(sequence, 500000)`) created automatically by the engine on insert —
+there is no ahead-of-edge provisioning Lambda (the PG-era
+`crates/db-partition-mgmt` was removed with the PG→CH cutover, task 0241).
 Ledger and transaction history are kept indefinitely.
 
 ---

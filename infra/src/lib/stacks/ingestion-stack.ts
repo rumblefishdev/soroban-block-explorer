@@ -258,7 +258,7 @@ export class IngestionStack extends cdk.Stack {
       workingDirectory: '/data',
       environment: {
         ...sharedContainerEnv,
-        START: '62024874',
+        START: '62528000',
       },
       secrets: sharedContainerSecrets,
       healthCheck: {

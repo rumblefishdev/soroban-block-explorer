@@ -219,10 +219,16 @@ aws ssm put-parameter \
 Source for `<hetzner-box-ipv4>`: Hetzner Robot dashboard → AX52 →
 public IPv4.
 
-### D-4 — Issue + upload mTLS client certs (6 services)
+### D-4 — Issue + upload mTLS client certs (3 services)
 
 Per `infra-hetzner/ca/README.md`. The script keeps the CA key on
 tmpfs; this section adds the AWS Secrets Manager upload.
+
+> Three CNs only: `lambda-api-production`, `lambda-ingestion-production`,
+> `galexie-production`. Task 0241 removed the migration + partition Lambdas,
+> so `lambda-migration-*` / `lambda-partition-*` certs are no longer issued;
+> the enrichment producer is stubbed (no CH connection), so no cert for it
+> either.
 
 ```bash
 # 1. Fetch CA key from password manager into tmpfs.
@@ -234,9 +240,6 @@ chmod 0600 /dev/shm/soroban-ca/ca.key
 cd infra-hetzner/ca
 for cn in lambda-api-production \
           lambda-ingestion-production \
-          lambda-partition-production \
-          lambda-migration-production \
-          lambda-enrichment-production \
           galexie-production; do
   ./issue-client-cert.sh "$cn"
 done
@@ -248,9 +251,6 @@ done
 #    disk-backed however — they get shredded in step 4.
 for cn in lambda-api-production \
           lambda-ingestion-production \
-          lambda-partition-production \
-          lambda-migration-production \
-          lambda-enrichment-production \
           galexie-production; do
   python3 -c "
 import json, sys
@@ -283,17 +283,22 @@ fields are needed since Caddy injects the CN-mapped CH user.
 
 ### D-5 — Register CNs on Hetzner box
 
-Update `~/.config/soroban-prod.env` — append six entries to
+Update `~/.config/soroban-prod.env` — append the three service entries to
 `CLICKHOUSE_CN_USER_MAP` per the [task 0240 RBAC user matrix](../architecture/security/clickhouse-rbac.md):
 
 ```text
 lambda-api-production:api_reader,
-lambda-ingestion-production:indexer,
-lambda-partition-production:partition_writer,
-lambda-migration-production:migration_full,
-lambda-enrichment-production:enrichment_writer,
+lambda-ingestion-production:ingestion_writer,
 galexie-production:galexie
 ```
+
+> Only three AWS workloads talk to CH: the API Lambda, the indexer Lambda,
+> and Galexie. Task 0241 removed the migration + partition Lambdas (PG-era —
+> CH applies its schema box-side via the `db-clickhouse-init` sidecar and
+> auto-creates partitions), so `lambda-migration-*` / `lambda-partition-*`
+> are no longer mapped. The enrichment producer is stubbed pending its CH
+> rewrite, so `lambda-enrichment-*` stays unmapped (it would 403 if it
+> connected).
 
 Then replay ansible with the narrow `caddy_reload` tag — re-renders the
 CN map snippet and reloads Caddy without touching the rest of the
@@ -322,18 +327,22 @@ cd infra
 make deploy-production
 ```
 
-CDK applies stacks in dependency order: Network → LedgerBucket →
-Migration → Partition → Compute → Ingestion → Delivery → Observability
-→ ApiGateway → CloudWatch → HetznerDns.
+CDK applies stacks in dependency order: Network → LedgerBucket → Compute
+→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch →
+HetznerDns.
 
-`MigrationStack` runs CH schema migrations as a CloudFormation custom
-resource; a failure there blocks deploy of all downstream stacks.
+**No stack connects to ClickHouse at deploy time.** The schema is applied
+box-side by the `db-clickhouse-init` sidecar (idempotent `init.sql`) and CH
+auto-creates partitions on insert. The migration + partition Lambdas
+(`MigrationStack` / `PartitionStack`) were removed in task 0241, so
+`make deploy-production` runs to completion even if CH is unreachable — the
+API and indexer Lambdas connect to CH only at runtime.
 
 ### D-7 — End-to-end smoke per AWS service
 
-For each of the 6 services exercise a real CH query through the mTLS
-path and verify the corresponding CN appears in Caddy access logs on
-the Hetzner box.
+For each of the three CH-talking services exercise a real CH query through
+the mTLS path and verify the corresponding CN appears in Caddy access logs
+on the Hetzner box.
 
 ```bash
 # API Lambda — invoke through API Gateway.
@@ -342,14 +351,13 @@ curl https://api.sorobanscan.rumblefish.dev/ledgers?limit=1
 # Indexer Lambda — upload a known ledger to the S3 trigger.
 aws s3 cp test.xdr.zst s3://production-stellar-ledger-data/test/
 
-# Enrichment Worker — enqueue a test message.
-aws sqs send-message --queue-url <enrichment-queue-url> --message-body '...'
-
-# Migration Lambda — already invoked by CDK custom resource at deploy.
-# Partition Lambda — already invoked by CDK custom resource at deploy.
 # Galexie — bump `galexieDesiredCount` to 1 in production.json and
 #           redeploy ingestion; check `aws logs tail /ecs/production/galexie-live`.
 ```
+
+> The enrichment producer is stubbed pending its CH rewrite, and the
+> migration + partition Lambdas were removed in task 0241 — no smoke for
+> those.
 
 On the Hetzner box, confirm each service shows up in Caddy access logs
 with its expected `X-Client-Subject: CN=<service>-production`:
@@ -357,12 +365,9 @@ with its expected `X-Client-Subject: CN=<service>-production`:
 ```bash
 ssh deploy@$HETZNER_IP
 docker logs caddy 2>&1 | grep -oE 'CN=[^,"]+' | sort -u
-# Expect at least:
+# Expect:
 #   CN=lambda-api-production
 #   CN=lambda-ingestion-production
-#   CN=lambda-partition-production
-#   CN=lambda-migration-production
-#   CN=lambda-enrichment-production
 #   CN=galexie-production
 ```
 
