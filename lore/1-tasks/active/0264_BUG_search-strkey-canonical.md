@@ -42,6 +42,7 @@ hex bookmarks. Going strkey-only everywhere.** Backend rejects hex input
 with informative error citing strkey requirement.
 
 This task ships canonical strkey across the full surface:
+
 - Pool endpoint accepts strkey only; internal DB lookup uses hex
 - Backend search classifier dispatches `L...` to pool lookup
 - FE URLs canonical = strkey
@@ -52,6 +53,7 @@ This task ships canonical strkey across the full surface:
 
 **Audit-blocker for task 0257 (FE comprehensive audit).** Must land
 before Wave 6 (Track 2 visual + UX). Closes:
+
 - F-L-1 🟠 (search pool strkey returns 0 results)
 - F-K-4 🟠 (empty-state hint omits L from supported formats)
 - F-AN-8 🟠 (cross-cutting strkey convention drift)
@@ -64,30 +66,31 @@ prevents future drift.
 
 **CAP-38 / Stellar SDK strkey convention:**
 
-| Entity | Canonical strkey prefix | Internal/wire form |
-|---|---|---|
-| Account | `G...` | 32-byte ed25519 pubkey |
-| Contract | `C...` | 32-byte contract ID |
-| **Liquidity pool** | **`L...`** | 32-byte SHA-256 hash |
-| Muxed account | `M...` | composite |
-| Pre-auth tx | `T...` | 32-byte hash |
+| Entity             | Canonical strkey prefix | Internal/wire form     |
+| ------------------ | ----------------------- | ---------------------- |
+| Account            | `G...`                  | 32-byte ed25519 pubkey |
+| Contract           | `C...`                  | 32-byte contract ID    |
+| **Liquidity pool** | **`L...`**              | 32-byte SHA-256 hash   |
+| Muxed account      | `M...`                  | composite              |
+| Pre-auth tx        | `T...`                  | 32-byte hash           |
 
 Stellar Expert + Horizon + Stellar Lab + Soroban CLI all use strkey
 canonical. Hex = internal storage/wire detail.
 
 **Current state in our project (per audit research 2026-05-25):**
 
-| Endpoint | Accepts | Industry std | Verdict |
-|---|---|---|---|
-| `/v1/accounts/:id` | strkey `G...` (`path::strkey(_, 'G', _)`) | strkey | ✓ canonical |
-| `/v1/contracts/:id` | strkey `C...` (`path::strkey(_, 'C', _)`) | strkey | ✓ canonical |
-| `/v1/transactions/:hash` | hex hash | hex | ✓ (tx hash always hex in protocol) |
-| `/v1/ledgers/:seq` | numeric | numeric | ✓ |
-| `/v1/assets/:id` | polymorphic (numeric ID OR C-strkey OR `code-issuer`) | mixed | ⚠ polymorphic by design |
-| **`/v1/liquidity-pools/:id`** | **hex 64-lower ONLY** | **strkey L...** | **❌ outlier — this task fixes** |
-| `/v1/nfts/:id` | `parse_nft_id` (TBD — verified in Phase 8) | strkey expected | ? verify |
+| Endpoint                      | Accepts                                               | Industry std    | Verdict                            |
+| ----------------------------- | ----------------------------------------------------- | --------------- | ---------------------------------- |
+| `/v1/accounts/:id`            | strkey `G...` (`path::strkey(_, 'G', _)`)             | strkey          | ✓ canonical                        |
+| `/v1/contracts/:id`           | strkey `C...` (`path::strkey(_, 'C', _)`)             | strkey          | ✓ canonical                        |
+| `/v1/transactions/:hash`      | hex hash                                              | hex             | ✓ (tx hash always hex in protocol) |
+| `/v1/ledgers/:seq`            | numeric                                               | numeric         | ✓                                  |
+| `/v1/assets/:id`              | polymorphic (numeric ID OR C-strkey OR `code-issuer`) | mixed           | ⚠ polymorphic by design            |
+| **`/v1/liquidity-pools/:id`** | **hex 64-lower ONLY**                                 | **strkey L...** | **❌ outlier — this task fixes**   |
+| `/v1/nfts/:id`                | `parse_nft_id` (TBD — verified in Phase 8)            | strkey expected | ? verify                           |
 
 **FE inconsistency** (will be fixed by this task):
+
 ```
 PoolsTable.tsx:  const strkey = poolIdHexToStrkey(row.pool_id);
                  href={routes.pool(row.pool_id)}                   // hex URL today
@@ -169,6 +172,7 @@ Storage stays hex (efficient, raw bytes). Boundary converts.
 classification lives — find by grep `G` prefix detection)
 
 Add symmetric case:
+
 ```rust
 // Find existing G/C detection; add L
 if let Ok(Strkey::LiquidityPool(pool)) = Strkey::from_string(input) {
@@ -217,6 +221,7 @@ Type signature change documents intent.
 ### Phase 6 — FE: all `routes.pool(...)` callsites pass strkey
 
 Grep all callers:
+
 - `web/src/pages/liquidity-pools/PoolsTable.tsx` — wire `href={routes.pool(<strkey>)}`. If API returns hex `pool_id`, convert at call site (or fix API per Phase 4 to return strkey directly).
 - `web/src/pages/pool-detail/PoolSummary.tsx` — same.
 - Any other `routes.pool(` call site in `web/src/`.
@@ -248,7 +253,7 @@ export function isPoolId(value: string): boolean {
 
 // After
 export function isPoolId(value: string): boolean {
-  return /^L[A-Z2-7]{55}$/.test(value);  // CAP-38 L-strkey, ~56 chars total
+  return /^L[A-Z2-7]{55}$/.test(value); // CAP-38 L-strkey, ~56 chars total
   // (or use stellar-strkey JS package isValidStrkey('L', value))
 }
 ```
@@ -264,15 +269,15 @@ canonical form acceptance:
 
 **File:** `crates/api/src/{accounts,assets,contracts,nfts,transactions,ledgers,liquidity_pools}/handlers.rs`
 
-| Endpoint | Verify | If outlier → fix in this task | Document in url-conventions.md |
-|---|---|---|---|
-| `/v1/accounts/:id` | `path::strkey(_, 'G', _)` accepts G-strkey only | already ✓ | ✓ strkey G |
-| `/v1/contracts/:id` | `path::strkey(_, 'C', _)` accepts C-strkey only | already ✓ | ✓ strkey C |
-| `/v1/liquidity-pools/:id` | `path::pool_id_strkey` (this task) | fixed in Phase 1-2 | ✓ strkey L |
-| `/v1/nfts/:id` | read `parse_nft_id` — accepts C-strkey for SAC contract addresses? | if hex-only → fix to strkey | ✓ strkey C (SAC) |
-| `/v1/assets/:id` | polymorphic: numeric ID / C-strkey / `code-issuer` | OK (Wave 5 1.2 accepted polymorphism) | ⚠ polymorphic — document each form |
-| `/v1/transactions/:hash` | `path::parse_hash` accepts hex 64-lower | OK (tx hash = hex per Stellar protocol) | ✓ hex 64-lower (tx hash is bytes, not strkey-eligible) |
-| `/v1/ledgers/:seq` | numeric | OK (ledger seq is u32, no strkey) | ✓ numeric u32 |
+| Endpoint                  | Verify                                                             | If outlier → fix in this task           | Document in url-conventions.md                         |
+| ------------------------- | ------------------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------ |
+| `/v1/accounts/:id`        | `path::strkey(_, 'G', _)` accepts G-strkey only                    | already ✓                               | ✓ strkey G                                             |
+| `/v1/contracts/:id`       | `path::strkey(_, 'C', _)` accepts C-strkey only                    | already ✓                               | ✓ strkey C                                             |
+| `/v1/liquidity-pools/:id` | `path::pool_id_strkey` (this task)                                 | fixed in Phase 1-2                      | ✓ strkey L                                             |
+| `/v1/nfts/:id`            | read `parse_nft_id` — accepts C-strkey for SAC contract addresses? | if hex-only → fix to strkey             | ✓ strkey C (SAC)                                       |
+| `/v1/assets/:id`          | polymorphic: numeric ID / C-strkey / `code-issuer`                 | OK (Wave 5 1.2 accepted polymorphism)   | ⚠ polymorphic — document each form                     |
+| `/v1/transactions/:hash`  | `path::parse_hash` accepts hex 64-lower                            | OK (tx hash = hex per Stellar protocol) | ✓ hex 64-lower (tx hash is bytes, not strkey-eligible) |
+| `/v1/ledgers/:seq`        | numeric                                                            | OK (ledger seq is u32, no strkey)       | ✓ numeric u32                                          |
 
 If NFT (Phase 8b) found hex-only → add to scope; convert to strkey
 acceptance same pattern as pool.
@@ -314,15 +319,15 @@ strkey-eligible by protocol.
 
 ## Per-endpoint path parameter formats
 
-| Endpoint | Path param | Form | Validator | Rationale |
-|---|---|---|---|---|
-| `/v1/accounts/:id` | account ID | strkey `G...` | `path::strkey('G')` | CAP-38 canonical |
-| `/v1/contracts/:id` | contract ID | strkey `C...` | `path::strkey('C')` | CAP-38 canonical |
-| `/v1/liquidity-pools/:id` | pool ID | strkey `L...` | `path::pool_id_strkey` | CAP-38 canonical |
-| `/v1/nfts/:id` | NFT ID (SAC contract) | strkey `C...` | `parse_nft_id` | NFTs are SAC contracts |
-| `/v1/assets/:id` | asset ID | polymorphic | `parse_asset_id` | numeric `assets.id` (internal) OR strkey `C...` (SAC) OR `code-issuer` composite (classic). Documented as exception. |
-| `/v1/transactions/:hash` | tx hash | hex 64-lower | `path::parse_hash` | Tx hash is raw bytes per Stellar protocol; no strkey form exists. |
-| `/v1/ledgers/:seq` | ledger sequence | numeric u32 | direct parse | Ledger seq is a counter, not an identifier. |
+| Endpoint                  | Path param            | Form          | Validator              | Rationale                                                                                                            |
+| ------------------------- | --------------------- | ------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `/v1/accounts/:id`        | account ID            | strkey `G...` | `path::strkey('G')`    | CAP-38 canonical                                                                                                     |
+| `/v1/contracts/:id`       | contract ID           | strkey `C...` | `path::strkey('C')`    | CAP-38 canonical                                                                                                     |
+| `/v1/liquidity-pools/:id` | pool ID               | strkey `L...` | `path::pool_id_strkey` | CAP-38 canonical                                                                                                     |
+| `/v1/nfts/:id`            | NFT ID (SAC contract) | strkey `C...` | `parse_nft_id`         | NFTs are SAC contracts                                                                                               |
+| `/v1/assets/:id`          | asset ID              | polymorphic   | `parse_asset_id`       | numeric `assets.id` (internal) OR strkey `C...` (SAC) OR `code-issuer` composite (classic). Documented as exception. |
+| `/v1/transactions/:hash`  | tx hash               | hex 64-lower  | `path::parse_hash`     | Tx hash is raw bytes per Stellar protocol; no strkey form exists.                                                    |
+| `/v1/ledgers/:seq`        | ledger sequence       | numeric u32   | direct parse           | Ledger seq is a counter, not an identifier.                                                                          |
 
 ## FE URL builder conventions
 
@@ -399,8 +404,8 @@ Add to ADR-0032 evergreen docs gate scope.
 
 - Effort: ~3-5h backend (validator + 4 handlers + response shape + search
   classifier + per-endpoint sweep) + ~1-2h FE (URL builder + 3 callsites
-  + validator + useParams + empty-state hint) + ~1h docs + ~30min API
-  types regen = **~6-9h total**.
+  - validator + useParams + empty-state hint) + ~1h docs + ~30min API
+    types regen = **~6-9h total**.
 - Pre-launch: hex rejected with informative error. No transition period
   needed.
 - Pairs cleanly with 0262 (composite NotFound) + 0263 (pool detail Link
