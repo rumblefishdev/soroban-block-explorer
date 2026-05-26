@@ -3,7 +3,6 @@ import type { PoolItem } from '@rumblefish/api-types';
 import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
-import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 import { AssetAvatar } from '../liquidity-pools/AssetAvatar.js';
 import { FeePill } from '../liquidity-pools/FeePill.js';
@@ -33,10 +32,6 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
   const pair = pool
     ? `${assetLegLabel(pool.asset_a)} / ${assetLegLabel(pool.asset_b)}`
     : 'Liquidity pool';
-  // Backend serves the pool id as 64-char hex; render the SEP-23 `L...`
-  // strkey (the form Stellar Laboratory / stellar.expert show) but keep
-  // the route href on hex so backend lookups still resolve.
-  const strkey = poolIdHexToStrkey(poolId);
 
   return (
     <Box>
@@ -59,10 +54,9 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
         {pool && <FeePill raw={pool.fee_percent} prefix />}
       </Stack>
       {/* Static caption — we are already on this pool's detail page, so
-          there is no link target that makes sense. Renders the SEP-23
-          `L...` strkey (canonical user-facing form); copy lives on the
+          there is no link target that makes sense. Copy lives on the
           full-id row inside the Summary card. */}
-      <IdentifierDisplay value={strkey} type="pool" linked={false} />
+      <IdentifierDisplay value={poolId} type="pool" linked={false} />
     </Box>
   );
 }

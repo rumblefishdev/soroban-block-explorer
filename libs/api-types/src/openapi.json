@@ -930,7 +930,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — 64-char lowercase hex (BYTEA(32)) per ADR 0024.",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -989,7 +989,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — 64-char lowercase hex (BYTEA(32)).",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1075,7 +1075,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — 64-char lowercase hex (BYTEA) per ADR 0024.",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1155,7 +1155,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — 64-char lowercase hex (BYTEA(32)).",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
             "required": true,
             "schema": {
               "type": "string"
@@ -1345,19 +1345,27 @@
         }
       }
     },
-    "/v1/nfts/{id}": {
+    "/v1/nfts/{contract_id}/{token_id}": {
       "get": {
         "tags": ["nfts"],
         "operationId": "get_nft",
         "parameters": [
           {
-            "name": "id",
+            "name": "contract_id",
             "in": "path",
-            "description": "Internal NFT surrogate id (`nfts.id`).",
+            "description": "Contract C-StrKey hosting the NFT (CAP-46-6 token contract).",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int32"
+              "type": "string"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Contract-defined token id (opaque string; ≤128 ASCII chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -1373,7 +1381,7 @@
             }
           },
           "400": {
-            "description": "Invalid id format",
+            "description": "Invalid contract_id / token_id",
             "content": {
               "application/json": {
                 "schema": {
@@ -1405,19 +1413,27 @@
         }
       }
     },
-    "/v1/nfts/{id}/transfers": {
+    "/v1/nfts/{contract_id}/{token_id}/transfers": {
       "get": {
         "tags": ["nfts"],
         "operationId": "list_nft_transfers",
         "parameters": [
           {
-            "name": "id",
+            "name": "contract_id",
             "in": "path",
-            "description": "Internal NFT surrogate id (`nfts.id`).",
+            "description": "Contract C-StrKey hosting the NFT.",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int32"
+              "type": "string"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Contract-defined token id (opaque string; ≤128 ASCII chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -1454,7 +1470,7 @@
             }
           },
           "400": {
-            "description": "Invalid id / pagination",
+            "description": "Invalid contract_id / token_id / pagination",
             "content": {
               "application/json": {
                 "schema": {
@@ -2038,7 +2054,8 @@
             "type": "string"
           },
           "pool_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
           },
           "to": {
             "type": "string",
@@ -2773,7 +2790,7 @@
           },
           "pool_id": {
             "type": ["string", "null"],
-            "description": "Hex-encoded liquidity pool ID."
+            "description": "Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded\nfrom the DB hex form at the response boundary so cross-entity\nlink targets match the `/v1/liquidity-pools/:id` route shape."
           },
           "source_account": {
             "type": ["string", "null"]
@@ -3376,7 +3393,7 @@
                 },
                 "pool_id": {
                   "type": "string",
-                  "description": "64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024."
+                  "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
                 },
                 "reserve_a": {
                   "type": ["string", "null"]
@@ -3588,7 +3605,7 @@
       },
       "PoolAssetLeg": {
         "type": "object",
-        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.",
+        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain\n    address in classic Stellar protocol; SAC mirror is network-dependent).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit\n    leg (populated when an `assets` row with `asset_type = 2`\n    exists for `(asset_code, issuer)` and carries a\n    `soroban_contracts.contract_id`). `None` for legs without an\n    SAC mirror. Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
         "required": ["asset_type"],
         "properties": {
           "asset_code": {
@@ -3602,6 +3619,10 @@
           "asset_type_name": {
             "type": ["string", "null"],
             "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+          },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the SAC mirror, when a matching `assets` row\n(`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for\nnative legs and for classic credit legs without an SAC mirror."
           },
           "issuer": {
             "type": ["string", "null"]
@@ -3657,7 +3678,7 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024."
+            "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
           },
           "reserve_a": {
             "type": ["string", "null"]

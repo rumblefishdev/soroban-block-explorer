@@ -42,6 +42,26 @@ pub(crate) fn is_strkey_shape(value: &str, prefix: char) -> bool {
             .all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
+pub(crate) fn pool_id_hex_to_strkey(hex_str: &str) -> String {
+    assert_eq!(
+        hex_str.len(),
+        64,
+        "pool_id hex must be exactly 64 chars (got {})",
+        hex_str.len()
+    );
+    let bytes = hex::decode(hex_str)
+        .unwrap_or_else(|_| panic!("pool_id hex contains non-hex chars: {hex_str}"));
+    let payload: [u8; 32] = bytes
+        .try_into()
+        .expect("32 bytes — guaranteed by 64-char length assert above");
+    // Double `.to_string()` is intentional: the inherent
+    // `LiquidityPool::to_string` returns `heapless::String<56>` (no_std);
+    // the second `.to_string()` (via `Display`) bridges to `std::String`.
+    stellar_strkey::LiquidityPool(payload)
+        .to_string()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

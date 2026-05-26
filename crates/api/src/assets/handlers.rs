@@ -12,6 +12,7 @@ use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
 use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::strkey::is_strkey_shape;
 use crate::openapi::schemas::{ErrorEnvelope, PageInfo, Paginated};
 use crate::runtime_enrichment::sep1::{Sep1Currency, Sep1TomlParsed};
 use crate::state::AppState;
@@ -64,12 +65,6 @@ fn parse_asset_id(raw: &str) -> Option<AssetIdRef<'_>> {
         }
     }
     None
-}
-
-fn is_strkey_shape(s: &str, prefix: char) -> bool {
-    s.len() == 56
-        && s.starts_with(prefix)
-        && s.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
 #[utoipa::path(

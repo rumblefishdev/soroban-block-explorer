@@ -165,6 +165,10 @@ export type ChartResponse = {
   data_points: Array<ChartDataPoint>;
   from: string;
   interval: string;
+  /**
+   * Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
+   * client supplied in the path.
+   */
   pool_id: string;
   to: string;
 };
@@ -645,7 +649,9 @@ export type OperationItem = {
   destination_account?: string | null;
   ledger_sequence: number;
   /**
-   * Hex-encoded liquidity pool ID.
+   * Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
+   * from the DB hex form at the response boundary so cross-entity
+   * link targets match the `/v1/liquidity-pools/:id` route shape.
    */
   pool_id?: string | null;
   source_account?: string | null;
@@ -1019,7 +1025,10 @@ export type PaginatedPoolItem = {
      */
     participant_count: number;
     /**
-     * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
+     * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
+     * 0024; the handler encodes to strkey at the response boundary so
+     * the wire shape matches the Stellar ecosystem canonical form
+     * (CAP-38 / SEP-23).
      */
     pool_id: string;
     reserve_a?: string | null;
@@ -1151,6 +1160,26 @@ export type ParticipantItem = {
  * One leg of an LP's asset pair. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
  * SMALLINT — same contract as `assets/dto::AssetItem`.
+ *
+ * Linkable identifiers (task 0263 / F-K-9). All link targets are the
+ * **asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic
+ * and accepts both C-strkey (SAC) and `code-issuer` composite, so all
+ * non-native legs resolve to the same asset row.
+ *
+ * * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
+ * address in classic Stellar protocol; SAC mirror is network-dependent).
+ * * `contract_id` — C-strkey of the SAC mirror for a classic credit
+ * leg (populated when an `assets` row with `asset_type = 2`
+ * exists for `(asset_code, issuer)` and carries a
+ * `soroban_contracts.contract_id`). `None` for legs without an
+ * SAC mirror. Pool legs only carry XDR `AssetType` (native /
+ * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
+ * so SAC / Soroban legs are not directly representable here;
+ * `contract_id` surfaces the SAC mirror look-up so the FE can
+ * route to the asset detail page via `/assets/${contract_id}`.
+ * * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE
+ * routes to `/assets/${asset_code}-${issuer}` (composite form
+ * accepted by `parse_asset_id`).
  */
 export type PoolAssetLeg = {
   asset_code?: string | null;
@@ -1162,6 +1191,12 @@ export type PoolAssetLeg = {
    * `native | classic_credit | sac | soroban`. `null` only on schema drift.
    */
   asset_type_name?: string | null;
+  /**
+   * C-strkey of the SAC mirror, when a matching `assets` row
+   * (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
+   * native legs and for classic credit legs without an SAC mirror.
+   */
+  contract_id?: string | null;
   issuer?: string | null;
 };
 
@@ -1193,7 +1228,10 @@ export type PoolItem = {
    */
   participant_count: number;
   /**
-   * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
+   * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
+   * 0024; the handler encodes to strkey at the response boundary so
+   * the wire shape matches the Stellar ecosystem canonical form
+   * (CAP-38 / SEP-23).
    */
   pool_id: string;
   reserve_a?: string | null;
@@ -2015,7 +2053,7 @@ export type GetPoolData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)) per ADR 0024.
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
      */
     pool_id: string;
   };
@@ -2053,7 +2091,7 @@ export type GetPoolChartData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)).
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
      */
     pool_id: string;
   };
@@ -2108,7 +2146,7 @@ export type ListParticipantsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA) per ADR 0024.
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
      */
     pool_id: string;
   };
@@ -2157,7 +2195,7 @@ export type ListPoolTransactionsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)).
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
      */
     pool_id: string;
   };
@@ -2286,17 +2324,21 @@ export type GetNftData = {
   body?: never;
   path: {
     /**
-     * Internal NFT surrogate id (`nfts.id`).
+     * Contract C-StrKey hosting the NFT (CAP-46-6 token contract).
      */
-    id: number;
+    contract_id: string;
+    /**
+     * Contract-defined token id (opaque string; ≤128 ASCII chars).
+     */
+    token_id: string;
   };
   query?: never;
-  url: '/v1/nfts/{id}';
+  url: '/v1/nfts/{contract_id}/{token_id}';
 };
 
 export type GetNftErrors = {
   /**
-   * Invalid id format
+   * Invalid contract_id / token_id
    */
   400: ErrorEnvelope;
   /**
@@ -2324,9 +2366,13 @@ export type ListNftTransfersData = {
   body?: never;
   path: {
     /**
-     * Internal NFT surrogate id (`nfts.id`).
+     * Contract C-StrKey hosting the NFT.
      */
-    id: number;
+    contract_id: string;
+    /**
+     * Contract-defined token id (opaque string; ≤128 ASCII chars).
+     */
+    token_id: string;
   };
   query?: {
     /**
@@ -2338,12 +2384,12 @@ export type ListNftTransfersData = {
      */
     cursor?: string;
   };
-  url: '/v1/nfts/{id}/transfers';
+  url: '/v1/nfts/{contract_id}/{token_id}/transfers';
 };
 
 export type ListNftTransfersErrors = {
   /**
-   * Invalid id / pagination
+   * Invalid contract_id / token_id / pagination
    */
   400: ErrorEnvelope;
   /**

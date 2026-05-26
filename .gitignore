@@ -69,3 +69,7 @@ target/
 # Local Docker compose overrides (perf tunings, env-specific paths)
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# Playwright MCP runtime artefacts (snapshots + console logs from
+# browser-driven manual verification sessions)
+.playwright-mcp/

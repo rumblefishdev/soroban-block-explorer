@@ -43,12 +43,10 @@ export default function LiquidityPoolDetailPage() {
   // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
-  // Pool ids must be a 64-char lowercase hex string. `PoolDetailHeader`
-  // synchronously calls `poolIdHexToStrkey` on mount and throws on a
-  // malformed id, which would crash the page into a generic error
-  // banner instead of the entity-specific NotFoundState routed via H8.
-  // `usePoolDetail` is hardcoded to skip the network when the id is
-  // empty; the guard below covers the non-empty malformed case.
+  // Pool ids must be a CAP-38 `L...` strkey (56 chars, base32). Validate
+  // up-front so a malformed id renders the entity-specific NotFoundState
+  // instead of firing a doomed request. `usePoolDetail` is hardcoded to
+  // skip the network when the id is empty.
   const validPoolId = isPoolId(poolId);
   const detail = usePoolDetail(validPoolId ? poolId : '');
   if (!validPoolId) {
@@ -92,15 +90,19 @@ export default function LiquidityPoolDetailPage() {
       <SectionErrorBoundary sectionName="pool-summary">
         {summarySection}
       </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-charts">
-        <PoolCharts poolId={poolId} />
-      </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-participants">
-        <PoolParticipants poolId={poolId} />
-      </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-transactions">
-        <PoolTransactions poolId={poolId} />
-      </SectionErrorBoundary>
+      {!detail.isError && (
+        <>
+          <SectionErrorBoundary sectionName="pool-charts">
+            <PoolCharts poolId={poolId} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary sectionName="pool-participants">
+            <PoolParticipants poolId={poolId} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary sectionName="pool-transactions">
+            <PoolTransactions poolId={poolId} />
+          </SectionErrorBoundary>
+        </>
+      )}
     </Stack>
   );
 }

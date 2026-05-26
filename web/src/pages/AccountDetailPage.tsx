@@ -87,9 +87,11 @@ export default function AccountDetailPage() {
           {balances}
         </SectionErrorBoundary>
       )}
-      <SectionErrorBoundary sectionName="account-transactions">
-        <AccountTransactions accountId={accountId} />
-      </SectionErrorBoundary>
+      {!account.isError && (
+        <SectionErrorBoundary sectionName="account-transactions">
+          <AccountTransactions accountId={accountId} />
+        </SectionErrorBoundary>
+      )}
     </Stack>
   );
 }

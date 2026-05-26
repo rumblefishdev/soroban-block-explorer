@@ -12,28 +12,52 @@ use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
 use crate::common::pagination::{finalize_page, into_envelope};
+use crate::common::path;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
 use super::dto::{
     ListParams, NftDetailResponse, NftIdCursor, NftItem, NftTransferCursor, NftTransferItem,
 };
-use super::queries::{ResolvedListParams, fetch_by_id, fetch_list, fetch_transfers, nft_exists};
+use super::queries::{
+    ResolvedListParams, fetch_by_composite, fetch_list, fetch_transfers, nft_exists_by_composite,
+};
 
-/// Parse `:id` path parameter as a positive `i32` (NFT surrogate id).
+/// Validate the composite `(:contract_id, :token_id)` NFT path parameter.
 ///
-/// Returns the canonical `INVALID_ID` envelope on parse failure, zero, or
-/// negative. Centralised here because both `get_nft` and
-/// `list_nft_transfers` accept the same `:id` shape.
-fn parse_nft_id(raw: &str) -> Result<i32, axum::response::Response> {
-    match raw.parse::<i32>() {
-        Ok(n) if n > 0 => Ok(n),
-        _ => Err(errors::bad_request_with_details(
+/// Per task 0264 Phase 8a, the external NFT route is keyed by
+/// `(contract C-strkey, token_id)` — the CAP-46-6 token contract identity
+/// — rather than by the internal `nfts.id i32` surrogate PK (which would
+/// leak storage shape into the wire URL and break ecosystem alignment
+/// with stellar.expert's contract-keyed Soroban-token addressing).
+///
+/// `contract` is validated as a CAP-38 `C…` StrKey via
+/// `path::strkey('C', _)` (same helper used by `/v1/contracts/:id`).
+///
+/// `token_id` is opaque to us — the contract author chooses the shape
+/// (numeric, ULID, hex, slug, …). DB column is `VARCHAR(256)`. We only
+/// guard against empty and absurd lengths so a degenerate input maps to
+/// 400 rather than wasting a DB round trip. 128 chars covers any
+/// reasonable token_id encoding (ULID = 26, UUID = 36, u128 decimal = 39,
+/// u256 hex = 64) with margin.
+fn parse_nft_path(
+    contract: &str,
+    token_id: &str,
+) -> Result<(String, String), axum::response::Response> {
+    path::strkey(contract, 'C', "contract_id")?;
+
+    if token_id.is_empty()
+        || token_id.len() > 128
+        || !token_id.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(errors::bad_request_with_details(
             errors::INVALID_ID,
-            "id must be a positive integer (NFT surrogate id)",
-            serde_json::json!({ "param": "id", "received": raw }),
-        )),
+            "token_id must be a non-empty printable-ASCII string of at most 128 characters",
+            serde_json::json!({ "param": "token_id", "received": token_id }),
+        ));
     }
+
+    Ok((contract.to_string(), token_id.to_string()))
 }
 
 #[utoipa::path(
@@ -102,29 +126,39 @@ pub async fn list_nfts(
 
 #[utoipa::path(
     get,
-    path = "/nfts/{id}",
+    path = "/nfts/{contract_id}/{token_id}",
     tag = "nfts",
     params(
-        ("id" = i32, Path, description = "Internal NFT surrogate id (`nfts.id`)."),
+        ("contract_id" = String, Path,
+         description = "Contract C-StrKey hosting the NFT (CAP-46-6 token contract)."),
+        ("token_id" = String, Path,
+         description = "Contract-defined token id (opaque string; ≤128 ASCII chars)."),
     ),
     responses(
         (status = 200, description = "NFT detail", body = NftDetailResponse),
-        (status = 400, description = "Invalid id format", body = ErrorEnvelope),
+        (status = 400, description = "Invalid contract_id / token_id", body = ErrorEnvelope),
         (status = 404, description = "NFT not found",   body = ErrorEnvelope),
         (status = 500, description = "Internal server error", body = ErrorEnvelope),
     ),
 )]
-pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let id = match parse_nft_id(&id) {
-        Ok(n) => n,
+pub async fn get_nft(
+    State(state): State<AppState>,
+    Path((contract_id, token_id)): Path<(String, String)>,
+) -> Response {
+    let (contract_id, token_id) = match parse_nft_path(&contract_id, &token_id) {
+        Ok(t) => t,
         Err(resp) => return resp,
     };
 
-    let row = match fetch_by_id(&state.db, id).await {
+    let row = match fetch_by_composite(&state.db, &contract_id, &token_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
-            tracing::error!("DB error fetching nft {id}: {e}");
+            tracing::error!(
+                contract_id = %contract_id,
+                token_id = %token_id,
+                "DB error fetching nft: {e}"
+            );
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -185,10 +219,13 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 #[utoipa::path(
     get,
-    path = "/nfts/{id}/transfers",
+    path = "/nfts/{contract_id}/{token_id}/transfers",
     tag = "nfts",
     params(
-        ("id" = i32, Path, description = "Internal NFT surrogate id (`nfts.id`)."),
+        ("contract_id" = String, Path,
+         description = "Contract C-StrKey hosting the NFT."),
+        ("token_id" = String, Path,
+         description = "Contract-defined token id (opaque string; ≤128 ASCII chars)."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -198,7 +235,8 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
     responses(
         (status = 200, description = "Paginated NFT transfer history",
          body = Paginated<NftTransferItem>),
-        (status = 400, description = "Invalid id / pagination", body = ErrorEnvelope),
+        (status = 400, description = "Invalid contract_id / token_id / pagination",
+         body = ErrorEnvelope),
         (status = 404, description = "NFT not found", body = ErrorEnvelope),
         (status = 500, description = "Internal server error", body = ErrorEnvelope),
     ),
@@ -206,28 +244,37 @@ pub async fn get_nft(State(state): State<AppState>, Path(id): Path<String>) -> R
 pub async fn list_nft_transfers(
     State(state): State<AppState>,
     pagination: Pagination<NftTransferCursor>,
-    Path(id): Path<String>,
+    Path((contract_id, token_id)): Path<(String, String)>,
 ) -> Response {
-    let id = match parse_nft_id(&id) {
-        Ok(n) => n,
+    let (contract_id, token_id) = match parse_nft_path(&contract_id, &token_id) {
+        Ok(t) => t,
         Err(resp) => return resp,
     };
 
-    match nft_exists(&state.db, id).await {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("nft not found"),
+    // Resolve composite identity → internal `nfts.id i32` surrogate up
+    // front. The transfers query joins on `nft_ownership.nft_id`, and the
+    // cursor payload carries the surrogate for stable keyset pagination
+    // — keeping the surrogate internal here means the wire URL stays
+    // composite even though storage / cursor stays integer.
+    let nft_id = match nft_exists_by_composite(&state.db, &contract_id, &token_id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
-            tracing::error!("DB error in nft_exists({id}): {e}");
+            tracing::error!(
+                contract_id = %contract_id,
+                token_id = %token_id,
+                "DB error in nft_exists_by_composite: {e}"
+            );
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
-    }
+    };
 
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
     let mut rows = match fetch_transfers(
         &state.db,
-        id,
+        nft_id,
         pagination.cursor.as_ref(),
         fetch_limit,
         direction,
@@ -236,7 +283,7 @@ pub async fn list_nft_transfers(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in fetch_transfers({id}): {e}");
+            tracing::error!("DB error in fetch_transfers({nft_id}): {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
