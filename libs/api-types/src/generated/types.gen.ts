@@ -1277,12 +1277,9 @@ export type SearchGroups = {
  * Single search row. Same shape across every entity bucket.
  *
  * `identifier` is the canonical human-shown id (hex hash for
- * transactions, strkey `L…` for pools, StrKey for accounts /
- * contracts, asset code for assets, name for NFTs). For `asset` it is
- * NOT unique — the frontend routes via `surrogate_id`. For `nft` it is
- * also not unique and `surrogate_id` alone is insufficient because NFT
- * identity is the composite `(contract_id, token_id)` per task 0264 /
- * ADR 0030 — those two fields below carry the composite for routing.
+ * transactions / pools, StrKey for accounts / contracts, asset code
+ * for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
+ * the frontend MUST route via `surrogate_id`.
  *
  * `successful` and `last_activity_at` are populated only for
  * `entity_type = transaction` today — joined from the partitioned
@@ -1293,14 +1290,12 @@ export type SearchGroups = {
  * whenever these fields are present.
  */
 export type SearchHit = {
-  contract_id?: string | null;
   entity_type: EntityType;
   identifier: string;
   label: string;
   last_activity_at?: string | null;
   successful?: boolean | null;
   surrogate_id?: number | null;
-  token_id?: string | null;
 };
 
 /**
