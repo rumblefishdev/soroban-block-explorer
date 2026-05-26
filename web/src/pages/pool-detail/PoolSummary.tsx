@@ -1,5 +1,5 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import type { PoolItem } from '@rumblefish/api-types';
 import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
 import { Link as RouterLink } from 'react-router-dom';
 
@@ -8,34 +8,7 @@ import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 import { formatAmount } from '../format.js';
 
-import { assetLegLabel } from './helpers.js';
-
-/**
- * Resolve the cross-entity link target for a pool asset leg (task 0263).
- * Always routes to the **asset detail page** — that is the natural target
- * when the user clicks the asset code on a pool reserve cell. Backend
- * `parse_asset_id` accepts either the SAC C-strkey or a `code-issuer`
- * composite, so both classic and SAC legs resolve to the same asset row.
- *
- * Precedence:
- *   1. `asset_type === 0` (native XLM) → no link. Stellar native has no
- *      on-chain address in classic protocol and `parse_asset_id` does
- *      not accept a `native` alias; the SAC mirror for XLM is also
- *      network-dependent, so we don't fabricate a target.
- *   2. `contract_id` (SAC mirror) → `/assets/${contract_id}` (C-strkey
- *      form — canonical for SAC / Soroban tokens).
- *   3. `asset_code` + `issuer` (classic credit, no SAC mirror) →
- *      `/assets/${asset_code}-${issuer}` (composite form).
- *   4. Anything else (schema drift) → no link.
- */
-function legHref(leg: PoolAssetLeg): string | undefined {
-  if (leg.asset_type === 0) return undefined;
-  if (leg.contract_id) return routes.asset(leg.contract_id);
-  if (leg.asset_code && leg.issuer) {
-    return routes.asset(`${leg.asset_code}-${leg.issuer}`);
-  }
-  return undefined;
-}
+import { assetLegLabel, legHref } from './helpers.js';
 
 interface AssetReserveCellProps {
   amount: string | null | undefined;

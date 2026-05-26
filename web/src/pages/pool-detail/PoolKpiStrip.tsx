@@ -1,10 +1,16 @@
-import { Card, Stack, Typography } from '@mui/material';
-import type { PoolItem } from '@rumblefish/api-types';
+import { Card, Link, Stack, Typography } from '@mui/material';
+import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import type { ReactNode } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 
 import { assetLegColor } from '../liquidity-pools/assetColor.js';
 
-import { assetLegLabel, formatCompactAmount, isPoolStale } from './helpers.js';
+import {
+  assetLegLabel,
+  formatCompactAmount,
+  isPoolStale,
+  legHref,
+} from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
 
@@ -61,6 +67,24 @@ interface PoolKpiStripProps {
  * and shares — those cells render as "—". `participant_count` stays
  * accurate regardless of freshness (per task 0246).
  */
+function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
+  const href = legHref(leg);
+  if (!href) return code;
+  return (
+    <Link
+      component={RouterLink}
+      to={href}
+      sx={{
+        color: 'inherit',
+        textDecoration: 'none',
+        '&:hover': { textDecoration: 'underline' },
+      }}
+    >
+      {code}
+    </Link>
+  );
+}
+
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
   const codeA = assetLegLabel(pool.asset_a);
   const codeB = assetLegLabel(pool.asset_b);
@@ -80,13 +104,13 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       <KpiCell
         label={`${codeA} reserve`}
         value={formatCompactAmount(pool.reserve_a)}
-        subtitle={stale ? STALE_SUBTITLE : codeA}
+        subtitle={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
         valueColor={assetLegColor(pool.asset_a).dot}
       />
       <KpiCell
         label={`${codeB} reserve`}
         value={formatCompactAmount(pool.reserve_b)}
-        subtitle={stale ? STALE_SUBTITLE : codeB}
+        subtitle={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
         valueColor={assetLegColor(pool.asset_b).dot}
       />
       <KpiCell
