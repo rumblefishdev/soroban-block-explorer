@@ -57,13 +57,14 @@ users.d/dict.xml             ← `dict_reader` user (loopback-only)
 
 On the deploy operator's laptop:
 
-| Tool           | Why                                 | Floor  |
-| -------------- | ----------------------------------- | ------ |
-| `ansible-core` | playbook runner                     | 2.16+  |
-| `openssl`      | CA bootstrap + client cert issuance | 1.1.1+ |
-| `git`, `ssh`   | repo + box reachability             | recent |
-| Python 3       | json bundle assembly for AWS SM     | 3.10+  |
-| `aws` CLI      | upload AWS service certs to SM      | v2     |
+| Tool           | Why                                                         | Floor  |
+| -------------- | ----------------------------------------------------------- | ------ |
+| `ansible-core` | playbook runner                                             | 2.16+  |
+| `openssl`      | CA bootstrap + client cert issuance                         | 1.1.1+ |
+| `git`, `ssh`   | repo + box reachability                                     | recent |
+| Python 3       | json bundle assembly for AWS SM                             | 3.10+  |
+| `aws` CLI      | upload AWS service certs to SM                              | v2     |
+| `hcloud` (pip) | `hetzner.hcloud` Storage Box modules (`pip install hcloud`) | recent |
 
 In the team password manager (entries named exactly as below):
 
@@ -81,12 +82,13 @@ The `ansible-env` entry contains a shell block of the form:
 # --- Required ---
 export HCLOUD_ROBOT_USER="..."          # Hetzner Robot webservice user (#ws+...)
 export HCLOUD_ROBOT_PASSWORD="..."      # Robot webservice password
+export HCLOUD_TOKEN="..."               # Hetzner Cloud API token (Console → Security → API tokens, read+write) — manages the Borg Storage Box subaccount
+export STORAGEBOX_ID="..."              # Numeric Cloud ID of the BX21 Storage Box (Console → Storage Boxes)
+export STORAGEBOX_SUBACCOUNT_PASSWORD="..."  # Random 32-byte base64 — password set on the Borg subaccount (used for the SFTP key-install login, not by the cron)
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
 export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
-export STORAGEBOX_SSH_USER="..."        # BX21 user, e.g. u123456
-export STORAGEBOX_SSH_HOST="..."        # BX21 host, e.g. u123456.your-storagebox.de
 export CLICKHOUSE_CN_USER_MAP="..."     # Comma-separated `<cn>:<ch_user>` pairs — Caddy uses both as the mTLS allowlist AND as the identity it forwards to CH (e.g. `<firstname>-laptop:dev_shared,galexie-production:galexie,...`). See docs/architecture/security/clickhouse-rbac.md.
 
 # OPERATOR_SSH_PUBKEYS — multi-line. One OpenSSH public key per
@@ -99,6 +101,15 @@ PUBKEYS
 )"
 
 # --- Optional overrides (sensible defaults applied if unset) ---
+# STORAGEBOX_SSH_USER / STORAGEBOX_SSH_HOST are DISCOVERED from the
+# Cloud API by the `storagebox` play and need not be set. Pin them
+# only to override, or to enable a `--tags backup`-only re-run that
+# skips discovery (use the u…-subN user / host the role printed).
+# export STORAGEBOX_SSH_USER="u123456-sub1"
+# export STORAGEBOX_SSH_HOST="u123456-sub1.your-storagebox.de"
+# export STORAGEBOX_SUBACCOUNT_NAME="borg-backup-ch-prod-01"
+# export STORAGEBOX_SUBACCOUNT_HOME="borg-ch-prod-01-repo"
+# export STORAGEBOX_RUN_BACKUP_VALIDATION="true"  # set false to skip the first-run full backup
 # export STORAGEBOX_SSH_PORT="23"
 # export BORG_REPO_PATH="./backups/clickhouse"
 # export BORG_KEEP_DAILY="7"
@@ -116,9 +127,17 @@ they prefer) with `chmod 600` and sources it before deploys.
 In the Hetzner Robot UI:
 
 - The dedicated server `ch-prod-01` already ordered and online.
-- A `BX21` Storage Box ordered in the same data centre.
 - The operator's personal SSH public key registered in the Robot
   UI for the rescue-system fallback.
+
+In the Hetzner Cloud Console (Storage Boxes moved here from Robot
+in 2025):
+
+- A `BX21` Storage Box ordered in the same data centre. Note its
+  numeric ID → `STORAGEBOX_ID`.
+- A read+write API token (Security → API tokens) → `HCLOUD_TOKEN`.
+- The Borg backup **subaccount is created by the playbook** (the
+  `storagebox` play) — no manual subaccount or SSH-key step.
 
 ## First-time setup (per environment)
 
@@ -183,8 +202,12 @@ the template in the "Prerequisites" section above):
   `chDomainName` in the CDK env config — provisioned by
   `HetznerDnsStack`)
 - `ACME_EMAIL` → real operator email (LE expiry warnings)
-- `STORAGEBOX_SSH_USER`, `STORAGEBOX_SSH_HOST` → values from the
-  BX21 order page
+- `STORAGEBOX_ID` → numeric Cloud ID of the BX21 Storage Box
+  (Console → Storage Boxes). `HCLOUD_TOKEN` →
+  read+write Cloud API token. `STORAGEBOX_SUBACCOUNT_PASSWORD` →
+  random 32-byte base64. The `storagebox` play creates/reconciles
+  the Borg subaccount and discovers its `STORAGEBOX_SSH_USER` /
+  `STORAGEBOX_SSH_HOST` automatically — you do **not** set those.
 - `OPERATOR_SSH_PUBKEYS` → multi-line block of OpenSSH public
   keys; one per operator authorised to SSH the box
 
@@ -226,6 +249,11 @@ ansible-playbook ... --tags security
 
 # Apply only Hetzner Robot side-channel changes (firewall, rDNS).
 ansible-playbook ... --tags hetzner
+
+# Reconcile the Borg Storage Box subaccount + authorised_keys via
+# the Cloud API, then run a one-off validation backup. Skip the
+# validation backup with -e storagebox_run_backup_validation=false.
+ansible-playbook ... --tags storagebox
 ```
 
 ## Post-deploy verification
@@ -329,36 +357,39 @@ CRL/OCSP infrastructure required.
 > Borg SSH public key from the Storage Box BEFORE provisioning
 > the new box. Otherwise the attacker — who still has the dead
 > box's `/root/.ssh/borg_ed25519` — can `borg delete` every
-> archive while you set up the replacement. In the Hetzner
-> Robot UI: Storage Boxes → ch-prod-01-bx21 → SSH Keys →
-> remove the old box's entry. Only then proceed with step 1.
+> archive while you set up the replacement. The dead key lives in
+> the subaccount's `authorized_keys`, which is reachable over SSH
+> only from inside Hetzner (`reachable_externally: false`) — you
+> cannot reach it from your laptop. Cut access via the **Cloud
+> API**, which needs no connection to the Storage Box: disable SSH
+> on the Borg subaccount, or delete it. In the Hetzner Console:
+> Storage Boxes → the box → Sub-accounts → turn SSH off (or delete
+> the subaccount). Equivalently, with `HCLOUD_TOKEN`/`STORAGEBOX_ID`
+> set, run `hetzner.hcloud.storage_box_subaccount` with
+> `access_settings.ssh_enabled=false` (or `state: absent`). This
+> instantly revokes the attacker's key-based access. Only then
+> proceed with step 1; the full playbook run in step 4 recreates /
+> re-enables the subaccount with only the new box's key authorised.
 
 1. Order a new dedicated server in Hetzner Robot UI.
 2. Apply `installimage.conf` from this directory via the Hetzner
    installimage tool. Reboots into fresh Ubuntu 24.04 on RAID 1.
 3. Update `inventory.ini` with the new IP.
-4. Run the full playbook: `ansible-playbook -i inventory.ini site.yml`.
-   This brings the stack up empty AND generates a new Borg SSH
-   keypair on the box. The playbook prints the new public key
-   in the `backup` role's "Display Storage Box authorised_keys
-   onboarding instructions" task — copy that output.
-
-5. **Authorise the new Borg SSH public key on the Storage Box.**
-   Without this step, `borg list` and `borg extract` in the next
-   steps will fail with "permission denied". The playbook's
-   `Display Storage Box authorised_keys onboarding instructions`
-   debug task printed the public key during step 4, but only on
-   that run — to re-display it from a fresh shell:
+4. Run the full playbook, skipping the first-run validation backup
+   (you are about to restore, not back up):
 
    ```bash
-   ssh deploy@<new-box-ip> sudo cat /root/.ssh/borg_ed25519.pub
+   ansible-playbook -i inventory.ini site.yml \
+       -e storagebox_run_backup_validation=false
    ```
 
-   In the Hetzner Robot UI: Storage Boxes → ch-prod-01-bx21 →
-   SSH Keys → add this public key. (You can also remove the old
-   key from the previous box at the same time.)
+   This brings the stack up empty, generates a new Borg SSH keypair
+   on the box, and — via the `storagebox` play — reconciles the
+   Storage Box subaccount and **authorises the new box's pubkey on
+   it automatically** (overwriting `authorized_keys`, which also
+   revokes the dead box's key). No manual Robot UI / Console step.
 
-6. Restore from the most recent Borg snapshot.
+5. Restore from the most recent Borg snapshot.
 
    ```bash
    ssh deploy@<new-box-ip>
@@ -401,16 +432,16 @@ CRL/OCSP infrastructure required.
            --query="RESTORE DATABASE default FROM Disk('backups', 'ch-<latest>/')"
    ```
 
-7. Validate the restore: row counts on a few large tables, schema
+6. Validate the restore: row counts on a few large tables, schema
    discovery via `SELECT name FROM system.tables WHERE database = 'default'`.
-8. Re-issue any mTLS service certs whose private keys were lost with
+7. Re-issue any mTLS service certs whose private keys were lost with
    the box (developer laptop certs are unaffected — those keys live
    on the laptops).
-9. Re-point the prod DNS A-record at the new IP. Caddy obtains a new
+8. Re-point the prod DNS A-record at the new IP. Caddy obtains a new
    LE cert on first request; mind the LE rate limit (5 certs/week
    per domain) if you have already issued recently.
-10. Smoke-test from a dev cert end-to-end before announcing
-    restoration.
+9. Smoke-test from a dev cert end-to-end before announcing
+   restoration.
 
 ### Storage Box (BX21) is lost
 

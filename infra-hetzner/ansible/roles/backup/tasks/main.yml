@@ -14,6 +14,28 @@
 # /etc/soroban-backup/borg.passphrase. Hetzner stores ciphertext;
 # a Hetzner-side disclosure does not leak our data.
 
+- name: Assert the Storage Box SSH endpoint is known before configuring Borg
+  # storagebox_ssh_user/host are normally DISCOVERED by the
+  # `storagebox` reconcile play (set_fact onto this host) and are no
+  # longer required env vars. But a run that excludes the
+  # `storagebox` tag (e.g. `--tags backup`, `--tags hetzner,backup`)
+  # skips discovery, leaving them empty — which would silently bake
+  # `ssh://@:23/...` into /usr/local/bin/ch-backup and ssh-keyscan an
+  # empty host. Fail fast with an actionable message instead.
+  ansible.builtin.assert:
+    that:
+      - storagebox_ssh_user | trim | length > 0
+      - storagebox_ssh_host | trim | length > 0
+    fail_msg: |
+      The Storage Box SSH endpoint (storagebox_ssh_user / storagebox_ssh_host)
+      is empty. It is discovered by the `storagebox` play, which this run did
+      not include. Either:
+        * run the full playbook (or add `--tags storagebox` to your tag set),
+          so the subaccount is reconciled and the endpoint discovered, or
+        * for a `--tags backup`-only re-run, export STORAGEBOX_SSH_USER and
+          STORAGEBOX_SSH_HOST (the values the `storagebox` play printed on the
+          last full run) before invoking ansible-playbook.
+
 - name: Install Borg
   ansible.builtin.apt:
     name: borgbackup
@@ -124,62 +146,69 @@
   register: borg_fp_current
   changed_when: false
 
-- name: Alert if the Borg SSH key fingerprint changed
-  ansible.builtin.fail:
+- name: Warn on Borg SSH key drift when the storagebox play will re-authorise it
+  # Drift is non-fatal ONLY when the `storagebox` play runs in this
+  # same invocation: its `authorize` play (after this role) re-pushes
+  # the CURRENT pubkey to the subaccount, so a regenerated keypair
+  # self-heals. A hard fail here would abort before that heal.
+  ansible.builtin.debug:
     msg: |
-      The Borg cron SSH key fingerprint has changed since the
-      last playbook run:
+      NOTICE: the Borg cron SSH key fingerprint changed since the
+      last run:
 
         recorded: {{ borg_fp_recorded.content | b64decode | trim }}
         current:  {{ borg_fp_current.stdout }}
 
-      This means the keypair was regenerated (file deletion +
-      module re-run, restore from backup, etc.). The Storage
-      Box's authorized_keys still trusts the OLD public key, so
-      the backup cron WILL FAIL until you:
-
-        1. Add the new public key to the Storage Box authorised
-           keys via Hetzner Robot UI (Storage Boxes → SSH Keys):
-              {{ borg_ssh_key.public_key }}
-        2. Optionally remove the old key from the same Robot UI
-           page.
-        3. Re-run this playbook to record the new fingerprint.
-
-      If this is the FIRST run on a fresh box, expected. Bypass
-      this check by deleting /etc/soroban-backup/borg.fp manually
-      and re-running.
+      The hetzner_storagebox `authorize` play will re-authorise the
+      current key on the subaccount later in this run. If you did NOT
+      expect a regeneration (disk swap, botched restore), investigate
+      why /root/.ssh/borg_ed25519 was recreated.
   when:
     - borg_fp_recorded.content is defined
     - (borg_fp_recorded.content | b64decode | trim) != borg_fp_current.stdout
+    - (('all' in ansible_run_tags) or ('storagebox' in ansible_run_tags)) and ('storagebox' not in ansible_skip_tags)
 
-- name: Record the current Borg SSH key fingerprint for future drift checks
-  # Mode 0640 (was 0644) — the fingerprint is not a secret on its
-  # own (it's a SHA256 of a public key), but world-readability
-  # leaks which key authorises the box against BX21, which is
-  # useful intel for a privilege-escalation pivot. Consistent
-  # with the rest of /etc/soroban-backup/ (passphrase 0400,
-  # client config 0400, dir 0750).
-  ansible.builtin.copy:
-    dest: /etc/soroban-backup/borg.fp
-    content: '{{ borg_fp_current.stdout }}'
-    owner: root
-    group: root
-    mode: '0640'
+- name: Fail on Borg SSH key drift when this run will NOT re-authorise it
+  # When `storagebox` is excluded (e.g. --tags backup), the authorize
+  # play does not run, so the new pubkey would never reach the
+  # subaccount and the cron would silently fail against the stale
+  # authorized_keys. Stop and tell the operator to include the play.
+  ansible.builtin.fail:
+    msg: |
+      The Borg cron SSH key fingerprint changed since the last run:
 
-- name: Display Storage Box authorised_keys onboarding instructions
-  # The public key has to be added to the Storage Box's
-  # authorized_keys via the Hetzner Robot UI (Storage Boxes →
-  # SSH Keys). This module call surfaces the exact key contents
-  # to the operator on first deploy. Idempotent: prints on every
-  # run but does not modify anything remote.
+        recorded: {{ borg_fp_recorded.content | b64decode | trim }}
+        current:  {{ borg_fp_current.stdout }}
+
+      This run does NOT include the `storagebox` play, so the new key
+      would NOT be authorised on the Storage Box subaccount and the
+      backup cron would fail. Re-run including the `storagebox` tag
+      (or the full playbook) so the new key is re-authorised.
+  when:
+    - borg_fp_recorded.content is defined
+    - (borg_fp_recorded.content | b64decode | trim) != borg_fp_current.stdout
+    - (not (('all' in ansible_run_tags) or ('storagebox' in ansible_run_tags))) or ('storagebox' in ansible_skip_tags)
+
+# NOTE: the drift baseline /etc/soroban-backup/borg.fp is RECORDED by
+# the hetzner_storagebox `authorize` play, AFTER it confirms the key is
+# authorised on the subaccount — not here. Recording it here would mark
+# a regenerated key as "known good" on a `--tags backup` run that never
+# re-authorised it, silently erasing the drift signal on the next run.
+
+- name: Note who authorises this key on the Storage Box
+  # The Borg pubkey is registered on the Storage Box SUBACCOUNT
+  # automatically by the `hetzner_storagebox` role's `authorize`
+  # play (which runs after this role) — it writes the subaccount
+  # `~/.ssh/authorized_keys` over SFTP. The old manual "add via
+  # Robot UI" step is gone (the Robot Storage Box API was removed
+  # 2025-07-30; Storage Boxes live in the Cloud API now). This
+  # debug only echoes the key for the run log.
   ansible.builtin.debug:
     msg: |
-      Add this public key to the Hetzner Storage Box authorised
-      keys via Robot UI (Storage Boxes → SSH Keys):
+      Borg cron public key (authorised on the Storage Box subaccount
+      by the hetzner_storagebox role, not by hand):
 
       {{ borg_ssh_key.public_key }}
-
-      Without this, the daily backup cron cannot push to BX21.
 
 - name: Deliver the backup script
   ansible.builtin.template:

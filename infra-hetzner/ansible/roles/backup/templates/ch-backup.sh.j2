@@ -111,10 +111,17 @@ main() {
     # during a foreground `sleep` is deferred until sleep
     # returns — up to 30 minutes. The wait builtin is
     # signal-interruptible, so the trap fires immediately.
-    sleep $(( RANDOM % 1800 )) &
-    SLEEP_PID=$!
-    wait "${SLEEP_PID}" 2>/dev/null || true
-    SLEEP_PID=""
+    # CH_BACKUP_NO_JITTER=1 skips the delay for a manual / Ansible-
+    # driven validation run (the first-run check in the
+    # hetzner_storagebox role) where blocking up to 30 min is
+    # pointless. The cron entry never sets it, so scheduled runs
+    # keep the jitter.
+    if [[ "${CH_BACKUP_NO_JITTER:-0}" != "1" ]]; then
+        sleep $(( RANDOM % 1800 )) &
+        SLEEP_PID=$!
+        wait "${SLEEP_PID}" 2>/dev/null || true
+        SLEEP_PID=""
+    fi
 
     log "Starting"
 
