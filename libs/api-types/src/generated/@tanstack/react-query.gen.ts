@@ -1304,15 +1304,18 @@ export const getSearchQueryKey = (options: Options<GetSearchData>) =>
  * `?limit=` caps each entity bucket independently (default 10,
  * ceiling 50).
  *
- * Behaviour:
- * * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
- * full C-StrKey) and the corresponding entity exists, the response
- * is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
- * navigates directly.
- * * Otherwise the response is `{ "type": "results", "groups": {...} }`
+ * Behaviour (option C — task 0271):
+ * * One SQL path: broad search across the six entity-typed CTEs.
+ * * If the broad query returns exactly one row AND that row's entity
+ * type is redirect-eligible (transaction / account / contract /
+ * pool — see [`SearchRedirect::from_hit`]), the response is
+ * `{ "type": "redirect", "entity_type", "entity_id", … }` and the
+ * frontend navigates directly.
+ * * Otherwise the response is `{ "type": "results", "groups": {…} }`
  * with up to `limit` rows per entity bucket. Rows carry the same
- * four columns regardless of bucket: `entity_type`, `identifier`,
- * `label`, `surrogate_id` (BIGINT FK or `null`).
+ * columns regardless of bucket: `entity_type`, `identifier`,
+ * `label`, `surrogate_id` (BIGINT FK or `null`), plus optional
+ * enrichment / composite-routing fields.
  *
  * Authoritative SQL:
  * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.

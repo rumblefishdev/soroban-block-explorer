@@ -33,6 +33,32 @@ pub struct SearchRedirect {
     pub last_activity_at: Option<DateTime<Utc>>,
 }
 
+impl SearchRedirect {
+    /// Synthesize a redirect from a singleton broad-search hit.
+    ///
+    /// Eligible entity types are the ones whose `(entity_type,
+    /// entity_id)` pair is enough for the FE to route — transaction,
+    /// account, contract, pool. Asset and NFT need additional routing
+    /// fields (`surrogate_id`, `contract_id` + `token_id`) that the
+    /// current `SearchRedirect` wire shape does not carry, so a
+    /// singleton asset / NFT hit falls through to `Results` with one
+    /// row instead.
+    pub fn from_hit(hit: &SearchHit) -> Option<Self> {
+        match hit.entity_type {
+            EntityType::Transaction
+            | EntityType::Account
+            | EntityType::Contract
+            | EntityType::Pool => Some(Self {
+                entity_type: hit.entity_type,
+                entity_id: hit.identifier.clone(),
+                successful: hit.successful,
+                last_activity_at: hit.last_activity_at,
+            }),
+            EntityType::Asset | EntityType::Nft => None,
+        }
+    }
+}
+
 /// Results payload — six entity-typed buckets, each capped at the
 /// per-group `limit` chosen by the caller (default 10, ceiling 50).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -173,6 +199,75 @@ mod tests {
             "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ"
         );
         assert_eq!(json["token_id"], "token-7");
+    }
+
+    /// Singleton-redirect synthesis is the load-bearing helper for the
+    /// option C search refactor (task 0271). It must accept the four
+    /// redirect-eligible entity types and reject asset / NFT (which
+    /// need routing fields the wire does not carry today).
+    #[test]
+    fn from_hit_eligible_entity_types_produce_redirect() {
+        for entity_type in [
+            EntityType::Transaction,
+            EntityType::Account,
+            EntityType::Contract,
+            EntityType::Pool,
+        ] {
+            let hit = SearchHit {
+                entity_type,
+                identifier: "ID".to_string(),
+                label: String::new(),
+                surrogate_id: None,
+                successful: None,
+                last_activity_at: None,
+                contract_id: None,
+                token_id: None,
+            };
+            let redirect = SearchRedirect::from_hit(&hit).expect("eligible");
+            assert_eq!(redirect.entity_type, entity_type);
+            assert_eq!(redirect.entity_id, "ID");
+        }
+    }
+
+    #[test]
+    fn from_hit_asset_and_nft_fall_through() {
+        for entity_type in [EntityType::Asset, EntityType::Nft] {
+            let hit = SearchHit {
+                entity_type,
+                identifier: "ID".to_string(),
+                label: String::new(),
+                surrogate_id: Some(1),
+                successful: None,
+                last_activity_at: None,
+                contract_id: None,
+                token_id: None,
+            };
+            assert!(
+                SearchRedirect::from_hit(&hit).is_none(),
+                "{entity_type:?} must fall through to Results"
+            );
+        }
+    }
+
+    #[test]
+    fn from_hit_propagates_tx_enrichment_fields() {
+        let hit = SearchHit {
+            entity_type: EntityType::Transaction,
+            identifier: "deadbeef".to_string(),
+            label: String::new(),
+            surrogate_id: None,
+            successful: Some(true),
+            last_activity_at: Some(
+                "2026-01-01T00:00:00Z"
+                    .parse::<DateTime<Utc>>()
+                    .expect("ts parses"),
+            ),
+            contract_id: None,
+            token_id: None,
+        };
+        let redirect = SearchRedirect::from_hit(&hit).expect("eligible");
+        assert_eq!(redirect.successful, Some(true));
+        assert!(redirect.last_activity_at.is_some());
     }
 
     #[test]

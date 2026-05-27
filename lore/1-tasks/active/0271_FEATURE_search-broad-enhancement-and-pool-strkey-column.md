@@ -59,6 +59,36 @@ history:
       Promoted to active. Implementation: option C refactor only —
       collapse fetch_redirect into broad+singleton on
       crates/api/src/search/.
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: >
+      Implementation landed locally. Code changes
+      (crates/api/src/search/): deleted fetch_redirect + RedirectRow
+      + Classified::is_fully_typed(); re-enabled tx_hits CTE in
+      fetch_search (6 CTEs total); added IncludeFlags::transaction
+      so the ?type=transaction filter token now activates the broad
+      tx bucket; added SearchRedirect::from_hit(&SearchHit) helper
+      in dto.rs. Handler synthesizes Redirect when broad returns
+      exactly 1 row AND singleton entity is redirect-eligible.
+      Emergent decision (conservative first iteration): asset / NFT
+      singletons fall through to Results because their FE routing
+      needs fields (surrogate_id / contract_id+token_id) the
+      SearchRedirect wire shape does not carry today. Asset
+      singleton-redirect would need a minor wire shape extension
+      (add surrogate_id field) — deferred to a possible follow-up
+      task if the UX case proves it worthwhile. NFT analogous.
+      Tests: 135 lib + 3 integration green (cargo test -p api);
+      cargo clippy clean. OpenAPI regen + nx web:typecheck green
+      (only docstring delta on the wire — non-breaking).
+      Detail-page 404 hygiene audit: all 7 detail routes (account,
+      transaction, contract, pool, ledger, NFT, asset) handle 404
+      via isMissingResource(classifyError(error)) → NotFoundState
+      uniformly. No crash / no infinite spinner. Safe to land.
+      Deviation from acceptance criteria: docs/architecture/api/
+      url-conventions.md update — file deleted by user during this
+      session; not restored per memory rule on respecting user
+      edits.
 ---
 
 # Search: collapse fetch_redirect into broad + singleton-redirect (option C)

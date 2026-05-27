@@ -55,15 +55,18 @@ pub struct SearchParams {
 /// `?limit=` caps each entity bucket independently (default 10,
 /// ceiling 50).
 ///
-/// Behaviour:
-/// * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
-///   full C-StrKey) and the corresponding entity exists, the response
-///   is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
-///   navigates directly.
-/// * Otherwise the response is `{ "type": "results", "groups": {...} }`
+/// Behaviour (option C — task 0271):
+/// * One SQL path: broad search across the six entity-typed CTEs.
+/// * If the broad query returns exactly one row AND that row's entity
+///   type is redirect-eligible (transaction / account / contract /
+///   pool — see [`SearchRedirect::from_hit`]), the response is
+///   `{ "type": "redirect", "entity_type", "entity_id", … }` and the
+///   frontend navigates directly.
+/// * Otherwise the response is `{ "type": "results", "groups": {…} }`
 ///   with up to `limit` rows per entity bucket. Rows carry the same
-///   four columns regardless of bucket: `entity_type`, `identifier`,
-///   `label`, `surrogate_id` (BIGINT FK or `null`).
+///   columns regardless of bucket: `entity_type`, `identifier`,
+///   `label`, `surrogate_id` (BIGINT FK or `null`), plus optional
+///   enrichment / composite-routing fields.
 ///
 /// Authoritative SQL:
 /// `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
@@ -125,31 +128,11 @@ pub async fn get_search(
         Err(resp) => return resp,
     };
 
-    // 4. Classify query.
+    // 4. Classify query — `hash_bytes` / `strkey_prefix` channels
+    //    feed the WHERE-gated CTE branches inside `fetch_search`.
     let classified = classifier::classify(q_raw);
 
-    // 5. Redirect short-circuit when `q` is a fully-typed entity id
-    //    that hits an existing row.
-    match queries::fetch_redirect(&state.db, &classified).await {
-        Ok(Some(row)) => {
-            let mut resp = Json(SearchResponse::Redirect(SearchRedirect {
-                entity_type: row.entity_type,
-                entity_id: row.entity_id,
-                successful: row.successful,
-                last_activity_at: row.last_activity_at,
-            }))
-            .into_response();
-            cache_control::attach(&mut resp, cache_control::NO_STORE);
-            return resp;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::error!("DB error in get_search redirect: {e}");
-            return errors::internal_error(errors::DB_ERROR, "Unable to perform search.");
-        }
-    }
-
-    // 6. Broad search.
+    // 5. Broad search — single SQL path covering all six entity types.
     let rows =
         match queries::fetch_search(&state.db, q_raw, &classified, &include, limit as i32).await {
             Ok(rows) => rows,
@@ -158,6 +141,20 @@ pub async fn get_search(
                 return errors::internal_error(errors::DB_ERROR, "Unable to perform search.");
             }
         };
+
+    // 6. Singleton-redirect synthesis (option C — task 0271).
+    //    When the broad query returns exactly one row and the entity
+    //    type is redirect-eligible, emit `SearchResponse::Redirect`
+    //    so the frontend navigates straight to the entity page.
+    //    Asset / NFT singletons fall through to `Results` because
+    //    their routing needs fields not carried in `SearchRedirect`.
+    if rows.len() == 1
+        && let Some(redirect) = SearchRedirect::from_hit(&rows[0].1)
+    {
+        let mut resp = Json(SearchResponse::Redirect(redirect)).into_response();
+        cache_control::attach(&mut resp, cache_control::NO_STORE);
+        return resp;
+    }
 
     let groups = group_hits(rows);
     let mut resp = Json(SearchResponse::Results(SearchResults { groups })).into_response();
@@ -259,10 +256,7 @@ mod tests {
     #[test]
     fn parse_type_filter_accepts_csv() {
         let f = parse_type_filter(Some("transaction,contract,asset")).unwrap();
-        // `transaction` is accepted as a filter token (parity with the
-        // wire discriminator) but is a no-op in the broad branch — the
-        // redirect branch covers it. No assertion on a `tx` field here
-        // because the field has been removed from `IncludeFlags`.
+        assert!(f.transaction);
         assert!(f.contract);
         assert!(f.asset);
         assert!(!f.account);
@@ -273,13 +267,13 @@ mod tests {
     #[test]
     fn parse_type_filter_missing_includes_all() {
         let f = parse_type_filter(None).unwrap();
-        assert!(f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.transaction && f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
     fn parse_type_filter_empty_string_includes_all() {
         let f = parse_type_filter(Some("")).unwrap();
-        assert!(f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.transaction && f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
@@ -290,8 +284,8 @@ mod tests {
 
     #[test]
     fn parse_type_filter_tolerates_whitespace_and_empty_tokens() {
-        // `transaction` token is accepted but is a no-op (redirect-only).
         let f = parse_type_filter(Some("  transaction , , account ")).unwrap();
+        assert!(f.transaction);
         assert!(f.account);
         assert!(!f.contract);
     }
