@@ -115,3 +115,36 @@ data sections. Search result-row first-hit click on a tx hit lands at
 
 **F-L-1, F-L-2, F-L-3, F-L-4, F-L-5, F-L-6:** STILL STAND. Filip didn't
 touch search.
+
+## 0270 merge resolution 2026-05-27 — develop @ cb2fa80a (PR #220)
+
+### F-L-1 — **RESOLVED** in `047ce51e` + `6421d3d7`
+
+Search by full pool L-strkey now decodes + redirects to `/liquidity-pools/L…`. Implementation:
+
+- **Backend** (`crates/api/src/search/classifier.rs`): classifier L-strkey decode branch via `stellar_strkey::LiquidityPool::from_string` feeds `hash_bytes` for pool exact-match CTE (same BYTEA(32) shape as tx hash path). `commit 047ce51e`.
+- **Backend wire** (`crates/api/src/search/queries.rs`): `fetch_redirect` pool branch wraps `entity_id` via `pool_id_hex_to_strkey`; `fetch_search` pool_hits row mapper converts to canonical strkey at boundary. Redirect target matches strkey-only path validator landed in 0264 Phase 1.
+- **Frontend** (`web/src/search/directRouteFor.ts` NEW): bare-digit u32 → `/ledgers/<seq>` runs BEFORE API call (FE-side classifier — backend search has no ledger bucket). Closes Gap D ledger numeric redirect at the optimal layer.
+- **Frontend** (`web/src/search/routeForHit.ts` removed; `libs/ui/src/identifiers/routes.ts` consolidates entityRoutes): NFT composite short-circuit produces `/nfts/:contractId/:tokenId` via `routes.nft(c, t)`. Closes NFT-search-404 regression that was carry-over from 0264 Phase 8a (reverted in `4716d5f3`, properly fixed here).
+
+Tests: `cargo test -p api` 132 passed (incl. `classifies_full_l_strkey_as_pool_hash_bytes` + `nft_hit_serializes_composite_fields` + `non_nft_hit_omits_composite_fields`). `nx run-many -t typecheck/lint/build` all green.
+
+### Out of scope — deferred to 0271 (NEW spawned task)
+
+- Asset broad-search by name (`asset_code` ILIKE)
+- NFT broad-search by `collection_name`
+- Pool L-strkey **prefix** matching (partial autocomplete — Gap E; requires denormalised strkey text column on `liquidity_pools`)
+
+### Considered + REJECTED per scope discipline (with documented rationale)
+
+- **Muxed M-strkey decode** → "no ecosystem precedent for asset auto-redirect" (per 0270 completion note). Worth research follow-up if Stellar Expert decoding pattern desired pre-launch.
+- **Asset `code-issuer` composite redirect** → same scope discipline rationale.
+- **Drop `SearchResponse::Redirect` anti-pattern** (move classifier FE-only, industry-canonical) → separate refactor PR; out of 0270 scope.
+- **Q5(b) bad-CRC L-strkey hint** (silent 0 results on typo) → minor UX nit; defer Phase 3.
+
+### Bonus simplifications (not in original plan, shipped under same PR)
+
+- `tx_hits` broad CTE **dropped** — dead code (redirect path covers tx hash already).
+- Classifier base64 32-byte branch **dropped** — no ecosystem caller.
+- `is_fully_typed` **derived** from `(hash_bytes, strkey_prefix)` instead of stored field — single source of truth, less drift surface.
+- `web/src/search/routeForHit.ts` **deleted entirely**; replaced by `libs/ui/src/identifiers/routes.ts` entityRoutes consolidation (broader than original "Path c overload" plan).

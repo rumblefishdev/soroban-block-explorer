@@ -311,3 +311,15 @@ Empty-state hint `L...` addition deferred to `future-search-followup` follow-up 
 ### F-K-5 + F-K-6 + F-K-7 + F-K-8 — **STATUS UNCHANGED**
 
 Account self-link (K-5), missing source-account column for accounts list (K-6), E3 tx-detail ledger link verification (K-7), Soroban call tree destination account routing (K-8) — none touched by Gate B batch. Will surface in Wave 6 Track 2 Playwright re-pass if remaining issues.
+
+## 0270 merge resolution 2026-05-27 — develop @ cb2fa80a (PR #220)
+
+### F-K-4 — **RESOLVED** in `6421d3d7`
+
+`SearchResultsView` empty-state hint extended to include liquidity pool `L…` prefix alongside `G…` (account) and `C…` (contract). User pasting strkey from stellar.expert now sees pool in supported formats list. Paired with F-L-1 backend resolution.
+
+### Bonus: NFT search-404 regression (carry-over from 0264 Phase 8a) — **RESOLVED** in `6421d3d7` + `69d9f529`
+
+Background: 0264 Phase 8a refactored `/v1/nfts/:id` → `/v1/nfts/:contract_id/:token_id`. `routeForHit` was at HEAD shape emitting `/nfts/<surrogate>` → React Router couldn't match composite → hard 404. Soft-fallback in `9c3db048` reverted in `4716d5f3` per user decision to defer proper composite fix to 0270.
+
+Fix: `SearchHit` extended with optional `contract_id` + `token_id`; `nft_hits` CTE JOINs `soroban_contracts` to project both; FE `routeForHit` NFT-composite short-circuit calls `routes.nft(c, t)`. NFT search results now navigate to the composite path correctly.
