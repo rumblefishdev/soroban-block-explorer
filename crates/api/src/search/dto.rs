@@ -63,9 +63,12 @@ pub struct SearchGroups {
 /// Single search row. Same shape across every entity bucket.
 ///
 /// `identifier` is the canonical human-shown id (hex hash for
-/// transactions / pools, StrKey for accounts / contracts, asset code
-/// for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
-/// the frontend MUST route via `surrogate_id`.
+/// transactions, strkey `L…` for pools, StrKey for accounts /
+/// contracts, asset code for assets, name for NFTs). For `asset` it is
+/// NOT unique — the frontend routes via `surrogate_id`. For `nft` it is
+/// also not unique and `surrogate_id` alone is insufficient because NFT
+/// identity is the composite `(contract_id, token_id)` per task 0264 /
+/// ADR 0030 — the two fields below carry the composite for routing.
 ///
 /// `successful` and `last_activity_at` are populated only for
 /// `entity_type = transaction` today — joined from the partitioned
@@ -84,6 +87,14 @@ pub struct SearchHit {
     pub successful: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// NFT composite routing key. Populated only when
+    /// `entity_type = nft`; `None` for every other bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_id: Option<String>,
+    /// NFT composite routing key. Populated only when
+    /// `entity_type = nft`; `None` for every other bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
 }
 
 /// Entity discriminator. Closed allowlist used by the `type=` filter
@@ -135,5 +146,49 @@ mod tests {
                 "EntityType::ALL contains `{name}` but parse() rejects it"
             );
         }
+    }
+
+    /// NFT hit carries the composite `(contract_id, token_id)` on the
+    /// wire so the frontend can route to `/nfts/:contract_id/:token_id`
+    /// without a second roundtrip. The fields must serialize when set
+    /// and disappear when `None` to keep the dropdown payload tight for
+    /// non-NFT buckets.
+    #[test]
+    fn nft_hit_serializes_composite_fields() {
+        let hit = SearchHit {
+            entity_type: EntityType::Nft,
+            identifier: "Cool Cat #7".to_string(),
+            label: "CoolCats".to_string(),
+            surrogate_id: Some(42),
+            successful: None,
+            last_activity_at: None,
+            contract_id: Some(
+                "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ".to_string(),
+            ),
+            token_id: Some("token-7".to_string()),
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(
+            json["contract_id"],
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ"
+        );
+        assert_eq!(json["token_id"], "token-7");
+    }
+
+    #[test]
+    fn non_nft_hit_omits_composite_fields() {
+        let hit = SearchHit {
+            entity_type: EntityType::Transaction,
+            identifier: "deadbeef".to_string(),
+            label: "ledger 1".to_string(),
+            surrogate_id: None,
+            successful: Some(true),
+            last_activity_at: None,
+            contract_id: None,
+            token_id: None,
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert!(json.get("contract_id").is_none());
+        assert!(json.get("token_id").is_none());
     }
 }

@@ -3793,9 +3793,13 @@
       },
       "SearchHit": {
         "type": "object",
-        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions / pools, StrKey for accounts / contracts, asset code\nfor assets, name for NFTs). For `asset` and `nft` it is NOT unique —\nthe frontend MUST route via `surrogate_id`.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
+        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions, strkey `L…` for pools, StrKey for accounts /\ncontracts, asset code for assets, name for NFTs). For `asset` it is\nNOT unique — the frontend routes via `surrogate_id`. For `nft` it is\nalso not unique and `surrogate_id` alone is insufficient because NFT\nidentity is the composite `(contract_id, token_id)` per task 0264 /\nADR 0030 — the two fields below carry the composite for routing.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
         "required": ["entity_type", "identifier", "label"],
         "properties": {
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "NFT composite routing key. Populated only when\n`entity_type = nft`; `None` for every other bucket."
+          },
           "entity_type": {
             "$ref": "#/components/schemas/EntityType"
           },
@@ -3815,6 +3819,10 @@
           "surrogate_id": {
             "type": ["integer", "null"],
             "format": "int64"
+          },
+          "token_id": {
+            "type": ["string", "null"],
+            "description": "NFT composite routing key. Populated only when\n`entity_type = nft`; `None` for every other bucket."
           }
         }
       },
