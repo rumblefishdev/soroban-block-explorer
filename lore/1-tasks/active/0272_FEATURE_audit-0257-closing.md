@@ -2,10 +2,9 @@
 id: '0272'
 title: 'Audit 0257 closing — elastic single-task implementation of remaining findings'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
-related_tasks:
-  ['0257', '0262', '0263', '0264', '0265', '0270', '0271']
+related_tasks: ['0257', '0262', '0263', '0264', '0265', '0270', '0271']
 tags:
   [
     'frontend',
@@ -23,6 +22,10 @@ links:
   - 'Prior fix batches: 0262/0263/0264 (Gate B), 0265 (Vite CVE), 0270 (search canonical)'
   - 'Spawned follow-ups: 0271 (search broad enhancement)'
 history:
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: Activated task for implementation.
   - date: '2026-05-27'
     status: backlog
     who: karolkow
@@ -52,11 +55,9 @@ Pre-launch closure target: ~3-4 working days for MUST + SHOULD tier
 cards. Full backlog (incl. NICE + POST-LAUNCH cards): ~24 days FE
 spread across pre-launch sprint + post-launch maintenance.
 
-## Status: Backlog
+## Status: Active
 
-Activate when ready to begin closure sprint. Independent of other
-in-flight tasks (Filip 0241 indexer, Staś 0252 CH validation, etc.) —
-this is pure FE closure work plus minor backend coordination cards.
+Active closure sprint. Independent of other in-flight tasks — this is pure FE closure work plus minor backend coordination cards.
 
 ## Context
 
@@ -97,18 +98,18 @@ Remaining work documented in master action queue:
 
 ### Category ordering (Option A — category-based, per user 2026-05-27)
 
-| Cat | # cards | Theme |
-|---|---:|---|
-| C1 | 3 | Pre-launch must-fix (footer legal, build SHA, contracts list page) |
-| C2 | 3 | Atomic refactor batches (format/truncate/debounce, folder rationalization, state primitives) |
-| C3 | 3 | Type-safety (noUncheckedIndexedAccess, branded IDs, assertNever) |
-| C4 | 1 | Performance (bundle + LP lazy + vendor split) |
-| C5 | 4 | Routing leftovers (NotFound h1+main, URL tab state, sub-section queries, cross-entity gaps) |
-| C6 | 4 | Forward-linked (lore drift 0066, 23 spawn, backend coord, ADR/doc sweep) |
-| C7 | 8 | Wave 6 visual / UX |
-| C8 | 8 | Catalog / lore / docs |
-| C9 | 1 | Bulk out-of-scope spawn (13 follow-up tasks) |
-| C10 | 3 | Gated external (LP oracle ADR, MUI 7→9, 0251 B1 root cause) |
+| Cat | # cards | Theme                                                                                        |
+| --- | ------: | -------------------------------------------------------------------------------------------- |
+| C1  |       3 | Pre-launch must-fix (footer legal, build SHA, contracts list page)                           |
+| C2  |       3 | Atomic refactor batches (format/truncate/debounce, folder rationalization, state primitives) |
+| C3  |       3 | Type-safety (noUncheckedIndexedAccess, branded IDs, assertNever)                             |
+| C4  |       1 | Performance (bundle + LP lazy + vendor split)                                                |
+| C5  |       4 | Routing leftovers (NotFound h1+main, URL tab state, sub-section queries, cross-entity gaps)  |
+| C6  |       4 | Forward-linked (lore drift 0066, 23 spawn, backend coord, ADR/doc sweep)                     |
+| C7  |       8 | Wave 6 visual / UX                                                                           |
+| C8  |       8 | Catalog / lore / docs                                                                        |
+| C9  |       1 | Bulk out-of-scope spawn (13 follow-up tasks)                                                 |
+| C10 |       3 | Gated external (LP oracle ADR, MUI 7→9, 0251 B1 root cause)                                  |
 
 ### Pre-launch decision points
 
@@ -135,8 +136,8 @@ High-level — granular checkpoints tracked per-card in the queue file.
 - [ ] All SKIP appendix rows documented with rationale in audit-summary.md
 - [ ] Master audit task 0257 archived: `git mv active/0257_* archive/0257_*` + frontmatter `status: completed`
 - [ ] `lore/3-wiki/` updated if patterns emerged worth documenting
-  (FE testing standards, formatter conventions, error state taxonomy,
-  useTableUrlState ADR cross-link)
+      (FE testing standards, formatter conventions, error state taxonomy,
+      useTableUrlState ADR cross-link)
 - [ ] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`
       cross-link to audit-action-queue.md final state per ADR 0032.
 - [ ] **API types regenerated** — `N/A` if no `crates/api/**` changes;
