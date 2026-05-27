@@ -1439,6 +1439,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots 1.0.6",
  "xdr-parser",
 ]
 
