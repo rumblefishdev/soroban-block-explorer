@@ -7,7 +7,7 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
-export { getIdentifierHref } from './routes.js';
+export { entityRoutes, getIdentifierHref, routeForHit } from './routes.js';
 export { getDefaultTruncation, truncateMiddle } from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {

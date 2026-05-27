@@ -259,7 +259,10 @@ mod tests {
     #[test]
     fn parse_type_filter_accepts_csv() {
         let f = parse_type_filter(Some("transaction,contract,asset")).unwrap();
-        assert!(f.tx);
+        // `transaction` is accepted as a filter token (parity with the
+        // wire discriminator) but is a no-op in the broad branch — the
+        // redirect branch covers it. No assertion on a `tx` field here
+        // because the field has been removed from `IncludeFlags`.
         assert!(f.contract);
         assert!(f.asset);
         assert!(!f.account);
@@ -270,13 +273,13 @@ mod tests {
     #[test]
     fn parse_type_filter_missing_includes_all() {
         let f = parse_type_filter(None).unwrap();
-        assert!(f.tx && f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
     fn parse_type_filter_empty_string_includes_all() {
         let f = parse_type_filter(Some("")).unwrap();
-        assert!(f.tx && f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
@@ -287,8 +290,8 @@ mod tests {
 
     #[test]
     fn parse_type_filter_tolerates_whitespace_and_empty_tokens() {
+        // `transaction` token is accepted but is a no-op (redirect-only).
         let f = parse_type_filter(Some("  transaction , , account ")).unwrap();
-        assert!(f.tx);
         assert!(f.account);
         assert!(!f.contract);
     }

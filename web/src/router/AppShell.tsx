@@ -12,6 +12,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useNetworkStats } from '../api/index.js';
+import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
 
@@ -80,7 +81,7 @@ export function AppShell() {
     const q = searchValue.trim();
     if (q) {
       setSearchOpen(false);
-      void navigate(routes.search(q));
+      void navigate(directRouteFor(q) ?? routes.search(q));
     }
   };
 

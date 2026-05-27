@@ -6,9 +6,9 @@ import {
   Chip,
   IdentifierDisplay,
   RelativeTimestamp,
+  routeForHit,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { routeForHit } from './routeForHit.js';
 import { ENTITY_LABEL } from './useSearchResults.js';
 
 interface SearchResultRowProps {

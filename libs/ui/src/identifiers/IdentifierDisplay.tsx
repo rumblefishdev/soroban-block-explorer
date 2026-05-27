@@ -94,6 +94,10 @@ export function IdentifierDisplay({
     [linked, truncate, tone]
   );
 
+  // NFT identity is composite `(contract_id, token_id)`; pass `href`
+  // explicitly when `type='nft'` (no production callsite does today).
+  // `getIdentifierHref` throws on `'nft'` if reached without an
+  // override — safety net, not hot path.
   return (
     <Box
       component={linked ? 'a' : 'span'}
