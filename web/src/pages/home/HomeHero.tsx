@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
+import { directRouteFor } from '../../search/directRouteFor.js';
 
 import { HeroSearch } from './HeroSearch.js';
 
@@ -17,7 +18,7 @@ export function HomeHero() {
 
   const submit = () => {
     const q = value.trim();
-    if (q) void navigate(routes.search(q));
+    if (q) void navigate(directRouteFor(q) ?? routes.search(q));
   };
 
   return (

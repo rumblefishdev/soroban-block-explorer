@@ -2,9 +2,9 @@
 id: '0270'
 title: 'Search strkey canonical output + redirect coverage gaps (deferred from 0264 + senior review)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0032']
-related_tasks: ['0264', '0262', '0263', '0265', '0257']
+related_tasks: ['0264', '0262', '0263', '0265', '0257', '0271']
 tags:
   [
     'backend',
@@ -29,6 +29,37 @@ history:
     status: active
     who: karolkow
     note: 'Activated after parent PR #219 merged (cdb0c81d). Starting implementation on fresh feature branch.'
+  - date: '2026-05-27'
+    status: completed
+    who: karolkow
+    note: >
+      Implemented minimalist target state via 4 commits on feat/0270.
+      Backend: pool identifier flows as canonical L-strkey on wire
+      (pool_id_hex_to_strkey at fetch_redirect + fetch_search row
+      mapper boundary), classifier gained L-strkey decode branch
+      (feeds hash_bytes for pool exact-match path), SearchHit gained
+      contract_id+token_id for NFT composite routing (nft_hits CTE
+      JOIN soroban_contracts), tx_hits broad CTE dropped (was dead
+      code — redirect path covers it). Classifier simplified: base64
+      32-byte branch dropped (no ecosystem caller uses it), is_fully_typed
+      derived from (hash_bytes, strkey_prefix) instead of stored field.
+      Frontend: routeForHit gained NFT composite short-circuit
+      (routes.nft(c, t)), directRouteFor.ts added (bare-digit u32 →
+      /ledgers/<seq> before API call — closes the FE side of P1),
+      SearchResultsView empty-state hint adds L… prefix.
+      Docs: url-conventions.md gained Search input section with
+      redirect priority table (backend tx/G/C/L + FE ledger).
+      OpenAPI regen committed (SearchHit gains optional contract_id
+      + token_id). cargo test -p api green (132 passed), nx run
+      web:typecheck + lint green. Out-of-scope work deferred to task
+      0271 (asset broad by name, NFT broad by collection_name, pool
+      L-strkey prefix matching via denormalised text column).
+      Out-of-scope considered but rejected per scope discipline:
+      drop SearchResponse::Redirect anti-pattern (industry-canonical
+      FE-only classifier, defer — separate refactor PR). M-muxed
+      decode, asset composite redirect — research found no
+      ecosystem precedent for asset auto-redirect; deferred. F-L-1
+      + F-K-4 in 0257 unblock with this landing.
 ---
 
 # Search strkey canonical output + redirect coverage gaps

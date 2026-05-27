@@ -96,7 +96,7 @@ export function SearchResultsView({
                 sx={{ color: 'text.tertiary', textAlign: 'center' }}
               >
                 {emptyCopy?.description ??
-                  'Try a full transaction hash, account address (G…), contract address (C…), or token code.'}
+                  'Try a full transaction hash, account address (G…), contract address (C…), liquidity pool (L…), or token code.'}
               </Typography>
             </Stack>
           )}
