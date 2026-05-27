@@ -2,9 +2,11 @@ import { Box, Stack, Typography } from '@mui/material';
 import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  routeForHit,
+  SearchInput,
+} from '@rumblefish/soroban-block-explorer-ui';
 
-import { routeForHit } from '../search/routeForHit.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
