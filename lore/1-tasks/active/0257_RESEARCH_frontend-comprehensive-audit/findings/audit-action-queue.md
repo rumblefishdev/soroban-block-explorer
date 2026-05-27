@@ -39,7 +39,7 @@ This is the master action queue for closing audit 0257. Structure:
 - Already-resolved on develop (Gate A + Gate B + 0270): F-D-2, F-AE-5, F-K-2/3/9, F-AN-8, F-CO-1, F-L-1, F-K-4, NFT search-404 regression, F-E-1, F-E-8 — all marked `RESOLVED` in appendix.
 - Already-resolved via 0254 merge: F-D-1 (live API stale binary).
 - Already-resolved via FilipDz tx-detail PR #215 (a2c1b205): A1 (TxDetail stub), F-K-1 (tx detail outbound links).
-- User-dropped: F-E-2 (URL wire contract), Muxed M→G + Asset composite redirect (no precedent), SearchResponse::Redirect refactor (deferred future PR) — all marked `SKIP` in appendix.
+- User-dropped: F-E-2 (URL wire contract), Muxed M→G + Asset composite redirect (no precedent) — marked `SKIP` in appendix. SearchResponse::Redirect refactor — was SKIP "deferred future PR" but **shipped by 0271 commit `5d7484b1`** (FE owns singleton classification; wire collapsed to `Results` only). Re-classified `RESOLVED` in appendix.
 - Already-spawned tasks on develop: 0262/0263/0264/0265 (Gate B batch archived), 0270 (search canonical archived), 0271 (search broad enhancement active).
 
 ---
@@ -1399,7 +1399,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | Out of scope BO                                | rdme        | —       | —                       | SKIP        | Session replay (skip per user)                                              |
 | Muxed M→G redirect                             | post-Gate-B | —       | —                       | SKIP        | No ecosystem precedent                                                      |
 | Asset code-issuer composite redirect           | post-Gate-B | —       | —                       | SKIP        | No ecosystem precedent                                                      |
-| SearchResponse::Redirect refactor              | post-Gate-B | —       | —                       | SKIP        | Deferred future PR                                                          |
+| SearchResponse::Redirect refactor              | post-Gate-B | —       | —                       | RESOLVED    | Shipped by 0271 `5d7484b1` (FE owns singleton; wire collapsed to Results)   |
 | F-EX-3 PoolKpiStrip (extends F-K-2)            | 5 sweep     | 🟠      | —                       | RESOLVED    | a5f15166 (0263)                                                             |
 | F-EX-4 PoolsTable reserves (extends F-K-2)     | 5 sweep     | 🟠      | —                       | RESOLVED    | a5f15166 (0263)                                                             |
 | Issues Encountered worktree gotchas wiki       | arch        | —       | C 6.4                   | TODO        | Spawn DOCS wiki entry                                                       |

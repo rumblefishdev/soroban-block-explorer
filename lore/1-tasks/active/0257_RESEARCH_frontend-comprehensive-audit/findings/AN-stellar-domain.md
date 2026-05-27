@@ -195,3 +195,14 @@ Strkey canonical convention shipped across the full surface via task 0264 Gate B
 - **Evergreen doc:** `docs/architecture/api/url-conventions.md` created with full per-endpoint table + rationale + ADR-0032 cross-link (`863a597a` restore commit).
 
 **Search portion deferred** — Phase 3 (backend search classifier `L...` decode), Phase 9 (no-op confirm), Phase 10 (FE empty-state hint), plus search output strkey alignment for pool + NFT composite — captured in `future-search-followup` task. F-L-1 + F-K-4 STILL OPEN as of Gate B close. See 0264 archive task body §Issues #5 for deferral rationale (4 in-flight subagent commits reverted to keep batch focused).
+
+## Post-0271 amendment 2026-05-27 — develop @ cb2fa80a → 53f13673
+
+**Evergreen doc removed.** `docs/architecture/api/url-conventions.md` (created in 0264 Phase 11 as evergreen reference + ADR-0032 gate compliance deliverable) was **deleted by user during 0271 implementation session**. Per 0271 archived task body emerged note: "file deleted by user during this session; not restored per memory rule on respecting user edits".
+
+**User decision 2026-05-27:** accept deletion (Path A). No restoration planned. ADR-0032 evergreen docs gate compliance for this surface = lost. Rationale not captured by user — likely scope drift / doc became stale after 0271 search refactor / preferred inline coverage in 0271 task body itself.
+
+**Implications:**
+- F-AN-8 RESOLVED note above mentions evergreen doc deliverable — that mention is now historical, not current state. Doc no longer exists at the cited path.
+- Future search work (0271 follow-up tasks if any) lacks evergreen URL conventions reference. Replacement options if drift surfaces: (a) re-create per-endpoint table in `docs/architecture/frontend/frontend-overview.md`; (b) inline in `lore/3-wiki/`; (c) accept ad-hoc per-task documentation.
+- Audit-summary.md (when written) should capture this deviation explicitly as known-incomplete coverage of ADR-0032 for url-conventions surface.
