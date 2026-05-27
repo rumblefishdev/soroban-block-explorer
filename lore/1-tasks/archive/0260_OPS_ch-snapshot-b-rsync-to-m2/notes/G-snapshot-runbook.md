@@ -90,28 +90,28 @@ EOF
 
 20 entities in `default`:
 
-| Name | Engine |
-|------|--------|
-| `account_balances_current` | ReplacingMergeTree |
-| `accounts` | ReplacingMergeTree |
-| `assets` | ReplacingMergeTree |
-| `ledgers` | **MergeTree** |
-| `liquidity_pool_snapshots` | ReplacingMergeTree |
-| `liquidity_pools` | ReplacingMergeTree |
-| `lp_positions` | ReplacingMergeTree |
-| `nft_ownership` | ReplacingMergeTree |
-| `nft_ownership_pending` | ReplacingMergeTree |
-| `nfts` | ReplacingMergeTree |
-| `nfts_pending` | ReplacingMergeTree |
-| `operations_appearances` | ReplacingMergeTree |
-| `soroban_contracts` | ReplacingMergeTree |
-| `soroban_events` | ReplacingMergeTree |
+| Name                              | Engine             |
+| --------------------------------- | ------------------ |
+| `account_balances_current`        | ReplacingMergeTree |
+| `accounts`                        | ReplacingMergeTree |
+| `assets`                          | ReplacingMergeTree |
+| `ledgers`                         | **MergeTree**      |
+| `liquidity_pool_snapshots`        | ReplacingMergeTree |
+| `liquidity_pools`                 | ReplacingMergeTree |
+| `lp_positions`                    | ReplacingMergeTree |
+| `nft_ownership`                   | ReplacingMergeTree |
+| `nft_ownership_pending`           | ReplacingMergeTree |
+| `nfts`                            | ReplacingMergeTree |
+| `nfts_pending`                    | ReplacingMergeTree |
+| `operations_appearances`          | ReplacingMergeTree |
+| `soroban_contracts`               | ReplacingMergeTree |
+| `soroban_events`                  | ReplacingMergeTree |
 | `soroban_invocations_appearances` | ReplacingMergeTree |
-| `transaction_hash_dict` | **Dictionary** |
-| `transaction_hash_index` | ReplacingMergeTree |
-| `transaction_participants` | ReplacingMergeTree |
-| `transactions` | ReplacingMergeTree |
-| `wasm_interface_metadata` | MergeTree |
+| `transaction_hash_dict`           | **Dictionary**     |
+| `transaction_hash_index`          | ReplacingMergeTree |
+| `transaction_participants`        | ReplacingMergeTree |
+| `transactions`                    | ReplacingMergeTree |
+| `wasm_interface_metadata`         | MergeTree          |
 
 Matches `crates/db-clickhouse/schema/init.sql:87-408` exactly.
 `BACKUP DATABASE default` captures all 20 entities atomically
@@ -200,11 +200,12 @@ Key points (vs the earlier placeholder this section had):
   ```
 
 Capture during the run:
-- Start time: __
-- End time: __
-- Total wall: __
-- Final compressed size on disk: __
-- CH-reported `bytes` / `total_size` from `system.backups`: __
+
+- Start time: \_\_
+- End time: \_\_
+- Total wall: \_\_
+- Final compressed size on disk: \_\_
+- CH-reported `bytes` / `total_size` from `system.backups`: \_\_
 
 ## 5. Revert memory cap (only if Section 3 bumped it)
 
@@ -268,6 +269,7 @@ df -h /                                       # confirm ~760 GiB free
 Capture freed bytes for the README history entry.
 
 **Cautions:**
+
 - Do `docker compose down` for just the clickhouse service if other
   services in the stack are needed running. Otherwise full `down`
   is fine.
@@ -288,6 +290,7 @@ rsync -avzP --partial --human-readable \
 ```
 
 Notes on rsync flags:
+
 - `-z` adds zstd-over-SSH wire compression; the snapshot is already
   zstd-compressed on disk so `-z` gains little and burns CPU. Drop
   if the bottleneck is CPU rather than bandwidth.
@@ -296,11 +299,12 @@ Notes on rsync flags:
   916 GiB root; adjust if there's a more conventional snapshot dir.
 
 Capture:
-- Start time: __
-- End time: __
-- Avg MB/s: __
-- Total wall: __
-- Total bytes: __
+
+- Start time: \_\_
+- End time: \_\_
+- Avg MB/s: \_\_
+- Total wall: \_\_
+- Total bytes: \_\_
 
 ## 8. md5 verification
 

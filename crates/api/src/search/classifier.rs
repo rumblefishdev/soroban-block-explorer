@@ -19,18 +19,6 @@ pub struct Classified {
     pub strkey_prefix: Option<String>,
 }
 
-impl Classified {
-    /// `true` when `q` is a fully-typed entity id that should redirect
-    /// at the route level (no broad search) when an entity exists:
-    /// 32-byte hash (`hash_bytes` populated), or a full 56-char `G…` /
-    /// `C…` StrKey (`strkey_prefix.len() == 56`). Derived from the two
-    /// channels so it cannot drift out of sync with what `fetch_redirect`
-    /// actually looks up.
-    pub fn is_fully_typed(&self) -> bool {
-        self.hash_bytes.is_some() || self.strkey_prefix.as_ref().is_some_and(|s| s.len() == 56)
-    }
-}
-
 /// Classify a trimmed, non-empty `q`.
 pub fn classify(q: &str) -> Classified {
     let mut out = Classified::default();
@@ -100,7 +88,6 @@ mod tests {
         let q = "a".repeat(64);
         let out = classify(&q);
         assert_eq!(out.hash_bytes.as_ref().map(Vec::len), Some(32));
-        assert!(out.is_fully_typed());
         assert!(out.strkey_prefix.is_none());
     }
 
@@ -108,7 +95,6 @@ mod tests {
     fn classifies_full_g_strkey() {
         let out = classify(FULL_G);
         assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_G));
-        assert!(out.is_fully_typed());
         assert!(out.hash_bytes.is_none());
     }
 
@@ -116,7 +102,6 @@ mod tests {
     fn classifies_full_c_strkey() {
         let out = classify(FULL_C);
         assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_C));
-        assert!(out.is_fully_typed());
     }
 
     #[test]
@@ -126,7 +111,6 @@ mod tests {
         let q = "gaaa";
         let out = classify(q);
         assert_eq!(out.strkey_prefix.as_deref(), Some("GAAA"));
-        assert!(!out.is_fully_typed());
     }
 
     #[test]
@@ -134,18 +118,16 @@ mod tests {
         let out = classify("hello world");
         assert!(out.hash_bytes.is_none());
         assert!(out.strkey_prefix.is_none());
-        assert!(!out.is_fully_typed());
     }
 
     #[test]
     fn classifies_full_l_strkey_as_pool_hash_bytes() {
         // Full L-strkey decodes to the same 32-byte hash the pool CTE
         // matches on, so it must populate `hash_bytes` (not
-        // `strkey_prefix`) so `fetch_redirect` runs.
+        // `strkey_prefix`) so `pool_hits` exact-match fires.
         let strkey = stellar_strkey::LiquidityPool([0u8; 32]).to_string();
         let out = classify(&strkey);
         assert_eq!(out.hash_bytes.as_deref(), Some([0u8; 32].as_slice()));
-        assert!(out.is_fully_typed());
         assert!(out.strkey_prefix.is_none());
     }
 
@@ -153,11 +135,10 @@ mod tests {
     fn rejects_partial_l_strkey() {
         // Partial L-prefix is not a valid SEP-23 strkey (no CRC payload).
         // Falls through to no classification — broad search has no pool
-        // text column to scan against (tracked in task 0271).
+        // text column to scan against (CH-era follow-up).
         let out = classify("LAB");
         assert!(out.hash_bytes.is_none());
         assert!(out.strkey_prefix.is_none());
-        assert!(!out.is_fully_typed());
     }
 
     #[test]

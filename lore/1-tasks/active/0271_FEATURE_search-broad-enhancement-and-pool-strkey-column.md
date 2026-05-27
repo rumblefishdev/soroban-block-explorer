@@ -59,6 +59,51 @@ history:
       Promoted to active. Implementation: option C refactor only —
       collapse fetch_redirect into broad+singleton on
       crates/api/src/search/.
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: >
+      Implementation landed locally. Code changes
+      (crates/api/src/search/): deleted fetch_redirect + RedirectRow
+      + Classified::is_fully_typed(); re-enabled tx_hits CTE in
+      fetch_search (6 CTEs total); added IncludeFlags::transaction
+      so the ?type=transaction filter token now activates the broad
+      tx bucket; added SearchRedirect::from_hit(&SearchHit) helper
+      in dto.rs. Handler synthesizes Redirect when broad returns
+      exactly 1 row AND singleton entity is redirect-eligible.
+      Emergent decision (conservative first iteration): asset / NFT
+      singletons fall through to Results because their FE routing
+      needs fields (surrogate_id / contract_id+token_id) the
+      SearchRedirect wire shape does not carry today. Asset
+      singleton-redirect would need a minor wire shape extension
+      (add surrogate_id field) — deferred to a possible follow-up
+      task if the UX case proves it worthwhile. NFT analogous.
+      Tests: 135 lib + 3 integration green (cargo test -p api);
+      cargo clippy clean. OpenAPI regen + nx web:typecheck green
+      (only docstring delta on the wire — non-breaking).
+      Detail-page 404 hygiene audit: all 7 detail routes (account,
+      transaction, contract, pool, ledger, NFT, asset) handle 404
+      via isMissingResource(classifyError(error)) → NotFoundState
+      uniformly. No crash / no infinite spinner. Safe to land.
+      Deviation from acceptance criteria: docs/architecture/api/
+      url-conventions.md update — file deleted by user during this
+      session; not restored per memory rule on respecting user
+      edits.
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: >
+      Scope refined further during review: BE-side singleton-redirect
+      synthesis dropped. `SearchResponse::Redirect` wire variant +
+      `SearchRedirect` struct + `from_hit` helper removed. Handler
+      always returns `SearchResponse::Results`. FE decides routing
+      based on response: when total row count is exactly 1 and
+      `routeForHit(singleton)` resolves, navigate directly; else
+      show dropdown / results page. Eliminates the asset/NFT
+      asymmetry (they redirect too because `routeForHit` already
+      knows their composite/surrogate routing). Wire shape change
+      is breaking but only our FE consumes the API; OpenAPI regen
+      + FE typecheck enforce the migration in one PR.
 ---
 
 # Search: collapse fetch_redirect into broad + singleton-redirect (option C)
@@ -66,13 +111,16 @@ history:
 ## Summary
 
 Refactor the search endpoint to a **single SQL path**: always run broad
-search; if total result count across all groups is exactly 1, synthesize
-`SearchResponse::Redirect` from that singleton row; otherwise return
-`SearchResponse::Results`. Delete `fetch_redirect` and
-`Classified::is_fully_typed()`.
+search; backend returns `SearchResponse::Results` unconditionally. The
+FE inspects the response — when total row count is exactly 1 and the
+singleton's entity type is routable (via the existing `routeForHit`
+helper), FE navigates directly; otherwise it shows the dropdown / list.
 
-Non-breaking wire change — `Redirect` and `Results` variants both
-preserved. FE unchanged.
+Delete `fetch_redirect`, `Classified::is_fully_typed()`,
+`SearchResponse::Redirect`, and `SearchRedirect`. Wire collapses to
+the single `Results` variant — breaking wire change, but only our FE
+consumes the API today and the OpenAPI regen + `web:typecheck`
+enforce the FE migration in the same PR.
 
 ## Context
 

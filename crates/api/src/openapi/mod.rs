@@ -25,9 +25,7 @@ use crate::nfts::dto::{NftItem, NftTransferItem};
 use crate::runtime_enrichment::stellar_archive::dto::{
     E3HeavyFields, E3Response, HeavyFieldsStatus, SignatureDto, XdrEventDto, XdrOperationDto,
 };
-use crate::search::dto::{
-    EntityType, SearchGroups, SearchHit, SearchRedirect, SearchResponse, SearchResults,
-};
+use crate::search::dto::{EntityType, SearchGroups, SearchHit, SearchResults};
 use crate::transactions::dto::{
     EventAppearanceItem, InvocationAppearanceItem, OperationItem, TransactionDetailLight,
     TransactionListItem,
@@ -93,8 +91,6 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         PoolTransactionItem,
         ChartResponse,
         ChartDataPoint,
-        SearchResponse,
-        SearchRedirect,
         SearchResults,
         SearchGroups,
         SearchHit,

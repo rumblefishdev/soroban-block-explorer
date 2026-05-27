@@ -502,14 +502,7 @@ mod tests {
             spec["paths"]["/v1/search"].is_object(),
             "spec missing /v1/search path: {spec}"
         );
-        for component in [
-            "SearchResponse",
-            "SearchRedirect",
-            "SearchResults",
-            "SearchGroups",
-            "SearchHit",
-            "EntityType",
-        ] {
+        for component in ["SearchResults", "SearchGroups", "SearchHit", "EntityType"] {
             assert!(
                 spec["components"]["schemas"][component].is_object(),
                 "spec missing {component} component: {spec}"
