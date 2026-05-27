@@ -1506,7 +1506,7 @@
       "get": {
         "tags": ["search"],
         "summary": "Unified search across all entity types.",
-        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (option C — task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* If the broad query returns exactly one row AND that row's entity\n  type is redirect-eligible (transaction / account / contract /\n  pool — see [`SearchRedirect::from_hit`]), the response is\n  `{ \"type\": \"redirect\", \"entity_type\", \"entity_id\", … }` and the\n  frontend navigates directly.\n* Otherwise the response is `{ \"type\": \"results\", \"groups\": {…} }`\n  with up to `limit` rows per entity bucket. Rows carry the same\n  columns regardless of bucket: `entity_type`, `identifier`,\n  `label`, `surrogate_id` (BIGINT FK or `null`), plus optional\n  enrichment / composite-routing fields.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `surrogate_id`\n  (BIGINT FK or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
         "operationId": "get_search",
         "parameters": [
           {
@@ -1546,7 +1546,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
+                  "$ref": "#/components/schemas/SearchResults"
                 }
               }
             }
@@ -3826,68 +3826,9 @@
           }
         }
       },
-      "SearchRedirect": {
-        "type": "object",
-        "description": "Redirect payload — frontend navigates directly to the entity page.",
-        "required": ["entity_type", "entity_id"],
-        "properties": {
-          "entity_id": {
-            "type": "string"
-          },
-          "entity_type": {
-            "$ref": "#/components/schemas/EntityType"
-          },
-          "last_activity_at": {
-            "type": ["string", "null"],
-            "format": "date-time"
-          },
-          "successful": {
-            "type": ["boolean", "null"]
-          }
-        }
-      },
-      "SearchResponse": {
-        "oneOf": [
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SearchRedirect"
-              },
-              {
-                "type": "object",
-                "required": ["type"],
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": ["redirect"]
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SearchResults"
-              },
-              {
-                "type": "object",
-                "required": ["type"],
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": ["results"]
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "description": "Discriminated response: `redirect` for unambiguous exact match,\n`results` for grouped broad search.\n\n`#[serde(tag = \"type\")]` puts the discriminator on the wire as\n`\"type\": \"redirect\" | \"results\"` per the task spec, mirroring the\nfrontend search-bar UX expectation: a `redirect` causes the bar to\nnavigate directly; a `results` shows the dropdown with grouped hits."
-      },
       "SearchResults": {
         "type": "object",
-        "description": "Results payload — six entity-typed buckets, each capped at the\nper-group `limit` chosen by the caller (default 10, ceiling 50).",
+        "description": "Results payload — six entity-typed buckets, each capped at the\nper-group `limit` chosen by the caller (default 10, ceiling 50).\n\nFE decides \"singleton → navigate directly\" by inspecting\n`groups`: when the total row count across all buckets is exactly\n1 and `routeForHit(singleton)` resolves, the FE navigates to the\ndetail page; otherwise it renders the dropdown / Results page.",
         "required": ["groups"],
         "properties": {
           "groups": {

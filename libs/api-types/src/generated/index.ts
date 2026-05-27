@@ -192,8 +192,6 @@ export type {
   PoolTransactionItem,
   SearchGroups,
   SearchHit,
-  SearchRedirect,
-  SearchResponse,
   SearchResults,
   SignatureDto,
   TransactionDetailLight,

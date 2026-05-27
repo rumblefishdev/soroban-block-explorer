@@ -5,11 +5,9 @@
 //!
 //! Single query: [`fetch_search`] runs the union-of-CTEs broad-search
 //! statement with the per-bucket `:include_*` flags resolved from the
-//! optional `?type=` filter. The handler decides between a `Redirect`
-//! and a `Results` response by counting the returned rows — a singleton
-//! row whose entity type fits the redirect wire shape is rendered as
-//! `SearchResponse::Redirect`; everything else returns as
-//! `SearchResponse::Results` (option C refactor — task 0271).
+//! optional `?type=` filter. The handler returns a flat
+//! `SearchResults { groups }` response — FE inspects the row count
+//! and routes directly when exactly one hit is present (task 0271).
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -86,8 +84,8 @@ impl IncludeFlags {
 /// Run the canonical `22_get_search.sql` UNION of six narrow CTEs and
 /// return the rows partitioned by `entity_type`. The caller groups
 /// these into [`SearchGroups`](super::dto::SearchGroups) for the JSON
-/// response, and synthesizes `SearchResponse::Redirect` when the
-/// returned row count is exactly one (option C — task 0271).
+/// response. The FE inspects total row count and navigates directly
+/// when exactly one hit is returned (task 0271).
 pub async fn fetch_search(
     pool: &PgPool,
     q: &str,
@@ -95,12 +93,11 @@ pub async fn fetch_search(
     include: &IncludeFlags,
     per_group_limit: i32,
 ) -> Result<Vec<(String, SearchHit)>, sqlx::Error> {
-    // Broad-search UNION across all six entity buckets. Option C
-    // collapses the previous two-path design (redirect short-circuit +
-    // broad fallback) into a single SQL — the handler counts rows and
-    // synthesizes `SearchResponse::Redirect` when exactly one row
-    // returns and its entity type is redirect-eligible (see
-    // `SearchRedirect::from_hit`).
+    // Broad-search UNION across all six entity buckets. Task 0271
+    // collapsed the previous two-path design (redirect short-circuit
+    // + broad fallback) into this single SQL — the handler returns a
+    // flat `SearchResults`, and the FE decides "singleton → navigate"
+    // by inspecting row count + routing the hit through `routeForHit`.
     //
     // CTE shape map:
     //   tx_hits      — exact match on BYTEA(32) hash via `hash_bytes`

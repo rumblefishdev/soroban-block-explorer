@@ -89,6 +89,21 @@ history:
       url-conventions.md update — file deleted by user during this
       session; not restored per memory rule on respecting user
       edits.
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: >
+      Scope refined further during review: BE-side singleton-redirect
+      synthesis dropped. `SearchResponse::Redirect` wire variant +
+      `SearchRedirect` struct + `from_hit` helper removed. Handler
+      always returns `SearchResponse::Results`. FE decides routing
+      based on response: when total row count is exactly 1 and
+      `routeForHit(singleton)` resolves, navigate directly; else
+      show dropdown / results page. Eliminates the asset/NFT
+      asymmetry (they redirect too because `routeForHit` already
+      knows their composite/surrogate routing). Wire shape change
+      is breaking but only our FE consumes the API; OpenAPI regen
+      + FE typecheck enforce the migration in one PR.
 ---
 
 # Search: collapse fetch_redirect into broad + singleton-redirect (option C)
@@ -96,13 +111,16 @@ history:
 ## Summary
 
 Refactor the search endpoint to a **single SQL path**: always run broad
-search; if total result count across all groups is exactly 1, synthesize
-`SearchResponse::Redirect` from that singleton row; otherwise return
-`SearchResponse::Results`. Delete `fetch_redirect` and
-`Classified::is_fully_typed()`.
+search; backend returns `SearchResponse::Results` unconditionally. The
+FE inspects the response — when total row count is exactly 1 and the
+singleton's entity type is routable (via the existing `routeForHit`
+helper), FE navigates directly; otherwise it shows the dropdown / list.
 
-Non-breaking wire change — `Redirect` and `Results` variants both
-preserved. FE unchanged.
+Delete `fetch_redirect`, `Classified::is_fully_typed()`,
+`SearchResponse::Redirect`, and `SearchRedirect`. Wire collapses to
+the single `Results` variant — breaking wire change, but only our FE
+consumes the API today and the OpenAPI regen + `web:typecheck`
+enforce the FE migration in the same PR.
 
 ## Context
 
