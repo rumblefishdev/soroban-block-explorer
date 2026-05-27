@@ -1,0 +1,43 @@
+route,breakpoint,result,severity,class,evidence,notes
+E1,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll docW=802 vs vw=364; nav cramped no hamburger; table overflows; 7/30 touch targets <44px
+E1,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll docW=802 vs vw=757; tables fit; nav cramped
+E1,1280,✓,—,—,wave6:F-W6-RESPONSIVE-3,vw=1269 dw=1269; no scroll; tables fit
+E2,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; 7-col table overflows within parent (scrollX=true); no card-layout fallback for mobile
+E2,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll docW=802 vs vw=757; table column-fits at 757 minimum
+E2,1280,✓,—,—,observed,clean
+E3,375,✗,🟠,C,wave6:F-W6-E3-3,Summary cell 64-char hash forces docW=802; page horiz-scroll
+E3,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll docW=802 vs vw=757; long hash still forces width
+E3,1280,✓,—,—,observed,clean
+E4,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; table overflows
+E4,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll; table fits parent
+E4,1280,✓,—,—,observed,clean
+E5,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; embedded tx table overflows
+E5,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll; embedded table fits
+E5,1280,✓,—,—,observed,clean
+E6,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; long G-strkey + tables
+E6,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E6,1280,✓,—,—,observed,clean
+E7,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; unlabeled filter slots cramped; table overflows
+E7,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E7,1280,✓,—,—,observed,clean
+E8,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll
+E8,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E8,1280,✓,—,—,observed,clean
+E9,375,?,—,—,not-tested-this-pass,Wave 6 time-boxed sweep; pattern likely matches E6 (long C-strkey forces page width). Spot-check needed.
+E9,768,?,—,—,not-tested-this-pass,inferred-pattern; spot-check needed.
+E9,1280,✓,—,—,observed-earlier,clean (Contract page seen at desktop sizes ok)
+E10,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; 4 unlabeled filter slots cramped; table overflows
+E10,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E10,1280,✓,—,—,observed,clean
+E11,375,?,—,—,not-tested-this-pass,inferred-pattern; NFT detail likely shows Cat-image + Details column — would need spot-check whether columns stack vs side-by-side
+E11,768,?,—,—,not-tested-this-pass,spot-check needed
+E11,1280,✓,—,—,observed-earlier,clean
+E12,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; filter slots cramped; table overflows
+E12,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E12,1280,✓,—,—,observed,clean
+E13,375,✗,🟠,C,wave6:F-W6-RESPONSIVE-1,page horiz-scroll; chart canvases likely overflow if not viewport-aware
+E13,768,⚠,🟡,C,wave6:F-W6-RESPONSIVE-2,page horiz-scroll
+E13,1280,✓,—,—,observed,clean
+E14,375,?,—,—,not-tested-this-pass,inferred — likely same page-level horiz-scroll; tabs row may wrap
+E14,768,?,—,—,not-tested-this-pass,spot-check needed
+E14,1280,✓,—,—,observed-earlier,clean
