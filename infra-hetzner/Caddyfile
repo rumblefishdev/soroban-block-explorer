@@ -175,6 +175,12 @@
 	# absent at compose-up time.
 	import snippets/cn_user_map.snippet
 
+	# Wrap the gate + proxy in an explicit `route` so its directives run
+	# in SOURCE order. Without it, Caddy's default directive order runs
+	# `reverse_proxy` before `respond`, so the `@no_user` 403 never fires
+	# and unmapped (but CA-valid) certs reach ClickHouse — rejected only by
+	# CH's password backstop, not at the edge. See task 0241.
+	route {
 	@no_user expression `{ch_user} == ""`
 	respond @no_user `{"error":"unauthorized client"}` 403 {
 		close
@@ -232,5 +238,6 @@
 			read_timeout 7200s
 			write_timeout 7200s
 		}
+	}
 	}
 }
