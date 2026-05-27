@@ -449,6 +449,31 @@ analysis + recommendation (keep / refactor / drop).
 
 ### Track 2 — Visual + UX audit (8 sub-phases, ~25.5h, Claude + user review)
 
+#### ⚠ Wave 6 baseline adjustments — post-Gate-B + post-0270 (2026-05-27)
+
+URL scheme + behavior changes that landed between original Wave 6 plan and dispatch. Track 2 measures against **THIS** baseline, not the original 14-route enumeration.
+
+| Aspect | Original plan | Post-Gate-B + 0270 baseline |
+|---|---|---|
+| **E11 NFT route** | `/nfts/:id` (numeric `i32` surrogate) | `/nfts/:contractId/:tokenId` composite (0264 Phase 8a) |
+| **E13 pool route** | `/liquidity-pools/<hex>` (64-char hex) | `/liquidity-pools/L<strkey>` (CAP-38 canonical, 0264 Phase 1-7) |
+| **E14 search — pool L-strkey paste** | F-L-1 expected (0 results) | RESOLVED — pool L-strkey decodes + redirects (0270 commit `047ce51e`) |
+| **E14 search — empty-state hint** | F-K-4 expected (no L… in hint) | RESOLVED — hint includes L… (0270 commit `6421d3d7`) |
+| **E14 search — NFT result click** | NFT route 404 regression (post-0264 carry-over) | RESOLVED — composite short-circuit via `routes.nft(c, t)` (0270 commit `6421d3d7`) |
+| **E14 search — bare digit** | classifier had no ledger branch (0 results) | RESOLVED — FE `directRouteFor.ts` redirects to `/ledgers/<seq>` BEFORE API call |
+| **Composite NotFound on E6/E9/E13** | F-D-2 + F-AE-5 expected (2-4 stacked error blocks) | RESOLVED — render-gated on `!parent.isError` (0262 commits `473de2a2` + `9e88114b`) |
+| **Pool detail reserve links** | F-K-2 expected (plain text) | RESOLVED — 3 sites wrapped in `<RouterLink>` (0263 commits `473de2a2` + `a5f15166`) |
+| **Pool participants "Since ledger"** | F-K-3 expected (plain number) | RESOLVED — wrapped in `<RouterLink to={routes.ledger(seq)}>` |
+
+**Track 2 implication:** these RESOLVED items become **positive verification** in Wave 6 (confirm fix works on visual + UX layer), not new findings. Any **regression** from these baselines = new HIGH/CRITICAL Wave 6 finding.
+
+**Still standing for Wave 6 to verify:**
+- DM-1 (footer "All systems operational" hardcoded) — Track 2 2.3 V live indicator will re-confirm
+- F-AI-1/2/10 (bundle perf baseline) — Track 2 2.2 will measure post-Gate-B numbers
+- F-AH cluster + F-Y cluster (visual/layout polish defer Phase 3) — Track 2 2.1 Figma may surface specifics
+
+**Stack state assumption:** API binary rebuilt from current develop tip (post-0270 schema with strkey wire + NFT composite + SearchHit composite fields); web dev server restarted to pick up new generated types.
+
 #### MUST (2.0, 2.3, ~4.5h)
 
 **2.0 Playwright MCP full re-pass (~4h)**
@@ -463,6 +488,13 @@ Same methodology as 0251-birthing pass, against post-fix baseline. All 14 routes
 - Console errors + React warnings (target: 0)
 - Tabs + filters + pagination state preservation
 - Search edge cases
+
+**Post-Gate-B verification adds:**
+- E11 NFT detail: use composite path `/nfts/:contractId/:tokenId`; find real composite IDs via `/v1/nfts?limit=N`
+- E13 pool detail: use strkey form `/liquidity-pools/L<55-base32>`; find via `/v1/liquidity-pools?limit=N`
+- E14 search: paste full pool L-strkey → redirect to `/liquidity-pools/L…`; paste bare digit → redirect to `/ledgers/<seq>`; NFT name search → result click → composite path
+- E6/E9/E13 valid-format-404: single NotFound block expected (positive verify F-D-2 fix)
+- Pool detail reserve labels: pointer cursor on hover + asset URL (positive verify F-K-2 fix)
 
 Output: `findings/playwright-pass/EXX-route.md` per endpoint.
 
