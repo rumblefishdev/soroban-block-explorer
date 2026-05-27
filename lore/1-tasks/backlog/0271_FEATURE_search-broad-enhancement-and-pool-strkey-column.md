@@ -31,6 +31,22 @@ history:
       pre-launch audit (Wave 6) closes. Detailed rationale + research
       findings preserved inline below so future sessions don't need the
       0270 chat transcript.
+  - date: '2026-05-27'
+    status: backlog
+    who: karolkow
+    note: >
+      Refined Phase 3 + "Drop SearchResponse::Redirect" sections. Three
+      changes: (1) recommend option C (collapse `fetch_redirect` into
+      broad search, synthesise Redirect from singleton row) over option
+      B (drop Redirect variant + FE shape-classifier) — C is
+      non-breaking wire, preserves backend existence check, removes
+      dead-code asymmetry around `tx_hits` / `pool_hits` CTEs;
+      (2) drop proposed separate `strkey_l_prefix` channel — extend
+      existing `strkey_prefix` to accept G/C/L uniformly, since the
+      three column storage shapes are non-overlapping by first
+      character; (3) document that `pool_hits` "dead code today"
+      becomes load-bearing under option C (sole path for full
+      L-strkey + partial-L-prefix matching).
 ---
 
 # Search broad enhancement + pool strkey column
@@ -260,9 +276,11 @@ column savings don't matter at pool-table scale.
 
 #### Code change in `fetch_search`
 
-Replace exact-match `pool_hits` CTE with prefix match. Drop dependency
-on `hash_bytes` for pool broad bucket — instead use the new
-`strkey_prefix` channel for L-prefix:
+Replace exact-match `pool_hits` CTE with prefix match on the new text
+column. Reuse the existing `strkey_prefix` channel (already used for G
+and C); after Phase 3 it accepts G/C/L uniformly because each entity's
+LIKE predicate is gated by the column whose values can only start with
+that letter (G-accounts vs C-contracts vs L-pools never collide):
 
 ```sql
 pool_hits AS (
@@ -279,26 +297,32 @@ pool_hits AS (
         NULL::varchar                      AS contract_id,
         NULL::varchar                      AS token_id
     FROM liquidity_pools lp
-    WHERE $10 = TRUE
-      AND (
-          ($2 IS NOT NULL AND lp.pool_id = $2)                       -- full L-strkey via hash_bytes (existing path)
-       OR ($N IS NOT NULL AND lp.pool_id_strkey LIKE $N || '%')      -- partial L-prefix (NEW)
-      )
+    WHERE $9 = TRUE
+      AND $3 IS NOT NULL
+      AND lp.pool_id_strkey LIKE $3 || '%'
     LIMIT $4
 )
 ```
 
-Classifier gains a new channel `strkey_l_prefix: Option<String>`
-populated when q starts with `L` and is 2–55 chars, all-base32. Full
-56-char L-strkey continues to populate `hash_bytes` via existing decode
-branch (redirect path stays unchanged).
+Full 56-char L-strkey is just the maximum-length case of the same
+prefix match — `LIKE 'LABC…56char%'` collapses to exact-match on the
+unique row. No separate `hash_bytes` branch required for pools after
+Phase 3.
 
-`fetch_search` binds the new param. Classifier unit tests cover
-partial-L prefix branch.
+Classifier change: extend the existing `strkey_prefix` validation to
+accept inputs starting with `L` (uppercase, base32, 2–56 chars). No new
+channel. The previous draft of this task proposed a separate
+`strkey_l_prefix: Option<String>` channel — rejected as redundant
+because account_id / contract_id / pool_id_strkey storage is
+non-overlapping by first character, so a single channel feeding all
+three CTE LIKE predicates naturally routes to the right one.
+
+`hash_bytes` channel collapses to the 64-hex transaction hash case
+only (the sole remaining BYTEA-storage entity).
 
 **Test:** insert 3 pools; search `q = 'LAB'` returns pools whose
-strkey starts with `LAB`; search full L-strkey returns same redirect
-behaviour as today.
+strkey starts with `LAB`; search full L-strkey returns the singleton
+row (which, under the C redirect strategy below, becomes a Redirect).
 
 ### Phase 4 — Update docs
 
@@ -318,7 +342,7 @@ mention partial L-prefix support now works (matches G/C parity).
 - [ ] `asset_hits` CTE adds `name ILIKE` branch
 - [ ] `nft_hits` CTE adds `collection_name ILIKE` branch
 - [ ] `pool_hits` CTE adds partial L-prefix branch
-- [ ] Classifier extended with `strkey_l_prefix` channel
+- [ ] Classifier `strkey_prefix` validation extended to accept `L` prefix (single channel covers G/C/L; no separate `strkey_l_prefix`)
 - [ ] All new branches covered by unit + integration tests
 - [ ] Backfill script for pool strkey column (Path B) — runbook + dry-run output
 
@@ -339,18 +363,24 @@ prefix, name-typed fields all support ILIKE substring matching
 backed by trgm. The next enhancement layer would be ranking /
 boost-by-relevance, which is out of scope here.
 
-### Consider: drop `SearchResponse::Redirect` (anti-pattern)
+### Consider: collapse `fetch_redirect` into broad search (RECOMMENDED — option C)
 
 Spawned from the 0270 session deep dive (cross-explorer survey,
-2026-05-27). The current backend `fetch_redirect` flow checks
-entity existence in the DB before returning `SearchResponse::Redirect`
-— if no row exists, falls through to broad search. Three
-independent industry references diverge from this pattern:
+2026-05-27), refined in the 2026-05-27 follow-up discussion.
+
+**Today's architecture (A — status quo):** handler calls
+`fetch_redirect` first (4 sequential indexed probes: tx hash → pool
+exact → account G-prefix-56 → contract C-prefix-56). On hit returns
+`SearchResponse::Redirect`. On miss falls through to `fetch_search`
+broad CTE. Two SQL paths to maintain, plus a `Classified::is_fully_typed()`
+gate in between.
+
+**Three industry references diverge** from this two-path shape:
 
 - **Solana Foundation Explorer** (source-read,
   `solana-foundation/explorer/app/features/search/model/`): pure FE
-  classifier with a provider registry, navigates optimistically
-  on shape match. No existence check.
+  classifier with provider registry; navigates optimistically on
+  shape match. No existence check.
 - **Etherscan family** (etherscan.io + clones): server-side 302 but
   shape-based only, no existence check. Genesis block hash pasted
   into the bar still lands on `/tx/<hash>` with "Transaction not
@@ -359,76 +389,158 @@ independent industry references diverge from this pattern:
   Bad-CRC G-strkey routes to `/address/<G>` and the detail page
   renders "Account Not Found".
 
-stellar.expert is the outlier — it does an API singleton-match
-before routing (server fanout to `/account?search=…` +
-`/asset?search=…`), which is closer to our current shape but with
-the indirection of a server-side `/search` page instead of a
-backend redirect endpoint.
+**stellar.expert** does API singleton-match-before-routing — same
+shape as option C below.
 
-**Refactor would:**
+#### Three refactor options considered
+
+**Option B — drop `SearchResponse::Redirect`, FE shape-classifier:**
 
 1. Drop `fetch_redirect`, `RedirectRow`, `SearchResponse::Redirect`,
-   `SearchRedirect`. Wire shape collapses to `{ groups: ... }`
-   only. **Breaking wire change.**
-2. Extend `web/src/search/directRouteFor.ts` from 1 shape
-   (bare-digit u32 → `/ledgers/<seq>`) to 5 shapes:
-   - 64-hex hash → `/transactions/<hex>` (tx-first convention per
-     Etherscan; pool-hex paste is the rare edge case since
-     post-0264 pool IDs surface as `L…` strkey in UI)
-   - full G-strkey 56 → `/accounts/<G>`
-   - full C-strkey 56 → `/contracts/<C>`
-   - full L-strkey 56 → `/liquidity-pools/<L>`
-   - bare digit u32 → `/ledgers/<seq>` (already)
-3. `SearchResultsPage` drops the `data.type === 'redirect'`
-   useEffect; `useSearchResults` drops `treatRedirectAsResult`
-   param + redirect→hit synthesis logic; `GlobalSearchBar` drops
-   the `treatRedirectAsResult: true` flag.
-4. OpenAPI regen — `SearchResponse` loses the `Redirect` variant.
-5. Docs update — `docs/architecture/api/url-conventions.md`
-   Search input section: backend serves only `Results`, every
-   direct redirect lives in `directRouteFor`.
+   `SearchRedirect`. Wire collapses to `{ groups: ... }`. **Breaking
+   wire change.**
+2. Extend `web/src/search/directRouteFor.ts` from 1 shape to 5:
+   64-hex → `/transactions/<hex>`, full G-strkey → `/accounts/<G>`,
+   full C-strkey → `/contracts/<C>`, full L-strkey →
+   `/liquidity-pools/<L>`, bare u32 → `/ledgers/<seq>` (already).
+3. FE drops `data.type === 'redirect'` useEffect and synthesis
+   helpers.
+4. OpenAPI regen — `SearchResponse` loses `Redirect` variant.
 
-**Open decision points to revisit at pickup:**
+Cost: 404 audit on every detail page (must render `NotFoundState`
+gracefully, not crash, not infinite spinner). Breaking wire shape.
+Optimistic navigation — backend stops being existence authority.
 
-- **64-hex tx-vs-pool collision policy.** Stellar tx hash and pool
-  ID are both 32-byte BYTEA — same wire shape on hex. The 0270
-  session settled on tx-first by convention, with the pool-hex
-  edge case landing on `/transactions/<hex>` "not found" (rare:
-  pool IDs surface as `L…` strkey post-0264). Alternatives:
-  hybrid backend RTT for hex only (cleanest UX but partial drop),
-  dropdown disambiguation (Solana model — extra click on common
-  tx paste), or skip hex from FE and rely on broad search
-  (requires un-dropping `tx_hits` CTE from 0270).
-- **Existence check.** Industry consensus says drop. Pre-flight
-  audit required: verify each detail page (`/accounts/:G`,
-  `/transactions/:hash`, `/contracts/:C`, `/liquidity-pools/:L`,
-  `/ledgers/:seq`, `/nfts/:c/:t`, `/assets/:id`) renders
-  `NotFoundState` (or equivalent) gracefully on 404 — not crash,
-  not infinite spinner. If any page fails, that detail page
-  needs a fix before #5 can land safely.
-- **`routeForHit` lifecycle.** After dropping
-  `SearchResponse::Redirect`, FE only ever sees `Results` from
-  the backend. `routeForHit` is still needed for dropdown row
-  clicks (NFT composite routing in particular). Choice: keep as
-  helper module, or inline into the 2-3 callsites.
-- **Branch / scope.** The refactor is breaking wire change ⇒
-  warrants its own task + PR (e.g. spawn task 0272-equivalent
-  rather than folding into 0270 or this 0271). 0270 session
-  spawned this consideration but explicitly deferred — keep
-  scope discipline.
+**Option C — keep `Redirect` variant, synthesize from broad
+singleton (RECOMMENDED):**
+
+1. Delete `fetch_redirect`, `RedirectRow`, `Classified::is_fully_typed()`.
+   `Classified` keeps `hash_bytes` + `strkey_prefix` as CTE branch
+   selectors only.
+2. Re-enable `tx_hits` CTE (currently dropped from `fetch_search`,
+   see comment at queries.rs:227-235). Combined with the Phase 3
+   `pool_hits` revival, broad search becomes 6 CTEs covering every
+   entity type with text or hex identifier.
+3. Handler computes `total = sum(groups.values().len())` after
+   `fetch_search` returns:
+   - `total == 1` → `SearchResponse::Redirect(SearchRedirect::from_hit(singleton))`
+   - `total != 1` → `SearchResponse::Results { groups }`
+4. Wire shape unchanged — `Redirect` variant preserved, non-breaking.
+5. FE unchanged — `SearchResultsPage` redirect useEffect keeps working.
+
+Cost: every shape-typed input now pays full 6-CTE fanout instead of
+the targeted-probe short-circuit. On mainnet-scale indexes this is
+single-digit ms — broad search already runs on every freetext query
+today, so the SQL plan is well-trodden. Removes ~200 LOC of
+redirect-only code path. New entity onboarding becomes 1-place
+(add a CTE) instead of 2-place (CTE + redirect branch).
+
+**Properties that make C the right pick:**
+
+- **Shape-agnostic redirect rule.** "Singleton in broad → redirect"
+  works for partial-prefix inputs that A cannot redirect (e.g.
+  `q = "LABCDEFGHIJK…"` matching exactly one pool by prefix). A
+  needs a 56-char-with-valid-CRC gate; C just counts rows.
+- **Existence check preserved.** Unlike B, backend stays the
+  authority on "this entity exists" — no optimistic navigation.
+  No 404 audit on detail pages needed.
+- **Pool_hits and tx_hits stop being dead code.** Today both CTEs
+  are scaffolds (pool) or removed (tx) because `fetch_redirect`
+  fires first with the same predicate, making the broad branch
+  unreachable. Under C, these CTEs are the _only_ path for full
+  L-strkey / 64-hex tx — they become load-bearing.
+- **Mainnet-scale assumption neutralises false-redirect risk.**
+  On a fully-indexed mainnet, popular asset codes (`USDC`, `BTC`)
+  have many issuers — singleton on freetext input is rare and
+  meaningful (NFT with unique name, sole asset under a specific
+  code). Singleton = "exactly one match exists, navigate to it"
+  matches user intent.
+- **Hex collision non-issue.** Stellar tx hash and pool_id share
+  32-byte BYTEA output space, but cryptographic collision
+  probability is 2^-256. In practice a 64-hex input matches at
+  most one of the two — no priority-order ambiguity.
+- **Limit edge case non-issue.** `?limit=1` could theoretically
+  cause "raw count == 1" by clipping, but the project does not
+  expose a UI knob for `limit`; default 10 leaves enough headroom
+  that singleton means true count.
+
+**Option C-prime — classifier-gated singleton (REJECTED):**
+
+An earlier hybrid kept the classifier as a gate
+(`is_fully_typed() && count == 1 → Redirect`) to avoid
+false-redirect-on-freetext-singleton. With mainnet scale + no
+user-facing `?limit` knob + 2^-256 hex collision, the freetext
+singleton case is either (i) impossible (popular names) or (ii)
+exactly what the user wants (unique-name NFT). Gating becomes
+dead weight. Pure C is simpler and equally correct.
+
+#### Implementation sketch (option C)
+
+```rust
+// crates/api/src/search/handlers.rs
+
+let groups = fetch_search(/* … */).await?;
+let total: usize = groups.values().map(Vec::len).sum();
+match total {
+    1 => {
+        let only = groups.into_values().flatten().next().expect("len==1");
+        Json(SearchResponse::Redirect(SearchRedirect::from_hit(only)))
+    }
+    _ => Json(SearchResponse::Results(SearchResults { groups })),
+}
+```
+
+```sql
+-- crates/api/src/search/queries.rs  — fetch_search additions:
+-- 1. Re-enable tx_hits CTE (removed today, see queries.rs:227-235).
+--    Predicate: WHERE $? = TRUE AND $hash_bytes IS NOT NULL
+--                 AND tx.hash = $hash_bytes
+-- 2. After Phase 3: pool_hits switches from $hash_bytes exact-match
+--    to strkey_prefix LIKE on pool_id_strkey (covered above).
+-- fetch_redirect: deleted entirely.
+```
+
+Classifier change: `Classified::is_fully_typed()` deletion + extend
+`strkey_prefix` validation to accept `L` (covered in Phase 3 update
+above). Two methods to remove total.
+
+#### Open decision points at pickup
+
+- **Detail page 404 UX.** Even though C preserves existence
+  check, a stale link or direct URL paste can still hit a detail
+  page with a non-existent id. Worth a 30-min audit of `NotFoundState`
+  parity across detail pages — but this is hygiene, not a blocker
+  for C (unlike B where it is the blocker).
+- **`routeForHit` lifecycle.** Stays — backend still emits
+  `Redirect` for singleton, but dropdown row clicks still need the
+  helper for NFT composite routing.
+- **Branch / scope.** C is non-breaking wire change ⇒ can land
+  alongside Phase 3 (since both touch `fetch_search` SQL +
+  classifier) or as its own task. Decision at pickup.
+- **Rollout sanity check.** Add an integration test that hits
+  `/v1/search?q=<full G-strkey for known account>` and asserts
+  `type == "redirect"`. Currently zero integration coverage for
+  redirect semantics (see queries audit).
 
 **Why deferred from 0270 session:**
 
 User explicitly chose to defer this refactor and ship 0270
 minimalist. PR #220 (0270) already landed the canonical-strkey
 wire + NFT composite routing + FE ledger redirect; the redirect
-anti-pattern drop is orthogonal architectural cleanup, not a
-launch blocker. Reasoning quoted: _"warto, ale nie krytyczne. (…)
-1 RTT mniej, prostszy wire, ale to wire breaking change i wymaga
+collapse is orthogonal architectural cleanup, not a launch
+blocker. Reasoning quoted: _"warto, ale nie krytyczne. (…) 1 RTT
+mniej, prostszy wire, ale to wire breaking change i wymaga
 dedykowanej sesji + manual UI verify każdej kategorii input."_
 
-Effort estimate: ~3-4h impl + ~30 min detail-page 404 audit +
-~20 min manual UI paste verify per category.
+Note: that quote applied to option B (wire-breaking). Option C
+preserves the wire and removes the "manual UI verify every
+category" cost — at pickup time, C is materially cheaper than
+the original 0270 session estimated for B.
+
+Effort estimate for C: ~2-3h impl (delete `fetch_redirect`,
+re-enable `tx_hits`, add singleton synthesis in handler, update
+unit + integration tests) + ~30 min detail-page 404 hygiene
+audit (optional). No FE work. No wire migration.
 
 ## Notes
 
