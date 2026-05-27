@@ -246,7 +246,7 @@ Add Playwright assertion (gated on 0226): pool detail reserve label has
 - [ ] **Docs updated** — `docs/architecture/api/<liquidity-pools>.md`
       (if exists) reflects new `PoolAssetLeg` field. Per ADR 0032. If no
       relevant doc exists, mark `N/A — backend schema extension matches
-  ADR 0032 evergreen docs gate trigger; doc to be added in Phase 3 batch task XXXX_DOCS_evergreen-architecture-sync per audit Wave 5 F-A-3`.
+ADR 0032 evergreen docs gate trigger; doc to be added in Phase 3 batch task XXXX_DOCS_evergreen-architecture-sync per audit Wave 5 F-A-3`.
 - [ ] **API types regenerated** — handled in Phase 3 (backend) above.
 
 ## Notes
