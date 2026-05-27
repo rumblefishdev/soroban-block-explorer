@@ -88,10 +88,20 @@ short-circuits before calling `/v1/search`.
 | ---------------- | ---------------- |
 | bare-digit `u32` | `/ledgers/<seq>` |
 
-`directRouteFor` is invoked at the search-entry points
-(`web/src/router/AppShell.tsx` `handleSearchSubmit` and
-`web/src/pages/home/HomeHero.tsx` `submit`) before falling through to
-`routes.search(q)`.
+`directRouteFor` is invoked at every search entry point so the
+behaviour is consistent regardless of how the query reaches the app:
+
+- `web/src/router/AppShell.tsx` `handleSearchSubmit` — global search
+  bar submit (typed + Enter).
+- `web/src/pages/home/HomeHero.tsx` `submit` — home-page hero search
+  submit.
+- `web/src/pages/SearchResultsPage.tsx` `useEffect` on `q` — handles
+  deep-link `/search?q=<digits>` and typing into the dedicated
+  search page's own `SearchInput` (which writes back to the URL
+  `q` param).
+
+On null return, callers fall through to `routes.search(q)` and let
+the backend resolve the input.
 
 ## Why this matters
 
