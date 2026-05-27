@@ -7,6 +7,7 @@ import {
   SearchInput,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { directRouteFor } from '../search/directRouteFor.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
@@ -15,6 +16,19 @@ export default function SearchResultsPage() {
   const navigate = useNavigate();
   const q = params.get('q') ?? '';
   const state = useSearchResults({ q });
+
+  // Deep-link / paste path (`/search?q=...`) bypasses the AppShell +
+  // HomeHero submit handlers that normally call `directRouteFor`
+  // first. Re-run the FE classifier here so a ledger sequence pasted
+  // into the URL bar (or typed into this page's own `SearchInput`,
+  // which writes back to the `q` param via `setParams`) lands on
+  // `/ledgers/<seq>` instead of an empty broad-search results page.
+  useEffect(() => {
+    const target = directRouteFor(q);
+    if (target) {
+      navigate(target, { replace: true });
+    }
+  }, [q, navigate]);
 
   useEffect(() => {
     if (state.data?.type === 'redirect') {
