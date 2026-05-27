@@ -2,7 +2,7 @@
 id: '0271'
 title: 'Search: collapse fetch_redirect into broad + singleton-redirect (option C refactor)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0047', '0024']
 related_tasks: ['0270', '0264', '0243']
 tags:
@@ -52,6 +52,13 @@ history:
       datastore-agnostic SQL pattern) and that removes architectural
       drift in the current PG codebase. Asset / NFT / pool broad-search
       enhancements re-emerge as CH-era follow-up after 0243 lands.
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. Implementation: option C refactor only —
+      collapse fetch_redirect into broad+singleton on
+      crates/api/src/search/.
 ---
 
 # Search: collapse fetch_redirect into broad + singleton-redirect (option C)
