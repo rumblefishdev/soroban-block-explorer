@@ -158,8 +158,13 @@
 	# to `dev_shared` (admin user with `<no_password/>` restricted
 	# to loopback/bridge — keeps the password-protected `default`
 	# unreachable from the Caddy path). Any CN absent from the map
-	# leaves `{ch_user}` empty — the @no_user matcher below rejects
-	# with 403 before any backend hop. The map IS the allowlist:
+	# gets the `__unmapped__` sentinel (the map's `default`) — the
+	# @no_user matcher below rejects with 403 before any backend hop.
+	# (A bare `== ""` did NOT work: an unset/empty {ch_user} does not
+	# compare equal to "" inside Caddy's CEL `expression` matcher, so
+	# the gate never fired — task 0241. The non-empty sentinel makes
+	# the var always set, so the comparison is reliable.) The map IS
+	# the allowlist:
 	# one source of truth, populated by Ansible from
 	# `clickhouse_cn_user_pairs` in group_vars (task 0240).
 	#
@@ -181,7 +186,7 @@
 	# and unmapped (but CA-valid) certs reach ClickHouse — rejected only by
 	# CH's password backstop, not at the edge. See task 0241.
 	route {
-	@no_user expression `{ch_user} == ""`
+	@no_user expression `{ch_user} == "__unmapped__"`
 	respond @no_user `{"error":"unauthorized client"}` 403 {
 		close
 	}
