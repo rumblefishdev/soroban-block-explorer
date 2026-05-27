@@ -16,6 +16,3 @@ pub mod filters;
 pub mod pagination;
 pub mod path;
 pub mod strkey;
-
-#[cfg(test)]
-pub mod test_env;

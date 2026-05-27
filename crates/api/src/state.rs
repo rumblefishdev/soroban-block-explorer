@@ -46,12 +46,18 @@ impl AppState {
     }
 
     /// CH client for a handler module routed to the ClickHouse read path.
-    /// Panics when called from a module whose env override is `ch` but the
-    /// cold-start gate decided not to build the client — that combination
-    /// is a misconfigured deploy and should fail loudly on first request.
+    /// Panics when the cold-start `AppConfig::ch_enabled` gate decided
+    /// not to build the client (no module reported CH at init time) yet
+    /// a handler later reads `DataSource::for_module(..) == Ch` and
+    /// reaches this accessor. The combination indicates an inconsistent
+    /// process state — e.g. env mutated post-init, or a `Module` variant
+    /// missing from `Module::ALL` — and is a misconfigured deploy that
+    /// must fail loudly on first request.
     pub fn ch(&self) -> &clickhouse::Client {
         self.ch.as_ref().expect(
-            "CH client not built — module routed to CH without API_DATASOURCE_*=ch at cold start",
+            "CH client not built at cold start, but handler dispatched to CH read path — \
+             AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
+             (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
         )
     }
 

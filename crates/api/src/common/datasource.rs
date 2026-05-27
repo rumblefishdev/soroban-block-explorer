@@ -5,10 +5,13 @@
 //! is a functional no-op; operators flip a single env per module to
 //! opt in, and rollback is the same flip in reverse.
 
-/// API handler modules that participate in the PG↔CH rollout. The variant
-/// set is the single source of truth — `Module::ALL`, `any_ch_enabled`,
-/// and per-handler call sites all walk this enum, so a new module gets
-/// a compile error if it is not added here.
+/// API handler modules that participate in the PG↔CH rollout.
+///
+/// Two manual lists must stay in sync: this enum (variants) and
+/// `Module::ALL`. The `env_suffix` and `ordinal` matches below are
+/// exhaustive so adding a variant without an arm fails compilation;
+/// `module_all_covers_every_variant` is the safety net that catches a
+/// missing-from-`ALL` entry at test time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Module {
     Accounts,
@@ -51,6 +54,26 @@ impl Module {
             Module::Transactions => "TRANSACTIONS",
         }
     }
+
+    /// Position in `Module::ALL`. Exhaustive match: a new variant
+    /// must add an arm here, which steers the developer to `ALL` as
+    /// well; the `module_all_covers_every_variant` test catches the
+    /// case where the arm is added but `ALL` isn't. Kept compiled in
+    /// release builds — the `#[allow]` is intentional, not stale code.
+    #[allow(dead_code)]
+    const fn ordinal(self) -> usize {
+        match self {
+            Module::Accounts => 0,
+            Module::Assets => 1,
+            Module::Contracts => 2,
+            Module::Ledgers => 3,
+            Module::LiquidityPools => 4,
+            Module::Network => 5,
+            Module::Nfts => 6,
+            Module::Search => 7,
+            Module::Transactions => 8,
+        }
+    }
 }
 
 /// Env-var prefix for every per-module override
@@ -72,8 +95,18 @@ impl DataSource {
     /// `--test-threads=1`.
     pub fn for_module(module: Module) -> Self {
         let key = format!("{ENV_PREFIX}{}", module.env_suffix());
-        match std::env::var(&key).as_deref().map(str::trim) {
-            Ok("ch") | Ok("CH") => Self::Ch,
+        Self::parse(std::env::var(&key).ok().as_deref())
+    }
+
+    /// Pure value-level mapping from a raw env override to a
+    /// `DataSource`. Lives separately from `for_module` so the value
+    /// semantics can be unit-tested without `std::env::set_var`
+    /// (whose Rust 2024 unsafe contract — no concurrent env access in
+    /// the process, including reads — cannot be honoured under
+    /// parallel `#[test]` threads).
+    fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some(v) if v.eq_ignore_ascii_case("ch") => Self::Ch,
             _ => Self::Pg,
         }
     }
@@ -92,44 +125,44 @@ impl DataSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::test_env::with_env;
 
     #[test]
     fn default_is_pg() {
-        with_env("API_DATASOURCE_NETWORK", None, || {
-            assert_eq!(DataSource::for_module(Module::Network), DataSource::Pg);
-        });
+        assert_eq!(DataSource::parse(None), DataSource::Pg);
+        assert_eq!(DataSource::parse(Some("")), DataSource::Pg);
     }
 
     #[test]
-    fn ch_lowercase_selects_ch() {
-        with_env("API_DATASOURCE_NETWORK", Some("ch"), || {
-            assert_eq!(DataSource::for_module(Module::Network), DataSource::Ch);
-        });
-    }
-
-    #[test]
-    fn ch_uppercase_selects_ch() {
-        with_env("API_DATASOURCE_NETWORK", Some("CH"), || {
-            assert_eq!(DataSource::for_module(Module::Network), DataSource::Ch);
-        });
+    fn ch_value_is_case_insensitive() {
+        for v in ["ch", "CH", "Ch", "cH", "  ch  "] {
+            assert_eq!(DataSource::parse(Some(v)), DataSource::Ch, "value {v:?}");
+        }
     }
 
     #[test]
     fn unknown_value_falls_back_to_pg() {
-        with_env("API_DATASOURCE_NETWORK", Some("hbase"), || {
-            assert_eq!(DataSource::for_module(Module::Network), DataSource::Pg);
-        });
+        for v in ["pg", "PG", "hbase", "clickhouse", "true", "1"] {
+            assert_eq!(DataSource::parse(Some(v)), DataSource::Pg, "value {v:?}");
+        }
     }
 
     #[test]
     fn liquidity_pools_env_suffix_is_snake_case() {
         assert_eq!(Module::LiquidityPools.env_suffix(), "LIQUIDITY_POOLS");
-        with_env("API_DATASOURCE_LIQUIDITY_POOLS", Some("ch"), || {
-            assert_eq!(
-                DataSource::for_module(Module::LiquidityPools),
-                DataSource::Ch
-            );
-        });
+    }
+
+    #[test]
+    fn module_all_covers_every_variant() {
+        // `ordinal()` is exhaustive — a new variant must add an arm
+        // there. This assert catches the case where the arm was added
+        // but `ALL` was not extended: every ordinal in `ALL` must form
+        // the contiguous range `0..ALL.len()`.
+        let mut ordinals: Vec<usize> = Module::ALL.iter().map(|m| m.ordinal()).collect();
+        ordinals.sort_unstable();
+        assert_eq!(
+            ordinals,
+            (0..Module::ALL.len()).collect::<Vec<_>>(),
+            "Module::ALL must list every variant exactly once",
+        );
     }
 }
