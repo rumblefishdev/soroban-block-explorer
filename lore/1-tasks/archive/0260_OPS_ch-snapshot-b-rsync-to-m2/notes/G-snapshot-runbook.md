@@ -20,29 +20,29 @@ history:
 # CH Snapshot B — operator runbook
 
 Reconstructed procedure for taking the post-0252 CH snapshot
-on `sorban-prod`. Anchored to the gaps surfaced during 0260
+on `<hetzner-host>`. Anchored to the gaps surfaced during 0260
 Phase 0 exploration: no committed BACKUP runbook in the repo,
 no committed M2↔Hetzner transport doc.
 
 ## Topology clarification
 
-The task uses "M2" as shorthand for the **fishuser-HERO** host
-(a Linux worker that ran one leg of the 0228 parallel backfill).
-It is the rsync destination and the host that needs its old
-backfill removed.
+"M2" in this task refers to a Linux worker host that ran one
+leg of the 0228 parallel backfill — not a static copy on the
+operator's laptop. It is the rsync destination and the host
+that needs its old backfill volume removed.
 
 ## Transport
 
-Direct SSH on alias `sorban-prod` from fishuser-HERO. No
-wireguard. SSH key for `sorban-prod` must be loaded on
-fishuser-HERO's agent before the rsync step.
+Direct SSH on alias `<hetzner-host>` from M2. No
+wireguard. SSH key for `<hetzner-host>` must be loaded on
+M2's agent before the rsync step.
 
 ## 0. Prerequisites
 
-- SSH agent on fishuser-HERO has `sorban-prod` key loaded
+- SSH agent on M2 has `<hetzner-host>` key loaded
   (`ssh-add -l`).
 - 0252 closed (artifact: `docs/runbooks/artifacts/endpoint_validation_20260525.md`).
-- fishuser-HERO has free disk ≥ estimated Snapshot B size + headroom
+- M2 has free disk ≥ estimated Snapshot B size + headroom
   **after backfill Docker volume removed**. Measured 2026-05-26:
   393 GiB free pre-delete → 760 GiB free post-delete → ~68 GiB
   (9 %) headroom for a 692 GiB snapshot. Below the 15 % comfort
@@ -56,8 +56,8 @@ fishuser-HERO's agent before the rsync step.
 ## 1. Pre-flight disk audit
 
 ```bash
-ssh sorban-prod 'df -h /srv'
-ssh sorban-prod 'du -sh /srv/backups/* /srv/clickhouse-data 2>/dev/null'
+ssh <hetzner-host> 'df -h /srv'
+ssh <hetzner-host> 'du -sh /srv/backups/* /srv/clickhouse-data 2>/dev/null'
 ```
 
 **Captured values (2026-05-26):**
@@ -248,14 +248,14 @@ EOF
 Drift threshold: zero. CH BACKUP is consistent by design; any
 delta means concurrent writes (write path should be off pre-0241).
 
-## 6.5 Free fishuser-HERO disk (pre-rsync)
+## 6.5 Free M2 disk (pre-rsync)
 
 Snapshot B is too large to fit alongside the orphaned backfill
-volume on fishuser-HERO (last query 2026-05-21; idle 5 days;
+volume on M2 (last query 2026-05-21; idle 5 days;
 frozen at 0228 merge state, no live ingest).
 
 ```bash
-# On fishuser-HERO:
+# On M2:
 cd ~/Desktop/soroban/soroban-block-explorer  # or wherever the
                                              # compose file lives
 docker compose ps clickhouse                  # confirm it's the
@@ -275,15 +275,15 @@ Capture freed bytes for the README history entry.
   still attached — repeat `compose down` against the right
   service, or `docker rm -f <id>` the lingering container.
 
-## 7. rsync to fishuser-HERO
+## 7. rsync to M2
 
-Operator drives from fishuser-HERO (pull):
+Operator drives from M2 (pull):
 
 ```bash
-# On fishuser-HERO, sorban-prod key loaded in agent:
+# On M2, the Hetzner host key loaded in agent:
 mkdir -p ~/snapshots
 rsync -avzP --partial --human-readable \
-  sorban-prod:/srv/backups/snapshot_b_post_0252_<YYYYMMDD>/ \
+  <hetzner-host>:/srv/backups/snapshot_b_post_0252_<YYYYMMDD>/ \
   ~/snapshots/snapshot_b_post_0252_<YYYYMMDD>/
 ```
 
@@ -292,7 +292,7 @@ Notes on rsync flags:
   zstd-compressed on disk so `-z` gains little and burns CPU. Drop
   if the bottleneck is CPU rather than bandwidth.
 - `-P --partial` lets a flaky transfer resume from where it stopped.
-- Path `~/snapshots/` is a suggested destination on fishuser-HERO's
+- Path `~/snapshots/` is a suggested destination on M2's
   916 GiB root; adjust if there's a more conventional snapshot dir.
 
 Capture:
@@ -306,9 +306,9 @@ Capture:
 
 ```bash
 # Hetzner:
-ssh sorban-prod 'cd /srv/backups/snapshot_b_post_0252_<YYYYMMDD> && \
+ssh <hetzner-host> 'cd /srv/backups/snapshot_b_post_0252_<YYYYMMDD> && \
   find . -type f -exec md5sum {} \; | sort' > /tmp/snapshot_b_remote.md5
-# fishuser-HERO (run locally on the host where rsync landed):
+# M2 (run locally on the host where rsync landed):
 cd ~/snapshots/snapshot_b_post_0252_<YYYYMMDD>
 find . -type f -exec md5sum {} \; | sort > /tmp/snapshot_b_local.md5
 diff /tmp/snapshot_b_remote.md5 /tmp/snapshot_b_local.md5
@@ -321,7 +321,7 @@ diff /tmp/snapshot_b_remote.md5 /tmp/snapshot_b_local.md5
 a recovery window. That is **wrong on a single-filesystem box**:
 `mv` only rewrites the directory entry, the 692 GiB of blocks
 stay allocated, so post-`mv` `df` shows the same free space.
-There is no other large filesystem on `sorban-prod` to receive
+There is no other large filesystem on `<hetzner-host>` to receive
 the rename.
 
 Single-step delete is the correct path. The risk surface is
@@ -332,8 +332,8 @@ the same live state. A's job as a Phase 5 rollback gate ended
 when 0252 closed.
 
 ```bash
-ssh sorban-prod 'rm -rf /srv/backups/pre_repair_20260521_1502'
-ssh sorban-prod 'df -h /srv'   # confirm ~972 GiB free
+ssh <hetzner-host> 'rm -rf /srv/backups/pre_repair_20260521_1502'
+ssh <hetzner-host> 'df -h /srv'   # confirm ~972 GiB free
 ```
 
 Capture freed bytes for the README history entry.
@@ -348,12 +348,12 @@ Capture freed bytes for the README history entry.
    bump in box bash history during Snapshot A creation. Plan: try
    Snapshot B at 6 GiB first; bump only on `MEMORY_LIMIT_EXCEEDED`.
 3. ~~Where on M2 does the old Soroban-era backfill live? Size?~~
-   **Resolved**: "M2" = fishuser-HERO. Backfill was the live
+   **Resolved**: "M2" = M2. Backfill was the live
    Docker volume `soroban-block-explorer_clickhouse-data`
    (367 GiB) at `/var/lib/docker/volumes/…/_data`. Removed
    2026-05-26 (Phase 1), 760 GiB free now.
 4. ~~Wireguard or SSH?~~ **Resolved**: direct SSH on alias
-   `sorban-prod` from fishuser-HERO. No wireguard configured.
+   `<hetzner-host>` from M2. No wireguard configured.
 5. ~~Does the `transaction_hash_dict` dictionary need explicit
    BACKUP coverage?~~ **Resolved**: `BACKUP DATABASE default`
    covers all tables + dictionaries in the database atomically;
