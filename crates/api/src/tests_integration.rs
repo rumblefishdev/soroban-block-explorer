@@ -54,8 +54,6 @@ fn build_app(db: PgPool) -> Router {
         .timeout_config(crate::runtime_enrichment::stellar_archive::default_timeout_config())
         .build();
     let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
-    let contract_cache = crate::contracts::cache::new_contract_cache();
-    let network_cache = crate::network::cache::new_network_cache();
     // Real fetchers with default config. Integration tests below never
     // hit a real issuer or S3 (validation tests short-circuit before
     // any handler reaches the fetcher; DB-gated tests use fixtures).
@@ -66,13 +64,7 @@ fn build_app(db: PgPool) -> Router {
         nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .expect("build nft_token_uri fetcher"),
     };
-    let state = AppState {
-        db,
-        runtime_enrichment,
-        contract_cache,
-        network_cache,
-        network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
-    };
+    let state = AppState::for_tests(db, runtime_enrichment);
 
     let (router, _spec) = OpenApiRouter::new()
         .nest("/v1", transactions::router())

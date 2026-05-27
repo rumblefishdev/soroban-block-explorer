@@ -88,9 +88,7 @@ mod tests {
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
-    use crate::contracts::cache::new_contract_cache;
     use crate::network;
-    use crate::network::cache::new_network_cache;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
@@ -108,13 +106,7 @@ mod tests {
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        let state = AppState {
-            db,
-            runtime_enrichment,
-            contract_cache: new_contract_cache(),
-            network_cache: new_network_cache(),
-            network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
-        };
+        let state = AppState::for_tests(db, runtime_enrichment);
 
         let (router, _spec) = OpenApiRouter::new()
             .nest("/v1", network::router())

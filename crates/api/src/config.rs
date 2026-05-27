@@ -4,6 +4,8 @@
 //! that `fn app(&AppConfig) -> Router` stays pure — tests construct
 //! their own `AppConfig` without touching `std::env`.
 
+use crate::common::datasource::DataSource;
+
 /// Application-wide runtime configuration.
 ///
 /// The `version` advertised in the OpenAPI spec is sourced from
@@ -16,19 +18,20 @@ pub struct AppConfig {
     /// domain (e.g. `https://api.staging.sorobanscan.rumblefish.dev`);
     /// locally it falls back to `http://localhost:9000`.
     pub base_url: String,
+    /// True when at least one handler module is configured to read
+    /// from ClickHouse via `API_DATASOURCE_<MODULE>=ch`. Drives the
+    /// cold-start decision in `main.rs` to build (or skip) the mTLS
+    /// CH client; PG-only deploys keep `false` and never touch the
+    /// Secrets Lambda Extension.
+    pub ch_enabled: bool,
 }
 
 impl AppConfig {
-    /// Build an `AppConfig` from the process environment.
-    ///
-    /// Reads:
-    /// - `API_BASE_URL` — set by CDK (`compute-stack.ts`) from the
-    ///   environment's `apiDomainName`. Falls back to a local default
-    ///   when unset so `cargo run -p api` works out of the box.
     pub fn from_env() -> Self {
         Self {
             base_url: std::env::var("API_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:9000".to_string()),
+            ch_enabled: DataSource::any_ch_enabled(),
         }
     }
 }
