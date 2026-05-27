@@ -28,6 +28,7 @@ Source account `GAHH…XXXX` is a working link to `/accounts/G…`. In Operation
 ## Invalid-id (`/transactions/INVALID`)
 
 Renders single "Transaction not found" block:
+
 > "We couldn't find anything matching this identifier. Double-check the value and try again. INVALID"
 
 No h1 on NotFound page (heading hierarchy gap). Cross-cite F-W6-NOTFOUND-1.

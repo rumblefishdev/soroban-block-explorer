@@ -7,14 +7,14 @@
 
 ## Per-check table
 
-| # | Check | Verdict | Evidence | Severity | Class |
-|---|---|---|---|---|---|
-| AD-1 | Junior can change something without predecessor context? | partial | 3 sampled changes below; 1 easy, 1 moderate, 1 requires cross-file coordination. See AD-1 sample | 🟡 | C |
-| AD-2 | Bug fix requires changes in 5+ files (leaked concern)? | ⚠ | See F-AD-1 — fixing **truncation** requires 6 files (cross-cite F-U-3); fixing **STROOPS conversion** requires 2 files (F-U-4); fixing **debounce-input** requires 4 files (F-Y-2). Leaks accumulate at "formatters / helpers" layer | 🟠 | C |
-| AD-3 | Each component has unit test protecting against regression | ✗ | 0 test files in `web/src` + `libs/ui/src`. Cross-cite F-AH-6 / Wave 1 P + AQ. Documented dropped scope `O`, Phase 3 spawn | 🟠 | D |
-| AD-4 | Implicit dependencies (components requiring parent context) | ✓ | Only 1: `useColorMode` requires `<ExplorerThemeProvider>`. Documented via throw on missing context (`ThemeProvider.tsx:93`). Cross-cite Wave 5 Z-7 — informative throw. | — | — |
-| AD-5 | Magic strings/numbers without constants | ✓ | Strong discipline. See AD-5 inventory below — magic numbers are either named constants, Figma-node-tagged, or have comment rationale | — | — |
-| AD-6 | Onboarding docs for FE exist | partial | `web/README.md` 74 lines, `libs/ui/README.md` 33 lines, `libs/api-types/README.md` 31 lines, root `README.md` 105 lines. `docs/architecture/frontend/frontend-overview.md` 740 lines. **Sufficient for cold-start dev in ~1 hour.** See F-AD-2 | 🟢 | D |
+| #    | Check                                                       | Verdict | Evidence                                                                                                                                                                                                                                       | Severity | Class |
+| ---- | ----------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| AD-1 | Junior can change something without predecessor context?    | partial | 3 sampled changes below; 1 easy, 1 moderate, 1 requires cross-file coordination. See AD-1 sample                                                                                                                                               | 🟡       | C     |
+| AD-2 | Bug fix requires changes in 5+ files (leaked concern)?      | ⚠       | See F-AD-1 — fixing **truncation** requires 6 files (cross-cite F-U-3); fixing **STROOPS conversion** requires 2 files (F-U-4); fixing **debounce-input** requires 4 files (F-Y-2). Leaks accumulate at "formatters / helpers" layer           | 🟠       | C     |
+| AD-3 | Each component has unit test protecting against regression  | ✗       | 0 test files in `web/src` + `libs/ui/src`. Cross-cite F-AH-6 / Wave 1 P + AQ. Documented dropped scope `O`, Phase 3 spawn                                                                                                                      | 🟠       | D     |
+| AD-4 | Implicit dependencies (components requiring parent context) | ✓       | Only 1: `useColorMode` requires `<ExplorerThemeProvider>`. Documented via throw on missing context (`ThemeProvider.tsx:93`). Cross-cite Wave 5 Z-7 — informative throw.                                                                        | —        | —     |
+| AD-5 | Magic strings/numbers without constants                     | ✓       | Strong discipline. See AD-5 inventory below — magic numbers are either named constants, Figma-node-tagged, or have comment rationale                                                                                                           | —        | —     |
+| AD-6 | Onboarding docs for FE exist                                | partial | `web/README.md` 74 lines, `libs/ui/README.md` 33 lines, `libs/api-types/README.md` 31 lines, root `README.md` 105 lines. `docs/architecture/frontend/frontend-overview.md` 740 lines. **Sufficient for cold-start dev in ~1 hour.** See F-AD-2 | 🟢       | D     |
 
 ## AD-1 sample — junior change scenarios
 
@@ -52,17 +52,17 @@
 
 Found 8 numeric literals ≥4 digits in user code:
 
-| Site | Value | Justified? |
-|---|---|---|
-| `web/src/api/polling.ts:4-25` | 10_000, 12_000, 60_000, 5*60_000 | ✓ named (`homePolicy.staleTime`, etc.) with JSDoc rationale |
-| `web/src/api/hooks/usePoolChart.ts:13` | `DAY_MS = 24 * 60 * 60 * 1000` | ✓ named constant |
-| `web/src/pages/pool-detail/helpers.ts:3` | `SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000` | ✓ named constant + JSDoc |
-| `web/src/search/SearchResultsTabs.tsx:60` | `borderRadius: 9999` | ✓ idiomatic CSS pill-radius marker; design-system convention |
-| `web/src/pages/transaction-detail/advanced/XdrRow.tsx:33` | `setTimeout(() => setCopied(false), 1500)` | ⚠ inline `1500` ms; should be `COPIED_FEEDBACK_MS = 1500` constant. Minor. |
-| `web/src/pages/HomePage.tsx:59` | `width: 1062` | ⚠ Figma layout px; should be CSS variable or commented. Minor. |
-| `web/src/pages/home/ChainOverview.tsx:80` | `maxWidth: 1064` | ⚠ same as above. Minor. |
-| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:22-24` | `10000 / 100000 / 1000000` | ✓ Figma-tagged in nearby comment `node 267:60674`; named labels (`Min $10,000` etc.) so user sees the meaning |
-| `web/src/pages/liquidity-pools/assetColor.ts:109` | `h = 5381` | ✓ djb2 hash constant — well-known number; comment could clarify |
+| Site                                                      | Value                                      | Justified?                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `web/src/api/polling.ts:4-25`                             | 10_000, 12_000, 60_000, 5\*60_000          | ✓ named (`homePolicy.staleTime`, etc.) with JSDoc rationale                                                   |
+| `web/src/api/hooks/usePoolChart.ts:13`                    | `DAY_MS = 24 * 60 * 60 * 1000`             | ✓ named constant                                                                                              |
+| `web/src/pages/pool-detail/helpers.ts:3`                  | `SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000`  | ✓ named constant + JSDoc                                                                                      |
+| `web/src/search/SearchResultsTabs.tsx:60`                 | `borderRadius: 9999`                       | ✓ idiomatic CSS pill-radius marker; design-system convention                                                  |
+| `web/src/pages/transaction-detail/advanced/XdrRow.tsx:33` | `setTimeout(() => setCopied(false), 1500)` | ⚠ inline `1500` ms; should be `COPIED_FEEDBACK_MS = 1500` constant. Minor.                                    |
+| `web/src/pages/HomePage.tsx:59`                           | `width: 1062`                              | ⚠ Figma layout px; should be CSS variable or commented. Minor.                                                |
+| `web/src/pages/home/ChainOverview.tsx:80`                 | `maxWidth: 1064`                           | ⚠ same as above. Minor.                                                                                       |
+| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:22-24`  | `10000 / 100000 / 1000000`                 | ✓ Figma-tagged in nearby comment `node 267:60674`; named labels (`Min $10,000` etc.) so user sees the meaning |
+| `web/src/pages/liquidity-pools/assetColor.ts:109`         | `h = 5381`                                 | ✓ djb2 hash constant — well-known number; comment could clarify                                               |
 
 **Net:** ~3 minor magic-number nits (1500ms feedback, 1062/1064 layout px). Otherwise strong discipline.
 
@@ -70,14 +70,14 @@ Found 8 numeric literals ≥4 digits in user code:
 
 ## AD-6 — Onboarding doc inventory
 
-| File | Size | Cold-start adequacy |
-|---|---|---|
-| `README.md` (root) | 105 lines | sets context, monorepo overview, links |
-| `web/README.md` | 74 lines | env config, structure tree, dev commands, data-layer rules ✓ |
-| `libs/ui/README.md` | 33 lines | "what goes here / what doesn't" rules ✓ (concise but clear) |
-| `libs/api-types/README.md` | 31 lines | codegen workflow ✓ |
-| `docs/architecture/frontend/frontend-overview.md` | 740 lines | comprehensive (per-route, per-state, data flow); reference document |
-| `CLAUDE.md` (project, root) | (committed) | session/task gate, deletion policy, codegen workflow, evergreen docs |
+| File                                              | Size        | Cold-start adequacy                                                  |
+| ------------------------------------------------- | ----------- | -------------------------------------------------------------------- |
+| `README.md` (root)                                | 105 lines   | sets context, monorepo overview, links                               |
+| `web/README.md`                                   | 74 lines    | env config, structure tree, dev commands, data-layer rules ✓         |
+| `libs/ui/README.md`                               | 33 lines    | "what goes here / what doesn't" rules ✓ (concise but clear)          |
+| `libs/api-types/README.md`                        | 31 lines    | codegen workflow ✓                                                   |
+| `docs/architecture/frontend/frontend-overview.md` | 740 lines   | comprehensive (per-route, per-state, data flow); reference document  |
+| `CLAUDE.md` (project, root)                       | (committed) | session/task gate, deletion policy, codegen workflow, evergreen docs |
 
 **Junior cold-start time estimate:** ~1-2 hours to read all 5 docs + skim `frontend-overview.md` § for area of interest. Strong onboarding.
 
@@ -87,14 +87,14 @@ Found 8 numeric literals ≥4 digits in user code:
 
 ### F-AD-1 [Class C, Severity 🟠] — Leaked concerns: bug fixes requiring 5+ files (RECAP)
 
-| Bug class | Files to change | Cross-cite |
-|---|---|---|
-| Truncation re-impl | 6 files | F-U-3 |
-| STROOPS_PER_XLM | 2 files | F-U-4 |
-| `formatFee` | 2 files | F-J-16 |
-| Stroop display formatter (third entry point `formatStroops`) | 3 files | F-J-17 |
-| Debounce pattern | 4 files | F-Y-2 |
-| Inline number formatters | 10 files | F-U-2 |
+| Bug class                                                    | Files to change | Cross-cite |
+| ------------------------------------------------------------ | --------------- | ---------- |
+| Truncation re-impl                                           | 6 files         | F-U-3      |
+| STROOPS_PER_XLM                                              | 2 files         | F-U-4      |
+| `formatFee`                                                  | 2 files         | F-J-16     |
+| Stroop display formatter (third entry point `formatStroops`) | 3 files         | F-J-17     |
+| Debounce pattern                                             | 4 files         | F-Y-2      |
+| Inline number formatters                                     | 10 files        | F-U-2      |
 
 - **Verdict:** the **formatter/truncation/debounce family** is the project's #1 maintenance-cost leak. A future "change how addresses truncate" requires editing 6 files instead of 1.
 - **Recommendation:** Phase 3 single PR consolidating into `libs/ui/src/format/` + `libs/ui/src/identifiers/truncate.ts` extensions. Estimated 0257 spawn task: `XXXX_REFACTOR_frontend-format-truncate-unification` (M-effort).

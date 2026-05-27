@@ -2,15 +2,15 @@
 
 ## Part 1 — State separation per-check
 
-| Check | Result | Evidence |
-|---|---|---|
-| Server state (TanStack) vs UI state (useState) vs URL state (useTableUrlState) — clean separation | ✓ | Sampled 4 pages (TransactionsListPage, LedgerDetailPage, AccountDetailPage, transaction-detail/index.tsx). Clean separation: TanStack hooks own server data, useState owns transient UI (selectedIndex in tx-detail), useCursorPagination owns URL. No mixing observed. |
-| Global state justified | ✓ | Only ColorModeContext (theme light/dark) — single context, top-level provider, leaf consumer. Justified. |
-| Local state that should be URL | ⚠ | tx-detail's `selectedIndex` (`useState(0)`) for operation picker is **deliberately** local — operation index resets on hash change. Acceptable but borderline. See F-AL-1. |
-| URL state that should be local | ✗ | None observed (URL state is correctly only used for cursor/filter/sort/mode). |
-| Prop drilling >3 levels | ✓ | Max 2 in sampled pool-detail (per X-coupling F-X-1). |
-| `useReducer` vs `useState` consistent | ✓ | Zero `useReducer` in `web/src/` — all simple `useState`. No complex state machines requiring reducer. |
-| `useDetailMode` aligned with `useTableUrlState` | ✗ | Diverges — see F-U-5 (in U-component-reuse.md) and EXTRA part 2 below. |
+| Check                                                                                             | Result | Evidence                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server state (TanStack) vs UI state (useState) vs URL state (useTableUrlState) — clean separation | ✓      | Sampled 4 pages (TransactionsListPage, LedgerDetailPage, AccountDetailPage, transaction-detail/index.tsx). Clean separation: TanStack hooks own server data, useState owns transient UI (selectedIndex in tx-detail), useCursorPagination owns URL. No mixing observed. |
+| Global state justified                                                                            | ✓      | Only ColorModeContext (theme light/dark) — single context, top-level provider, leaf consumer. Justified.                                                                                                                                                                |
+| Local state that should be URL                                                                    | ⚠      | tx-detail's `selectedIndex` (`useState(0)`) for operation picker is **deliberately** local — operation index resets on hash change. Acceptable but borderline. See F-AL-1.                                                                                              |
+| URL state that should be local                                                                    | ✗      | None observed (URL state is correctly only used for cursor/filter/sort/mode).                                                                                                                                                                                           |
+| Prop drilling >3 levels                                                                           | ✓      | Max 2 in sampled pool-detail (per X-coupling F-X-1).                                                                                                                                                                                                                    |
+| `useReducer` vs `useState` consistent                                                             | ✓      | Zero `useReducer` in `web/src/` — all simple `useState`. No complex state machines requiring reducer.                                                                                                                                                                   |
+| `useDetailMode` aligned with `useTableUrlState`                                                   | ✗      | Diverges — see F-U-5 (in U-component-reuse.md) and EXTRA part 2 below.                                                                                                                                                                                                  |
 
 ## Findings
 
@@ -45,18 +45,18 @@ Reading `libs/ui/src/table/useTableUrlState.ts:1-126`:
 
 ### Decision matrix
 
-| Concern | useSearchParams direct | useTableUrlState | TanStack-native URL |
-|---|---|---|---|
-| Lines of code per page | ~20-30 boilerplate per page (parse, type, setters, cursor reset) | ~5 lines (hook call) | N/A — TanStack has no URL persistence built-in |
-| Type safety on cursor / sort | None (string \| null everywhere) | Typed `TableUrlState` ✓ | N/A |
-| Side-effect rule "filter change drops cursor" | Easy to forget per page | Enforced centrally ✓ | N/A |
-| Multi-section cursor keys | Manual per page | Supported via `cursorParam` ✓ | N/A |
-| Memo reference stability | Manual `useMemo` per page | Built in ✓ | N/A |
-| Lock-in / replaceability | Zero | Low — 130-line file, easy to inline | High — bind URL to query keys = big rewrite |
-| Discoverability for new contributors | Familiar React Router API | One extra abstraction to learn | TanStack stores URL nowhere — requires bespoke plugin |
-| DX | Verbose | Concise ✓ | N/A |
-| Coupling to React Router | Indirect (used internally) | Indirect (same) | N/A |
-| Test coverage | Per-page boilerplate to test | Single hook tested once | N/A |
+| Concern                                       | useSearchParams direct                                           | useTableUrlState                    | TanStack-native URL                                   |
+| --------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------- |
+| Lines of code per page                        | ~20-30 boilerplate per page (parse, type, setters, cursor reset) | ~5 lines (hook call)                | N/A — TanStack has no URL persistence built-in        |
+| Type safety on cursor / sort                  | None (string \| null everywhere)                                 | Typed `TableUrlState` ✓             | N/A                                                   |
+| Side-effect rule "filter change drops cursor" | Easy to forget per page                                          | Enforced centrally ✓                | N/A                                                   |
+| Multi-section cursor keys                     | Manual per page                                                  | Supported via `cursorParam` ✓       | N/A                                                   |
+| Memo reference stability                      | Manual `useMemo` per page                                        | Built in ✓                          | N/A                                                   |
+| Lock-in / replaceability                      | Zero                                                             | Low — 130-line file, easy to inline | High — bind URL to query keys = big rewrite           |
+| Discoverability for new contributors          | Familiar React Router API                                        | One extra abstraction to learn      | TanStack stores URL nowhere — requires bespoke plugin |
+| DX                                            | Verbose                                                          | Concise ✓                           | N/A                                                   |
+| Coupling to React Router                      | Indirect (used internally)                                       | Indirect (same)                     | N/A                                                   |
+| Test coverage                                 | Per-page boilerplate to test                                     | Single hook tested once             | N/A                                                   |
 
 ### What TanStack actually provides (for the record)
 
@@ -89,6 +89,7 @@ consumer list and verify no pages bypass the abstraction.
 ### `useCursorPagination` consumers (13 call sites)
 
 **List pages (5):**
+
 - `web/src/pages/TransactionsListPage.tsx:34`
 - `web/src/pages/LedgersListPage.tsx:20`
 - `web/src/pages/AssetsListPage.tsx:32`
@@ -96,6 +97,7 @@ consumer list and verify no pages bypass the abstraction.
 - `web/src/pages/LiquidityPoolsListPage.tsx:34`
 
 **Detail-page tab/section tables (8):**
+
 - `web/src/pages/LedgerDetailPage.tsx:32` (parent ledger transactions)
 - `web/src/pages/accounts/AccountTransactions.tsx:74`
 - `web/src/pages/assets/AssetTransactions.tsx:72`
@@ -125,11 +127,11 @@ where multiple sections coexist (pool detail, contract detail). Consistent.
 
 ### useState that could be URL state (review opportunity)
 
-| File:line | State | Currently | Disposition |
-|---|---|---|---|
-| `web/src/pages/transaction-detail/index.tsx:30` | `selectedIndex` | useState | F-AL-1 — deliberate; defer Gate B |
-| `web/src/pages/transaction-detail/sections/OperationPicker.tsx:59` | `typeFilter` | useState | ephemeral in-page filter; correct |
-| `web/src/pages/pool-detail/PoolCharts.tsx:128-129` | `metric`, `period` | useState | **NEW — F-EX-2** 🟢 LOW |
+| File:line                                                          | State              | Currently | Disposition                       |
+| ------------------------------------------------------------------ | ------------------ | --------- | --------------------------------- |
+| `web/src/pages/transaction-detail/index.tsx:30`                    | `selectedIndex`    | useState  | F-AL-1 — deliberate; defer Gate B |
+| `web/src/pages/transaction-detail/sections/OperationPicker.tsx:59` | `typeFilter`       | useState  | ephemeral in-page filter; correct |
+| `web/src/pages/pool-detail/PoolCharts.tsx:128-129`                 | `metric`, `period` | useState  | **NEW — F-EX-2** 🟢 LOW           |
 
 ### F-EX-2 [Class C, Severity 🟢] — Pool chart metric/period in useState, not URL
 

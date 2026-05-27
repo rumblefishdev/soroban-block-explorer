@@ -4,13 +4,13 @@
 
 ### F-W6-NOTFOUND-1 [Class C, Severity 🟡 MEDIUM] NotFound pages missing h1 on 4 of 5 detail routes
 
-| Route | NotFound h1 |
-|---|---|
-| `/transactions/<invalid>` | ❌ none |
-| `/ledgers/<invalid>`      | ❌ none |
-| `/accounts/<invalid>`     | ❌ none |
-| `/contracts/<invalid>`    | ✓ "Contract" present |
-| `/liquidity-pools/<invalid>` | ❌ none |
+| Route                        | NotFound h1          |
+| ---------------------------- | -------------------- |
+| `/transactions/<invalid>`    | ❌ none              |
+| `/ledgers/<invalid>`         | ❌ none              |
+| `/accounts/<invalid>`        | ❌ none              |
+| `/contracts/<invalid>`       | ✓ "Contract" present |
+| `/liquidity-pools/<invalid>` | ❌ none              |
 
 Screen-reader users navigating by heading shortcut land mid-content with no level-1 anchor; visual users still see breadcrumb + "X not found" text but a11y tree is incomplete. Inconsistent across routes — pick a single pattern. Recommended: every NotFound page renders `<h1>{entityType} not found</h1>` or similar.
 
@@ -36,9 +36,17 @@ Confirmed: Tab from page-load → header search input → `outline: rgb(26, 26, 
 
 ```js
 inputLabels: [
-  { label: null, placeholder: 'Search by TX hash, accounts, contract, token', id: '' },  // ← header
-  { label: 'Search by TX hash, accounts, contract, token', placeholder: '...', id: '' }  // ← hero
-]
+  {
+    label: null,
+    placeholder: 'Search by TX hash, accounts, contract, token',
+    id: '',
+  }, // ← header
+  {
+    label: 'Search by TX hash, accounts, contract, token',
+    placeholder: '...',
+    id: '',
+  }, // ← hero
+];
 ```
 
 Header search has placeholder but no aria-label and no `<label for>`. Hero search has aria-label. Inconsistent.
@@ -54,6 +62,7 @@ Pure manual + DOM-evaluation walkthrough. Recommended: run `lighthouse --only-ca
 Sampled E2 transactions table: every status cell has `[ref] generic: "Success"` or `"Failed"` plus a colored dot/chip background.
 
 Inspection: tx row 1 ("Account Merge / Success") and row 3 ("Payment / Failed") — both show:
+
 - Text label visible (`Success` / `Failed`)
 - Background chip color (green for Success, red for Failed assumed)
 - **No explicit checkmark / X icon**

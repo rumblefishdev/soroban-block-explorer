@@ -7,15 +7,15 @@
 
 ## Per-check table
 
-| # | Check | Verdict | Evidence | Severity | Class |
-|---|---|---|---|---|---|
-| Y-1 | Most complex component — justified? | mostly ✓ | Top 5 sized files reviewed below — 4/5 justified by domain; 1 has split potential | 🟢 | D |
-| Y-2 | Longest file should be split | partial | `libs/ui/src/theme/overrides.ts` 890 LOC — splittable per MUI component family. See F-Y-1 | 🟡 | D |
-| Y-3 | Deepest conditional nesting | ✓ | Sampled 5 longest files; no >4-level nesting in render/handler functions | — | — |
-| Y-4 | Copied blocks (3+ occurrences) → extract? | ✗ | Cross-cite F-U-3 (6 truncation re-impls), F-U-4 (2 STROOPS constants), F-J-16 (2 formatFee impls), F-J-17 (filter `useEffect` pair in 3 filter components). See F-Y-2 below | 🟠 | C |
-| Y-5 | `useEffect` where `useMemo` / event handler suffices | partial | 16 `useEffect` sites across `web/src` (excluding libs/ui infrastructure). Pattern is sound (debounce + re-sync) but the **same 2-effect debounce pattern is copy-pasted 4 times across filter components**. See F-Y-3 | 🟡 | C |
-| Y-6 | `useState` that should be URL state | partial | Cross-cite Wave 4 F-AL-1 (`selectedIndex` in tx-detail — borderline, deferred to Gate B) — already inventoried | 🟡 | C |
-| Y-7 | Local inline components where shared component fits | ✗ | Cross-cite Wave 4 F-U-1, F-U-2, F-U-3, F-U-4 (SectionCard local; inline formatters; truncation re-impls; STROOPS dup). All Class C — defer Gate B | 🟠 | C |
+| #   | Check                                                | Verdict  | Evidence                                                                                                                                                                                                              | Severity | Class |
+| --- | ---------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| Y-1 | Most complex component — justified?                  | mostly ✓ | Top 5 sized files reviewed below — 4/5 justified by domain; 1 has split potential                                                                                                                                     | 🟢       | D     |
+| Y-2 | Longest file should be split                         | partial  | `libs/ui/src/theme/overrides.ts` 890 LOC — splittable per MUI component family. See F-Y-1                                                                                                                             | 🟡       | D     |
+| Y-3 | Deepest conditional nesting                          | ✓        | Sampled 5 longest files; no >4-level nesting in render/handler functions                                                                                                                                              | —        | —     |
+| Y-4 | Copied blocks (3+ occurrences) → extract?            | ✗        | Cross-cite F-U-3 (6 truncation re-impls), F-U-4 (2 STROOPS constants), F-J-16 (2 formatFee impls), F-J-17 (filter `useEffect` pair in 3 filter components). See F-Y-2 below                                           | 🟠       | C     |
+| Y-5 | `useEffect` where `useMemo` / event handler suffices | partial  | 16 `useEffect` sites across `web/src` (excluding libs/ui infrastructure). Pattern is sound (debounce + re-sync) but the **same 2-effect debounce pattern is copy-pasted 4 times across filter components**. See F-Y-3 | 🟡       | C     |
+| Y-6 | `useState` that should be URL state                  | partial  | Cross-cite Wave 4 F-AL-1 (`selectedIndex` in tx-detail — borderline, deferred to Gate B) — already inventoried                                                                                                        | 🟡       | C     |
+| Y-7 | Local inline components where shared component fits  | ✗        | Cross-cite Wave 4 F-U-1, F-U-2, F-U-3, F-U-4 (SectionCard local; inline formatters; truncation re-impls; STROOPS dup). All Class C — defer Gate B                                                                     | 🟠       | C     |
 
 ## Longest files inventory
 
@@ -51,7 +51,9 @@
 const [draft, setDraft] = useState(initial);
 
 // Re-sync local input when value changes externally (e.g. "Clear filters")
-useEffect(() => { setDraft(initial); }, [initial]);
+useEffect(() => {
+  setDraft(initial);
+}, [initial]);
 
 // Debounce committing typed value to avoid refetch per keystroke
 useEffect(() => {
@@ -63,12 +65,12 @@ useEffect(() => {
 
 **Sites:**
 
-| File:line | Filter |
-|---|---|
-| `web/src/pages/transactions/TransactionFilters.tsx:36-49` | tx search |
-| `web/src/pages/assets/AssetFilters.tsx:25-40` | asset search |
-| `web/src/pages/nfts/NftFilters.tsx:24-40` | NFT search |
-| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:46-62` | LP asset-code search |
+| File:line                                                 | Filter               |
+| --------------------------------------------------------- | -------------------- |
+| `web/src/pages/transactions/TransactionFilters.tsx:36-49` | tx search            |
+| `web/src/pages/assets/AssetFilters.tsx:25-40`             | asset search         |
+| `web/src/pages/nfts/NftFilters.tsx:24-40`                 | NFT search           |
+| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:46-62`  | LP asset-code search |
 
 - **Pattern lives in `web/src/search/useDebounced.ts`** already (5-line `useDebounced` hook). Filter components don't use it; they reinvent.
 - **Recommendation:** extract a `useDebouncedDraft<T>(value, onChange, delay)` hook that returns `[draft, setDraft]` + handles the 2-effect dance. Use across the 4 filter components.
@@ -79,18 +81,18 @@ useEffect(() => {
 
 16 `useEffect` sites across `web/src/` (excluding libs/ui infrastructure):
 
-| File:line | Purpose | Justification |
-|---|---|---|
-| `web/src/search/useSearchResults.ts:122` | debounce + dedupe abort | ✓ legitimate side effect |
-| `web/src/search/useDebounced.ts:5` | timer-driven value update | ✓ |
-| `web/src/search/GlobalSearchBar.tsx:28, 40` | command-K shortcut + focus mgmt | ✓ |
-| `web/src/pages/SearchResultsPage.tsx:17` | URL → input sync | ✓ |
-| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:52, 57` | F-Y-2 pattern | ✓ but duplicated |
-| `web/src/pages/nft-detail/NftMediaPreview.tsx:90` | iframe `load` listener attach | ✓ |
-| `web/src/pages/nfts/NftNameCell.tsx:31` | (sampled — controlled-input sync) | ✓ |
-| `web/src/pages/transactions/TransactionFilters.tsx:40, 45` | F-Y-2 pattern | ✓ but duplicated |
-| `web/src/pages/nfts/NftFilters.tsx:30, 34` | F-Y-2 pattern | ✓ but duplicated |
-| `web/src/pages/assets/AssetFilters.tsx:31, 35` | F-Y-2 pattern | ✓ but duplicated |
+| File:line                                                  | Purpose                           | Justification            |
+| ---------------------------------------------------------- | --------------------------------- | ------------------------ |
+| `web/src/search/useSearchResults.ts:122`                   | debounce + dedupe abort           | ✓ legitimate side effect |
+| `web/src/search/useDebounced.ts:5`                         | timer-driven value update         | ✓                        |
+| `web/src/search/GlobalSearchBar.tsx:28, 40`                | command-K shortcut + focus mgmt   | ✓                        |
+| `web/src/pages/SearchResultsPage.tsx:17`                   | URL → input sync                  | ✓                        |
+| `web/src/pages/liquidity-pools/PoolsFilterBar.tsx:52, 57`  | F-Y-2 pattern                     | ✓ but duplicated         |
+| `web/src/pages/nft-detail/NftMediaPreview.tsx:90`          | iframe `load` listener attach     | ✓                        |
+| `web/src/pages/nfts/NftNameCell.tsx:31`                    | (sampled — controlled-input sync) | ✓                        |
+| `web/src/pages/transactions/TransactionFilters.tsx:40, 45` | F-Y-2 pattern                     | ✓ but duplicated         |
+| `web/src/pages/nfts/NftFilters.tsx:30, 34`                 | F-Y-2 pattern                     | ✓ but duplicated         |
+| `web/src/pages/assets/AssetFilters.tsx:31, 35`             | F-Y-2 pattern                     | ✓ but duplicated         |
 
 - **Verdict:** zero `useEffect` doing what `useMemo` / event handler should. All effects are legitimate (timers, controlled-input re-sync, DOM listeners, URL sync).
 - **Only smell:** the **4× repeated debounce pattern** (F-Y-2).

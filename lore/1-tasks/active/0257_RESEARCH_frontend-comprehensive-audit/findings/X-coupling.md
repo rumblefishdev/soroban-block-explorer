@@ -2,16 +2,16 @@
 
 ## Per-check table
 
-| Check | Result | Evidence |
-|---|---|---|
-| `libs/ui` has no dependency on `web/` | ✓ | `grep -rn "from ['\"]web/\|@rumblefish/soroban-block-explorer-web" libs/ui/src/` returns 0 hits |
-| `libs/api-types` has no dependency on `libs/ui` or `web/` | ✓ | Same grep returns 0; package.json verified — only `@hey-api/openapi-ts` runtime deps |
-| Each page-level component extractable independently | ✓ | Each `*Page.tsx` is a leaf — composes child sections that take only `poolId`/`accountId`/etc. as props (verified pool-detail: `PoolKpiStrip({pool})`, `PoolParticipants({poolId})`, etc.) |
-| Prop drilling >3 levels | ✓ | Sampled pool-detail: max 2 levels (Page → SectionCard → leaf). Asset-detail / contract-detail similar. No deep drilling. |
-| Global state usage justified | ✓ | Only 1 `createContext` in app code: `libs/ui/src/theme/ThemeProvider.tsx:26` — ColorModeContext (light/dark mode). No app-level global state. TanStack QueryClient is the only "global" store, which is correct. |
-| Each custom hook single responsibility | ✓ | Sampled: `useCursorPagination` (URL ↔ cursor), `usePageHandlers` (response → button state), `useDetailMode` (URL ↔ mode tab), `useTableUrlState` (URL serialization). Each has one job. |
-| No cycles between modules | ✓ | `libs/ui` ←→ `libs/api-types` independent. `web/` depends on both. No back-edges. (Nx graph generation timed out locally; relied on grep direction analysis.) |
-| API client single entry point | ✓ | `web/src/api/` is the single layer. All hooks (`useLedgersList`, `useAssetsList`, etc.) import from generated client. No raw `fetch` / `axios` in app (verified). |
+| Check                                                     | Result | Evidence                                                                                                                                                                                                         |
+| --------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `libs/ui` has no dependency on `web/`                     | ✓      | `grep -rn "from ['\"]web/\|@rumblefish/soroban-block-explorer-web" libs/ui/src/` returns 0 hits                                                                                                                  |
+| `libs/api-types` has no dependency on `libs/ui` or `web/` | ✓      | Same grep returns 0; package.json verified — only `@hey-api/openapi-ts` runtime deps                                                                                                                             |
+| Each page-level component extractable independently       | ✓      | Each `*Page.tsx` is a leaf — composes child sections that take only `poolId`/`accountId`/etc. as props (verified pool-detail: `PoolKpiStrip({pool})`, `PoolParticipants({poolId})`, etc.)                        |
+| Prop drilling >3 levels                                   | ✓      | Sampled pool-detail: max 2 levels (Page → SectionCard → leaf). Asset-detail / contract-detail similar. No deep drilling.                                                                                         |
+| Global state usage justified                              | ✓      | Only 1 `createContext` in app code: `libs/ui/src/theme/ThemeProvider.tsx:26` — ColorModeContext (light/dark mode). No app-level global state. TanStack QueryClient is the only "global" store, which is correct. |
+| Each custom hook single responsibility                    | ✓      | Sampled: `useCursorPagination` (URL ↔ cursor), `usePageHandlers` (response → button state), `useDetailMode` (URL ↔ mode tab), `useTableUrlState` (URL serialization). Each has one job.                          |
+| No cycles between modules                                 | ✓      | `libs/ui` ←→ `libs/api-types` independent. `web/` depends on both. No back-edges. (Nx graph generation timed out locally; relied on grep direction analysis.)                                                    |
+| API client single entry point                             | ✓      | `web/src/api/` is the single layer. All hooks (`useLedgersList`, `useAssetsList`, etc.) import from generated client. No raw `fetch` / `axios` in app (verified).                                                |
 
 ## Findings
 

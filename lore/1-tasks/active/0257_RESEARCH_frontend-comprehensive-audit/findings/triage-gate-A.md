@@ -19,6 +19,7 @@ Per task README "Triage gates" section:
 ## Wave 4 sub-phases at risk
 
 Wave 4 runs:
+
 1. **1.5 state coverage matrix** 14×9 = 126 cells (Playwright marathon)
 2. **1.6 console + error handling** across all routes
 3. **1.9 + 1.9b** component reuse + coupling (grep-heavy)
@@ -31,33 +32,33 @@ A finding becomes Gate A fix-first only if it changes what these sub-phases meas
 
 ## Class A — baseline-breakers (5 findings)
 
-| ID | Finding | Cascade if NOT fixed | Decision | Rationale |
-|---|---|---|---|---|
-| **F-AQ-1** 🟠 | `noUncheckedIndexedAccess` off in `tsconfig.base.json` | Toggling mid-audit regenerates tsc errors → 1.11/1.11b baseline invalid | **DEFER (Phase 3 refactor task)** | Audit MEASURES current "flag off" baseline. Toggling = refactor scope, not Gate A. Spawn dedicated task post-audit: enable flag, fix new errors, separate PR. |
-| **F-AQ-4** 🟠 | Zero branded ID types (`AccountId` / `AssetId` / `PoolId` / etc.) | None for Wave 4 (1.15 inspects display patterns, not type-level) | **DEFER (Gate B refactor task)** | Type-system refactor, not measurement question. Gate B can decide if it bundles with 1.10/10b senior craft findings. |
-| **F-AI-1 + F-AI-2** 🟠 | Main bundle 594KB / LP chunk 313KB | None for Wave 4 (perf is 2.2 = Wave 6) | **DEFER (Gate B)** | Wave 4 doesn't measure bundle. Gate B re-snapshots for Wave 6 baseline. |
-| **DM-1** 🟠 | `Footer.tsx:78-102` hardcoded "All systems operational" | Confirms 2.3 V live indicator finding (Wave 6) but doesn't break Wave 4 | **DOCUMENT BASELINE + DEFER (Gate B)** | Audit baseline = "footer indicator is hardcoded, no health probe". 2.3 V will cite this. Fix-first = single-PR refactor (introduce `/health` probe + indicator state), but doesn't unlock Wave 4 anything. |
-| **F-AF-1** 🟡 | `client.ts:11-29` error interceptor flattens typed `ErrorEnvelope` | 1.6 console error handling sees flattened `Error` not typed `code` discriminant — partial measurement loss | **ACCEPT BASELINE + NOTE IN 1.6** | Document in Wave 4 1.6 output: "error-state taxonomy measured at consumer level, not interceptor level". Fix-first not justified; refactor in Phase 3 with typed `extractErrorCode()` helper. |
+| ID                     | Finding                                                            | Cascade if NOT fixed                                                                                       | Decision                               | Rationale                                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **F-AQ-1** 🟠          | `noUncheckedIndexedAccess` off in `tsconfig.base.json`             | Toggling mid-audit regenerates tsc errors → 1.11/1.11b baseline invalid                                    | **DEFER (Phase 3 refactor task)**      | Audit MEASURES current "flag off" baseline. Toggling = refactor scope, not Gate A. Spawn dedicated task post-audit: enable flag, fix new errors, separate PR.                                              |
+| **F-AQ-4** 🟠          | Zero branded ID types (`AccountId` / `AssetId` / `PoolId` / etc.)  | None for Wave 4 (1.15 inspects display patterns, not type-level)                                           | **DEFER (Gate B refactor task)**       | Type-system refactor, not measurement question. Gate B can decide if it bundles with 1.10/10b senior craft findings.                                                                                       |
+| **F-AI-1 + F-AI-2** 🟠 | Main bundle 594KB / LP chunk 313KB                                 | None for Wave 4 (perf is 2.2 = Wave 6)                                                                     | **DEFER (Gate B)**                     | Wave 4 doesn't measure bundle. Gate B re-snapshots for Wave 6 baseline.                                                                                                                                    |
+| **DM-1** 🟠            | `Footer.tsx:78-102` hardcoded "All systems operational"            | Confirms 2.3 V live indicator finding (Wave 6) but doesn't break Wave 4                                    | **DOCUMENT BASELINE + DEFER (Gate B)** | Audit baseline = "footer indicator is hardcoded, no health probe". 2.3 V will cite this. Fix-first = single-PR refactor (introduce `/health` probe + indicator state), but doesn't unlock Wave 4 anything. |
+| **F-AF-1** 🟡          | `client.ts:11-29` error interceptor flattens typed `ErrorEnvelope` | 1.6 console error handling sees flattened `Error` not typed `code` discriminant — partial measurement loss | **ACCEPT BASELINE + NOTE IN 1.6**      | Document in Wave 4 1.6 output: "error-state taxonomy measured at consumer level, not interceptor level". Fix-first not justified; refactor in Phase 3 with typed `extractErrorCode()` helper.              |
 
 ## Class B — routing/contract that affects Wave 4 (3 fix-first candidates)
 
-| ID | Finding | Wave 4 impact | Decision |
-|---|---|---|---|
-| **F-E-1** 🔴 | Pagination cursor never written to URL on `/transactions` + `/ledgers` Next-click | **1.5 cells D2/D9 on every list page** become unreliable: "success state" matrix can't validate URL-restorable pagination; D9 "stale polling indicator" tied to cursor refresh path | **FIX-FIRST** ✅ Single highest-value Gate A item. Spawn `audit-blocker` task. Without fix, 1.5 records "URL state broken across all list pages" 14 times. |
-| **F-K-1 + A1** 🟠 | `/transactions/:hash` renders 14-line stub (`PageStub`), no validation | **1.5 entire E3 row (9 cells) becomes N/A**; 1.6 E3 console blank; 1.7 every tx-link landing E3 = stub-by-design; 2.0/2.1/2.4 E3 = N/A on Track 2 | **RESOLVED 2026-05-25:** 0070+0071 in-flight by FilipDz (local-only, unpushed). Path B (document baseline + delta-audit post-merge). Skip E3 row across all matrix sub-phases with `N/A — gated on FilipDz merge` markers. See action item #3 below for full plan. |
-| **F-E-2** 🟠 | Lowercase `?op=invoke_host_function` from URL → MUI warning + API 400 + 0 rows; `normalizeOperationType` doesn't normalize URL input | **1.6 console** registers API 400 on every Next-click during 1.5 marathon → 100+ false-positive console errors during Playwright pass | **FIX-FIRST** ✅ Single-file fix (`normalizeOperationType` at URL parse boundary). Without it, 1.6 baseline polluted by reproducible API 400 noise that masks real console findings. |
+| ID                | Finding                                                                                                                              | Wave 4 impact                                                                                                                                                                       | Decision                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **F-E-1** 🔴      | Pagination cursor never written to URL on `/transactions` + `/ledgers` Next-click                                                    | **1.5 cells D2/D9 on every list page** become unreliable: "success state" matrix can't validate URL-restorable pagination; D9 "stale polling indicator" tied to cursor refresh path | **FIX-FIRST** ✅ Single highest-value Gate A item. Spawn `audit-blocker` task. Without fix, 1.5 records "URL state broken across all list pages" 14 times.                                                                                                         |
+| **F-K-1 + A1** 🟠 | `/transactions/:hash` renders 14-line stub (`PageStub`), no validation                                                               | **1.5 entire E3 row (9 cells) becomes N/A**; 1.6 E3 console blank; 1.7 every tx-link landing E3 = stub-by-design; 2.0/2.1/2.4 E3 = N/A on Track 2                                   | **RESOLVED 2026-05-25:** 0070+0071 in-flight by FilipDz (local-only, unpushed). Path B (document baseline + delta-audit post-merge). Skip E3 row across all matrix sub-phases with `N/A — gated on FilipDz merge` markers. See action item #3 below for full plan. |
+| **F-E-2** 🟠      | Lowercase `?op=invoke_host_function` from URL → MUI warning + API 400 + 0 rows; `normalizeOperationType` doesn't normalize URL input | **1.6 console** registers API 400 on every Next-click during 1.5 marathon → 100+ false-positive console errors during Playwright pass                                               | **FIX-FIRST** ✅ Single-file fix (`normalizeOperationType` at URL parse boundary). Without it, 1.6 baseline polluted by reproducible API 400 noise that masks real console findings.                                                                               |
 
 ## Class B — defer to Gate B (Track 2 impact only)
 
 Listed for the record; no Gate A action.
 
-| ID | Finding | Why Gate B |
-|---|---|---|
-| F-K-2 + F-K-3 🟠 | Pool detail reserve labels + participants "Since ledger" no `<a href>` | 1.7 already done (Wave 3); affects 2.0 Track 2 only |
-| F-L-1 + F-K-4 🟠 | Pool strkey (`L...`) search → 0 results across 6 tabs; strkey↔hex unified canonicalisation | 1.14 already done; affects 2.0 search Track 2 |
-| F-E-3, F-E-8 🟡 | URL state edge cases | 2.0 Track 2 measures real-world UX impact |
-| F-I-3 🟡 | Polling cache logic gap | 2.0 / 2.2 Track 2 |
-| C-5 🟠 | Missing `isAssetId` / `isNftId` validator | Routing-level refactor; Gate B with type-safety refactors |
+| ID               | Finding                                                                                    | Why Gate B                                                |
+| ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| F-K-2 + F-K-3 🟠 | Pool detail reserve labels + participants "Since ledger" no `<a href>`                     | 1.7 already done (Wave 3); affects 2.0 Track 2 only       |
+| F-L-1 + F-K-4 🟠 | Pool strkey (`L...`) search → 0 results across 6 tabs; strkey↔hex unified canonicalisation | 1.14 already done; affects 2.0 search Track 2             |
+| F-E-3, F-E-8 🟡  | URL state edge cases                                                                       | 2.0 Track 2 measures real-world UX impact                 |
+| F-I-3 🟡         | Polling cache logic gap                                                                    | 2.0 / 2.2 Track 2                                         |
+| C-5 🟠           | Missing `isAssetId` / `isNftId` validator                                                  | Routing-level refactor; Gate B with type-safety refactors |
 
 ## Class C — defer to Gate B (visual/layout)
 
@@ -90,24 +91,24 @@ Exact list = every Wave 1-3 finding tagged `[Class D]`.
 
 ## Class E — off-band immediate (2 actions)
 
-| ID | Finding | Action | Blocks Gate A? |
-|---|---|---|---|
-| **F-CO-1** 🟠 | Vite 7.3.1 has 3 high-severity dev-server CVEs (path traversal, fs-deny bypass, arbitrary file read via WebSocket); fix at 7.3.3 | **Spawn dedicated `XXXX_CHORE_vite-7.3.3-cve-bump.md` backlog task → promote → merge → audit branch rebase**. Single-line dependency bump. | **No.** Off-band. Wave 4 can start without waiting. |
-| **C-17** 🟠 | No `tower_http::cors::CorsLayer` in `crates/api/src/` — prod browser CORS depends on infra (API GW / ALB) terminating | **Open ticket with infra owner: confirm CORS termination at infra layer OR add `CorsLayer` to API**. Audit cannot resolve unilaterally. | **No.** Out of FE audit scope. Document, route to backend/infra. |
+| ID            | Finding                                                                                                                          | Action                                                                                                                                     | Blocks Gate A?                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| **F-CO-1** 🟠 | Vite 7.3.1 has 3 high-severity dev-server CVEs (path traversal, fs-deny bypass, arbitrary file read via WebSocket); fix at 7.3.3 | **Spawn dedicated `XXXX_CHORE_vite-7.3.3-cve-bump.md` backlog task → promote → merge → audit branch rebase**. Single-line dependency bump. | **No.** Off-band. Wave 4 can start without waiting.              |
+| **C-17** 🟠   | No `tower_http::cors::CorsLayer` in `crates/api/src/` — prod browser CORS depends on infra (API GW / ALB) terminating            | **Open ticket with infra owner: confirm CORS termination at infra layer OR add `CorsLayer` to API**. Audit cannot resolve unilaterally.    | **No.** Out of FE audit scope. Document, route to backend/infra. |
 
 ---
 
 ## Summary table
 
-| Class | Total | Fix-first @ A | Defer to B | Defer to Phase 3 | Off-band immediate |
-|---|---:|---:|---:|---:|---:|
-| A | 5 | 0 | 3 | 2 | 0 |
-| B (Wave 4 impact) | 3 | **3** | 0 | 0 | 0 |
-| B (Track 2 only) | 6 | 0 | 6 | 0 | 0 |
-| C | 5 | 0 | 5 | 0 | 0 |
-| D | ~22 | 0 | 0 | ~22 | 0 |
-| E | 2 | 0 | 0 | 0 | 2 |
-| **Total** | **~43** | **3** | **14** | **~24** | **2** |
+| Class             |   Total | Fix-first @ A | Defer to B | Defer to Phase 3 | Off-band immediate |
+| ----------------- | ------: | ------------: | ---------: | ---------------: | -----------------: |
+| A                 |       5 |             0 |          3 |                2 |                  0 |
+| B (Wave 4 impact) |       3 |         **3** |          0 |                0 |                  0 |
+| B (Track 2 only)  |       6 |             0 |          6 |                0 |                  0 |
+| C                 |       5 |             0 |          5 |                0 |                  0 |
+| D                 |     ~22 |             0 |          0 |              ~22 |                  0 |
+| E                 |       2 |             0 |          0 |                0 |                  2 |
+| **Total**         | **~43** |         **3** |     **14** |          **~24** |              **2** |
 
 (Remaining ~46 of ~89 actionable findings are LOW severity catalog/nit items — all defer to Phase 3 by default.)
 
@@ -116,6 +117,7 @@ Exact list = every Wave 1-3 finding tagged `[Class D]`.
 Three `audit-blocker`-tagged backlog tasks to spawn + land before Wave 4 starts:
 
 1. **`XXXX_BUG_url-cursor-not-written.md`** — F-E-1
+
    - **Class:** B
    - **Severity:** 🔴 CRITICAL
    - **Scope:** `web/src/pages/.../useTableUrlState` (and consumers on `/transactions`, `/ledgers`, every list page) — confirm cursor write path on Next-click, fix to persist `?cursor=...` in URL.
@@ -123,6 +125,7 @@ Three `audit-blocker`-tagged backlog tasks to spawn + land before Wave 4 starts:
    - **Related:** 0257 (this audit)
 
 2. **`XXXX_BUG_url-op-filter-case-normalise.md`** — F-E-2
+
    - **Class:** B
    - **Severity:** 🟠 HIGH
    - **Scope:** `web/src/pages/transactions/operationTypes.ts` — `normalizeOperationType` to canonicalise URL input before API call.
@@ -142,12 +145,7 @@ Three `audit-blocker`-tagged backlog tasks to spawn + land before Wave 4 starts:
      pre-merge).
    - **Wave 4 + Track 2 baseline:** E3 row skipped across all matrix
      sub-phases. Pre-populate output files with `N/A — gated on 0070+0071
-     (FilipDz in-flight, local-only)` markers in:
-     - 1.5 `findings/D-state-coverage-matrix.csv` — 9 N/A cells for E3 row
-     - 1.6 `findings/M-AE-console-error-handling.md` — E3 section "N/A pending merge"
-     - 2.0 `findings/playwright-pass/E3-transactions-detail.md` — header note "deferred"
-     - 2.1 `findings/B-figma-fidelity.md` — E3 section "N/A pending merge"
-     - 2.4 `findings/R-responsive-matrix.csv` — 3 N/A cells for E3 row
+(FilipDz in-flight, local-only)` markers in: - 1.5 `findings/D-state-coverage-matrix.csv` — 9 N/A cells for E3 row - 1.6 `findings/M-AE-console-error-handling.md` — E3 section "N/A pending merge" - 2.0 `findings/playwright-pass/E3-transactions-detail.md` — header note "deferred" - 2.1 `findings/B-figma-fidelity.md` — E3 section "N/A pending merge" - 2.4 `findings/R-responsive-matrix.csv` — 3 N/A cells for E3 row
    - **Effective matrix:** 1.5 = 13×9 = 117 measurable cells; 2.4 = 13×3 = 39 measurable cells.
    - **Delta-audit post-merge** (separate ~1.5h session, single Playwright run):
      - E3: 9 cells 1.5 + 1.6 console + 1.7 cross-entity links FROM E3 (ops table → assets/contracts/accounts) + 2.0 visual + 2.1 Figma + 2.4 responsive 3 cells.
@@ -178,6 +176,7 @@ Plus 1 off-band routing (no spawn, just communication):
 ## Anti-pattern reminder (per task README)
 
 Do NOT fix-first at Gate A:
+
 - Lore drift (0066) — batch in 1.18 / Phase 3
 - Style / comment nits — Phase 3 batch PR
 - Doc-only updates — Phase 3
@@ -201,6 +200,7 @@ scope queued (see worklog Phase 4 re-audit queue).
 matrix restored to 1.5 = 14×9 = 126 cells; 2.4 = 14×3 = 42 cells.
 
 **Severity escalations from post-merge findings:**
+
 - J-4 (STROOPS_PER_XLM gap) bumps 🟡 → 🟠 HIGH (duplicate realised in tx-detail)
 - J-7 (truncation re-impls) bumps 🟡 → 🟠 HIGH (count went from 2 → 6)
 - F-J-16 NEW 🟠 HIGH (duplicate `formatFee` function)
@@ -212,17 +212,18 @@ all are Class B/C deferrable to Gate B.
 
 ## Post-merge update 2026-05-25 (0254 merge @ 6af74d82) — develop @ 68b40058
 
-**Karol's 0254 branch (direction-aware cursor pagination + prev_cursor
-+ ADR 0008 amendment + test suite) merged into audit branch.**
+\*\*Karol's 0254 branch (direction-aware cursor pagination + prev_cursor
+
+- ADR 0008 amendment + test suite) merged into audit branch.\*\*
 
 ### Fix-first scope after merge: **2 items → 0 items** (1 resolved + 1 dropped)
 
-| Item | Pre-merge state | Post-merge verdict |
-|---|---|---|
-| F-E-1 (URL cursor not written) | 🔴 fix-first audit-blocker | **RESOLVED** via `f646047d` (FE prev-stack drop + wire backend `prev_cursor`) + `78345d49` (backend direction-aware cursor). See `findings/E-url-state-functional.md` Post-merge update section. |
+| Item                           | Pre-merge state            | Post-merge verdict                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-E-1 (URL cursor not written) | 🔴 fix-first audit-blocker | **RESOLVED** via `f646047d` (FE prev-stack drop + wire backend `prev_cursor`) + `78345d49` (backend direction-aware cursor). See `findings/E-url-state-functional.md` Post-merge update section.                                                                                                                                                                                                                                                                |
 | F-E-2 (lowercase op normalise) | 🟠 fix-first audit-blocker | **DROPPED 2026-05-25** — per user senior design call: "URL to URL i po prostu powinien być poprawny i tyle." Re-classified as ACCEPT BASELINE (URL = wire contract, FE owns canonicalisation only for URLs it produces; malformed external input → API 400 = expected REST behavior). Task file `0262_BUG_url-op-filter-case-normalise.md` moved to `.trash/`. See `findings/E-url-state-functional.md` F-E-2 section for full rationale + Wave 4 implications. |
-| Vite 7.3.3 CVE bump | Class E off-band | STILL STANDS (`@vitejs/plugin-react@7.3.1` unchanged in merge) |
-| CORS infra comm | Class E off-band | STILL STANDS |
+| Vite 7.3.3 CVE bump            | Class E off-band           | STILL STANDS (`@vitejs/plugin-react@7.3.1` unchanged in merge)                                                                                                                                                                                                                                                                                                                                                                                                  |
+| CORS infra comm                | Class E off-band           | STILL STANDS                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ### Cascade impact
 
@@ -239,23 +240,23 @@ all are Class B/C deferrable to Gate B.
 
 ### New audit-surface from 0254
 
-| Concern | Status |
-|---|---|
-| `cursor` → `next_cursor` rename (BREAKING wire format) | FE consumers all updated; `tsc` green (0 errors); no stale `.cursor` references in `web/src` or `libs/ui` consumer code (the 2 hits in `useCursorPagination.ts` are `state.cursor` for URL-local cursor, intentional). |
-| `prev_cursor` field added | Wired via `usePageHandlers.ts:48` (`page?.prev_cursor ?? null`). |
-| `has_more` dropped | No consumer accesses `.has_more` anywhere in `web/src/` (grep clean). |
-| ADR 0008 amendment | Read; canonical URL state expectation = `?cursor=<token>` (single key per section), opaque base64-JSON. No FE-visible discontinuity. |
-| Backend changes (handlers / queries / cursor.rs / pagination.rs) | Out of FE audit scope; ripple effects covered by FE-side wire shape verification above. |
-| Integration test suite `crates/api/src/tests_integration.rs` (+544 LOC) | Out of FE audit scope. Mentioned in 0254 README "defer test suite to 0257" — 0257 does NOT inherit backend test work, it inherits the verified-via-tests FE wire contract. |
+| Concern                                                                 | Status                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cursor` → `next_cursor` rename (BREAKING wire format)                  | FE consumers all updated; `tsc` green (0 errors); no stale `.cursor` references in `web/src` or `libs/ui` consumer code (the 2 hits in `useCursorPagination.ts` are `state.cursor` for URL-local cursor, intentional). |
+| `prev_cursor` field added                                               | Wired via `usePageHandlers.ts:48` (`page?.prev_cursor ?? null`).                                                                                                                                                       |
+| `has_more` dropped                                                      | No consumer accesses `.has_more` anywhere in `web/src/` (grep clean).                                                                                                                                                  |
+| ADR 0008 amendment                                                      | Read; canonical URL state expectation = `?cursor=<token>` (single key per section), opaque base64-JSON. No FE-visible discontinuity.                                                                                   |
+| Backend changes (handlers / queries / cursor.rs / pagination.rs)        | Out of FE audit scope; ripple effects covered by FE-side wire shape verification above.                                                                                                                                |
+| Integration test suite `crates/api/src/tests_integration.rs` (+544 LOC) | Out of FE audit scope. Mentioned in 0254 README "defer test suite to 0257" — 0257 does NOT inherit backend test work, it inherits the verified-via-tests FE wire contract.                                             |
 
 ### Bundle delta post-merge
 
-| Chunk | Pre-merge (post FilipDz) | Post-0254 merge | Delta |
-|---|---:|---:|---:|
-| main `index-*.js` | 596.20 KB / 189.36 KB gz | 596.20 KB / 189.37 KB gz | +0 raw / +0.01 KB gz (noise) |
-| `LiquidityPoolDetailPage-*.js` | 307.12 KB / 93.81 KB gz | 307.15 KB / 93.81 KB gz | +0.03 KB raw / 0 gz |
-| `TransactionDetailPage-*.js` | 29.97 KB / 9.13 KB gz | 29.97 KB / 9.13 KB gz | 0 / 0 |
-| `usePageHandlers-*.js` | n/a (not separately chunked before) | 2.35 KB / 1.16 KB gz | NEW chunk — page handlers now shared across all paginated pages |
+| Chunk                          |            Pre-merge (post FilipDz) |          Post-0254 merge |                                                           Delta |
+| ------------------------------ | ----------------------------------: | -----------------------: | --------------------------------------------------------------: |
+| main `index-*.js`              |            596.20 KB / 189.36 KB gz | 596.20 KB / 189.37 KB gz |                                    +0 raw / +0.01 KB gz (noise) |
+| `LiquidityPoolDetailPage-*.js` |             307.12 KB / 93.81 KB gz |  307.15 KB / 93.81 KB gz |                                             +0.03 KB raw / 0 gz |
+| `TransactionDetailPage-*.js`   |               29.97 KB / 9.13 KB gz |    29.97 KB / 9.13 KB gz |                                                           0 / 0 |
+| `usePageHandlers-*.js`         | n/a (not separately chunked before) |     2.35 KB / 1.16 KB gz | NEW chunk — page handlers now shared across all paginated pages |
 
 F-AI-1, F-AI-2 STILL STAND at same numbers. New `usePageHandlers`
 shared chunk is a small reuse improvement (was previously inlined per
@@ -263,32 +264,32 @@ page; now extracted).
 
 ### Deterministic delta check results
 
-| Check | Result |
-|---|---|
-| `nx run-many -t typecheck` | exit 0, 0 errors (baseline holds; `cursor` → `next_cursor` rename caught zero consumer drift) |
-| `nx run-many -t lint` | 1 problem (0 errors, 1 warning) — same `assetColor.ts:131` baseline |
-| `nx build web` | exit 0, 2.23s, bundle deltas above |
+| Check                                                              | Result                                                                                                                                                |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------ |
+| `nx run-many -t typecheck`                                         | exit 0, 0 errors (baseline holds; `cursor` → `next_cursor` rename caught zero consumer drift)                                                         |
+| `nx run-many -t lint`                                              | 1 problem (0 errors, 1 warning) — same `assetColor.ts:131` baseline                                                                                   |
+| `nx build web`                                                     | exit 0, 2.23s, bundle deltas above                                                                                                                    |
 | `grep -rnE "\.cursor\b" web/src libs/ui/src` (excluding generated) | 2 hits in `useCursorPagination.ts:22,118` — both `state.cursor` (URL-local cursor read), intentional. Zero stale refs to old `page.cursor` API shape. |
-| `grep -rnE "\.has_more\b" web/src libs/ui/src` | 0 hits — clean rename. |
-| `grep -rnE "\.next_cursor\b|\.prev_cursor\b" libs/ui/src` | 4 hits, all in `usePageHandlers.ts:47-50` (correct single consumer). |
-| `grep "as any|@ts-ignore|@ts-expect-error" <touched files>` | 0 hits |
-| `grep "fetch\(|axios" <touched files>` | 0 raw fetches (5 `refetch()` from TanStack — false positive) |
+| `grep -rnE "\.has_more\b" web/src libs/ui/src`                     | 0 hits — clean rename.                                                                                                                                |
+| `grep -rnE "\.next_cursor\b                                        | \.prev_cursor\b" libs/ui/src`                                                                                                                         | 4 hits, all in `usePageHandlers.ts:47-50` (correct single consumer). |
+| `grep "as any                                                      | @ts-ignore                                                                                                                                            | @ts-expect-error" <touched files>`                                   | 0 hits |
+| `grep "fetch\(                                                     | axios" <touched files>`                                                                                                                               | 0 raw fetches (5 `refetch()` from TanStack — false positive)         |
 
 ### Re-audit queue (work absorbed into Wave 4)
 
-| Sub-phase | Scope | Effort | Priority |
-|---|---|---:|---|
-| 1.1 OpenAPI adherence | Verify regenerated `types.gen.ts` shape vs `openapi.json`; check no manual fetches in touched files (done above) | 5 min | Wave 4 |
-| 1.4 API consistency | `cursor` → `next_cursor` rename consistency (done above — clean) | 0 (done) | done |
-| 1.5 D2/D9 cells for E2/E4/E7/E10/E12 (list pages) | Re-verify pagination URL contract on Next + Prev + refresh + deep-link, per list page | 30 min Playwright | **Wave 4** |
-| 1.5 D2/D9 cells for tab tables (E6, E8, E9, E11, E13) | Same scope on `?cursor_p=` / `?cursor_e=` / `?cursor_i=` per-section cursors | 25 min Playwright | Wave 4 |
-| 1.6 console | F-E-2 DROPPED per design decision. Any API 400 from malformed `?op=` is expected baseline (user error, not FE bug). Record context note, do NOT log as console finding. | 0 (no new scope) | Wave 4 |
-| 1.7 cross-entity links | List page row link rendering untouched by 0254 | 0 (no new scope) | done |
-| 1.9 component reuse | `usePageHandlers` now extracted shared chunk — uniform usage across 13 pages. Confirms hook is the right level of abstraction. | 5 min | Wave 4 |
-| 1.11 P / 1.11b AQ | Re-ran (done above — baseline holds) | 0 (done) | done |
-| 1.13 URL state | F-E-1 resolved; F-E-2 + F-E-3 + F-E-7 still stand | 0 (done in this pass) | done |
-| 1.16 bundle | Delta captured above | 0 (done) | done |
-| 1.18 Q+AR lore | ADR 0008 amendment + 0254 archive: check task close metadata for completeness | 10 min | Wave 4 |
+| Sub-phase                                             | Scope                                                                                                                                                                   |                Effort | Priority   |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------: | ---------- |
+| 1.1 OpenAPI adherence                                 | Verify regenerated `types.gen.ts` shape vs `openapi.json`; check no manual fetches in touched files (done above)                                                        |                 5 min | Wave 4     |
+| 1.4 API consistency                                   | `cursor` → `next_cursor` rename consistency (done above — clean)                                                                                                        |              0 (done) | done       |
+| 1.5 D2/D9 cells for E2/E4/E7/E10/E12 (list pages)     | Re-verify pagination URL contract on Next + Prev + refresh + deep-link, per list page                                                                                   |     30 min Playwright | **Wave 4** |
+| 1.5 D2/D9 cells for tab tables (E6, E8, E9, E11, E13) | Same scope on `?cursor_p=` / `?cursor_e=` / `?cursor_i=` per-section cursors                                                                                            |     25 min Playwright | Wave 4     |
+| 1.6 console                                           | F-E-2 DROPPED per design decision. Any API 400 from malformed `?op=` is expected baseline (user error, not FE bug). Record context note, do NOT log as console finding. |      0 (no new scope) | Wave 4     |
+| 1.7 cross-entity links                                | List page row link rendering untouched by 0254                                                                                                                          |      0 (no new scope) | done       |
+| 1.9 component reuse                                   | `usePageHandlers` now extracted shared chunk — uniform usage across 13 pages. Confirms hook is the right level of abstraction.                                          |                 5 min | Wave 4     |
+| 1.11 P / 1.11b AQ                                     | Re-ran (done above — baseline holds)                                                                                                                                    |              0 (done) | done       |
+| 1.13 URL state                                        | F-E-1 resolved; F-E-2 + F-E-3 + F-E-7 still stand                                                                                                                       | 0 (done in this pass) | done       |
+| 1.16 bundle                                           | Delta captured above                                                                                                                                                    |              0 (done) | done       |
+| 1.18 Q+AR lore                                        | ADR 0008 amendment + 0254 archive: check task close metadata for completeness                                                                                           |                10 min | Wave 4     |
 
 **Total delta-audit effort: ~75 min**, all absorbable into Wave 4
 baseline. No separate session required.

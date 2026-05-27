@@ -4,23 +4,23 @@ CSV: `R-responsive-matrix.csv` (42 cells, ASCII glyphs ✓/⚠/✗/?).
 
 ## Aggregate
 
-| Result | Count | %  |
-|---|---:|---:|
-| ✓ (correct)   | 14 | 33% |
-| ⚠ (partial)   | 11 | 26% |
-| ✗ (broken)    | 11 | 26% |
-| ? (untested)  | 6  | 14% |
-| **Total**     | 42 | 100% |
+| Result       | Count |    % |
+| ------------ | ----: | ---: |
+| ✓ (correct)  |    14 |  33% |
+| ⚠ (partial)  |    11 |  26% |
+| ✗ (broken)   |    11 |  26% |
+| ? (untested) |     6 |  14% |
+| **Total**    |    42 | 100% |
 
 Of 36 tested cells: 14 ✓ / 11 ⚠ / 11 ✗ → **22 / 36 (61%) NOT clean**.
 
 ## Per-breakpoint
 
-| Breakpoint | ✓ | ⚠ | ✗ | ? |
-|---|---:|---:|---:|---:|
-| 375 mobile   | 0  | 0  | 11 | 3 |
-| 768 tablet   | 0  | 11 | 0  | 3 |
-| 1280 desktop | 14 | 0  | 0  | 0 |
+| Breakpoint   |   ✓ |   ⚠ |   ✗ |   ? |
+| ------------ | --: | --: | --: | --: |
+| 375 mobile   |   0 |   0 |  11 |   3 |
+| 768 tablet   |   0 |  11 |   0 |   3 |
+| 1280 desktop |  14 |   0 |   0 |   0 |
 
 **Pattern:** desktop pristine; tablet uniformly degraded (page horiz-scroll); mobile uniformly broken.
 
@@ -38,6 +38,7 @@ Mechanism (observed via JS evaluation in browser DevTools at 375 + 768 viewports
 Result: every route shows page-level horizontal scrollbar on mobile (severe usability) and a smaller horizontal scrollbar on tablet (still annoying — content barely fits, edge-clipping risk).
 
 **Likely fix sites:**
+
 - `web/src/router/AppShell.tsx`: check `Container maxWidth` / `Box minWidth` settings
 - `libs/ui/src/layout/HeaderStatsStrip.tsx`: 4 stats inline — if `flex-wrap: nowrap` it forces min-width
 
@@ -61,6 +62,7 @@ Sampled 30 button/link elements on home at 375 viewport: 7 measured <44px in bot
 ## Phase 3 spawn recommendation
 
 `XXXX_FEATURE_responsive-redesign-mobile-tablet.md`:
+
 - Audit + fix the 800px min-width root cause (1 file likely)
 - Add hamburger menu at <768
 - Add table → card transformation OR horizontal-scroll-with-shadow pattern for embedded tables

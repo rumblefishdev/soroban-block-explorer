@@ -30,6 +30,7 @@ the same ID, producing **2 stacked error blocks** on one page instead
 of a single clean NotFound.
 
 Scope corrected after research vs initial finding claim:
+
 - **Account** (E6): `<AccountTransactions/>` always mounts regardless
   of `account.isError` → 2 blocks
 - **Contract** (E9): `<ContractDetailPage>` uses tabs; only one tab
@@ -77,10 +78,12 @@ Cascade compression: ~4-6 duplicate Wave 6 Track 2 findings avoided.
 
 ```tsx
 // Before
-<AccountTransactions accountId={accountId} />
+<AccountTransactions accountId={accountId} />;
 
 // After (Approach B — render-level gating, matches AssetDetailPage.tsx:127)
-{!account.isError && <AccountTransactions accountId={accountId} />}
+{
+  !account.isError && <AccountTransactions accountId={accountId} />;
+}
 ```
 
 Or use `enabled` on the child hook (`useAccountTransactions.ts`):

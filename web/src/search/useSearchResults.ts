@@ -5,11 +5,16 @@ import { getSearchOptions } from '@rumblefish/api-types';
 import type {
   EntityType,
   SearchHit,
-  SearchResponse,
+  SearchResults,
 } from '@rumblefish/api-types';
 
 import { searchPolicy } from '../api/polling.js';
 import { useDebounced } from './useDebounced.js';
+
+// `/v1/search` returns a flat `SearchResults` payload — task 0271
+// dropped the previous `SearchResponse::Redirect` wire variant. The
+// FE inspects `totalCount` for the singleton-direct-navigation
+// behaviour (see SearchResultsPage useEffect).
 
 export const TAB_ORDER: ReadonlyArray<EntityType> = [
   'transaction',
@@ -32,13 +37,11 @@ export const ENTITY_LABEL: Record<EntityType, string> = {
 interface UseSearchResultsParams {
   q: string;
   debounceMs?: number;
-
-  treatRedirectAsResult?: boolean;
 }
 
 export interface SearchResultsState {
   effectiveQuery: string;
-  data: SearchResponse | undefined;
+  data: SearchResults | undefined;
   isFetching: boolean;
   isError: boolean;
   error: unknown;
@@ -49,22 +52,9 @@ export interface SearchResultsState {
   hitsForActiveTab: readonly SearchHit[];
 }
 
-const GROUP_KEY: Record<
-  EntityType,
-  'transactions' | 'accounts' | 'contracts' | 'assets' | 'nfts' | 'pools'
-> = {
-  transaction: 'transactions',
-  account: 'accounts',
-  contract: 'contracts',
-  asset: 'assets',
-  nft: 'nfts',
-  pool: 'pools',
-};
-
 export function useSearchResults({
   q,
   debounceMs = 300,
-  treatRedirectAsResult = false,
 }: UseSearchResultsParams): SearchResultsState {
   const debouncedRaw = useDebounced(q, debounceMs);
   const effectiveQuery = debouncedRaw.trim();
@@ -76,23 +66,7 @@ export function useSearchResults({
     enabled,
   });
 
-  const data = useMemo<SearchResponse | undefined>(() => {
-    if (!query.data) return undefined;
-    if (!treatRedirectAsResult || query.data.type !== 'redirect') {
-      return query.data;
-    }
-    const hit: SearchHit = {
-      entity_type: query.data.entity_type,
-      identifier: query.data.entity_id,
-      label: '',
-      successful: query.data.successful ?? null,
-      last_activity_at: query.data.last_activity_at ?? null,
-    };
-    return {
-      type: 'results',
-      groups: { [GROUP_KEY[query.data.entity_type]]: [hit] },
-    };
-  }, [query.data, treatRedirectAsResult]);
+  const data = query.data;
 
   const counts = useMemo<Record<EntityType, number>>(() => {
     const empty: Record<EntityType, number> = {
@@ -103,7 +77,7 @@ export function useSearchResults({
       nft: 0,
       pool: 0,
     };
-    if (!data || data.type !== 'results') return empty;
+    if (!data) return empty;
     const { groups } = data;
     return {
       transaction: groups.transactions?.length ?? 0,
@@ -127,7 +101,7 @@ export function useSearchResults({
   }, [enabled, query.isFetching, totalCount, counts, activeTab]);
 
   const hitsForActiveTab = useMemo<readonly SearchHit[]>(() => {
-    if (!data || data.type !== 'results') return [];
+    if (!data) return [];
     const { groups } = data;
     switch (activeTab) {
       case 'transaction':

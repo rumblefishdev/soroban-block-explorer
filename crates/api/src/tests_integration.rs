@@ -4228,6 +4228,79 @@ async fn search_cache_control_no_store_against_real_db() {
     assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
 }
 
+/// `GET /v1/search?q=<random 64-hex>` → broad search runs (no match
+/// → Results, empty groups). Locks in the option C refactor invariant
+/// (task 0271): the handler no longer short-circuits to `fetch_redirect`
+/// on shape-typed inputs — it always runs broad and only synthesizes
+/// `Redirect` when row count is exactly one.
+#[tokio::test]
+async fn search_random_hex_returns_results_not_redirect() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    // 64 chars of zero hex — vanishingly unlikely to exist in either
+    // `transaction_hash_index` or `liquidity_pools`. Both CTEs return
+    // zero rows ⇒ total == 0 ⇒ Results (with empty groups).
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v1/search?q=0000000000000000000000000000000000000000000000000000000000000000",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["type"], "results",
+        "non-existent hex input must not redirect (option C: row count drives wire shape)"
+    );
+}
+
+/// `GET /v1/search?q=<random full G-strkey>` → broad runs; non-existent
+/// account ⇒ no rows in `account_hits` ⇒ Results (empty groups), not
+/// Redirect. Complements the hex case above for the strkey channel.
+#[tokio::test]
+async fn search_random_full_g_strkey_returns_results_not_redirect() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+    // Valid SEP-23 G-strkey for the all-zero ed25519 pubkey. Standalone
+    // valid shape; live indexer has no realistic chance of carrying it.
+    let zero_account = stellar_strkey::ed25519::PublicKey([0u8; 32]).to_string();
+    let uri = format!("/v1/search?q={zero_account}");
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(uri.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["type"], "results",
+        "non-existent G-strkey must not redirect under option C"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Cursor matrix — direction-aware pagination (task 0254)
 //

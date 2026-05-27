@@ -7,33 +7,33 @@
 
 ## Per-check table
 
-| # | Check | Verdict | Evidence | Severity | Class |
-|---|---|---|---|---|---|
-| AA-1 | Abstractions used only once | ⚠ | See per-abstraction inventory below | 🟢 / 🟡 | D |
-| AA-2 | Generic types that could be concrete | ✓ | 1 generic in user code: `useIntersectionObserver<T extends Element = HTMLDivElement>` — justified (ref typing). No other unjustified generics. | — | — |
-| AA-3 | Design patterns (Factory/Strategy/Observer) without justification | ✓ | 0 hits for Factory/Strategy/Observer named patterns. Only `Provider` instances are `RouterProvider` (react-router), `QueryProvider` (TanStack), `ExplorerThemeProvider` (MUI theme) — all framework-required. | — | — |
-| AA-4 | State management library (Redux / Zustand) | ✓ | None. `package.json` has no `redux` / `zustand` / `jotai` / `mobx` / `recoil`. Only state libs: TanStack Query (server state), React Router (URL state via `useSearchParams` + `useTableUrlState` wrapper). **Senior choice — correctly resisted Redux defaultism.** | — | — |
-| AA-5 | Custom hooks where inline is clearer | partial | See F-AA-1 — `useDebounced.ts` is 5 LOC (inline-or-extract toss-up). Most other hooks have ≥2 consumers and earn their keep. | 🟢 | D |
-| AA-6 | Wrapper components without value | ✓ | No "<children/>"-only wrappers identified. `SectionCard` adds layout (chrome + padding + heading); `LazySection` adds intersection-observer gating; both have content. | — | — |
-| AA-7 | Utility functions called only once | partial | See per-utility consumer-count inventory | 🟢 | D |
+| #    | Check                                                             | Verdict | Evidence                                                                                                                                                                                                                                                             | Severity | Class |
+| ---- | ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| AA-1 | Abstractions used only once                                       | ⚠       | See per-abstraction inventory below                                                                                                                                                                                                                                  | 🟢 / 🟡  | D     |
+| AA-2 | Generic types that could be concrete                              | ✓       | 1 generic in user code: `useIntersectionObserver<T extends Element = HTMLDivElement>` — justified (ref typing). No other unjustified generics.                                                                                                                       | —        | —     |
+| AA-3 | Design patterns (Factory/Strategy/Observer) without justification | ✓       | 0 hits for Factory/Strategy/Observer named patterns. Only `Provider` instances are `RouterProvider` (react-router), `QueryProvider` (TanStack), `ExplorerThemeProvider` (MUI theme) — all framework-required.                                                        | —        | —     |
+| AA-4 | State management library (Redux / Zustand)                        | ✓       | None. `package.json` has no `redux` / `zustand` / `jotai` / `mobx` / `recoil`. Only state libs: TanStack Query (server state), React Router (URL state via `useSearchParams` + `useTableUrlState` wrapper). **Senior choice — correctly resisted Redux defaultism.** | —        | —     |
+| AA-5 | Custom hooks where inline is clearer                              | partial | See F-AA-1 — `useDebounced.ts` is 5 LOC (inline-or-extract toss-up). Most other hooks have ≥2 consumers and earn their keep.                                                                                                                                         | 🟢       | D     |
+| AA-6 | Wrapper components without value                                  | ✓       | No "<children/>"-only wrappers identified. `SectionCard` adds layout (chrome + padding + heading); `LazySection` adds intersection-observer gating; both have content.                                                                                               | —        | —     |
+| AA-7 | Utility functions called only once                                | partial | See per-utility consumer-count inventory                                                                                                                                                                                                                             | 🟢       | D     |
 
 ## Per-abstraction consumer-count audit
 
 ### Custom hooks
 
-| Hook | Location | Consumer count | Justified? |
-|---|---|---|---|
-| `useTableUrlState` | `libs/ui/src/table/useTableUrlState.ts` | 1 direct (via `useCursorPagination`) + 13 indirect via paginated list/tab pages | ✓ — Wave 4 EXTRA verdict KEEP; centralizes URL ↔ typed state + cursor invariant |
-| `useCursorPagination` | `libs/ui/src/table/useCursorPagination.ts` | ~13 pages (every paginated list + tab section) | ✓ |
-| `usePageHandlers` | `libs/ui/src/table/usePageHandlers.ts` | ~13 pages (same set) | ✓ — Wave 4 F-X-3 positive note (extracted shared chunk post-0254) |
-| `useTabUrlState` | `libs/ui/src/visualization/useTabUrlState.ts` | 5 consumers (`ContractDetailPage`, `Tabs.tsx`, etc.) | ✓ |
-| `useIntersectionObserver` | `libs/ui/src/visualization/useIntersectionObserver.ts` | 1 direct (`LazySection.tsx`) | ⚠ See F-AA-1 |
-| `useNow` | `libs/ui/src/timestamps/useNow.ts` | 2 (RelativeTimestamp, PollingIndicator) | ✓ |
-| `useDebounced` | `web/src/search/useDebounced.ts` (5 LOC) | 1 (`useSearchResults.ts`) | ⚠ See F-AA-1 |
-| `useDetailMode` | `web/src/pages/transaction-detail/useDetailMode.ts` | 1 (`transaction-detail/index.tsx`) | ✓ — page-local concern |
-| `useTxHashParam` | `web/src/pages/transaction-detail/useTxHashParam.ts` | 1 (`transaction-detail/index.tsx`) | ✓ — page-local validation/param helper |
-| `useColorMode` | `libs/ui/src/theme/ThemeProvider.tsx:65` | TBD (theme toggle) | ✓ — required by Provider/Consumer pattern |
-| 26× `useXxx` API hooks | `web/src/api/hooks/*.ts` | 1 each (per page) | ✓ — 1-per-endpoint is the convention; each is a thin TanStack `useQuery` wrapper, not overengineering |
+| Hook                      | Location                                               | Consumer count                                                                  | Justified?                                                                                            |
+| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `useTableUrlState`        | `libs/ui/src/table/useTableUrlState.ts`                | 1 direct (via `useCursorPagination`) + 13 indirect via paginated list/tab pages | ✓ — Wave 4 EXTRA verdict KEEP; centralizes URL ↔ typed state + cursor invariant                       |
+| `useCursorPagination`     | `libs/ui/src/table/useCursorPagination.ts`             | ~13 pages (every paginated list + tab section)                                  | ✓                                                                                                     |
+| `usePageHandlers`         | `libs/ui/src/table/usePageHandlers.ts`                 | ~13 pages (same set)                                                            | ✓ — Wave 4 F-X-3 positive note (extracted shared chunk post-0254)                                     |
+| `useTabUrlState`          | `libs/ui/src/visualization/useTabUrlState.ts`          | 5 consumers (`ContractDetailPage`, `Tabs.tsx`, etc.)                            | ✓                                                                                                     |
+| `useIntersectionObserver` | `libs/ui/src/visualization/useIntersectionObserver.ts` | 1 direct (`LazySection.tsx`)                                                    | ⚠ See F-AA-1                                                                                          |
+| `useNow`                  | `libs/ui/src/timestamps/useNow.ts`                     | 2 (RelativeTimestamp, PollingIndicator)                                         | ✓                                                                                                     |
+| `useDebounced`            | `web/src/search/useDebounced.ts` (5 LOC)               | 1 (`useSearchResults.ts`)                                                       | ⚠ See F-AA-1                                                                                          |
+| `useDetailMode`           | `web/src/pages/transaction-detail/useDetailMode.ts`    | 1 (`transaction-detail/index.tsx`)                                              | ✓ — page-local concern                                                                                |
+| `useTxHashParam`          | `web/src/pages/transaction-detail/useTxHashParam.ts`   | 1 (`transaction-detail/index.tsx`)                                              | ✓ — page-local validation/param helper                                                                |
+| `useColorMode`            | `libs/ui/src/theme/ThemeProvider.tsx:65`               | TBD (theme toggle)                                                              | ✓ — required by Provider/Consumer pattern                                                             |
+| 26× `useXxx` API hooks    | `web/src/api/hooks/*.ts`                               | 1 each (per page)                                                               | ✓ — 1-per-endpoint is the convention; each is a thin TanStack `useQuery` wrapper, not overengineering |
 
 **Verdict:** every custom hook has clear consumers. Single-consumer hooks (`useDetailMode`, `useTxHashParam`, API hooks) are page-local helpers — colocation is correct, not over-abstraction.
 
@@ -61,11 +61,11 @@ Justified — `Element` constraint allows the caller to type the ref correctly (
 
 Three single-consumer abstractions are inline-vs-extract toss-ups:
 
-| Abstraction | Consumer | Trim? |
-|---|---|---|
-| `useIntersectionObserver` | only `LazySection.tsx` | Either keep as exported (anticipates future consumers) or inline into `LazySection.tsx`. Since `LazySection` is itself a libs/ui-exported utility, future consumers may want raw observer access. Subjective. **Keep recommendation.** |
-| `useDebounced` (5 LOC) | only `useSearchResults.ts` | Trivial — 5 LOC, single call. Could be inlined into `useSearchResults`. But F-Y-2 finding identifies 4 NEW debounce-pattern sites that could consume an enriched `useDebounced` — keep + repurpose. |
-| `useTxHashParam` | only `transaction-detail/index.tsx` | Page-local helper; correctly colocated; not exported. ✓ keep |
+| Abstraction               | Consumer                            | Trim?                                                                                                                                                                                                                                  |
+| ------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useIntersectionObserver` | only `LazySection.tsx`              | Either keep as exported (anticipates future consumers) or inline into `LazySection.tsx`. Since `LazySection` is itself a libs/ui-exported utility, future consumers may want raw observer access. Subjective. **Keep recommendation.** |
+| `useDebounced` (5 LOC)    | only `useSearchResults.ts`          | Trivial — 5 LOC, single call. Could be inlined into `useSearchResults`. But F-Y-2 finding identifies 4 NEW debounce-pattern sites that could consume an enriched `useDebounced` — keep + repurpose.                                    |
+| `useTxHashParam`          | only `transaction-detail/index.tsx` | Page-local helper; correctly colocated; not exported. ✓ keep                                                                                                                                                                           |
 
 **Class:** D (informational; no fix).
 

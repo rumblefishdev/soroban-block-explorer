@@ -15,8 +15,15 @@ Single Playwright MCP session. Browser stays open. Captured snapshot at `/` then
 CA-1 + CA-2 fix-first task #4 from `triage-gate-B.md` **has NOT landed**. Footer evaluated on home + every other route:
 
 ```js
-footerDeadSpans: ['GitHub', 'Stellar docs', 'Soroban docs', 'Stellar dashboard',
-                  'Terms of Service', 'Privacy Policy', 'Cookies']
+footerDeadSpans: [
+  'GitHub',
+  'Stellar docs',
+  'Soroban docs',
+  'Stellar dashboard',
+  'Terms of Service',
+  'Privacy Policy',
+  'Cookies',
+];
 ```
 
 Each rendered as `<div>` / `<span>`, NOT `<a href=…>`. Confirms by DOM evaluation `el => !el.closest('a')`. Footer Explorer column (Home/Transactions/Ledgers/Assets/NFTs/Pools) IS linked — only Resources + Legal columns are dead.
@@ -42,9 +49,11 @@ At viewport 375px (iPhone SE-ish): `<nav>` shows all 6 links (Home / Transaction
 ### F-W6-E0-4 [Class C, Severity 🟡 MEDIUM] Header search field placeholder enumerates 4 entity types, page-search no-results hint enumerates 5
 
 `HeroSearch.tsx:22` + `libs/ui/src/layout/SearchInput.tsx:26`:
+
 > `'Search by TX hash, accounts, contract, token'`
 
 `SearchResultsView.tsx:99` no-results hint:
+
 > `'Try a full transaction hash, account address (G…), contract address (C…), liquidity pool (L…), or token code.'`
 
 Header copy omits NFTs and liquidity pools (5 of 6 categories the search tabs support). User won't discover the new L… support unless they paste an unsupported value first.
@@ -54,6 +63,7 @@ Header copy omits NFTs and liquidity pools (5 of 6 categories the search tabs su
 ### F-W6-E0-5 [Class B, Severity 🟢 LOW] Header polling duplicates home polling
 
 Network capture after 30 s on `/`:
+
 ```
 GET /v1/network/stats     ×4
 GET /v1/transactions?limit=10  ×4
@@ -68,14 +78,14 @@ Across all routes happy path: 1 `favicon.ico 404` (benign). All other console me
 
 ### Positive verifications (post-Gate-B baseline confirms)
 
-| Item | Status |
-|---|---|
-| F-L-1 (search L-strkey paste → redirect) | ✅ confirmed Wave 6 (see `E14-search.md`) |
-| F-K-4 (no-results hint lists L…) | ✅ partial (no-results path only; header placeholder + empty-state generic hint still don't enumerate prefixes) |
-| F-D-2 (composite NotFound single-block on E6/E9/E13) | ✅ confirmed (see `E6-`, `E9-`, `E13-` files) |
-| F-K-2 (pool reserve labels linked) | ✅ confirmed (see `E13-liquidity-pools-detail.md`) |
-| F-K-3 (pool "Since ledger" linked) | ✅ confirmed (see `E13-`) |
-| NFT route composite + search-click | ✅ confirmed (see `E11-`, `E14-`) |
-| bare digit → /ledgers/<seq> | ✅ confirmed (see `E14-`) |
+| Item                                                 | Status                                                                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| F-L-1 (search L-strkey paste → redirect)             | ✅ confirmed Wave 6 (see `E14-search.md`)                                                                       |
+| F-K-4 (no-results hint lists L…)                     | ✅ partial (no-results path only; header placeholder + empty-state generic hint still don't enumerate prefixes) |
+| F-D-2 (composite NotFound single-block on E6/E9/E13) | ✅ confirmed (see `E6-`, `E9-`, `E13-` files)                                                                   |
+| F-K-2 (pool reserve labels linked)                   | ✅ confirmed (see `E13-liquidity-pools-detail.md`)                                                              |
+| F-K-3 (pool "Since ledger" linked)                   | ✅ confirmed (see `E13-`)                                                                                       |
+| NFT route composite + search-click                   | ✅ confirmed (see `E11-`, `E14-`)                                                                               |
+| bare digit → /ledgers/<seq>                          | ✅ confirmed (see `E14-`)                                                                                       |
 
 No regressions.

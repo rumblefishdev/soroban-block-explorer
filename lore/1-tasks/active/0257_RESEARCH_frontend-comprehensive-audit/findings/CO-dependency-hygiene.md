@@ -8,73 +8,73 @@ Tools: `npm outdated`, `npm audit`, `npm audit --omit=dev`,
 
 Total rows: ~40. Material misses:
 
-| Package | Current | Latest | Notes |
-|---|---|---|---|
-| `@mui/material` | 7.3.9 | 9.0.1 | **2 major versions behind** |
-| `@mui/icons-material` | 7.3.9 | 9.0.1 | **2 major** |
-| `@mui/x-charts` | 9.2.0 | 9.3.0 | 1 minor |
-| `react` | 19.2.4 | 19.2.6 | 2 patches |
-| `react-dom` | 19.2.4 | 19.2.6 | 2 patches |
-| `react-router-dom` | 7.13.2 | 7.15.1 | 2 minor |
-| `@tanstack/react-query` | 5.96.1 | 5.100.14 | 4 minor |
-| `@tanstack/react-query-devtools` | 5.96.1 | 5.100.14 | 4 minor |
-| `vite` | 7.3.1 | 8.0.14 | **1 major behind** (also CVE — see audit) |
-| `typescript` | 5.9.3 | 6.0.3 | **1 major** |
-| `eslint` | 8.57.1 | 10.4.0 | **2 major** (deprecated v8 EoL) |
-| `@vitejs/plugin-react` | 5.2.0 | 6.0.2 | 1 major |
-| `prettier` | 2.8.8 | 3.8.3 | **1 major** (formatting drift risk) |
-| `@nx/*` (10 pkgs) | 22.6.1 | 22.7.3 | 1 minor — coordinated bump |
-| `aws-cdk` / `aws-cdk-lib` | 2.1116 / 2.246 | 2.1124 / 2.257 | minor (infra) |
-| `@types/node` | 20.19.9 | 25.9.1 | **5 major** (intentional — pin to runtime) |
+| Package                          | Current        | Latest         | Notes                                      |
+| -------------------------------- | -------------- | -------------- | ------------------------------------------ |
+| `@mui/material`                  | 7.3.9          | 9.0.1          | **2 major versions behind**                |
+| `@mui/icons-material`            | 7.3.9          | 9.0.1          | **2 major**                                |
+| `@mui/x-charts`                  | 9.2.0          | 9.3.0          | 1 minor                                    |
+| `react`                          | 19.2.4         | 19.2.6         | 2 patches                                  |
+| `react-dom`                      | 19.2.4         | 19.2.6         | 2 patches                                  |
+| `react-router-dom`               | 7.13.2         | 7.15.1         | 2 minor                                    |
+| `@tanstack/react-query`          | 5.96.1         | 5.100.14       | 4 minor                                    |
+| `@tanstack/react-query-devtools` | 5.96.1         | 5.100.14       | 4 minor                                    |
+| `vite`                           | 7.3.1          | 8.0.14         | **1 major behind** (also CVE — see audit)  |
+| `typescript`                     | 5.9.3          | 6.0.3          | **1 major**                                |
+| `eslint`                         | 8.57.1         | 10.4.0         | **2 major** (deprecated v8 EoL)            |
+| `@vitejs/plugin-react`           | 5.2.0          | 6.0.2          | 1 major                                    |
+| `prettier`                       | 2.8.8          | 3.8.3          | **1 major** (formatting drift risk)        |
+| `@nx/*` (10 pkgs)                | 22.6.1         | 22.7.3         | 1 minor — coordinated bump                 |
+| `aws-cdk` / `aws-cdk-lib`        | 2.1116 / 2.246 | 2.1124 / 2.257 | minor (infra)                              |
+| `@types/node`                    | 20.19.9        | 25.9.1         | **5 major** (intentional — pin to runtime) |
 
 ## `npm audit` summary
 
-| Severity | Full | Prod-only (`--omit=dev`) |
-|---|---|---|
-| critical | 0 | 0 |
-| high | 22 | 2 |
-| moderate | 11 | 4 |
-| low | 0 | 0 |
-| **total** | **33** | **6** |
+| Severity  | Full   | Prod-only (`--omit=dev`) |
+| --------- | ------ | ------------------------ |
+| critical  | 0      | 0                        |
+| high      | 22     | 2                        |
+| moderate  | 11     | 4                        |
+| low       | 0      | 0                        |
+| **total** | **33** | **6**                    |
 
 ### Prod-only highs (FE-runtime impact)
 
-| Pkg | Vuln |
-|---|---|
-| `fast-uri` | path traversal + host confusion (CWE-22, CVSS 7.5) |
+| Pkg         | Vuln                                                           |
+| ----------- | -------------------------------------------------------------- |
+| `fast-uri`  | path traversal + host confusion (CWE-22, CVSS 7.5)             |
 | `lodash-es` | prototype pollution × 3 in `_.unset` / `_.omit` / `_.template` |
 
 → `lodash-es` only enters via `node_modules/cargo-lambda-cdk/node_modules/lodash-es` (transitive infra dep, not in FE bundle — verified: `grep -rnE "from ['\"]lodash" web/src libs/ui/src` → 0 hits). `fast-uri` source unclear without deeper trace; likely fastify-adjacent test dep, but `npm audit --omit=dev` listed it as prod, so spec must confirm.
 
 ### Dev highs of concern (build-chain)
 
-| Pkg | Vuln |
-|---|---|
-| `vite` (DIRECT) | Path traversal in `.map` handling; `server.fs.deny` bypass; arbitrary file read via WebSocket — **only affects dev server**, not production CloudFront artifact |
-| `axios` (via `nx`/`@module-federation/dts-plugin`) | SSRF via NO_PROXY bypass; auth bypass via prototype pollution. Build-time only. |
-| `picomatch` (via `nx`/`@nx/workspace`) | ReDoS + method injection |
-| `@nx/*` all DIRECT | inherit picomatch + axios chain |
-| `lodash-es` (via cargo-lambda-cdk) | prototype pollution |
-| `fast-uri` | path traversal |
-| `@babel/plugin-transform-modules-systemjs` | arbitrary code gen on malicious input |
+| Pkg                                                | Vuln                                                                                                                                                            |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vite` (DIRECT)                                    | Path traversal in `.map` handling; `server.fs.deny` bypass; arbitrary file read via WebSocket — **only affects dev server**, not production CloudFront artifact |
+| `axios` (via `nx`/`@module-federation/dts-plugin`) | SSRF via NO_PROXY bypass; auth bypass via prototype pollution. Build-time only.                                                                                 |
+| `picomatch` (via `nx`/`@nx/workspace`)             | ReDoS + method injection                                                                                                                                        |
+| `@nx/*` all DIRECT                                 | inherit picomatch + axios chain                                                                                                                                 |
+| `lodash-es` (via cargo-lambda-cdk)                 | prototype pollution                                                                                                                                             |
+| `fast-uri`                                         | path traversal                                                                                                                                                  |
+| `@babel/plugin-transform-modules-systemjs`         | arbitrary code gen on malicious input                                                                                                                           |
 
 → Most chain back to `nx` ↔ `@module-federation/*` graph; `nx 22.7.3` upgrade may resolve a chunk. `vite 7.3.3` (already on `wanted`) closes the 3 dev-server CVEs.
 
 ## License check (`license-checker --summary --production`)
 
-| License | Count |
-|---|---|
-| MIT | 86 |
-| BSD-3-Clause | 3 |
-| ISC | 2 |
-| UNLICENSED | 1 (own root `@rumblefish/soroban-block-explorer@0.0.0` — expected, will be set at publish) |
+| License      | Count                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| MIT          | 86                                                                                         |
+| BSD-3-Clause | 3                                                                                          |
+| ISC          | 2                                                                                          |
+| UNLICENSED   | 1 (own root `@rumblefish/soroban-block-explorer@0.0.0` — expected, will be set at publish) |
 
 → All permissive licenses. No GPL/AGPL/copyleft. Clean.
 
 ## Bundle duplicate-version risk (FE-only filter)
 
-| Package | Versions in lock |
-|---|---|
+| Package      | Versions in lock                         |
+| ------------ | ---------------------------------------- |
 | `@mui/utils` | **`7.3.9`, `9.0.0`, `9.0.1`** — 3 copies |
 
 Other FE-relevant pkgs (`react`, `react-dom`, `react-router-dom`,

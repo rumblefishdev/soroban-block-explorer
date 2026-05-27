@@ -4,12 +4,12 @@ Grep + visual sample. Read-only.
 
 ## Hardcoded hex colors (4 instances in tsx/ts, excl. comments)
 
-| File:line | Value | Context | Severity |
-|---|---|---|---|
-| `web/src/pages/contracts/ContractInterface.tsx:36` | `#155dfc` | `const TYPE_REF_COLOR` (Solidity-type reference link blue) | 🟡 should be `theme.palette.info.main` or new `palette.code.typeRef` token |
-| `libs/ui/src/identifiers/CopyButton.tsx:10` | `#000000` | `const COPIED_ICON_COLOR` (icon color when "Copied" state) | 🟢 sometimes black-on-X is intentional; lift to `theme.palette.common.black` |
-| `libs/ui/src/layout/PageGridBackdrop.tsx:37,39` | `#000` (twice) | radial-gradient backdrop | 🟢 cosmetic; could use `theme.palette.background.default` |
-| `web/src/pages/HomePage.tsx:21` | `#fdda24` | in a comment only ("warm gold glow"); the actual sx prop uses theme tokens | ✓ comment only — not a finding |
+| File:line                                          | Value          | Context                                                                    | Severity                                                                     |
+| -------------------------------------------------- | -------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `web/src/pages/contracts/ContractInterface.tsx:36` | `#155dfc`      | `const TYPE_REF_COLOR` (Solidity-type reference link blue)                 | 🟡 should be `theme.palette.info.main` or new `palette.code.typeRef` token   |
+| `libs/ui/src/identifiers/CopyButton.tsx:10`        | `#000000`      | `const COPIED_ICON_COLOR` (icon color when "Copied" state)                 | 🟢 sometimes black-on-X is intentional; lift to `theme.palette.common.black` |
+| `libs/ui/src/layout/PageGridBackdrop.tsx:37,39`    | `#000` (twice) | radial-gradient backdrop                                                   | 🟢 cosmetic; could use `theme.palette.background.default`                    |
+| `web/src/pages/HomePage.tsx:21`                    | `#fdda24`      | in a comment only ("warm gold glow"); the actual sx prop uses theme tokens | ✓ comment only — not a finding                                               |
 
 ### F-W6-AK-1 [Class A, Severity 🟡 MEDIUM] 3 hardcoded hex constants survive — minor token-system leakage
 
@@ -19,13 +19,13 @@ Consolidate into theme tokens. Phase 3 micro-task.
 
 Grep `zIndex` in `web/src` + `libs/ui/src`: 5 occurrences.
 
-| Location | Value | Semantic? |
-|---|---|---|
-| `web/src/pages/HomePage.tsx:34` | `0` | backdrop layer |
-| `web/src/pages/HomePage.tsx:68` | `1` | content above backdrop |
-| `web/src/router/AppShell.tsx:170` | `1` | content above backdrop |
-| `libs/ui/src/layout/PageGridBackdrop.tsx:26` | `0` | backdrop component |
-| `libs/ui/src/layout/TopNav.tsx:168` | `theme.zIndex.modal` | ✓ semantic |
+| Location                                     | Value                | Semantic?              |
+| -------------------------------------------- | -------------------- | ---------------------- |
+| `web/src/pages/HomePage.tsx:34`              | `0`                  | backdrop layer         |
+| `web/src/pages/HomePage.tsx:68`              | `1`                  | content above backdrop |
+| `web/src/router/AppShell.tsx:170`            | `1`                  | content above backdrop |
+| `libs/ui/src/layout/PageGridBackdrop.tsx:26` | `0`                  | backdrop component     |
+| `libs/ui/src/layout/TopNav.tsx:168`          | `theme.zIndex.modal` | ✓ semantic             |
 
 ### F-W6-AK-2 [Class A, Severity 🟢 LOW] Z-index uses raw 0/1 ad-hoc; no defined scale
 

@@ -1316,35 +1316,13 @@ export type SearchHit = {
 };
 
 /**
- * Redirect payload — frontend navigates directly to the entity page.
- */
-export type SearchRedirect = {
-  entity_id: string;
-  entity_type: EntityType;
-  last_activity_at?: string | null;
-  successful?: boolean | null;
-};
-
-/**
- * Discriminated response: `redirect` for unambiguous exact match,
- * `results` for grouped broad search.
- *
- * `#[serde(tag = "type")]` puts the discriminator on the wire as
- * `"type": "redirect" | "results"` per the task spec, mirroring the
- * frontend search-bar UX expectation: a `redirect` causes the bar to
- * navigate directly; a `results` shows the dropdown with grouped hits.
- */
-export type SearchResponse =
-  | (SearchRedirect & {
-      type: 'redirect';
-    })
-  | (SearchResults & {
-      type: 'results';
-    });
-
-/**
  * Results payload — six entity-typed buckets, each capped at the
  * per-group `limit` chosen by the caller (default 10, ceiling 50).
+ *
+ * FE decides "singleton → navigate directly" by inspecting
+ * `groups`: when the total row count across all buckets is exactly
+ * 1 and `routeForHit(singleton)` resolves, the FE navigates to the
+ * detail page; otherwise it renders the dropdown / Results page.
  */
 export type SearchResults = {
   groups: SearchGroups;
@@ -2465,7 +2443,7 @@ export type GetSearchResponses = {
   /**
    * Search results
    */
-  200: SearchResponse;
+  200: SearchResults;
 };
 
 export type GetSearchResponse = GetSearchResponses[keyof GetSearchResponses];
