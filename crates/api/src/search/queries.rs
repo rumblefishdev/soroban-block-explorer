@@ -316,6 +316,15 @@ pub async fn fetch_search(
             LIMIT $4
         ),
         pool_hits AS (
+            -- TODO(0271): switch this predicate to
+            --   lp.pool_id_strkey LIKE $3 || '%'
+            -- once task 0271 adds the denormalised L-strkey text
+            -- column. The current `lp.pool_id = $2` predicate is
+            -- identical to `fetch_redirect`'s — non-empty broad
+            -- result here is unreachable in practice (redirect path
+            -- fires first), so the CTE is dead code today and stays
+            -- only as scaffold for the upcoming partial-prefix
+            -- migration. See backlog task 0271.
             SELECT
                 'pool'::text                AS entity_type,
                 encode(lp.pool_id, 'hex')   AS identifier,

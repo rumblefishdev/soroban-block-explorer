@@ -13,15 +13,16 @@ const routes: Record<EntityType, (id: string) => string> = {
   // exhaustiveness; loud throw beats a silent broken URL if a future
   // regression routes an `'nft'` through this builder.
   //
-  // The only NFT search call site (`web/src/search/routeForHit.ts`)
-  // short-circuits on `entity_type === 'nft'` and uses the composite
-  // `routes.nft(c, t)` builder from `web/src/router/routes.ts`. No
-  // `IdentifierDisplay` callers pass `type="nft"` today.
+  // The NFT search-hit dispatch lives in `routeForHit` (this module)
+  // which short-circuits on `entity_type === 'nft'` and builds the
+  // composite URL inline. `IdentifierDisplay` callers that render an
+  // NFT identifier must pass `href` explicitly (no production callsite
+  // does today).
   nft: () => {
     throw new Error(
-      'getIdentifierHref("nft", id) is not supported — NFT routing is composite ' +
-        '`(contract_id, token_id)`. Use routes.nft(contractId, tokenId) from ' +
-        '`web/src/router/routes.ts` instead.'
+      'getIdentifierHref("nft", id) is not supported — NFT routing is ' +
+        'composite `(contract_id, token_id)`. Use `routeForHit(hit)` for ' +
+        'search hits, or pass `href` explicitly to `IdentifierDisplay`.'
     );
   },
 };

@@ -55,15 +55,18 @@ and MUST stay in sync with this document.
 
 ### Direct redirect — backend (`/v1/search` `SearchResponse::Redirect`)
 
-When `q` is a fully-typed entity id, `crates/api/src/search/classifier.rs`
-flags `is_fully_typed = true` and `fetch_redirect`
+When `q` is a fully-typed entity id, the `Classified` struct produced
+by `crates/api/src/search/classifier.rs` returns `true` from its
+derived `is_fully_typed()` method, and `fetch_redirect`
 (`crates/api/src/search/queries.rs`) performs an exact-match lookup.
 On hit, the response is `SearchResponse::Redirect`; on miss, the broad
-search runs. The classifier covers four deterministic shapes:
+search runs. The derived predicate is `true` when `hash_bytes` is
+populated or when `strkey_prefix` is exactly 56 chars long. The
+classifier covers four deterministic shapes:
 
 | Input shape              | `Classified` channel       | Redirect target         |
 | ------------------------ | -------------------------- | ----------------------- |
-| 64-hex / 32-byte base64  | `hash_bytes`               | `/transactions/<hash>`  |
+| 64-hex                   | `hash_bytes`               | `/transactions/<hash>`  |
 | full L-strkey (56 chars) | `hash_bytes` (via decode)  | `/liquidity-pools/<L…>` |
 | full G-strkey (56 chars) | `strkey_prefix` (56 chars) | `/accounts/<G…>`        |
 | full C-strkey (56 chars) | `strkey_prefix` (56 chars) | `/contracts/<C…>`       |
