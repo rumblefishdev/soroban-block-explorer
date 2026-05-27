@@ -333,11 +333,102 @@ mention partial L-prefix support now works (matches G/C parity).
 
 ## Future Work
 
-None planned beyond this task. After these three enhancements ship,
-broad search has parity across all six entity types: text-typed
-identifiers all support partial prefix, name-typed fields all support
-ILIKE substring matching backed by trgm. The next enhancement layer
-would be ranking / boost-by-relevance, which is out of scope here.
+After these three enhancements ship, broad search has parity across
+all six entity types: text-typed identifiers all support partial
+prefix, name-typed fields all support ILIKE substring matching
+backed by trgm. The next enhancement layer would be ranking /
+boost-by-relevance, which is out of scope here.
+
+### Consider: drop `SearchResponse::Redirect` (anti-pattern)
+
+Spawned from the 0270 session deep dive (cross-explorer survey,
+2026-05-27). The current backend `fetch_redirect` flow checks
+entity existence in the DB before returning `SearchResponse::Redirect`
+— if no row exists, falls through to broad search. Three
+independent industry references diverge from this pattern:
+
+- **Solana Foundation Explorer** (source-read,
+  `solana-foundation/explorer/app/features/search/model/`): pure FE
+  classifier with a provider registry, navigates optimistically
+  on shape match. No existence check.
+- **Etherscan family** (etherscan.io + clones): server-side 302 but
+  shape-based only, no existence check. Genesis block hash pasted
+  into the bar still lands on `/tx/<hash>` with "Transaction not
+  found" — destination page owns the miss UX.
+- **stellarchain.io** (live-probed): pure FE classify-then-redirect.
+  Bad-CRC G-strkey routes to `/address/<G>` and the detail page
+  renders "Account Not Found".
+
+stellar.expert is the outlier — it does an API singleton-match
+before routing (server fanout to `/account?search=…` +
+`/asset?search=…`), which is closer to our current shape but with
+the indirection of a server-side `/search` page instead of a
+backend redirect endpoint.
+
+**Refactor would:**
+
+1. Drop `fetch_redirect`, `RedirectRow`, `SearchResponse::Redirect`,
+   `SearchRedirect`. Wire shape collapses to `{ groups: ... }`
+   only. **Breaking wire change.**
+2. Extend `web/src/search/directRouteFor.ts` from 1 shape
+   (bare-digit u32 → `/ledgers/<seq>`) to 5 shapes:
+   - 64-hex hash → `/transactions/<hex>` (tx-first convention per
+     Etherscan; pool-hex paste is the rare edge case since
+     post-0264 pool IDs surface as `L…` strkey in UI)
+   - full G-strkey 56 → `/accounts/<G>`
+   - full C-strkey 56 → `/contracts/<C>`
+   - full L-strkey 56 → `/liquidity-pools/<L>`
+   - bare digit u32 → `/ledgers/<seq>` (already)
+3. `SearchResultsPage` drops the `data.type === 'redirect'`
+   useEffect; `useSearchResults` drops `treatRedirectAsResult`
+   param + redirect→hit synthesis logic; `GlobalSearchBar` drops
+   the `treatRedirectAsResult: true` flag.
+4. OpenAPI regen — `SearchResponse` loses the `Redirect` variant.
+5. Docs update — `docs/architecture/api/url-conventions.md`
+   Search input section: backend serves only `Results`, every
+   direct redirect lives in `directRouteFor`.
+
+**Open decision points to revisit at pickup:**
+
+- **64-hex tx-vs-pool collision policy.** Stellar tx hash and pool
+  ID are both 32-byte BYTEA — same wire shape on hex. The 0270
+  session settled on tx-first by convention, with the pool-hex
+  edge case landing on `/transactions/<hex>` "not found" (rare:
+  pool IDs surface as `L…` strkey post-0264). Alternatives:
+  hybrid backend RTT for hex only (cleanest UX but partial drop),
+  dropdown disambiguation (Solana model — extra click on common
+  tx paste), or skip hex from FE and rely on broad search
+  (requires un-dropping `tx_hits` CTE from 0270).
+- **Existence check.** Industry consensus says drop. Pre-flight
+  audit required: verify each detail page (`/accounts/:G`,
+  `/transactions/:hash`, `/contracts/:C`, `/liquidity-pools/:L`,
+  `/ledgers/:seq`, `/nfts/:c/:t`, `/assets/:id`) renders
+  `NotFoundState` (or equivalent) gracefully on 404 — not crash,
+  not infinite spinner. If any page fails, that detail page
+  needs a fix before #5 can land safely.
+- **`routeForHit` lifecycle.** After dropping
+  `SearchResponse::Redirect`, FE only ever sees `Results` from
+  the backend. `routeForHit` is still needed for dropdown row
+  clicks (NFT composite routing in particular). Choice: keep as
+  helper module, or inline into the 2-3 callsites.
+- **Branch / scope.** The refactor is breaking wire change ⇒
+  warrants its own task + PR (e.g. spawn task 0272-equivalent
+  rather than folding into 0270 or this 0271). 0270 session
+  spawned this consideration but explicitly deferred — keep
+  scope discipline.
+
+**Why deferred from 0270 session:**
+
+User explicitly chose to defer this refactor and ship 0270
+minimalist. PR #220 (0270) already landed the canonical-strkey
+wire + NFT composite routing + FE ledger redirect; the redirect
+anti-pattern drop is orthogonal architectural cleanup, not a
+launch blocker. Reasoning quoted: _"warto, ale nie krytyczne. (…)
+1 RTT mniej, prostszy wire, ale to wire breaking change i wymaga
+dedykowanej sesji + manual UI verify każdej kategorii input."_
+
+Effort estimate: ~3-4h impl + ~30 min detail-page 404 audit +
+~20 min manual UI paste verify per category.
 
 ## Notes
 
