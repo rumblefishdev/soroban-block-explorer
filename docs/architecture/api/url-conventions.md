@@ -53,6 +53,43 @@ parameters. The empty-state hint in `web/src/search/SearchResultsView.tsx`
 enumerates the supported prefixes (`G…`, `C…`, `L…`, hash, token code)
 and MUST stay in sync with this document.
 
+### Direct redirect — backend (`/v1/search` `SearchResponse::Redirect`)
+
+When `q` is a fully-typed entity id, `crates/api/src/search/classifier.rs`
+flags `is_fully_typed = true` and `fetch_redirect`
+(`crates/api/src/search/queries.rs`) performs an exact-match lookup.
+On hit, the response is `SearchResponse::Redirect`; on miss, the broad
+search runs. The classifier covers four deterministic shapes:
+
+| Input shape              | `Classified` channel       | Redirect target         |
+| ------------------------ | -------------------------- | ----------------------- |
+| 64-hex / 32-byte base64  | `hash_bytes`               | `/transactions/<hash>`  |
+| full L-strkey (56 chars) | `hash_bytes` (via decode)  | `/liquidity-pools/<L…>` |
+| full G-strkey (56 chars) | `strkey_prefix` (56 chars) | `/accounts/<G…>`        |
+| full C-strkey (56 chars) | `strkey_prefix` (56 chars) | `/contracts/<C…>`       |
+
+Partial G-/C- prefixes (`is_strkey_prefix`) drive the prefix CTEs in
+broad search and are not eligible for redirect — only full 56-char
+strkeys redirect. Partial L-prefix is not classified at all; the pool
+table stores raw `BYTEA(32)` with no text mirror column (tracked in
+backlog task 0271).
+
+### Direct redirect — frontend (`directRouteFor`)
+
+`web/src/search/directRouteFor.ts` handles inputs the backend redirect
+path doesn't cover. Today the only case is a bare-digit ledger
+sequence — ledger is not a broad-search bucket entity, so the FE
+short-circuits before calling `/v1/search`.
+
+| Input shape      | Redirect target  |
+| ---------------- | ---------------- |
+| bare-digit `u32` | `/ledgers/<seq>` |
+
+`directRouteFor` is invoked at the search-entry points
+(`web/src/router/AppShell.tsx` `handleSearchSubmit` and
+`web/src/pages/home/HomeHero.tsx` `submit`) before falling through to
+`routes.search(q)`.
+
 ## Why this matters
 
 Stellar Expert, Horizon, Stellar Lab, Soroban CLI, and the broader
