@@ -11,14 +11,14 @@ Wave 4 1.5 output. CSV: `D-state-coverage-matrix.csv` (126 cells).
 
 ## Summary stats
 
-| Verdict | Count | % |
-|---|---:|---:|
-| ✓ correct (post-delta) | 55 | 44% |
-| ⚠ partial | 18 | 14% |
-| ✗ broken | 0 | 0% |
-| N/A | 27 | 21% |
-| ? not exercised (skipped) | 26 | 21% |
-| **Total** | **126** | 100% |
+| Verdict                   |   Count |    % |
+| ------------------------- | ------: | ---: |
+| ✓ correct (post-delta)    |      55 |  44% |
+| ⚠ partial                 |      18 |  14% |
+| ✗ broken                  |       0 |   0% |
+| N/A                       |      27 |  21% |
+| ? not exercised (skipped) |      26 |  21% |
+| **Total**                 | **126** | 100% |
 
 **Pre-delta** (for reference): 50 ✓, 18 ⚠, 5 ✗, 27 N/A, 26 ?.
 
@@ -115,10 +115,10 @@ remains.
 
 ## Effective measurable matrix
 
-| Slice | Total | Measured | % |
-|---|---:|---:|---:|
-| All cells | 126 | 100 | 79% |
-| All cells excluding D6/D7/D8 (untestable in this env) | 98 | 100 | (98 in-scope, 73 ✓/⚠/✗) |
+| Slice                                                 | Total | Measured |                       % |
+| ----------------------------------------------------- | ----: | -------: | ----------------------: |
+| All cells                                             |   126 |      100 |                     79% |
+| All cells excluding D6/D7/D8 (untestable in this env) |    98 |      100 | (98 in-scope, 73 ✓/⚠/✗) |
 
 (D6/D7/D8 are 3 cols × 14 rows minus E0 N/A = ~40 cells. Of those, ~26 were skipped, ~14 marked N/A for shell/list rows. Net measurable in-scope = ~73 cells, of which 55 ✓ / 13 ⚠ / 5 ✗.)
 
@@ -146,33 +146,33 @@ page and on representative tab tables.
 
 ### List pages (5/5 ✓)
 
-| Endpoint | URL on Next click | Page 2 rows | Prev state | Notes |
-|---|---|---:|---|---|
-| E2 `/transactions` | `?cursor=eyJk…NjEiLC…M2fX0` | 18 | enabled | 38 total rows across 2 pages; Prev returns to page 1 with 20 rows, URL `?cursor=…dir:prev`; deep-link refresh on page-2 URL renders 18 rows ✓ |
-| E4 `/ledgers` | `?cursor=eyJk…MTI6MDA6MjVa…MTAwNX19` | 5 | enabled | 25 total ledgers; page 2 = last 5 |
-| E7 `/assets` | n/a (single page) | n/a | n/a | 6 rows total, API `next_cursor:null`, both buttons disabled = **correct** |
-| E10 `/nfts` | n/a (single page) | n/a | n/a | 5 rows total, both disabled correctly |
-| E12 `/liquidity-pools` | n/a (single page) | n/a | n/a | 3 rows total, both disabled correctly |
+| Endpoint               | URL on Next click                    | Page 2 rows | Prev state | Notes                                                                                                                                         |
+| ---------------------- | ------------------------------------ | ----------: | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| E2 `/transactions`     | `?cursor=eyJk…NjEiLC…M2fX0`          |          18 | enabled    | 38 total rows across 2 pages; Prev returns to page 1 with 20 rows, URL `?cursor=…dir:prev`; deep-link refresh on page-2 URL renders 18 rows ✓ |
+| E4 `/ledgers`          | `?cursor=eyJk…MTI6MDA6MjVa…MTAwNX19` |           5 | enabled    | 25 total ledgers; page 2 = last 5                                                                                                             |
+| E7 `/assets`           | n/a (single page)                    |         n/a | n/a        | 6 rows total, API `next_cursor:null`, both buttons disabled = **correct**                                                                     |
+| E10 `/nfts`            | n/a (single page)                    |         n/a | n/a        | 5 rows total, both disabled correctly                                                                                                         |
+| E12 `/liquidity-pools` | n/a (single page)                    |         n/a | n/a        | 3 rows total, both disabled correctly                                                                                                         |
 
 ### Tab tables sampled (3 with usable cursor)
 
-| Section | Cursor key | Deep-link probe | Result |
-|---|---|---|---|
-| Contract `…CSTELLARCATS…?tab=invocations` | `cursor_i` | `cursor_i=<b64 from limit=2 probe>` | Prev enabled, Next disabled, 1 row ✓ |
-| Pool `…fac63b…?cursor_p=…` participants | `cursor_p` | `cursor_p=<b64 from limit=1 probe>` | Participants table: Prev enabled, Next disabled, 1 row. Transactions table: unchanged (Prev/Next both disabled). **Cursor namespace isolation confirmed.** ✓ |
-| Account `GACCAROLNFT…?cursor=…` transactions | `cursor` (default) | `cursor=<b64 from limit=2 probe>` | Account has 9 transactions; from `next_cursor` probe URL, 7 rows render with Prev enabled, Next disabled ✓ |
+| Section                                      | Cursor key         | Deep-link probe                     | Result                                                                                                                                                       |
+| -------------------------------------------- | ------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Contract `…CSTELLARCATS…?tab=invocations`    | `cursor_i`         | `cursor_i=<b64 from limit=2 probe>` | Prev enabled, Next disabled, 1 row ✓                                                                                                                         |
+| Pool `…fac63b…?cursor_p=…` participants      | `cursor_p`         | `cursor_p=<b64 from limit=1 probe>` | Participants table: Prev enabled, Next disabled, 1 row. Transactions table: unchanged (Prev/Next both disabled). **Cursor namespace isolation confirmed.** ✓ |
+| Account `GACCAROLNFT…?cursor=…` transactions | `cursor` (default) | `cursor=<b64 from limit=2 probe>`   | Account has 9 transactions; from `next_cursor` probe URL, 7 rows render with Prev enabled, Next disabled ✓                                                   |
 
 Pool transactions (`cursor_t`), contract events (`cursor_e`), asset transactions, nft transfers — all return `next_cursor:null` against default `limit=20` (fixture too small), so the URL key cannot be exercised but the **wire shape was verified at API level** (`page: { next_cursor, prev_cursor, limit }`) and the FE code paths all use the same `usePageHandlers` + `useCursorPagination` infrastructure already proven on the 3 sampled sections.
 
 ### CSV cells flipped
 
-| Cell | Before | After |
-|---|---|---|
-| E2/D9 | ✗ 🔴 | ✓ |
-| E4/D9 | ✗ 🔴 | ✓ |
-| E7/D9 | ✗ 🔴 | ✓ |
-| E10/D9 | ✗ 🔴 | ✓ |
-| E12/D9 | ✗ 🔴 | ✓ |
+| Cell   | Before | After |
+| ------ | ------ | ----- |
+| E2/D9  | ✗ 🔴   | ✓     |
+| E4/D9  | ✗ 🔴   | ✓     |
+| E7/D9  | ✗ 🔴   | ✓     |
+| E10/D9 | ✗ 🔴   | ✓     |
+| E12/D9 | ✗ 🔴   | ✓     |
 
 (Note on D-axis labeling: the original CSV used D9 for both
 "pagination function" and "polling indicator" — strictly the matrix
@@ -210,15 +210,15 @@ Trigger: F-D-2 originally cited "account + contract" (E6/E8/E9). Exhaustive
 walk of all 7 detail pages corrects the scope: **E8 asset is clean**
 (render-gate at line 127), but **E13 pool is newly identified as affected**.
 
-| Page | Sub-sections (count + own queries?) | Parent isError pattern | Dual-block on 404? |
-|---|---|---|---|
-| E3 transaction (`web/src/pages/transaction-detail/index.tsx`) | 5 sections, all read from single `useTransactionDetail` parent — NO own queries | Early-return at lines 62-73 | **NO** — single query |
-| E5 ledger (`web/src/pages/LedgerDetailPage.tsx`) | 2 sections, embedded transactions — NO own queries | Early-return at lines 56-77 | **NO** — single query |
-| E6 account (`web/src/pages/AccountDetailPage.tsx`) | 3 sections — `AccountTransactions` fires own `useAccountTransactions` | Sub-section unconditional mount (line 90-92) | **YES** (F-D-2 confirmed) |
-| E8 asset (`web/src/pages/AssetDetailPage.tsx`) | 3 sections — `AssetTransactions` fires own `useAssetTransactions` | **Render-gate** at line 127: `{!asset.isError && <AssetTransactions/>}` | **NO** — gate present (F-D-2 was wrong about E8) |
-| E9 contract (`web/src/pages/ContractDetailPage.tsx`) | 4 sections — Interface + Invocations + Events all fire own queries | Unconditional mount inside tab Card | **YES** — worst case 4 error blocks (F-D-2 confirmed) |
-| E11 NFT (`web/src/pages/NftDetailPage.tsx`) | 4 sections — `NftTransfers` fires own `useNftTransfers` | Early-return at lines 84-103 | **NO** — sub-sections never mount on parent error |
-| E13 pool (`web/src/pages/LiquidityPoolDetailPage.tsx`) | 6 sections — Charts + Participants + Transactions all fire own queries | Sub-sections unconditional mount (lines 95-103) | **YES — NEW; not in original F-D-2 scope** |
+| Page                                                          | Sub-sections (count + own queries?)                                             | Parent isError pattern                                                  | Dual-block on 404?                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| E3 transaction (`web/src/pages/transaction-detail/index.tsx`) | 5 sections, all read from single `useTransactionDetail` parent — NO own queries | Early-return at lines 62-73                                             | **NO** — single query                                 |
+| E5 ledger (`web/src/pages/LedgerDetailPage.tsx`)              | 2 sections, embedded transactions — NO own queries                              | Early-return at lines 56-77                                             | **NO** — single query                                 |
+| E6 account (`web/src/pages/AccountDetailPage.tsx`)            | 3 sections — `AccountTransactions` fires own `useAccountTransactions`           | Sub-section unconditional mount (line 90-92)                            | **YES** (F-D-2 confirmed)                             |
+| E8 asset (`web/src/pages/AssetDetailPage.tsx`)                | 3 sections — `AssetTransactions` fires own `useAssetTransactions`               | **Render-gate** at line 127: `{!asset.isError && <AssetTransactions/>}` | **NO** — gate present (F-D-2 was wrong about E8)      |
+| E9 contract (`web/src/pages/ContractDetailPage.tsx`)          | 4 sections — Interface + Invocations + Events all fire own queries              | Unconditional mount inside tab Card                                     | **YES** — worst case 4 error blocks (F-D-2 confirmed) |
+| E11 NFT (`web/src/pages/NftDetailPage.tsx`)                   | 4 sections — `NftTransfers` fires own `useNftTransfers`                         | Early-return at lines 84-103                                            | **NO** — sub-sections never mount on parent error     |
+| E13 pool (`web/src/pages/LiquidityPoolDetailPage.tsx`)        | 6 sections — Charts + Participants + Transactions all fire own queries          | Sub-sections unconditional mount (lines 95-103)                         | **YES — NEW; not in original F-D-2 scope**            |
 
 ### F-D-2 scope correction (post-exhaustive)
 

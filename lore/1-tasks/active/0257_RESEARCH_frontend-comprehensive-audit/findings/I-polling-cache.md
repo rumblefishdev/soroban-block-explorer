@@ -7,14 +7,15 @@ Grep + Read on `web/src/api/`. Live verification: home `/` left open
 
 Defined in `web/src/api/polling.ts`:
 
-| Policy | `staleTime` | `refetchInterval` | `gcTime` | `placeholderData` |
-|---|---:|---:|---:|---|
-| `homePolicy` | 10 s | **12 s** | (default 5 min) | — |
-| `listPolicy` | 60 s | — (no polling) | (default 5 min) | `keepPreviousData` |
-| `detailPolicy` | 5 min | — | (default 5 min) | `keepPreviousData` |
-| `searchPolicy` | 0 | — | 0 | — |
+| Policy         | `staleTime` | `refetchInterval` |        `gcTime` | `placeholderData`  |
+| -------------- | ----------: | ----------------: | --------------: | ------------------ |
+| `homePolicy`   |        10 s |          **12 s** | (default 5 min) | —                  |
+| `listPolicy`   |        60 s |    — (no polling) | (default 5 min) | `keepPreviousData` |
+| `detailPolicy` |       5 min |                 — | (default 5 min) | `keepPreviousData` |
+| `searchPolicy` |           0 |                 — |               0 | —                  |
 
 Plus `QueryProvider.tsx:5-22` defaults:
+
 - `staleTime: 60_000`
 - `gcTime: 5 * 60_000`
 - `refetchOnWindowFocus: true` (re-fetch when tab regains focus)
@@ -26,6 +27,7 @@ Plus `QueryProvider.tsx:5-22` defaults:
 ### F-I-1 ✓ PASS — Policies appropriately segmented by volatility
 
 `homePolicy` polls every 12s on:
+
 - `useLatestTransactions.ts` (home "Latest transactions")
 - `useLatestLedgers.ts` (home "Latest ledgers")
 - `useNetworkStats.ts` (top banner TPS / Ledger / Accounts / Contracts)
@@ -34,6 +36,7 @@ Plus `QueryProvider.tsx:5-22` defaults:
 ~2 new ledgers).
 
 `listPolicy` (60s stale, no polling) on:
+
 - `useTransactionsList`, `useAssetsList`, `useLedgersList`,
   `useAccountTransactions`, `useAssetTransactions`,
   `usePoolTransactions`, `usePoolParticipants`,
@@ -44,6 +47,7 @@ state would invalidate, (b) user is mid-scroll. Manual reload or window
 focus is enough.
 
 `detailPolicy` (5 min stale, no polling) on:
+
 - `useTransactionDetail`, `useAccountDetail`, `useAssetDetail`,
   `usePoolDetail`, `usePoolChart`, `useContractInterface`.
 
@@ -57,6 +61,7 @@ gc'd. Correct for search UX.
 ### F-I-2 ✓ PASS — Live verification matches stated intervals
 
 Home `/` open 30s. Network filtered to polled endpoints:
+
 - `/v1/transactions?limit=10` × 4 polls
 - `/v1/ledgers?limit=10` × 4 polls
 - `/v1/network/stats` × 4 polls
@@ -91,6 +96,7 @@ grep -rn "invalidateResource" web/src libs/ui/src
 ```
 
 Hits:
+
 - `web/src/api/queryKeys.ts:49` — definition.
 - `web/src/api/index.ts:12` — re-export.
 
@@ -101,6 +107,7 @@ explorer), so there's no obvious caller. Dead code that signals an
 abandoned feature.
 
 Two interpretations:
+
 1. **Dead code** — drop it, single PR.
 2. **Pre-mutation infrastructure** — keep for future "favourite",
    "follow", or admin actions, but mark explicitly as such.
@@ -111,10 +118,11 @@ behaviour today.
 ### F-I-5 ✓ PASS — TanStack default dedup
 
 Multiple subscribers to the same query key share the underlying fetch
-+ cache. Verified indirectly: home page mounts both
-`useLatestTransactions` and `useLatestLedgers` and they each fire one
-request per interval (not N per mounted component). No need for manual
-request-coalescing.
+
+- cache. Verified indirectly: home page mounts both
+  `useLatestTransactions` and `useLatestLedgers` and they each fire one
+  request per interval (not N per mounted component). No need for manual
+  request-coalescing.
 
 ### F-I-6 🟢 LOW `[Class D, Severity LOW]` — No explicit `refetchIntervalInBackground` setting
 
@@ -135,6 +143,7 @@ TanStack is supposed to deliver.
 ### F-I-8 ✓ PASS — Retry policy correctly excludes 4xx
 
 `QueryProvider.tsx:14-19`:
+
 ```ts
 retry: (failureCount, error) => {
   const status = (error as { status?: number })?.status;
@@ -142,31 +151,31 @@ retry: (failureCount, error) => {
     return false;
   }
   return failureCount < 1;
-}
+};
 ```
 
 Correctly: 4xx → no retry (user error / 404), 5xx + network → one
 retry. Relies on `client.ts` error interceptor stamping `status` on
 the thrown error — assuming Wave 1 / Wave 2 finding on the interceptor
-holds. Cross-reference: Wave 2 C-* findings; specifically the
+holds. Cross-reference: Wave 2 C-\* findings; specifically the
 Class B candidate from Gate A triage agenda item #3.
 
 ## Class breakdown for I (Wave 3 1.22)
 
-| Class | Count |
-|---|---:|
-| A | 0 |
-| B — routing/contract | 1 (I-3) |
-| C | 0 |
-| D — catalog-only | 3 (I-4, I-6, I-7) |
-| E | 0 |
-| ✓ pass | 4 (I-1, I-2, I-5, I-8) |
+| Class                |                  Count |
+| -------------------- | ---------------------: |
+| A                    |                      0 |
+| B — routing/contract |                1 (I-3) |
+| C                    |                      0 |
+| D — catalog-only     |      3 (I-4, I-6, I-7) |
+| E                    |                      0 |
+| ✓ pass               | 4 (I-1, I-2, I-5, I-8) |
 
 ## Severity breakdown
 
-| Severity | Count |
-|---|---:|
-| 🔴 CRITICAL | 0 |
-| 🟠 HIGH | 1 (I-4) |
-| 🟡 MEDIUM | 2 (I-3, I-7) |
-| 🟢 LOW | 1 (I-6) |
+| Severity    |        Count |
+| ----------- | -----------: |
+| 🔴 CRITICAL |            0 |
+| 🟠 HIGH     |      1 (I-4) |
+| 🟡 MEDIUM   | 2 (I-3, I-7) |
+| 🟢 LOW      |      1 (I-6) |

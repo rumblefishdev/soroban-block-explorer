@@ -37,6 +37,7 @@ alert dialog. React JSX default escaping confirmed working.
 other scheme.
 
 Used at:
+
 - `web/src/pages/assets/AssetIcon.tsx:22` — `src` for asset icon image
   (TOML-sourced, attacker-controlled).
 - `web/src/pages/assets/AssetMetadata.tsx:31` — `href` for asset
@@ -96,6 +97,7 @@ grep -rn "Authorization|Bearer|x-api-key" web/src libs/ui/src libs/api-types/src
 ```
 
 Hits:
+
 - `libs/api-types/src/generated/core/auth.gen.ts:15,34` — generic SDK
   helper, `@default 'Authorization'`, `Bearer ${token}` (template).
 - `libs/api-types/src/generated/client/utils.gen.ts:151` — generated
@@ -112,6 +114,7 @@ grep -rn "import\.meta\.env" web/src libs/ui/src
 ```
 
 Result: 2 matches.
+
 - `web/src/api/config.ts:1` reads `VITE_API_BASE_URL`, throws if unset,
   validates URL parses, strips trailing `/`.
 - `web/src/api/QueryProvider.tsx:28` `import.meta.env.DEV` gate for
@@ -128,23 +131,23 @@ more conventional namespace prefix. Catalog-only.
 
 ## Class breakdown for H (Wave 3 1.17)
 
-| Class | Count |
-|---|---:|
-| A | 0 |
-| B | 0 |
-| C | 0 |
+| Class            |    Count |
+| ---------------- | -------: |
+| A                |        0 |
+| B                |        0 |
+| C                |        0 |
 | D — catalog-only | 1 (H-12) |
-| E — off-band | 0 |
-| ✓ pass | 11 |
+| E — off-band     |        0 |
+| ✓ pass           |       11 |
 
 ## Severity breakdown
 
-| Severity | Count |
-|---|---:|
-| 🔴 CRITICAL | 0 |
-| 🟠 HIGH | 0 |
-| 🟡 MEDIUM | 0 |
-| 🟢 LOW | 1 (H-12) |
+| Severity    |    Count |
+| ----------- | -------: |
+| 🔴 CRITICAL |        0 |
+| 🟠 HIGH     |        0 |
+| 🟡 MEDIUM   |        0 |
+| 🟢 LOW      | 1 (H-12) |
 
 Security baseline is **clean** for the scoped subset. No off-band fixes
 needed. Real CSP / CSRF / clickjacking / iframe-embed audit is out of

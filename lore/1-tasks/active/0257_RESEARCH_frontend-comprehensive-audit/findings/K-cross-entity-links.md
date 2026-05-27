@@ -13,21 +13,21 @@ Rows = source page. Columns = link target type. ✓ = link present and
 target renders. ✗ = link absent. STUB = target is the `PageStub`
 placeholder (E3). N/A = no logical link.
 
-| From entity ↓ / To → | tx detail | account | asset | contract | ledger | pool | nft |
-|---|---|---|---|---|---|---|---|
-| `/transactions` list                        | ✓ STUB | ✓ | N/A   | N/A   | ✓ | N/A | N/A |
-| `/transactions/:hash` (STUB E3)             | N/A    | ✗ | ✗     | ✗     | ✗ | ✗   | ✗   |
-| `/ledgers` list                             | N/A    | N/A | N/A | N/A   | ✓ | N/A | N/A |
-| `/ledgers/:seq` detail                      | ✓ STUB | ✓ | N/A   | N/A   | ✓ self / prev | N/A | N/A |
-| `/accounts/:id` detail — summary            | N/A    | ✓ self | N/A | N/A | ✓ first/last seen | N/A | N/A |
-| `/accounts/:id` detail — recent tx table    | ✓ STUB | N/A | N/A | N/A   | ✓ | N/A | N/A |
-| `/assets` list                              | N/A    | ✓ issuer | ✓ | ✓ (SAC) | N/A | N/A | N/A |
-| `/assets/:id` detail                        | ✓ STUB | ✓ issuer | ✓ self | ✓ (SAC) | ✓ | N/A | N/A |
-| `/contracts/:id` detail                     | N/A    | ✓ creator | N/A | ✓ self | ✓ | N/A | N/A |
-| `/nfts` list                                | N/A    | ✓ owner | N/A | ✓ collection | N/A | N/A | ✓ |
-| `/nfts/:id` detail                          | ✓ STUB | ✓ owner+creator | N/A | ✓ collection | N/A | N/A | N/A |
-| `/liquidity-pools` list                     | N/A    | N/A | N/A | N/A   | N/A | ✓ | N/A |
-| `/liquidity-pools/:id` detail               | N/A    | ✓ participants | **✗ reserves** | N/A | **✗ since-ledger** | ✓ self | N/A |
+| From entity ↓ / To →                     | tx detail | account         | asset          | contract     | ledger             | pool   | nft |
+| ---------------------------------------- | --------- | --------------- | -------------- | ------------ | ------------------ | ------ | --- |
+| `/transactions` list                     | ✓ STUB    | ✓               | N/A            | N/A          | ✓                  | N/A    | N/A |
+| `/transactions/:hash` (STUB E3)          | N/A       | ✗               | ✗              | ✗            | ✗                  | ✗      | ✗   |
+| `/ledgers` list                          | N/A       | N/A             | N/A            | N/A          | ✓                  | N/A    | N/A |
+| `/ledgers/:seq` detail                   | ✓ STUB    | ✓               | N/A            | N/A          | ✓ self / prev      | N/A    | N/A |
+| `/accounts/:id` detail — summary         | N/A       | ✓ self          | N/A            | N/A          | ✓ first/last seen  | N/A    | N/A |
+| `/accounts/:id` detail — recent tx table | ✓ STUB    | N/A             | N/A            | N/A          | ✓                  | N/A    | N/A |
+| `/assets` list                           | N/A       | ✓ issuer        | ✓              | ✓ (SAC)      | N/A                | N/A    | N/A |
+| `/assets/:id` detail                     | ✓ STUB    | ✓ issuer        | ✓ self         | ✓ (SAC)      | ✓                  | N/A    | N/A |
+| `/contracts/:id` detail                  | N/A       | ✓ creator       | N/A            | ✓ self       | ✓                  | N/A    | N/A |
+| `/nfts` list                             | N/A       | ✓ owner         | N/A            | ✓ collection | N/A                | N/A    | ✓   |
+| `/nfts/:id` detail                       | ✓ STUB    | ✓ owner+creator | N/A            | ✓ collection | N/A                | N/A    | N/A |
+| `/liquidity-pools` list                  | N/A       | N/A             | N/A            | N/A          | N/A                | ✓      | N/A |
+| `/liquidity-pools/:id` detail            | N/A       | ✓ participants  | **✗ reserves** | N/A          | **✗ since-ledger** | ✓ self | N/A |
 
 ## Findings
 
@@ -96,13 +96,13 @@ for matrix completeness.)
 
 ## Dead links / 4xx / 5xx network calls observed
 
-| URL clicked | Result | Network response |
-|---|---|---|
-| `/transactions/:hash` (any) | STUB renders (no API call) | none |
-| `/transactions/nothash` (invalid id) | STUB renders | none |
-| `/foobar` (unknown route) | 404 "Page not found" catch-all | none |
-| `/transactions/` (trailing slash) | renders /transactions list | normal |
-| `/transactions?op=invoke_host_function` (lowercase) | 0 rows, MUI warning, API 400 | `GET /v1/transactions?filter[operation_type]=invoke_host_function → 400` |
+| URL clicked                                         | Result                         | Network response                                                         |
+| --------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
+| `/transactions/:hash` (any)                         | STUB renders (no API call)     | none                                                                     |
+| `/transactions/nothash` (invalid id)                | STUB renders                   | none                                                                     |
+| `/foobar` (unknown route)                           | 404 "Page not found" catch-all | none                                                                     |
+| `/transactions/` (trailing slash)                   | renders /transactions list     | normal                                                                   |
+| `/transactions?op=invoke_host_function` (lowercase) | 0 rows, MUI warning, API 400   | `GET /v1/transactions?filter[operation_type]=invoke_host_function → 400` |
 
 The lowercase op-filter 400 is the same case-sensitivity gap that Wave 2
 C-2 catalogued. URL state preserves the bad value rather than
@@ -122,22 +122,22 @@ hash
 
 ## Class breakdown for K (Wave 3 1.7)
 
-| Class | Count |
-|---|---:|
-| A — baseline-breaker | 0 |
+| Class                |                  Count |
+| -------------------- | ---------------------: |
+| A — baseline-breaker |                      0 |
 | B — routing/contract | 4 (K-1, K-2, K-3, K-4) |
-| C — visual/layout | 0 |
-| D — catalog-only | 2 (K-5, K-6) |
-| E — off-band | 0 |
+| C — visual/layout    |                      0 |
+| D — catalog-only     |           2 (K-5, K-6) |
+| E — off-band         |                      0 |
 
 ## Severity breakdown
 
-| Severity | Count |
-|---|---:|
+| Severity    |                                                              Count |
+| ----------- | -----------------------------------------------------------------: |
 | 🔴 CRITICAL | 0 (K-1 is the cascade-class CRITICAL but inherited from Wave 1 A1) |
-| 🟠 HIGH | 3 (K-1 inherited, K-2, K-3) |
-| 🟡 MEDIUM | 1 (K-4) |
-| 🟢 LOW | 2 (K-5, K-6) |
+| 🟠 HIGH     |                                        3 (K-1 inherited, K-2, K-3) |
+| 🟡 MEDIUM   |                                                            1 (K-4) |
+| 🟢 LOW      |                                                       2 (K-5, K-6) |
 
 ## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
 
@@ -186,6 +186,7 @@ exposes the identifier as a clickable link — verify in delta pass.
 **Evidence:**
 
 - `libs/api-types/src/generated/types.gen.ts:1155-1166` — `PoolAssetLeg` shape:
+
   ```ts
   type PoolAssetLeg = {
     asset_code: string;
@@ -194,9 +195,11 @@ exposes the identifier as a clickable link — verify in delta pass.
     issuer?: string | null;
   };
   ```
+
   **No `id`, no `contract_id`.**
 
 - Asset endpoint accepted formats (per `crates/api/src/assets/handlers.rs:get_asset`):
+
   - numeric `assets.id`
   - contract C-strkey (56 chars)
   - `code-issuer` composite (e.g. `USDC-GA...XYZ`)
@@ -246,15 +249,15 @@ component={RouterLink}>` patterns in:
 
 ### Unlinked identifier renderings — NEW EXHAUSTIVE LIST
 
-| File:line | Identifier | Type | Render mode | Link target | Severity | Finding |
-|---|---|---|---|---|---|---|
-| `web/src/pages/pool-detail/PoolSummary.tsx:33-34` | reserve asset code | asset | plain `Typography` in AssetReserveCell | `/assets/:id` | 🟠 | **F-K-2** (existing) |
-| `web/src/pages/pool-detail/PoolKpiStrip.tsx:82-83,88-89` | reserve label + subtitle asset code | asset | plain `Typography` in KpiCell | `/assets/:id` | 🟠 | **EXTENDS F-K-2** — additional pool detail surface |
-| `web/src/pages/liquidity-pools/PoolsTable.tsx:97-105` | reserve column asset code (list page) | asset | plain `Typography` in reserves stack | `/assets/:id` | 🟠 | **EXTENDS F-K-2** — list-page surface |
-| `web/src/pages/pool-detail/PoolParticipants.tsx:57-59` | `first_deposit_ledger` "Since ledger" | ledger | plain `Typography` w/ `formatAmount` | `/ledgers/:seq` | 🟠 | **F-K-3** (existing) |
-| `web/src/pages/nft-detail/NftSummary.tsx:87-89` | `minted_at_ledger` | ledger | plain `Typography` w/ inline comment "Plain Satoshi text per Figma" | `/ledgers/:seq` | 🟡 | **NEW — F-EX-1** |
-| `web/src/pages/contracts/ContractEvents.tsx:78-90` | event topic strings (when string-typed) | unknown (could be account/contract) | plain colored `Typography` w/ `shortStr` 4/4 truncate | unclear — topics are unstructured | 🟢 | informational; topics may carry addresses |
-| `web/src/pages/contracts/ContractEvents.tsx:96-126` | event data cell | freeform JSON | plain `Typography` middle-truncated | N/A | N/A | not an identifier |
+| File:line                                                | Identifier                              | Type                                | Render mode                                                         | Link target                       | Severity | Finding                                            |
+| -------------------------------------------------------- | --------------------------------------- | ----------------------------------- | ------------------------------------------------------------------- | --------------------------------- | -------- | -------------------------------------------------- |
+| `web/src/pages/pool-detail/PoolSummary.tsx:33-34`        | reserve asset code                      | asset                               | plain `Typography` in AssetReserveCell                              | `/assets/:id`                     | 🟠       | **F-K-2** (existing)                               |
+| `web/src/pages/pool-detail/PoolKpiStrip.tsx:82-83,88-89` | reserve label + subtitle asset code     | asset                               | plain `Typography` in KpiCell                                       | `/assets/:id`                     | 🟠       | **EXTENDS F-K-2** — additional pool detail surface |
+| `web/src/pages/liquidity-pools/PoolsTable.tsx:97-105`    | reserve column asset code (list page)   | asset                               | plain `Typography` in reserves stack                                | `/assets/:id`                     | 🟠       | **EXTENDS F-K-2** — list-page surface              |
+| `web/src/pages/pool-detail/PoolParticipants.tsx:57-59`   | `first_deposit_ledger` "Since ledger"   | ledger                              | plain `Typography` w/ `formatAmount`                                | `/ledgers/:seq`                   | 🟠       | **F-K-3** (existing)                               |
+| `web/src/pages/nft-detail/NftSummary.tsx:87-89`          | `minted_at_ledger`                      | ledger                              | plain `Typography` w/ inline comment "Plain Satoshi text per Figma" | `/ledgers/:seq`                   | 🟡       | **NEW — F-EX-1**                                   |
+| `web/src/pages/contracts/ContractEvents.tsx:78-90`       | event topic strings (when string-typed) | unknown (could be account/contract) | plain colored `Typography` w/ `shortStr` 4/4 truncate               | unclear — topics are unstructured | 🟢       | informational; topics may carry addresses          |
+| `web/src/pages/contracts/ContractEvents.tsx:96-126`      | event data cell                         | freeform JSON                       | plain `Typography` middle-truncated                                 | N/A                               | N/A      | not an identifier                                  |
 
 ### Implication for task 0263
 

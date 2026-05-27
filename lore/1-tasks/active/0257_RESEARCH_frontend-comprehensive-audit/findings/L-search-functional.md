@@ -12,16 +12,16 @@ roundtrips).
 
 ## Per-query matrix
 
-| Query | Type | Expected | Actual | Verdict |
-|---|---|---|---|---|
-| `7b9bacc894c4580b684692d82e03cc63d2185d3ff09ead8746736e88b2d92089` | full tx hash | redirect to `/transactions/:hash` | redirected — stub renders (Wave 1 A1) | ✓ redirect works |
-| `GAHHHEIDIBOTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` | account strkey | redirect to `/accounts/:id` | redirected → full account detail | ✓ |
-| `CUSDCSACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` | contract strkey | redirect to `/contracts/:id` | redirected → contract detail | ✓ |
-| `LD5MMO5JQEACR6KEAPI4ON4P6XKDIRP6KIIA42YOYIQX2EX4JZO6T2DO` | pool strkey | redirect to `/liquidity-pools/:id` OR list filter | **0 results** "No results for ..." | ✗ |
-| `USD` | asset code partial | list filter / results | Token tab shows 2 hits (USDC + USDCOIN) | ✓ |
-| `` (empty) | no query | placeholder | "Type to search transactions, accounts, contracts, tokens, NFTs, and liquidity pools." | ✓ |
-| `aaaa...` ×1000 | very long | graceful error | "Search request failed. Try again..." (API 400) | ✓ graceful |
-| `<script>alert(1)</script>` | XSS | escaped | rendered as text inside `"No results for \"<script>alert(1)</script>\""`, no `<script>` injected to DOM | ✓ safe |
+| Query                                                              | Type               | Expected                                          | Actual                                                                                                  | Verdict          |
+| ------------------------------------------------------------------ | ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------- |
+| `7b9bacc894c4580b684692d82e03cc63d2185d3ff09ead8746736e88b2d92089` | full tx hash       | redirect to `/transactions/:hash`                 | redirected — stub renders (Wave 1 A1)                                                                   | ✓ redirect works |
+| `GAHHHEIDIBOTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`         | account strkey     | redirect to `/accounts/:id`                       | redirected → full account detail                                                                        | ✓                |
+| `CUSDCSACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`         | contract strkey    | redirect to `/contracts/:id`                      | redirected → contract detail                                                                            | ✓                |
+| `LD5MMO5JQEACR6KEAPI4ON4P6XKDIRP6KIIA42YOYIQX2EX4JZO6T2DO`         | pool strkey        | redirect to `/liquidity-pools/:id` OR list filter | **0 results** "No results for ..."                                                                      | ✗                |
+| `USD`                                                              | asset code partial | list filter / results                             | Token tab shows 2 hits (USDC + USDCOIN)                                                                 | ✓                |
+| `` (empty)                                                         | no query           | placeholder                                       | "Type to search transactions, accounts, contracts, tokens, NFTs, and liquidity pools."                  | ✓                |
+| `aaaa...` ×1000                                                    | very long          | graceful error                                    | "Search request failed. Try again..." (API 400)                                                         | ✓ graceful       |
+| `<script>alert(1)</script>`                                        | XSS                | escaped                                           | rendered as text inside `"No results for \"<script>alert(1)</script>\""`, no `<script>` injected to DOM | ✓ safe           |
 
 ## Findings
 
@@ -87,23 +87,23 @@ junior reader.
 
 ## Class breakdown for L (Wave 3 1.14)
 
-| Class | Count |
-|---|---:|
-| A | 0 |
-| B | 1 (L-1) |
-| C | 1 (L-2) |
-| D | 1 (L-6) |
-| E | 0 |
+| Class  |             Count |
+| ------ | ----------------: |
+| A      |                 0 |
+| B      |           1 (L-1) |
+| C      |           1 (L-2) |
+| D      |           1 (L-6) |
+| E      |                 0 |
 | ✓ pass | 3 (L-3, L-4, L-5) |
 
 ## Severity breakdown
 
-| Severity | Count |
-|---|---:|
-| 🔴 CRITICAL | 0 |
-| 🟠 HIGH | 1 (L-1) |
-| 🟡 MEDIUM | 2 (L-2, L-6) |
-| 🟢 LOW | 0 |
+| Severity    |        Count |
+| ----------- | -----------: |
+| 🔴 CRITICAL |            0 |
+| 🟠 HIGH     |      1 (L-1) |
+| 🟡 MEDIUM   | 2 (L-2, L-6) |
+| 🟢 LOW      |            0 |
 
 ## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
 

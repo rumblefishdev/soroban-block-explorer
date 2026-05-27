@@ -35,14 +35,14 @@ Two search inputs visible on home (one in header for "CTRL + F", one in hero for
 
 ## Cross-entity link audit (sampled 5 of each kind from this page)
 
-| Source cell | Destination link | Working? |
-|---|---|---|
-| Tx hash row 1 | `/transactions/7b9bac…2089` | ✓ (full hash href) |
-| Source account row 1 | `/accounts/GAHH…XXXX` | ✓ |
-| Ledger 1024 row | `/ledgers/1024` | ✓ |
-| Ledger hash row | (no link — display only) | ⚠ inconsistent with tx hash being clickable |
-| "View All" tx link | `/transactions` | ✓ |
-| "View All" ledger link | `/ledgers` | ✓ |
+| Source cell            | Destination link            | Working?                                    |
+| ---------------------- | --------------------------- | ------------------------------------------- |
+| Tx hash row 1          | `/transactions/7b9bac…2089` | ✓ (full hash href)                          |
+| Source account row 1   | `/accounts/GAHH…XXXX`       | ✓                                           |
+| Ledger 1024 row        | `/ledgers/1024`             | ✓                                           |
+| Ledger hash row        | (no link — display only)    | ⚠ inconsistent with tx hash being clickable |
+| "View All" tx link     | `/transactions`             | ✓                                           |
+| "View All" ledger link | `/ledgers`                  | ✓                                           |
 
 ### F-W6-E1-4 [Class C, Severity 🟡 MEDIUM] Ledger hash on home table is NOT a link, but ledger sequence IS
 

@@ -23,6 +23,7 @@ DOM snapshot returned the placeholders as empty / zero-width strings. Could not 
 ### F-W6-E7-3 [Class C, Severity 🟢 LOW] Asset detail link uses composite ID `USDCOIN-GAFF…` even for Soroban contracts
 
 Links from this list:
+
 - Classic asset: `/assets/USDCOIN-GAFFFRANK…XXXX` (id `6` confirmed via direct API)
 - Soroban: `/assets/<id>` (numeric id from server-side surrogate)
 

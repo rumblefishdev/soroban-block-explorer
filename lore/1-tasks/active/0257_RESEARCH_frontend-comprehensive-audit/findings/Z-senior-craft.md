@@ -7,21 +7,22 @@
 
 ## Per-check table
 
-| # | Check | Verdict | Evidence | Severity | Class |
-|---|---|---|---|---|---|
-| Z-1 | Anything a senior FE-dev would write differently? | mixed | See per-spot subjective table below | 🟡 | C/D |
-| Z-2 | Naming idiomatic (PascalCase / use* / lowercase / Type/Item suffix) | ✓ | Sampled 20+ exports across `libs/ui/src/index.ts` + `web/src/pages/`; 100% compliance. PascalCase components (Chip, ExplorerTable, …); `useXxx` hooks (useCursorPagination, useTableUrlState, usePageHandlers, useNow, useDebounced, useTabUrlState, useDetailMode); lowercase utilities (truncateMiddle, formatRelative, isPoolStale, classifyError); `Item` / `Type` / `Props` / `Result` suffixes for types | — | — |
-| Z-3 | File structure discoverable (junior finds files in 30s) | ⚠ | "Where is transactions list pagination logic?" trace = 3 hops. Acceptable. See Z-3 below | 🟢 | D |
-| Z-4 | Code smells (god components, magic numbers, deep prop drilling, exception swallowing) | ⚠ | Few smells; **zero exception swallowing** (verified — every catch logs or fallbacks); magic numbers minor (cross-cite F-AD-3 below); no god components | 🟡 | C |
-| Z-5 | Each public API has JSDoc | partial | Spot-check 10 `libs/ui/src/index.ts` re-exports → ~7/10 have JSDoc on the underlying definition; truncate.ts + validators.ts have partial JSDoc; theme exports rely on type names. See Z-5 below | 🟡 | D |
-| Z-6 | Comments explain why, not what | ✓ | Excellent — every sampled comment is "why" or "what + rationale". Examples: `assetLegLabel` JSDoc explains hard-fail rationale; `helpers.ts:41-42` USD formatter has cache rationale comment; `client.ts:7-10` has full backstory; `assetType.ts` (sampled) is rationale-rich | — | — |
-| Z-7 | Error throws have informative messages | ✓ | 6 user-code throws sampled; all have context-rich messages. See Z-7 below | — | — |
+| #   | Check                                                                                 | Verdict | Evidence                                                                                                                                                                                                                                                                                                                                                                                                       | Severity | Class |
+| --- | ------------------------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| Z-1 | Anything a senior FE-dev would write differently?                                     | mixed   | See per-spot subjective table below                                                                                                                                                                                                                                                                                                                                                                            | 🟡       | C/D   |
+| Z-2 | Naming idiomatic (PascalCase / use\* / lowercase / Type/Item suffix)                  | ✓       | Sampled 20+ exports across `libs/ui/src/index.ts` + `web/src/pages/`; 100% compliance. PascalCase components (Chip, ExplorerTable, …); `useXxx` hooks (useCursorPagination, useTableUrlState, usePageHandlers, useNow, useDebounced, useTabUrlState, useDetailMode); lowercase utilities (truncateMiddle, formatRelative, isPoolStale, classifyError); `Item` / `Type` / `Props` / `Result` suffixes for types | —        | —     |
+| Z-3 | File structure discoverable (junior finds files in 30s)                               | ⚠       | "Where is transactions list pagination logic?" trace = 3 hops. Acceptable. See Z-3 below                                                                                                                                                                                                                                                                                                                       | 🟢       | D     |
+| Z-4 | Code smells (god components, magic numbers, deep prop drilling, exception swallowing) | ⚠       | Few smells; **zero exception swallowing** (verified — every catch logs or fallbacks); magic numbers minor (cross-cite F-AD-3 below); no god components                                                                                                                                                                                                                                                         | 🟡       | C     |
+| Z-5 | Each public API has JSDoc                                                             | partial | Spot-check 10 `libs/ui/src/index.ts` re-exports → ~7/10 have JSDoc on the underlying definition; truncate.ts + validators.ts have partial JSDoc; theme exports rely on type names. See Z-5 below                                                                                                                                                                                                               | 🟡       | D     |
+| Z-6 | Comments explain why, not what                                                        | ✓       | Excellent — every sampled comment is "why" or "what + rationale". Examples: `assetLegLabel` JSDoc explains hard-fail rationale; `helpers.ts:41-42` USD formatter has cache rationale comment; `client.ts:7-10` has full backstory; `assetType.ts` (sampled) is rationale-rich                                                                                                                                  | —        | —     |
+| Z-7 | Error throws have informative messages                                                | ✓       | 6 user-code throws sampled; all have context-rich messages. See Z-7 below                                                                                                                                                                                                                                                                                                                                      | —        | —     |
 
 ## Z-3 — Discoverability trace
 
 **Task:** "Where is the transactions list pagination logic?"
 
 Starting from `web/src/pages/TransactionsListPage.tsx`:
+
 - Imports `useTransactionsList` from `web/src/api/hooks/useTransactionsList.ts`
 - Imports `useCursorPagination`, `usePageHandlers` from `@rumblefish/soroban-block-explorer-ui` → resolves to `libs/ui/src/table/{useCursorPagination,usePageHandlers}.ts`
 - `useCursorPagination` → `useTableUrlState` (sibling file)
@@ -35,18 +36,18 @@ Starting from `web/src/pages/TransactionsListPage.tsx`:
 
 Sampled 10 from `libs/ui/src/index.ts`:
 
-| Export | Source file | JSDoc on definition? |
-|---|---|---|
-| `Chip` | `libs/ui/src/components/Chip.tsx` | ⚠ (function-level present, no @param doc) |
-| `TableSkeleton` | `libs/ui/src/states/skeletons/TableSkeleton.tsx` | ✓ |
-| `NotFoundState` | `libs/ui/src/states/errors/NotFoundState.tsx` | ✓ |
-| `classifyError` | `libs/ui/src/states/classifyError.ts` | ✓ (extensive) |
-| `RelativeTimestamp` | `libs/ui/src/timestamps/RelativeTimestamp.tsx` | ✓ |
-| `formatRelative` | `libs/ui/src/timestamps/formatRelative.ts` | ✓ |
-| `useNow` | `libs/ui/src/timestamps/useNow.ts` | ✓ |
-| `ExplorerTable` | `libs/ui/src/table/ExplorerTable.tsx` | ✓ |
-| `useTableUrlState` | `libs/ui/src/table/useTableUrlState.ts` | ✓ |
-| `useCursorPagination` | `libs/ui/src/table/useCursorPagination.ts` | ✓ |
+| Export                | Source file                                      | JSDoc on definition?                      |
+| --------------------- | ------------------------------------------------ | ----------------------------------------- |
+| `Chip`                | `libs/ui/src/components/Chip.tsx`                | ⚠ (function-level present, no @param doc) |
+| `TableSkeleton`       | `libs/ui/src/states/skeletons/TableSkeleton.tsx` | ✓                                         |
+| `NotFoundState`       | `libs/ui/src/states/errors/NotFoundState.tsx`    | ✓                                         |
+| `classifyError`       | `libs/ui/src/states/classifyError.ts`            | ✓ (extensive)                             |
+| `RelativeTimestamp`   | `libs/ui/src/timestamps/RelativeTimestamp.tsx`   | ✓                                         |
+| `formatRelative`      | `libs/ui/src/timestamps/formatRelative.ts`       | ✓                                         |
+| `useNow`              | `libs/ui/src/timestamps/useNow.ts`               | ✓                                         |
+| `ExplorerTable`       | `libs/ui/src/table/ExplorerTable.tsx`            | ✓                                         |
+| `useTableUrlState`    | `libs/ui/src/table/useTableUrlState.ts`          | ✓                                         |
+| `useCursorPagination` | `libs/ui/src/table/useCursorPagination.ts`       | ✓                                         |
 
 **Estimate:** ~80-90% of `libs/ui` public API has JSDoc on the definition. Strong baseline.
 
@@ -56,15 +57,15 @@ Sampled 10 from `libs/ui/src/index.ts`:
 
 ## Z-7 — Throw quality sample
 
-| File:line | Throw message | Context | Quality |
-|---|---|---|---|
-| `web/src/main.tsx:13` | "Root element not found. Ensure index.html contains `<div id="root"></div>`." | Bootstrap | ✓ tells dev exactly what to check |
-| `web/src/api/config.ts:4` | "VITE_API_BASE_URL is not set. Add it to web/.env.<mode> or pass it on the Vite command line." | Env config | ✓ actionable |
-| `web/src/api/config.ts:12` | "VITE_API_BASE_URL is not a valid URL: ${raw}" | Env validation | ✓ includes offending value |
-| `web/src/utils/poolIdStrkey.ts:78` | (not read — domain throw) | Strkey parse | ✓ (per existing Wave 4 AN review) |
-| `web/src/pages/pool-detail/helpers.ts:19` | "assetLegLabel: non-native leg has no asset_code (asset_type_name=${...})" | Schema drift hard-fail | ✓ identifies caller + value |
-| `web/src/pages/pool-detail/PoolTransactions.tsx:65` | (per Wave 4 — `classifyLpTx` hard-fail on unknown op_type) | Schema drift | ✓ |
-| `libs/ui/src/theme/ThemeProvider.tsx:93` | (sampled — context-not-found error in `useColorMode`) | React context | ✓ standard pattern |
+| File:line                                           | Throw message                                                                                  | Context                | Quality                           |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------- |
+| `web/src/main.tsx:13`                               | "Root element not found. Ensure index.html contains `<div id="root"></div>`."                  | Bootstrap              | ✓ tells dev exactly what to check |
+| `web/src/api/config.ts:4`                           | "VITE_API_BASE_URL is not set. Add it to web/.env.<mode> or pass it on the Vite command line." | Env config             | ✓ actionable                      |
+| `web/src/api/config.ts:12`                          | "VITE_API_BASE_URL is not a valid URL: ${raw}"                                                 | Env validation         | ✓ includes offending value        |
+| `web/src/utils/poolIdStrkey.ts:78`                  | (not read — domain throw)                                                                      | Strkey parse           | ✓ (per existing Wave 4 AN review) |
+| `web/src/pages/pool-detail/helpers.ts:19`           | "assetLegLabel: non-native leg has no asset_code (asset_type_name=${...})"                     | Schema drift hard-fail | ✓ identifies caller + value       |
+| `web/src/pages/pool-detail/PoolTransactions.tsx:65` | (per Wave 4 — `classifyLpTx` hard-fail on unknown op_type)                                     | Schema drift           | ✓                                 |
+| `libs/ui/src/theme/ThemeProvider.tsx:93`            | (sampled — context-not-found error in `useColorMode`)                                          | React context          | ✓ standard pattern                |
 
 **Verdict:** every user-code throw is informative + actionable. **No "Error: failed" style throws.** Strong senior discipline.
 
@@ -73,27 +74,32 @@ Sampled 10 from `libs/ui/src/index.ts`:
 Picked 5 spots that stand out:
 
 ### Spot 1 — `client.ts:11-29` error interceptor flattens typed envelope
+
 - **What's odd:** mutates the caught error via `Object.assign(error, {status})`; loses typed envelope discriminator.
 - **What a senior would do:** typed `extractErrorCode(error: unknown): string | null` helper + `errorWithEnvelope` wrapper type.
 - **Cross-cite:** F-AF-1 (Gate A accepted baseline; Phase 3 refactor).
 - **Class:** A.
 
 ### Spot 2 — `format.ts` + `transactions/formatters.ts` + `pool-detail/helpers.ts` + `transaction-detail/shared/formatFee.ts` are 4 formatter homes
+
 - **What's odd:** 4 distinct formatter homes, partially overlapping (cross-cite F-Y-6 / F-U-2 / F-U-4 / F-J-16 / F-J-17). Senior would unify under `libs/ui/src/format/`.
 - **Cross-cite:** Wave 4 F-U series; Wave 5 F-Y-2.
 - **Class:** C.
 
 ### Spot 3 — `web/src/pages/detail/SectionCard.tsx` named "detail" but used universally
+
 - **What's odd:** the home doesn't match the use. Senior would hoist to `libs/ui/src/layout/`.
 - **Cross-cite:** F-AH-3, F-U-1, F-X-2.
 - **Class:** C.
 
 ### Spot 4 — `useDetailMode` (`web/src/pages/transaction-detail/useDetailMode.ts`) uses `useSearchParams` directly, while pagination uses `useTableUrlState`
+
 - **What's odd:** 2 parallel URL-state patterns. Senior would either unify or document why they diverge.
 - **Cross-cite:** Wave 4 F-U-5, F-X-3.
 - **Class:** A (informational — Wave 4 Part 2 EXTRA verdict: KEEP useTableUrlState, document detail mode's divergence).
 
 ### Spot 5 — `web/src/pages/transactions/operationTypes.ts` hardcodes operation enum (27 entries) in FE
+
 - **What's odd:** the canonical op-type list lives in `crates/domain/src/enums/operation_type.rs`. FE hand-types the 27 entries, susceptible to backend drift.
 - **What a senior would do:** generate FE op-type enum from OpenAPI (`@hey-api/openapi-ts` supports enum codegen) or include it in `@rumblefish/api-types` codegen.
 - **Cross-cite:** Wave 1 archaeology Future Work item from 0069 ("OpenAPI operation_type enum in backend — FE filter list hardcoded today") + Wave 1 C-2 (H6 5 vs 27 ops).

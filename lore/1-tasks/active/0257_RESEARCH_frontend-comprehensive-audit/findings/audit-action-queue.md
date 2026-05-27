@@ -59,6 +59,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Edit `libs/ui/src/layout/Footer.tsx`. Either (a) fill in real hrefs for all 7 items — needs legal team content for Terms/Privacy/Cookies — or (b) hide dead `<span>` items entirely until content ready. External links must use `target="_blank" rel="noopener noreferrer"` per F-H-5 pattern.
 
 **Findings closed (sub-checklist):**
+
 - [ ] CA-1 — Terms of Service / Privacy Policy / Cookies render as dead `<span>` (no href)
 - [ ] CA-2 — Resources (GitHub / Stellar docs / Soroban docs / Stellar dashboard) render as dead `<span>` (no href)
 - [ ] CA-3 — When wiring external links, ensure `target="_blank" rel="noopener noreferrer"`
@@ -81,10 +82,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `define: { __BUILD_SHA__: JSON.stringify(process.env.GITHUB_SHA ?? 'dev') }` to `web/vite.config.ts`. Surface in `libs/ui/src/layout/Footer.tsx` near copyright line. Wire `package.json.version` similarly. Update CI workflow to pass `GITHUB_SHA` env var to the build step.
 
 **Findings closed (sub-checklist):**
+
 - [ ] DN-1 — no build version / SHA displayed in UI
 - [ ] DN-2 — no vite `define` block to inject build metadata
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -101,6 +103,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Create `web/src/pages/ContractsListPage.tsx` mirroring the patterns of TransactionsListPage / AssetsListPage. Add route in `web/src/router/index.tsx`. Add nav entry to `libs/ui/src/layout/TopNav.tsx` `NAV_LINKS`. Wire `useContractsList` hook over the appropriate generated client method (verify endpoint exists; if not, spawn backend task first).
 
 **Findings closed (sub-checklist):**
+
 - [ ] Archaeology Recommendation 2 — Contracts list + nav missing
 - [ ] F-A-5 Gap 1 — Contract detail unreachable by browsing
 - [ ] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS
@@ -124,6 +127,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Create `libs/ui/src/format/` directory with: `stroops.ts` (single `STROOPS_PER_XLM_BIGINT` + `stroopsToXlmString` + canonical `formatFee` + `formatStroops`), `numbers.ts` (`formatInteger`, `formatTps`, `formatPercent`). Extend `libs/ui/src/identifiers/truncate.ts` to expose all 6 ad-hoc truncate variants via canonical `truncateMiddle(value, type)`. Extract `useDebouncedDraft<T>(value, onChange, delay)` from existing `useDebounced.ts`. Migrate all consumers: 6 truncation sites + 10 toLocaleString sites + 4 toFixed sites + 2 STROOPS + 2 formatFee + 4 debounce sites. Delete duplicated impls.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-U-3 — 6 truncation re-impls (shortId/shortStr/shortHash/shortenStrKey/truncateHex + inline)
 - [ ] F-U-4 — 2 STROOPS_PER_XLM constants (number + bigint variants)
 - [ ] F-U-2 — 10 inline toFixed/toLocaleString sites bypass formatter
@@ -141,7 +145,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-Z-1 — Multiple formatter homes (recap)
 - [ ] J-3 — TopNav.formatNumber duplicate of formatCompactAmount
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -158,6 +162,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Hoist `web/src/pages/detail/{SectionCard,PageBreadcrumb,SummaryRow}.tsx` → `libs/ui/src/layout/`. Add to `libs/ui/src/index.ts` barrel. Update 16+ consumer imports. Delete the `web/src/pages/detail/` folder. Move `assetLegLabel` + `classifyLpTx` to `web/src/pages/liquidity-pools/shared/`. Hoist `GlobalSearchBar` to `libs/ui/src/layout/` and move `web/src/search/` body into `web/src/pages/search/`. Move `web/src/pages/{cursorParams,format,url}.ts` to `web/src/pages/_shared/`. Delete `web/src/pages/PageStub.tsx` (dead orphan post tx-detail merge).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-U-1 — SectionCard wrong home (web/src/pages/detail/ instead of libs/ui)
 - [ ] F-AH-3 — Same as F-U-1, restated
 - [ ] F-AH-1 — `web/src/pages/PageStub.tsx` dead orphan post-tx-detail merge
@@ -188,12 +193,13 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Extend `libs/ui/src/states/` with: `<TableSkeleton rows={N}>`, `<SectionSkeleton>`, `<LoadingState variant="inline|overlay|full">`, `<RetryingState attempt={N} max={N}>`. Migrate consumers. Add subtle polling-refresh pulse to `LIVE` pills (paired with card 7.2).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-U-5 — Minor component-reuse violation
 - [ ] F-W6-AP-1 — Loading pattern inconsistency: skeleton vs spinner choice not codified
 - [ ] F-W6-AP-3 — Error retry has no distinct "retrying" state
 - [ ] F-W6-AP-4 — Inline vs overlay vs full-page loading not standardised
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -212,6 +218,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Enable `noUncheckedIndexedAccess: true` in `tsconfig.base.json`. Expect 10-50 new errors; most are 1-line `?? fallback` additions. Fix the `assetColor.ts:131` non-null assertion as bonus. Verify `nx typecheck` green.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AQ-1 — `noUncheckedIndexedAccess` disabled
 - [ ] F-AQ-2 — `exactOptionalPropertyTypes` disabled (bundle in same PR if cheap)
 - [ ] F-P-1 — Lint warning at `assetColor.ts:131` forbidden non-null assertion
@@ -233,6 +240,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Define `Brand<T, B>` helper in `libs/ui/src/identifiers/branded.ts`. Bump each validator from `(v: string): boolean` to `(v: string): v is XxxId` form. Thread branded types through `routes.ts`, `useParams` consumers, hook arg signatures. Add `isAssetId` / `isNftId` shape-aware validators (currently fall through to `value.length > 0`).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AQ-4 — Zero branded / nominal types for ID strings
 - [ ] C-5 — Missing `isAssetId` / `isNftId` validator (asset polymorphic gap)
 
@@ -253,9 +261,10 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `libs/ui/src/utils/assertNever.ts` exporting `assertNever(x: never): never`. Adopt in the 4 existing switches over string-literal unions (`useSearchResults.ts`, `usePoolChart.ts`, `OperationFlowTree.tsx`, `validators.ts`) plus Filip's 2 new switches in `HighlightedJson.tsx` + `humanizeOp.ts`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AQ-3 — 4 switches, 3 exhaustive, 1 implicit-fallback; no `assertNever`
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -274,6 +283,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `rollup-plugin-visualizer` dev-dep + CI artifact upload. Add `manualChunks` in `web/vite.config.ts` for `react-vendor`, `mui-vendor`, `tanstack-vendor`. Lazy-load `PoolCharts` inside `LiquidityPoolDetailPage` so chart code loads on tab activation. Coordinated MUI 7→9 bump to eliminate `@mui/utils` triplication (separate concern — see card 10.2).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AI-1 — Main bundle 594KB / 189KB gz exceeds Vite 500KB warning
 - [ ] F-AI-2 — `LiquidityPoolDetailPage` 313KB / 95KB gz, chart heavy
 - [ ] F-AI-3 — `SearchOutlined-*.js` 67KB stand-alone chunk (anomaly worth visualizer)
@@ -302,6 +312,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Wrap catch-all 404 in `AppShell` `<main>` landmark. Update `libs/ui/src/states/errors/NotFoundState.tsx` to render an `<h1>` (entity-typed). Verify all detail-route NotFound paths use the canonical state component.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-E-3 — Catch-all 404 `<main>` landmark gap
 - [ ] F-W6-NOTFOUND-1 — NotFound missing h1 on 4 of 5 detail routes
 - [ ] F-W6-E3-3 — NotFound h1 inconsistency (cross-cite)
@@ -311,7 +322,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-W6-E13-2 — Pool NotFound has no h1
 - [ ] F-D-3 — Detail page H1 heading inconsistency (partial — covers NotFound variant)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -328,6 +339,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Migrate `web/src/pages/pool-detail/PoolCharts.tsx` state (`metric`, `period`) to `useTabUrlState` or `useSearchParams` (whichever pattern is established). Confirm Contract tabs are fully URL-state (per AL sweep evidence). Document the convention in `lore/3-wiki/`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-E-7 — No URL state for tabs (Contract Interface/Invocations/Events + LP chart)
 - [ ] F-EX-2 — Pool chart metric/period in useState, not URL
 - [ ] F-AL-1 (defer) — `selectedIndex` in tx-detail useState (defer; this is borderline-deliberate per F-AL-1 trade-off)
@@ -349,12 +361,13 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Update each detail-page sub-section hook (`useAccountTransactions`, `useContractInterface`, `useContractInvocations`, `useContractEvents`, `usePoolCharts`, `usePoolParticipants`, `usePoolTransactions`) to accept `enabled` arg and gate via parent query status. Update consumer pages to pass `enabled: !parentQuery.isError`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-NOTFOUND-2 — Sub-section queries fire on parent 404, console noise
 - [ ] F-W6-E6-1 — Sub-section queries still fire on 404
 - [ ] F-W6-E9-1 — Same on contract detail
 - [ ] F-W6-E13- (Network requests) — Same on pool detail
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -371,6 +384,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Wrap remaining identifier renderings in `<RouterLink>` per the canonical `IdentifierDisplay` pattern. Verify `IdentifierDisplay type="ledger"` on E3 emits an `<a href="/ledgers/:seq">`. Confirm `OperationFlowTree` exposes destination account as clickable.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-E10-3 — NFT row Contract ID is plain text
 - [ ] F-W6-E11-3 — Contract ID in NFT detail Details section is plain text
 - [ ] F-W6-E1-4 — Ledger hash on home table not a link
@@ -397,10 +411,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Fix 0066 frontmatter + body + cross-refs (related_adr ['0008'], related_tasks ['0063']). Write a Phase-3 walker script in `scripts/` that diffs `status: active` frontmatter against body `## Status:` heading across all FE tasks and reports drift. Spot-fix any other drift surfaced.
 
 **Findings closed (sub-checklist):**
+
 - [ ] A2 — 0066 task body drift
 - [ ] Q-4 — 0066 triple-drift confirmed + expanded
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -417,6 +432,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Walk the 23 GAP rows in `00-archaeology.md` Future Work table. Spawn backlog tasks under `lore/1-tasks/backlog/XXXX_*.md` with `related_tasks: ['0257']`, severity-tagged. Cluster format/style nits into 1-2 batch tasks. Notable gaps: contracts list page (covered by card 1.3 — skip), responsive nav (covered by card 8.3 — skip), validators → libs/domain migration, IdentifierDisplay router Link audit, table sorting once API exposes sort, tx Amount on PoolTransactions (gated on 0247), per-leg icon_url, SAC SEP-41 stub, B4 fake-XLM disambig design redo, ScVal decoder for Contract Events, Searchable Autocomplete for ops dropdown, etc.
 
 **Findings closed (sub-checklist):**
+
 - [ ] A3 — 25/28 Future Work items un-spawned (23 still remain after card 1.3)
 - [ ] AC-13 — Each unchecked AC has spawned task (cross-cite A3)
 - [ ] Q-7 — Forward-link expectation mismatch 0254 ↔ 0257 (testing baseline cross-link)
@@ -443,6 +459,7 @@ This is the master action queue for closing audit 0257. Structure:
 4. **Operation type enum codegen from OpenAPI** — backend should expose op_type as OpenAPI enum so `@hey-api/openapi-ts` generates it; resolves 0069 Future Work + F-Z-2 hand-typed 27-entry FE enum.
 
 **Findings closed (sub-checklist):**
+
 - [ ] C-17 — No `CorsLayer` in `crates/api/src/`
 - [ ] F-AQ-7 — `unknown` + runtime probes for heavy XDR shapes
 - [ ] F-AQ-8 — Triple cast `results_meta_xdr` codegen drift
@@ -468,6 +485,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Update `docs/architecture/backend/backend-overview.md` pagination section with new shape. Write ADR `lore/2-adrs/XXXX_url-cursor-pagination-convention.md` for multi-cursor namespacing. Create `lore/3-wiki/frontend-conventions.md` + `lore/3-wiki/frontend-data-flow.md`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-A-3 — Partial ADR 0032 gap on 0254 PR
 - [ ] 0238 #5 Emerged — `cursorParam` multi-cursor namespacing ADR gap
 - [ ] F-AB-2 — Interval labels (0065 #5) spec body not amended
@@ -482,7 +500,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-AA-4 — `useIntersectionObserver` single-consumer note in wiki
 - [ ] Issues Encountered worth re-audit (worktree gotchas → `lore/3-wiki/`)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -501,6 +519,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add checkmark / X icon to status badges for color-blind compliance. Add semantic color groups to operation type chips. Replace `background-color` / `width` / `border-radius` transitions with `transform` / `opacity` where possible (per F-W6-AG-3 list of 14 sites). Trim hover transitions to ~80-100ms. Wrap LP detail section operation type as entity-style chip. Fix small copy nits (typos, etc.).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-CH-1 — Status badges rely on color but include text (mid-grade compliance)
 - [ ] F-W6-CH-2 — Operation type chips rely on text only (informational)
 - [ ] F-W6-AG-3 — Transitions favor non-GPU-accelerated properties
@@ -550,6 +569,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `useLiveStatus()` hook in `libs/ui/src/timestamps/`: compares `latest_close_at` with `now()`; threshold <30s = LIVE, >30s = STALE, >5min = OFFLINE. Single source of truth for footer + all 5 LIVE pill sites. Add `/v1/health` backend endpoint check for footer status indicator. Wire `is_live` / `latest_close_at` from `/v1/network/stats` into the hook. Add subtle pulse / row-flash on poll refresh (paired with card 2.3).
 
 **Findings closed (sub-checklist):**
+
 - [ ] DM-1 — Footer "All systems operational" hardcoded
 - [ ] DM-2 — No `/health` or `/status` endpoint hit anywhere
 - [ ] F-D-4 — Polling indicator absent on detail pages (PollingIndicator has 0 consumers)
@@ -576,6 +596,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Find the share % render in `web/src/pages/pool-detail/PoolParticipants.tsx`. Apply `formatPercent(value, 2)` from card 2.1 batch (or inline `.toFixed(2)` until 2.1 lands).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision
 
 **Notes:** Fast standalone fix; do not wait for card 2.1.
@@ -595,12 +616,13 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `aria-label` + `placeholder` to each filter input. Verify with `document.querySelectorAll('input').forEach(el => console.log(el.ariaLabel, el.placeholder))`. Update `libs/ui/src/layout/SearchInput.tsx` and per-page `AssetFilters.tsx`, `NftFilters.tsx`, `PoolsFilterBar.tsx`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-F-2 — Filter slots on /assets, /nfts, /liquidity-pools lack accessible names
 - [ ] F-W6-F-4 — Header search lacks aria-label and id
 - [ ] F-W6-E7-1 — Two filter slots above /assets with no label visible
 - [ ] F-W6-E10-1 — Four filter slots above /nfts all unlabeled
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -617,10 +639,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** In `web/src/pages/nft-detail/`, add `component="h2"` to section heading Typography elements.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-E11-1 — NFT detail has h1 but no h2/h3
 - [ ] F-W6-F-1 — Same finding (recap)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -637,12 +660,13 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Normalize both consumers to use the same `useNetworkStats()` hook + same query key, so TanStack dedupes. Verify in DevTools network panel.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-E0-5 — Header polling duplicates home polling
 - [ ] F-W6-AG-9 — Polling on home + header overlap (cross-cite)
 - [ ] F-W6-E1-3 — Home stats strip duplicated in header (informational)
 - [ ] F-I-5 — TanStack default dedup (informational; confirmed working — this card validates same-key usage)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -659,9 +683,10 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add global top-bar progress indicator (e.g. `nprogress`-style or React Router's `useNavigation()` state). Wire to a small `<RouteTransitionIndicator>` in `AppShell`.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-AG-5 — No visible route-transition loading indicator
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -678,10 +703,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `@media (prefers-reduced-motion: reduce)` rule to global CSS that shortens all transitions to ~0ms. Run keyboard trap test on any popovers (TanStack devtools, Autocomplete, etc.).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-F-7 — Reduced-motion not verified
 - [ ] F-W6-F-8 — No keyboard trap test on dialogs/modals
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -700,6 +726,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Spawn / promote task 0226 (libs/ui vitest infra). Promote / activate. Add unit tests for: `truncateMiddle`, `useCursorPagination`, `formatAmount`, `useDebouncedDraft`. Add Playwright CLI smoke for 11 paginated pages (blocks 0077, 0238). Wire CI gate.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AD-5 — Zero test coverage (cross-cite)
 - [ ] F-AH-6 — No tests collocated or in `__tests__/`
 - [ ] A4 — Task 0226 backlog since 2026-05-15 unblocks 4 deferred items
@@ -725,6 +752,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Bundle into single dep-hygiene task: add `knip` to CI with baseline; add Renovate config + grouped MUI/Nx batches; allowlist `lodash-es` via cargo-lambda-cdk in `npm audit`; bump prettier 2→3 + format:write follow-up; bump eslint 8→9 (flat config) + typescript-eslint 8→9.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-P-2 — No dead-export detection in CI (knip / ts-prune)
 - [ ] F-P-6 — Cyclical imports not checked (madge / dependency-cruiser)
 - [ ] F-P-8 — No production-bundle console-leak check in CI
@@ -753,6 +781,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Audit + fix 800px min-width root cause (likely `web/src/router/AppShell.tsx` or `libs/ui/src/layout/HeaderStatsStrip.tsx`). Add hamburger menu at <768px (resolves 0059 Future Work). Add table → card transformation OR horizontal-scroll-with-shadow for embedded tables. Audit touch targets to 44px minimum.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum
 - [ ] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation
 - [ ] F-W6-RESPONSIVE-3 — No hamburger / mobile nav
@@ -777,6 +806,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add typed `extractErrorCode(error: unknown): string | null` helper next to `client.ts`. Wrap all 7 detail pages in `SectionErrorBoundary`. Spawn `XXXX_FEATURE_frontend-error-reporting` task or wire a minimal Sentry/console reporter behind env var. Add runtime shape probe (per F-AE-6 / F-D-1 root-cause prevention).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AF-1 — Error interceptor swallows raw envelope shape (information loss)
 - [ ] F-AE-3 — SectionErrorBoundary inconsistent coverage
 - [ ] F-AE-4 — Error interceptor flattens typed envelope (cross-cite F-AF-1)
@@ -802,12 +832,13 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Bump `detailPolicy.gcTime` to ≥10min in `web/src/api/polling.ts`. Explicitly set `refetchIntervalInBackground: false` on `homePolicy`. Add JSDoc header comment documenting TanStack's visibility-API integration. Decide on `invalidateResource`: drop (dead code) or keep + mark "pre-mutation infra".
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-I-3 — No visibilitychange / document.hidden pause
 - [ ] F-I-4 — `invalidateResource` defined + exported but never called
 - [ ] F-I-6 — No explicit `refetchIntervalInBackground` setting
 - [ ] F-I-7 — `gcTime` not set on listPolicy / detailPolicy
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -824,6 +855,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `web/public/favicon.ico` or `<link rel="icon" href="data:,">` shim. Rename `soroban-explorer.color-mode` → `sbe:theme` (or document). Wrap timestamp renderings in `<time dateTime>`. Document em-dash convention in wiki.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AE-1 — `/favicon.ico` 404 on every route
 - [ ] H-12 — Color-mode storage key naming inconsistency
 - [ ] C-8 — No `<time dateTime>` semantic element
@@ -853,10 +885,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Show designer the current implementation alongside both Figma variants. Pick canonical pattern.
 
 **Findings closed (sub-checklist):**
+
 - [ ] 0061 #4 Emerged — Sort caret middle-ground designer sign-off
 - [ ] F-AB-4 — Sort-caret middle ground needs designer sign-off (recap)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -873,13 +906,14 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Add `commitlint.config.js` + husky `commit-msg` hook. Create `.github/PULL_REQUEST_TEMPLATE.md` with lore task reference field. Human-verify GitHub branch protection rules on develop.
 
 **Findings closed (sub-checklist):**
+
 - [ ] AR-2 — Mixed `feat(lore-NNNN)` vs `feat(NNNN)` scope styles
 - [ ] AR-3 — Commitlint config missing
 - [ ] AR-4 — PR template missing
 - [ ] AR-7 — Branch protection on develop not verifiable from repo
 - [ ] AR-8 — No CHANGELOG.md (pre-launch defer per default; document decision)
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -898,6 +932,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Walk the Out-of-scope table from `README.md`. Spawn each as `lore/1-tasks/backlog/XXXX_*.md` with `related_tasks: ['0257']` and clear scope.
 
 **Findings closed (sub-checklist):**
+
 - [ ] Out of scope O — testing coverage → `XXXX_FEATURE_frontend-testing-baseline` (covered by card 8.1; skip if already spawned)
 - [ ] Out of scope N — i18n readiness → `XXXX_FEATURE_frontend-i18n` (conditional)
 - [ ] Out of scope AJ — asset optimization (spawn if perf issues found; covered by card 4.1)
@@ -931,6 +966,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Spawn `XXXX_RESEARCH_lp-oracle-decision-adr` in `lore/2-adrs/`. Decide: oracle source (Stellar Reflector, Chainlink, custom indexer-side computation, etc.). Once ADR lands, 0199 + 0215 unblock.
 
 **Findings closed (sub-checklist):**
+
 - [ ] A5 — 0199 / 0215 LP-blocked tasks never unblocked
 - [ ] F-A-4 (Gap) — 0199 blocked-on-oracle (recap)
 - [ ] 0077 Future Work — Chart series wiring (gated on 0199)
@@ -953,6 +989,7 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Spawn `XXXX_REFACTOR_frontend-mui-7-to-9-bump`. Bump `@mui/material` 7→9. Migrate sx changes per upstream guide. Migrate Grid usage to Grid v2. Run visual regression (Wave 6 + Playwright CLI smoke once card 8.1 lands). Verify `@mui/utils` single version in lock.
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-CO-3 — `@mui/material` 2 major versions behind
 - [ ] F-CO-6 — `@mui/utils` triple-versioned (RESOLVED by this bump)
 
@@ -973,10 +1010,11 @@ This is the master action queue for closing audit 0257. Structure:
 **Scope.** Find `linked={false}` site (likely `web/src/pages/pool-detail/PoolDetailHeader.tsx`). Verify `routes.pool(strkey)` produces correct URL. Flip back to `linked={true}` (or remove the prop).
 
 **Findings closed (sub-checklist):**
+
 - [ ] F-AB-3 — Mild fix-by-hide in 0251 B1
 - [ ] 0251 B1 Emerged — fix-by-hide on pool-id header
 
-**Notes:** _____
+**Notes:** **\_**
 
 ---
 
@@ -989,383 +1027,383 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 - `→ C N.M` — clustered into card N.M of this queue; STATUS tracks per card
 - `TODO` (orphan) — surfaced by audit but not assigned to any card or skip; review during impl
 
-| Finding | Wave | Sev | Cluster | STATUS | Notes |
-|---|---|---|---|---|---|
-| A1 | 1 | 🔴 | — | RESOLVED | TxDetail stub — a2c1b205 (FilipDz PR #215) |
-| A2 | 1 | 🟠 | C 6.1 | TODO | 0066 task body drift |
-| A3 | 1 | 🟠 | C 6.2 | TODO | 25/28 Future Work un-spawned |
-| A4 | 1 | 🟡 | C 8.1 | TODO | 0226 test infra blocked |
-| A5 | 1 | 🟡 | C 10.1 | TODO | 0199/0215 LP blocked |
-| F-AF-1 | 1 | 🟡 | C 8.4 | TODO | Error interceptor flattens envelope |
-| F-AF-2 | 1 | 🟢 | C 8.4 | TODO | Object.assign(error) smell |
-| F-AF-3 | 1 | 🟢 | — | SKIP | as unknown as `useNow.ts` justified |
-| F-AF-4 | 1 | 🟢 | C 8.4 | TODO | envelopeMessage object-string guard |
-| F-AQ-1 | 1 | 🟠 | C 3.1 | TODO | noUncheckedIndexedAccess flag |
-| F-AQ-2 | 1 | 🟡 | C 3.1 | TODO | exactOptionalPropertyTypes flag |
-| F-AQ-3 | 1 | 🟡 | C 3.3 | TODO | Switch exhaustiveness + assertNever |
-| F-AQ-4 | 1 | 🟠 | C 3.2 | TODO | Branded ID types |
-| F-AQ-5 | 1 | 🟢 | — | SKIP | Discriminated unions zero — no issue |
-| F-AQ-6 | 1 | 🟢 | — | SKIP | Generic constraints sensible — no issue |
-| F-AQ-7 | 1 | 🟡 | C 6.3 | TODO | XDR unknown casts (backend coordination) |
-| F-AQ-8 | 1 | 🟡 | C 6.3 | TODO | results_meta_xdr codegen drift |
-| F-P-1 | 1 | 🟡 | C 3.1 | TODO | Lint warning assetColor.ts:131 |
-| F-P-2 | 1 | 🟡 | C 8.2 | TODO | No knip/ts-prune in CI |
-| F-P-3 | 1 | ✓ | — | RESOLVED | Zero console.* in source (baseline) |
-| F-P-4 | 1 | ✓ | — | RESOLVED | Zero TODO/FIXME markers (baseline) |
-| F-P-5 | 1 | ✓ | — | RESOLVED | Zero commented-out blocks (baseline) |
-| F-P-6 | 1 | 🟢 | C 8.2 | TODO | Cyclical imports not checked |
-| F-P-7 | 1 | 🟢 | C 7.1 (overrides split) | DEFER-M2 | overrides.ts 867 LOC — splittable; F-Y-1 |
-| F-P-8 | 1 | 🟢 | C 8.2 | TODO | No bundle console-leak grep in CI |
-| F-AI-1 | 1 | 🟠 | C 4.1 | TODO | Main bundle > 500KB |
-| F-AI-2 | 1 | 🟠 | C 4.1 | TODO | LP detail chunk 313KB |
-| F-AI-3 | 1 | 🟡 | C 4.1 | TODO | SearchOutlined 67KB chunk anomaly |
-| F-AI-4 | 1 | 🟢 | — | SKIP | ExplorerTable chunk informational |
-| F-AI-5 | 1 | ✓ | — | RESOLVED | Devtools tree-shake confirmed |
-| F-AI-6 | 1 | ✓ | — | RESOLVED | Tree-shake validated |
-| F-AI-7 | 1 | 🟡 | C 4.1 | TODO | No bundle visualizer |
-| F-AI-8 | 1 | 🟡 | C 4.1 | TODO | No vendor chunk split |
-| F-AI-9 | 1 | ✓ | — | RESOLVED | CSS total tiny (informational) |
-| F-AI-10 | 1 | 🟡 | C 4.1 | TODO | TxDetail chunk 30KB (Filip baseline) |
-| F-AI-11 | 1 | 🟢 | — | SKIP | TransactionsListPage +0.15KB (informational) |
-| F-CO-1 | 1 | 🟠 | — | RESOLVED | Vite 7.3.3 CVE bump — 473de2a2 |
-| F-CO-2 | 1 | 🟢 | C 8.2 | TODO | lodash-es allowlist |
-| F-CO-3 | 1 | 🟡 | C 10.2 | TODO | MUI 7→9 bump |
-| F-CO-4 | 1 | 🟢 | C 8.2 | TODO | react-router-dom 2 minor |
-| F-CO-5 | 1 | 🟡 | C 8.2 | TODO | eslint v8 EoL |
-| F-CO-6 | 1 | 🟠 | C 10.2 / C 8.2 | TODO | mui/utils triple-version |
-| F-CO-7 | 1 | 🟢 | C 8.2 | TODO | No Renovate/Dependabot |
-| F-CO-8 | 1 | 🟢 | C 8.2 | TODO | prettier 2→3 |
-| C-1 | 2 | ✓ | — | RESOLVED | normalizeOperationType H2 root cause baseline |
-| C-2 | 2 | ✓ | — | RESOLVED | 27 ops parity holds |
-| C-3 | 2 | 🟢 | C 8.6 | TODO | Non-op enums no FE mirror (document) |
-| C-4 | 2 | 🟢 | C 8.6 | TODO | Polymorphic ID link builders inconsistent encoding |
-| C-5 | 2 | 🟡 | C 3.2 | TODO | Missing isAssetId / isNftId validator |
-| C-6 | 2 | ✓ | — | RESOLVED | Pool id strkey/hex round-trip OK |
-| C-7 | 2 | partial | — | RESOLVED | UTC timestamps consistent (baseline) |
-| C-8 | 2 | 🟢 | C 8.6 | TODO | No `<time dateTime>` element |
-| C-9 | 2 | ✓ | — | RESOLVED | Trailing-zero trim works |
-| C-10 | 2 | ✓ | — | RESOLVED | minDecimals floor works |
-| C-11 | 2 | 🟢 | C 8.6 | TODO | Em-dash vs ellipsis convention undocumented |
-| C-12 | 2 | ✓ | — | RESOLVED | Em-dash exclusive (no hyphen) |
-| C-13 | 2 | ✓ | — | RESOLVED | Cursor pagination semantic uniform |
-| C-14 | 2 | ✓ | — | RESOLVED | useCursorPagination single hook |
-| C-15 | 2 | 🟢 | C 8.5 | TODO | Polling cache headers per-endpoint (minor smell) |
-| C-16 | 2 | — | — | SKIP | Polling pause check deferred to 1.22 (covered by F-I-3) |
-| C-17 | 2 | 🟠 | C 6.3 | TODO | No CorsLayer (infra coordination) |
-| C-18 | 2 | ✓ | — | RESOLVED | FE client credentials OK |
-| C-19 | 2 | ✓ | — | RESOLVED | Error envelope shape OK |
-| C-20 | 2 | ✓ | — | RESOLVED | API base URL config OK |
-| J-1 | 2 | ✓ | — | RESOLVED | formatAmount usage healthy |
-| J-2 | 2 | 🟡 | C 2.1 | TODO | 10 toLocaleString sites bypass formatter |
-| J-3 | 2 | 🟡 | C 2.1 | TODO | TopNav.formatNumber duplicate |
-| J-4 | 2 | 🟠 | C 2.1 | TODO | STROOPS_PER_XLM single site (drift realized) |
-| J-5 | 2 | 🟡 | C 2.1 | TODO | Timestamp depth inconsistency |
-| J-6 | 2 | 🟢 | C 8.6 | TODO | No `<time>` element (cross-cite C-8) |
-| J-7 | 2 | 🟠 | C 2.1 | TODO | Truncation re-impls (6 sites) |
-| J-8 | 2 | ✓ | — | RESOLVED | Hash truncation per-type via IdentifierDisplay |
-| J-9 | 2 | ✓ | — | RESOLVED | Strkey vs hex pool strategy documented |
-| J-10 | 2 | ✓ | — | RESOLVED | Asset labels with issuer disambig OK |
-| J-11 | 2 | 🟢 | C 8.6 | TODO | Percentages decimals no shared constant |
-| J-12 | 2 | ✓ | — | RESOLVED | Status badge colors consistent |
-| J-13 | 2 | ✓ | — | RESOLVED | Event-type chip colors single map |
-| J-14 | 2 | 🟢 | C 8.6 | TODO | Currency symbol XLM hardcoded |
-| J-15 | 2 | ✓ | — | RESOLVED | Em-dash convention OK |
-| F-J-16 | 2 | 🟠 | C 2.1 | TODO | Duplicate formatFee BigInt vs Number |
-| F-J-17 | 2 | 🟡 | C 2.1 | TODO | formatStroops 3rd entry point |
-| Q-1 | 2 | ✓ | — | RESOLVED | Acceptance Criteria present in archived tasks |
-| Q-2 | 2 | ✓ | — | RESOLVED | Design Decisions section present |
-| Q-3 | 2 | 🟢 | C 6.4 | TODO | 0246 missing Issues Encountered heading |
-| Q-4 | 2 | 🟠 | C 6.1 | TODO | 0066 triple-drift |
-| Q-5 | 2 | ✓ | — | RESOLVED | API commits include openapi regen |
-| Q-6 | 2 | 🟢 | — | RESOLVED | ADR 0032 evergreen-docs gate honored (baseline) |
-| Q-7 | 2 | ✓ | — | RESOLVED | ADR cross-ref density healthy |
-| Q-7 (post-merge) | 2 | 🟡 | C 6.2 | TODO | Forward-link expectation mismatch 0254↔0257 |
-| AR-1 | 2 | ✓ | — | RESOLVED | Conventional Commits 81% compliance |
-| AR-2 | 2 | 🟢 | C 8.8 | TODO | Mixed lore-scope styles |
-| AR-3 | 2 | 🟡 | C 8.8 | TODO | Commitlint missing |
-| AR-4 | 2 | 🟡 | C 8.8 | TODO | PR template missing |
-| AR-5 | 2 | ✓ | — | RESOLVED | Branch naming OK |
-| AR-6 | 2 | ✓ | — | RESOLVED | Husky pre-commit OK |
-| AR-7 | 2 | 🟡 | C 8.8 | TODO | Branch protection check (human) |
-| AR-8 | 2 | 🟢 | C 8.8 | TODO | No CHANGELOG.md |
-| DM-1 | 2 | 🟠 | C 7.2 | TODO | Footer "All systems operational" hardcoded |
-| DM-2 | 2 | 🟢 | C 7.2 | TODO | No /health probe |
-| DN-1 | 2 | 🟠 | C 1.2 | TODO | No build SHA in UI |
-| DN-2 | 2 | 🟡 | C 1.2 | TODO | No vite define block |
-| CA-1 | 2 | 🟠 | C 1.1 | TODO | Footer Terms/Privacy/Cookies dead spans |
-| CA-2 | 2 | 🟠 | C 1.1 | TODO | Footer Resources dead spans |
-| CA-3 | 2 | 🟢 | C 1.1 | TODO | target=_blank+rel preventive |
-| CA-4 | 2 | ✓ | — | RESOLVED | Copyright line OK |
-| AO-1 | 2 | ✓ | — | RESOLVED | .env.example exists |
-| AO-2 | 2 | ✓ | — | RESOLVED | web/.env.example covers VITE_* |
-| AO-3 | 2 | ✓ | — | RESOLVED | No hardcoded localhost in src |
-| AO-4 | 2 | ✓ | — | RESOLVED | No console.* leftover |
-| AO-5 | 2 | ✓ | — | RESOLVED | .gitignore coverage OK |
-| AO-6 | 2 | ✓ | — | RESOLVED | No secrets in history |
-| AO-7 | 2 | ✓ | — | RESOLVED | CI typescript gate OK |
-| AO-8 | 2 | ✓ | — | RESOLVED | CI api-types-codegen gate OK |
-| AO-9 | 2 | 🟢 | C 8.6 | TODO | No FE prod deploy workflow |
-| AO-10 | 2 | 🟢 | C 8.6 | TODO | No PR preview-deploy workflow |
-| AO-11 | 2 | — | C 1.2 | TODO | Prod build version stamp (covered by DN-1) |
-| K-1 (=F-K-1) | 3 | 🟠 | — | RESOLVED | TxDetail stub — a2c1b205 (Filip) |
-| F-K-2 | 3 | 🟠 | — | RESOLVED | Pool reserve links — 473de2a2 + a5f15166 |
-| F-K-3 | 3 | 🟠 | — | RESOLVED | Pool participants "Since ledger" link — 473de2a2 |
-| F-K-4 | 3 | 🟡 | — | RESOLVED | Pool URL strkey hint — 6421d3d7 (0270) |
-| F-K-5 | 3 | 🟢 | — | SKIP | Account self-link cosmetic — no fix |
-| F-K-6 | 3 | 🟢 | — | SKIP | Account TX no source-account column (intentional) |
-| F-K-7 | 3 | 🟡 | C 5.4 | TODO | E3 tx-detail ledger link verification |
-| F-K-8 | 3 | 🟡 | C 5.4 | TODO | Soroban call tree destination account routing |
-| F-K-9 | 3 | 🟠 | — | RESOLVED | PoolAssetLeg schema gap — 473de2a2 |
-| F-E-1 | 3 | 🔴 | — | RESOLVED | URL cursor write — f646047d (0254 merge) |
-| F-E-2 | 3 | 🟠 | — | SKIP | URL wire contract — user-dropped 2026-05-25 |
-| F-E-3 | 3 | 🟡 | C 5.1 | TODO | Catch-all 404 `<main>` landmark |
-| F-E-4 | 3 | ✓ | — | RESOLVED | Filter URL preserves refresh OK |
-| F-E-5 | 3 | ✓ | — | RESOLVED | Trailing slash tolerated |
-| F-E-6 | 3 | ✓ | — | RESOLVED | Deep link from raw URL OK |
-| F-E-7 | 3 | 🟡 | C 5.2 | TODO | No URL state for tabs |
-| F-E-8 | 3 | 🟢 | — | RESOLVED | cursor_p/_e/_i — same fix as F-E-1 |
-| F-L-1 | 3 | 🟠 | — | RESOLVED | Pool strkey search — 047ce51e + 6421d3d7 (0270) |
-| F-L-2 | 3 | 🟡 | C 7.1 | TODO | Hint enumerates 4 of 6 entity types |
-| F-L-3 | 3 | ✓ | — | RESOLVED | XSS escaped (baseline) |
-| F-L-4 | 3 | ✓ | — | RESOLVED | Debounce confirmed |
-| F-L-5 | 3 | ✓ | — | RESOLVED | Long query handled gracefully |
-| F-L-6 | 3 | 🟡 | — | SKIP | treatRedirectAsResult flag (catalog-only; no bug) |
-| F-H-1 | 3 | ✓ | — | RESOLVED | Zero console.* (baseline) |
-| F-H-2 | 3 | ✓ | — | RESOLVED | Zero dangerouslySetInnerHTML / eval |
-| F-H-3 | 3 | ✓ | — | RESOLVED | XSS probe escaped |
-| F-H-4 | 3 | ✓ | — | RESOLVED | safeHttpUrl link injection guard |
-| F-H-5 | 3 | ✓ | — | RESOLVED | target=_blank with rel=noopener |
-| F-H-6 | 3 | ✓ | — | RESOLVED | Zero iframe |
-| F-H-7 | 3 | ✓ | — | RESOLVED | localStorage minimal + non-sensitive |
-| F-H-8 | 3 | ✓ | — | RESOLVED | Zero sessionStorage |
-| F-H-9 | 3 | ✓ | — | RESOLVED | Zero document.cookie |
-| F-H-10 | 3 | ✓ | — | RESOLVED | Auth headers only in generated SDK |
-| F-H-11 | 3 | ✓ | — | RESOLVED | Env vars constrained |
-| H-12 | 3 | 🟢 | C 8.6 | TODO | Color-mode storage key naming |
-| F-I-1 | 3 | ✓ | — | RESOLVED | Polling policies segmented |
-| F-I-2 | 3 | ✓ | — | RESOLVED | Live verification matches intervals |
-| F-I-3 | 3 | 🟡 | C 8.5 | TODO | No visibilitychange pause doc |
-| F-I-4 | 3 | 🟠 | C 8.5 | TODO | invalidateResource dead/abandoned |
-| F-I-5 | 3 | ✓ | C 7.6 | TODO | TanStack dedup confirmed (validate same-key) |
-| F-I-6 | 3 | 🟢 | C 8.5 | TODO | refetchIntervalInBackground not explicit |
-| F-I-7 | 3 | 🟡 | C 8.5 | TODO | gcTime not set on listPolicy/detailPolicy |
-| F-I-8 | 3 | ✓ | — | RESOLVED | Retry policy excludes 4xx |
-| F-D-1 | 4 | 🔴 | — | RESOLVED | API stale binary — restart 2026-05-25 |
-| F-D-2 | 4 | 🟠 | — | RESOLVED | Composite NotFound — 473de2a2 + 9e88114b |
-| F-D-3 | 4 | 🟡 | C 5.1 / C 7.1 | TODO | Detail page H1 heading inconsistency |
-| F-D-4 | 4 | 🟡 | C 7.2 | TODO | Polling indicator absent on detail pages |
-| F-D-5 | 4 | 🟡 | — | SKIP | E5 empty-state spot-check unverified (low-pri) |
-| F-AE-1 | 4 | 🟢 | C 8.6 | TODO | favicon.ico 404 |
-| F-AE-2 | 4 | 🟢 | — | RESOLVED | try/catch inventory baseline |
-| F-AE-3 | 4 | 🟡 | C 8.4 | TODO | SectionErrorBoundary inconsistent coverage |
-| F-AE-4 | 4 | 🟡 | C 8.4 | TODO | Error interceptor flattens envelope (recap) |
-| F-AE-5 | 4 | 🟠 | — | RESOLVED | Composite NotFound err — 473de2a2 + 9e88114b |
-| F-AE-6 | 4 | 🟠 | C 8.4 | TODO | Silent shape-mismatch no console signal |
-| F-AE-7 | 4 | 🟢 | C 8.4 | TODO | No global error reporter |
-| F-U-1 | 4 | 🟡 | C 2.2 | TODO | SectionCard wrong home |
-| F-U-2 | 4 | 🟡 | C 2.1 | TODO | Inline toFixed/toLocaleString 10 sites |
-| F-U-3 | 4 | 🟠 | C 2.1 | TODO | Truncation re-impls 6 sites |
-| F-U-4 | 4 | 🟠 | C 2.1 | TODO | STROOPS_PER_XLM 2 constants |
-| F-U-5 | 4 | 🟡 | C 2.3 | TODO | EmptyState minor reuse violation |
-| F-X-1 | 4 | 🟡 | C 2.2 | TODO | assetLegLabel cross-folder reach |
-| F-X-2 | 4 | 🟢 | C 2.2 | TODO | web/src/pages/detail/ single-file |
-| F-X-3 | 4 | 🟡 | — | RESOLVED | usePageHandlers shared chunk (positive baseline) |
-| F-X-4 | 4 | 🟡 | C 6.4 | TODO | Hooks colocated in two places (document) |
-| F-X-5 | 4 | 🟢 | C 2.2 | TODO | web/src/utils/ single-file |
-| F-AL-1 | 4 | 🟡 | C 5.2 | DEFER-M2 | tx-detail selectedIndex useState (borderline) |
-| F-AL-2 | 4 | 🟢 | C 6.4 | TODO | useDetailMode parallel pattern doc |
-| F-AN-1 | 4 | 🟡 | — | DEFER-M2 | Strkey vs hex strategy (partly resolved 0264; remainder bidirectional util) |
-| F-AN-2 | 4 | 🟢 | — | RESOLVED | XDR rendering inventory clean baseline |
-| F-AN-3 | 4 | 🟡 | C 7.1 | TODO | Op-type label single source; icon mapping absent (Figma check) |
-| F-AN-4 | 4 | 🟢 | — | RESOLVED | SEP-1 TOML enrichment OK |
-| F-AN-5 | 4 | 🟡 | C 6.4 | TODO | Soroban-era ledger detection absent (document) |
-| F-AN-6 | 4 | 🟢 | C 6.4 | TODO | Mainnet/Testnet config single-env (document) |
-| F-AN-7 | 4 | 🟠 | C 2.1 | TODO | Stroop/XLM 2-place (recap F-U-4) |
-| F-AN-8 | 4 | 🟠 | — | RESOLVED | Strkey canonical convention — 473de2a2 (0264) |
-| F-AE-1..F-AE-7 | 4 | various | (above) | (above) | (see individual rows) |
-| F-A-1 | 5 | 🟡 | — | RESOLVED | Spec drift 0246 Phase 3 dropped (positive baseline) |
-| F-A-2 | 5 | 🟡 | — | RESOLVED | 0254 BREAKING wire rename clean (positive baseline) |
-| F-A-3 | 5 | 🟡 | C 6.4 | TODO | ADR 0032 partial gap on 0254 (doc sync) |
-| F-A-4 | 5 | 🟡 | — | RESOLVED | LP feature gold-standard exemplar (positive note) |
-| F-A-5 | 5 | 🟡 | C 1.3 | TODO | Contract list page gap (launch blocker) |
-| F-A-6 | 5 | 🟢 | — | RESOLVED | Tx-detail spec/ship chain clean |
-| F-A-7 | 5 | 🟢 | — | RESOLVED | Deviation notes discipline excellent |
-| F-AH-1 | 5 | 🟡 | C 2.2 | TODO | PageStub.tsx dead orphan |
-| F-AH-2 | 5 | 🟡 | C 2.2 | TODO | Folder asymmetry |
-| F-AH-3 | 5 | 🟡 | C 2.2 | TODO | SectionCard wrong home (recap) |
-| F-AH-4 | 5 | 🟢 | C 2.2 | TODO | web/src/utils/ single-file (recap) |
-| F-AH-5 | 5 | 🟢 | C 2.2 | TODO | web/src/pages/detail/ misnamed (recap) |
-| F-AH-6 | 5 | 🟢 | C 8.1 | TODO | No tests (cross-cite testing baseline) |
-| F-AH-7 | 5 | 🟢 | C 2.2 | TODO | web/src/search/ parallel folder |
-| F-AH-8 | 5 | 🟢 | C 2.2 | TODO | Page-root helpers mixed with *Page.tsx |
-| F-Y-1 | 5 | 🟡 | — | DEFER-M2 | overrides.ts 890 LOC split (low stakes) |
-| F-Y-2 | 5 | 🟠 | C 2.1 | TODO | Debounce pattern duplicated 4× |
-| F-Y-3 | 5 | 🟢 | — | RESOLVED | useEffect discipline good (baseline) |
-| F-Y-4 | 5 | 🟢 | — | DEFER-M2 | PoolCharts 268 LOC borderline |
-| F-Y-5 | 5 | 🟢 | — | RESOLVED | Long files domain-justified (baseline) |
-| F-Y-6 | 5 | 🟡 | C 2.1 | TODO | Cross-cites formatter/truncation (recap) |
-| F-Z-1 | 5 | 🟡 | C 2.1 | TODO | Multiple formatter homes (recap) |
-| F-Z-2 | 5 | 🟢 | C 6.3 | TODO | Op-type enum hand-typed (backend coordination) |
-| F-Z-3 | 5 | 🟢 | — | DEFER-M2 | Chip JSDoc @param polish |
-| F-Z-4 | 5 | 🟢 | C 6.4 | TODO | frontend-data-flow wiki |
-| F-AA-1 | 5 | 🟢 | — | SKIP | Single-consumer abstractions (keep-or-trim toss-up) |
-| F-AA-2 | 5 | 🟢 | — | RESOLVED | Zero Redux/Zustand (positive baseline) |
-| F-AA-3 | 5 | 🟢 | — | RESOLVED | useDebounced will broaden in C 2.1 |
-| F-AA-4 | 5 | 🟢 | C 6.4 | TODO | useIntersectionObserver single-consumer wiki note |
-| F-AA-5 | 5 | 🟢 | — | RESOLVED | Provider count minimal (positive baseline) |
-| F-AA-6 | 5 | 🟢 | — | RESOLVED | Hook proliferation bounded (positive baseline) |
-| F-AB-1 | 5 | 🟡 | C 6.4 | TODO | useDetailMode divergence not in task body |
-| F-AB-2 | 5 | 🟡 | C 6.4 | TODO | Interval labels 0065 #5 spec not amended |
-| F-AB-3 | 5 | 🟢 | C 10.3 | TODO | 0251 B1 fix-by-hide root-cause fix |
-| F-AB-4 | 5 | 🟢 | C 8.7 | TODO | Sort-caret middle-ground designer sign-off |
-| F-AB-5 | 5 | 🟠 | C 2.1 | TODO | Cross-task formatter dups (recap symptom) |
-| F-AD-1 | 5 | 🟠 | C 2.1 | TODO | Leaked-concern 5+ file bug fixes |
-| F-AD-2 | 5 | 🟢 | C 6.4 | TODO | Onboarding doc polish |
-| F-AD-3 | 5 | 🟢 | C 7.1 | TODO | 3 inline magic numbers (1500ms, 1062, 1064) |
-| F-AD-4 | 5 | 🟢 | — | RESOLVED | Zero implicit-context surprises (baseline) |
-| F-AD-5 | 5 | 🟠 | C 8.1 | TODO | Zero test coverage (cross-cite) |
-| F-AC checks (AC-1..AC-14) | 5 | — | (rolled up) | (rolled up) | See F-A-1..F-A-7 above |
-| F-EX-1 | 5 sweep | 🟡 | C 5.4 | TODO | NFT minted_at_ledger plain text (Figma check) |
-| F-EX-2 | 5 sweep | 🟢 | C 5.2 | TODO | Pool chart metric/period useState |
-| F-W6-AG-1 | 6 | 🟠 | C 4.1 | TODO | Main bundle >500KB (recap) |
-| F-W6-AG-2 | 6 | 🟠 | C 4.1 | TODO | LP detail chunk 300KB (recap) |
-| F-W6-AG-3 | 6 | 🟡 | C 7.1 | TODO | Transitions non-GPU |
-| F-W6-AG-4 | 6 | 🟢 | C 7.1 | TODO | 150ms transitions edge of hover rule |
-| F-W6-AG-5 | 6 | 🟡 | C 7.7 | TODO | No route-transition loading indicator |
-| F-W6-AG-6 | 6 | 🟢 | — | SKIP | useMemo/useCallback spot-check informational |
-| F-W6-AG-7 | 6 | 🟢 | — | RESOLVED | TanStack staleTime/gcTime tuned (baseline) |
-| F-W6-AG-8 | 6 | 🟢 | — | RESOLVED | Cache hit on navigate-back confirmed |
-| F-W6-AG-9 | 6 | 🟢 | C 7.6 | TODO | Polling home+header overlap |
-| F-W6-AP-1 | 6 | 🟡 | C 2.3 | TODO | Loading pattern inconsistency |
-| F-W6-AP-2 | 6 | 🟢 | C 7.2 | TODO | Polling refresh silent |
-| F-W6-AP-3 | 6 | 🟢 | C 2.3 | TODO | Error retry no distinct state |
-| F-W6-AP-4 | 6 | 🟢 | C 2.3 | TODO | Inline/overlay/full-page not standardised |
-| F-W6-V-1 | 6 | 🟠 | C 7.2 | TODO | DM-1 reconfirmed + all live pills lack freshness |
-| F-W6-V-2 | 6 | 🟡 | C 7.2 | TODO | Backfill doesn't disable LIVE |
-| F-W6-V-3 | 6 | 🟢 | C 7.2 | TODO | Latest-ledger polling works (informational) |
-| F-W6-AK-1 | 6 | 🟡 | C 7.1 | TODO | 3 hardcoded hex constants |
-| F-W6-AK-2 | 6 | 🟢 | C 7.1 | TODO | Z-index raw 0/1 no scale |
-| F-W6-AK-3 | 6 | ✓ | — | RESOLVED | Spacing scale consistent (baseline) |
-| F-W6-AK-4 | 6 | 🟢 | — | DEFER-M2 | Border-radius/shadow audit deferred |
-| F-W6-AK-5 | 6 | ✓ | — | RESOLVED | CSS approach single (baseline) |
-| F-W6-AK-6 | 6 | 🟢 | C 7.1 | TODO | Theme tokens pervasive; tiny leakage (recap) |
-| F-W6-F-1 | 6 | 🟡 | C 7.5 | TODO | NFT detail no h2/h3 |
-| F-W6-F-2 | 6 | 🟡 | C 7.4 | TODO | Filter slots lack accessible names |
-| F-W6-F-3 | 6 | 🟢 | — | RESOLVED | First Tab focus visible (baseline) |
-| F-W6-F-4 | 6 | 🟢 | C 7.4 | TODO | Header search lacks aria-label/id |
-| F-W6-F-5 | 6 | 🟢 | — | RESOLVED | Copy buttons aria-label correct (baseline) |
-| F-W6-F-6 | 6 | 🟢 | C 8.1 | DEFER-M2 | Lighthouse a11y audit not run |
-| F-W6-F-7 | 6 | 🟢 | C 7.8 | TODO | Reduced-motion not verified |
-| F-W6-F-8 | 6 | 🟢 | C 7.8 | TODO | No keyboard trap test on modals |
-| F-W6-CH-1 | 6 | 🟡 | C 7.1 | TODO | Status badges color+text, no shape icon |
-| F-W6-CH-2 | 6 | 🟢 | C 7.1 | TODO | Operation type chips text-only (informational) |
-| F-W6-RESPONSIVE-1 | 6 | 🟠 | C 8.3 | TODO | All routes break <800px |
-| F-W6-RESPONSIVE-2 | 6 | 🟡 | C 8.3 | TODO | No table → card transformation |
-| F-W6-RESPONSIVE-3 | 6 | 🟡 | C 8.3 | TODO | No hamburger / mobile nav |
-| F-W6-RESPONSIVE-4 | 6 | 🟢 | C 8.3 | TODO | Touch targets <44px on mobile |
-| F-W6-NOTFOUND-1 | 6 | 🟡 | C 5.1 | TODO | NotFound missing h1 on 4 of 5 detail |
-| F-W6-NOTFOUND-2 | 6 | 🟡 | C 5.3 | TODO | Sub-section queries fire on parent 404 |
-| F-W6-E0-1 | 6 | 🟠 | C 1.1 | TODO | Footer dead spans (recap) |
-| F-W6-E0-2 | 6 | 🟠 | C 7.2 | TODO | Footer hardcoded operational (recap) |
-| F-W6-E0-3 | 6 | 🟡 | C 8.3 | TODO | No hamburger at mobile |
-| F-W6-E0-4 | 6 | 🟡 | C 7.1 | TODO | Header search placeholder 4 vs hint 5 |
-| F-W6-E0-5 | 6 | 🟢 | C 7.6 | TODO | Header polling duplicates home |
-| F-W6-E1-1 | 6 | 🟡 | C 7.2 | TODO | LIVE badge always on (recap) |
-| F-W6-E1-2 | 6 | 🟢 | C 7.1 | TODO | Hero+header search visually identical |
-| F-W6-E1-3 | 6 | 🟢 | C 7.6 | TODO | Home stats strip duplicated (informational) |
-| F-W6-E1-4 | 6 | 🟡 | C 5.4 | TODO | Home ledger hash not a link |
-| F-W6-E2-1 | 6 | 🟢 | C 7.1 | TODO | "Transactions list" vs nav "Transactions" |
-| F-W6-E2-2 | 6 | 🟢 | C 7.1 | TODO | "All operations type" typo |
-| F-W6-E3-1 | 6 | 🟢 | C 7.1 | TODO | Memo "—" semantic improvement |
-| F-W6-E3-2 | 6 | 🟢 | C 7.1 | TODO | Normal/Advanced tabs no description |
-| F-W6-E3-3 | 6 | 🟡 | C 5.1 / C 8.3 | TODO | Page horiz scroll mobile (covered by responsive) |
-| F-W6-E5-1 | 6 | 🟢 | C 7.1 | TODO | Prev/Next ledger no disabled at boundary |
-| F-W6-E6-1 | 6 | 🟡 | C 5.3 | TODO | Sub-section queries fire on 404 (account) |
-| F-W6-E6-2 | 6 | 🟢 | C 5.1 | TODO | NotFound no h1 (account) |
-| F-W6-E7-1 | 6 | 🟡 | C 7.4 | TODO | Two unlabeled filter slots /assets |
-| F-W6-E7-2 | 6 | 🟢 | C 7.1 | TODO | Asset icon "?" fallback |
-| F-W6-E7-3 | 6 | 🟢 | C 7.1 | TODO | Asset detail link uses composite ID for SAC |
-| F-W6-E8-1 | 6 | 🟢 | C 7.1 | TODO | Asset Metadata sparse |
-| F-W6-E8-2 | 6 | 🟢 | C 7.1 | TODO | Holder count not linkable |
-| F-W6-E9-1 | 6 | 🟡 | C 5.3 | TODO | Sub-section queries fire on 404 (contract) |
-| F-W6-E9-2 | 6 | 🟢 | C 7.1 | TODO | Invocations+Events no empty-state message |
-| F-W6-E9-3 | 6 | 🟡 | C 5.1 | TODO | NotFound h1 inconsistent (contract) |
-| F-W6-E10-1 | 6 | 🟡 | C 7.4 | TODO | Four unlabeled filter slots /nfts |
-| F-W6-E10-2 | 6 | 🟢 | C 7.1 | TODO | NFT row token IDs inline text |
-| F-W6-E10-3 | 6 | 🟡 | C 5.4 | TODO | NFT row Contract ID plain text |
-| F-W6-E11-1 | 6 | 🟡 | C 7.5 | TODO | NFT detail no h2/h3 |
-| F-W6-E11-2 | 6 | 🟢 | C 7.1 | TODO | NFT Traits "Metadata unavailable" no guidance |
-| F-W6-E11-3 | 6 | 🟡 | C 5.4 | TODO | NFT Contract ID in Details plain text |
-| F-W6-E12-1 | 6 | 🟡 | C 7.1 | TODO | Pool ID truncation twice per row |
-| F-W6-E12-2 | 6 | 🟢 | C 7.1 | TODO | "Any TVL" filter looks like loading |
-| F-W6-E13-1 | 6 | 🟠 | C 7.3 | TODO | Pool participants share % full precision |
-| F-W6-E13-2 | 6 | 🟢 | C 5.1 | TODO | Pool NotFound no h1 |
-| F-W6-E13-3 | 6 | 🟢 | C 7.1 | TODO | Pool tx operation type plain text |
-| F-W6-E14-1 | 6 | 🟢 | C 7.1 | TODO | Empty-state hint at ?q= no examples |
-| F-W6-E14-2 | 6 | 🟢 | C 7.1 | TODO | Search has two clear buttons |
-| F-W6-E14-3 | 6 | 🟢 | — | SKIP | First Tab lands on header search (informational) |
-| Z-1 Spot 5 | 5 | 🟢 | C 6.3 | TODO | Op-type enum hand-typed (cross-cite F-Z-2) |
-| Z-1 Spot 1 | 5 | A | C 8.4 | TODO | Error envelope flatten (cross-cite F-AF-1) |
-| 0061 #4 | arch | 🟢 | C 8.7 | TODO | Sort caret middle-ground sign-off |
-| 0065 #5 | arch | 🟡 | C 6.4 | TODO | Interval labels spec drift |
-| 0073 #5 | arch | 🟡 | C 6.3 | TODO | Balances SAC vs Classic distinction (backend) |
-| 0075 #6 | arch | 🟡 | C 6.3 | TODO | interface_metadata hand-typed |
-| 0077 #9 | arch | ✓ | — | RESOLVED | Pool-id strkey 60 LOC justified |
-| 0077 #12 #13 | arch | ✓ | — | RESOLVED | assetLegLabel/classifyLpTx hard-fail justified |
-| 0238 #5 | arch | 🟡 | C 6.4 | TODO | cursorParam multi-cursor ADR gap |
-| 0251 B1 | arch | 🟢 | C 10.3 | TODO | linked=false fix-by-hide root cause |
-| 0059 Future Work (live stats) | arch | — | — | RESOLVED | Wired via 0066 (TopNav still shows MOCK_STATS — re-verify in C 7.6 / 8.6) |
-| 0059 Future Work (responsive nav) | arch | — | C 8.3 | TODO | Hamburger menu |
-| 0061 FW (libs/ui vitest) | arch | — | C 8.1 | TODO | 0226 promote |
-| 0062 FW (validators → libs/domain) | arch | — | C 6.2 | TODO | Spawn |
-| 0062 FW (IdentifierDisplay router Link audit) | arch | — | C 6.2 | TODO | Spawn |
-| 0067 FW (route param validation per page) | arch | — | C 6.2 | TODO | Partly absorbed by 0251 |
-| 0068 FW (table sorting) | arch | — | C 6.2 | TODO | Gated on backend sort param |
-| 0068 FW (populated-data diff) | arch | — | — | RESOLVED | Absorbed into 0251/0257 |
-| 0069 FW (libs/ui error/empty divergence) | arch | — | C 6.2 | TODO | Spawn |
-| 0069 FW (operation pill colour confirm) | arch | — | C 8.7 | TODO | Designer sign-off |
-| 0069 FW (OpenAPI op_type enum backend) | arch | — | C 6.3 | TODO | Backend task |
-| 0072 FW (hoist Button + formatFee timestamp) | arch | — | C 2.1 / C 2.2 | TODO | Covered by format/folder cards |
-| 0072 FW (URL-synced cursor) | arch | — | — | RESOLVED | 0238 |
-| 0075 FW (contracts list page) | arch | — | C 1.3 | TODO | Launch blocker |
-| 0075 FW (events count for tab pill) | arch | — | C 6.2 | TODO | Backend task |
-| 0075 FW (wasm_interface_metadata JSONB doc) | arch | — | C 6.3 | TODO | Backend task |
-| 0075 FW (SAC SEP-41 stub) | arch | — | C 6.2 | TODO | Spawn |
-| 0076 FW (NFT trait rarity) | arch | — | — | RESOLVED | 0229 spawned |
-| 0077 FW (Tx Amount column on PoolTransactions) | arch | — | C 6.2 | TODO | Gated on 0247 |
-| 0077 FW (chart series wiring) | arch | — | C 10.1 | TODO | Gated on 0199 |
-| 0077 FW (per-leg icon_url backend) | arch | — | C 6.2 | TODO | Spawn |
-| 0077 FW (Playwright CLI for LP pages) | arch | — | C 8.1 | TODO | Gated on 0226 |
-| 0077 FW (LP senior-eye 6 items) | arch | — | C 6.2 | TODO | Bulk spawn batch |
-| 0238 FW (backend prev_cursor) | arch | — | — | RESOLVED | 0254 |
-| 0238 FW (unit tests useCursorPagination) | arch | — | C 8.1 | TODO | Gated on 0226 |
-| 0238 FW (Playwright smoke 11 pages) | arch | — | C 8.1 | TODO | Gated on 0226 |
-| 0238 FW (ADR multi-cursor) | arch | — | C 6.4 | TODO | Cross-cite |
-| 0251 FW (ScVal decoder Contract Events) | arch | — | C 6.2 | TODO | Spawn |
-| 0251 FW (network runtime toggle) | arch | — | C 6.2 | TODO | Spawn (post-launch) |
-| 0251 FW (Searchable Autocomplete ops) | arch | — | C 6.2 | TODO | Spawn |
-| 0251 FW (B4 fake-XLM design redo) | arch | — | C 6.2 | TODO | Spawn |
-| Out of scope O | rdme | — | C 8.1 | TODO | testing baseline (= C 8.1) |
-| Out of scope N | rdme | — | C 9.1 | TODO | i18n |
-| Out of scope AJ | rdme | — | C 9.1 | TODO | Asset optimization (covered partly by C 4.1) |
-| Out of scope AT | rdme | — | C 9.1 | TODO | Animation polish |
-| Out of scope S | rdme | — | C 9.1 | TODO | Browser compat matrix |
-| Out of scope T | rdme | — | C 9.1 | TODO | Production parity |
-| Out of scope BR | rdme | — | C 9.1 | TODO | OG / Twitter cards |
-| Out of scope BM | rdme | — | C 9.1 | TODO | Memory leaks research |
-| Out of scope BJ | rdme | — | C 9.1 | TODO | WebSocket / SSE |
-| Out of scope BV | rdme | — | C 9.1 | TODO | PWA |
-| Out of scope BZ | rdme | — | C 9.1 | TODO | GDPR |
-| Out of scope CE | rdme | — | C 9.1 | TODO | Command palette |
-| Out of scope CF | rdme | — | C 9.1 | TODO | CSV/JSON export |
-| Out of scope BO | rdme | — | — | SKIP | Session replay (skip per user) |
-| Muxed M→G redirect | post-Gate-B | — | — | SKIP | No ecosystem precedent |
-| Asset code-issuer composite redirect | post-Gate-B | — | — | SKIP | No ecosystem precedent |
-| SearchResponse::Redirect refactor | post-Gate-B | — | — | SKIP | Deferred future PR |
-| F-EX-3 PoolKpiStrip (extends F-K-2) | 5 sweep | 🟠 | — | RESOLVED | a5f15166 (0263) |
-| F-EX-4 PoolsTable reserves (extends F-K-2) | 5 sweep | 🟠 | — | RESOLVED | a5f15166 (0263) |
-| Issues Encountered worktree gotchas wiki | arch | — | C 6.4 | TODO | Spawn DOCS wiki entry |
-| NFT search-404 regression (0264 carry-over) | 0270 | 🟠 | — | RESOLVED | 6421d3d7 + 69d9f529 |
+| Finding                                        | Wave        | Sev     | Cluster                 | STATUS      | Notes                                                                       |
+| ---------------------------------------------- | ----------- | ------- | ----------------------- | ----------- | --------------------------------------------------------------------------- |
+| A1                                             | 1           | 🔴      | —                       | RESOLVED    | TxDetail stub — a2c1b205 (FilipDz PR #215)                                  |
+| A2                                             | 1           | 🟠      | C 6.1                   | TODO        | 0066 task body drift                                                        |
+| A3                                             | 1           | 🟠      | C 6.2                   | TODO        | 25/28 Future Work un-spawned                                                |
+| A4                                             | 1           | 🟡      | C 8.1                   | TODO        | 0226 test infra blocked                                                     |
+| A5                                             | 1           | 🟡      | C 10.1                  | TODO        | 0199/0215 LP blocked                                                        |
+| F-AF-1                                         | 1           | 🟡      | C 8.4                   | TODO        | Error interceptor flattens envelope                                         |
+| F-AF-2                                         | 1           | 🟢      | C 8.4                   | TODO        | Object.assign(error) smell                                                  |
+| F-AF-3                                         | 1           | 🟢      | —                       | SKIP        | as unknown as `useNow.ts` justified                                         |
+| F-AF-4                                         | 1           | 🟢      | C 8.4                   | TODO        | envelopeMessage object-string guard                                         |
+| F-AQ-1                                         | 1           | 🟠      | C 3.1                   | TODO        | noUncheckedIndexedAccess flag                                               |
+| F-AQ-2                                         | 1           | 🟡      | C 3.1                   | TODO        | exactOptionalPropertyTypes flag                                             |
+| F-AQ-3                                         | 1           | 🟡      | C 3.3                   | TODO        | Switch exhaustiveness + assertNever                                         |
+| F-AQ-4                                         | 1           | 🟠      | C 3.2                   | TODO        | Branded ID types                                                            |
+| F-AQ-5                                         | 1           | 🟢      | —                       | SKIP        | Discriminated unions zero — no issue                                        |
+| F-AQ-6                                         | 1           | 🟢      | —                       | SKIP        | Generic constraints sensible — no issue                                     |
+| F-AQ-7                                         | 1           | 🟡      | C 6.3                   | TODO        | XDR unknown casts (backend coordination)                                    |
+| F-AQ-8                                         | 1           | 🟡      | C 6.3                   | TODO        | results_meta_xdr codegen drift                                              |
+| F-P-1                                          | 1           | 🟡      | C 3.1                   | TODO        | Lint warning assetColor.ts:131                                              |
+| F-P-2                                          | 1           | 🟡      | C 8.2                   | TODO        | No knip/ts-prune in CI                                                      |
+| F-P-3                                          | 1           | ✓       | —                       | RESOLVED    | Zero console.\* in source (baseline)                                        |
+| F-P-4                                          | 1           | ✓       | —                       | RESOLVED    | Zero TODO/FIXME markers (baseline)                                          |
+| F-P-5                                          | 1           | ✓       | —                       | RESOLVED    | Zero commented-out blocks (baseline)                                        |
+| F-P-6                                          | 1           | 🟢      | C 8.2                   | TODO        | Cyclical imports not checked                                                |
+| F-P-7                                          | 1           | 🟢      | C 7.1 (overrides split) | DEFER-M2    | overrides.ts 867 LOC — splittable; F-Y-1                                    |
+| F-P-8                                          | 1           | 🟢      | C 8.2                   | TODO        | No bundle console-leak grep in CI                                           |
+| F-AI-1                                         | 1           | 🟠      | C 4.1                   | TODO        | Main bundle > 500KB                                                         |
+| F-AI-2                                         | 1           | 🟠      | C 4.1                   | TODO        | LP detail chunk 313KB                                                       |
+| F-AI-3                                         | 1           | 🟡      | C 4.1                   | TODO        | SearchOutlined 67KB chunk anomaly                                           |
+| F-AI-4                                         | 1           | 🟢      | —                       | SKIP        | ExplorerTable chunk informational                                           |
+| F-AI-5                                         | 1           | ✓       | —                       | RESOLVED    | Devtools tree-shake confirmed                                               |
+| F-AI-6                                         | 1           | ✓       | —                       | RESOLVED    | Tree-shake validated                                                        |
+| F-AI-7                                         | 1           | 🟡      | C 4.1                   | TODO        | No bundle visualizer                                                        |
+| F-AI-8                                         | 1           | 🟡      | C 4.1                   | TODO        | No vendor chunk split                                                       |
+| F-AI-9                                         | 1           | ✓       | —                       | RESOLVED    | CSS total tiny (informational)                                              |
+| F-AI-10                                        | 1           | 🟡      | C 4.1                   | TODO        | TxDetail chunk 30KB (Filip baseline)                                        |
+| F-AI-11                                        | 1           | 🟢      | —                       | SKIP        | TransactionsListPage +0.15KB (informational)                                |
+| F-CO-1                                         | 1           | 🟠      | —                       | RESOLVED    | Vite 7.3.3 CVE bump — 473de2a2                                              |
+| F-CO-2                                         | 1           | 🟢      | C 8.2                   | TODO        | lodash-es allowlist                                                         |
+| F-CO-3                                         | 1           | 🟡      | C 10.2                  | TODO        | MUI 7→9 bump                                                                |
+| F-CO-4                                         | 1           | 🟢      | C 8.2                   | TODO        | react-router-dom 2 minor                                                    |
+| F-CO-5                                         | 1           | 🟡      | C 8.2                   | TODO        | eslint v8 EoL                                                               |
+| F-CO-6                                         | 1           | 🟠      | C 10.2 / C 8.2          | TODO        | mui/utils triple-version                                                    |
+| F-CO-7                                         | 1           | 🟢      | C 8.2                   | TODO        | No Renovate/Dependabot                                                      |
+| F-CO-8                                         | 1           | 🟢      | C 8.2                   | TODO        | prettier 2→3                                                                |
+| C-1                                            | 2           | ✓       | —                       | RESOLVED    | normalizeOperationType H2 root cause baseline                               |
+| C-2                                            | 2           | ✓       | —                       | RESOLVED    | 27 ops parity holds                                                         |
+| C-3                                            | 2           | 🟢      | C 8.6                   | TODO        | Non-op enums no FE mirror (document)                                        |
+| C-4                                            | 2           | 🟢      | C 8.6                   | TODO        | Polymorphic ID link builders inconsistent encoding                          |
+| C-5                                            | 2           | 🟡      | C 3.2                   | TODO        | Missing isAssetId / isNftId validator                                       |
+| C-6                                            | 2           | ✓       | —                       | RESOLVED    | Pool id strkey/hex round-trip OK                                            |
+| C-7                                            | 2           | partial | —                       | RESOLVED    | UTC timestamps consistent (baseline)                                        |
+| C-8                                            | 2           | 🟢      | C 8.6                   | TODO        | No `<time dateTime>` element                                                |
+| C-9                                            | 2           | ✓       | —                       | RESOLVED    | Trailing-zero trim works                                                    |
+| C-10                                           | 2           | ✓       | —                       | RESOLVED    | minDecimals floor works                                                     |
+| C-11                                           | 2           | 🟢      | C 8.6                   | TODO        | Em-dash vs ellipsis convention undocumented                                 |
+| C-12                                           | 2           | ✓       | —                       | RESOLVED    | Em-dash exclusive (no hyphen)                                               |
+| C-13                                           | 2           | ✓       | —                       | RESOLVED    | Cursor pagination semantic uniform                                          |
+| C-14                                           | 2           | ✓       | —                       | RESOLVED    | useCursorPagination single hook                                             |
+| C-15                                           | 2           | 🟢      | C 8.5                   | TODO        | Polling cache headers per-endpoint (minor smell)                            |
+| C-16                                           | 2           | —       | —                       | SKIP        | Polling pause check deferred to 1.22 (covered by F-I-3)                     |
+| C-17                                           | 2           | 🟠      | C 6.3                   | TODO        | No CorsLayer (infra coordination)                                           |
+| C-18                                           | 2           | ✓       | —                       | RESOLVED    | FE client credentials OK                                                    |
+| C-19                                           | 2           | ✓       | —                       | RESOLVED    | Error envelope shape OK                                                     |
+| C-20                                           | 2           | ✓       | —                       | RESOLVED    | API base URL config OK                                                      |
+| J-1                                            | 2           | ✓       | —                       | RESOLVED    | formatAmount usage healthy                                                  |
+| J-2                                            | 2           | 🟡      | C 2.1                   | TODO        | 10 toLocaleString sites bypass formatter                                    |
+| J-3                                            | 2           | 🟡      | C 2.1                   | TODO        | TopNav.formatNumber duplicate                                               |
+| J-4                                            | 2           | 🟠      | C 2.1                   | TODO        | STROOPS_PER_XLM single site (drift realized)                                |
+| J-5                                            | 2           | 🟡      | C 2.1                   | TODO        | Timestamp depth inconsistency                                               |
+| J-6                                            | 2           | 🟢      | C 8.6                   | TODO        | No `<time>` element (cross-cite C-8)                                        |
+| J-7                                            | 2           | 🟠      | C 2.1                   | TODO        | Truncation re-impls (6 sites)                                               |
+| J-8                                            | 2           | ✓       | —                       | RESOLVED    | Hash truncation per-type via IdentifierDisplay                              |
+| J-9                                            | 2           | ✓       | —                       | RESOLVED    | Strkey vs hex pool strategy documented                                      |
+| J-10                                           | 2           | ✓       | —                       | RESOLVED    | Asset labels with issuer disambig OK                                        |
+| J-11                                           | 2           | 🟢      | C 8.6                   | TODO        | Percentages decimals no shared constant                                     |
+| J-12                                           | 2           | ✓       | —                       | RESOLVED    | Status badge colors consistent                                              |
+| J-13                                           | 2           | ✓       | —                       | RESOLVED    | Event-type chip colors single map                                           |
+| J-14                                           | 2           | 🟢      | C 8.6                   | TODO        | Currency symbol XLM hardcoded                                               |
+| J-15                                           | 2           | ✓       | —                       | RESOLVED    | Em-dash convention OK                                                       |
+| F-J-16                                         | 2           | 🟠      | C 2.1                   | TODO        | Duplicate formatFee BigInt vs Number                                        |
+| F-J-17                                         | 2           | 🟡      | C 2.1                   | TODO        | formatStroops 3rd entry point                                               |
+| Q-1                                            | 2           | ✓       | —                       | RESOLVED    | Acceptance Criteria present in archived tasks                               |
+| Q-2                                            | 2           | ✓       | —                       | RESOLVED    | Design Decisions section present                                            |
+| Q-3                                            | 2           | 🟢      | C 6.4                   | TODO        | 0246 missing Issues Encountered heading                                     |
+| Q-4                                            | 2           | 🟠      | C 6.1                   | TODO        | 0066 triple-drift                                                           |
+| Q-5                                            | 2           | ✓       | —                       | RESOLVED    | API commits include openapi regen                                           |
+| Q-6                                            | 2           | 🟢      | —                       | RESOLVED    | ADR 0032 evergreen-docs gate honored (baseline)                             |
+| Q-7                                            | 2           | ✓       | —                       | RESOLVED    | ADR cross-ref density healthy                                               |
+| Q-7 (post-merge)                               | 2           | 🟡      | C 6.2                   | TODO        | Forward-link expectation mismatch 0254↔0257                                 |
+| AR-1                                           | 2           | ✓       | —                       | RESOLVED    | Conventional Commits 81% compliance                                         |
+| AR-2                                           | 2           | 🟢      | C 8.8                   | TODO        | Mixed lore-scope styles                                                     |
+| AR-3                                           | 2           | 🟡      | C 8.8                   | TODO        | Commitlint missing                                                          |
+| AR-4                                           | 2           | 🟡      | C 8.8                   | TODO        | PR template missing                                                         |
+| AR-5                                           | 2           | ✓       | —                       | RESOLVED    | Branch naming OK                                                            |
+| AR-6                                           | 2           | ✓       | —                       | RESOLVED    | Husky pre-commit OK                                                         |
+| AR-7                                           | 2           | 🟡      | C 8.8                   | TODO        | Branch protection check (human)                                             |
+| AR-8                                           | 2           | 🟢      | C 8.8                   | TODO        | No CHANGELOG.md                                                             |
+| DM-1                                           | 2           | 🟠      | C 7.2                   | TODO        | Footer "All systems operational" hardcoded                                  |
+| DM-2                                           | 2           | 🟢      | C 7.2                   | TODO        | No /health probe                                                            |
+| DN-1                                           | 2           | 🟠      | C 1.2                   | TODO        | No build SHA in UI                                                          |
+| DN-2                                           | 2           | 🟡      | C 1.2                   | TODO        | No vite define block                                                        |
+| CA-1                                           | 2           | 🟠      | C 1.1                   | TODO        | Footer Terms/Privacy/Cookies dead spans                                     |
+| CA-2                                           | 2           | 🟠      | C 1.1                   | TODO        | Footer Resources dead spans                                                 |
+| CA-3                                           | 2           | 🟢      | C 1.1                   | TODO        | target=\_blank+rel preventive                                               |
+| CA-4                                           | 2           | ✓       | —                       | RESOLVED    | Copyright line OK                                                           |
+| AO-1                                           | 2           | ✓       | —                       | RESOLVED    | .env.example exists                                                         |
+| AO-2                                           | 2           | ✓       | —                       | RESOLVED    | web/.env.example covers VITE\_\*                                            |
+| AO-3                                           | 2           | ✓       | —                       | RESOLVED    | No hardcoded localhost in src                                               |
+| AO-4                                           | 2           | ✓       | —                       | RESOLVED    | No console.\* leftover                                                      |
+| AO-5                                           | 2           | ✓       | —                       | RESOLVED    | .gitignore coverage OK                                                      |
+| AO-6                                           | 2           | ✓       | —                       | RESOLVED    | No secrets in history                                                       |
+| AO-7                                           | 2           | ✓       | —                       | RESOLVED    | CI typescript gate OK                                                       |
+| AO-8                                           | 2           | ✓       | —                       | RESOLVED    | CI api-types-codegen gate OK                                                |
+| AO-9                                           | 2           | 🟢      | C 8.6                   | TODO        | No FE prod deploy workflow                                                  |
+| AO-10                                          | 2           | 🟢      | C 8.6                   | TODO        | No PR preview-deploy workflow                                               |
+| AO-11                                          | 2           | —       | C 1.2                   | TODO        | Prod build version stamp (covered by DN-1)                                  |
+| K-1 (=F-K-1)                                   | 3           | 🟠      | —                       | RESOLVED    | TxDetail stub — a2c1b205 (Filip)                                            |
+| F-K-2                                          | 3           | 🟠      | —                       | RESOLVED    | Pool reserve links — 473de2a2 + a5f15166                                    |
+| F-K-3                                          | 3           | 🟠      | —                       | RESOLVED    | Pool participants "Since ledger" link — 473de2a2                            |
+| F-K-4                                          | 3           | 🟡      | —                       | RESOLVED    | Pool URL strkey hint — 6421d3d7 (0270)                                      |
+| F-K-5                                          | 3           | 🟢      | —                       | SKIP        | Account self-link cosmetic — no fix                                         |
+| F-K-6                                          | 3           | 🟢      | —                       | SKIP        | Account TX no source-account column (intentional)                           |
+| F-K-7                                          | 3           | 🟡      | C 5.4                   | TODO        | E3 tx-detail ledger link verification                                       |
+| F-K-8                                          | 3           | 🟡      | C 5.4                   | TODO        | Soroban call tree destination account routing                               |
+| F-K-9                                          | 3           | 🟠      | —                       | RESOLVED    | PoolAssetLeg schema gap — 473de2a2                                          |
+| F-E-1                                          | 3           | 🔴      | —                       | RESOLVED    | URL cursor write — f646047d (0254 merge)                                    |
+| F-E-2                                          | 3           | 🟠      | —                       | SKIP        | URL wire contract — user-dropped 2026-05-25                                 |
+| F-E-3                                          | 3           | 🟡      | C 5.1                   | TODO        | Catch-all 404 `<main>` landmark                                             |
+| F-E-4                                          | 3           | ✓       | —                       | RESOLVED    | Filter URL preserves refresh OK                                             |
+| F-E-5                                          | 3           | ✓       | —                       | RESOLVED    | Trailing slash tolerated                                                    |
+| F-E-6                                          | 3           | ✓       | —                       | RESOLVED    | Deep link from raw URL OK                                                   |
+| F-E-7                                          | 3           | 🟡      | C 5.2                   | TODO        | No URL state for tabs                                                       |
+| F-E-8                                          | 3           | 🟢      | —                       | RESOLVED    | cursor_p/\_e/\_i — same fix as F-E-1                                        |
+| F-L-1                                          | 3           | 🟠      | —                       | RESOLVED    | Pool strkey search — 047ce51e + 6421d3d7 (0270)                             |
+| F-L-2                                          | 3           | 🟡      | C 7.1                   | TODO        | Hint enumerates 4 of 6 entity types                                         |
+| F-L-3                                          | 3           | ✓       | —                       | RESOLVED    | XSS escaped (baseline)                                                      |
+| F-L-4                                          | 3           | ✓       | —                       | RESOLVED    | Debounce confirmed                                                          |
+| F-L-5                                          | 3           | ✓       | —                       | RESOLVED    | Long query handled gracefully                                               |
+| F-L-6                                          | 3           | 🟡      | —                       | SKIP        | treatRedirectAsResult flag (catalog-only; no bug)                           |
+| F-H-1                                          | 3           | ✓       | —                       | RESOLVED    | Zero console.\* (baseline)                                                  |
+| F-H-2                                          | 3           | ✓       | —                       | RESOLVED    | Zero dangerouslySetInnerHTML / eval                                         |
+| F-H-3                                          | 3           | ✓       | —                       | RESOLVED    | XSS probe escaped                                                           |
+| F-H-4                                          | 3           | ✓       | —                       | RESOLVED    | safeHttpUrl link injection guard                                            |
+| F-H-5                                          | 3           | ✓       | —                       | RESOLVED    | target=\_blank with rel=noopener                                            |
+| F-H-6                                          | 3           | ✓       | —                       | RESOLVED    | Zero iframe                                                                 |
+| F-H-7                                          | 3           | ✓       | —                       | RESOLVED    | localStorage minimal + non-sensitive                                        |
+| F-H-8                                          | 3           | ✓       | —                       | RESOLVED    | Zero sessionStorage                                                         |
+| F-H-9                                          | 3           | ✓       | —                       | RESOLVED    | Zero document.cookie                                                        |
+| F-H-10                                         | 3           | ✓       | —                       | RESOLVED    | Auth headers only in generated SDK                                          |
+| F-H-11                                         | 3           | ✓       | —                       | RESOLVED    | Env vars constrained                                                        |
+| H-12                                           | 3           | 🟢      | C 8.6                   | TODO        | Color-mode storage key naming                                               |
+| F-I-1                                          | 3           | ✓       | —                       | RESOLVED    | Polling policies segmented                                                  |
+| F-I-2                                          | 3           | ✓       | —                       | RESOLVED    | Live verification matches intervals                                         |
+| F-I-3                                          | 3           | 🟡      | C 8.5                   | TODO        | No visibilitychange pause doc                                               |
+| F-I-4                                          | 3           | 🟠      | C 8.5                   | TODO        | invalidateResource dead/abandoned                                           |
+| F-I-5                                          | 3           | ✓       | C 7.6                   | TODO        | TanStack dedup confirmed (validate same-key)                                |
+| F-I-6                                          | 3           | 🟢      | C 8.5                   | TODO        | refetchIntervalInBackground not explicit                                    |
+| F-I-7                                          | 3           | 🟡      | C 8.5                   | TODO        | gcTime not set on listPolicy/detailPolicy                                   |
+| F-I-8                                          | 3           | ✓       | —                       | RESOLVED    | Retry policy excludes 4xx                                                   |
+| F-D-1                                          | 4           | 🔴      | —                       | RESOLVED    | API stale binary — restart 2026-05-25                                       |
+| F-D-2                                          | 4           | 🟠      | —                       | RESOLVED    | Composite NotFound — 473de2a2 + 9e88114b                                    |
+| F-D-3                                          | 4           | 🟡      | C 5.1 / C 7.1           | TODO        | Detail page H1 heading inconsistency                                        |
+| F-D-4                                          | 4           | 🟡      | C 7.2                   | TODO        | Polling indicator absent on detail pages                                    |
+| F-D-5                                          | 4           | 🟡      | —                       | SKIP        | E5 empty-state spot-check unverified (low-pri)                              |
+| F-AE-1                                         | 4           | 🟢      | C 8.6                   | TODO        | favicon.ico 404                                                             |
+| F-AE-2                                         | 4           | 🟢      | —                       | RESOLVED    | try/catch inventory baseline                                                |
+| F-AE-3                                         | 4           | 🟡      | C 8.4                   | TODO        | SectionErrorBoundary inconsistent coverage                                  |
+| F-AE-4                                         | 4           | 🟡      | C 8.4                   | TODO        | Error interceptor flattens envelope (recap)                                 |
+| F-AE-5                                         | 4           | 🟠      | —                       | RESOLVED    | Composite NotFound err — 473de2a2 + 9e88114b                                |
+| F-AE-6                                         | 4           | 🟠      | C 8.4                   | TODO        | Silent shape-mismatch no console signal                                     |
+| F-AE-7                                         | 4           | 🟢      | C 8.4                   | TODO        | No global error reporter                                                    |
+| F-U-1                                          | 4           | 🟡      | C 2.2                   | TODO        | SectionCard wrong home                                                      |
+| F-U-2                                          | 4           | 🟡      | C 2.1                   | TODO        | Inline toFixed/toLocaleString 10 sites                                      |
+| F-U-3                                          | 4           | 🟠      | C 2.1                   | TODO        | Truncation re-impls 6 sites                                                 |
+| F-U-4                                          | 4           | 🟠      | C 2.1                   | TODO        | STROOPS_PER_XLM 2 constants                                                 |
+| F-U-5                                          | 4           | 🟡      | C 2.3                   | TODO        | EmptyState minor reuse violation                                            |
+| F-X-1                                          | 4           | 🟡      | C 2.2                   | TODO        | assetLegLabel cross-folder reach                                            |
+| F-X-2                                          | 4           | 🟢      | C 2.2                   | TODO        | web/src/pages/detail/ single-file                                           |
+| F-X-3                                          | 4           | 🟡      | —                       | RESOLVED    | usePageHandlers shared chunk (positive baseline)                            |
+| F-X-4                                          | 4           | 🟡      | C 6.4                   | TODO        | Hooks colocated in two places (document)                                    |
+| F-X-5                                          | 4           | 🟢      | C 2.2                   | TODO        | web/src/utils/ single-file                                                  |
+| F-AL-1                                         | 4           | 🟡      | C 5.2                   | DEFER-M2    | tx-detail selectedIndex useState (borderline)                               |
+| F-AL-2                                         | 4           | 🟢      | C 6.4                   | TODO        | useDetailMode parallel pattern doc                                          |
+| F-AN-1                                         | 4           | 🟡      | —                       | DEFER-M2    | Strkey vs hex strategy (partly resolved 0264; remainder bidirectional util) |
+| F-AN-2                                         | 4           | 🟢      | —                       | RESOLVED    | XDR rendering inventory clean baseline                                      |
+| F-AN-3                                         | 4           | 🟡      | C 7.1                   | TODO        | Op-type label single source; icon mapping absent (Figma check)              |
+| F-AN-4                                         | 4           | 🟢      | —                       | RESOLVED    | SEP-1 TOML enrichment OK                                                    |
+| F-AN-5                                         | 4           | 🟡      | C 6.4                   | TODO        | Soroban-era ledger detection absent (document)                              |
+| F-AN-6                                         | 4           | 🟢      | C 6.4                   | TODO        | Mainnet/Testnet config single-env (document)                                |
+| F-AN-7                                         | 4           | 🟠      | C 2.1                   | TODO        | Stroop/XLM 2-place (recap F-U-4)                                            |
+| F-AN-8                                         | 4           | 🟠      | —                       | RESOLVED    | Strkey canonical convention — 473de2a2 (0264)                               |
+| F-AE-1..F-AE-7                                 | 4           | various | (above)                 | (above)     | (see individual rows)                                                       |
+| F-A-1                                          | 5           | 🟡      | —                       | RESOLVED    | Spec drift 0246 Phase 3 dropped (positive baseline)                         |
+| F-A-2                                          | 5           | 🟡      | —                       | RESOLVED    | 0254 BREAKING wire rename clean (positive baseline)                         |
+| F-A-3                                          | 5           | 🟡      | C 6.4                   | TODO        | ADR 0032 partial gap on 0254 (doc sync)                                     |
+| F-A-4                                          | 5           | 🟡      | —                       | RESOLVED    | LP feature gold-standard exemplar (positive note)                           |
+| F-A-5                                          | 5           | 🟡      | C 1.3                   | TODO        | Contract list page gap (launch blocker)                                     |
+| F-A-6                                          | 5           | 🟢      | —                       | RESOLVED    | Tx-detail spec/ship chain clean                                             |
+| F-A-7                                          | 5           | 🟢      | —                       | RESOLVED    | Deviation notes discipline excellent                                        |
+| F-AH-1                                         | 5           | 🟡      | C 2.2                   | TODO        | PageStub.tsx dead orphan                                                    |
+| F-AH-2                                         | 5           | 🟡      | C 2.2                   | TODO        | Folder asymmetry                                                            |
+| F-AH-3                                         | 5           | 🟡      | C 2.2                   | TODO        | SectionCard wrong home (recap)                                              |
+| F-AH-4                                         | 5           | 🟢      | C 2.2                   | TODO        | web/src/utils/ single-file (recap)                                          |
+| F-AH-5                                         | 5           | 🟢      | C 2.2                   | TODO        | web/src/pages/detail/ misnamed (recap)                                      |
+| F-AH-6                                         | 5           | 🟢      | C 8.1                   | TODO        | No tests (cross-cite testing baseline)                                      |
+| F-AH-7                                         | 5           | 🟢      | C 2.2                   | TODO        | web/src/search/ parallel folder                                             |
+| F-AH-8                                         | 5           | 🟢      | C 2.2                   | TODO        | Page-root helpers mixed with \*Page.tsx                                     |
+| F-Y-1                                          | 5           | 🟡      | —                       | DEFER-M2    | overrides.ts 890 LOC split (low stakes)                                     |
+| F-Y-2                                          | 5           | 🟠      | C 2.1                   | TODO        | Debounce pattern duplicated 4×                                              |
+| F-Y-3                                          | 5           | 🟢      | —                       | RESOLVED    | useEffect discipline good (baseline)                                        |
+| F-Y-4                                          | 5           | 🟢      | —                       | DEFER-M2    | PoolCharts 268 LOC borderline                                               |
+| F-Y-5                                          | 5           | 🟢      | —                       | RESOLVED    | Long files domain-justified (baseline)                                      |
+| F-Y-6                                          | 5           | 🟡      | C 2.1                   | TODO        | Cross-cites formatter/truncation (recap)                                    |
+| F-Z-1                                          | 5           | 🟡      | C 2.1                   | TODO        | Multiple formatter homes (recap)                                            |
+| F-Z-2                                          | 5           | 🟢      | C 6.3                   | TODO        | Op-type enum hand-typed (backend coordination)                              |
+| F-Z-3                                          | 5           | 🟢      | —                       | DEFER-M2    | Chip JSDoc @param polish                                                    |
+| F-Z-4                                          | 5           | 🟢      | C 6.4                   | TODO        | frontend-data-flow wiki                                                     |
+| F-AA-1                                         | 5           | 🟢      | —                       | SKIP        | Single-consumer abstractions (keep-or-trim toss-up)                         |
+| F-AA-2                                         | 5           | 🟢      | —                       | RESOLVED    | Zero Redux/Zustand (positive baseline)                                      |
+| F-AA-3                                         | 5           | 🟢      | —                       | RESOLVED    | useDebounced will broaden in C 2.1                                          |
+| F-AA-4                                         | 5           | 🟢      | C 6.4                   | TODO        | useIntersectionObserver single-consumer wiki note                           |
+| F-AA-5                                         | 5           | 🟢      | —                       | RESOLVED    | Provider count minimal (positive baseline)                                  |
+| F-AA-6                                         | 5           | 🟢      | —                       | RESOLVED    | Hook proliferation bounded (positive baseline)                              |
+| F-AB-1                                         | 5           | 🟡      | C 6.4                   | TODO        | useDetailMode divergence not in task body                                   |
+| F-AB-2                                         | 5           | 🟡      | C 6.4                   | TODO        | Interval labels 0065 #5 spec not amended                                    |
+| F-AB-3                                         | 5           | 🟢      | C 10.3                  | TODO        | 0251 B1 fix-by-hide root-cause fix                                          |
+| F-AB-4                                         | 5           | 🟢      | C 8.7                   | TODO        | Sort-caret middle-ground designer sign-off                                  |
+| F-AB-5                                         | 5           | 🟠      | C 2.1                   | TODO        | Cross-task formatter dups (recap symptom)                                   |
+| F-AD-1                                         | 5           | 🟠      | C 2.1                   | TODO        | Leaked-concern 5+ file bug fixes                                            |
+| F-AD-2                                         | 5           | 🟢      | C 6.4                   | TODO        | Onboarding doc polish                                                       |
+| F-AD-3                                         | 5           | 🟢      | C 7.1                   | TODO        | 3 inline magic numbers (1500ms, 1062, 1064)                                 |
+| F-AD-4                                         | 5           | 🟢      | —                       | RESOLVED    | Zero implicit-context surprises (baseline)                                  |
+| F-AD-5                                         | 5           | 🟠      | C 8.1                   | TODO        | Zero test coverage (cross-cite)                                             |
+| F-AC checks (AC-1..AC-14)                      | 5           | —       | (rolled up)             | (rolled up) | See F-A-1..F-A-7 above                                                      |
+| F-EX-1                                         | 5 sweep     | 🟡      | C 5.4                   | TODO        | NFT minted_at_ledger plain text (Figma check)                               |
+| F-EX-2                                         | 5 sweep     | 🟢      | C 5.2                   | TODO        | Pool chart metric/period useState                                           |
+| F-W6-AG-1                                      | 6           | 🟠      | C 4.1                   | TODO        | Main bundle >500KB (recap)                                                  |
+| F-W6-AG-2                                      | 6           | 🟠      | C 4.1                   | TODO        | LP detail chunk 300KB (recap)                                               |
+| F-W6-AG-3                                      | 6           | 🟡      | C 7.1                   | TODO        | Transitions non-GPU                                                         |
+| F-W6-AG-4                                      | 6           | 🟢      | C 7.1                   | TODO        | 150ms transitions edge of hover rule                                        |
+| F-W6-AG-5                                      | 6           | 🟡      | C 7.7                   | TODO        | No route-transition loading indicator                                       |
+| F-W6-AG-6                                      | 6           | 🟢      | —                       | SKIP        | useMemo/useCallback spot-check informational                                |
+| F-W6-AG-7                                      | 6           | 🟢      | —                       | RESOLVED    | TanStack staleTime/gcTime tuned (baseline)                                  |
+| F-W6-AG-8                                      | 6           | 🟢      | —                       | RESOLVED    | Cache hit on navigate-back confirmed                                        |
+| F-W6-AG-9                                      | 6           | 🟢      | C 7.6                   | TODO        | Polling home+header overlap                                                 |
+| F-W6-AP-1                                      | 6           | 🟡      | C 2.3                   | TODO        | Loading pattern inconsistency                                               |
+| F-W6-AP-2                                      | 6           | 🟢      | C 7.2                   | TODO        | Polling refresh silent                                                      |
+| F-W6-AP-3                                      | 6           | 🟢      | C 2.3                   | TODO        | Error retry no distinct state                                               |
+| F-W6-AP-4                                      | 6           | 🟢      | C 2.3                   | TODO        | Inline/overlay/full-page not standardised                                   |
+| F-W6-V-1                                       | 6           | 🟠      | C 7.2                   | TODO        | DM-1 reconfirmed + all live pills lack freshness                            |
+| F-W6-V-2                                       | 6           | 🟡      | C 7.2                   | TODO        | Backfill doesn't disable LIVE                                               |
+| F-W6-V-3                                       | 6           | 🟢      | C 7.2                   | TODO        | Latest-ledger polling works (informational)                                 |
+| F-W6-AK-1                                      | 6           | 🟡      | C 7.1                   | TODO        | 3 hardcoded hex constants                                                   |
+| F-W6-AK-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Z-index raw 0/1 no scale                                                    |
+| F-W6-AK-3                                      | 6           | ✓       | —                       | RESOLVED    | Spacing scale consistent (baseline)                                         |
+| F-W6-AK-4                                      | 6           | 🟢      | —                       | DEFER-M2    | Border-radius/shadow audit deferred                                         |
+| F-W6-AK-5                                      | 6           | ✓       | —                       | RESOLVED    | CSS approach single (baseline)                                              |
+| F-W6-AK-6                                      | 6           | 🟢      | C 7.1                   | TODO        | Theme tokens pervasive; tiny leakage (recap)                                |
+| F-W6-F-1                                       | 6           | 🟡      | C 7.5                   | TODO        | NFT detail no h2/h3                                                         |
+| F-W6-F-2                                       | 6           | 🟡      | C 7.4                   | TODO        | Filter slots lack accessible names                                          |
+| F-W6-F-3                                       | 6           | 🟢      | —                       | RESOLVED    | First Tab focus visible (baseline)                                          |
+| F-W6-F-4                                       | 6           | 🟢      | C 7.4                   | TODO        | Header search lacks aria-label/id                                           |
+| F-W6-F-5                                       | 6           | 🟢      | —                       | RESOLVED    | Copy buttons aria-label correct (baseline)                                  |
+| F-W6-F-6                                       | 6           | 🟢      | C 8.1                   | DEFER-M2    | Lighthouse a11y audit not run                                               |
+| F-W6-F-7                                       | 6           | 🟢      | C 7.8                   | TODO        | Reduced-motion not verified                                                 |
+| F-W6-F-8                                       | 6           | 🟢      | C 7.8                   | TODO        | No keyboard trap test on modals                                             |
+| F-W6-CH-1                                      | 6           | 🟡      | C 7.1                   | TODO        | Status badges color+text, no shape icon                                     |
+| F-W6-CH-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Operation type chips text-only (informational)                              |
+| F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | TODO        | All routes break <800px                                                     |
+| F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | TODO        | No table → card transformation                                              |
+| F-W6-RESPONSIVE-3                              | 6           | 🟡      | C 8.3                   | TODO        | No hamburger / mobile nav                                                   |
+| F-W6-RESPONSIVE-4                              | 6           | 🟢      | C 8.3                   | TODO        | Touch targets <44px on mobile                                               |
+| F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 on 4 of 5 detail                                        |
+| F-W6-NOTFOUND-2                                | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on parent 404                                      |
+| F-W6-E0-1                                      | 6           | 🟠      | C 1.1                   | TODO        | Footer dead spans (recap)                                                   |
+| F-W6-E0-2                                      | 6           | 🟠      | C 7.2                   | TODO        | Footer hardcoded operational (recap)                                        |
+| F-W6-E0-3                                      | 6           | 🟡      | C 8.3                   | TODO        | No hamburger at mobile                                                      |
+| F-W6-E0-4                                      | 6           | 🟡      | C 7.1                   | TODO        | Header search placeholder 4 vs hint 5                                       |
+| F-W6-E0-5                                      | 6           | 🟢      | C 7.6                   | TODO        | Header polling duplicates home                                              |
+| F-W6-E1-1                                      | 6           | 🟡      | C 7.2                   | TODO        | LIVE badge always on (recap)                                                |
+| F-W6-E1-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Hero+header search visually identical                                       |
+| F-W6-E1-3                                      | 6           | 🟢      | C 7.6                   | TODO        | Home stats strip duplicated (informational)                                 |
+| F-W6-E1-4                                      | 6           | 🟡      | C 5.4                   | TODO        | Home ledger hash not a link                                                 |
+| F-W6-E2-1                                      | 6           | 🟢      | C 7.1                   | TODO        | "Transactions list" vs nav "Transactions"                                   |
+| F-W6-E2-2                                      | 6           | 🟢      | C 7.1                   | TODO        | "All operations type" typo                                                  |
+| F-W6-E3-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Memo "—" semantic improvement                                               |
+| F-W6-E3-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Normal/Advanced tabs no description                                         |
+| F-W6-E3-3                                      | 6           | 🟡      | C 5.1 / C 8.3           | TODO        | Page horiz scroll mobile (covered by responsive)                            |
+| F-W6-E5-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Prev/Next ledger no disabled at boundary                                    |
+| F-W6-E6-1                                      | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on 404 (account)                                   |
+| F-W6-E6-2                                      | 6           | 🟢      | C 5.1                   | TODO        | NotFound no h1 (account)                                                    |
+| F-W6-E7-1                                      | 6           | 🟡      | C 7.4                   | TODO        | Two unlabeled filter slots /assets                                          |
+| F-W6-E7-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset icon "?" fallback                                                     |
+| F-W6-E7-3                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset detail link uses composite ID for SAC                                 |
+| F-W6-E8-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset Metadata sparse                                                       |
+| F-W6-E8-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Holder count not linkable                                                   |
+| F-W6-E9-1                                      | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on 404 (contract)                                  |
+| F-W6-E9-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Invocations+Events no empty-state message                                   |
+| F-W6-E9-3                                      | 6           | 🟡      | C 5.1                   | TODO        | NotFound h1 inconsistent (contract)                                         |
+| F-W6-E10-1                                     | 6           | 🟡      | C 7.4                   | TODO        | Four unlabeled filter slots /nfts                                           |
+| F-W6-E10-2                                     | 6           | 🟢      | C 7.1                   | TODO        | NFT row token IDs inline text                                               |
+| F-W6-E10-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT row Contract ID plain text                                              |
+| F-W6-E11-1                                     | 6           | 🟡      | C 7.5                   | TODO        | NFT detail no h2/h3                                                         |
+| F-W6-E11-2                                     | 6           | 🟢      | C 7.1                   | TODO        | NFT Traits "Metadata unavailable" no guidance                               |
+| F-W6-E11-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT Contract ID in Details plain text                                       |
+| F-W6-E12-1                                     | 6           | 🟡      | C 7.1                   | TODO        | Pool ID truncation twice per row                                            |
+| F-W6-E12-2                                     | 6           | 🟢      | C 7.1                   | TODO        | "Any TVL" filter looks like loading                                         |
+| F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision                                    |
+| F-W6-E13-2                                     | 6           | 🟢      | C 5.1                   | TODO        | Pool NotFound no h1                                                         |
+| F-W6-E13-3                                     | 6           | 🟢      | C 7.1                   | TODO        | Pool tx operation type plain text                                           |
+| F-W6-E14-1                                     | 6           | 🟢      | C 7.1                   | TODO        | Empty-state hint at ?q= no examples                                         |
+| F-W6-E14-2                                     | 6           | 🟢      | C 7.1                   | TODO        | Search has two clear buttons                                                |
+| F-W6-E14-3                                     | 6           | 🟢      | —                       | SKIP        | First Tab lands on header search (informational)                            |
+| Z-1 Spot 5                                     | 5           | 🟢      | C 6.3                   | TODO        | Op-type enum hand-typed (cross-cite F-Z-2)                                  |
+| Z-1 Spot 1                                     | 5           | A       | C 8.4                   | TODO        | Error envelope flatten (cross-cite F-AF-1)                                  |
+| 0061 #4                                        | arch        | 🟢      | C 8.7                   | TODO        | Sort caret middle-ground sign-off                                           |
+| 0065 #5                                        | arch        | 🟡      | C 6.4                   | TODO        | Interval labels spec drift                                                  |
+| 0073 #5                                        | arch        | 🟡      | C 6.3                   | TODO        | Balances SAC vs Classic distinction (backend)                               |
+| 0075 #6                                        | arch        | 🟡      | C 6.3                   | TODO        | interface_metadata hand-typed                                               |
+| 0077 #9                                        | arch        | ✓       | —                       | RESOLVED    | Pool-id strkey 60 LOC justified                                             |
+| 0077 #12 #13                                   | arch        | ✓       | —                       | RESOLVED    | assetLegLabel/classifyLpTx hard-fail justified                              |
+| 0238 #5                                        | arch        | 🟡      | C 6.4                   | TODO        | cursorParam multi-cursor ADR gap                                            |
+| 0251 B1                                        | arch        | 🟢      | C 10.3                  | TODO        | linked=false fix-by-hide root cause                                         |
+| 0059 Future Work (live stats)                  | arch        | —       | —                       | RESOLVED    | Wired via 0066 (TopNav still shows MOCK_STATS — re-verify in C 7.6 / 8.6)   |
+| 0059 Future Work (responsive nav)              | arch        | —       | C 8.3                   | TODO        | Hamburger menu                                                              |
+| 0061 FW (libs/ui vitest)                       | arch        | —       | C 8.1                   | TODO        | 0226 promote                                                                |
+| 0062 FW (validators → libs/domain)             | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0062 FW (IdentifierDisplay router Link audit)  | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0067 FW (route param validation per page)      | arch        | —       | C 6.2                   | TODO        | Partly absorbed by 0251                                                     |
+| 0068 FW (table sorting)                        | arch        | —       | C 6.2                   | TODO        | Gated on backend sort param                                                 |
+| 0068 FW (populated-data diff)                  | arch        | —       | —                       | RESOLVED    | Absorbed into 0251/0257                                                     |
+| 0069 FW (libs/ui error/empty divergence)       | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0069 FW (operation pill colour confirm)        | arch        | —       | C 8.7                   | TODO        | Designer sign-off                                                           |
+| 0069 FW (OpenAPI op_type enum backend)         | arch        | —       | C 6.3                   | TODO        | Backend task                                                                |
+| 0072 FW (hoist Button + formatFee timestamp)   | arch        | —       | C 2.1 / C 2.2           | TODO        | Covered by format/folder cards                                              |
+| 0072 FW (URL-synced cursor)                    | arch        | —       | —                       | RESOLVED    | 0238                                                                        |
+| 0075 FW (contracts list page)                  | arch        | —       | C 1.3                   | TODO        | Launch blocker                                                              |
+| 0075 FW (events count for tab pill)            | arch        | —       | C 6.2                   | TODO        | Backend task                                                                |
+| 0075 FW (wasm_interface_metadata JSONB doc)    | arch        | —       | C 6.3                   | TODO        | Backend task                                                                |
+| 0075 FW (SAC SEP-41 stub)                      | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0076 FW (NFT trait rarity)                     | arch        | —       | —                       | RESOLVED    | 0229 spawned                                                                |
+| 0077 FW (Tx Amount column on PoolTransactions) | arch        | —       | C 6.2                   | TODO        | Gated on 0247                                                               |
+| 0077 FW (chart series wiring)                  | arch        | —       | C 10.1                  | TODO        | Gated on 0199                                                               |
+| 0077 FW (per-leg icon_url backend)             | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0077 FW (Playwright CLI for LP pages)          | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
+| 0077 FW (LP senior-eye 6 items)                | arch        | —       | C 6.2                   | TODO        | Bulk spawn batch                                                            |
+| 0238 FW (backend prev_cursor)                  | arch        | —       | —                       | RESOLVED    | 0254                                                                        |
+| 0238 FW (unit tests useCursorPagination)       | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
+| 0238 FW (Playwright smoke 11 pages)            | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
+| 0238 FW (ADR multi-cursor)                     | arch        | —       | C 6.4                   | TODO        | Cross-cite                                                                  |
+| 0251 FW (ScVal decoder Contract Events)        | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0251 FW (network runtime toggle)               | arch        | —       | C 6.2                   | TODO        | Spawn (post-launch)                                                         |
+| 0251 FW (Searchable Autocomplete ops)          | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| 0251 FW (B4 fake-XLM design redo)              | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
+| Out of scope O                                 | rdme        | —       | C 8.1                   | TODO        | testing baseline (= C 8.1)                                                  |
+| Out of scope N                                 | rdme        | —       | C 9.1                   | TODO        | i18n                                                                        |
+| Out of scope AJ                                | rdme        | —       | C 9.1                   | TODO        | Asset optimization (covered partly by C 4.1)                                |
+| Out of scope AT                                | rdme        | —       | C 9.1                   | TODO        | Animation polish                                                            |
+| Out of scope S                                 | rdme        | —       | C 9.1                   | TODO        | Browser compat matrix                                                       |
+| Out of scope T                                 | rdme        | —       | C 9.1                   | TODO        | Production parity                                                           |
+| Out of scope BR                                | rdme        | —       | C 9.1                   | TODO        | OG / Twitter cards                                                          |
+| Out of scope BM                                | rdme        | —       | C 9.1                   | TODO        | Memory leaks research                                                       |
+| Out of scope BJ                                | rdme        | —       | C 9.1                   | TODO        | WebSocket / SSE                                                             |
+| Out of scope BV                                | rdme        | —       | C 9.1                   | TODO        | PWA                                                                         |
+| Out of scope BZ                                | rdme        | —       | C 9.1                   | TODO        | GDPR                                                                        |
+| Out of scope CE                                | rdme        | —       | C 9.1                   | TODO        | Command palette                                                             |
+| Out of scope CF                                | rdme        | —       | C 9.1                   | TODO        | CSV/JSON export                                                             |
+| Out of scope BO                                | rdme        | —       | —                       | SKIP        | Session replay (skip per user)                                              |
+| Muxed M→G redirect                             | post-Gate-B | —       | —                       | SKIP        | No ecosystem precedent                                                      |
+| Asset code-issuer composite redirect           | post-Gate-B | —       | —                       | SKIP        | No ecosystem precedent                                                      |
+| SearchResponse::Redirect refactor              | post-Gate-B | —       | —                       | SKIP        | Deferred future PR                                                          |
+| F-EX-3 PoolKpiStrip (extends F-K-2)            | 5 sweep     | 🟠      | —                       | RESOLVED    | a5f15166 (0263)                                                             |
+| F-EX-4 PoolsTable reserves (extends F-K-2)     | 5 sweep     | 🟠      | —                       | RESOLVED    | a5f15166 (0263)                                                             |
+| Issues Encountered worktree gotchas wiki       | arch        | —       | C 6.4                   | TODO        | Spawn DOCS wiki entry                                                       |
+| NFT search-404 regression (0264 carry-over)    | 0270        | 🟠      | —                       | RESOLVED    | 6421d3d7 + 69d9f529                                                         |
 
 (Appendix row count tracked above — see report.)
 

@@ -453,21 +453,22 @@ analysis + recommendation (keep / refactor / drop).
 
 URL scheme + behavior changes that landed between original Wave 6 plan and dispatch. Track 2 measures against **THIS** baseline, not the original 14-route enumeration.
 
-| Aspect | Original plan | Post-Gate-B + 0270 baseline |
-|---|---|---|
-| **E11 NFT route** | `/nfts/:id` (numeric `i32` surrogate) | `/nfts/:contractId/:tokenId` composite (0264 Phase 8a) |
-| **E13 pool route** | `/liquidity-pools/<hex>` (64-char hex) | `/liquidity-pools/L<strkey>` (CAP-38 canonical, 0264 Phase 1-7) |
-| **E14 search — pool L-strkey paste** | F-L-1 expected (0 results) | RESOLVED — pool L-strkey decodes + redirects (0270 commit `047ce51e`) |
-| **E14 search — empty-state hint** | F-K-4 expected (no L… in hint) | RESOLVED — hint includes L… (0270 commit `6421d3d7`) |
-| **E14 search — NFT result click** | NFT route 404 regression (post-0264 carry-over) | RESOLVED — composite short-circuit via `routes.nft(c, t)` (0270 commit `6421d3d7`) |
-| **E14 search — bare digit** | classifier had no ledger branch (0 results) | RESOLVED — FE `directRouteFor.ts` redirects to `/ledgers/<seq>` BEFORE API call |
-| **Composite NotFound on E6/E9/E13** | F-D-2 + F-AE-5 expected (2-4 stacked error blocks) | RESOLVED — render-gated on `!parent.isError` (0262 commits `473de2a2` + `9e88114b`) |
-| **Pool detail reserve links** | F-K-2 expected (plain text) | RESOLVED — 3 sites wrapped in `<RouterLink>` (0263 commits `473de2a2` + `a5f15166`) |
-| **Pool participants "Since ledger"** | F-K-3 expected (plain number) | RESOLVED — wrapped in `<RouterLink to={routes.ledger(seq)}>` |
+| Aspect                               | Original plan                                      | Post-Gate-B + 0270 baseline                                                         |
+| ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **E11 NFT route**                    | `/nfts/:id` (numeric `i32` surrogate)              | `/nfts/:contractId/:tokenId` composite (0264 Phase 8a)                              |
+| **E13 pool route**                   | `/liquidity-pools/<hex>` (64-char hex)             | `/liquidity-pools/L<strkey>` (CAP-38 canonical, 0264 Phase 1-7)                     |
+| **E14 search — pool L-strkey paste** | F-L-1 expected (0 results)                         | RESOLVED — pool L-strkey decodes + redirects (0270 commit `047ce51e`)               |
+| **E14 search — empty-state hint**    | F-K-4 expected (no L… in hint)                     | RESOLVED — hint includes L… (0270 commit `6421d3d7`)                                |
+| **E14 search — NFT result click**    | NFT route 404 regression (post-0264 carry-over)    | RESOLVED — composite short-circuit via `routes.nft(c, t)` (0270 commit `6421d3d7`)  |
+| **E14 search — bare digit**          | classifier had no ledger branch (0 results)        | RESOLVED — FE `directRouteFor.ts` redirects to `/ledgers/<seq>` BEFORE API call     |
+| **Composite NotFound on E6/E9/E13**  | F-D-2 + F-AE-5 expected (2-4 stacked error blocks) | RESOLVED — render-gated on `!parent.isError` (0262 commits `473de2a2` + `9e88114b`) |
+| **Pool detail reserve links**        | F-K-2 expected (plain text)                        | RESOLVED — 3 sites wrapped in `<RouterLink>` (0263 commits `473de2a2` + `a5f15166`) |
+| **Pool participants "Since ledger"** | F-K-3 expected (plain number)                      | RESOLVED — wrapped in `<RouterLink to={routes.ledger(seq)}>`                        |
 
 **Track 2 implication:** these RESOLVED items become **positive verification** in Wave 6 (confirm fix works on visual + UX layer), not new findings. Any **regression** from these baselines = new HIGH/CRITICAL Wave 6 finding.
 
 **Still standing for Wave 6 to verify:**
+
 - DM-1 (footer "All systems operational" hardcoded) — Track 2 2.3 V live indicator will re-confirm
 - F-AI-1/2/10 (bundle perf baseline) — Track 2 2.2 will measure post-Gate-B numbers
 - F-AH cluster + F-Y cluster (visual/layout polish defer Phase 3) — Track 2 2.1 Figma may surface specifics
@@ -490,6 +491,7 @@ Same methodology as 0251-birthing pass, against post-fix baseline. All 14 routes
 - Search edge cases
 
 **Post-Gate-B verification adds:**
+
 - E11 NFT detail: use composite path `/nfts/:contractId/:tokenId`; find real composite IDs via `/v1/nfts?limit=N`
 - E13 pool detail: use strkey form `/liquidity-pools/L<55-base32>`; find via `/v1/liquidity-pools?limit=N`
 - E14 search: paste full pool L-strkey → redirect to `/liquidity-pools/L…`; paste bare digit → redirect to `/ledgers/<seq>`; NFT name search → result click → composite path
@@ -869,17 +871,17 @@ waves. **Upgrade to `claude-opus-4-7` extra-high (1M context) at two
 specific points** where synthesis across many findings + many files
 matters more than per-sub-phase scope.
 
-| Stage | Model | Rationale |
-|---|---|---|
-| Wave 1 (Tier 1 deterministic) | high (200K) | Bounded scope per sub-phase, file-based outputs, no cross-finding synthesis |
-| Wave 2 (Tier 1 cleanup + Tier 2 grep) | high (200K) | Same — grep + tooling output per sub-phase |
-| Wave 3 (Tier 2 Playwright + grep) | high (200K) | Single browser session bounded; findings file-based |
-| 🛑 Gate A triage | high (200K) | Per-finding decision is local; reference Wave 1-3 finding files directly |
-| Wave 4 (Tier 3 sequential) | high (200K) | 1.5 state matrix 14×9 = 126 cells works fine row-by-row; 1.12 useTableUrlState analysis bounded |
-| Wave 5 (Tier 4 subjective) | **extra-high (1M)** ✅ | 1.2 spec/source consistency + 1.10/10b/10c/10d senior craft → reads spec docs + Figma + code + ALL prior findings simultaneously; quality scales with context |
-| 🛑 Gate B triage | **extra-high (1M)** ✅ | Decisions span Track 1 + 2 boundaries; need to hold all ~150+ findings simultaneously to identify cascade-compression candidates |
-| Wave 6 (Track 2 visual + UX) | high (200K) | Per-route Playwright + Figma compare is bounded scope per route |
-| Wave 7 — **Phase 3 consolidation** | **extra-high (1M)** ✅ | 3.1 aggregate findings + 3.2 spawn 20-50 backlog tasks + 3.4 audit-summary all require holding the complete findings set; one-pass synthesis avoids re-reading 30+ finding files |
+| Stage                                 | Model                  | Rationale                                                                                                                                                                        |
+| ------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wave 1 (Tier 1 deterministic)         | high (200K)            | Bounded scope per sub-phase, file-based outputs, no cross-finding synthesis                                                                                                      |
+| Wave 2 (Tier 1 cleanup + Tier 2 grep) | high (200K)            | Same — grep + tooling output per sub-phase                                                                                                                                       |
+| Wave 3 (Tier 2 Playwright + grep)     | high (200K)            | Single browser session bounded; findings file-based                                                                                                                              |
+| 🛑 Gate A triage                      | high (200K)            | Per-finding decision is local; reference Wave 1-3 finding files directly                                                                                                         |
+| Wave 4 (Tier 3 sequential)            | high (200K)            | 1.5 state matrix 14×9 = 126 cells works fine row-by-row; 1.12 useTableUrlState analysis bounded                                                                                  |
+| Wave 5 (Tier 4 subjective)            | **extra-high (1M)** ✅ | 1.2 spec/source consistency + 1.10/10b/10c/10d senior craft → reads spec docs + Figma + code + ALL prior findings simultaneously; quality scales with context                    |
+| 🛑 Gate B triage                      | **extra-high (1M)** ✅ | Decisions span Track 1 + 2 boundaries; need to hold all ~150+ findings simultaneously to identify cascade-compression candidates                                                 |
+| Wave 6 (Track 2 visual + UX)          | high (200K)            | Per-route Playwright + Figma compare is bounded scope per route                                                                                                                  |
+| Wave 7 — **Phase 3 consolidation**    | **extra-high (1M)** ✅ | 3.1 aggregate findings + 3.2 spawn 20-50 backlog tasks + 3.4 audit-summary all require holding the complete findings set; one-pass synthesis avoids re-reading 30+ finding files |
 
 **Switch instructions:**
 
@@ -970,13 +972,13 @@ fix-first the ones that block accurate downstream work, defer the rest.
 
 **Invalidation taxonomy** — for every finding ask:
 
-| Class | Definition | Action |
-|---|---|---|
-| **A. Baseline-breaker** | Toggling this changes auto-tooling output, route render, or state surface that a later sub-phase measures | Fix-first at the next gate (or document explicit "audit baseline = X" and defer) |
-| **B. Routing/contract** | Changes URL, error code, response shape that 1.5/1.7/2.0 will exercise | Fix-first at Gate B (before Track 2) |
-| **C. Visual/layout** | Changes rendered DOM, styling, or component composition | Fix-first at Gate B (before Track 2 Figma + responsive) |
-| **D. Catalog-only** | Lore drift, missing spawned tasks, code smells, docs gaps, dep upgrades that don't change behavior | Defer to Phase 3 bulk spawning |
-| **E. Off-band** | Security CVE, secret leak, license violation | Fix immediately as separate task (does not invalidate findings, but does not wait for gate either) |
+| Class                   | Definition                                                                                                | Action                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **A. Baseline-breaker** | Toggling this changes auto-tooling output, route render, or state surface that a later sub-phase measures | Fix-first at the next gate (or document explicit "audit baseline = X" and defer)                   |
+| **B. Routing/contract** | Changes URL, error code, response shape that 1.5/1.7/2.0 will exercise                                    | Fix-first at Gate B (before Track 2)                                                               |
+| **C. Visual/layout**    | Changes rendered DOM, styling, or component composition                                                   | Fix-first at Gate B (before Track 2 Figma + responsive)                                            |
+| **D. Catalog-only**     | Lore drift, missing spawned tasks, code smells, docs gaps, dep upgrades that don't change behavior        | Defer to Phase 3 bulk spawning                                                                     |
+| **E. Off-band**         | Security CVE, secret leak, license violation                                                              | Fix immediately as separate task (does not invalidate findings, but does not wait for gate either) |
 
 **Gate A — end of Wave 3 (~9h cumulative, after Tier 1 + Tier 2 done)**
 
@@ -1047,8 +1049,9 @@ Decisions recorded in `findings/triage-gate-B.md`.
 **Gate C — implicit, end of Track 2 + Phase 3 entry**
 
 No explicit triage; Phase 3 IS the bulk-spawning gate. All Class D findings
-+ deferred-from-A/B + new Track 2 findings consolidate into
-`findings/consolidated-bugs.md`, then spawn into backlog per 3.2.
+
+- deferred-from-A/B + new Track 2 findings consolidate into
+  `findings/consolidated-bugs.md`, then spawn into backlog per 3.2.
 
 **Fix-first task spawning rules at Gate A / Gate B**
 
@@ -1065,14 +1068,14 @@ No explicit triage; Phase 3 IS the bulk-spawning gate. All Class D findings
 
 These first-mover fixes are known to cut down downstream finding count:
 
-| Fix at gate | Reduces findings in |
-|---|---|
-| TxDetail stub fully implemented (0070+0071) | 1.5 (9 cells E3), 1.6 (E3 console), 1.7 (every link landing E3), 2.0 (E3 full visual pass), 2.1 (E3 Figma), 2.4 (E3 responsive 3 cells) |
-| Type-safety flag enabled + errors fixed | 1.6 (fewer runtime issues caught by tsc upgrade), 2.2 (fewer defensive `?? ''` smells in perf review) |
-| Cross-entity dead links fixed | 1.7 (root cause cleared), 2.0 (Playwright doesn't re-report), 2.5 (a11y on dead routes N/A) |
-| Bundle size optimization (deps consolidation) | 1.16 (post-fix baseline), 2.2 (LCP improves), 2.4 (faster responsive switching) |
-| Lore drift fixed (0066 body, missing spawned tasks) | 1.18 (clean baseline), 3.2 (less catch-up spawning) |
-| Component hoist to libs/ui | 1.9 (root cause cleared), 2.1 (Figma fidelity measures shared component, not divergent locals) |
+| Fix at gate                                         | Reduces findings in                                                                                                                     |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| TxDetail stub fully implemented (0070+0071)         | 1.5 (9 cells E3), 1.6 (E3 console), 1.7 (every link landing E3), 2.0 (E3 full visual pass), 2.1 (E3 Figma), 2.4 (E3 responsive 3 cells) |
+| Type-safety flag enabled + errors fixed             | 1.6 (fewer runtime issues caught by tsc upgrade), 2.2 (fewer defensive `?? ''` smells in perf review)                                   |
+| Cross-entity dead links fixed                       | 1.7 (root cause cleared), 2.0 (Playwright doesn't re-report), 2.5 (a11y on dead routes N/A)                                             |
+| Bundle size optimization (deps consolidation)       | 1.16 (post-fix baseline), 2.2 (LCP improves), 2.4 (faster responsive switching)                                                         |
+| Lore drift fixed (0066 body, missing spawned tasks) | 1.18 (clean baseline), 3.2 (less catch-up spawning)                                                                                     |
+| Component hoist to libs/ui                          | 1.9 (root cause cleared), 2.1 (Figma fidelity measures shared component, not divergent locals)                                          |
 
 **Anti-pattern: do NOT fix-first**
 

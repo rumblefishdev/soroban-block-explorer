@@ -23,35 +23,35 @@ Triggered by `index-oicZakw3.js` at **594 KB minified / 188 KB gz**.
 
 ## Chunk inventory (largest)
 
-| Chunk | KB (min) | KB (gz) | Notes |
-|---|---:|---:|---|
-| **`index-*.js`** | **594.55** | **188.87** | main bundle — React + MUI + TanStack + router + AppShell + every eagerly-imported lib |
-| `LiquidityPoolDetailPage-*.js` | 313.11 | 95.57 | **second largest** — likely `@mui/x-charts` bundled here (only LP page uses TimeSeriesChart) |
-| `SearchOutlined-*.js` | 67.33 | 20.21 | strange — single MUI icon as own chunk (size hints at chart deps inlined?) |
-| `ContractDetailPage-*.js` | 21.72 | 7.00 | OK |
-| `cursorParams-*.js` | 16.62 | 5.82 | shared cursor logic |
-| `HomePage-*.js` | 13.54 | 4.48 | OK |
-| `ExplorerTable-*.js` | 11.57 | 4.14 | shared (lazy, surprising — should be eager) |
-| `NftDetailPage-*.js` | 9.90 | 3.72 | OK |
-| `LedgerDetailPage-*.js` | 6.06 | 2.41 | OK |
-| `AccountDetailPage-*.js` | 5.73 | 2.41 | OK |
-| `AssetDetailPage-*.js` | 5.68 | 2.23 | OK |
-| `LiquidityPoolsListPage-*.js` | 5.38 | 2.31 | OK |
-| `NftsListPage-*.js` | 5.09 | 2.27 | OK |
-| `AssetsListPage-*.js` | 4.63 | 2.11 | OK |
-| `PageBreadcrumb-*.js` | 4.60 | 1.94 | OK |
-| `TransactionsListPage-*.js` | 3.55 | 1.75 | OK |
-| `MenuItem-*.js` | 3.40 | 1.41 | OK |
-| `Link-*.js` | 3.23 | 1.33 | OK (MUI Link split) |
-| `AssetIcon-*.js` | 3.20 | 1.59 | OK |
-| `FeePill-*.js` | 3.12 | 1.60 | OK |
-| `usePageHandlers-*.js` | 2.49 | 1.24 | OK |
-| `cells-*.js` | 2.43 | 1.12 | OK |
-| `TableEmptyState-*.js` | 2.17 | 1.07 | OK |
-| `LedgersListPage-*.js` | 1.60 | 0.87 | OK |
-| `TransactionsTable-*.js` | 1.05 | 0.54 | OK |
-| `TransactionDetailPage-*.js` | 0.95 | 0.50 | the stub (matches A1 in archaeology — page is intentionally tiny) |
-| `SearchResultsPage-*.js` | 0.93 | 0.56 | OK |
+| Chunk                          |   KB (min) |    KB (gz) | Notes                                                                                        |
+| ------------------------------ | ---------: | ---------: | -------------------------------------------------------------------------------------------- |
+| **`index-*.js`**               | **594.55** | **188.87** | main bundle — React + MUI + TanStack + router + AppShell + every eagerly-imported lib        |
+| `LiquidityPoolDetailPage-*.js` |     313.11 |      95.57 | **second largest** — likely `@mui/x-charts` bundled here (only LP page uses TimeSeriesChart) |
+| `SearchOutlined-*.js`          |      67.33 |      20.21 | strange — single MUI icon as own chunk (size hints at chart deps inlined?)                   |
+| `ContractDetailPage-*.js`      |      21.72 |       7.00 | OK                                                                                           |
+| `cursorParams-*.js`            |      16.62 |       5.82 | shared cursor logic                                                                          |
+| `HomePage-*.js`                |      13.54 |       4.48 | OK                                                                                           |
+| `ExplorerTable-*.js`           |      11.57 |       4.14 | shared (lazy, surprising — should be eager)                                                  |
+| `NftDetailPage-*.js`           |       9.90 |       3.72 | OK                                                                                           |
+| `LedgerDetailPage-*.js`        |       6.06 |       2.41 | OK                                                                                           |
+| `AccountDetailPage-*.js`       |       5.73 |       2.41 | OK                                                                                           |
+| `AssetDetailPage-*.js`         |       5.68 |       2.23 | OK                                                                                           |
+| `LiquidityPoolsListPage-*.js`  |       5.38 |       2.31 | OK                                                                                           |
+| `NftsListPage-*.js`            |       5.09 |       2.27 | OK                                                                                           |
+| `AssetsListPage-*.js`          |       4.63 |       2.11 | OK                                                                                           |
+| `PageBreadcrumb-*.js`          |       4.60 |       1.94 | OK                                                                                           |
+| `TransactionsListPage-*.js`    |       3.55 |       1.75 | OK                                                                                           |
+| `MenuItem-*.js`                |       3.40 |       1.41 | OK                                                                                           |
+| `Link-*.js`                    |       3.23 |       1.33 | OK (MUI Link split)                                                                          |
+| `AssetIcon-*.js`               |       3.20 |       1.59 | OK                                                                                           |
+| `FeePill-*.js`                 |       3.12 |       1.60 | OK                                                                                           |
+| `usePageHandlers-*.js`         |       2.49 |       1.24 | OK                                                                                           |
+| `cells-*.js`                   |       2.43 |       1.12 | OK                                                                                           |
+| `TableEmptyState-*.js`         |       2.17 |       1.07 | OK                                                                                           |
+| `LedgersListPage-*.js`         |       1.60 |       0.87 | OK                                                                                           |
+| `TransactionsTable-*.js`       |       1.05 |       0.54 | OK                                                                                           |
+| `TransactionDetailPage-*.js`   |       0.95 |       0.50 | the stub (matches A1 in archaeology — page is intentionally tiny)                            |
+| `SearchResultsPage-*.js`       |       0.93 |       0.56 | OK                                                                                           |
 
 **CSS:** `index-*.css` = **636 B** (Emotion mostly runtime).
 
@@ -122,19 +122,19 @@ Build is **green, code-split per route, tree-shake-clean**, but the
 main bundle exceeds Vite's 500 KB warning, and one route (LP detail) is
 nearly as big as the rest combined.
 
-| Severity | Findings |
-|---|---|
-| 🔴 CRITICAL | 0 |
-| 🟠 HIGH | 2 (F-AI-1 main bundle size, F-AI-2 LP chart heavy) |
-| 🟡 MEDIUM | 3 (F-AI-3 weird icon chunk, F-AI-7 no visualizer, F-AI-8 no vendor split) |
-| 🟢 LOW | 2 (F-AI-4 table chunk, F-AI-9 CSS tiny — informational) |
+| Severity    | Findings                                                                  |
+| ----------- | ------------------------------------------------------------------------- |
+| 🔴 CRITICAL | 0                                                                         |
+| 🟠 HIGH     | 2 (F-AI-1 main bundle size, F-AI-2 LP chart heavy)                        |
+| 🟡 MEDIUM   | 3 (F-AI-3 weird icon chunk, F-AI-7 no visualizer, F-AI-8 no vendor split) |
+| 🟢 LOW      | 2 (F-AI-4 table chunk, F-AI-9 CSS tiny — informational)                   |
 
 ## Recommendations
 
 1. **🟠 HIGH (F-AI-1 + F-AI-8):** Spawn `XXXX_REFACTOR_frontend-vendor-chunk-split` — add `manualChunks` for react / mui / tanstack vendor splits + verify @mui/utils unification.
 2. **🟠 HIGH (F-AI-2):** Spawn `XXXX_REFACTOR_frontend-lp-chart-lazy-load` — lazy `PoolCharts` inside `LiquidityPoolDetailPage` so charts load on tab activation, not page load.
 3. **🟡 MEDIUM (F-AI-7):** Add `rollup-plugin-visualizer` dev-dep + CI artifact upload of the treemap on every build.
-5. **🟢 LOW:** Re-check after F-AI-1 lands whether SearchOutlined chunk normalises.
+4. **🟢 LOW:** Re-check after F-AI-1 lands whether SearchOutlined chunk normalises.
 
 ## Post-merge update 2026-05-25 — develop @ 6b7fb558 (FilipDz tx-detail PR #215)
 
@@ -142,15 +142,15 @@ Re-ran `nx run @rumblefish/soroban-block-explorer-web:build`. Exit 0, 2.40s.
 
 **Bundle delta (vs Wave 1 baseline):**
 
-| Chunk | Wave 1 | Post-merge | Δ |
-|---|---:|---:|---:|
-| `index-*.js` (main eager) | 594.55 KB / 188.87 KB gz | **596.20 KB / 189.36 KB gz** | +1.65 KB / +0.49 KB gz |
-| `LiquidityPoolDetailPage-*.js` | 313.11 KB / 95.57 KB gz | 307.12 KB / 93.81 KB gz | −5.99 KB / −1.76 KB gz |
-| `TransactionDetailPage-*.js` | 0.95 KB / 0.50 KB gz (stub) | **29.97 KB / 9.13 KB gz** | **+29.02 KB / +8.63 KB gz** |
-| `SearchOutlined-*.js` | 67.33 KB / 20.21 KB gz | 67.27 KB / 20.19 KB gz | flat |
-| `ContractDetailPage-*.js` | 21.72 KB / 7.00 KB gz | 17.99 KB / 5.89 KB gz | −3.73 KB / −1.11 KB gz |
-| `HomePage-*.js` | 13.54 KB / 4.48 KB gz | 13.62 KB / 4.52 KB gz | flat |
-| `cursorParams-*.js` | 16.62 KB / 5.82 KB gz | 16.62 KB / 5.83 KB gz | flat |
+| Chunk                          |                      Wave 1 |                   Post-merge |                           Δ |
+| ------------------------------ | --------------------------: | ---------------------------: | --------------------------: |
+| `index-*.js` (main eager)      |    594.55 KB / 188.87 KB gz | **596.20 KB / 189.36 KB gz** |      +1.65 KB / +0.49 KB gz |
+| `LiquidityPoolDetailPage-*.js` |     313.11 KB / 95.57 KB gz |      307.12 KB / 93.81 KB gz |      −5.99 KB / −1.76 KB gz |
+| `TransactionDetailPage-*.js`   | 0.95 KB / 0.50 KB gz (stub) |    **29.97 KB / 9.13 KB gz** | **+29.02 KB / +8.63 KB gz** |
+| `SearchOutlined-*.js`          |      67.33 KB / 20.21 KB gz |       67.27 KB / 20.19 KB gz |                        flat |
+| `ContractDetailPage-*.js`      |       21.72 KB / 7.00 KB gz |        17.99 KB / 5.89 KB gz |      −3.73 KB / −1.11 KB gz |
+| `HomePage-*.js`                |       13.54 KB / 4.48 KB gz |        13.62 KB / 4.52 KB gz |                        flat |
+| `cursorParams-*.js`            |       16.62 KB / 5.82 KB gz |        16.62 KB / 5.83 KB gz |                        flat |
 
 **F-AI-1 + F-AI-2 (🟠 HIGH — main bundle 594KB / LP chunk 313KB):** STILL
 STAND. Main bundle moved +1.65KB raw / +0.49KB gz (still above Vite
