@@ -15,14 +15,14 @@ appends only. Task 0262 owned by user — report-only here.
 
 ## Per-cluster delta summary
 
-| # | Cluster | Original claim | Exhaustive count | Delta | Severity change |
-|---|---|---|---|---|---|
-| 1 | Composite NotFound (sub-section parallel queries) | "account + contract" (F-D-2) | **account + contract + pool** (3 pages) | +1 (pool) | None — F-D-2 scope extended |
-| 2 | Cross-entity link integrity | 9 findings F-K-1..K-9 | +2 new sites identified | +2 | None — extends F-K-2 family |
-| 3 | Truncation re-impls | 6 sites (F-U-3 / J-7) | **6 sites** | 0 — confirmed exhaustive | No change |
-| 4 | Formatter dups | 2 STROOPS_PER_XLM, 2 formatFee (F-U-4 / F-J-16) | **2 / 2 / 10 toLocaleString / 4 bypass-toFixed** | toFixed slightly higher than F-J-3 cited (3 → 4) | No change |
-| 5 | XDR / binary `as unknown` + structural casts | "3 files in advanced/" (F-AQ-7) | **9 cast sites across 8 files** (4 in tx-detail; 5 elsewhere) | Wider than cited | None — surface-area note |
-| 6 | URL-state hook consumers | useTableUrlState verdict KEEP | **11 useCursorPagination + 1 useTabUrlState + 1 useDetailMode + 1 raw useSearchParams** consumers | Confirmed exhaustive | No change |
+| #   | Cluster                                           | Original claim                                  | Exhaustive count                                                                                  | Delta                                            | Severity change             |
+| --- | ------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------- |
+| 1   | Composite NotFound (sub-section parallel queries) | "account + contract" (F-D-2)                    | **account + contract + pool** (3 pages)                                                           | +1 (pool)                                        | None — F-D-2 scope extended |
+| 2   | Cross-entity link integrity                       | 9 findings F-K-1..K-9                           | +2 new sites identified                                                                           | +2                                               | None — extends F-K-2 family |
+| 3   | Truncation re-impls                               | 6 sites (F-U-3 / J-7)                           | **6 sites**                                                                                       | 0 — confirmed exhaustive                         | No change                   |
+| 4   | Formatter dups                                    | 2 STROOPS_PER_XLM, 2 formatFee (F-U-4 / F-J-16) | **2 / 2 / 10 toLocaleString / 4 bypass-toFixed**                                                  | toFixed slightly higher than F-J-3 cited (3 → 4) | No change                   |
+| 5   | XDR / binary `as unknown` + structural casts      | "3 files in advanced/" (F-AQ-7)                 | **9 cast sites across 8 files** (4 in tx-detail; 5 elsewhere)                                     | Wider than cited                                 | None — surface-area note    |
+| 6   | URL-state hook consumers                          | useTableUrlState verdict KEEP                   | **11 useCursorPagination + 1 useTabUrlState + 1 useDetailMode + 1 raw useSearchParams** consumers | Confirmed exhaustive                             | No change                   |
 
 **Net new findings:** 2 (F-EX-1, F-EX-2). **Severity escalations:** 0.
 
@@ -34,15 +34,15 @@ Procedure: for each of the 7 detail pages, classify (a) sub-section count,
 (b) per-section own-query status, (c) parent error-handling pattern,
 (d) dual-block risk on valid-format-404.
 
-| Page | File | Sub-sections | Per-section own query? | Parent error pattern | Dual-block on 404? |
-|---|---|---|---|---|---|
-| E3 transaction | `web/src/pages/transaction-detail/index.tsx` | TransactionSummary, OperationsSection, SignaturesTable, EventsSection, RawDataSection | NO — all consume `tx.heavy.*` from single parent `useTransactionDetail` | Full early-return on `query.isError` (lines 62-73) | **NO** — single query |
-| E5 ledger | `web/src/pages/LedgerDetailPage.tsx` | LedgerSummary, LedgerTransactions | NO — `ledger.transactions` embedded in parent `useLedgerDetail` | Full early-return on `isError` (lines 56-77) | **NO** — single query |
-| E6 account | `web/src/pages/AccountDetailPage.tsx` | AccountSummary, AccountBalances, AccountTransactions | **YES** — `AccountTransactions` fires `useAccountTransactions` (line 78) | Sub-section unconditional mount even on parent error (line 90-92, no `!account.isError &&` gate) | **YES** — F-D-2 confirmed |
-| E8 asset | `web/src/pages/AssetDetailPage.tsx` | AssetSummary, AssetMetadata, AssetTransactions | **YES** — `AssetTransactions` fires `useAssetTransactions` (line 76) | Render-gate at line 127: `{!asset.isError && <AssetTransactions/>}` | **NO** — F-D-2 was wrong about E8; gate present |
-| E9 contract | `web/src/pages/ContractDetailPage.tsx` | ContractSummary, ContractInterface, ContractInvocations, ContractEvents | **YES** — 3 of 4 fire own queries (Interface line 173, Invocations 81, Events 172) | Sub-sections unconditional inside tab `<Card>` — no `!contract.isError &&` gate | **YES** — F-D-2 confirmed; **WORST: 4 error blocks possible** (1 parent + 3 tab queries) |
-| E11 NFT | `web/src/pages/NftDetailPage.tsx` | NftMediaPreview, NftSummary, NftMetadata, NftTransfers | **YES** — `NftTransfers` fires `useNftTransfers` (line 93) | Full early-return on `isError` (lines 84-103) — sub-sections never mount on parent error | **NO** — early-return prevents |
-| E13 pool | `web/src/pages/LiquidityPoolDetailPage.tsx` | PoolDetailHeader, PoolKpiStrip, PoolSummary, PoolCharts, PoolParticipants, PoolTransactions | **YES** — 3 fire own queries (Charts 131, Participants 83, Transactions 127) | Sub-sections unconditional mount even on parent error (lines 95-103) | **YES** — **NEW: not in F-D-2 original scope; +3 error blocks possible** |
+| Page           | File                                         | Sub-sections                                                                                | Per-section own query?                                                             | Parent error pattern                                                                             | Dual-block on 404?                                                                       |
+| -------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| E3 transaction | `web/src/pages/transaction-detail/index.tsx` | TransactionSummary, OperationsSection, SignaturesTable, EventsSection, RawDataSection       | NO — all consume `tx.heavy.*` from single parent `useTransactionDetail`            | Full early-return on `query.isError` (lines 62-73)                                               | **NO** — single query                                                                    |
+| E5 ledger      | `web/src/pages/LedgerDetailPage.tsx`         | LedgerSummary, LedgerTransactions                                                           | NO — `ledger.transactions` embedded in parent `useLedgerDetail`                    | Full early-return on `isError` (lines 56-77)                                                     | **NO** — single query                                                                    |
+| E6 account     | `web/src/pages/AccountDetailPage.tsx`        | AccountSummary, AccountBalances, AccountTransactions                                        | **YES** — `AccountTransactions` fires `useAccountTransactions` (line 78)           | Sub-section unconditional mount even on parent error (line 90-92, no `!account.isError &&` gate) | **YES** — F-D-2 confirmed                                                                |
+| E8 asset       | `web/src/pages/AssetDetailPage.tsx`          | AssetSummary, AssetMetadata, AssetTransactions                                              | **YES** — `AssetTransactions` fires `useAssetTransactions` (line 76)               | Render-gate at line 127: `{!asset.isError && <AssetTransactions/>}`                              | **NO** — F-D-2 was wrong about E8; gate present                                          |
+| E9 contract    | `web/src/pages/ContractDetailPage.tsx`       | ContractSummary, ContractInterface, ContractInvocations, ContractEvents                     | **YES** — 3 of 4 fire own queries (Interface line 173, Invocations 81, Events 172) | Sub-sections unconditional inside tab `<Card>` — no `!contract.isError &&` gate                  | **YES** — F-D-2 confirmed; **WORST: 4 error blocks possible** (1 parent + 3 tab queries) |
+| E11 NFT        | `web/src/pages/NftDetailPage.tsx`            | NftMediaPreview, NftSummary, NftMetadata, NftTransfers                                      | **YES** — `NftTransfers` fires `useNftTransfers` (line 93)                         | Full early-return on `isError` (lines 84-103) — sub-sections never mount on parent error         | **NO** — early-return prevents                                                           |
+| E13 pool       | `web/src/pages/LiquidityPoolDetailPage.tsx`  | PoolDetailHeader, PoolKpiStrip, PoolSummary, PoolCharts, PoolParticipants, PoolTransactions | **YES** — 3 fire own queries (Charts 131, Participants 83, Transactions 127)       | Sub-sections unconditional mount even on parent error (lines 95-103)                             | **YES** — **NEW: not in F-D-2 original scope; +3 error blocks possible**                 |
 
 ### F-D-2 scope correction
 
@@ -79,15 +79,15 @@ matches across 22 files** (grep verified).
 
 ### Unlinked identifier renderings (NEW EXHAUSTIVE LIST)
 
-| File:line | Identifier | Type | Current render | Should link to | Severity | Existing finding? |
-|---|---|---|---|---|---|---|
-| `web/src/pages/pool-detail/PoolSummary.tsx:33-34` | reserve asset code (e.g. `USDCOIN`) | asset | plain `Typography` inside `AssetReserveCell` | `/assets/:id` | 🟠 HIGH | **F-K-2** (existing) |
-| `web/src/pages/pool-detail/PoolKpiStrip.tsx:82-83, 88-89` | reserve label asset code | asset | KPI cell label + subtitle plain `Typography` | `/assets/:id` | 🟠 HIGH | **EXTENDS F-K-2** — additional surface |
-| `web/src/pages/liquidity-pools/PoolsTable.tsx:97-105` | reserve column asset codes (list page) | asset | plain `Typography` inside reserves stack | `/assets/:id` | 🟠 HIGH | **EXTENDS F-K-2** — list-page surface |
-| `web/src/pages/pool-detail/PoolParticipants.tsx:57-59` | `first_deposit_ledger` "Since ledger" | ledger | plain `Typography` w/ `formatAmount` | `/ledgers/:seq` | 🟠 HIGH | **F-K-3** (existing) |
-| `web/src/pages/nft-detail/NftSummary.tsx:87-89` | `minted_at_ledger` (NFT detail) | ledger | plain `Typography` w/ `toLocaleString` | `/ledgers/:seq` | 🟡 MEDIUM | **NEW — F-EX-1** (comment says "plain text per Figma") |
-| `web/src/pages/contracts/ContractEvents.tsx:78-90` | topic strings (event topics) | possibly account/contract | plain colored `Typography` w/ `shortStr` | unclear (topic strings may be addresses) | 🟢 LOW | informational — defer; topics may carry addresses |
-| `web/src/pages/contracts/ContractEvents.tsx:96-126` | data cell (event data) | freeform | plain `Typography` middle-truncated | N/A — JSON blob | N/A | not an identifier |
+| File:line                                                 | Identifier                             | Type                      | Current render                               | Should link to                           | Severity  | Existing finding?                                      |
+| --------------------------------------------------------- | -------------------------------------- | ------------------------- | -------------------------------------------- | ---------------------------------------- | --------- | ------------------------------------------------------ |
+| `web/src/pages/pool-detail/PoolSummary.tsx:33-34`         | reserve asset code (e.g. `USDCOIN`)    | asset                     | plain `Typography` inside `AssetReserveCell` | `/assets/:id`                            | 🟠 HIGH   | **F-K-2** (existing)                                   |
+| `web/src/pages/pool-detail/PoolKpiStrip.tsx:82-83, 88-89` | reserve label asset code               | asset                     | KPI cell label + subtitle plain `Typography` | `/assets/:id`                            | 🟠 HIGH   | **EXTENDS F-K-2** — additional surface                 |
+| `web/src/pages/liquidity-pools/PoolsTable.tsx:97-105`     | reserve column asset codes (list page) | asset                     | plain `Typography` inside reserves stack     | `/assets/:id`                            | 🟠 HIGH   | **EXTENDS F-K-2** — list-page surface                  |
+| `web/src/pages/pool-detail/PoolParticipants.tsx:57-59`    | `first_deposit_ledger` "Since ledger"  | ledger                    | plain `Typography` w/ `formatAmount`         | `/ledgers/:seq`                          | 🟠 HIGH   | **F-K-3** (existing)                                   |
+| `web/src/pages/nft-detail/NftSummary.tsx:87-89`           | `minted_at_ledger` (NFT detail)        | ledger                    | plain `Typography` w/ `toLocaleString`       | `/ledgers/:seq`                          | 🟡 MEDIUM | **NEW — F-EX-1** (comment says "plain text per Figma") |
+| `web/src/pages/contracts/ContractEvents.tsx:78-90`        | topic strings (event topics)           | possibly account/contract | plain colored `Typography` w/ `shortStr`     | unclear (topic strings may be addresses) | 🟢 LOW    | informational — defer; topics may carry addresses      |
+| `web/src/pages/contracts/ContractEvents.tsx:96-126`       | data cell (event data)                 | freeform                  | plain `Typography` middle-truncated          | N/A — JSON blob                          | N/A       | not an identifier                                      |
 
 ### F-K-2 / F-K-3 cross-task implications
 
@@ -129,18 +129,19 @@ across `web/src/` + `libs/ui/src/` + `libs/api-types/src/` (excluding `generated
 
 ### Result: 6 ad-hoc impls — F-U-3 count CONFIRMED exhaustive
 
-| File:line | Function | Pattern | head/tail | Used in |
-|---|---|---|---|---|
-| `web/src/pages/AccountDetailPage.tsx:22` | `shortId(id)` | `slice(0,4)…slice(-4)` | 4/4 | breadcrumb crumb |
-| `web/src/pages/contracts/ContractEvents.tsx:46` | `shortStr(value)` | `slice(0,4)…slice(-4)` (when >14) | 4/4 | topic JSON strings |
-| `web/src/pages/contracts/ContractEvents.tsx:107` | inline `data.slice(0,10)…slice(-10)` | inline | 10/10 | event data cell |
-| `web/src/pages/transaction-detail/index.tsx:23` | `shortHash(hash)` | `slice(0,6)…slice(-4)` (when >12) | 6/4 | tx breadcrumb |
-| `web/src/pages/transaction-detail/normal/humanizeOp.ts:5` | `shortId(value)` | `slice(0,6)…slice(-4)` (when >12) | 6/4 | op flow tree labels |
-| `web/src/pages/transaction-detail/advanced/EventsSection.tsx:29` | `shortenStrKey(value)` | `slice(0,5)…slice(-4)` (when >12) | 5/4 | event topic identifiers |
-| `web/src/pages/transaction-detail/sections/SignaturesTable.tsx:29` | `truncateHex(hex, 12, 12)` | `slice(0,12)…slice(-12)` | 12/12 | signature hex |
+| File:line                                                          | Function                             | Pattern                           | head/tail | Used in                 |
+| ------------------------------------------------------------------ | ------------------------------------ | --------------------------------- | --------- | ----------------------- |
+| `web/src/pages/AccountDetailPage.tsx:22`                           | `shortId(id)`                        | `slice(0,4)…slice(-4)`            | 4/4       | breadcrumb crumb        |
+| `web/src/pages/contracts/ContractEvents.tsx:46`                    | `shortStr(value)`                    | `slice(0,4)…slice(-4)` (when >14) | 4/4       | topic JSON strings      |
+| `web/src/pages/contracts/ContractEvents.tsx:107`                   | inline `data.slice(0,10)…slice(-10)` | inline                            | 10/10     | event data cell         |
+| `web/src/pages/transaction-detail/index.tsx:23`                    | `shortHash(hash)`                    | `slice(0,6)…slice(-4)` (when >12) | 6/4       | tx breadcrumb           |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:5`          | `shortId(value)`                     | `slice(0,6)…slice(-4)` (when >12) | 6/4       | op flow tree labels     |
+| `web/src/pages/transaction-detail/advanced/EventsSection.tsx:29`   | `shortenStrKey(value)`               | `slice(0,5)…slice(-4)` (when >12) | 5/4       | event topic identifiers |
+| `web/src/pages/transaction-detail/sections/SignaturesTable.tsx:29` | `truncateHex(hex, 12, 12)`           | `slice(0,12)…slice(-12)`          | 12/12     | signature hex           |
 
 **Canonical util:** `libs/ui/src/identifiers/truncate.ts:21` `truncateMiddle`
-+ `getDefaultTruncation(type)` exposed via `IdentifierDisplay` / `IdentifierWithCopy`.
+
+- `getDefaultTruncation(type)` exposed via `IdentifierDisplay` / `IdentifierWithCopy`.
 
 **Also note (non-middle-truncation, end-only):** `web/src/pages/nft-detail/NftMetadata.tsx:33`
 `text.slice(0, MAX_VALUE_LEN)…` — different category (end-truncate of
@@ -160,9 +161,9 @@ in the same file already cited.
 
 ### STROOPS_PER_XLM constants
 
-| File:line | Value | Type |
-|---|---|---|
-| `web/src/pages/transactions/formatters.ts:1` | `10_000_000` | number |
+| File:line                                                | Value         | Type   |
+| -------------------------------------------------------- | ------------- | ------ |
+| `web/src/pages/transactions/formatters.ts:1`             | `10_000_000`  | number |
 | `web/src/pages/transaction-detail/shared/formatFee.ts:3` | `10_000_000n` | bigint |
 
 **Count: 2** — matches F-U-4. No other instances; no raw `1e7` literals
@@ -170,40 +171,40 @@ in production code.
 
 ### formatFee functions
 
-| File:line | Implementation | Path |
-|---|---|---|
-| `web/src/pages/transactions/formatters.ts:11` | Number-based, `toFixed(7).replace(/\.?0+$/, '')` | `transactions/formatters` |
-| `web/src/pages/transaction-detail/shared/formatFee.ts:5` | BigInt-based, manual whole/frac split | `transaction-detail/shared/formatFee` |
+| File:line                                                | Implementation                                   | Path                                  |
+| -------------------------------------------------------- | ------------------------------------------------ | ------------------------------------- |
+| `web/src/pages/transactions/formatters.ts:11`            | Number-based, `toFixed(7).replace(/\.?0+$/, '')` | `transactions/formatters`             |
+| `web/src/pages/transaction-detail/shared/formatFee.ts:5` | BigInt-based, manual whole/frac split            | `transaction-detail/shared/formatFee` |
 
 **Count: 2** — matches F-J-16. Plus 1 `formatStroops` at
 `transaction-detail/shared/formatFee.ts:15` (third entry point — F-J-17).
 
 ### toLocaleString('en-US') sites
 
-| File:line | Use |
-|---|---|
-| `web/src/pages/LedgerDetailPage.tsx:85` | sequence label |
-| `web/src/pages/ledgers/LedgerSummary.tsx:29` | base fee stroops display |
-| `web/src/pages/ledgers/LedgerSummary.tsx:74` | sequence |
-| `web/src/pages/ledgers/LedgerSummary.tsx:115` | transaction count |
-| `web/src/pages/ledgers/LedgersTable.tsx:63` | transaction_count cell |
-| `web/src/pages/ledgers/LedgerTransactions.tsx:46` | totalCount caption |
-| `web/src/pages/nft-detail/NftSummary.tsx:88` | minted_at_ledger |
+| File:line                                          | Use                                     |
+| -------------------------------------------------- | --------------------------------------- |
+| `web/src/pages/LedgerDetailPage.tsx:85`            | sequence label                          |
+| `web/src/pages/ledgers/LedgerSummary.tsx:29`       | base fee stroops display                |
+| `web/src/pages/ledgers/LedgerSummary.tsx:74`       | sequence                                |
+| `web/src/pages/ledgers/LedgerSummary.tsx:115`      | transaction count                       |
+| `web/src/pages/ledgers/LedgersTable.tsx:63`        | transaction_count cell                  |
+| `web/src/pages/ledgers/LedgerTransactions.tsx:46`  | totalCount caption                      |
+| `web/src/pages/nft-detail/NftSummary.tsx:88`       | minted_at_ledger                        |
 | `libs/ui/src/identifiers/IdentifierDisplay.tsx:73` | ledger formatForDisplay (internal util) |
-| `libs/ui/src/visualization/Tabs.tsx:42` | tab count badge |
-| `libs/ui/src/layout/TopNav.tsx:83` | formatNumber util |
+| `libs/ui/src/visualization/Tabs.tsx:42`            | tab count badge                         |
+| `libs/ui/src/layout/TopNav.tsx:83`                 | formatNumber util                       |
 
 **Count: 10** — matches F-U-2 cited 10. F-J-2 cited 7-9 (off by 1-3).
 
 ### toFixed sites bypassing canonical formatter
 
-| File:line | Use |
-|---|---|
-| `web/src/pages/home/ChainOverview.tsx:53` | `tps_60s.toFixed(1)` |
-| `web/src/pages/liquidity-pools/FeePill.tsx:24` | `n.toFixed(2)%` |
-| `libs/ui/src/layout/TopNav.tsx:81` | `value.toFixed(1)M` (internal formatNumber) |
-| `libs/ui/src/layout/TopNav.tsx:132` | `stats.tps_60s.toFixed(1)` |
-| `web/src/pages/transactions/formatters.ts:14` | `xlm.toFixed(7)` — **canonical formatter**, not a bypass |
+| File:line                                      | Use                                                      |
+| ---------------------------------------------- | -------------------------------------------------------- |
+| `web/src/pages/home/ChainOverview.tsx:53`      | `tps_60s.toFixed(1)`                                     |
+| `web/src/pages/liquidity-pools/FeePill.tsx:24` | `n.toFixed(2)%`                                          |
+| `libs/ui/src/layout/TopNav.tsx:81`             | `value.toFixed(1)M` (internal formatNumber)              |
+| `libs/ui/src/layout/TopNav.tsx:132`            | `stats.tps_60s.toFixed(1)`                               |
+| `web/src/pages/transactions/formatters.ts:14`  | `xlm.toFixed(7)` — **canonical formatter**, not a bypass |
 
 **Bypass-formatter count: 4** — F-J-3 cited 3, missed 1 (`TopNav.tsx:132` second TPS site distinct from line 81 internal util).
 
@@ -219,8 +220,8 @@ Grep across all of `web/src/` + `libs/ui/src/` + `libs/api-types/src/`
 
 ### `as unknown as` — true cross-runtime type-escape
 
-| File:line | Reason |
-|---|---|
+| File:line                             | Reason                                            |
+| ------------------------------------- | ------------------------------------------------- |
 | `libs/ui/src/timestamps/useNow.ts:18` | `setInterval` return type cross-platform polyfill |
 
 **Count: 1** — same as Wave 1 baseline. **No new instances post-Filip-merge.**
@@ -231,35 +232,35 @@ Grep across all of `web/src/` + `libs/ui/src/` + `libs/api-types/src/`
 
 ### Structural inline casts `(x as { foo?: unknown })`
 
-| File:line | Cast | Reason inferred |
-|---|---|---|
-| `web/src/api/client.ts:20` | `error as { message: unknown }` | error normalisation |
-| `web/src/api/QueryProvider.tsx:14` | `error as { status?: number }` | retry-policy classifier |
-| `web/src/api/queryKeys.ts:39` | `head as { _id?: unknown }` | SDK_IDS_BY_RESOURCE probe |
-| `web/src/pages/transaction-detail/normal/humanizeOp.ts:12` | `details as { function_name?: unknown }` | heavy XDR shape probe |
-| `web/src/pages/transaction-detail/normal/humanizeOp.ts:21` | `details as { summary?: unknown }` | heavy XDR shape probe |
-| `libs/ui/src/states/classifyError.ts:23` | `err as { status: unknown }` | error classifier |
+| File:line                                                  | Cast                                     | Reason inferred           |
+| ---------------------------------------------------------- | ---------------------------------------- | ------------------------- |
+| `web/src/api/client.ts:20`                                 | `error as { message: unknown }`          | error normalisation       |
+| `web/src/api/QueryProvider.tsx:14`                         | `error as { status?: number }`           | retry-policy classifier   |
+| `web/src/api/queryKeys.ts:39`                              | `head as { _id?: unknown }`              | SDK_IDS_BY_RESOURCE probe |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:12` | `details as { function_name?: unknown }` | heavy XDR shape probe     |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:21` | `details as { summary?: unknown }`       | heavy XDR shape probe     |
+| `libs/ui/src/states/classifyError.ts:23`                   | `err as { status: unknown }`             | error classifier          |
 
 **Count: 6 structural casts**
 
 ### `as Record<string, unknown>` (runtime-narrowing prep)
 
-| File:line | Cast |
-|---|---|
+| File:line                                                              | Cast                                 |
+| ---------------------------------------------------------------------- | ------------------------------------ |
 | `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:21` | `details as Record<string, unknown>` |
 | `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:23` | `details as Record<string, unknown>` |
-| `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:63` | `value as Record<string, unknown>` |
-| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:29` | `value as Record<string, unknown>` |
+| `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:63`     | `value as Record<string, unknown>`   |
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:29`           | `value as Record<string, unknown>`   |
 
 **Count: 4**
 
 ### Other domain-specific casts
 
-| File:line | Cast | Notes |
-|---|---|---|
-| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:38` | `value as NestedCallShape[]` | post-`Array.isArray` narrow |
-| `web/src/pages/pool-detail/PoolCharts.tsx:190` | `key as ChartMetric` | tab-key narrow on `Tabs.onChange` |
-| `web/src/pages/transaction-detail/index.tsx:131-138` | `heavy as \| { results_meta_xdr?: ... } \| null \| undefined` | F-AQ-8 cited; OpenAPI codegen drift |
+| File:line                                                    | Cast                                                          | Notes                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------- | ----------------------------------- |
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:38` | `value as NestedCallShape[]`                                  | post-`Array.isArray` narrow         |
+| `web/src/pages/pool-detail/PoolCharts.tsx:190`               | `key as ChartMetric`                                          | tab-key narrow on `Tabs.onChange`   |
+| `web/src/pages/transaction-detail/index.tsx:131-138`         | `heavy as \| { results_meta_xdr?: ... } \| null \| undefined` | F-AQ-8 cited; OpenAPI codegen drift |
 
 ### Summary
 
@@ -274,7 +275,7 @@ QueryProvider, queryKeys) + 2 libs/ui files (classifyError, useNow).
 
 **Severity:** F-AQ-7 / F-AQ-8 remain 🟡 MEDIUM. Larger surface area than
 cited but pattern unchanged — all instances are defensive narrowing of
-backend JSONB blobs (`Record<string, unknown>` shape) — the *correct*
+backend JSONB blobs (`Record<string, unknown>` shape) — the _correct_
 defensive code given backend wire format. Real fix: stricter OpenAPI
 schema for `details` field (discriminated union by op_type).
 
@@ -285,6 +286,7 @@ schema for `details` field (discriminated union by op_type).
 ### `useCursorPagination` consumers (11 total)
 
 List pages (5):
+
 - `web/src/pages/TransactionsListPage.tsx:34`
 - `web/src/pages/LedgersListPage.tsx:20`
 - `web/src/pages/AssetsListPage.tsx:32`
@@ -292,6 +294,7 @@ List pages (5):
 - `web/src/pages/LiquidityPoolsListPage.tsx:34`
 
 Detail-page tab/section tables (6):
+
 - `web/src/pages/LedgerDetailPage.tsx:32` (parent ledger transactions)
 - `web/src/pages/accounts/AccountTransactions.tsx:74`
 - `web/src/pages/assets/AssetTransactions.tsx:72`
@@ -329,11 +332,11 @@ multiple sections coexist (pool detail, contract detail). Consistent.
 
 Found 3 candidates where state-as-URL would improve deep-linkability:
 
-| File:line | State | Currently | Trade-off |
-|---|---|---|---|
-| `web/src/pages/transaction-detail/index.tsx:30` | `selectedIndex` | useState | F-AL-1 — deliberate; refresh resets to op #0 |
-| `web/src/pages/transaction-detail/sections/OperationPicker.tsx:59` | `typeFilter` | useState | in-page filter, ephemeral by design |
-| `web/src/pages/pool-detail/PoolCharts.tsx:128-129` | `metric` + `period` | useState | **NEW — F-EX-2** — pool chart tab + range; refresh resets to TVL / 30D |
+| File:line                                                          | State               | Currently | Trade-off                                                              |
+| ------------------------------------------------------------------ | ------------------- | --------- | ---------------------------------------------------------------------- |
+| `web/src/pages/transaction-detail/index.tsx:30`                    | `selectedIndex`     | useState  | F-AL-1 — deliberate; refresh resets to op #0                           |
+| `web/src/pages/transaction-detail/sections/OperationPicker.tsx:59` | `typeFilter`        | useState  | in-page filter, ephemeral by design                                    |
+| `web/src/pages/pool-detail/PoolCharts.tsx:128-129`                 | `metric` + `period` | useState  | **NEW — F-EX-2** — pool chart tab + range; refresh resets to TVL / 30D |
 
 **F-EX-2 trade-off:** moving `metric`/`period` to URL would let users share
 "this pool's volume over 7 days" links. Trade-off identical to F-AL-1.
@@ -391,6 +394,7 @@ resets to TVL / 30D.
 **Original scope (per F-D-2):** account + contract
 
 **Exhaustive scope correction:**
+
 - **Account (E6) — affected** — `AccountTransactions` mounted on parent error
 - **Contract (E9) — affected** — Interface + Invocations + Events all mounted on parent error; up to 4 error blocks
 - **Pool (E13) — NEW, affected** — Charts + Participants + Transactions all mounted on parent error
@@ -405,6 +409,7 @@ resets to TVL / 30D.
 **Original scope:** pool detail reserve labels Link wrap (PoolSummary)
 
 **Exhaustive surface:**
+
 - `web/src/pages/pool-detail/PoolSummary.tsx` (AssetReserveCell × 2 reserves)
 - `web/src/pages/pool-detail/PoolKpiStrip.tsx` (KpiCell label + subtitle × 2 reserves) — **NEW surface**
 - `web/src/pages/liquidity-pools/PoolsTable.tsx` (reserves column on list page) — **NEW surface**
@@ -434,6 +439,7 @@ that mix display+route encoding. Pool is the only case.
 **Wave 6 readiness: GREEN.**
 
 Rationale:
+
 - All 6 cluster patterns have been verified exhaustive (counts ±1-2 of
   original where noted, no severity escalation needed).
 - Only **2 new findings** spawned (F-EX-1, F-EX-2) — both Class C / 🟡 / 🟢
@@ -456,8 +462,8 @@ Rationale:
 ## Sweep methodology notes
 
 - Procedure: grep first for raw matches across `web/src/` + `libs/ui/src/`
-  + `libs/api-types/src/` (excluding `generated/`), then read each match
-  for context to classify.
+  - `libs/api-types/src/` (excluding `generated/`), then read each match
+    for context to classify.
 - Files read in full or in relevant ranges: 14 (TransactionDetailPage,
   LedgerDetailPage, AccountDetailPage, AssetDetailPage, ContractDetailPage,
   NftDetailPage, LiquidityPoolDetailPage, AccountTransactions, PoolParticipants,

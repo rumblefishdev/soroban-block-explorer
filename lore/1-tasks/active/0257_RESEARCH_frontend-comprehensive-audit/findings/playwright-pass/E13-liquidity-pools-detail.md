@@ -6,18 +6,19 @@ H1: `"USDCOIN / EUR"`. Sections (with proper h2/h3): Summary, Pool participants,
 
 ## Positive verifications — Gate B fix-firsts CONFIRMED
 
-| Fix-first item | Status | Evidence |
-|---|---|---|
-| **F-L-1** L-strkey URL works | ✅ | `/liquidity-pools/LD5MMO…O6TL` (composite strkey) renders correctly |
-| **F-K-2** Reserve labels linked | ✅ | `USDCOIN` + `EUR` in Summary wrapped in `<a href="/assets/USDCOIN-GAFFFRANK…">` and `<a href="/assets/EUR-GAFFFRANK…">`; appears 4× total (header card + Summary section) |
-| **F-K-3** "Since ledger" linked | ✅ | Pool participants table → `Since ledger` values 1,019 and 1,021 wrapped in `<a href="/ledgers/1019">` and `<a href="/ledgers/1021">` |
-| **F-D-2** Single NotFound on invalid pool | ✅ | `/liquidity-pools/LXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` → single "Liquidity pool not found" block, no stacked sub-section error blocks |
+| Fix-first item                            | Status | Evidence                                                                                                                                                                  |
+| ----------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **F-L-1** L-strkey URL works              | ✅     | `/liquidity-pools/LD5MMO…O6TL` (composite strkey) renders correctly                                                                                                       |
+| **F-K-2** Reserve labels linked           | ✅     | `USDCOIN` + `EUR` in Summary wrapped in `<a href="/assets/USDCOIN-GAFFFRANK…">` and `<a href="/assets/EUR-GAFFFRANK…">`; appears 4× total (header card + Summary section) |
+| **F-K-3** "Since ledger" linked           | ✅     | Pool participants table → `Since ledger` values 1,019 and 1,021 wrapped in `<a href="/ledgers/1019">` and `<a href="/ledgers/1021">`                                      |
+| **F-D-2** Single NotFound on invalid pool | ✅     | `/liquidity-pools/LXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` → single "Liquidity pool not found" block, no stacked sub-section error blocks                 |
 
 ## Findings
 
 ### F-W6-E13-1 [Class A, Severity 🟠 HIGH] Pool participants "Share %" rendered at full precision `33.3333333333333333%`
 
 Snapshot text:
+
 ```
 GADD…XXXX   600   100.00%        1,019
 GAHH…XXXX   200   33.3333333333333333%  1,021

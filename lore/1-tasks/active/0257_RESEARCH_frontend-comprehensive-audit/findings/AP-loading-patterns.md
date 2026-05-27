@@ -5,6 +5,7 @@
 ### F-W6-AP-1 [Class C, Severity 🟡 MEDIUM] Loading pattern inconsistency: skeleton vs spinner choice not codified
 
 Observed via fast-throttle simulation (Playwright network conditions not used; observed during initial load):
+
 - List pages (`/transactions`, `/ledgers`, `/assets`, `/nfts`, `/liquidity-pools`): brief blank-state, then full-table render. No skeleton row pattern.
 - Detail pages: same — brief blank, then full render.
 - Home: brief blank, then 4 sections paint roughly together.

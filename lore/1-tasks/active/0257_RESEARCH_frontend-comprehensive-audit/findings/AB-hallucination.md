@@ -7,25 +7,25 @@
 
 ## Per-check table
 
-| # | Check | Verdict | Evidence | Severity | Class |
-|---|---|---|---|---|---|
-| AB-1 | Divergences from project convention — explicit in task or invented? | ⚠ | Sample 5 below; 4/5 explicit, 1 partial. See F-AB-1 | 🟡 | D |
-| AB-2 | Each Emerged Decision — justified or hallucinated? | mostly ✓ | Wave 1 archaeology cataloged 41 Emerged decisions; 14 flagged for re-audit. **8 of 14 confirmed justified post Wave 4** (Stellar correctness, Figma overrides). See per-decision verdict below. | 🟡 | D |
-| AB-3 | Each `as any` / `@ts-ignore` justified? | ✓ | Cross-cite Wave 1 AF-1 — **zero `as any` / zero `@ts-ignore` in user code**. F-AF-3 (1 `as unknown as` in `useNow.ts`) justified cross-runtime types. | — | — |
-| AB-4 | F-AQ-7 / F-AQ-8 `unknown` + cast — justified or hallucinated? | ✓ justified | See F-AB-2 below — XDR `details` field is intentionally untyped on the wire (heterogeneous per-op shape); runtime probes are correct pattern | — | — |
-| AB-5 | Implementations inconsistent with project pattern | partial | Cross-cite Wave 4 F-U series + Wave 5 F-Y-2 (debounce dup). Inconsistencies all flagged in task bodies or Future Work | 🟠 | C |
-| AB-6 | Spec says X but code does Y without task note | ✓ | Sample 3 below — every divergence has task-body note or Emerged Decision rationale | — | — |
-| AB-7 | Comment-out leftover / false starts | ✓ | `grep "// old\|/\* old\|// TODO\|// FIXME"` → **0 hits** across `web/src` + `libs/ui/src`. Cross-cite Wave 1 P-5 | — | — |
+| #    | Check                                                               | Verdict     | Evidence                                                                                                                                                                                        | Severity | Class |
+| ---- | ------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| AB-1 | Divergences from project convention — explicit in task or invented? | ⚠           | Sample 5 below; 4/5 explicit, 1 partial. See F-AB-1                                                                                                                                             | 🟡       | D     |
+| AB-2 | Each Emerged Decision — justified or hallucinated?                  | mostly ✓    | Wave 1 archaeology cataloged 41 Emerged decisions; 14 flagged for re-audit. **8 of 14 confirmed justified post Wave 4** (Stellar correctness, Figma overrides). See per-decision verdict below. | 🟡       | D     |
+| AB-3 | Each `as any` / `@ts-ignore` justified?                             | ✓           | Cross-cite Wave 1 AF-1 — **zero `as any` / zero `@ts-ignore` in user code**. F-AF-3 (1 `as unknown as` in `useNow.ts`) justified cross-runtime types.                                           | —        | —     |
+| AB-4 | F-AQ-7 / F-AQ-8 `unknown` + cast — justified or hallucinated?       | ✓ justified | See F-AB-2 below — XDR `details` field is intentionally untyped on the wire (heterogeneous per-op shape); runtime probes are correct pattern                                                    | —        | —     |
+| AB-5 | Implementations inconsistent with project pattern                   | partial     | Cross-cite Wave 4 F-U series + Wave 5 F-Y-2 (debounce dup). Inconsistencies all flagged in task bodies or Future Work                                                                           | 🟠       | C     |
+| AB-6 | Spec says X but code does Y without task note                       | ✓           | Sample 3 below — every divergence has task-body note or Emerged Decision rationale                                                                                                              | —        | —     |
+| AB-7 | Comment-out leftover / false starts                                 | ✓           | `grep "// old\|/\* old\|// TODO\|// FIXME"` → **0 hits** across `web/src` + `libs/ui/src`. Cross-cite Wave 1 P-5                                                                                | —        | —     |
 
 ## F-AB-1 — Divergence audit (sample of 5)
 
-| Divergence | Where | Explicit in task body? | Verdict |
-|---|---|---|---|
-| FE op-type enum hardcoded (27 entries) | `web/src/pages/transactions/operationTypes.ts` | ✓ — 0069 Future Work "OpenAPI operation_type enum in backend" | ✓ explicit |
-| Hard-fail throws on schema drift (`assetLegLabel`, `classifyLpTx`, `poolIdHexToStrkey`) | `web/src/pages/pool-detail/helpers.ts:16-23`, etc. | ✓ — 0077 #12 + #13 Emerged | ✓ explicit |
-| Custom pool-id strkey encoder (~60 LOC) instead of `@stellar/base` | `web/src/utils/poolIdStrkey.ts` | ✓ — 0077 #9 Emerged (bundle-size justification documented) | ✓ explicit |
-| `Source account` column dropped on account-transactions table | `web/src/pages/accounts/AccountTransactions.tsx` | ✓ — 0073 deviation note + AC delta | ✓ explicit |
-| `useDetailMode` uses `useSearchParams` instead of `useTableUrlState` | `web/src/pages/transaction-detail/useDetailMode.ts` | ⚠ — Filip's 0070/0071 task body doesn't explicitly note divergence; Wave 4 F-U-5 documented post-merge | partial |
+| Divergence                                                                              | Where                                               | Explicit in task body?                                                                                 | Verdict    |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------- |
+| FE op-type enum hardcoded (27 entries)                                                  | `web/src/pages/transactions/operationTypes.ts`      | ✓ — 0069 Future Work "OpenAPI operation_type enum in backend"                                          | ✓ explicit |
+| Hard-fail throws on schema drift (`assetLegLabel`, `classifyLpTx`, `poolIdHexToStrkey`) | `web/src/pages/pool-detail/helpers.ts:16-23`, etc.  | ✓ — 0077 #12 + #13 Emerged                                                                             | ✓ explicit |
+| Custom pool-id strkey encoder (~60 LOC) instead of `@stellar/base`                      | `web/src/utils/poolIdStrkey.ts`                     | ✓ — 0077 #9 Emerged (bundle-size justification documented)                                             | ✓ explicit |
+| `Source account` column dropped on account-transactions table                           | `web/src/pages/accounts/AccountTransactions.tsx`    | ✓ — 0073 deviation note + AC delta                                                                     | ✓ explicit |
+| `useDetailMode` uses `useSearchParams` instead of `useTableUrlState`                    | `web/src/pages/transaction-detail/useDetailMode.ts` | ⚠ — Filip's 0070/0071 task body doesn't explicitly note divergence; Wave 4 F-U-5 documented post-merge | partial    |
 
 **Verdict:** 4/5 sampled divergences are explicitly documented in originating task body. 1/5 (useDetailMode) emerged from post-merge audit — task body could be amended.
 
@@ -38,6 +38,7 @@ Filip's tx-detail pages use `unknown` + runtime probes for the heavy `details` f
 **Backend perspective:** The `XdrOperationDto.details` field is `serde_json::Value` on the wire (heterogeneous per-op-type JSON shape — Payment has `amount/destination`, ManageData has `data_name/data_value`, etc.). OpenAPI types this as `unknown` (correct — there's no closed-set schema for per-op JSON).
 
 **FE response:**
+
 - `OperationJsonDetail.tsx:13-26` defines `pickDetailValue(details: unknown, key: string)` with full type-guarded probe (`typeof === 'object' && !Array.isArray && key in`).
 - `OperationJsonDetail.tsx:28-30` defines `asString(value: unknown)` returning `string | null`.
 - These are **the correct pattern** for safely accessing unknown shapes.
@@ -50,18 +51,18 @@ Filip's tx-detail pages use `unknown` + runtime probes for the heavy `details` f
 
 ## F-AB-3 — Emerged Decision re-audit (sample of 8 from Wave 1 archaeology 14-item list)
 
-| # | Decision | Re-audit verdict |
-|---|---|---|
-| 0061 #4 | Sort caret without DS "Active" yellow pill — "deliberate middle ground" | **partial hallucination — design decision was unilateral.** Subjective: a "middle-ground" between 2 Figma variants without designer confirmation is creative interpretation. Defer to Wave 6 Figma audit to settle. |
-| 0062 #4 | Tooltip removed from `IdentifierDisplay` per Figma exactly | **justified** — Figma-first per project convention; cost = click-to-copy compensates |
-| 0065 #4 | `OperationFlowTree` unified instead of separate `InvocationCallTree` | **justified** — Wave 4 F-AN-3 verified Soroban call trees render as nested children; unification is correct |
-| 0065 #5 | Interval labels `1D/7D/30D/1Y` from Figma vs spec `1h/1d/1w` | **partial — Figma override correct, but spec drift unaddressed.** Spec body never amended. Defer for Wave 6 confirmation + spec-update task in Phase 3 |
-| 0073 #5 | Balances show only "Native asset" / "Classic" (cannot distinguish SAC from API) | **backend gap, not hallucination.** Spawn backend task per Wave 1 A3. |
-| 0075 #6 | `interface_metadata` hand-typed from indexer source not OpenAPI | **partial hallucination risk.** Type drift hazard — if backend changes, FE silently breaks. Spawn backend task per Wave 1 A3. |
-| 0077 #9 | Pool-id strkey encoder = ~60 LOC custom (avoid 50-100 KB stellar-base) | **justified** — bundle-size win documented; verified vs stellar-base in task body |
-| 0077 #12 + #13 | `assetLegLabel` / `classifyLpTx` hard-fail on schema drift via `throw` | **justified** — Wave 4 F-AE-2 verified all throws fall into `SectionErrorBoundary`. Documented |
-| 0238 #5 | `cursorParam` multi-cursor namespacing (`cursor_p/_t/_e/_i`) via CURSOR_PARAMS registry | **justified mechanism, ADR gap.** Convention undocumented per archaeology recommendation; Phase 3 ADR spawn (already flagged) |
-| 0251 B1 | `linked={false}` on pool-id header instead of fixing href | **structurally correct but anti-pattern.** Hides the bug rather than fixing root cause. Future juniors will reintroduce the broken link. **Mild hallucination of fix.** |
+| #              | Decision                                                                                | Re-audit verdict                                                                                                                                                                                                    |
+| -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0061 #4        | Sort caret without DS "Active" yellow pill — "deliberate middle ground"                 | **partial hallucination — design decision was unilateral.** Subjective: a "middle-ground" between 2 Figma variants without designer confirmation is creative interpretation. Defer to Wave 6 Figma audit to settle. |
+| 0062 #4        | Tooltip removed from `IdentifierDisplay` per Figma exactly                              | **justified** — Figma-first per project convention; cost = click-to-copy compensates                                                                                                                                |
+| 0065 #4        | `OperationFlowTree` unified instead of separate `InvocationCallTree`                    | **justified** — Wave 4 F-AN-3 verified Soroban call trees render as nested children; unification is correct                                                                                                         |
+| 0065 #5        | Interval labels `1D/7D/30D/1Y` from Figma vs spec `1h/1d/1w`                            | **partial — Figma override correct, but spec drift unaddressed.** Spec body never amended. Defer for Wave 6 confirmation + spec-update task in Phase 3                                                              |
+| 0073 #5        | Balances show only "Native asset" / "Classic" (cannot distinguish SAC from API)         | **backend gap, not hallucination.** Spawn backend task per Wave 1 A3.                                                                                                                                               |
+| 0075 #6        | `interface_metadata` hand-typed from indexer source not OpenAPI                         | **partial hallucination risk.** Type drift hazard — if backend changes, FE silently breaks. Spawn backend task per Wave 1 A3.                                                                                       |
+| 0077 #9        | Pool-id strkey encoder = ~60 LOC custom (avoid 50-100 KB stellar-base)                  | **justified** — bundle-size win documented; verified vs stellar-base in task body                                                                                                                                   |
+| 0077 #12 + #13 | `assetLegLabel` / `classifyLpTx` hard-fail on schema drift via `throw`                  | **justified** — Wave 4 F-AE-2 verified all throws fall into `SectionErrorBoundary`. Documented                                                                                                                      |
+| 0238 #5        | `cursorParam` multi-cursor namespacing (`cursor_p/_t/_e/_i`) via CURSOR_PARAMS registry | **justified mechanism, ADR gap.** Convention undocumented per archaeology recommendation; Phase 3 ADR spawn (already flagged)                                                                                       |
+| 0251 B1        | `linked={false}` on pool-id header instead of fixing href                               | **structurally correct but anti-pattern.** Hides the bug rather than fixing root cause. Future juniors will reintroduce the broken link. **Mild hallucination of fix.**                                             |
 
 **Verdict:** of 10 sampled, **8 justified, 2 partial/hallucination-risk (0061 #4, 0251 B1)**. The 4 marked "partial" still defer to Wave 6 Figma audit.
 
@@ -71,14 +72,14 @@ Filip's tx-detail pages use `unknown` + runtime probes for the heavy `details` f
 
 All flagged in Wave 4:
 
-| Inconsistency | Cross-cite | Class | Spec note |
-|---|---|---|---|
-| Local `SectionCard` not in libs/ui | F-U-1 | C | Not in task — emerged organically |
-| Inline `toFixed`/`toLocaleString` (10 sites) | F-U-2 | C | Not in task |
-| Truncation re-impls (6 sites) | F-U-3 | C | Not in task |
-| STROOPS_PER_XLM constant dup (2 sites) | F-U-4 | A | Filip's tx-detail introduced 2nd site; not in task |
-| Debounce pattern dup (4 sites — NEW) | F-Y-2 | C | Not in task |
-| `formatFee` dup (2 sites) | F-J-16 | C | Filip's tx-detail introduced; not in task |
+| Inconsistency                                | Cross-cite | Class | Spec note                                          |
+| -------------------------------------------- | ---------- | ----- | -------------------------------------------------- |
+| Local `SectionCard` not in libs/ui           | F-U-1      | C     | Not in task — emerged organically                  |
+| Inline `toFixed`/`toLocaleString` (10 sites) | F-U-2      | C     | Not in task                                        |
+| Truncation re-impls (6 sites)                | F-U-3      | C     | Not in task                                        |
+| STROOPS_PER_XLM constant dup (2 sites)       | F-U-4      | A     | Filip's tx-detail introduced 2nd site; not in task |
+| Debounce pattern dup (4 sites — NEW)         | F-Y-2      | C     | Not in task                                        |
+| `formatFee` dup (2 sites)                    | F-J-16     | C     | Filip's tx-detail introduced; not in task          |
 
 **Subjective:** these are all **organic drift across feature task boundaries** — each task was self-contained and didn't anti-DRY-check across siblings. **Not hallucination; just incremental accretion that ought to be tidied periodically.**
 
@@ -86,11 +87,11 @@ All flagged in Wave 4:
 
 ## F-AB-5 — Spec ↔ code divergence without note (sample of 3)
 
-| Divergence | Spec source | Task body note? |
-|---|---|---|
-| 0065 #5 interval labels | Spec `1h/1d/1w` vs code `1D/7D/30D/1Y` | ⚠ in Emerged but spec body never amended |
-| `Source account` column drop | Spec lists column; code omits | ✓ in 0073 deviation + Emerged |
-| Asset-transactions table layout (Ledger vs Fee) | Spec / Figma diverge | ✓ in 0074 Emerged |
+| Divergence                                      | Spec source                            | Task body note?                          |
+| ----------------------------------------------- | -------------------------------------- | ---------------------------------------- |
+| 0065 #5 interval labels                         | Spec `1h/1d/1w` vs code `1D/7D/30D/1Y` | ⚠ in Emerged but spec body never amended |
+| `Source account` column drop                    | Spec lists column; code omits          | ✓ in 0073 deviation + Emerged            |
+| Asset-transactions table layout (Ledger vs Fee) | Spec / Figma diverge                   | ✓ in 0074 Emerged                        |
 
 **Verdict:** 2/3 explicit; 1 (interval labels) lacks spec update.
 

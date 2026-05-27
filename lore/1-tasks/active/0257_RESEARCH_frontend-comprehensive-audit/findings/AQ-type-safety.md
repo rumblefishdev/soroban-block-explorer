@@ -8,20 +8,20 @@ discriminated unions, branded types.
 
 `tsconfig.base.json` (extends to all 4 projects):
 
-| Flag | Value | Verdict |
-|---|---|---|
-| `strict` | `true` | ✓ |
-| `noFallthroughCasesInSwitch` | `true` | ✓ |
-| `noImplicitOverride` | `true` | ✓ |
-| `noImplicitReturns` | `true` | ✓ |
-| `noUnusedLocals` | `true` | ✓ |
-| `noEmitOnError` | `true` | ✓ |
-| `isolatedModules` | `true` | ✓ |
-| `composite` | `true` | ✓ |
-| **`noUncheckedIndexedAccess`** | **NOT SET** | ✗ — 🟠 HIGH |
-| **`exactOptionalPropertyTypes`** | **NOT SET** | ✗ — 🟡 MEDIUM |
-| `noPropertyAccessFromIndexSignature` | not set | 🟢 LOW |
-| `noUnusedParameters` | not set | 🟢 LOW |
+| Flag                                 | Value       | Verdict       |
+| ------------------------------------ | ----------- | ------------- |
+| `strict`                             | `true`      | ✓             |
+| `noFallthroughCasesInSwitch`         | `true`      | ✓             |
+| `noImplicitOverride`                 | `true`      | ✓             |
+| `noImplicitReturns`                  | `true`      | ✓             |
+| `noUnusedLocals`                     | `true`      | ✓             |
+| `noEmitOnError`                      | `true`      | ✓             |
+| `isolatedModules`                    | `true`      | ✓             |
+| `composite`                          | `true`      | ✓             |
+| **`noUncheckedIndexedAccess`**       | **NOT SET** | ✗ — 🟠 HIGH   |
+| **`exactOptionalPropertyTypes`**     | **NOT SET** | ✗ — 🟡 MEDIUM |
+| `noPropertyAccessFromIndexSignature` | not set     | 🟢 LOW        |
+| `noUnusedParameters`                 | not set     | 🟢 LOW        |
 
 Per-project tsconfigs (`web/tsconfig.lib.json`, `libs/ui/tsconfig.lib.json`,
 `libs/api-types/tsconfig.lib.json`) only override `baseUrl`, `rootDir`,
@@ -37,7 +37,7 @@ The flag is the single biggest type-safety upgrade missing. Today:
 
 ```ts
 const palette = FALLBACK_PALETTE[idx]; // typed AssetColor (NOT AssetColor | undefined)
-palette.bg;                            // compiles even if idx out of range
+palette.bg; // compiles even if idx out of range
 ```
 
 The lint warning in F-P-1 (`assetColor.ts:131` non-null assertion)
@@ -66,12 +66,12 @@ use OpenAPI types directly, but a defensive flip-on is cheap.
 
 Found 4 `switch` statements:
 
-| File:line | Discriminant | Default branch? | Exhaustive? |
-|---|---|---|---|
-| `web/src/search/useSearchResults.ts:132` | `activeTab` (string literal union) | (need to verify) | (need to verify) |
-| `web/src/api/hooks/usePoolChart.ts:24` | `period` (`1D|7D|30D|1Y`) | **no `default:`**, no return after switch — relies on `noImplicitReturns` + `noFallthroughCasesInSwitch` to catch new period values | partial |
-| `libs/ui/src/visualization/OperationFlowTree.tsx:62` | `kind` (union: contract/destination/result/account/operation) | (need to verify final return / default) | (need to verify) |
-| `libs/ui/src/identifiers/validators.ts:40` | `type: EntityType` | **no `default:`**, returns out of each case; would NOT compile if `EntityType` adds a member (`noImplicitReturns` saves us) | type-safe but no `assertNever` |
+| File:line                                            | Discriminant                                                  | Default branch?                                                                                                             | Exhaustive?                    |
+| ---------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `web/src/search/useSearchResults.ts:132`             | `activeTab` (string literal union)                            | (need to verify)                                                                                                            | (need to verify)               |
+| `web/src/api/hooks/usePoolChart.ts:24`               | `period` (`1D                                                 | 7D                                                                                                                          | 30D                            | 1Y`) | **no `default:`**, no return after switch — relies on `noImplicitReturns` + `noFallthroughCasesInSwitch` to catch new period values | partial |
+| `libs/ui/src/visualization/OperationFlowTree.tsx:62` | `kind` (union: contract/destination/result/account/operation) | (need to verify final return / default)                                                                                     | (need to verify)               |
+| `libs/ui/src/identifiers/validators.ts:40`           | `type: EntityType`                                            | **no `default:`**, returns out of each case; would NOT compile if `EntityType` adds a member (`noImplicitReturns` saves us) | type-safe but no `assertNever` |
 
 → None use `assertNever(x: never): never` exhaustiveness assertion.
 TS's `noImplicitReturns` provides the same guarantee for return-typed
@@ -162,10 +162,11 @@ Type safety is **good baseline + 1 strong miss**.
 
 **F-AQ-3 (🟡 — switch exhaustiveness):** PARTIALLY DEGRADED. Filip's PR
 adds switches at:
+
 - `web/src/pages/transaction-detail/normal/humanizeOp.ts:36-61` —
   switch on `light.type_name` (string, not literal union). 4 cases +
   fall-through to default `return \`${opLabel} processed\``. No
-  `assertNever` (and can't be — discriminant is `string`, not narrowed).
+`assertNever`(and can't be — discriminant is`string`, not narrowed).
 - `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:9-19` —
   switch on `TokenKind` (string-literal union). 5 cases, no default,
   returns each branch. `noImplicitReturns` will catch new union members.
@@ -176,6 +177,7 @@ baseline. Severity unchanged.
 **F-AQ-4 (🟠 HIGH — zero branded ID types):** STILL STANDS, DEGRADED.
 Filip's PR threads `string` IDs through new types without branding.
 Examples:
+
 - `useTxHashParam.ts:5-7` `{ hash: string }` — could be `TransactionHash`
 - `OperationPicker.tsx` accepts `OperationItem` with no `OperationId` brand
 - `humanizeOp.ts` `shortId(value: string)` accepts any string
@@ -187,6 +189,7 @@ Adding tx-detail surface enlarges the unbranded-ID surface area.
 **NEW FINDING — F-AQ-7 🟡 MEDIUM `[Class B, Severity MEDIUM]` — `unknown` +
 runtime probes for heavy XDR shapes.** Filip's tx-detail pages use
 `unknown` + manual shape probes for the heavy `details` field:
+
 - `humanizeOp.ts:9-25` — `fnNameFromHeavy`, `summaryFromHeavy` cast
   `details` as `{ function_name?: unknown; summary?: unknown }`
 - `toFlowNodes.tsx:27-39` — `asObject`, `asString`, `asNestedCalls`
@@ -194,7 +197,7 @@ runtime probes for heavy XDR shapes.** Filip's tx-detail pages use
 - `OperationJsonDetail.tsx:13-30` — `pickDetailValue(details, key)` with
   `key in details` runtime probe
 
-This is the *correct* defensive pattern given that backend `details` is
+This is the _correct_ defensive pattern given that backend `details` is
 a `Record<string, unknown>`-style JSONB blob with no schema lock. But it
 indicates an OpenAPI gap: `XdrOperationDto.details` should be typed
 more strictly (probably a discriminated union by `op_type`). Cross-refs
@@ -226,8 +229,8 @@ Re-grep to confirm exhaustive across whole tree.
 
 ### `as unknown as` — true cross-runtime type-escape (1 site, baseline preserved)
 
-| File:line | Reason |
-|---|---|
+| File:line                             | Reason                                            |
+| ------------------------------------- | ------------------------------------------------- |
 | `libs/ui/src/timestamps/useNow.ts:18` | `setInterval` return type cross-platform polyfill |
 
 **Wave 1 baseline of "single legitimate `as unknown as`" still holds post-Filip merge.**
@@ -238,26 +241,26 @@ Re-grep to confirm exhaustive across whole tree.
 
 ### Structural inline casts `(x as { ... })`
 
-| File:line | Cast | Reason |
-|---|---|---|
-| `web/src/api/client.ts:20` | `error as { message: unknown }` | error normalisation |
-| `web/src/api/QueryProvider.tsx:14` | `error as { status?: number }` | retry policy classifier |
-| `web/src/api/queryKeys.ts:39` | `head as { _id?: unknown }` | SDK_IDS_BY_RESOURCE probe |
-| `web/src/pages/transaction-detail/normal/humanizeOp.ts:12` | `details as { function_name?: unknown }` | heavy XDR shape probe |
-| `web/src/pages/transaction-detail/normal/humanizeOp.ts:21` | `details as { summary?: unknown }` | heavy XDR shape probe |
-| `libs/ui/src/states/classifyError.ts:23` | `err as { status: unknown }` | error classifier |
+| File:line                                                  | Cast                                     | Reason                    |
+| ---------------------------------------------------------- | ---------------------------------------- | ------------------------- |
+| `web/src/api/client.ts:20`                                 | `error as { message: unknown }`          | error normalisation       |
+| `web/src/api/QueryProvider.tsx:14`                         | `error as { status?: number }`           | retry policy classifier   |
+| `web/src/api/queryKeys.ts:39`                              | `head as { _id?: unknown }`              | SDK_IDS_BY_RESOURCE probe |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:12` | `details as { function_name?: unknown }` | heavy XDR shape probe     |
+| `web/src/pages/transaction-detail/normal/humanizeOp.ts:21` | `details as { summary?: unknown }`       | heavy XDR shape probe     |
+| `libs/ui/src/states/classifyError.ts:23`                   | `err as { status: unknown }`             | error classifier          |
 
 **Count: 6.** F-AQ-7 cited "3 files in `transaction-detail/advanced/`" —
 exhaustive count includes 3 API-layer + 2 tx-detail/normal + 1 libs/ui/states.
 
 ### `as Record<string, unknown>` (defensive narrowing prep)
 
-| File:line | Cast |
-|---|---|
+| File:line                                                              | Cast                                 |
+| ---------------------------------------------------------------------- | ------------------------------------ |
 | `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:21` | `details as Record<string, unknown>` |
 | `web/src/pages/transaction-detail/advanced/OperationJsonDetail.tsx:23` | `details as Record<string, unknown>` |
-| `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:63` | `value as Record<string, unknown>` |
-| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:29` | `value as Record<string, unknown>` |
+| `web/src/pages/transaction-detail/advanced/HighlightedJson.tsx:63`     | `value as Record<string, unknown>`   |
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:29`           | `value as Record<string, unknown>`   |
 
 **Count: 4.** All in transaction-detail. F-AQ-7's "3 files in advanced/"
 roughly maps to OperationJsonDetail + HighlightedJson + EventsSection
@@ -266,15 +269,16 @@ in `/normal/` not `/advanced/` adding a 4th distinct file.
 
 ### Other domain-specific casts
 
-| File:line | Cast | Notes |
-|---|---|---|
-| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:38` | `value as NestedCallShape[]` | post-`Array.isArray` narrow — safe |
-| `web/src/pages/pool-detail/PoolCharts.tsx:190` | `key as ChartMetric` | Tabs.onChange callback string → literal union |
-| `web/src/pages/transaction-detail/index.tsx:131-138` | `heavy as | { results_meta_xdr?: ... } | ...` | F-AQ-8 cited; OpenAPI codegen drift |
+| File:line                                                    | Cast                         | Notes                                         |
+| ------------------------------------------------------------ | ---------------------------- | --------------------------------------------- | ---- | ----------------------------------- |
+| `web/src/pages/transaction-detail/normal/toFlowNodes.tsx:38` | `value as NestedCallShape[]` | post-`Array.isArray` narrow — safe            |
+| `web/src/pages/pool-detail/PoolCharts.tsx:190`               | `key as ChartMetric`         | Tabs.onChange callback string → literal union |
+| `web/src/pages/transaction-detail/index.tsx:131-138`         | `heavy as                    | { results_meta_xdr?: ... }                    | ...` | F-AQ-8 cited; OpenAPI codegen drift |
 
 ### Conclusion
 
 **Total type-escape sites across tree (non-`as const`):** ~14
+
 - 1× `as unknown as`
 - 6× structural inline casts
 - 4× `as Record<string, unknown>`

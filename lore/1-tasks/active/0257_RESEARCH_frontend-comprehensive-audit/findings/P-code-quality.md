@@ -5,13 +5,13 @@ Tools: `nx run-many -t typecheck`, `nx run-many -t lint`, grep.
 
 ## Tool runs
 
-| Target | Projects | Result | Exit |
-|---|---|---|---|
-| `typecheck` | `@rumblefish/api-types`, `@rumblefish/soroban-block-explorer-ui`, `@rumblefish/soroban-block-explorer-web`, plus aws-cdk | `Successfully ran target typecheck for 4 projects and 2 tasks they depend on` | 0 |
-| `lint` (JS subset: web, ui, api-types) | 3 projects | `1 problem (0 errors, 1 warning)` | 0 |
-| `lint` (full incl. Rust) | 5 projects | green, 1 warning | 0 |
-| `knip` | — | **not installed** | n/a |
-| `ts-prune` | — | **not installed** | n/a |
+| Target                                 | Projects                                                                                                                 | Result                                                                        | Exit |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ---- |
+| `typecheck`                            | `@rumblefish/api-types`, `@rumblefish/soroban-block-explorer-ui`, `@rumblefish/soroban-block-explorer-web`, plus aws-cdk | `Successfully ran target typecheck for 4 projects and 2 tasks they depend on` | 0    |
+| `lint` (JS subset: web, ui, api-types) | 3 projects                                                                                                               | `1 problem (0 errors, 1 warning)`                                             | 0    |
+| `lint` (full incl. Rust)               | 5 projects                                                                                                               | green, 1 warning                                                              | 0    |
+| `knip`                                 | —                                                                                                                        | **not installed**                                                             | n/a  |
+| `ts-prune`                             | —                                                                                                                        | **not installed**                                                             | n/a  |
 
 ## Findings
 
@@ -70,15 +70,15 @@ sanity check or `nx report` enhancement.
 
 ### F-P-7 — Longest file = `libs/ui/src/theme/overrides.ts` (867 LOC) — 🟢 LOW
 
-| File | LOC |
-|---|---|
-| `libs/ui/src/theme/overrides.ts` | **867** |
-| `web/src/pages/pool-detail/PoolCharts.tsx` | 268 |
-| `libs/ui/src/visualization/OperationFlowTree.tsx` | 263 |
-| `libs/ui/src/layout/SearchInput.tsx` | 246 |
-| `web/src/pages/contracts/ContractEvents.tsx` | 233 |
-| `libs/ui/src/theme/types.ts` | 228 |
-| `libs/ui/src/visualization/TimeSeriesChart.tsx` | 223 |
+| File                                              | LOC     |
+| ------------------------------------------------- | ------- |
+| `libs/ui/src/theme/overrides.ts`                  | **867** |
+| `web/src/pages/pool-detail/PoolCharts.tsx`        | 268     |
+| `libs/ui/src/visualization/OperationFlowTree.tsx` | 263     |
+| `libs/ui/src/layout/SearchInput.tsx`              | 246     |
+| `web/src/pages/contracts/ContractEvents.tsx`      | 233     |
+| `libs/ui/src/theme/types.ts`                      | 228     |
+| `libs/ui/src/visualization/TimeSeriesChart.tsx`   | 223     |
 
 `overrides.ts` is the MUI theme component-override registry — 867 lines
 of one giant config object. Likely splittable per component family
@@ -114,10 +114,10 @@ console-leak grep.
 Re-ran `nx run-many -t typecheck` + `nx run-many -t lint` against
 post-merge tree.
 
-| Target | Result | Δ vs Wave 1 |
-|---|---|---|
+| Target                            | Result                                      | Δ vs Wave 1  |
+| --------------------------------- | ------------------------------------------- | ------------ |
 | `typecheck` (4 projects + 2 deps) | exit 0, "Successfully ran target typecheck" | 0 new errors |
-| `lint` (JS subset + Rust) | exit 0, **1 problem (0 errors, 1 warning)** | 0 new |
+| `lint` (JS subset + Rust)         | exit 0, **1 problem (0 errors, 1 warning)** | 0 new        |
 
 **F-P-1 (🟡 MEDIUM — lint warning at `assetColor.ts:131`):** STILL STANDS,
 unchanged. The 1 warning still fires at the same site. Filip's PR added

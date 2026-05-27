@@ -2,16 +2,16 @@
 
 ## Per-check verdict table
 
-| Check | Result | Severity | Evidence |
-|---|---|---|---|
-| Strkey vs hex strategy consistent across display + URL | ⚠ | 🟡 | See F-AN-1 |
-| XDR rendering — where decoded vs raw | ✓ | — | See F-AN-2 inventory |
-| Operation type → icon mapping consistent | ⚠ | 🟡 | See F-AN-3 |
-| Asset SEP-1 TOML enrichment handled per-page | ✓ | — | See F-AN-4 |
-| Soroban-era ledger detection (>= 50,457,424) | ✗ | 🟡 | See F-AN-5 |
-| Mainnet vs Testnet config single source | N/A | — | F-AN-6 — single-environment app |
-| Network passphrase usage in FE | ✓ | — | Not used; FE doesn't sign tx |
-| Stroop ↔ XLM conversion central util | ⚠ | 🟠 | Per F-U-4 — 2 STROOPS_PER_XLM constants |
+| Check                                                  | Result | Severity | Evidence                                |
+| ------------------------------------------------------ | ------ | -------- | --------------------------------------- |
+| Strkey vs hex strategy consistent across display + URL | ⚠      | 🟡       | See F-AN-1                              |
+| XDR rendering — where decoded vs raw                   | ✓      | —        | See F-AN-2 inventory                    |
+| Operation type → icon mapping consistent               | ⚠      | 🟡       | See F-AN-3                              |
+| Asset SEP-1 TOML enrichment handled per-page           | ✓      | —        | See F-AN-4                              |
+| Soroban-era ledger detection (>= 50,457,424)           | ✗      | 🟡       | See F-AN-5                              |
+| Mainnet vs Testnet config single source                | N/A    | —        | F-AN-6 — single-environment app         |
+| Network passphrase usage in FE                         | ✓      | —        | Not used; FE doesn't sign tx            |
+| Stroop ↔ XLM conversion central util                   | ⚠      | 🟠       | Per F-U-4 — 2 STROOPS_PER_XLM constants |
 
 ## Findings
 
@@ -19,15 +19,15 @@
 
 **Inventory:**
 
-| Entity | Stored | Displayed | URL | Util |
-|---|---|---|---|---|
+| Entity         | Stored             | Displayed            | URL             | Util                                                |
+| -------------- | ------------------ | -------------------- | --------------- | --------------------------------------------------- |
 | Liquidity Pool | hex64 in `pool_id` | SEP-23 `L...` strkey | hex64 (per ADR) | `poolIdHexToStrkey` (web/src/utils/poolIdStrkey.ts) |
-| Asset | numeric `id` | code or `id` | `id` | none |
-| Contract | C-strkey | C-strkey truncated | C-strkey | `truncateMiddle` |
-| Account | G-strkey | G-strkey truncated | G-strkey | `truncateMiddle` |
-| Transaction | hex hash | hex truncated | hex full | local truncation funcs |
-| Ledger | numeric sequence | numeric | numeric | none |
-| NFT | numeric `id` | name | `id` | none |
+| Asset          | numeric `id`       | code or `id`         | `id`            | none                                                |
+| Contract       | C-strkey           | C-strkey truncated   | C-strkey        | `truncateMiddle`                                    |
+| Account        | G-strkey           | G-strkey truncated   | G-strkey        | `truncateMiddle`                                    |
+| Transaction    | hex hash           | hex truncated        | hex full        | local truncation funcs                              |
+| Ledger         | numeric sequence   | numeric              | numeric         | none                                                |
+| NFT            | numeric `id`       | name                 | `id`            | none                                                |
 
 **Concerns:**
 
@@ -112,23 +112,25 @@ Per Gate A note on FilipDz merge: `transaction-detail/advanced/` XDR patterns re
 
 **Per-endpoint format inventory (backend `crates/api/src/*/handlers.rs`):**
 
-| Endpoint | Accepts | Industry standard | Verdict |
-|---|---|---|---|
-| `/v1/accounts/:id` | strkey `G...` (`path::strkey(_, 'G', _)`) | strkey | ✓ canonical |
-| `/v1/contracts/:id` | strkey `C...` (`path::strkey(_, 'C', _)`) | strkey | ✓ canonical |
-| `/v1/transactions/:hash` | hex hash (`path::parse_hash`) | hex | ✓ tx hash = hex industry-wide |
-| `/v1/ledgers/:seq` | numeric | numeric | ✓ |
-| `/v1/assets/:id` | polymorphic: numeric `assets.id` OR contract strkey `C...` OR `code-issuer` composite | mixed | ⚠ polymorphic by design (accepted) |
-| `/v1/nfts/:id` | `parse_nft_id` (TBD) | ? | ? (verify) |
-| **`/v1/liquidity-pools/:id`** | **hex 64-lowercase ONLY** (`path::pool_id_hex`) | **strkey L...** | **❌ outlier vs ecosystem** |
+| Endpoint                      | Accepts                                                                               | Industry standard | Verdict                            |
+| ----------------------------- | ------------------------------------------------------------------------------------- | ----------------- | ---------------------------------- |
+| `/v1/accounts/:id`            | strkey `G...` (`path::strkey(_, 'G', _)`)                                             | strkey            | ✓ canonical                        |
+| `/v1/contracts/:id`           | strkey `C...` (`path::strkey(_, 'C', _)`)                                             | strkey            | ✓ canonical                        |
+| `/v1/transactions/:hash`      | hex hash (`path::parse_hash`)                                                         | hex               | ✓ tx hash = hex industry-wide      |
+| `/v1/ledgers/:seq`            | numeric                                                                               | numeric           | ✓                                  |
+| `/v1/assets/:id`              | polymorphic: numeric `assets.id` OR contract strkey `C...` OR `code-issuer` composite | mixed             | ⚠ polymorphic by design (accepted) |
+| `/v1/nfts/:id`                | `parse_nft_id` (TBD)                                                                  | ?                 | ? (verify)                         |
+| **`/v1/liquidity-pools/:id`** | **hex 64-lowercase ONLY** (`path::pool_id_hex`)                                       | **strkey L...**   | **❌ outlier vs ecosystem**        |
 
 **Industry convention (Stellar / Soroban):**
+
 - Strkey is canonical human-facing ID per CAP-38 + Stellar SDK. G/C/L/M/T/X/S prefix encodes type.
 - Horizon API `/liquidity_pools/<id>` accepts BOTH hex and strkey; returns canonical strkey.
 - stellar.expert URLs use canonical forms (strkey-first for accounts/contracts/pools; hex for tx hashes).
 - Stellar Lab + Soroban CLI: strkey-first.
 
 **FE side inconsistency** (`web/src/pages/liquidity-pools/PoolsTable.tsx`, `pool-detail/PoolSummary.tsx`):
+
 ```
 PoolsTable.tsx:
   const strkey = poolIdHexToStrkey(row.pool_id);     // converts to strkey...
@@ -140,6 +142,7 @@ PoolSummary.tsx:
 ```
 
 **Consequences:**
+
 - User sees strkey `L...` in UI display + copy button.
 - URL bar shows hex (`/liquidity-pools/<64-hex>`).
 - User copies strkey display → pastes into our search → **F-L-1 fail** (search backend requires hex).
@@ -149,6 +152,7 @@ PoolSummary.tsx:
 **Root cause:** original pool implementation (0077) chose hex for backend path because SHA-256 hash is naturally hex (32 bytes raw). Strkey wrapping was added later as display-only enhancement, never wired through to URL routing or backend acceptance.
 
 **Recommended fix (Path A, cross-cutting):**
+
 1. `crates/api/src/common/path.rs` — add `pool_id_or_strkey` validator that accepts hex 64-lower OR strkey `L...` (56 chars base32 with checksum). Convert strkey → hex internally before DB lookup.
 2. `crates/api/src/search/queries.rs` — search classifier detects `L...` prefix, dispatches pool lookup.
 3. `crates/api/src/liquidity_pools/handlers.rs` — every pool handler uses the new validator; internal conversion at boundary.
@@ -158,6 +162,7 @@ PoolSummary.tsx:
 7. Backwards compatibility: old hex URLs still resolve (validator accepts both forms for ~3 months, then deprecate hex URL form).
 
 **Verify also:**
+
 - `/v1/nfts/:id` accepts strkey? (NFT IDs in Stellar can be SAC contract addresses or other forms — check `parse_nft_id`)
 - Asset endpoint polymorphic acceptance is OK by design but worth documenting in API docs
 
@@ -170,6 +175,7 @@ PoolSummary.tsx:
 **Phase 3 spawn candidate:** `XXXX_REFACTOR_strkey-canonical-everywhere` — bundles F-L-1 + F-K-4 + F-AN-8 into one cross-cutting refactor. Replaces task 0264's narrower scope.
 
 **Impact on Gate B fix-first 0264:**
+
 - Original 0264 task (FE search preprocess only) is **narrower than the actual problem**.
 - Either:
   - (a) **Drop 0264**, spawn broader `XXXX_REFACTOR_strkey-canonical-everywhere` Phase 3 task. Wave 6 records F-L-1 as audit baseline, Phase 3 cluster fix.

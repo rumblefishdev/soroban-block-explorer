@@ -2,7 +2,7 @@
 id: '0272'
 title: 'Audit 0257 closing — elastic single-task implementation of remaining findings'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0257', '0262', '0263', '0264', '0265', '0270', '0271']
 tags:
@@ -22,6 +22,10 @@ links:
   - 'Prior fix batches: 0262/0263/0264 (Gate B), 0265 (Vite CVE), 0270 (search canonical)'
   - 'Spawned follow-ups: 0271 (search broad enhancement)'
 history:
+  - date: '2026-05-27'
+    status: active
+    who: karolkow
+    note: Activated task for implementation.
   - date: '2026-05-27'
     status: backlog
     who: karolkow
@@ -51,11 +55,9 @@ Pre-launch closure target: ~3-4 working days for MUST + SHOULD tier
 cards. Full backlog (incl. NICE + POST-LAUNCH cards): ~24 days FE
 spread across pre-launch sprint + post-launch maintenance.
 
-## Status: Backlog
+## Status: Active
 
-Activate when ready to begin closure sprint. Independent of other
-in-flight tasks (Filip 0241 indexer, Staś 0252 CH validation, etc.) —
-this is pure FE closure work plus minor backend coordination cards.
+Active closure sprint. Independent of other in-flight tasks — this is pure FE closure work plus minor backend coordination cards.
 
 ## Context
 

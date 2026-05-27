@@ -4,20 +4,20 @@
 
 ## Per-check verdicts
 
-| Check | Result | Notes |
-|---|---|---|
-| Zero ERROR per route happy path | ✓ | All 14 routes traversed in this session show 0 console errors except favicon 404 (universal, harmless). |
-| Zero WARN per route | ✓ | No MUI warnings, no React warnings observed across home, list, detail, search routes. |
-| React duplicate-key warnings | ✓ | Per Wave 1 B5 history: previously fixed. Re-verified clean across all list rendering. |
-| Deprecated lifecycle warnings | ✓ | None observed. App is hooks-only. |
-| Strict-mode double-render side effects | ✓ | TanStack queries idempotent; `useEffect` only in `useCursorPagination.ts` (reset-on-resetKey-flip) — guarded by `useRef` against initial-mount fire. |
-| Source map present in dev | ✓ | Vite dev server serves sourcemaps automatically. Error stack traces resolve to .tsx lines (verified via thrown-error simulation in dev tools). |
-| Network 4xx/5xx counts per route happy path | ⚠ | See F-AE-1 below — `/favicon.ico` 404 on every route. Otherwise clean. |
-| Every try/catch has logger or user-feedback | ✓ | 5 try blocks total in `web/src/`: see F-AE-2 inventory below. All either rethrow or have user-visible fallback. None swallow silently. |
-| No silent exception swallow | ✓ | Reviewed each try/catch — all either rethrow or fall through to TanStack's `isError` state. |
-| Hard-fail decisions documented | ✓ | `assetLegLabel` (web/src/pages/pool-detail/helpers.ts:16-23), `classifyLpTx` (web/src/pages/pool-detail/PoolTransactions.tsx:44-67), `poolIdHexToStrkey` (web/src/utils/poolIdStrkey.ts:75-90), `config.ts` env throws — all have JSDoc/comment rationale. |
-| Async hooks (TanStack) — error state properly propagated | ⚠ | 10/13 pages call `isError` correctly. 3 pages have composite-error UX (E6/E8/E9 — see F-D-2 in matrix doc). |
-| No `console.log` leftover | ✓ | Grep `console\.(log|warn|error|info|debug)` in `web/src/` and `libs/ui/src/` (excluding tests) returns 0 hits. |
+| Check                                                    | Result | Notes                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ----- | ---- | ---------------------------------------------------------------------- |
+| Zero ERROR per route happy path                          | ✓      | All 14 routes traversed in this session show 0 console errors except favicon 404 (universal, harmless).                                                                                                                                                    |
+| Zero WARN per route                                      | ✓      | No MUI warnings, no React warnings observed across home, list, detail, search routes.                                                                                                                                                                      |
+| React duplicate-key warnings                             | ✓      | Per Wave 1 B5 history: previously fixed. Re-verified clean across all list rendering.                                                                                                                                                                      |
+| Deprecated lifecycle warnings                            | ✓      | None observed. App is hooks-only.                                                                                                                                                                                                                          |
+| Strict-mode double-render side effects                   | ✓      | TanStack queries idempotent; `useEffect` only in `useCursorPagination.ts` (reset-on-resetKey-flip) — guarded by `useRef` against initial-mount fire.                                                                                                       |
+| Source map present in dev                                | ✓      | Vite dev server serves sourcemaps automatically. Error stack traces resolve to .tsx lines (verified via thrown-error simulation in dev tools).                                                                                                             |
+| Network 4xx/5xx counts per route happy path              | ⚠      | See F-AE-1 below — `/favicon.ico` 404 on every route. Otherwise clean.                                                                                                                                                                                     |
+| Every try/catch has logger or user-feedback              | ✓      | 5 try blocks total in `web/src/`: see F-AE-2 inventory below. All either rethrow or have user-visible fallback. None swallow silently.                                                                                                                     |
+| No silent exception swallow                              | ✓      | Reviewed each try/catch — all either rethrow or fall through to TanStack's `isError` state.                                                                                                                                                                |
+| Hard-fail decisions documented                           | ✓      | `assetLegLabel` (web/src/pages/pool-detail/helpers.ts:16-23), `classifyLpTx` (web/src/pages/pool-detail/PoolTransactions.tsx:44-67), `poolIdHexToStrkey` (web/src/utils/poolIdStrkey.ts:75-90), `config.ts` env throws — all have JSDoc/comment rationale. |
+| Async hooks (TanStack) — error state properly propagated | ⚠      | 10/13 pages call `isError` correctly. 3 pages have composite-error UX (E6/E8/E9 — see F-D-2 in matrix doc).                                                                                                                                                |
+| No `console.log` leftover                                | ✓      | Grep `console\.(log                                                                                                                                                                                                                                        | warn | error | info | debug)`in`web/src/`and`libs/ui/src/` (excluding tests) returns 0 hits. |
 
 ## Findings
 
@@ -33,13 +33,13 @@
 
 5 try blocks in `web/src/`:
 
-| File:line | Purpose | Behavior on catch |
-|---|---|---|
-| `web/src/api/config.ts:9` | URL validation of `VITE_API_BASE_URL` | Rethrows with informative message — runtime crash if env missing (correct fail-fast) |
-| `web/src/pages/url.ts:10` | URL parse for cross-entity link | Falls back to raw string return — graceful |
-| `web/src/pages/contracts/ContractEvents.tsx:57` | JSON parse on event payload | Falls back to raw string display — graceful |
-| `web/src/pages/contracts/ContractEvents.tsx:99` | Hex decode for event payload | Falls back to raw hex — graceful |
-| `web/src/pages/nft-detail/NftMediaPreview.tsx:28` | URL validation for media | Falls back to icon placeholder — graceful |
+| File:line                                         | Purpose                               | Behavior on catch                                                                    |
+| ------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
+| `web/src/api/config.ts:9`                         | URL validation of `VITE_API_BASE_URL` | Rethrows with informative message — runtime crash if env missing (correct fail-fast) |
+| `web/src/pages/url.ts:10`                         | URL parse for cross-entity link       | Falls back to raw string return — graceful                                           |
+| `web/src/pages/contracts/ContractEvents.tsx:57`   | JSON parse on event payload           | Falls back to raw string display — graceful                                          |
+| `web/src/pages/contracts/ContractEvents.tsx:99`   | Hex decode for event payload          | Falls back to raw hex — graceful                                                     |
+| `web/src/pages/nft-detail/NftMediaPreview.tsx:28` | URL validation for media              | Falls back to icon placeholder — graceful                                            |
 
 All justified. Class D informational; no action.
 
@@ -71,7 +71,7 @@ All justified. Class D informational; no action.
 - Cross-reference F-D-1 in matrix.
 - ~~Live API returns old pagination shape~~ — RESOLVED post API-binary restart. New shape `page: { next_cursor, prev_cursor, limit }` served correctly; FE Next/Prev cycle URL `?cursor=…` works end-to-end.
 - **Root-cause class observation stands:** there is **no console error / no user feedback** when wire-shape drifts. A future similar drift would again present as silent broken UX. The Phase 3 runtime-shape-probe + dev-env-rebuild-runbook recommendations remain valid as preventive controls.
-- Console-error-handling angle: no error surface even when key payload fields are missing is a **F-AE-* gap that survives F-D-1's resolution**. Consider keeping this finding open as a Class A 🟡 "silent shape mismatch has no console signal" rather than closing entirely.
+- Console-error-handling angle: no error surface even when key payload fields are missing is a **F-AE-\* gap that survives F-D-1's resolution**. Consider keeping this finding open as a Class A 🟡 "silent shape mismatch has no console signal" rather than closing entirely.
 
 ### F-AE-7 [Class D, Severity 🟢] — No global error reporter
 

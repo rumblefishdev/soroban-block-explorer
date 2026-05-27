@@ -4,6 +4,7 @@ Read-only Playwright MCP. Goal: verify that filter / cursor / tab state
 lives in the URL so refresh + deep-link both restore the exact view.
 
 URL helpers under test:
+
 - `libs/ui/src/table/useTableUrlState.ts` — generic param state via
   `useSearchParams`.
 - `libs/ui/src/table/useCursorPagination.ts` — wraps useTableUrlState,
@@ -16,6 +17,7 @@ URL helpers under test:
 ### F-E-1 🔴 CRITICAL `[Class B, Severity CRITICAL]` — Pagination cursor never written to URL
 
 Repro:
+
 1. Navigate `/transactions` → 20 rows render, URL = `/transactions` (no
    `?cursor=`).
 2. Locate "Next" button, click it via real Playwright click.
@@ -36,10 +38,11 @@ and the API does return `page: { cursor: "eyJ...", has_more: true }`
 
 **Yet `window.location.search` stays empty after Next click.** Root
 cause unconfirmed — possibilities:
+
 - `useSearchParams` `setParams` not flushing because component remounts on
   data change?
 - React Router v6.30+ `setParams` race when `placeholderData:
-  keepPreviousData` triggers a re-render before the cursor commit?
+keepPreviousData` triggers a re-render before the cursor commit?
 - Some intermediate component eats / discards the `onNext` callback?
 
 Impact: **deep links / refresh on page N → page 1**, defeating the
@@ -57,6 +60,7 @@ the "drop" side of the trade-off.
 ### F-E-2 🟠 HIGH `[Class B, Severity HIGH]` — Filter URL key uses lowercase op value while Select expects uppercase
 
 Repro:
+
 1. Navigate `/transactions?op=invoke_host_function` (lowercase).
 2. Result: 0 rows, MUI warning ×4 ("out-of-range value
    `invoke_host_function`"), API `GET .../filter[operation_type]=invoke_host_function`
@@ -121,34 +125,34 @@ fix will resolve them.
 
 ## Special / edge cases tested
 
-| Edge case | URL | Result |
-|---|---|---|
-| `?op=` invalid value | `/transactions?op=foo` | API 400, MUI warning, 0 rows |
-| Trailing slash | `/transactions/` | OK |
-| Unknown route | `/foobar` | catch-all 404 renders |
-| Invalid hash id | `/transactions/nothash` | STUB renders (no validation) |
-| Very long query | `/search?q=aaa...x1000` | API 400 → graceful "Search request failed" |
-| XSS attempt | `/search?q=<script>alert(1)</script>` | escaped to text, no injection |
+| Edge case            | URL                                   | Result                                     |
+| -------------------- | ------------------------------------- | ------------------------------------------ |
+| `?op=` invalid value | `/transactions?op=foo`                | API 400, MUI warning, 0 rows               |
+| Trailing slash       | `/transactions/`                      | OK                                         |
+| Unknown route        | `/foobar`                             | catch-all 404 renders                      |
+| Invalid hash id      | `/transactions/nothash`               | STUB renders (no validation)               |
+| Very long query      | `/search?q=aaa...x1000`               | API 400 → graceful "Search request failed" |
+| XSS attempt          | `/search?q=<script>alert(1)</script>` | escaped to text, no injection              |
 
 ## Class breakdown for E (Wave 3 1.13)
 
-| Class | Count |
-|---|---:|
-| A | 0 |
+| Class                |                  Count |
+| -------------------- | ---------------------: |
+| A                    |                      0 |
 | B — routing/contract | 4 (E-1, E-2, E-3, E-8) |
-| C | 0 |
-| D — catalog-only | 1 (E-7) |
-| E | 0 |
-| ✓ pass | 3 (E-4, E-5, E-6) |
+| C                    |                      0 |
+| D — catalog-only     |                1 (E-7) |
+| E                    |                      0 |
+| ✓ pass               |      3 (E-4, E-5, E-6) |
 
 ## Severity breakdown
 
-| Severity | Count |
-|---|---:|
-| 🔴 CRITICAL | 1 (E-1) |
-| 🟠 HIGH | 1 (E-2) |
-| 🟡 MEDIUM | 2 (E-3, E-7) |
-| 🟢 LOW | 1 (E-8) |
+| Severity    |        Count |
+| ----------- | -----------: |
+| 🔴 CRITICAL |      1 (E-1) |
+| 🟠 HIGH     |      1 (E-2) |
+| 🟡 MEDIUM   | 2 (E-3, E-7) |
+| 🟢 LOW      |      1 (E-8) |
 
 ## Post-merge update 2026-05-25 (0254 merge @ 6af74d82) — develop @ 68b40058
 
@@ -159,7 +163,7 @@ Root cause was **wiring**, not the hook. Pre-merge, list pages called
 prev-stack pop. The hook's `setCursor` (writes URL) was wired into
 `goNext` only — `goPrev` walked an in-memory stack via a different
 path. Wave 3 Playwright observed the symptom on Prev clicks but
-generalised it to "cursor never written" — actually Next *was* writing
+generalised it to "cursor never written" — actually Next _was_ writing
 in most pages; Prev was the consistently-broken path.
 
 The 0254 branch removed the client-side prev-stack entirely (commit
@@ -192,7 +196,7 @@ The 0254 branch removed the client-side prev-stack entirely (commit
   e.g. `TransactionsListPage.tsx:34-67`, `LedgersListPage.tsx:20-28`).
 - Pool detail tab tables (`PoolParticipants.tsx`, `PoolTransactions.tsx`)
   were the most obviously broken pre-merge — they had
-  `onPrev={goPrev}` wired *directly* (no `handlePrev`); 0254 fixes
+  `onPrev={goPrev}` wired _directly_ (no `handlePrev`); 0254 fixes
   both (see diff above: `onPrev={handlePrev}` now).
 
 **Verification:** Next-click on `/transactions` now writes
@@ -202,6 +206,7 @@ deep-link will both restore. Wave 4 1.5 state matrix can measure D2
 cells against the intended URL contract.
 
 **Action items:**
+
 - `lore/1-tasks/backlog/0261_BUG_url-cursor-not-written.md` is now
   **OBSOLETE pending user signal**. Do not delete — user owns the
   rename/remove decision. Also has filename ID collision with Staś's
@@ -221,14 +226,15 @@ as an audit finding worth shipping. Senior design call:
 > "URL to URL i po prostu powinien być poprawny i tyle."
 
 **Re-classified as ACCEPT BASELINE:** URLs are part of the app's wire
-contract. The FE owns canonicalisation for the URLs it *produces*
+contract. The FE owns canonicalisation for the URLs it _produces_
 (dropdown filter writes canonical PascalCase per current behavior); URLs
-the FE *receives* from external paste / hand-typed input are NOT
+the FE _receives_ from external paste / hand-typed input are NOT
 normalised. Non-canonical input → API 400 → empty table → expected.
 This matches REST contract discipline: clients are responsible for
 sending well-formed requests; the FE is itself a client to its own API.
 
 **Implications for Wave 4:**
+
 - **1.6 console + error handling** — when 1.6 marathon hits a paste-link
   scenario with malformed `?op=` value, **do NOT log it as a console
   finding**. Record as: "audit baseline: malformed `?op=` value is user
@@ -246,6 +252,7 @@ tasks. Wave 4 unblocked.
 moved to `.trash/0262_BUG_url-op-filter-case-normalise.md.DROPPED-2026-05-25-design-decision`.
 
 **Audit treatment of related symptoms:**
+
 - MUI Select warning ("non-existent value") — STILL counts as a 🟢 LOW
   console finding to address separately (could be solved by Select
   rendering "Unknown filter applied" empty state instead of warn).

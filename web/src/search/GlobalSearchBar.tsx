@@ -22,7 +22,7 @@ export function GlobalSearchBar({
 }: GlobalSearchBarProps) {
   const navigate = useNavigate();
 
-  const state = useSearchResults({ q, treatRedirectAsResult: true });
+  const state = useSearchResults({ q });
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {

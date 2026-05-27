@@ -7,6 +7,7 @@ H1: `"Account"`. Sections: Summary, Balances (with empty state "No balances yet"
 ## Positive verification — F-D-2 fix CONFIRMED for E6
 
 Invalid format `/accounts/GINVALID` → single NotFound block:
+
 > "Account not found / We couldn't find anything matching this identifier. Double-check the value and try again. / GINVALID"
 
 Valid-format-404 `/accounts/GDOESNOTEXISTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` → ALSO single NotFound block, identical copy. Render-gating works as Gate B fix-first #1 intended.
@@ -16,12 +17,14 @@ Valid-format-404 `/accounts/GDOESNOTEXISTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ### F-W6-E6-1 [Class A, Severity 🟡 MEDIUM] Sub-section queries still FIRE on 404 even though render is gated
 
 On `/accounts/GDOESNOTEXIST...`:
+
 ```
 GET /v1/accounts/GDOESNOTEXIST... → 404 (parent)
 GET /v1/accounts/GDOESNOTEXIST.../transactions?limit=20 → 404 (sub)
 ```
 
 Two console errors logged. The Gate B Fix-First #1 (`XXXX_BUG_composite-notfound-sub-section-queries.md`) acceptance criteria specified:
+
 > "Loading state on parent doesn't trigger sub-section error."
 
 The render side IS gated (no dual error blocks displayed) but the **request side is NOT** — sub-queries still hit the network. Either path (a) `enabled: !!parentData` was not added to every sub-section hook, or only added to the rendering layer. Wastes 1 network call per sub-section per failed parent + N console-error rows per failed parent navigation.

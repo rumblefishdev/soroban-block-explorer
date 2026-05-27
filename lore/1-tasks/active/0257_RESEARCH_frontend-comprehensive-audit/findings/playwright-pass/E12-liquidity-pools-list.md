@@ -11,6 +11,7 @@ Table 5 columns (Pool / Fee / Reserves / Total shares / Participants). 3 rows vi
 ### F-W6-E12-1 [Class C, Severity 🟡 MEDIUM] Pool ID truncation `LD5MMO…O6TL` is shown twice per row (under pair name AND in Pool column)
 
 Visible text:
+
 ```
 USDCOIN / EUR
 LD5MMO...O6TL  ← truncation

@@ -1304,15 +1304,17 @@ export const getSearchQueryKey = (options: Options<GetSearchData>) =>
  * `?limit=` caps each entity bucket independently (default 10,
  * ceiling 50).
  *
- * Behaviour:
- * * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
- * full C-StrKey) and the corresponding entity exists, the response
- * is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
- * navigates directly.
- * * Otherwise the response is `{ "type": "results", "groups": {...} }`
- * with up to `limit` rows per entity bucket. Rows carry the same
- * four columns regardless of bucket: `entity_type`, `identifier`,
- * `label`, `surrogate_id` (BIGINT FK or `null`).
+ * Behaviour (task 0271):
+ * * One SQL path: broad search across the six entity-typed CTEs.
+ * * Response is `{ "groups": {…} }` with up to `limit` rows per
+ * entity bucket. Rows carry the same columns regardless of
+ * bucket: `entity_type`, `identifier`, `label`, `surrogate_id`
+ * (BIGINT FK or `null`), plus optional enrichment
+ * (`successful`, `last_activity_at`) and composite routing
+ * (`contract_id`, `token_id`) fields.
+ * * FE decides "singleton → direct navigation" by inspecting the
+ * response: total row count == 1 and `routeForHit(singleton)`
+ * resolves ⇒ navigate; else show the dropdown / list.
  *
  * Authoritative SQL:
  * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.

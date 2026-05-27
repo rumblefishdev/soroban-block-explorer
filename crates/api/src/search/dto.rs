@@ -7,34 +7,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// Discriminated response: `redirect` for unambiguous exact match,
-/// `results` for grouped broad search.
-///
-/// `#[serde(tag = "type")]` puts the discriminator on the wire as
-/// `"type": "redirect" | "results"` per the task spec, mirroring the
-/// frontend search-bar UX expectation: a `redirect` causes the bar to
-/// navigate directly; a `results` shows the dropdown with grouped hits.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum SearchResponse {
-    Redirect(SearchRedirect),
-    Results(SearchResults),
-}
-
-/// Redirect payload — frontend navigates directly to the entity page.
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct SearchRedirect {
-    pub entity_type: EntityType,
-    pub entity_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub successful: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_activity_at: Option<DateTime<Utc>>,
-}
-
 /// Results payload — six entity-typed buckets, each capped at the
 /// per-group `limit` chosen by the caller (default 10, ceiling 50).
+///
+/// FE decides "singleton → navigate directly" by inspecting
+/// `groups`: when the total row count across all buckets is exactly
+/// 1 and `routeForHit(singleton)` resolves, the FE navigates to the
+/// detail page; otherwise it renders the dropdown / Results page.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct SearchResults {
     pub groups: SearchGroups,

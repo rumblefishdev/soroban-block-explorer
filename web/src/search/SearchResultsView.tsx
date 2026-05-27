@@ -36,7 +36,7 @@ export function SearchResultsView({
     hitsForActiveTab,
   } = state;
 
-  const showResults = data?.type === 'results' && totalCount > 0;
+  const showResults = data != null && totalCount > 0;
 
   return (
     <Stack>

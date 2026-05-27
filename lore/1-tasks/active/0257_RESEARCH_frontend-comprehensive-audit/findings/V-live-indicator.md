@@ -3,6 +3,7 @@
 ## Where in UI is the live/active indicator?
 
 Multiple sites:
+
 1. **Footer**: `<span>All systems operational</span>` — plain text, no health probe.
 2. **Header stats strip**: 4 stats (TPS / Ledger / Accounts / Contracts) refreshed every 12s but no LIVE pill on the strip itself.
 3. **Home Hero card**: "LIVE" pill next to "Current ledger" stat block.
@@ -14,6 +15,7 @@ Multiple sites:
 ### F-W6-V-1 [Class A, Severity 🟠 HIGH] DM-1 RE-CONFIRMED — footer hardcoded; ALL live pills also lack freshness logic
 
 Inspected DOM at all 5 sites:
+
 - Footer "All systems operational" → no aria-live, no JS-bound state, no class/style indicating dynamic value.
 - LIVE pills (home, latest-tx, latest-ledger) → no JS state checking last-poll time vs now or vs latest-ledger close-time.
 - "Updated in a moment" text → static; doesn't update relative time after poll.
@@ -30,7 +32,7 @@ The expected behavior would be: backfill activity → `/v1/network/stats` return
 
 ### F-W6-V-3 [Class A, Severity 🟢 LOW] Latest-ledger sequence DOES poll and DOES update (so polling itself works)
 
-`/v1/network/stats` returns latest_ledger 1024 — same value across polls because chain is dormant in this dev env. If chain were producing ledgers, the value would update every 12s. So the data-binding works, only the *liveness-judging* logic is missing.
+`/v1/network/stats` returns latest*ledger 1024 — same value across polls because chain is dormant in this dev env. If chain were producing ledgers, the value would update every 12s. So the data-binding works, only the \_liveness-judging* logic is missing.
 
 ## Current behavior confirm
 
@@ -39,6 +41,7 @@ The expected behavior would be: backfill activity → `/v1/network/stats` return
 ## Recommended Phase 3 spawn
 
 `XXXX_FEATURE_live-and-status-indicator-freshness-logic.md`:
+
 - Adds `useLiveStatus()` hook: compares `latest_close_at` with `now()`; threshold (e.g. < 30s) = LIVE; >30s = STALE; >5min = OFFLINE.
 - Single source of truth for footer + all 5 LIVE pill sites.
 - Adds `/v1/health` backend endpoint check for footer "All systems operational" → green/yellow/red.
