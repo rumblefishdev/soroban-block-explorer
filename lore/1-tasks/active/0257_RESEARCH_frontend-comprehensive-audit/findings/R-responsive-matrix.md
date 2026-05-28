@@ -70,3 +70,14 @@ Sampled 30 button/link elements on home at 375 viewport: 7 measured <44px in bot
 - Effort: 3-5 days
 - Class: C (pre-launch must-fix if mobile launch is a goal; otherwise prioritise post-launch)
 - This is also a Track 2 audit finding; spawn unique vs bundling with format/truncate batch
+
+## design_parity update 2026-05-27 (06ab34cc)
+
+The `feat/design_parity` branch (commit `06ab34cc`, merge `62c988d4`) was merged into the audit branch and substantially addresses this matrix **in code** (no live re-run yet). Verdicts below are code-inspection only — see `design-parity-impact-2026-05-27.md` §2 + §Live-Playwright re-verify queue. Maps to queue card **8.3 → PARTIAL**.
+
+- **F-W6-RESPONSIVE-1 (802px root cause): RESOLVED-IN-CODE / needs-live-verify.** AppShell `<main>` switched to responsive `px: { xs: grid.mobile.margin, md: grid.desktop.margin }`; TopNav/SecondaryNav/Footer switched off fixed `px: grid.desktop.margin`; Home full-bleed sections (HomeHero/ChainOverview/LatestLedgers/LatestTransactions) dropped the `px: 10` that forced extra width; HomeHero subtitle no longer nowrap at xs. No remaining fixed `minWidth` on shells (only `minWidth: 0` which allows shrink). **THE gating live check:** confirm `document.documentElement.scrollWidth === clientWidth` at 375 + 768 on all 14 routes.
+- **F-W6-RESPONSIVE-2 (no table→card transform): PARTIAL.** ExplorerTable + standalone tx-detail tables (SignaturesTable, EventsSection) got `TableContainer sx={{ overflowX: 'auto' }}` — tables scroll within their own container instead of forcing page-level overflow. The recommended card-layout transform at <600px is still NOT implemented (and no scroll-shadow affordance). Acceptable mitigation; finding stays open for the card-layout goal.
+- **F-W6-RESPONSIVE-3 (no hamburger): UNTOUCHED — alternative chosen.** SecondaryNav nav row now `overflowX: { xs: 'auto', md: 'visible' }` (hidden scrollbar) — nav **scrolls horizontally** on mobile. There is NO hamburger button / `aria-label="Open menu"` / collapse-to-menu. This contradicts card 8.3 + 0059 Future Work. **Designer decision needed:** accept scroll-nav as the answer (then close RESPONSIVE-3 / 0059) OR still require a hamburger.
+- **F-W6-RESPONSIVE-4 (touch targets <44px): UNTOUCHED.** No 44px-minimum audit; HomeLogo height dropped 32→24 in SecondaryNav; nav buttons unchanged. Still open — needs live measurement.
+
+Cross-ref: `design-parity-impact-2026-05-27.md`.

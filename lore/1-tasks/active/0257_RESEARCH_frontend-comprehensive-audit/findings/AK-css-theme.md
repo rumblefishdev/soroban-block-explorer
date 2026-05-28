@@ -66,3 +66,12 @@ Combine with F-W6-AK-1 in Phase 3.
 ## Summary
 
 Theme consistency is **good**. Single CSS approach, MUI shorthand for spacing, theme palette dominant. Only blemish: 3 hardcoded hex constants in 3 components. No new fix-first; all Phase 3 micro-defers.
+
+## design_parity update 2026-05-27 (06ab34cc)
+
+Both AK findings **REGRESSED** by the `feat/design_parity` merge (`06ab34cc`, merge `62c988d4`). Source: `design-parity-impact-2026-05-27.md` §4 + §Regressions. New regression cards: **11.2** (hex) + **11.3** (z-index); new findings **F-DP-2** + **F-DP-3** (appendix).
+
+- **F-W6-AK-1 / F-AK-1 (hardcoded hex): REGRESSED — 3 → 5.** `AssetIcon` (`sac` kind) now adds inline `'#724311'` + `'#fffcc2'`; `ContractInterface` `TYPE_REF_COLOR='#155dfc'` retained. design_parity was exactly the Figma-parity pass card 7.1 hoped would *close* this finding — instead it added 2 more. Fix: move the 2 new AssetIcon hex values to theme tokens (e.g. `palette.assetKind.sac`) as part of the card 7.1 / card 11.2 hex consolidation. (`CopyButton` `#000000` + `PageGridBackdrop` `#000` unchanged.)
+- **F-W6-AK-2 / F-AK-2 (raw z-index): REGRESSED (mildly).** AppShell / TopNav / SecondaryNav / Footer now sprinkle raw `zIndex: 2` (layering the shell above `PageGridBackdrop`) in addition to the prior raw `0`/`1`. More ad-hoc z-index, still no defined scale. Fix: define a scale (`theme.zIndex.appBackdrop`/`appContent`/`appShell`) and migrate all raw values — card 7.1 / card 11.3.
+
+Cross-ref: `design-parity-impact-2026-05-27.md`; F-DP-2 + F-DP-3 (appendix); cards 7.1 + 11.2 + 11.3.

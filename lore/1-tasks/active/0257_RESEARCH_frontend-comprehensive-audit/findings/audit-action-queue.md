@@ -29,10 +29,25 @@ This is the master action queue for closing audit 0257. Structure:
 
 - `TODO` — not started
 - `IN-PROGRESS` — actively being worked
+- `PARTIAL` — partially closed (e.g. one half of a finding landed, or code-verified but awaiting live verification); remaining scope still open. Do NOT mark `DONE` until the residual sub-items + any live re-verify clear.
 - `DONE` — landed on develop
 - `SKIP` — explicit user decision to skip, rationale in Notes
 - `DEFER-M2` — push to milestone 2 (or `-M3`, `-LATER`)
 - `RESOLVED` (appendix only) — already-shipped in pre-queue Gate A/B/0270 batches; cite SHA
+
+> **design_parity merge note (2026-05-27, commit `06ab34cc`, merge `62c988d4`).** The `feat/design_parity` branch (Figma-parity + responsive pass) was merged into `research/0257_frontend-comprehensive-audit`. It was NOT authored to close audit cards — several apparent closures are PARTIAL, four findings REGRESSED, and one Wave 6 finding it appears to fix (filter a11y, card 7.4) was already fixed pre-merge (stale). Full per-card/per-finding verdicts: `design-parity-impact-2026-05-27.md`. Every PARTIAL flagged below requires live Playwright re-verify — see **"Pending live verification (design_parity)"** block below — before promotion to DONE.
+
+## Pending live verification (design_parity)
+
+These items were judged from **code inspection only** (no live Playwright run in the design_parity impact analysis). They are marked `PARTIAL` in cards/appendix and MUST be confirmed in a live run at **375px + 768px** viewports before any flip to `DONE`. Source: `design-parity-impact-2026-05-27.md` §Live-Playwright re-verify queue.
+
+- [ ] **All 14 routes × 375/768 responsive cells** — confirm `document.documentElement.scrollWidth === clientWidth` (no page-level horizontal scrollbar) on every route. THE gating check for the responsive matrix (F-W6-RESPONSIVE-1).
+- [ ] **Embedded/list table overflow** — confirm tables scroll within their own container and do NOT push page width on E1–E8/E10/E12/E13 (F-W6-RESPONSIVE-2).
+- [ ] **Touch targets ≥44px** — measure nav, copy buttons, pagination prev/next at 375 (F-W6-RESPONSIVE-4).
+- [ ] **Catch-all 404 `<main>` landmark** — confirm the catch-all 404 still renders inside `<main>` after the AppShell `<main>` restructure in `06ab34cc` (F-E-3 / card 5.1).
+- [ ] **Home KPI grid** — confirm KPI 2×2 grid + hero wrap render without overflow at 375; confirm TopNav hidden-on-home does not break header search/network affordance expectations.
+- [ ] **SecondaryNav scroll-nav** — confirm horizontal-scroll nav is usable at 375, and decide whether it substitutes for the hamburger (F-W6-RESPONSIVE-3 / 0059).
+- [ ] **NetworkToggle no-op confirm** — confirm clicking Testnet visibly does nothing to data (documents the decorative behavior) and is invisible on `/` (F-DP-1 / F-AN-6).
 
 ## Excluded from this queue (background only)
 
@@ -96,7 +111,8 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~1d
 - **Severity / Class:** 🔴 (launch-blocker per archaeology A3 / F-A-5 Gap 1)
 - **Pre-launch:** MUST
-- **STATUS:** TODO
+- **STATUS:** PARTIAL
+- **design_parity note:** `/contracts` + `/accounts` nav entries (`NAV_LINKS` in routes.ts) AND stub routes landed in `06ab34cc` (design_parity). F-A-5 Gap 1 **nav-link half DONE**; the real list-page half is still TODO — both routes currently render via `<PageStub>` placeholder, not a real list. PageStub is now the stub renderer for these two routes (see card 2.2 scope conflict).
 
 **Rationale.** Contract detail pages exist at `/contracts/:id` but are reachable only by deep link — no list page, no nav entry. Users browsing the explorer cannot discover any contract. Per Wave 1 archaeology this is a launch-blocker carried over from 0075's Future Work. F-A-5 spec/source consistency audit also flagged it.
 
@@ -104,11 +120,11 @@ This is the master action queue for closing audit 0257. Structure:
 
 **Findings closed (sub-checklist):**
 
-- [ ] Archaeology Recommendation 2 — Contracts list + nav missing
-- [ ] F-A-5 Gap 1 — Contract detail unreachable by browsing
-- [ ] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS
+- [~] Archaeology Recommendation 2 — Contracts list + nav missing (nav added in `06ab34cc`; list still missing)
+- [~] F-A-5 Gap 1 — Contract detail unreachable by browsing (nav entry added `06ab34cc`; list page still TODO — partial)
+- [~] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS (NAV_LINKS entry DONE `06ab34cc`; list page TODO)
 
-**Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq.
+**Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq. design_parity `06ab34cc` landed the nav-entry + stub-route half; remaining scope is the real list page (PageStub → real `ContractsListPage` / `AccountsListPage`).
 
 ---
 
@@ -156,16 +172,15 @@ This is the master action queue for closing audit 0257. Structure:
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** SHOULD
 - **STATUS:** TODO
+- **design_parity note:** SCOPE CONFLICT — `06ab34cc` (design_parity) **revives `PageStub`** as the render target for the new `/accounts` + `/contracts` stub routes. F-AH-1 ("PageStub dead orphan, delete") is now **FALSE** — PageStub has 2 live consumers. The "Delete `web/src/pages/PageStub.tsx` dead orphan" line is removed from scope below; PageStub deletion is now **gated behind card 1.3** shipping real `ContractsListPage` / `AccountsListPage`. but are used universally — they belong in `libs/ui`. The `web/src/search/` parallel top-level folder is structural debt. `web/src/utils/` is a single-file folder. `assetLegLabel` cross-folder reach couples sibling page folders. One refactor PR fixes all five.
 
-**Rationale.** Several layout primitives live in `web/src/pages/detail/` but are used universally — they belong in `libs/ui`. The `web/src/search/` parallel top-level folder is structural debt. `web/src/utils/` is a single-file folder. `assetLegLabel` cross-folder reach couples sibling page folders. One refactor PR fixes all five.
-
-**Scope.** Hoist `web/src/pages/detail/{SectionCard,PageBreadcrumb,SummaryRow}.tsx` → `libs/ui/src/layout/`. Add to `libs/ui/src/index.ts` barrel. Update 16+ consumer imports. Delete the `web/src/pages/detail/` folder. Move `assetLegLabel` + `classifyLpTx` to `web/src/pages/liquidity-pools/shared/`. Hoist `GlobalSearchBar` to `libs/ui/src/layout/` and move `web/src/search/` body into `web/src/pages/search/`. Move `web/src/pages/{cursorParams,format,url}.ts` to `web/src/pages/_shared/`. Delete `web/src/pages/PageStub.tsx` (dead orphan post tx-detail merge).
+**Scope.** Hoist `web/src/pages/detail/{SectionCard,PageBreadcrumb,SummaryRow}.tsx` → `libs/ui/src/layout/`. Add to `libs/ui/src/index.ts` barrel. Update 16+ consumer imports. Delete the `web/src/pages/detail/` folder. Move `assetLegLabel` + `classifyLpTx` to `web/src/pages/liquidity-pools/shared/`. Hoist `GlobalSearchBar` to `libs/ui/src/layout/` and move `web/src/search/` body into `web/src/pages/search/`. Move `web/src/pages/{cursorParams,format,url}.ts` to `web/src/pages/_shared/`. ~~Delete `web/src/pages/PageStub.tsx` (dead orphan post tx-detail merge).~~ **[design_parity `06ab34cc`: PageStub REVIVED as `/accounts` + `/contracts` stub — no longer deletable; deletion gated behind card 1.3 real pages.]**
 
 **Findings closed (sub-checklist):**
 
 - [ ] F-U-1 — SectionCard wrong home (web/src/pages/detail/ instead of libs/ui)
 - [ ] F-AH-3 — Same as F-U-1, restated
-- [ ] F-AH-1 — `web/src/pages/PageStub.tsx` dead orphan post-tx-detail merge
+- [ ] ~~F-AH-1 — `web/src/pages/PageStub.tsx` dead orphan post-tx-detail merge~~ **STALE/FALSE post-`06ab34cc`: PageStub now has 2 live consumers (`/accounts`, `/contracts` stubs). Deletion gated behind card 1.3.**
 - [ ] F-AH-2 — Folder asymmetry across feature areas
 - [ ] F-AH-5 — `web/src/pages/detail/` only has 3 files (resolves with hoist)
 - [ ] F-AH-7 — `web/src/search/` parallel top-level folder
@@ -176,7 +191,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-X-5 — `web/src/utils/` 1-file (recap F-AH-4)
 - [ ] F-U-2 (partial) — EmptyState reimplemented locally per page (covered by component reuse)
 
-**Notes:** PageStub deletion uses `mv .trash/` per project policy.
+**Notes:** PageStub deletion uses `mv .trash/` per project policy — **but only after card 1.3 ships real `ContractsListPage` / `AccountsListPage`** (design_parity `06ab34cc` revived PageStub as the live stub for those two routes; deleting it now would break `/accounts` + `/contracts`).
 
 ---
 
@@ -306,8 +321,7 @@ This is the master action queue for closing audit 0257. Structure:
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** SHOULD
 - **STATUS:** TODO
-
-**Rationale.** `/foobar` (unknown route) renders "Page not found" but bypasses the `AppShell` `<main>` landmark — screen readers skip the page main, selector tests break. Additionally, NotFound pages on 4 of 5 detail routes lack an `<h1>` element (only `/contracts/<invalid>` has one). SR users navigating by heading shortcut land mid-content. Two small a11y fixes in one PR.
+- **design_parity note:** `06ab34cc` restructured AppShell's `<main>` (now wraps `<Outlet/>` inside a relative Box). Catch-all 404 routing itself was NOT touched in the diff, and NotFound h1 was NOT touched. **Re-verify F-E-3 landmark still holds after the AppShell refactor** (see "Pending live verification" block). No status change yet — scope unchanged, but live re-check required before DONE. but bypasses the `AppShell` `<main>` landmark — screen readers skip the page main, selector tests break. Additionally, NotFound pages on 4 of 5 detail routes lack an `<h1>` element (only `/contracts/<invalid>` has one). SR users navigating by heading shortcut land mid-content. Two small a11y fixes in one PR.
 
 **Scope.** Wrap catch-all 404 in `AppShell` `<main>` landmark. Update `libs/ui/src/states/errors/NotFoundState.tsx` to render an `<h1>` (entity-typed). Verify all detail-route NotFound paths use the canonical state component.
 
@@ -479,8 +493,7 @@ This is the master action queue for closing audit 0257. Structure:
 - **Severity / Class:** 🟡 D
 - **Pre-launch:** NICE
 - **STATUS:** TODO
-
-**Rationale.** Single doc-sync PR covering: 0254 wire rename (`cursor` → `next_cursor` + `prev_cursor`) not propagated to `docs/architecture/backend/backend-overview.md`; 0238 multi-cursor namespacing (`cursor_p/_t/_e/_i`) has no ADR; per-feature wiki gaps (frontend conventions, data flow doc, error message standards as exemplar, useDetailMode vs useTableUrlState pattern, asymmetric folder split rule documented).
+- **design_parity note:** `06ab34cc` added a Mainnet/Testnet UI toggle (`NetworkToggle`) that is **NON-FUNCTIONAL** (see card 11.1 / F-DP-1 and §Regressions in impact doc). F-AN-6's "document single-environment config" line now has more to cover: there is a visible toggle implying multi-network, but config is still a single static `VITE_API_BASE_URL`. The doc must now also explain the **visual-only / decorative** toggle (or the toggle is wired / hidden first — see card 11.1 decision). **Added to scope** below. (`cursor` → `next_cursor` + `prev_cursor`) not propagated to `docs/architecture/backend/backend-overview.md`; 0238 multi-cursor namespacing (`cursor_p/_t/_e/_i`) has no ADR; per-feature wiki gaps (frontend conventions, data flow doc, error message standards as exemplar, useDetailMode vs useTableUrlState pattern, asymmetric folder split rule documented).
 
 **Scope.** Update `docs/architecture/backend/backend-overview.md` pagination section with new shape. Write ADR `lore/2-adrs/XXXX_url-cursor-pagination-convention.md` for multi-cursor namespacing. Create `lore/3-wiki/frontend-conventions.md` + `lore/3-wiki/frontend-data-flow.md`.
 
@@ -495,7 +508,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-Z-4 — Discoverability `lore/3-wiki/frontend-data-flow.md` would help
 - [ ] F-AD-2 — Onboarding doc completeness (add convention rules)
 - [ ] F-AN-5 — Soroban-era ledger detection absent (document assumption)
-- [ ] F-AN-6 — Mainnet/Testnet config single-environment (document)
+- [ ] F-AN-6 — Mainnet/Testnet config single-environment (document) — **NOW ALSO: document the decorative non-functional NetworkToggle added in `06ab34cc`; cross-ref card 11.1 / F-DP-1 wire-or-hide decision**
 - [ ] F-AH-6 — No tests doc note (cross-cite; testing-baseline task owns code)
 - [ ] F-AA-4 — `useIntersectionObserver` single-consumer note in wiki
 - [ ] Issues Encountered worth re-audit (worktree gotchas → `lore/3-wiki/`)
@@ -512,7 +525,8 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~2h
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** NICE
-- **STATUS:** TODO
+- **STATUS:** PARTIAL
+- **design_parity note:** `06ab34cc` (design_parity) is the Figma-compare pass and partially closed several sub-findings — asset metadata Domain row (F-W6-E8-1), AssetIcon color-coding (F-W6-E7-2), NFT media empty-state (F-W6-E11-2), contract tab-count pills, new Classic/SAC + protocol_version semantic chips (F-W6-CH-2 tangential). **NOT closed:** F-W6-E2-2 typo ("All operations type" still present), F-W6-CH-1 status-badge icon cue, F-W6-AG-3 non-GPU transitions (new components add more), op-type-on-transactions chip (F-W6-E13-3). **REGRESSED:** F-AK-1 / F-W6-AK-1 hardcoded hex 3→5 (AssetIcon `#724311`/`#fffcc2`); F-AK-2 / F-W6-AK-2 raw z-index (new `zIndex: 2` in shell). See cards 11.2 / 11.3. Do NOT mark 7.1 DONE.
 
 **Rationale.** Wave 6 surfaced multiple small visual nits across routes — chip styling, status badge icon-cue for color-blindness, animation property choices, copy nits, transitions at edge of 100ms hover rule. Bundle into a single visual-polish PR.
 
@@ -520,24 +534,24 @@ This is the master action queue for closing audit 0257. Structure:
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-CH-1 — Status badges rely on color but include text (mid-grade compliance)
-- [ ] F-W6-CH-2 — Operation type chips rely on text only (informational)
+- [ ] F-W6-CH-1 — Status badges rely on color but include text (mid-grade compliance) — **NOT closed by `06ab34cc` (no checkmark/X icon added)**
+- [~] F-W6-CH-2 — Operation type chips rely on text only (informational) — **PARTIAL/tangential `06ab34cc`: NEW Classic/SAC chips (AssetsTable, AccountBalances) + protocol_version chip (LedgersTable) — semantic but not the op-type-on-transactions grouping asked**
 - [ ] F-W6-AG-3 — Transitions favor non-GPU-accelerated properties
 - [ ] F-W6-AG-4 — 150ms / 200ms transitions at edge of <100ms hover rule
 - [ ] F-W6-E13-3 — Recent transactions operation type as plain text, no chip
-- [ ] F-W6-E2-2 — "All operations type" typo (should be "All operation types")
+- [ ] F-W6-E2-2 — "All operations type" typo (should be "All operation types") — **NOT closed by `06ab34cc` (TransactionFilters.tsx line unchanged; typo still present)**
 - [ ] F-W6-E12-1 — Pool ID truncation shown twice per row
 - [ ] F-W6-E12-2 — "Any TVL" filter looks like loading state
 - [ ] F-W6-E10-2 — NFT row token IDs as inline text only
 - [ ] F-W6-E3-1 — Memo "—" could be more semantic
 - [ ] F-W6-E3-2 — "Normal / Advanced" tab pair no description
 - [ ] F-W6-E5-1 — Prev/Next ledger button no disabled state for boundary
-- [ ] F-W6-E7-2 — Asset icon "?" fallback could be better
+- [~] F-W6-E7-2 — Asset icon "?" fallback could be better — **PARTIAL `06ab34cc`: AssetIcon now color-coded by kind + 2-line header; "?" letter fallback unchanged (cosmetically richer)**
 - [ ] F-W6-E7-3 — Asset detail link uses composite ID for Soroban contracts
-- [ ] F-W6-E8-1 — Asset metadata sparse
+- [~] F-W6-E8-1 — Asset metadata sparse — **PARTIAL `06ab34cc`: AssetMetadata adds Domain row (home_page hostname) paired with Homepage; still no full SEP-1 TOML (conditions/contact/org/validators)**
 - [ ] F-W6-E8-2 — Holder count not linkable to per-asset holders list
 - [ ] F-W6-E9-2 — Invocations + Events sections no obvious empty-state messaging
-- [ ] F-W6-E11-2 — NFT Traits "Metadata unavailable" no actionable guidance
+- [~] F-W6-E11-2 — NFT Traits "Metadata unavailable" no actionable guidance — **PARTIAL `06ab34cc`: NFT *media* empty-state improved (icon chip + "No media available" + subtext); Traits empty-state guidance NOT improved**
 - [ ] F-W6-E2-1 — Heading "Transactions list" inconsistent with side-nav "Transactions"
 - [ ] F-W6-E1-2 — Hero search box + header search box visually identical but separate state
 - [ ] F-W6-E14-2 — Search input has TWO clear-button affordances
@@ -545,10 +559,10 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-W6-E0-4 — Header search placeholder enumerates 4 entity types, page-search hint enumerates 5
 - [ ] F-D-3 — Detail page H1 heading inconsistency (partial — non-NotFound version)
 - [ ] F-L-2 — Search no-results hint enumerates 4 of 6 entity types
-- [ ] F-AK-1 — 3 hardcoded hex constants
-- [ ] F-AK-2 — Z-index uses raw 0/1 ad-hoc; no defined scale
-- [ ] F-W6-AK-1 — Same as F-AK-1
-- [ ] F-W6-AK-2 — Same as F-AK-2
+- [ ] F-AK-1 — 3 hardcoded hex constants — **REGRESSED by `06ab34cc`: now 5 (AssetIcon `sac` adds `#724311` + `#fffcc2`; `TYPE_REF_COLOR='#155dfc'` retained). See card 11.2 / F-DP-2**
+- [ ] F-AK-2 — Z-index uses raw 0/1 ad-hoc; no defined scale — **REGRESSED by `06ab34cc`: shell now sprinkles raw `zIndex: 2` (AppShell/TopNav/SecondaryNav/Footer). See card 11.3 / F-DP-3**
+- [ ] F-W6-AK-1 — Same as F-AK-1 — **REGRESSED (see above)**
+- [ ] F-W6-AK-2 — Same as F-AK-2 — **REGRESSED (see above)**
 - [ ] F-W6-AK-6 — Theme tokens used pervasively; combine with W6-AK-1
 - [ ] F-AD-3 — 3 inline magic numbers worth naming
 
@@ -609,7 +623,8 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~1h
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** DONE (already-fixed — STALE finding)
+- **design_parity note:** STALE finding — NOT a design_parity closure. The filter inputs already carried `aria-label` + `placeholder` at `06ab34cc^` (the commit's own parent), verified by reading the pre-merge AssetFilters/NftFilters and the untouched PoolsFilterBar. The a11y half (F-W6-F-2 / F-W6-E7-1 / F-W6-E10-1) was already resolved by an earlier batch (likely Gate B); design_parity only added responsive widths. **Recommend: re-verify the live names against current develop, then archive this card.** Header-search aria-label (F-W6-F-4) is the only possibly-open residual — confirm in re-verify; if also present, full DONE.
 
 **Rationale.** Filter input slots on `/assets` (2), `/nfts` (4), `/liquidity-pools` (3), plus header search are rendered without accessible names / placeholders / labels visible to screen readers. SR users hear "edit text" with no context. Header search has placeholder but no aria-label; hero search has aria-label. Inconsistent.
 
@@ -774,7 +789,8 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~3-5d
 - **Severity / Class:** 🟠 C (pre-launch must-fix if mobile is a goal)
 - **Pre-launch:** MUST (if mobile launch in scope) / DEFER-M2 otherwise
-- **STATUS:** TODO
+- **STATUS:** PARTIAL
+- **design_parity note:** Biggest impact from `06ab34cc`. The **802px fixed-page-width root cause is removed** (AppShell `<main>` + TopNav/SecondaryNav/Footer switched to responsive `px`; Home full-bleed sections dropped `px: 10`; HomeHero subtitle no longer nowrap at xs). Tables now wrap in `overflowX: 'auto'` (ExplorerTable + standalone tx-detail tables). Nav scrolls horizontally; heroes stack; KPI strip 2×2. **NOT done:** no hamburger menu (design_parity chose horizontal-scroll nav — needs designer sign-off, contradicts card 8.3 + 0059); touch-target ≥44px NOT audited; no table→card transform (plain overflow-x, no shadow affordance). **All verdicts code-only — REQUIRES live re-verify** of all 14 routes × 375/768 cells (see "Pending live verification" block) before any sub-finding flips DONE. Remaining effort shrinks from "3–5d" to ~1–2d.
 
 **Rationale.** Responsive matrix exposed page-level horizontal scrollbar at <800px (mobile severe, tablet noticeable). Root cause: layout shell has hardcoded ~802px min-width. Tables don't transform to card layout at narrow viewports. No hamburger menu at <768px. Touch targets <44px. WCAG 2.5.5 fail. Per F-W6-RESPONSIVE-1.
 
@@ -782,14 +798,14 @@ This is the master action queue for closing audit 0257. Structure:
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum
-- [ ] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation
-- [ ] F-W6-RESPONSIVE-3 — No hamburger / mobile nav
-- [ ] F-W6-RESPONSIVE-4 — Touch targets <44px on mobile
-- [ ] F-W6-E0-3 — No hamburger menu at mobile (recap)
-- [ ] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile)
+- [~] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum — **PARTIAL `06ab34cc`: 802px root cause removed in code; needs live re-verify `scrollWidth===clientWidth` on all 14×375/768**
+- [~] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation — **PARTIAL `06ab34cc`: tables now `overflowX: auto` (page-level overflow mitigated); card-layout transform still NOT implemented**
+- [ ] F-W6-RESPONSIVE-3 — No hamburger / mobile nav — **UNTOUCHED — design_parity chose horizontal-scroll nav instead; DESIGNER SIGN-OFF NEEDED (accept scroll-nav vs require hamburger)**
+- [ ] F-W6-RESPONSIVE-4 — Touch targets <44px on mobile — **UNTOUCHED by `06ab34cc`; needs live measurement (HomeLogo dropped 32→24, nav buttons unchanged)**
+- [ ] F-W6-E0-3 — No hamburger menu at mobile (recap) — **UNTOUCHED (scroll-nav alternative; see RESPONSIVE-3)**
+- [ ] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile) — **UNTOUCHED (scroll-nav alternative; designer decision)**
 
-**Notes:** User decision: pre-launch (MUST) vs post-launch (DEFER-M2)?
+**Notes:** User decision: pre-launch (MUST) vs post-launch (DEFER-M2)? **AND** designer decision: accept design_parity's horizontal-scroll nav as the answer to RESPONSIVE-3/0059, or still require a hamburger. PARTIAL until both decisions + live re-verify land.
 
 ---
 
@@ -879,6 +895,7 @@ This is the master action queue for closing audit 0257. Structure:
 - **Severity / Class:** 🟢 A
 - **Pre-launch:** NICE
 - **STATUS:** TODO
+- **design_parity note:** ARTIFACT CHANGED. `06ab34cc` **rewrote the sort caret** — removed MUI `TableSortLabel` + `UnfoldMore`; new `SortableHeader` with a circular badge + rotating `KeyboardArrowDownIcon`. The "middle-ground" caret the audit flagged for sign-off is now a *different* implementation. Designer sign-off (F-AB-4 / 0061 #4) now applies to the **new circular-badge caret**, not the old one. Status stays TODO; only the artifact under review changed.
 
 **Rationale.** Sort caret design was "deliberate middle ground" between two Figma variants — never confirmed with designer. Audit flagged as partial hallucination risk.
 
@@ -886,8 +903,8 @@ This is the master action queue for closing audit 0257. Structure:
 
 **Findings closed (sub-checklist):**
 
-- [ ] 0061 #4 Emerged — Sort caret middle-ground designer sign-off
-- [ ] F-AB-4 — Sort-caret middle ground needs designer sign-off (recap)
+- [ ] 0061 #4 Emerged — Sort caret middle-ground designer sign-off — **artifact rewritten by `06ab34cc` (now circular-badge `SortableHeader`); sign-off applies to new caret**
+- [ ] F-AB-4 — Sort-caret middle ground needs designer sign-off (recap) — **see above; new artifact**
 
 **Notes:** **\_**
 
@@ -1018,12 +1035,104 @@ This is the master action queue for closing audit 0257. Structure:
 
 ---
 
+## Category 11 — design_parity regressions (introduced by `06ab34cc`)
+
+> New cluster. Source: `design-parity-impact-2026-05-27.md` §Regressions. The `feat/design_parity` merge (`06ab34cc` / merge `62c988d4`) introduced 4 net-new debt items while doing its Figma-parity + responsive pass. Each is tracked as a new `F-DP-*` finding (see appendix) and clustered here. Two of these directly **regress** existing audit findings the visual-polish card 7.1 was meant to *close* (F-AK-1 hex, F-AK-2 z-index).
+
+### 11.1 NetworkToggle non-functional affordance
+
+- **Type:** BUG
+- **Effort:** ~4h (wire) / ~30min (hide)
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** SHOULD
+- **STATUS:** TODO
+
+**Rationale.** `06ab34cc` added `libs/ui/src/layout/NetworkToggle.tsx` (124 lines): a Mainnet/Testnet segmented control with `role="group"`, `aria-pressed`, hover, per-network palette — wired AppShell → TopNav → NetworkToggle via a local `useState<Network>`. **It is purely visual.** `web/src/api/config.ts` `apiBaseUrl` is a static module constant from `VITE_API_BASE_URL` and does NOT read `network`; query keys (`queryKeys.ts`) do not include network; there is no network context/provider. Switching the toggle changes only the toggle's own rendering — no API base URL change, no refetch, no data difference. It is also **invisible on `/`** (TopNav is now hidden on the home route: `{!isHome && <TopNav .../>}`). This is a misleading affordance — worse for users than F-AN-6's prior no-toggle baseline.
+
+**Scope.** DECISION NEEDED — present both options:
+- **Option A (wire it).** Thread `network` into `apiBaseUrl` resolution + namespace query keys by network + add a network context/provider so switching actually changes data. Larger lift; only valid if backend serves both networks. Also surface on `/` (or accept home-route absence by design).
+- **Option B (hide it).** Remove / feature-flag the toggle until multi-network is real. Restores the honest single-environment baseline; pairs with card 6.4 documenting single-env config.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-DP-1 — NetworkToggle non-functional (wire OR hide)
+- [ ] F-AN-6 (cross-cite) — single-environment config doc must reflect the chosen outcome
+
+**Notes:** Introduced by design_parity `06ab34cc`. Cross-ref card 6.4 (documentation) + "Pending live verification" (no-op confirm). Decision owner: user/designer + backend (is multi-network served?).
+
+---
+
+### 11.2 AssetIcon hardcoded hex → theme tokens (regresses F-AK-1)
+
+- **Type:** REFACTOR
+- **Effort:** ~30min
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** NICE
+- **STATUS:** TODO
+
+**Rationale.** `06ab34cc` added inline hardcoded hex `'#724311'` + `'#fffcc2'` in AssetIcon (`sac` kind), bringing the hardcoded-hex count from 3 → 5 (`ContractInterface` `TYPE_REF_COLOR='#155dfc'` retained). Directly **regresses F-AK-1 / F-W6-AK-1**, which card 7.1 was meant to close.
+
+**Scope.** Move the 2 new AssetIcon hex values to theme tokens (e.g. a `palette.assetKind.sac` token pair) alongside the card 7.1 hex consolidation. Fold into card 7.1's hex sweep OR land standalone here.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-DP-2 — AssetIcon `#724311` / `#fffcc2` hardcoded (move to theme tokens)
+- [ ] F-AK-1 / F-W6-AK-1 (cross-cite) — regression must be undone as part of the hex consolidation
+
+**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1.
+
+---
+
+### 11.3 Raw z-index additions → z-index scale (regresses F-AK-2)
+
+- **Type:** REFACTOR
+- **Effort:** ~30min
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** NICE
+- **STATUS:** TODO
+
+**Rationale.** `06ab34cc` added raw `zIndex: 2` in several shell spots (AppShell / TopNav / SecondaryNav / Footer, layering the shell above `PageGridBackdrop`). Adds to the ad-hoc-z-index debt with no defined scale. **Regresses F-AK-2 / F-W6-AK-2.**
+
+**Scope.** Define a z-index scale (e.g. `theme.zIndex.appBackdrop` / `appContent` / `appShell`) and migrate the raw `0`/`1`/`2` values across HomePage, AppShell, PageGridBackdrop, TopNav, SecondaryNav, Footer. Fold into card 7.1's z-index item OR land standalone here.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-DP-3 — Raw `zIndex: 2` additions in shell (move to z-index scale constants)
+- [ ] F-AK-2 / F-W6-AK-2 (cross-cite) — regression folded into the z-index scale work
+
+**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1.
+
+---
+
+### 11.4 OperationFlowTree collapse/expand lost — verify vs Figma
+
+- **Type:** BUG
+- **Effort:** ~2h (verify + restore if regression)
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** SHOULD
+- **STATUS:** TODO
+
+**Rationale.** `06ab34cc` rewrote `OperationFlowTree` — removed the `useState` + `Collapse` + expand chevron; operation trees now render **flat** with dashed sibling connectors. If collapse/expand was intended UX (deep Soroban call trees), this is a **functional regression**; if Figma specifies a flat tree, it is intended and should be documented.
+
+**Scope.** Verify the current `OperationFlowTree` against Figma + with the designer. If collapse was intended UX → restore `useState`/`Collapse`/chevron (or a better affordance for deep trees). If flat is intended → document the decision and close. Also: cross-check the contract `events` tab count wired to `recent_unique_callers` (callers ≠ events — possible mislabel; verify intended stat, see impact doc lower-severity notes).
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-DP-4 — OperationFlowTree collapse/expand removed (verify vs Figma; restore if regression)
+
+**Notes:** Introduced by design_parity `06ab34cc`. Designer / Figma confirmation required to classify as regression vs intended.
+
+---
+
 ## Appendix — 281-finding STATUS table
 
 Compact per-finding cross-reference. One line per finding ID surfaced by audit Waves 1-6. STATUS:
 
 - `RESOLVED` — already shipped pre-queue; SHA in Notes
 - `SKIP` — user-dropped, rationale in Notes
+- `PARTIAL` — partially addressed (e.g. design_parity `06ab34cc` code-verified one half); remaining scope open + live re-verify pending
+- `STALE` — finding's premise no longer true (e.g. F-AH-1 PageStub revived); see Notes
+- `DONE` (appendix) — closed (incl. already-fixed-pre-merge stale-a11y rows); confirm on develop before archive
 - `→ C N.M` — clustered into card N.M of this queue; STATUS tracks per card
 - `TODO` (orphan) — surfaced by audit but not assigned to any card or skip; review during impl
 
@@ -1217,7 +1326,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-AN-3                                         | 4           | 🟡      | C 7.1                   | TODO        | Op-type label single source; icon mapping absent (Figma check)              |
 | F-AN-4                                         | 4           | 🟢      | —                       | RESOLVED    | SEP-1 TOML enrichment OK                                                    |
 | F-AN-5                                         | 4           | 🟡      | C 6.4                   | TODO        | Soroban-era ledger detection absent (document)                              |
-| F-AN-6                                         | 4           | 🟢      | C 6.4                   | TODO        | Mainnet/Testnet config single-env (document)                                |
+| F-AN-6                                         | 4           | 🟢      | C 6.4 / C 11.1          | TODO        | Mainnet/Testnet config single-env — REGRESSED by `06ab34cc`: NetworkToggle added but NON-FUNCTIONAL (fake toggle, no apiBaseUrl/query-key change, invisible on `/`); worse than no-toggle baseline. See F-DP-1 / card 11.1 (wire-or-hide) + design-parity-impact |
 | F-AN-7                                         | 4           | 🟠      | C 2.1                   | TODO        | Stroop/XLM 2-place (recap F-U-4)                                            |
 | F-AN-8                                         | 4           | 🟠      | —                       | RESOLVED    | Strkey canonical convention — 473de2a2 (0264)                               |
 | F-AE-1..F-AE-7                                 | 4           | various | (above)                 | (above)     | (see individual rows)                                                       |
@@ -1225,10 +1334,10 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-A-2                                          | 5           | 🟡      | —                       | RESOLVED    | 0254 BREAKING wire rename clean (positive baseline)                         |
 | F-A-3                                          | 5           | 🟡      | C 6.4                   | TODO        | ADR 0032 partial gap on 0254 (doc sync)                                     |
 | F-A-4                                          | 5           | 🟡      | —                       | RESOLVED    | LP feature gold-standard exemplar (positive note)                           |
-| F-A-5                                          | 5           | 🟡      | C 1.3                   | TODO        | Contract list page gap (launch blocker)                                     |
+| F-A-5                                          | 5           | 🟡      | C 1.3                   | PARTIAL     | Contract list page gap (launch blocker) — nav added, page stubbed via PageStub (design_parity `06ab34cc`); list page still TODO |
 | F-A-6                                          | 5           | 🟢      | —                       | RESOLVED    | Tx-detail spec/ship chain clean                                             |
 | F-A-7                                          | 5           | 🟢      | —                       | RESOLVED    | Deviation notes discipline excellent                                        |
-| F-AH-1                                         | 5           | 🟡      | C 2.2                   | TODO        | PageStub.tsx dead orphan                                                    |
+| F-AH-1                                         | 5           | 🟡      | C 2.2                   | STALE       | PageStub.tsx dead orphan — FALSE post-`06ab34cc`: PageStub revived as `/accounts`+`/contracts` stub (2 live consumers); deletion gated behind card 1.3 |
 | F-AH-2                                         | 5           | 🟡      | C 2.2                   | TODO        | Folder asymmetry                                                            |
 | F-AH-3                                         | 5           | 🟡      | C 2.2                   | TODO        | SectionCard wrong home (recap)                                              |
 | F-AH-4                                         | 5           | 🟢      | C 2.2                   | TODO        | web/src/utils/ single-file (recap)                                          |
@@ -1267,7 +1376,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-EX-2                                         | 5 sweep     | 🟢      | C 5.2                   | TODO        | Pool chart metric/period useState                                           |
 | F-W6-AG-1                                      | 6           | 🟠      | C 4.1                   | TODO        | Main bundle >500KB (recap)                                                  |
 | F-W6-AG-2                                      | 6           | 🟠      | C 4.1                   | TODO        | LP detail chunk 300KB (recap)                                               |
-| F-W6-AG-3                                      | 6           | 🟡      | C 7.1                   | TODO        | Transitions non-GPU                                                         |
+| F-W6-AG-3                                      | 6           | 🟡      | C 7.1                   | TODO        | Transitions non-GPU — slight NEG from `06ab34cc` (NetworkToggle/sort-caret/Tabs add more `background-color`/`color`/`border-color` transitions; no move to transform/opacity) |
 | F-W6-AG-4                                      | 6           | 🟢      | C 7.1                   | TODO        | 150ms transitions edge of hover rule                                        |
 | F-W6-AG-5                                      | 6           | 🟡      | C 7.7                   | TODO        | No route-transition loading indicator                                       |
 | F-W6-AG-6                                      | 6           | 🟢      | —                       | SKIP        | useMemo/useCallback spot-check informational                                |
@@ -1281,31 +1390,31 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-V-1                                       | 6           | 🟠      | C 7.2                   | TODO        | DM-1 reconfirmed + all live pills lack freshness                            |
 | F-W6-V-2                                       | 6           | 🟡      | C 7.2                   | TODO        | Backfill doesn't disable LIVE                                               |
 | F-W6-V-3                                       | 6           | 🟢      | C 7.2                   | TODO        | Latest-ledger polling works (informational)                                 |
-| F-W6-AK-1                                      | 6           | 🟡      | C 7.1                   | TODO        | 3 hardcoded hex constants                                                   |
-| F-W6-AK-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Z-index raw 0/1 no scale                                                    |
+| F-W6-AK-1                                      | 6           | 🟡      | C 7.1 / C 11.2          | TODO        | 3 hardcoded hex constants — REGRESSED by `06ab34cc`: now 5 (AssetIcon adds `#724311`/`#fffcc2`). See F-DP-2 / card 11.2 |
+| F-W6-AK-2                                      | 6           | 🟢      | C 7.1 / C 11.3          | TODO        | Z-index raw 0/1 no scale — REGRESSED by `06ab34cc`: shell adds raw `zIndex: 2` (AppShell/TopNav/SecondaryNav/Footer). See F-DP-3 / card 11.3 |
 | F-W6-AK-3                                      | 6           | ✓       | —                       | RESOLVED    | Spacing scale consistent (baseline)                                         |
 | F-W6-AK-4                                      | 6           | 🟢      | —                       | DEFER-M2    | Border-radius/shadow audit deferred                                         |
 | F-W6-AK-5                                      | 6           | ✓       | —                       | RESOLVED    | CSS approach single (baseline)                                              |
 | F-W6-AK-6                                      | 6           | 🟢      | C 7.1                   | TODO        | Theme tokens pervasive; tiny leakage (recap)                                |
 | F-W6-F-1                                       | 6           | 🟡      | C 7.5                   | TODO        | NFT detail no h2/h3                                                         |
-| F-W6-F-2                                       | 6           | 🟡      | C 7.4                   | TODO        | Filter slots lack accessible names                                          |
+| F-W6-F-2                                       | 6           | 🟡      | C 7.4                   | DONE        | Filter slots lack accessible names — STALE: already had `aria-label`+`placeholder` at `06ab34cc^` (pre-merge); NOT a design_parity closure. Re-verify on develop then archive |
 | F-W6-F-3                                       | 6           | 🟢      | —                       | RESOLVED    | First Tab focus visible (baseline)                                          |
-| F-W6-F-4                                       | 6           | 🟢      | C 7.4                   | TODO        | Header search lacks aria-label/id                                           |
+| F-W6-F-4                                       | 6           | 🟢      | C 7.4                   | TODO        | Header search lacks aria-label/id — only possibly-open residual of card 7.4 (filter a11y stale-fixed); confirm in re-verify |
 | F-W6-F-5                                       | 6           | 🟢      | —                       | RESOLVED    | Copy buttons aria-label correct (baseline)                                  |
 | F-W6-F-6                                       | 6           | 🟢      | C 8.1                   | DEFER-M2    | Lighthouse a11y audit not run                                               |
 | F-W6-F-7                                       | 6           | 🟢      | C 7.8                   | TODO        | Reduced-motion not verified                                                 |
 | F-W6-F-8                                       | 6           | 🟢      | C 7.8                   | TODO        | No keyboard trap test on modals                                             |
-| F-W6-CH-1                                      | 6           | 🟡      | C 7.1                   | TODO        | Status badges color+text, no shape icon                                     |
-| F-W6-CH-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Operation type chips text-only (informational)                              |
-| F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | TODO        | All routes break <800px                                                     |
-| F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | TODO        | No table → card transformation                                              |
-| F-W6-RESPONSIVE-3                              | 6           | 🟡      | C 8.3                   | TODO        | No hamburger / mobile nav                                                   |
-| F-W6-RESPONSIVE-4                              | 6           | 🟢      | C 8.3                   | TODO        | Touch targets <44px on mobile                                               |
+| F-W6-CH-1                                      | 6           | 🟡      | C 7.1                   | TODO        | Status badges color+text, no shape icon — NOT closed by `06ab34cc` (no checkmark/X icon added) |
+| F-W6-CH-2                                      | 6           | 🟢      | C 7.1                   | PARTIAL     | Operation type chips text-only (informational) — design_parity `06ab34cc` adds NEW Classic/SAC + protocol_version chips (tangential, not op-type-on-tx grouping) |
+| F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | PARTIAL     | All routes break <800px — design_parity `06ab34cc`: 802px root cause removed (code-verified), live re-verify pending (scrollWidth===clientWidth on 14×375/768) |
+| F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | PARTIAL     | No table → card transformation — design_parity `06ab34cc`: tables now `overflowX: auto` (page-level overflow mitigated, code-verified); card-layout transform still NOT done; live re-verify pending |
+| F-W6-RESPONSIVE-3                              | 6           | 🟡      | C 8.3                   | TODO        | No hamburger / mobile nav — design_parity `06ab34cc` chose horizontal-scroll nav instead (UNTOUCHED as hamburger); DESIGNER SIGN-OFF NEEDED (accept scroll-nav vs require hamburger) |
+| F-W6-RESPONSIVE-4                              | 6           | 🟢      | C 8.3                   | TODO        | Touch targets <44px on mobile — UNTOUCHED by `06ab34cc`; needs live measurement at 375 |
 | F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 on 4 of 5 detail                                        |
 | F-W6-NOTFOUND-2                                | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on parent 404                                      |
 | F-W6-E0-1                                      | 6           | 🟠      | C 1.1                   | TODO        | Footer dead spans (recap)                                                   |
 | F-W6-E0-2                                      | 6           | 🟠      | C 7.2                   | TODO        | Footer hardcoded operational (recap)                                        |
-| F-W6-E0-3                                      | 6           | 🟡      | C 8.3                   | TODO        | No hamburger at mobile                                                      |
+| F-W6-E0-3                                      | 6           | 🟡      | C 8.3                   | TODO        | No hamburger at mobile — UNTOUCHED by `06ab34cc` (scroll-nav alternative; designer decision; see F-W6-RESPONSIVE-3) |
 | F-W6-E0-4                                      | 6           | 🟡      | C 7.1                   | TODO        | Header search placeholder 4 vs hint 5                                       |
 | F-W6-E0-5                                      | 6           | 🟢      | C 7.6                   | TODO        | Header polling duplicates home                                              |
 | F-W6-E1-1                                      | 6           | 🟡      | C 7.2                   | TODO        | LIVE badge always on (recap)                                                |
@@ -1313,35 +1422,39 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-E1-3                                      | 6           | 🟢      | C 7.6                   | TODO        | Home stats strip duplicated (informational)                                 |
 | F-W6-E1-4                                      | 6           | 🟡      | C 5.4                   | TODO        | Home ledger hash not a link                                                 |
 | F-W6-E2-1                                      | 6           | 🟢      | C 7.1                   | TODO        | "Transactions list" vs nav "Transactions"                                   |
-| F-W6-E2-2                                      | 6           | 🟢      | C 7.1                   | TODO        | "All operations type" typo                                                  |
+| F-W6-E2-2                                      | 6           | 🟢      | C 7.1                   | TODO        | "All operations type" typo — NOT closed by `06ab34cc` (TransactionFilters.tsx unchanged) |
 | F-W6-E3-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Memo "—" semantic improvement                                               |
 | F-W6-E3-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Normal/Advanced tabs no description                                         |
-| F-W6-E3-3                                      | 6           | 🟡      | C 5.1 / C 8.3           | TODO        | Page horiz scroll mobile (covered by responsive)                            |
+| F-W6-E3-3                                      | 6           | 🟡      | C 5.1 / C 8.3           | PARTIAL     | Page horiz scroll mobile (covered by responsive) — design_parity `06ab34cc` removed 802px root cause (code-verified); live re-verify pending |
 | F-W6-E5-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Prev/Next ledger no disabled at boundary                                    |
 | F-W6-E6-1                                      | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on 404 (account)                                   |
 | F-W6-E6-2                                      | 6           | 🟢      | C 5.1                   | TODO        | NotFound no h1 (account)                                                    |
-| F-W6-E7-1                                      | 6           | 🟡      | C 7.4                   | TODO        | Two unlabeled filter slots /assets                                          |
-| F-W6-E7-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset icon "?" fallback                                                     |
+| F-W6-E7-1                                      | 6           | 🟡      | C 7.4                   | DONE        | Two unlabeled filter slots /assets — STALE: aria-label+placeholder present at `06ab34cc^` (pre-merge); re-verify then archive |
+| F-W6-E7-2                                      | 6           | 🟢      | C 7.1                   | PARTIAL     | Asset icon "?" fallback — design_parity `06ab34cc`: AssetIcon now color-coded by kind + 2-line header; "?" fallback unchanged |
 | F-W6-E7-3                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset detail link uses composite ID for SAC                                 |
-| F-W6-E8-1                                      | 6           | 🟢      | C 7.1                   | TODO        | Asset Metadata sparse                                                       |
+| F-W6-E8-1                                      | 6           | 🟢      | C 7.1                   | PARTIAL     | Asset Metadata sparse — design_parity `06ab34cc` adds Domain row (home_page hostname); still no full SEP-1 TOML |
 | F-W6-E8-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Holder count not linkable                                                   |
 | F-W6-E9-1                                      | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on 404 (contract)                                  |
 | F-W6-E9-2                                      | 6           | 🟢      | C 7.1                   | TODO        | Invocations+Events no empty-state message                                   |
 | F-W6-E9-3                                      | 6           | 🟡      | C 5.1                   | TODO        | NotFound h1 inconsistent (contract)                                         |
-| F-W6-E10-1                                     | 6           | 🟡      | C 7.4                   | TODO        | Four unlabeled filter slots /nfts                                           |
+| F-W6-E10-1                                     | 6           | 🟡      | C 7.4                   | DONE        | Four unlabeled filter slots /nfts — STALE: aria-label+placeholder present at `06ab34cc^` (pre-merge); re-verify then archive |
 | F-W6-E10-2                                     | 6           | 🟢      | C 7.1                   | TODO        | NFT row token IDs inline text                                               |
 | F-W6-E10-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT row Contract ID plain text                                              |
 | F-W6-E11-1                                     | 6           | 🟡      | C 7.5                   | TODO        | NFT detail no h2/h3                                                         |
-| F-W6-E11-2                                     | 6           | 🟢      | C 7.1                   | TODO        | NFT Traits "Metadata unavailable" no guidance                               |
+| F-W6-E11-2                                     | 6           | 🟢      | C 7.1                   | PARTIAL     | NFT Traits "Metadata unavailable" no guidance — design_parity `06ab34cc`: NFT *media* empty-state improved; Traits guidance NOT improved |
 | F-W6-E11-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT Contract ID in Details plain text                                       |
 | F-W6-E12-1                                     | 6           | 🟡      | C 7.1                   | TODO        | Pool ID truncation twice per row                                            |
 | F-W6-E12-2                                     | 6           | 🟢      | C 7.1                   | TODO        | "Any TVL" filter looks like loading                                         |
 | F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision                                    |
 | F-W6-E13-2                                     | 6           | 🟢      | C 5.1                   | TODO        | Pool NotFound no h1                                                         |
-| F-W6-E13-3                                     | 6           | 🟢      | C 7.1                   | TODO        | Pool tx operation type plain text                                           |
+| F-W6-E13-3                                     | 6           | 🟢      | C 7.1                   | TODO        | Pool tx operation type plain text — UNCHANGED by `06ab34cc` (LP-detail recent-tx + home op-type not in diff) |
 | F-W6-E14-1                                     | 6           | 🟢      | C 7.1                   | TODO        | Empty-state hint at ?q= no examples                                         |
 | F-W6-E14-2                                     | 6           | 🟢      | C 7.1                   | TODO        | Search has two clear buttons                                                |
 | F-W6-E14-3                                     | 6           | 🟢      | —                       | SKIP        | First Tab lands on header search (informational)                            |
+| F-DP-1                                         | design_parity | 🟠   | C 11.1                  | TODO        | NetworkToggle non-functional — fake Mainnet/Testnet toggle (no apiBaseUrl/query-key change), invisible on `/`. Introduced by `06ab34cc`. Wire OR hide. See design-parity-impact |
+| F-DP-2                                         | design_parity | 🟠   | C 11.2                  | TODO        | AssetIcon hardcoded hex `#724311`/`#fffcc2` (sac kind) — regresses F-AK-1 (3→5). Introduced by `06ab34cc`. Move to theme tokens |
+| F-DP-3                                         | design_parity | 🟠   | C 11.3                  | TODO        | Raw `zIndex: 2` added across shell (AppShell/TopNav/SecondaryNav/Footer) — regresses F-AK-2. Introduced by `06ab34cc`. Move to z-index scale |
+| F-DP-4                                         | design_parity | 🟠   | C 11.4                  | TODO        | OperationFlowTree collapse/expand removed (now flat w/ dashed connectors) — verify vs Figma; restore if regression. Introduced by `06ab34cc` |
 | Z-1 Spot 5                                     | 5           | 🟢      | C 6.3                   | TODO        | Op-type enum hand-typed (cross-cite F-Z-2)                                  |
 | Z-1 Spot 1                                     | 5           | A       | C 8.4                   | TODO        | Error envelope flatten (cross-cite F-AF-1)                                  |
 | 0061 #4                                        | arch        | 🟢      | C 8.7                   | TODO        | Sort caret middle-ground sign-off                                           |
@@ -1405,7 +1518,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | Issues Encountered worktree gotchas wiki       | arch        | —       | C 6.4                   | TODO        | Spawn DOCS wiki entry                                                       |
 | NFT search-404 regression (0264 carry-over)    | 0270        | 🟠      | —                       | RESOLVED    | 6421d3d7 + 69d9f529                                                         |
 
-(Appendix row count tracked above — see report.)
+(Appendix row count tracked above — see report. +4 design_parity regression rows F-DP-1..F-DP-4 appended 2026-05-27 per design-parity-impact-2026-05-27.md.)
 
 ## End of queue
 
