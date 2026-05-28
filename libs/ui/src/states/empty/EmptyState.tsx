@@ -1,6 +1,8 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
+import { monoFontFamily } from '../../theme/typography.js';
+
 export type EmptyStateVariant = 'default' | 'warning' | 'error';
 
 interface EmptyStateProps {
@@ -70,7 +72,7 @@ export function EmptyState({
             variant="bodyXsRegular"
             sx={{
               color: 'text.tertiary',
-              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+              fontFamily: monoFontFamily,
               mt: 0.5,
             }}
           >

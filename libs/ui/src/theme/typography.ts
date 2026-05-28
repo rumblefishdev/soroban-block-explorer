@@ -1,7 +1,7 @@
 import type { TypographyVariantsOptions } from '@mui/material/styles';
 
-const headingFontFamily = '"Mona Sans", system-ui, sans-serif';
-const bodyFontFamily = '"Inter", system-ui, sans-serif';
+export const headingFontFamily = '"Mona Sans", system-ui, sans-serif';
+export const bodyFontFamily = '"Inter", system-ui, sans-serif';
 export const monoFontFamily =
   '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
