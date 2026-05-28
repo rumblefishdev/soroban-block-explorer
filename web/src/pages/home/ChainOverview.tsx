@@ -2,6 +2,8 @@ import { Box, Divider } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
   classifyError,
+  formatAmount,
+  formatTps,
   GenericErrorState,
   RateLimitState,
   TransientErrorState,
@@ -9,7 +11,6 @@ import {
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
-import { formatAmount } from '../format.js';
 
 import { ChainOverviewCard } from './ChainOverviewCard.js';
 import { LiveIndicator } from './LiveIndicator.js';
@@ -60,7 +61,7 @@ export function ChainOverview() {
         />
         <ChainOverviewCard
           label="TPS"
-          value={data ? data.tps_60s.toFixed(1) : undefined}
+          value={data ? formatTps(data.tps_60s) : undefined}
           caption="Last 60s"
           accentValue
           loading={isLoading}

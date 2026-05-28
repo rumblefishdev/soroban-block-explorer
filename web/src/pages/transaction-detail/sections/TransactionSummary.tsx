@@ -2,6 +2,8 @@ import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
 import { Stack, Typography } from '@mui/material';
 import {
   Chip,
+  formatFee,
+  formatStroops,
   IdentifierDisplay,
   IdentifierWithCopy,
   RelativeTimestamp,
@@ -10,7 +12,6 @@ import {
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
 import { describeMemo } from '../shared/describeMemo.js';
-import { formatFee, formatStroops } from '../shared/formatFee.js';
 
 interface TransactionSummaryProps {
   tx: E3ResponseTransactionDetailLight;

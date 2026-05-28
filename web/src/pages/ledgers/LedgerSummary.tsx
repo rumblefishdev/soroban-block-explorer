@@ -1,13 +1,15 @@
 import type { LedgerDetailResponse } from '@rumblefish/api-types';
 import {
   Chip,
+  formatFee,
+  formatInteger,
+  formatStroops,
   IdentifierWithCopy,
   TableSectionHeader,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Box, Card, Stack, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
-import { formatFee } from '../transactions/formatters.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LedgerSummaryProps {
@@ -26,7 +28,7 @@ function BaseFee({ stroops }: { stroops: number }) {
         {formatFee(stroops)}
       </Typography>
       <Typography variant="bodyMonoXsRegular" sx={{ color: 'text.tertiary' }}>
-        ({stroops.toLocaleString('en-US')} stroops)
+        ({formatStroops(stroops)} stroops)
       </Typography>
     </Stack>
   );
@@ -87,7 +89,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
         label: 'Sequence',
         value: (
           <Typography variant="bodySmMedium">
-            {ledger.sequence.toLocaleString('en-US')}
+            {formatInteger(ledger.sequence)}
           </Typography>
         ),
       },
@@ -128,7 +130,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
         label: 'TX Count',
         value: (
           <Typography variant="bodySmRegular">
-            {ledger.transaction_count.toLocaleString('en-US')}
+            {formatInteger(ledger.transaction_count)}
           </Typography>
         ),
       },

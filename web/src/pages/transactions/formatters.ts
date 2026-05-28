@@ -1,18 +1,5 @@
-const STROOPS_PER_XLM = 10_000_000;
-
 function pad(n: number): string {
   return String(n).padStart(2, '0');
-}
-
-/**
- * Formats a fee in stroops as an XLM amount, trimming trailing zeros.
- * `100` → `0.00001 XLM`, `0` → `0 XLM`.
- */
-export function formatFee(stroops: number): string {
-  if (!Number.isFinite(stroops)) return '—';
-  const xlm = stroops / STROOPS_PER_XLM;
-  const fixed = xlm.toFixed(7).replace(/\.?0+$/, '');
-  return `${fixed === '' ? '0' : fixed} XLM`;
 }
 
 /**

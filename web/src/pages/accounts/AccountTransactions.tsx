@@ -3,6 +3,7 @@ import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
   classifyError,
   ExplorerTable,
+  formatFee,
   GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -21,7 +22,6 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { OperationCell, StatusCell } from '../transactions/cells.js';
-import { formatFee } from '../transactions/formatters.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 const columns: ExplorerTableColumn<AccountTransactionItem>[] = [

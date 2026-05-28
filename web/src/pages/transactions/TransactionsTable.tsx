@@ -1,6 +1,7 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
   ExplorerTable,
+  formatFee,
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
@@ -8,7 +9,6 @@ import {
 import { Typography } from '@mui/material';
 
 import { Dash, OperationCell, StatusCell } from './cells.js';
-import { formatFee } from './formatters.js';
 import { TransactionTime } from './TransactionTime.js';
 
 interface TransactionsTableProps {

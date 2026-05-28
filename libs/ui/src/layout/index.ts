@@ -11,6 +11,10 @@ export { SecondaryNav } from './SecondaryNav.js';
 export type { SecondaryNavProps, NavItem } from './SecondaryNav.js';
 
 export { Footer } from './Footer.js';
-export type { FooterProps, FooterNavItem } from './Footer.js';
+export type {
+  FooterProps,
+  FooterNavItem,
+  FooterSystemStatus,
+} from './Footer.js';
 
 export { PageGridBackdrop } from './PageGridBackdrop.js';

@@ -1,6 +1,8 @@
 import { Box, Tab, Tabs as MuiTabs } from '@mui/material';
 import type { ReactNode, SyntheticEvent } from 'react';
 
+import { formatInteger } from '../format/index.js';
+
 export interface TabDefinition {
   /** Stable key — also the value synced to the URL by `useTabUrlState`. */
   key: string;
@@ -52,7 +54,7 @@ function TabLabel({
             : theme.palette.text.secondary,
         })}
       >
-        {count.toLocaleString('en-US')}
+        {formatInteger(count)}
       </Box>
     </Box>
   );

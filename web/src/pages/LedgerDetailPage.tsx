@@ -2,6 +2,7 @@ import { Box, Link, Stack, Typography } from '@mui/material';
 import {
   classifyError,
   DetailSkeleton,
+  formatInteger,
   GenericErrorState,
   isLedgerSequence,
   isMissingResource,
@@ -82,7 +83,7 @@ export default function LedgerDetailPage() {
 
   const ledger = data;
   const txRows = ledger.transactions.data;
-  const sequenceLabel = ledger.sequence.toLocaleString('en-US');
+  const sequenceLabel = formatInteger(ledger.sequence);
 
   return (
     <Stack spacing={3}>
