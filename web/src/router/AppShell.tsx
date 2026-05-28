@@ -155,20 +155,25 @@ export function AppShell() {
       />
       <Box
         component="main"
-        sx={{
-          position: 'relative',
-          flex: 1,
-          width: '100%',
-          maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,
-          mx: 'auto',
-          ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
-        }}
+        sx={{ position: 'relative', flex: 1, width: '100%' }}
       >
-        {/* Faint grid halo behind every page. The home page adds the
-            warm gold glow pills on top of this same backdrop; every
-            other route shows the grid on its own. */}
+        {/* Faint grid halo behind every page, full-bleed so it reads the
+            same on every route. The home page adds the warm gold glow
+            pills on top of this same backdrop; every other route shows
+            the grid on its own. Lives on the full-width <main> (not the
+            constrained content box) so the grid spans the viewport
+            instead of being clipped to the centered column. */}
         <PageGridBackdrop />
-        <Box sx={{ position: 'relative', zIndex: 1 }}>
+        <Box
+          sx={{
+            position: 'relative',
+            zIndex: 1,
+            width: '100%',
+            maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,
+            mx: 'auto',
+            ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
+          }}
+        >
           <Outlet />
         </Box>
       </Box>
