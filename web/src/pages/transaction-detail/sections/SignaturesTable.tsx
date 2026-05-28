@@ -13,6 +13,7 @@ import {
   CopyButton,
   IdentifierWithCopy,
   monoFontFamily,
+  truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -24,11 +25,6 @@ export interface SignatureRow extends SignatureDto {
 
 interface SignaturesTableProps {
   signatures: readonly SignatureRow[];
-}
-
-function truncateHex(hex: string, head = 12, tail = 12): string {
-  if (hex.length <= head + tail + 1) return hex;
-  return `${hex.slice(0, head)}…${hex.slice(-tail)}`;
 }
 
 function Dash() {
@@ -110,7 +106,10 @@ export function SignaturesTable({ signatures }: SignaturesTableProps) {
                           color: theme.palette.text.primary,
                         })}
                       >
-                        {truncateHex(sig.signature)}
+                        {truncateMiddle(sig.signature, {
+                          prefix: 12,
+                          suffix: 12,
+                        })}
                       </Typography>
                       <CopyButton
                         value={sig.signature}

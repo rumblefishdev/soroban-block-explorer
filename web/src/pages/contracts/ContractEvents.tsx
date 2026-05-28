@@ -12,6 +12,7 @@ import {
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
+  truncateMiddle,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -40,11 +41,6 @@ function EventTypeBadge({ type }: { type: string }) {
   const label =
     type.length > 0 ? type.charAt(0).toUpperCase() + type.slice(1) : 'Unknown';
   return <Chip size="sm" color={color} label={label} />;
-}
-
-/** Middle-truncates long identifier-like strings; leaves short labels whole. */
-function shortStr(value: string): string {
-  return value.length > 14 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value;
 }
 
 /**
@@ -80,7 +76,7 @@ function TopicsCell({ topics }: { topics: readonly unknown[] }) {
           {index > 0 && ', '}
           {typeof topic === 'string' ? (
             <Box component="span" sx={{ color: 'text.success' }}>
-              {`"${shortStr(topic)}"`}
+              {`"${truncateMiddle(topic, { prefix: 4, suffix: 4 })}"`}
             </Box>
           ) : (
             JSON.stringify(topic) ?? String(topic)
@@ -104,7 +100,7 @@ function DataCell({ data }: { data: unknown }) {
   }, [data]);
   const display =
     typeof data === 'string' && data.length > 24
-      ? `${data.slice(0, 10)}…${data.slice(-10)}`
+      ? truncateMiddle(data, { prefix: 10, suffix: 10 })
       : full;
   return (
     <Typography

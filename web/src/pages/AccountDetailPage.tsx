@@ -3,10 +3,12 @@ import {
   CardSkeleton,
   classifyError,
   GenericErrorState,
+  getDefaultTruncation,
   isAccountId,
   isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
+  truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
@@ -17,11 +19,6 @@ import { AccountBalances } from './accounts/AccountBalances.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
 import { AccountTransactions } from './accounts/AccountTransactions.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
-
-/** `GDQP…EE36`-style short form for the breadcrumb crumb. */
-function shortId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
-}
 
 /**
  * Account detail page (`/accounts/:accountId`) — summary, balances, and a
@@ -66,7 +63,15 @@ export default function AccountDetailPage() {
     <Stack spacing={3}>
       <Box>
         <PageBreadcrumb
-          items={[{ label: 'Account' }, { label: shortId(accountId) }]}
+          items={[
+            { label: 'Account' },
+            {
+              label: truncateMiddle(
+                accountId,
+                getDefaultTruncation('account')
+              ),
+            },
+          ]}
         />
         <Typography variant="heading4SemiBold" component="h1">
           Account
