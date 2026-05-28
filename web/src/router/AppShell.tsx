@@ -156,6 +156,7 @@ export function AppShell() {
       <Box
         component="main"
         sx={{
+          position: 'relative',
           flex: 1,
           width: '100%',
           maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,

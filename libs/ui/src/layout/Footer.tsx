@@ -54,6 +54,8 @@ export function Footer({ logo, navItems }: FooterProps) {
     <Box
       component="footer"
       sx={(theme) => ({
+        position: 'relative',
+        zIndex: 1,
         width: '100%',
         backgroundColor: theme.palette.surface.backgroundAlt,
         borderTop: `1px solid ${theme.palette.stroke.default}`,
