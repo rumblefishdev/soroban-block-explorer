@@ -92,11 +92,13 @@ export function NftSummary({ nft }: NftSummaryProps) {
       {nft.minted_at_ledger != null && (
         <Row
           label="Minted at ledger"
-          // Plain Satoshi text per Figma — not a mono/linked identifier.
+          // Deviation from Figma's plain-text mock: linked like every other
+          // ledger reference in the app for consistency (F-EX-1, lore-0272).
           value={
-            <Typography variant="bodySmMedium">
-              {nft.minted_at_ledger.toLocaleString('en-US')}
-            </Typography>
+            <IdentifierDisplay
+              value={String(nft.minted_at_ledger)}
+              type="ledger"
+            />
           }
           last
         />

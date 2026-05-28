@@ -391,7 +391,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~30min
 - **Severity / Class:** 🟡 B
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** DONE
 
 **Rationale.** Wave 6 identified a handful of remaining unlinked identifiers not closed by the F-K-2/3 Gate B batch: NFT row contract ID, NFT detail contract ID in Details section, home table ledger hash, possibly E3 tx-detail ledger link. Plus account self-link (cosmetic) and Soroban call tree destination account routing verification.
 
@@ -399,14 +399,16 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-E10-3 — NFT row Contract ID is plain text
-- [ ] F-W6-E11-3 — Contract ID in NFT detail Details section is plain text
-- [ ] F-W6-E1-4 — Ledger hash on home table not a link
-- [ ] F-K-7 — E3 tx-detail ledger sequence link verification
-- [ ] F-K-8 — Soroban call tree destination account routing verification
-- [ ] F-EX-1 — NFT minted_at_ledger plain text (revisit Figma intent)
+- [x] F-W6-E10-3 — NFT row Contract ID is plain text → `IdentifierDisplay type="contract"` (NftsTable.tsx:45)
+- [x] F-W6-E11-3 — Contract ID in NFT detail Details section → `IdentifierWithCopy type="contract"` (NftSummary.tsx:76)
+- [x] F-W6-E1-4 — Ledger hash on home table → `IdentifierDisplay type="ledger"` (home/LedgersTable.tsx:36-42; sequence also linked :24-30)
+- [x] F-K-7 — E3 tx-detail ledger sequence link → `type="ledger"` (TransactionSummary.tsx:151-152)
+- [x] F-K-8 — Soroban call tree destination account → `IdentifierDisplay` in OperationFlowTree.tsx:151 (account/contract nodes linked)
+- [x] F-EX-1 — NFT minted_at_ledger → `IdentifierDisplay type="ledger"` (NftSummary.tsx:96) — **deliberate deviation from Figma**
 
-**Notes:** F-EX-1 needs Figma confirmation — comment says "Plain Satoshi text per Figma."
+**Notes:** The five listed findings verified RESOLVED against current code 2026-05-28 (E10-3, E11-3, E1-4 via 0257 merge; K-7, K-8 confirmed). F-EX-1 resolved per user 2026-05-28: the "Minted at ledger" value was plain Satoshi text per the Figma mock; user chose Option B — link it like every other ledger reference for consistency/utility (gold IdentifierDisplay, formatted with thousands separators). Documented Figma deviation; revisit with designer if they object.
+
+**Additional identifier-consistency sweep (lore-0272, 2026-05-28).** Beyond the listed Wave-6 findings, a full repo sweep found 7 ad-hoc entity links still using raw MUI `<Link component={RouterLink}>` instead of the canonical `IdentifierDisplay`. All converted (asset/ledger/nft type, gold-hover): asset-leg labels in PoolsTable / PoolSummary / PoolKpiStrip (tone="inherit"), asset code in AssetsTable, asset balance name in AccountBalances, NFT name in NftNameCell, and the "Since ledger" column in PoolParticipants. Visually verified on assets / pools list / nfts / pool detail / account detail. Legit navigation links (breadcrumbs, View-all, pager, logo, nav bar, external URLs, search-row wrapper) intentionally left as-is.
 
 ---
 

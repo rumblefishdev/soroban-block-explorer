@@ -7,7 +7,6 @@ import Tooltip from '@mui/material/Tooltip';
 import { styled } from '@mui/material/styles';
 
 const COPIED_DURATION_MS = 1500;
-const COPIED_ICON_COLOR = '#000000';
 
 const StyledButton = styled(IconButton, {
   shouldForwardProp: (prop) => prop !== 'copied',
@@ -16,7 +15,7 @@ const StyledButton = styled(IconButton, {
   borderRadius: 9999,
   width: 26,
   height: 26,
-  color: copied ? COPIED_ICON_COLOR : theme.palette.text.primary,
+  color: copied ? theme.palette.common.black : theme.palette.text.primary,
   backgroundColor: copied ? theme.palette.surface.primaryMain : 'transparent',
   transition: theme.transitions.create('background-color', {
     duration: theme.transitions.duration.shortest,

@@ -1,7 +1,9 @@
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
-import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
+import {
+  IdentifierDisplay,
+  IdentifierWithCopy,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -24,14 +26,7 @@ function AssetReserveCell({
   href,
 }: AssetReserveCellProps) {
   const codeNode = href ? (
-    <Link
-      component={RouterLink}
-      to={href}
-      variant="bodySmRegular"
-      sx={{ color: 'text.primary' }}
-    >
-      {code}
-    </Link>
+    <IdentifierDisplay value={code} type="asset" truncate={false} href={href} />
   ) : (
     <Typography component="span" variant="bodySmRegular">
       {code}

@@ -29,13 +29,6 @@ import {
 const INT_TYPE = /^[iu](8|16|32|64|128|256)$/;
 
 /**
- * Blue for reference / struct types (`Address`, `Symbol`, custom). The DS
- * has no `text` blue token, so this mirrors the design-system blue/600 —
- * the same value the Chip `color="blue"` variant renders.
- */
-const TYPE_REF_COLOR = '#155dfc';
-
-/**
  * Syntax colour for a Soroban type token, matching the Figma interface
  * panel.
  *
@@ -56,7 +49,9 @@ function typeColor(
   if (position === 'return') return theme.palette.text.accent;
   if (type === 'bool') return theme.palette.text.accent;
   if (INT_TYPE.test(type)) return theme.palette.text.success;
-  return TYPE_REF_COLOR;
+  // Reference / struct types (Address, Symbol, custom) — DS blue/600,
+  // matching the Chip color="blue" variant.
+  return theme.palette.blue[600];
 }
 
 /** Syntax-coloured type token. */
