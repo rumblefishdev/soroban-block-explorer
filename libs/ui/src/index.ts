@@ -86,9 +86,6 @@ export {
   type FooterProps,
   type FooterNavItem,
   PageGridBackdrop,
-  NetworkToggle,
-  Network,
-  type NetworkToggleProps,
 } from './layout/index.js';
 
 export {

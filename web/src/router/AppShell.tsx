@@ -9,7 +9,6 @@ import {
   PageGridBackdrop,
   grid,
   type NavItem,
-  Network,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useNetworkStats } from '../api/index.js';
@@ -83,8 +82,6 @@ export function AppShell() {
   const [searchValue, setSearchValue] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const [network, setNetwork] = useState<Network>(Network.MAINNET);
-
   const enterHandlerRef = useRef<() => boolean>(() => false);
 
   const isHome = pathname === routes.home;
@@ -141,8 +138,6 @@ export function AppShell() {
       {!isHome && (
         <TopNav
           stats={stats}
-          network={network}
-          onNetworkChange={setNetwork}
           searchValue={searchValue}
           onSearchChange={handleSearchChange}
           onSearchSubmit={handleSearchSubmit}

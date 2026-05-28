@@ -4,7 +4,6 @@ import type { ReactNode } from 'react';
 
 import { grid } from '../theme/grid.js';
 import { monoFontFamily } from '../theme/typography.js';
-import { NetworkToggle, type Network } from './NetworkToggle.js';
 import { SearchInput } from './SearchInput.js';
 
 /**
@@ -26,8 +25,6 @@ export interface TopNavProps {
    *  fallback so callers don't ship visually-misleading hard-coded
    *  zeros. */
   stats?: NetworkStats;
-  network: Network;
-  onNetworkChange?: (next: Network) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -88,8 +85,6 @@ function formatNumber(n: number): string {
 
 export function TopNav({
   stats,
-  network,
-  onNetworkChange,
   searchValue,
   onSearchChange,
   onSearchSubmit,
@@ -132,8 +127,6 @@ export function TopNav({
           minWidth={0}
           overflow="hidden"
         >
-          <NetworkToggle network={network} onNetworkChange={onNetworkChange} />
-
           <Box
             sx={{
               display: { xs: 'none', md: 'flex' },
