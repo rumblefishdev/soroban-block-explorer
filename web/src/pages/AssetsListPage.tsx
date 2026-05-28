@@ -7,13 +7,14 @@ import {
   GenericErrorState,
   PaginationControls,
   RateLimitState,
+  type SortDirection,
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import { useAssetsList } from '../api/index.js';
 
@@ -29,12 +30,14 @@ const PAGE_SIZE = 20;
  * contract, with asset-code search and an asset-type filter. Cursor paginated.
  */
 export default function AssetsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['code', 'type'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, reset } =
+    useCursorPagination({
+      filterKeys: ['code', 'type'],
+    });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
+  const [sortDir, setSortDir] = useState<SortDirection>('desc');
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
@@ -45,7 +48,17 @@ export default function AssetsListPage() {
 
   const { data, isLoading, isError, error, refetch } = useAssetsList(
     cursor,
-    queryFilters
+    queryFilters,
+    sortDir
+  );
+
+  const handleSortChange = useCallback(
+    (next: SortDirection) => {
+      setSortDir(next);
+
+      reset();
+    },
+    [reset]
   );
 
   const rows = data?.data ?? [];
@@ -109,16 +122,22 @@ export default function AssetsListPage() {
       </Box>
     );
   } else {
-    body = <AssetsTable rows={rows} />;
+    body = (
+      <AssetsTable
+        rows={rows}
+        sortDir={sortDir}
+        onSortChange={handleSortChange}
+      />
+    );
   }
 
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="heading3SemiBold" component="h1">
+        <Typography variant="heading4SemiBold" component="h1">
           Assets
         </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
+        <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
           All classic assets and Soroban token contracts on the Stellar network
         </Typography>
       </Box>
@@ -130,7 +149,7 @@ export default function AssetsListPage() {
           onSearchChange={handleSearchChange}
           onTypeChange={handleTypeChange}
         />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+        <Box>{body}</Box>
         <PaginationControls
           caption="Latest results"
           canPrev={canPrev}

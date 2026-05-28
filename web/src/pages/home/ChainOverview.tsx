@@ -40,14 +40,24 @@ export function ChainOverview() {
     );
   } else {
     content = (
-      <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' },
+          alignItems: 'stretch',
+        }}
+      >
         <ChainOverviewCard
           label={<LiveIndicator />}
           value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
           caption="Current ledger"
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
+        <Divider
+          orientation="vertical"
+          flexItem
+          sx={{ display: { xs: 'none', md: 'block' } }}
+        />
         <ChainOverviewCard
           label="TPS"
           value={data ? data.tps_60s.toFixed(1) : undefined}
@@ -55,14 +65,22 @@ export function ChainOverview() {
           accentValue
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
+        <Divider
+          orientation="vertical"
+          flexItem
+          sx={{ display: { xs: 'none', md: 'block' } }}
+        />
         <ChainOverviewCard
           label="Accounts"
           value={data ? formatAmount(data.total_accounts) : undefined}
           caption="Total"
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
+        <Divider
+          orientation="vertical"
+          flexItem
+          sx={{ display: { xs: 'none', md: 'block' } }}
+        />
         <ChainOverviewCard
           label="Contracts"
           value={data ? formatAmount(data.total_contracts) : undefined}
@@ -74,13 +92,11 @@ export function ChainOverview() {
   }
 
   return (
-    <Box sx={{ px: 10 }}>
+    <Box sx={{ display: 'flex', justifyContent: 'center' }}>
       <Box
         sx={(theme) => ({
+          width: '100%',
           maxWidth: 1064,
-          mx: 'auto',
-          // Exact Figma panel (node 4:2727): 16px radius, 80%-opaque
-          // surface so the hero glow shows through, 6px backdrop blur.
           borderRadius: '16px',
           border: `1px solid ${theme.palette.stroke.default}`,
           backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),

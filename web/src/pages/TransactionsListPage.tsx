@@ -126,7 +126,7 @@ export default function TransactionsListPage() {
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="heading5SemiBold" component="h1">
+        <Typography variant="heading4SemiBold" component="h1">
           Transactions list
         </Typography>
         <Typography

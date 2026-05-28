@@ -108,10 +108,10 @@ export default function NftsListPage() {
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="heading3SemiBold" component="h1">
+        <Typography variant="heading4SemiBold" component="h1">
           NFTs
         </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
+        <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
           Soroban-based NFT contracts on the Stellar network
         </Typography>
       </Box>
@@ -123,7 +123,7 @@ export default function NftsListPage() {
           onCollectionChange={(v) => setFilter('collection', v || null)}
           onContractIdChange={(v) => setFilter('contract', v || null)}
         />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+        <Box>{body}</Box>
         <PaginationControls
           caption="Latest results"
           canPrev={canPrev}

@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 export interface SummaryCell {
   label: string;
   value: ReactNode;
+
+  labelMinWidth?: number;
 }
 
 /**
@@ -19,7 +21,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
         backgroundColor: theme.palette.surface.grayMain,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         '&:last-of-type': { borderBottom: 'none' },
-        minHeight: 60,
+        minHeight: 44,
       })}
     >
       {cells.map((cell, index) => (
@@ -35,7 +37,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
             flex: 1,
             minWidth: 0,
             px: 2,
-            py: 1.25,
+            py: 0.75,
             alignItems: 'center',
           }}
         >
@@ -43,7 +45,8 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
             variant="bodySmRegular"
             sx={(theme) => ({
               color: theme.palette.text.primary,
-              minWidth: 140,
+
+              minWidth: { xs: 'auto', sm: cell.labelMinWidth ?? 140 },
               flexShrink: 0,
             })}
           >

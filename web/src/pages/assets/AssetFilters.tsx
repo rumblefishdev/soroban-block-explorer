@@ -1,5 +1,5 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, InputAdornment, Stack, TextField } from '@mui/material';
+import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
 import { Chip } from '@rumblefish/soroban-block-explorer-ui';
 import { useEffect, useState } from 'react';
 
@@ -43,9 +43,11 @@ export function AssetFilters({
       sx={(theme) => ({
         display: 'flex',
         flexWrap: 'wrap',
+        alignItems: 'center',
         gap: 2,
         p: 2,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
+        bgcolor: theme.palette.surface.grayMainAlt,
       })}
     >
       <TextField
@@ -53,7 +55,7 @@ export function AssetFilters({
         onChange={(e) => setDraft(e.target.value)}
         placeholder="Search by asset code..."
         aria-label="Search by asset code"
-        sx={{ flex: 1, minWidth: 240 }}
+        sx={{ width: { xs: '100%', sm: 320 } }}
         slotProps={{
           input: {
             startAdornment: (
@@ -64,6 +66,11 @@ export function AssetFilters({
           },
         }}
       />
+      <Divider
+        orientation="vertical"
+        flexItem
+        sx={{ display: { xs: 'none', sm: 'block' }, my: 0.5 }}
+      />
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         {ASSET_TYPE_FILTERS.map((option) => {
           const active = option.value === type;
@@ -71,7 +78,7 @@ export function AssetFilters({
             <Chip
               key={option.value}
               label={option.label}
-              size="md"
+              size="lg"
               color={active ? 'accent' : 'neutral'}
               clickable
               onClick={() => onTypeChange(option.value)}

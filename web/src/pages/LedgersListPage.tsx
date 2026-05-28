@@ -4,21 +4,35 @@ import {
   GenericErrorState,
   PaginationControls,
   RateLimitState,
+  type SortDirection,
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { type ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 
 import { useLedgersList } from '../api/index.js';
 
 import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
-  const { cursor, goNext, goPrev } = useCursorPagination();
-  const { data, isLoading, isError, error, refetch } = useLedgersList(cursor);
+  const { cursor, goNext, goPrev, reset } = useCursorPagination();
+  const [sortDir, setSortDir] = useState<SortDirection>('desc');
+  const { data, isLoading, isError, error, refetch } = useLedgersList(
+    cursor,
+    sortDir
+  );
+
+  const handleSortChange = useCallback(
+    (next: SortDirection) => {
+      setSortDir(next);
+
+      reset();
+    },
+    [reset]
+  );
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -55,22 +69,28 @@ export default function LedgersListPage() {
       </Box>
     );
   } else {
-    body = <LedgersTable rows={rows} />;
+    body = (
+      <LedgersTable
+        rows={rows}
+        sortDir={sortDir}
+        onSortChange={handleSortChange}
+      />
+    );
   }
 
   return (
     <Stack spacing={3}>
       <Box>
-        <Typography variant="heading3SemiBold" component="h1">
+        <Typography variant="heading4SemiBold" component="h1">
           Ledgers
         </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
+        <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
           All indexed ledgers on the Stellar network
         </Typography>
       </Box>
 
       <Card>
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+        <Box>{body}</Box>
         <PaginationControls
           caption="Latest results"
           canPrev={canPrev}
