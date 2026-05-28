@@ -96,7 +96,11 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
               />
             ),
           },
-          { label: 'Holders', value: formatAmount(asset.holder_count) },
+          {
+            label: 'Holders',
+            value: formatAmount(asset.holder_count),
+            labelMinWidth: 70,
+          },
         ]}
       />
       {asset.deployed_at_ledger != null && (

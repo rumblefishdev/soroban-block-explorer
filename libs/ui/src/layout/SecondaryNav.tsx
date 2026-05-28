@@ -30,6 +30,9 @@ export function SecondaryNav({
         width: '100%',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMain,
+
+        position: 'relative',
+        zIndex: 2,
       })}
     >
       <Box
@@ -40,19 +43,36 @@ export function SecondaryNav({
           width: '100%',
           maxWidth: grid.desktop.maxWidth,
           mx: 'auto',
-          px: `${grid.desktop.margin}px`,
+          px: {
+            xs: `${grid.mobile.margin}px`,
+            md: `${grid.desktop.margin}px`,
+          },
           py: 1,
+          gap: 2,
         }}
       >
-        <Box sx={{ height: 32, display: 'flex', alignItems: 'center' }}>
+        <Box
+          sx={{
+            height: 32,
+            display: 'flex',
+            alignItems: 'center',
+            flexShrink: 0,
+          }}
+        >
           {logo}
         </Box>
 
         <Box
           display="flex"
           alignItems="stretch"
-          sx={{ alignSelf: 'stretch' }}
           gap={1}
+          sx={{
+            alignSelf: 'stretch',
+            minWidth: 0,
+            overflowX: { xs: 'auto', md: 'visible' },
+            scrollbarWidth: 'none',
+            '&::-webkit-scrollbar': { display: 'none' },
+          }}
         >
           {navItems.map((item) => (
             <NavButton

@@ -58,55 +58,57 @@ export function EventsSection({
           </Typography>
         </Box>
       ) : (
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ width: 130 }}>Type</TableCell>
-              <TableCell sx={{ width: 200 }}>Contract</TableCell>
-              <TableCell>Topics</TableCell>
-              <TableCell>Data</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {merged.map((event) => (
-              <TableRow key={`${event.kind}-${event.event_index}`}>
-                <TableCell sx={{ verticalAlign: 'top' }}>
-                  <Chip
-                    size="sm"
-                    color={event.kind === 'contract' ? 'blue' : 'neutral'}
-                    label={
-                      event.kind === 'contract' ? 'Contract' : 'Diagnostic'
-                    }
-                  />
-                </TableCell>
-                <TableCell sx={{ verticalAlign: 'top' }}>
-                  {event.contract_id != null ? (
-                    <Typography
-                      component="span"
-                      variant="bodyMonoSmMedium"
-                      sx={(theme) => ({ color: theme.palette.text.primary })}
-                    >
-                      {shortenStrKey(event.contract_id)}
-                    </Typography>
-                  ) : (
-                    <Typography
-                      component="span"
-                      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                    >
-                      —
-                    </Typography>
-                  )}
-                </TableCell>
-                <TableCell sx={{ verticalAlign: 'top' }}>
-                  <HighlightedJson value={event.topics} />
-                </TableCell>
-                <TableCell sx={{ verticalAlign: 'top' }}>
-                  <HighlightedJson value={event.data} />
-                </TableCell>
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ width: 130 }}>Type</TableCell>
+                <TableCell sx={{ width: 200 }}>Contract</TableCell>
+                <TableCell>Topics</TableCell>
+                <TableCell>Data</TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {merged.map((event) => (
+                <TableRow key={`${event.kind}-${event.event_index}`}>
+                  <TableCell sx={{ verticalAlign: 'top' }}>
+                    <Chip
+                      size="sm"
+                      color={event.kind === 'contract' ? 'blue' : 'neutral'}
+                      label={
+                        event.kind === 'contract' ? 'Contract' : 'Diagnostic'
+                      }
+                    />
+                  </TableCell>
+                  <TableCell sx={{ verticalAlign: 'top' }}>
+                    {event.contract_id != null ? (
+                      <Typography
+                        component="span"
+                        variant="bodyMonoSmMedium"
+                        sx={(theme) => ({ color: theme.palette.text.primary })}
+                      >
+                        {shortenStrKey(event.contract_id)}
+                      </Typography>
+                    ) : (
+                      <Typography
+                        component="span"
+                        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                      >
+                        —
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell sx={{ verticalAlign: 'top' }}>
+                    <HighlightedJson value={event.topics} compact />
+                  </TableCell>
+                  <TableCell sx={{ verticalAlign: 'top' }}>
+                    <HighlightedJson value={event.data} compact />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
       )}
     </SectionCard>
   );

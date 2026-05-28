@@ -22,13 +22,18 @@ export function HomeHero() {
   };
 
   return (
-    <Box sx={{ px: 10, pt: 8, pb: 6 }}>
-      <Stack spacing={3} alignItems="center" sx={{ maxWidth: 632, mx: 'auto' }}>
+    <Box sx={{ pt: 8, pb: 5 }}>
+      <Stack spacing={4} alignItems="center">
         <Stack spacing={1.5} alignItems="center">
           <Typography
             variant="heading1Bold"
             component="h1"
-            sx={{ textAlign: 'center', lineHeight: 1.15 }}
+            sx={{
+              textAlign: 'center',
+              lineHeight: 1.15,
+
+              fontSize: { xs: 36, sm: 48, md: 60 },
+            }}
           >
             <Box component="span" sx={{ color: 'text.accent' }}>
               Soroban
@@ -42,13 +47,18 @@ export function HomeHero() {
           </Typography>
           <Typography
             variant="bodyRegular"
-            sx={{ textAlign: 'center', color: 'text.secondary' }}
+            sx={{
+              textAlign: 'center',
+              color: 'text.secondary',
+
+              whiteSpace: { xs: 'normal', md: 'nowrap' },
+            }}
           >
             Built for the Soroban era — smart contracts, payments, NFTs,
             liquidity pools, all decoded.
           </Typography>
         </Stack>
-        <Box sx={{ width: '100%' }}>
+        <Box sx={{ width: '100%', maxWidth: 632 }}>
           <HeroSearch value={value} onChange={setValue} onSubmit={submit} />
         </Box>
       </Stack>

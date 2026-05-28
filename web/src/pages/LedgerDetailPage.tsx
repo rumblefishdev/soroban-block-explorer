@@ -113,7 +113,7 @@ export default function LedgerDetailPage() {
             flexWrap: 'wrap',
           }}
         >
-          <Typography variant="heading3SemiBold" component="h1">
+          <Typography variant="heading4SemiBold" component="h1">
             Ledger {sequenceLabel}
           </Typography>
           <LedgerNav

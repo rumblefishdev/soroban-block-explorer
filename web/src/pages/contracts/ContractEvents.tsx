@@ -25,9 +25,9 @@ import { TransactionTime } from '../transactions/TransactionTime.js';
 type EventRow = PaginatedEventItem['data'][number];
 
 // Chip colour per `event_type`, matching the Figma events table: contract
-// blue, system brown, diagnostic grey. `/contracts/:id/events` only ever
-// returns `contract` and `system` (the diagnostic container is dropped
-// server-side, task 0182) — `diagnostic` is mapped defensively anyway.
+// blue, system brown (amber/cream), diagnostic grey. `/contracts/:id/events`
+// only ever returns `contract` and `system` (the diagnostic container is
+// dropped server-side, task 0182) — `diagnostic` is mapped defensively.
 const EVENT_TYPE_COLOR: Record<string, ChipProps['color']> = {
   contract: 'blue',
   system: 'brown',

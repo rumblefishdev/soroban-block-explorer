@@ -150,7 +150,7 @@ export default function NftDetailPage() {
 
         <Stack spacing={2} sx={{ flex: 1, minWidth: 320 }}>
           <Box>
-            <Typography variant="heading5SemiBold" component="h1">
+            <Typography variant="heading4SemiBold" component="h1">
               {title}
             </Typography>
             {collectionLine}

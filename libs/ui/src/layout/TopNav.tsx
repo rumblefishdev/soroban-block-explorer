@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { grid } from '../theme/grid.js';
 import { monoFontFamily } from '../theme/typography.js';
+import { NetworkToggle, type Network } from './NetworkToggle.js';
 import { SearchInput } from './SearchInput.js';
 
 /**
@@ -25,6 +26,8 @@ export interface TopNavProps {
    *  fallback so callers don't ship visually-misleading hard-coded
    *  zeros. */
   stats?: NetworkStats;
+  network: Network;
+  onNetworkChange?: (next: Network) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -85,6 +88,8 @@ function formatNumber(n: number): string {
 
 export function TopNav({
   stats,
+  network,
+  onNetworkChange,
   searchValue,
   onSearchChange,
   onSearchSubmit,
@@ -98,6 +103,9 @@ export function TopNav({
         width: '100%',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.backgroundAlt,
+
+        position: 'relative',
+        zIndex: 2,
       })}
     >
       <Box
@@ -108,8 +116,12 @@ export function TopNav({
           width: '100%',
           maxWidth: grid.desktop.maxWidth,
           mx: 'auto',
-          px: `${grid.desktop.margin}px`,
+          px: {
+            xs: `${grid.mobile.margin}px`,
+            md: `${grid.desktop.margin}px`,
+          },
           py: 1,
+          gap: 1,
         }}
       >
         <Box
@@ -120,12 +132,16 @@ export function TopNav({
           minWidth={0}
           overflow="hidden"
         >
+          <NetworkToggle network={network} onNetworkChange={onNetworkChange} />
+
           <Box
-            display="flex"
-            alignItems="center"
-            gap={1.5}
-            minWidth={0}
-            overflow="hidden"
+            sx={{
+              display: { xs: 'none', md: 'flex' },
+              alignItems: 'center',
+              gap: 1.5,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
           >
             <Stat
               label="TPS"
@@ -150,7 +166,7 @@ export function TopNav({
           </Box>
         </Box>
 
-        <Box sx={{ position: 'relative', flexShrink: 0 }}>
+        <Box sx={{ position: 'relative', flexShrink: 0, minWidth: 0 }}>
           <SearchInput
             value={searchValue}
             onChange={onSearchChange}
@@ -164,7 +180,8 @@ export function TopNav({
                 top: '100%',
                 right: 0,
                 mt: 0.5,
-                width: 628,
+                width: { xs: 'calc(100vw - 32px)', md: 628 },
+                maxWidth: 628,
                 zIndex: theme.zIndex.modal,
               })}
             >

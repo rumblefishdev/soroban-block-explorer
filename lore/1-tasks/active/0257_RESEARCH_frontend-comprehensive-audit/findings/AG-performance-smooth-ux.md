@@ -77,3 +77,15 @@ Per F-W6-E0-5: header `HeaderStatsStrip` polls `/network/stats` and home main al
 ## Summary
 
 5 medium-or-higher new findings + 4 already-tracked confirmations. Major perf risks unchanged from Wave 1 (bundle size). New observations: transition properties not GPU-accelerated; no route transition indicator. Defer all to Phase 3 perf-batch task.
+
+## design_parity update 2026-05-27 (06ab34cc)
+
+Source: `design-parity-impact-2026-05-27.md` §4 + §Regressions. Maps to queue cards **7.1** (transitions) + **4.1** (bundle) + **11.4** (OperationFlowTree regression).
+
+- **F-W6-AG-3 (non-GPU transitions): UNCHANGED / slight NEG.** `06ab34cc` adds NetworkToggle, the new ExplorerTable sort caret, and Tabs — all using `background-color`/`color`/`border-color` transitions (non-GPU). No move to transform/opacity. The new components ADD more non-GPU transitions rather than reduce them.
+- **F-W6-AG-4 (150/200ms hover at edge): UNCHANGED.** New transitions are 0.15s (150ms) — same edge value.
+- **F-W6-AG-5 (no route-transition indicator): UNCHANGED.** Not added by `06ab34cc`.
+- **Bundle (F-W6-AG-1/2 / card 4.1): slight NEG, no status change.** No manualChunks / lazy LP chart added. NEW assets `soroban-logo.webp` (~2.9KB) + the `NetworkToggle` component add a little to the main bundle. No visualizer.
+- **OperationFlowTree (NEW regression F-DP-4 — card 11.4):** the `06ab34cc` rewrite **removed** `OperationFlowTree`'s `useState` + `Collapse` + expand chevron (the one site this file noted at line 209 as the _only_ GPU `transform` transition). Trees now render flat with dashed sibling connectors. If collapse was intended UX for deep Soroban call trees this is a functional regression; if Figma specifies flat, it's intended — **verify vs Figma / with designer** (card 11.4). Note: this also removes the single `transform`-based transition cited in F-W6-AG-3, marginally worsening the non-GPU ratio.
+
+Cross-ref: `design-parity-impact-2026-05-27.md`; F-DP-4 (appendix); cards 7.1 + 4.1 + 11.4.

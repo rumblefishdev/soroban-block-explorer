@@ -1,9 +1,7 @@
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import { Box, Collapse, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
-import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { Fragment, type ReactNode } from 'react';
 
 import { IdentifierDisplay } from '../identifiers/IdentifierDisplay.js';
 import type { EntityType } from '../identifiers/types.js';
@@ -94,25 +92,32 @@ function FlowConnector({ label }: { label: ReactNode }) {
       direction="row"
       spacing={0.5}
       alignItems="center"
-      sx={{ py: 1, pl: 0.5 }}
+      sx={{ py: 1, pl: 2 }}
     >
-      <ArrowDownwardIcon
-        sx={(theme) => ({ fontSize: 14, color: theme.palette.text.tertiary })}
-      />
-      <Typography
-        variant="bodyXsMedium"
-        sx={(theme) => ({ color: theme.palette.text.tertiary })}
-      >
-        {label}
-      </Typography>
+      <ArrowDownwardIcon sx={{ fontSize: 14 }} />
+      <Typography variant="bodyXsRegular">{label}</Typography>
     </Stack>
+  );
+}
+
+function SiblingDashedConnector() {
+  return (
+    <Box
+      aria-hidden
+      sx={(theme) => ({
+        alignSelf: 'flex-start',
+        width: 0,
+        height: 24,
+        ml: 2,
+        borderLeft: `1px dashed ${theme.palette.stroke.default}`,
+      })}
+    />
   );
 }
 
 function FlowNodeCard({ node }: { node: FlowNode }) {
   const children = node.children ?? [];
   const hasChildren = children.length > 0;
-  const [expanded, setExpanded] = useState(node.defaultExpanded ?? true);
 
   return (
     <Box>
@@ -129,112 +134,79 @@ function FlowNodeCard({ node }: { node: FlowNode }) {
           };
         }}
       >
-        <Stack
-          direction="row"
-          alignItems="flex-start"
-          justifyContent="space-between"
-          spacing={1}
-        >
-          <Stack spacing={0.5} sx={{ minWidth: 0 }}>
-            <Typography variant="heading6SemiBold" sx={{ color: 'inherit' }}>
-              {node.title}
-            </Typography>
-            {(node.identifier || node.detail !== undefined) && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 0.75,
-                  flexWrap: 'wrap',
-                }}
-              >
-                {node.identifier && (
-                  <IdentifierDisplay
-                    value={node.identifier.value}
-                    type={node.identifier.type}
-                    tone="inherit"
-                  />
-                )}
-                {node.detail !== undefined && (
-                  <Typography
-                    component="span"
-                    sx={{
-                      fontFamily: monoFontFamily,
-                      fontSize: 14,
-                      color: 'inherit',
-                    }}
-                  >
-                    {node.detail}
-                  </Typography>
-                )}
-              </Box>
-            )}
-            {node.summary !== undefined && (
-              <Typography
-                variant="bodySmRegular"
-                sx={{ color: 'inherit', opacity: 0.85 }}
-              >
-                {node.summary}
-              </Typography>
-            )}
-          </Stack>
-          {hasChildren && (
+        <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+          <Typography variant="heading6SemiBold" sx={{ color: 'inherit' }}>
+            {node.title}
+          </Typography>
+          {(node.identifier || node.detail !== undefined) && (
             <Box
-              component="button"
-              type="button"
-              aria-expanded={expanded}
-              aria-label={
-                expanded ? 'Collapse nested calls' : 'Expand nested calls'
-              }
-              onClick={() => setExpanded((value) => !value)}
-              sx={(theme) => ({
-                display: 'inline-flex',
-                p: 0.25,
-                m: 0,
-                border: 'none',
-                background: 'transparent',
-                color: 'inherit',
-                cursor: 'pointer',
-                borderRadius: `${theme.shape.radius.xs}px`,
-                flexShrink: 0,
-                '&:focus-visible': {
-                  outline: '2px solid currentColor',
-                  outlineOffset: 2,
-                },
-              })}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                flexWrap: 'wrap',
+              }}
             >
-              <KeyboardArrowDownIcon
-                sx={{
-                  fontSize: 20,
-                  transition: 'transform 150ms ease',
-                  transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                }}
-              />
+              {node.identifier && (
+                <IdentifierDisplay
+                  value={node.identifier.value}
+                  type={node.identifier.type}
+                  tone="inherit"
+                />
+              )}
+              {node.detail !== undefined && (
+                <Typography
+                  component="span"
+                  sx={{
+                    fontFamily: monoFontFamily,
+                    fontSize: 14,
+                    color: 'inherit',
+                  }}
+                >
+                  {node.detail}
+                </Typography>
+              )}
             </Box>
+          )}
+          {node.summary !== undefined && (
+            <Typography
+              variant="bodySmRegular"
+              sx={{ color: 'inherit', opacity: 0.85 }}
+            >
+              {node.summary}
+            </Typography>
           )}
         </Stack>
       </Box>
       {hasChildren && (
-        <Collapse in={expanded} unmountOnExit>
-          <Box
-            sx={(theme) => ({
-              ml: 2,
-              pl: 2,
-              pb: 2,
-              borderLeft: `1px dashed ${theme.palette.stroke.default}`,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1.5,
-            })}
-          >
-            {children.map((child) => (
-              <FlowNodeBlock key={child.id} node={child} />
-            ))}
-          </Box>
-        </Collapse>
+        <Box
+          sx={(theme) => ({
+            ml: 2,
+            pl: 2,
+            pb: 2,
+            borderLeft: `1px dashed ${theme.palette.stroke.default}`,
+            display: 'flex',
+            flexDirection: 'column',
+          })}
+        >
+          {renderNodeList(children)}
+        </Box>
       )}
     </Box>
   );
+}
+
+function renderNodeList(nodes: readonly FlowNode[]): ReactNode {
+  return nodes.map((node, index) => {
+    const needsSiblingConnector =
+      index > 0 && node.connectorLabel === undefined;
+    return (
+      <Fragment key={node.id}>
+        {needsSiblingConnector && <SiblingDashedConnector />}
+        <FlowNodeBlock node={node} />
+      </Fragment>
+    );
+  });
 }
 
 function FlowNodeBlock({ node }: { node: FlowNode }) {
@@ -256,11 +228,5 @@ function FlowNodeBlock({ node }: { node: FlowNode }) {
  * (`operation_tree` / `invocations`) into `FlowNode`s.
  */
 export function OperationFlowTree({ nodes }: OperationFlowTreeProps) {
-  return (
-    <Box>
-      {nodes.map((node) => (
-        <FlowNodeBlock key={node.id} node={node} />
-      ))}
-    </Box>
-  );
+  return <Box>{renderNodeList(nodes)}</Box>;
 }

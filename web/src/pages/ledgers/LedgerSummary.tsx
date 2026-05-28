@@ -34,10 +34,25 @@ function BaseFee({ stroops }: { stroops: number }) {
 
 function Cell({ label, value }: SummaryCell) {
   return (
-    <Box sx={{ display: 'flex', flex: 1, minWidth: 0, gap: 2, px: 2, py: 1.5 }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flex: 1,
+        minWidth: 0,
+        gap: 2,
+        px: 2,
+        py: 1.5,
+
+        alignItems: 'center',
+      }}
+    >
       <Typography
         variant="bodySmRegular"
-        sx={{ color: 'text.secondary', width: 160, flexShrink: 0 }}
+        sx={{
+          color: 'text.secondary',
+          width: { xs: 'auto', sm: 160 },
+          flexShrink: 0,
+        }}
       >
         {label}
       </Typography>
@@ -51,6 +66,7 @@ function Row({ cells, alt }: { cells: SummaryCell[]; alt: boolean }) {
     <Box
       sx={(theme) => ({
         display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
         backgroundColor: alt
           ? theme.palette.surface.grayMainAlt
           : theme.palette.surface.grayMain,

@@ -58,30 +58,29 @@ export function LatestLedgers() {
   }
 
   return (
-    <Box sx={{ px: 10 }}>
-      <Card>
-        <TableSectionHeader
-          title="Latest Ledgers"
-          badge={<LiveIndicator />}
-          action={<ViewAllLink to={routes.ledgers} />}
-        />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
-        <Box
-          sx={{
-            px: 2,
-            py: 1.5,
-            borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
-          }}
+    <Card>
+      <TableSectionHeader
+        title="Latest Ledgers"
+        badge={<LiveIndicator />}
+        action={<ViewAllLink to={routes.ledgers} />}
+      />
+      <Box>{body}</Box>
+      <Box
+        sx={{
+          px: 2,
+          py: 1.5,
+          borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+          backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
+        }}
+      >
+        <Typography
+          component="span"
+          variant="bodySmRegular"
+          sx={{ color: 'text.tertiary' }}
         >
-          <Typography
-            component="span"
-            variant="bodySmRegular"
-            sx={{ color: 'text.tertiary' }}
-          >
-            Latest {rows.length} results
-          </Typography>
-        </Box>
-      </Card>
-    </Box>
+          {rows.length} latest records
+        </Typography>
+      </Box>
+    </Card>
   );
 }

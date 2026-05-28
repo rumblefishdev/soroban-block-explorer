@@ -1,14 +1,13 @@
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import {
   Box,
+  ButtonBase,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  TableSortLabel,
 } from '@mui/material';
 import type { ReactNode } from 'react';
 
@@ -33,6 +32,74 @@ export interface ExplorerTableProps<T> {
   emptyState?: ReactNode;
 }
 
+interface SortableHeaderProps {
+  label: ReactNode;
+  isSorted: boolean;
+  direction: SortDirection;
+  align: 'left' | 'right' | 'center';
+  onClick: () => void;
+}
+
+function SortableHeader({
+  label,
+  isSorted,
+  direction,
+  align,
+  onClick,
+}: SortableHeaderProps) {
+  return (
+    <ButtonBase
+      onClick={onClick}
+      sx={(theme) => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 0.75,
+        justifyContent:
+          align === 'right'
+            ? 'flex-end'
+            : align === 'center'
+            ? 'center'
+            : 'flex-start',
+        color: theme.palette.text.primary,
+        '&:focus-visible': {
+          outline: `2px solid ${theme.palette.stroke.action}`,
+          outlineOffset: 2,
+          borderRadius: `${theme.shape.radius.xs}px`,
+        },
+      })}
+    >
+      {label}
+      <Box
+        component="span"
+        sx={(theme) => ({
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 20,
+          height: 20,
+          borderRadius: '50%',
+          flexShrink: 0,
+          backgroundColor: isSorted
+            ? theme.palette.surface.primaryMain
+            : theme.palette.surface.grayLight,
+          color: isSorted
+            ? theme.palette.common.black
+            : theme.palette.text.tertiary,
+          transition: 'background-color 0.15s, color 0.15s',
+        })}
+      >
+        <KeyboardArrowDownIcon
+          sx={{
+            fontSize: 14,
+            transition: 'transform 150ms ease',
+            transform: direction === 'asc' ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+        />
+      </Box>
+    </ButtonBase>
+  );
+}
+
 export function ExplorerTable<T>({
   columns,
   rows,
@@ -44,11 +111,14 @@ export function ExplorerTable<T>({
 }: ExplorerTableProps<T>) {
   const isEmpty = rows.length === 0;
   return (
-    <TableContainer>
+    <TableContainer
+      sx={{
+        overflowX: 'auto',
+      }}
+    >
       <Table>
         <TableHead
           sx={(theme) => ({
-            // Table header sits on the darkest surface (Figma).
             backgroundColor: theme.palette.surface.backgroundAlt,
           })}
         >
@@ -63,30 +133,17 @@ export function ExplorerTable<T>({
                   sortDirection={isSorted ? sortDir : false}
                 >
                   {col.sortable ? (
-                    // Unsorted columns show a neutral CaretUpDown; the
-                    // sorted column swaps to a directional caret that
-                    // MUI rotates for asc/desc.
-                    <TableSortLabel
-                      active={isSorted}
+                    <SortableHeader
+                      label={col.header}
+                      isSorted={isSorted}
                       direction={isSorted ? sortDir : 'desc'}
+                      align={col.align ?? 'left'}
                       onClick={() => {
                         const next: SortDirection =
                           isSorted && sortDir === 'desc' ? 'asc' : 'desc';
                         onSortChange?.(col.id, next);
                       }}
-                      IconComponent={
-                        isSorted ? KeyboardArrowDownIcon : UnfoldMoreIcon
-                      }
-                      sx={(theme) => ({
-                        '& .MuiTableSortLabel-icon': {
-                          fontSize: 12,
-                          opacity: isSorted ? 1 : 0.5,
-                          color: theme.palette.text.primary,
-                        },
-                      })}
-                    >
-                      {col.header}
-                    </TableSortLabel>
+                    />
                   ) : (
                     col.header
                   )}
@@ -132,8 +189,7 @@ export function ExplorerTable<T>({
                       key={col.id}
                       align={col.align ?? 'left'}
                       width={col.width}
-                      // Fixed 48px row, per the Design System table cell.
-                      sx={{ height: 48, py: 0 }}
+                      sx={{ py: 0.5 }}
                     >
                       {col.cell(row, idx)}
                     </TableCell>

@@ -19,7 +19,7 @@ function colorFor(kind: TokenKind, theme: Theme): string {
   }
 }
 
-const INDENT = '';
+const INDENT = '  ';
 
 function pad(level: number): string {
   return INDENT.repeat(level);
@@ -33,7 +33,15 @@ function Token({ kind, children }: { kind: TokenKind; children: ReactNode }) {
   );
 }
 
-function Node({ value, level }: { value: unknown; level: number }): ReactNode {
+function Node({
+  value,
+  level,
+  compact,
+}: {
+  value: unknown;
+  level: number;
+  compact: boolean;
+}): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
   if (typeof value === 'string')
@@ -42,15 +50,30 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
     return <Token kind="number">{String(value)}</Token>;
   if (typeof value === 'boolean')
     return <Token kind="bool">{String(value)}</Token>;
+
   if (Array.isArray(value)) {
     if (value.length === 0) return '[]';
+    if (compact) {
+      return (
+        <>
+          {'['}
+          {value.map((item, i) => (
+            <Fragment key={i}>
+              {i > 0 && pad(level + 1)}
+              <Node value={item} level={level + 1} compact={compact} />
+              {i < value.length - 1 ? ',\n' : ']'}
+            </Fragment>
+          ))}
+        </>
+      );
+    }
     return (
       <>
         {'[\n'}
         {value.map((item, i) => (
           <Fragment key={i}>
             {pad(level + 1)}
-            <Node value={item} level={level + 1} />
+            <Node value={item} level={level + 1} compact={compact} />
             {i < value.length - 1 ? ',' : ''}
             {'\n'}
           </Fragment>
@@ -62,6 +85,22 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.length === 0) return '{}';
+    if (compact) {
+      return (
+        <>
+          {'{'}
+          {entries.map(([k, v], i) => (
+            <Fragment key={k}>
+              {i > 0 && pad(level + 1)}
+              <Token kind="key">{`"${k}"`}</Token>
+              {': '}
+              <Node value={v} level={level + 1} compact={compact} />
+              {i < entries.length - 1 ? ',\n' : '}'}
+            </Fragment>
+          ))}
+        </>
+      );
+    }
     return (
       <>
         {'{\n'}
@@ -70,7 +109,7 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
             {pad(level + 1)}
             <Token kind="key">{`"${k}"`}</Token>
             {': '}
-            <Node value={v} level={level + 1} />
+            <Node value={v} level={level + 1} compact={compact} />
             {i < entries.length - 1 ? ',' : ''}
             {'\n'}
           </Fragment>
@@ -85,9 +124,14 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
 
 interface HighlightedJsonProps {
   value: unknown;
+
+  compact?: boolean;
 }
 
-export function HighlightedJson({ value }: HighlightedJsonProps) {
+export function HighlightedJson({
+  value,
+  compact = false,
+}: HighlightedJsonProps) {
   return (
     <Typography
       component="pre"
@@ -99,7 +143,7 @@ export function HighlightedJson({ value }: HighlightedJsonProps) {
         color: theme.palette.text.primary,
       })}
     >
-      <Node value={value} level={0} />
+      <Node value={value} level={0} compact={compact} />
     </Typography>
   );
 }

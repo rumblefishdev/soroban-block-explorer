@@ -3,7 +3,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import {
   Box,
-  Button,
+  ButtonBase,
   Collapse,
   IconButton,
   Stack,
@@ -114,23 +114,24 @@ export function XdrRow({ label, value }: XdrRowProps) {
           </Typography>
         </Box>
         <Box sx={{ px: 2, pb: 2 }}>
-          <Button
-            size="small"
-            variant="text"
-            color="inherit"
-            disableRipple
-            startIcon={<ContentCopyIcon fontSize="small" />}
+          <ButtonBase
             onClick={onCopy}
             sx={(theme) => ({
-              textTransform: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.75,
+              ...theme.typography.bodySmMedium,
               color: theme.palette.text.primary,
-              p: 0,
-              minWidth: 0,
-              '&:hover': { backgroundColor: 'transparent' },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+                borderRadius: `${theme.shape.radius.xs}px`,
+              },
             })}
           >
+            <ContentCopyIcon sx={{ fontSize: 14 }} />
             {copied ? 'Copied!' : 'Copy'}
-          </Button>
+          </ButtonBase>
         </Box>
       </Collapse>
     </Box>

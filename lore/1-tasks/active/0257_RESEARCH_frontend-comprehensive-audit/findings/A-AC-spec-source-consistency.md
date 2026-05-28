@@ -110,6 +110,7 @@ Sampled feature spec/Figma/docs/code consistency. **Note:** Figma read-only insp
 
 - **Verdict:** spec/docs alignment good. Code has a structural gap (no list, no nav) that's a launch blocker but **fully tracked in the originating task body and in Wave 1 archaeology**.
 - **Class:** D (no new finding — already in Phase 3 spawn pipeline).
+- **design_parity update 2026-05-27 (`06ab34cc`):** F-A-5 **Gap 1 PARTIAL.** The `feat/design_parity` merge added `/contracts` + `/accounts` to `NAV_LINKS` (routes.ts) AND as routes — so the **nav-link half is DONE** (contract detail now reachable by browsing via the nav entry). BUT both routes render via the `<PageStub>` placeholder, NOT a real list page — the **list-page half is still TODO**. Net: F-A-5 → PARTIAL (queue card 1.3 → PARTIAL). Side effect: PageStub is now a live consumer (2 routes), which invalidates F-AH-1 "PageStub dead orphan, delete" — see AH-file-folder-structure / card 2.2 scope conflict. Source: `design-parity-impact-2026-05-27.md` §1 + §5.
 
 ### F-A-6 [Class D, Severity 🟢] — Per-feature triangulation: transaction detail
 

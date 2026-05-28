@@ -90,3 +90,13 @@ Not done programmatically (would require a CSS color sampler). Visual scan: dark
 ## Summary
 
 8 new Wave 6 a11y/cb findings, all 🟡 MEDIUM or 🟢 LOW. None gate-blocking; all Phase 3 defer. Key issues: NotFound h1 inconsistency (write task), unlabeled filter slots, NFT detail missing h2/h3.
+
+## design_parity update 2026-05-27 (06ab34cc)
+
+Source: `design-parity-impact-2026-05-27.md` §Stale-findings + §4. Maps to queue cards **7.4** (stale) + **7.1** (chips/badges, untouched).
+
+- **F-W6-F-2 / F-W6-E7-1 / F-W6-E10-1 (filter slots lack accessible names): STALE — already fixed pre-merge, NOT a design_parity closure.** The filter inputs already carried `aria-label` + `placeholder` at `06ab34cc^` (the commit's own parent) — verified by reading the pre-merge AssetFilters/NftFilters and the untouched PoolsFilterBar. design_parity only added responsive widths. So card 7.4's a11y finding was already resolved by an earlier batch (likely Gate B); the Wave 6 finding is stale as written. **Recommend:** re-verify against current develop and downgrade card 7.4 to "verify-only" / archive. Appendix marks these rows DONE (already-fixed). Residual to confirm: header-search aria-label (F-W6-F-4).
+- **F-W6-CH-1 (status badges no shape icon): UNTOUCHED.** No checkmark/X icon added by `06ab34cc`.
+- **F-W6-CH-2 (op-type chips text-only): PARTIAL/tangential.** `06ab34cc` adds NEW semantic chips (Classic/SAC on AssetsTable + AccountBalances; protocol_version on LedgersTable) — but not the op-type-on-transactions grouping this finding asked for.
+
+Cross-ref: `design-parity-impact-2026-05-27.md`; cards 7.1 + 7.4.
