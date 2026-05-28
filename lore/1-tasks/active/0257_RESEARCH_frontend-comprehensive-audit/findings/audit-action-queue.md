@@ -789,8 +789,8 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~3-5d
 - **Severity / Class:** 🟠 C (pre-launch must-fix if mobile is a goal)
 - **Pre-launch:** MUST (if mobile launch in scope) / DEFER-M2 otherwise
-- **STATUS:** PARTIAL
-- **design_parity note:** Biggest impact from `06ab34cc`. The **802px fixed-page-width root cause is removed** (AppShell `<main>` + TopNav/SecondaryNav/Footer switched to responsive `px`; Home full-bleed sections dropped `px: 10`; HomeHero subtitle no longer nowrap at xs). Tables now wrap in `overflowX: 'auto'` (ExplorerTable + standalone tx-detail tables). Nav scrolls horizontally; heroes stack; KPI strip 2×2. **NOT done:** no hamburger menu (design_parity chose horizontal-scroll nav — needs designer sign-off, contradicts card 8.3 + 0059); touch-target ≥44px NOT audited; no table→card transform (plain overflow-x, no shadow affordance). **All verdicts code-only — REQUIRES live re-verify** of all 14 routes × 375/768 cells (see "Pending live verification" block) before any sub-finding flips DONE. Remaining effort shrinks from "3–5d" to ~1–2d.
+- **STATUS:** PARTIAL — root-cause + table overflow RESOLVED via design_parity `06ab34cc` + live re-verify 2026-05-28; residual responsive items split to **C11.5 (hamburger)**, **C11.6 (touch targets)**, **C11.7 (search overflow)**. This card's original scope explicitly bundled hamburger + touch targets, so it stays PARTIAL (not DONE): the scrollWidth/table-overflow scope it covered is DONE, the remaining sub-findings moved to new cards.
+- **design_parity note:** Biggest impact from `06ab34cc`. The **802px fixed-page-width root cause is removed** (AppShell `<main>` + TopNav/SecondaryNav/Footer switched to responsive `px`; Home full-bleed sections dropped `px: 10`; HomeHero subtitle no longer nowrap at xs). Tables now wrap in `overflowX: 'auto'` (ExplorerTable + standalone tx-detail tables). Nav scrolls horizontally; heroes stack; KPI strip 2×2. **Live re-verify 2026-05-28 (Playwright):** 41/42 cells show no doc-level horizontal scroll; 768 now docW=757 (was 802 everywhere); 1280 pristine (no regression). → **F-W6-RESPONSIVE-1 RESOLVED**, **F-W6-RESPONSIVE-2 RESOLVED as bug** (tables contained; table→card transform = separate optional enhancement). **Residual split out:** hamburger → C11.5 (user decision 2026-05-28 requires it; scroll-nav alt rejected); touch targets ≥44px → C11.6 (still failing live, 105/106 <44px @375); newly-surfaced /search overflow <660px → C11.7.
 
 **Rationale.** Responsive matrix exposed page-level horizontal scrollbar at <800px (mobile severe, tablet noticeable). Root cause: layout shell has hardcoded ~802px min-width. Tables don't transform to card layout at narrow viewports. No hamburger menu at <768px. Touch targets <44px. WCAG 2.5.5 fail. Per F-W6-RESPONSIVE-1.
 
@@ -798,14 +798,14 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [~] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum — **PARTIAL `06ab34cc`: 802px root cause removed in code; needs live re-verify `scrollWidth===clientWidth` on all 14×375/768**
-- [~] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation — **PARTIAL `06ab34cc`: tables now `overflowX: auto` (page-level overflow mitigated); card-layout transform still NOT implemented**
-- [ ] F-W6-RESPONSIVE-3 — No hamburger / mobile nav — **UNTOUCHED — design_parity chose horizontal-scroll nav instead; DESIGNER SIGN-OFF NEEDED (accept scroll-nav vs require hamburger)**
-- [ ] F-W6-RESPONSIVE-4 — Touch targets <44px on mobile — **UNTOUCHED by `06ab34cc`; needs live measurement (HomeLogo dropped 32→24, nav buttons unchanged)**
-- [ ] F-W6-E0-3 — No hamburger menu at mobile (recap) — **UNTOUCHED (scroll-nav alternative; see RESPONSIVE-3)**
-- [ ] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile) — **UNTOUCHED (scroll-nav alternative; designer decision)**
+- [x] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum — **RESOLVED `06ab34cc` + live re-verify 2026-05-28: 41/42 cells no doc-scroll, 768 docW=757 (was 802), 1280 pristine; 802px root cause gone**
+- [x] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation — **RESOLVED as bug `06ab34cc` + live re-verify 2026-05-28: tables contained in `overflowX:auto`, doc never overflows; table→card transform = separate optional enhancement (not a failure)**
+- [→] F-W6-RESPONSIVE-3 — No hamburger / mobile nav — **SPLIT → C11.5. User decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alternative rejected**
+- [→] F-W6-RESPONSIVE-4 — Touch targets <44px on mobile — **SPLIT → C11.6. Still failing live 2026-05-28: 105/106 interactive elements <44px @375 (pagination 36px, nav 24–32px)**
+- [→] F-W6-E0-3 — No hamburger menu at mobile (recap) — **SPLIT → C11.5 (user requires hamburger; see RESPONSIVE-3)**
+- [→] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile) — **SPLIT → C11.5 (user requires hamburger)**
 
-**Notes:** User decision: pre-launch (MUST) vs post-launch (DEFER-M2)? **AND** designer decision: accept design_parity's horizontal-scroll nav as the answer to RESPONSIVE-3/0059, or still require a hamburger. PARTIAL until both decisions + live re-verify land.
+**Notes:** Live re-verify 2026-05-28 (Playwright) + design_parity `06ab34cc` resolved the scrollWidth/802px root cause and table page-overflow (RESPONSIVE-1/2 RESOLVED). User decision 2026-05-28 requires a hamburger menu (scroll-nav alt rejected). Residual responsive work split to new cards: **C11.5** hamburger, **C11.6** touch targets, **C11.7** search-page overflow. Card stays PARTIAL because its original scope bundled hamburger + touch targets; only the scrollWidth + table-overflow portion is DONE. User decision still needed: pre-launch (MUST) vs post-launch (DEFER-M2) for the residual cards.
 
 ---
 
@@ -1124,6 +1124,66 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 ---
 
+### 11.5 Hamburger nav menu for <768px
+
+- **Type:** FEATURE
+- **Effort:** ~3-4h
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** SHOULD
+- **STATUS:** TODO
+
+**Rationale.** design_parity removed the 802px doc-scroll root cause but left no hamburger menu at narrow viewports. At 375px the 8 nav links happen to fit in 364px without scrolling, but that's fragile — any nav label change or i18n overflows. User decision 2026-05-28: require a proper hamburger menu, not the scroll-nav fallback.
+
+**Scope.** Add hamburger menu component to TopNav (libs/ui/src/layout/TopNav.tsx) that collapses nav links into a drawer/menu below ~768px breakpoint. Desktop unchanged.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-W6-RESPONSIVE-3 — no hamburger nav at <768px (user requires hamburger)
+
+**Notes:** Live re-verify 2026-05-28 confirmed scroll-nav alt present but user rejected it. Effort ~3-4h (drawer + breakpoint + a11y focus trap).
+
+---
+
+### 11.6 Touch targets ≥44px (mobile a11y)
+
+- **Type:** BUG
+- **Effort:** ~2-3h
+- **Severity / Class:** 🟠 C
+- **Pre-launch:** SHOULD
+- **STATUS:** TODO
+
+**Rationale.** 105 of 106 interactive elements are <44px in at least one dimension at 375px viewport (pagination Prev/Next = 36px tall, nav links 24-32px). WCAG 2.1 AA target-size minimum is 44×44px. Mobile users mis-tap. Untouched by design_parity.
+
+**Scope.** Audit + enlarge interactive element hit areas to ≥44×44px at mobile breakpoint: pagination controls (libs/ui PaginationControls), nav links (TopNav/SecondaryNav), table row actions, filter chips. Use min-height/min-width or padding; visual size can stay smaller if hit-area padded.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-W6-RESPONSIVE-4 — 105/106 interactive elements <44px at 375px
+
+**Notes:** Live-confirmed 2026-05-28. WCAG 2.1 AA 2.5.5 target size.
+
+---
+
+### 11.7 Search page overflow <660px
+
+- **Type:** BUG
+- **Effort:** ~1h
+- **Severity / Class:** 🟡 C
+- **Pre-launch:** NICE
+- **STATUS:** TODO
+
+**Rationale.** The /search page is the only route still causing document horizontal scroll below ~660px viewport (docW=644 at 375px). Root cause: a search-results category card with ~628px intrinsic min-width that won't shrink. Page-specific — NOT the AppShell root cause (that's fixed) and NOT a design_parity regression (search was untested in Wave 6). Passes at 768/1280.
+
+**Scope.** Find the search-results category card (web/src/search/ or web/src/pages/SearchResultsPage.tsx) forcing ~628px min-width; make it responsive (flex-wrap, min-width:0, or stack on narrow). Verify docW ≤ viewport at 375.
+
+**Findings closed (sub-checklist):**
+
+- [ ] F-W6-RESPONSIVE-5 — search category card 628px intrinsic, overflows <660px
+
+**Notes:** Newly-surfaced live 2026-05-28; screenshot at .playwright-mcp/e14-search-375-overflow.png.
+
+---
+
 ## Appendix — 281-finding STATUS table
 
 Compact per-finding cross-reference. One line per finding ID surfaced by audit Waves 1-6. STATUS:
@@ -1406,15 +1466,16 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-F-8                                       | 6           | 🟢      | C 7.8                   | TODO        | No keyboard trap test on modals                                             |
 | F-W6-CH-1                                      | 6           | 🟡      | C 7.1                   | TODO        | Status badges color+text, no shape icon — NOT closed by `06ab34cc` (no checkmark/X icon added) |
 | F-W6-CH-2                                      | 6           | 🟢      | C 7.1                   | PARTIAL     | Operation type chips text-only (informational) — design_parity `06ab34cc` adds NEW Classic/SAC + protocol_version chips (tangential, not op-type-on-tx grouping) |
-| F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | PARTIAL     | All routes break <800px — design_parity `06ab34cc`: 802px root cause removed (code-verified), live re-verify pending (scrollWidth===clientWidth on 14×375/768) |
-| F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | PARTIAL     | No table → card transformation — design_parity `06ab34cc`: tables now `overflowX: auto` (page-level overflow mitigated, code-verified); card-layout transform still NOT done; live re-verify pending |
-| F-W6-RESPONSIVE-3                              | 6           | 🟡      | C 8.3                   | TODO        | No hamburger / mobile nav — design_parity `06ab34cc` chose horizontal-scroll nav instead (UNTOUCHED as hamburger); DESIGNER SIGN-OFF NEEDED (accept scroll-nav vs require hamburger) |
-| F-W6-RESPONSIVE-4                              | 6           | 🟢      | C 8.3                   | TODO        | Touch targets <44px on mobile — UNTOUCHED by `06ab34cc`; needs live measurement at 375 |
+| F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | RESOLVED    | design_parity 06ab34cc + live re-verify 2026-05-28: 41/42 no doc-scroll, 802px root cause gone |
+| F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | RESOLVED    | tables in overflowX:auto; table→card transform = separate optional enhancement |
+| F-W6-RESPONSIVE-3                              | 6           | 🟠      | C 11.5                  | TODO        | user decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alt rejected → card 11.5 |
+| F-W6-RESPONSIVE-4                              | 6           | 🟠      | C 11.6                  | TODO        | still failing live; 105/106 elements <44px @375 → card 11.6 |
+| F-W6-RESPONSIVE-5                              | 6           | 🟡      | C 11.7                  | TODO        | search page overflow <660px, category card 628px intrinsic; newly-surfaced live 2026-05-28 |
 | F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 on 4 of 5 detail                                        |
 | F-W6-NOTFOUND-2                                | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on parent 404                                      |
 | F-W6-E0-1                                      | 6           | 🟠      | C 1.1                   | TODO        | Footer dead spans (recap)                                                   |
 | F-W6-E0-2                                      | 6           | 🟠      | C 7.2                   | TODO        | Footer hardcoded operational (recap)                                        |
-| F-W6-E0-3                                      | 6           | 🟡      | C 8.3                   | TODO        | No hamburger at mobile — UNTOUCHED by `06ab34cc` (scroll-nav alternative; designer decision; see F-W6-RESPONSIVE-3) |
+| F-W6-E0-3                                      | 6           | 🟡      | C 11.5                  | TODO        | No hamburger at mobile — user decision 2026-05-28: REQUIRE hamburger <768px (scroll-nav alt rejected); → card 11.5 (see F-W6-RESPONSIVE-3) |
 | F-W6-E0-4                                      | 6           | 🟡      | C 7.1                   | TODO        | Header search placeholder 4 vs hint 5                                       |
 | F-W6-E0-5                                      | 6           | 🟢      | C 7.6                   | TODO        | Header polling duplicates home                                              |
 | F-W6-E1-1                                      | 6           | 🟡      | C 7.2                   | TODO        | LIVE badge always on (recap)                                                |
