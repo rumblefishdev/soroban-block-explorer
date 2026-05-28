@@ -56,10 +56,11 @@ function HomeLogo({
       onClick={onClick}
       sx={{ display: 'inline-flex', lineHeight: 0 }}
     >
-      <img
+      <Box
+        component="img"
         src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.svg'}
         alt={isSoroban ? 'Soroban' : 'Rumblefish'}
-        style={{ height, width: 'auto', display: 'block' }}
+        sx={{ height, width: 'auto', display: 'block' }}
       />
     </Box>
   );
