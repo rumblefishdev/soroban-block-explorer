@@ -1,7 +1,7 @@
-import { Card, Link, Stack, Typography } from '@mui/material';
+import { Card, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { assetLegColor } from '../liquidity-pools/assetColor.js';
 
@@ -71,17 +71,13 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
   if (!href) return code;
   return (
-    <Link
-      component={RouterLink}
-      to={href}
-      sx={{
-        color: 'inherit',
-        textDecoration: 'none',
-        '&:hover': { textDecoration: 'underline' },
-      }}
-    >
-      {code}
-    </Link>
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      fontSize="inherit"
+    />
   );
 }
 

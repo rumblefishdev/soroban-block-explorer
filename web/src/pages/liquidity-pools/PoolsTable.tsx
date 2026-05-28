@@ -1,4 +1,4 @@
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   ExplorerTable,
@@ -6,7 +6,6 @@ import {
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { formatAmount } from '../format.js';
@@ -31,17 +30,13 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
   const href = legHref(leg);
   if (!href) return code;
   return (
-    <Link
-      component={RouterLink}
-      to={href}
-      sx={{
-        color: 'inherit',
-        textDecoration: 'none',
-        '&:hover': { textDecoration: 'underline' },
-      }}
-    >
-      {code}
-    </Link>
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      fontSize="inherit"
+    />
   );
 }
 

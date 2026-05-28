@@ -12,12 +12,13 @@ import type { EntityType, TruncationConfig } from './types.js';
 function makeMonoSx(
   linked: boolean,
   fullWidth: boolean,
-  tone: 'default' | 'inherit'
+  tone: 'default' | 'inherit',
+  fontSize: number | string
 ): SxProps<Theme> {
   const inheritColor = tone === 'inherit';
   return {
     fontFamily: monoFontFamily,
-    fontSize: 14,
+    fontSize,
     fontWeight: 500,
     lineHeight: 1.4,
     color: inheritColor
@@ -64,6 +65,13 @@ export interface IdentifierDisplayProps {
    * 'default' (theme text colour).
    */
   tone?: 'default' | 'inherit';
+  /**
+   * Font size of the rendered identifier. Defaults to 14. Pass `'inherit'`
+   * when rendered inline inside smaller surrounding text (e.g. a reserves
+   * cell) so the identifier matches the adjacent value rather than forcing
+   * its own size.
+   */
+  fontSize?: number | string;
   className?: string;
   'aria-label'?: string;
 }
@@ -83,6 +91,7 @@ export function IdentifierDisplay({
   linked = true,
   href,
   tone = 'default',
+  fontSize = 14,
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
@@ -90,8 +99,8 @@ export function IdentifierDisplay({
   const formatted = formatForDisplay(type, value);
   const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;
   const sx = useMemo(
-    () => makeMonoSx(linked, !truncate, tone),
-    [linked, truncate, tone]
+    () => makeMonoSx(linked, !truncate, tone, fontSize),
+    [linked, truncate, tone, fontSize]
   );
 
   // NFT identity is composite `(contract_id, token_id)`; pass `href`
