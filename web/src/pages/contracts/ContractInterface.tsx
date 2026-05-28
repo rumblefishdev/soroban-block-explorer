@@ -37,20 +37,41 @@ const TYPE_REF_COLOR = '#155dfc';
 
 /**
  * Syntax colour for a Soroban type token, matching the Figma interface
- * panel: integer types green, `bool` accent-yellow, `void` dimmed, every
- * other type (`Address`, `Symbol`, custom structs) blue.
+ * panel.
+ *
+ * - `arg` position: integer types green, `bool` accent-yellow, reference
+ *   types (`Address`, `Symbol`, custom structs) blue.
+ * - `return` position: everything except `void` is accent-yellow, so the
+ *   return value reads as the function's "output highlight" regardless of
+ *   the underlying primitive (Figma: `returns i128`, `returns bool` both
+ *   render yellow).
+ * - `void` / empty always dimmed.
  */
-function typeColor(theme: Theme, type: string): string {
+function typeColor(
+  theme: Theme,
+  type: string,
+  position: 'arg' | 'return'
+): string {
   if (type === '' || type === 'void') return theme.palette.text.tertiary;
+  if (position === 'return') return theme.palette.text.accent;
   if (type === 'bool') return theme.palette.text.accent;
   if (INT_TYPE.test(type)) return theme.palette.text.success;
   return TYPE_REF_COLOR;
 }
 
 /** Syntax-coloured type token. */
-function TypeTok({ type }: { type: string }) {
+function TypeTok({
+  type,
+  position,
+}: {
+  type: string;
+  position: 'arg' | 'return';
+}) {
   return (
-    <Box component="span" sx={(theme) => ({ color: typeColor(theme, type) })}>
+    <Box
+      component="span"
+      sx={(theme) => ({ color: typeColor(theme, type, position) })}
+    >
       {type}
     </Box>
   );
@@ -140,14 +161,14 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
                 variant="bodyMonoXsRegular"
                 sx={{ color: 'text.primary' }}
               >
-                {param.name}: <TypeTok type={param.type_name} />
+                {param.name}: <TypeTok type={param.type_name} position="arg" />
               </Typography>
             ))
           )}
           <Box
             sx={(theme) => ({
               borderTop: `1px solid ${theme.palette.stroke.default}`,
-              my: 1.5,
+              my: 1,
             })}
           />
           <Typography
@@ -155,7 +176,7 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
             variant="bodyMonoXsRegular"
             sx={{ color: 'text.tertiary' }}
           >
-            returns <TypeTok type={returnType} />
+            returns <TypeTok type={returnType} position="return" />
           </Typography>
         </Box>
       </AccordionDetails>

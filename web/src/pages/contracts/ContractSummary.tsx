@@ -42,11 +42,11 @@ export function ContractSummary({
     <Stack spacing={3}>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3}>
         <StatCard
-          label={`Invocations · last ${stats.stats_window}`}
+          label="Total invocations"
           value={formatAmount(stats.recent_invocations)}
         />
         <StatCard
-          label={`Unique callers · last ${stats.stats_window}`}
+          label="Unique callers"
           value={formatAmount(stats.recent_unique_callers)}
         />
       </Stack>

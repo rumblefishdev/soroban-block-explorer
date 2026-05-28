@@ -24,12 +24,21 @@ function Row({
     <Box
       sx={(theme) => ({
         display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
         borderBottom: last
           ? 'none'
           : `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <Box sx={{ width: 150, flexShrink: 0, px: 2, py: 1.5 }}>
+      <Box
+        sx={{
+          width: { xs: '100%', sm: 150 },
+          flexShrink: 0,
+          px: 2,
+          pt: 1.5,
+          pb: { xs: 0, sm: 1.5 },
+        }}
+      >
         <Typography variant="bodySmBold" sx={{ color: 'text.primary' }}>
           {label}
         </Typography>
@@ -39,7 +48,8 @@ function Row({
           flex: 1,
           minWidth: 0,
           px: 2,
-          py: 1.5,
+          pt: { xs: 0.5, sm: 1.5 },
+          pb: 1.5,
           display: 'flex',
           alignItems: 'center',
         }}

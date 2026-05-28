@@ -18,7 +18,7 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta } from './assets/assetType.js';
+import { assetTypeMeta, iconKindFor } from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -73,19 +73,27 @@ export default function AssetDetailPage() {
             <AssetIcon
               code={data.asset_code}
               iconUrl={data.icon_url}
+              kind={iconKindFor(data.asset_type_name)}
               size={40}
             />
           )}
-          <Typography variant="heading3SemiBold" component="h1">
-            {code}
-          </Typography>
-          {meta && <Chip size="md" color={meta.color} label={meta.label} />}
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="heading4SemiBold" component="h1">
+                {code}
+              </Typography>
+              {meta && <Chip size="sm" color={meta.color} label={meta.label} />}
+            </Stack>
+            {data?.name && (
+              <Typography
+                variant="bodyRegular"
+                sx={{ color: 'text.secondary' }}
+              >
+                {data.name}
+              </Typography>
+            )}
+          </Box>
         </Stack>
-        {data?.name && (
-          <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
-            {data.name}
-          </Typography>
-        )}
       </Box>
 
       {asset.isError ? (

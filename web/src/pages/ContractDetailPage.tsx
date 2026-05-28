@@ -17,6 +17,7 @@ import type { ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useContractDetail } from '../api/index.js';
+import { routes } from '../router/routes.js';
 
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
@@ -70,13 +71,18 @@ export default function ContractDetailPage() {
     summary = <ContractSummary contract={contract.data} />;
   }
 
-  // Count pills are intentionally omitted for now — the API has no honest
-  // per-tab totals (no event count at all; invocation/function counts are
-  // windowed or query-dependent).
   const tabs: TabDefinition[] = [
     { key: 'interface', label: 'Interface' },
-    { key: 'invocations', label: 'Invocations' },
-    { key: 'events', label: 'Events' },
+    {
+      key: 'invocations',
+      label: 'Invocations',
+      count: contract.data?.stats.recent_invocations,
+    },
+    {
+      key: 'events',
+      label: 'Events',
+      count: contract.data?.stats.recent_unique_callers,
+    },
   ];
 
   return (
@@ -84,8 +90,17 @@ export default function ContractDetailPage() {
       <Box>
         <PageBreadcrumb
           items={[
-            { label: 'Contract' },
-            { label: truncateMiddle(contractId, BREADCRUMB_TRUNCATION) },
+            contract.data?.deployer
+              ? {
+                  label: 'Account',
+                  to: routes.account(contract.data.deployer),
+                }
+              : { label: 'Contracts' },
+            {
+              label: contract.data?.deployer
+                ? truncateMiddle(contract.data.deployer, BREADCRUMB_TRUNCATION)
+                : truncateMiddle(contractId, BREADCRUMB_TRUNCATION),
+            },
           ]}
         />
         <Stack
@@ -94,7 +109,7 @@ export default function ContractDetailPage() {
           alignItems="center"
           sx={{ flexWrap: 'wrap' }}
         >
-          <Typography variant="heading3SemiBold" component="h1">
+          <Typography variant="heading4SemiBold" component="h1">
             Contract
           </Typography>
           {contract.data?.is_sac === true && (

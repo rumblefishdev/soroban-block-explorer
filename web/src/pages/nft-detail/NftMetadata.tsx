@@ -14,6 +14,7 @@ interface NftMetadataProps {
 interface Attribute {
   label: string;
   value: string;
+  rarityPercent?: number;
 }
 
 const MAX_VALUE_LEN = 120;
@@ -40,7 +41,16 @@ function parseAttributes(value: unknown): Attribute[] {
   return value.map((entry, index) => {
     if (isPlainObject(entry)) {
       const label = stringifyValue(entry.trait_type ?? `Trait ${index + 1}`);
-      return { label, value: stringifyValue(entry.value ?? '') };
+      const rarityRaw = entry.rarity_percent ?? entry.rarity;
+      const rarityPercent =
+        typeof rarityRaw === 'number' && Number.isFinite(rarityRaw)
+          ? rarityRaw
+          : undefined;
+      return {
+        label,
+        value: stringifyValue(entry.value ?? ''),
+        rarityPercent,
+      };
     }
     return { label: `Trait ${index + 1}`, value: stringifyValue(entry) };
   });
@@ -57,7 +67,7 @@ function Empty({ label }: { label: string }) {
   );
 }
 
-function TraitCard({ label, value }: Attribute) {
+function TraitCard({ label, value, rarityPercent }: Attribute) {
   return (
     <Box
       sx={(theme) => ({
@@ -86,6 +96,14 @@ function TraitCard({ label, value }: Attribute) {
       >
         {value || 'N/A'}
       </Typography>
+      {rarityPercent !== undefined && (
+        <Typography
+          variant="bodyXsRegular"
+          sx={{ color: 'text.tertiary', textAlign: 'center' }}
+        >
+          {`${rarityPercent}% have this`}
+        </Typography>
+      )}
     </Box>
   );
 }

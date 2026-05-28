@@ -48,7 +48,7 @@ export default function TransactionDetailPage() {
               { label: shortHash(hash) },
             ]}
           />
-          <Typography variant="heading5SemiBold" component="h1">
+          <Typography variant="heading4SemiBold" component="h1">
             Transaction Detail
           </Typography>
         </Box>
@@ -92,7 +92,7 @@ export default function TransactionDetailPage() {
           spacing={2}
           sx={{ flexWrap: 'wrap' }}
         >
-          <Typography variant="heading5SemiBold" component="h1">
+          <Typography variant="heading4SemiBold" component="h1">
             Transaction Detail
           </Typography>
           <ModeToggle mode={mode} onChange={setMode} />

@@ -68,7 +68,7 @@ export default function AccountDetailPage() {
         <PageBreadcrumb
           items={[{ label: 'Account' }, { label: shortId(accountId) }]}
         />
-        <Typography variant="heading3SemiBold" component="h1">
+        <Typography variant="heading4SemiBold" component="h1">
           Account
         </Typography>
         <Typography

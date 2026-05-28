@@ -20,7 +20,15 @@ export interface TabsProps {
   'aria-label'?: string;
 }
 
-function TabLabel({ label, count }: { label: ReactNode; count?: number }) {
+function TabLabel({
+  label,
+  count,
+  active,
+}: {
+  label: ReactNode;
+  count?: number;
+  active: boolean;
+}) {
   if (count === undefined) return <>{label}</>;
   return (
     <Box
@@ -35,8 +43,13 @@ function TabLabel({ label, count }: { label: ReactNode; count?: number }) {
           px: 0.75,
           py: 0.125,
           borderRadius: `${theme.shape.radius.pills}px`,
-          backgroundColor: theme.palette.surface.grayLight,
-          color: theme.palette.text.secondary,
+
+          backgroundColor: active
+            ? theme.palette.surface.primaryMain
+            : theme.palette.surface.grayLight,
+          color: active
+            ? theme.palette.common.black
+            : theme.palette.text.secondary,
         })}
       >
         {count.toLocaleString('en-US')}
@@ -69,7 +82,13 @@ export function Tabs({
           key={tab.key}
           value={tab.key}
           disabled={tab.disabled}
-          label={<TabLabel label={tab.label} count={tab.count} />}
+          label={
+            <TabLabel
+              label={tab.label}
+              count={tab.count}
+              active={tab.key === activeKey}
+            />
+          }
         />
       ))}
     </MuiTabs>

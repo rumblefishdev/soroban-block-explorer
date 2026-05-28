@@ -132,7 +132,7 @@ export default function LiquidityPoolsListPage() {
           onAssetChange={handleAssetChange}
           onMinTvlChange={handleMinTvlChange}
         />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+        <Box>{body}</Box>
         <PaginationControls
           caption="Latest results"
           canPrev={canPrev}

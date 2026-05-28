@@ -54,6 +54,7 @@ export function TransactionFilters({
         display: 'flex',
         gap: 2,
         p: 2,
+        flexWrap: 'wrap',
         backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
@@ -63,7 +64,7 @@ export function TransactionFilters({
         onChange={(e) => setDraft(e.target.value)}
         placeholder="Source account or contract ID..."
         aria-label="Filter by source account or contract ID"
-        sx={{ width: 400 }}
+        sx={{ width: { xs: '100%', sm: 400 } }}
         slotProps={{
           input: {
             startAdornment: (
@@ -84,7 +85,7 @@ export function TransactionFilters({
         onChange={(e) => onOperationTypeChange(e.target.value)}
         displayEmpty
         aria-label="Filter by operation type"
-        sx={{ width: 280 }}
+        sx={{ width: { xs: '100%', sm: 280 } }}
       >
         <MenuItem value={ALL_OPERATIONS}>All operations type</MenuItem>
         {OPERATION_TYPE_OPTIONS.map((option) => (
