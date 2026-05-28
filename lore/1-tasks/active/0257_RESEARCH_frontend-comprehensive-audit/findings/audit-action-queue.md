@@ -52,7 +52,7 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~2h (if hrefs available) / ~30min (if hiding)
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** MUST
-- **STATUS:** TODO
+- **STATUS:** SKIP
 
 **Rationale.** The footer renders Terms of Service, Privacy Policy, Cookies, and external Resources links (GitHub, Stellar docs, Soroban docs, Stellar dashboard) as plain `<span>` elements with no `href`. Shipping a public block explorer with non-functional Terms/Privacy is a legal/compliance liability. Resources are a discoverability gap. Even the project's own GitHub link is missing. This was already flagged as Gate B fix-first but deferred to this queue.
 
@@ -65,7 +65,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] CA-3 — When wiring external links, ensure `target="_blank" rel="noopener noreferrer"`
 - [ ] F-W6-E0-1 — Wave 6 re-confirmed dead spans across all 14 routes
 
-**Notes:** User decision required between path (a) and (b).
+**Notes:** SKIP per user 2026-05-28. Legal pages (Terms/Privacy/Cookies) have no content and no destination — blocker not resolvable pre-launch without legal team input. Resources links (GitHub / Stellar docs / Soroban docs / Stellar dashboard) are cheap external wins still wireable later if revisited; deferred along with the legal items rather than split. CA-1, CA-2, CA-3, F-W6-E0-1 left open.
 
 ---
 
@@ -96,7 +96,7 @@ This is the master action queue for closing audit 0257. Structure:
 - **Effort:** ~1d
 - **Severity / Class:** 🔴 (launch-blocker per archaeology A3 / F-A-5 Gap 1)
 - **Pre-launch:** MUST
-- **STATUS:** TODO
+- **STATUS:** SKIP
 
 **Rationale.** Contract detail pages exist at `/contracts/:id` but are reachable only by deep link — no list page, no nav entry. Users browsing the explorer cannot discover any contract. Per Wave 1 archaeology this is a launch-blocker carried over from 0075's Future Work. F-A-5 spec/source consistency audit also flagged it.
 
@@ -108,7 +108,7 @@ This is the master action queue for closing audit 0257. Structure:
 - [ ] F-A-5 Gap 1 — Contract detail unreachable by browsing
 - [ ] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS
 
-**Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq.
+**Notes:** SKIP per user 2026-05-28. Despite 🔴 launch-blocker class, deferred. Contract detail stays reachable by deep link / search; no browse-discovery list at launch. CA findings (Archaeology Rec 2, F-A-5 Gap 1, 0075 Future Work) left open. Revisit post-launch if discovery gap proves material.
 
 ---
 
