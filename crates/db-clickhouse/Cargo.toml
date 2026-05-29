@@ -29,9 +29,9 @@ aws-mtls = [
 
 [dependencies]
 # Official ClickHouse Inc.-maintained client (resolves ADR 0044 §Decision §5
-# Q4). Pinned to the latest stable release at task 0204 implementation time
-# (2026-05-08). Bump deliberately in a follow-up PR if blocked by a bug.
-clickhouse = "=0.15.0"
+# Q4). Version pinned in workspace.dependencies (root Cargo.toml) so api,
+# indexer, backfill-runner, and this crate stay in lockstep.
+clickhouse = { workspace = true }
 # Shared Extracted* types — the CH writer consumes the same parser surface
 # the PG persist path does, with the documented `soroban_events` unfold
 # (ADR 0044 §Decision §4a). Domain enums supply the i16 discriminants used
