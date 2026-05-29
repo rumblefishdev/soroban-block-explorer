@@ -65,6 +65,9 @@ export default function ContractDetailPage() {
     {
       key: 'events',
       label: 'Events',
+      // Placeholder count — `recent_unique_callers` is a callers metric,
+      // not an events total. Stays until the API exposes a real events
+      // count (tracked in the FE→API gaps doc).
       count: contract.data?.stats.recent_unique_callers,
     },
   ];
@@ -74,17 +77,8 @@ export default function ContractDetailPage() {
       <Box>
         <PageBreadcrumb
           items={[
-            contract.data?.deployer
-              ? {
-                  label: 'Account',
-                  to: routes.account(contract.data.deployer),
-                }
-              : { label: 'Contracts' },
-            {
-              label: contract.data?.deployer
-                ? truncateMiddle(contract.data.deployer, BREADCRUMB_TRUNCATION)
-                : truncateMiddle(contractId, BREADCRUMB_TRUNCATION),
-            },
+            { label: 'Contracts', to: routes.contracts },
+            { label: truncateMiddle(contractId, BREADCRUMB_TRUNCATION) },
           ]}
         />
         <Stack

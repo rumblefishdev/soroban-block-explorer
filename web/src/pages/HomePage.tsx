@@ -11,8 +11,9 @@ import { LatestTransactions } from './home/LatestTransactions.js';
  * stats, and the latest transactions and ledgers. Each section has its own
  * error boundary so one failure does not collapse the rest of the page.
  *
- * Rendered full-bleed: AppShell drops its content padding for the home
- * route, and each section owns its horizontal padding.
+ * Rendered inside AppShell's standard content frame (maxWidth + responsive
+ * horizontal padding) like every other route. The relative wrapper here
+ * exists only to anchor the absolute-positioned glow layers below.
  */
 export default function HomePage() {
   return (

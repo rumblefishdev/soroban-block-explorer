@@ -150,5 +150,6 @@ export const typography: TypographyVariantsOptions = {
   bodyMonoSmMedium: makeMono(14, 500, 1.4),
   bodyMonoSmRegular: makeMono(14, 400, 1.4),
   bodyMonoXsBold: makeMono(12, 700, 1.4),
+  bodyMonoXsMedium: makeMono(12, 500, 1.4),
   bodyMonoXsRegular: makeMono(12, 400, 1.4),
 };
