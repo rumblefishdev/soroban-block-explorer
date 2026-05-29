@@ -53,7 +53,12 @@ export function AssetFilters({
           input: {
             startAdornment: (
               <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
+                <SearchIcon
+                  sx={(theme) => ({
+                    fontSize: 18,
+                    color: theme.palette.text.tertiary,
+                  })}
+                />
               </InputAdornment>
             ),
           },

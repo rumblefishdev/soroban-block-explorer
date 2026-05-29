@@ -49,15 +49,8 @@
             </interval>
         </high_write>
 
-        <low_volume>
-            <interval>
-                <duration>3600</duration>
-                <queries>100</queries>
-                <errors>20</errors>
-                <result_rows>0</result_rows>
-                <read_rows>0</read_rows>
-                <execution_time>0</execution_time>
-            </interval>
-        </low_volume>
+        <!-- low_volume quota removed in task 0241 — its only consumers
+             (migration_admin + partition_admin) were removed with the
+             PG-era migration + partition Lambdas. -->
     </quotas>
 </clickhouse>

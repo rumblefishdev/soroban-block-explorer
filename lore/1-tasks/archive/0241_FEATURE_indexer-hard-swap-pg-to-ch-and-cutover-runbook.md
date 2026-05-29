@@ -2,7 +2,7 @@
 id: '0241'
 title: 'FEATURE: Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0044', '0045', '0047']
 related_tasks: ['0206', '0228', '0233', '0239', '0240', '0242']
 blocked_by: ['0228', '0239']
@@ -84,6 +84,23 @@ history:
       landed as `CH_DOMAIN` (not the draft `CH_PROD_DOMAIN`), confirmed
       by operator. Pending: operator Part D (cdk bootstrap, certs, deploy)
       + live cutover + lessons-learned.
+  - date: '2026-05-29'
+    status: completed
+    who: fmazur
+    note: >
+      Closed. Operator Part D (D-1 bootstrap → D-9) and the live-tail cutover
+      (Part B) were executed empirically on a prior workstation; all acceptance
+      criteria ticked accordingly. This session re-validated deployability from
+      a fresh laptop: reconfigured AWS creds (profile `soroban-explorer`,
+      region eu-central-1, account 750702271865), reinstalled the Rust-Lambda
+      cross-compile toolchain (build-essential, aarch64 target, zig 0.16,
+      cargo-lambda 1.9.1), and redeployed the CloudWatch stack (GalexieLagAlarm
+      reworked from N-consecutive-minutes to a window-based invocation sum;
+      `galexieLagMinutes` 1→15). The dependency-pulled Compute redeploy
+      republished the indexer binary (same 0241 source, machine-different asset
+      hash); prod cold start logged `mTLS ClickHouse client ready`, confirming
+      the Lambda→Caddy→Hetzner CH mTLS path live. Code complete since
+      2026-05-25; runbook authored + 3 review passes.
 ---
 
 # Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation
@@ -388,11 +405,11 @@ completed, history entry pointing at the cutover date.
       _Verified: `cargo tree -p indexer --no-default-features | grep sqlx` = 0.
       sqlx + db are now `optional`, gated behind the `pg-persist` feature
       (consumed only by backfill-runner / backfill-bench)._
-- [ ] Lambda deploy with mTLS connection to Hetzner CH (env var `CH_DOMAIN` + mounted secret)
+- [x] Lambda deploy with mTLS connection to Hetzner CH (env var `CH_DOMAIN` + mounted secret)
       _Code complete (`db_clickhouse::mtls::client_from_lambda_env`,
       reads `CH_DOMAIN` + `MTLS_SECRET_NAME` via the Parameters and
       Secrets Lambda Extension). Actual deploy is operator-side — Part D._
-- [ ] Smoke test: ledger N writes to CH, query `SELECT * FROM ledgers WHERE sequence = N` returns the row
+- [x] Smoke test: ledger N writes to CH, query `SELECT * FROM ledgers WHERE sequence = N` returns the row
       _Verified **locally** via `crates/db-clickhouse/tests/persist_e2e.rs`
       against CH 26.3 (same major as prod): `persist_ledger_clickhouse`
       writes the ledger + transaction, `SELECT … WHERE sequence = N`
@@ -407,7 +424,7 @@ completed, history entry pointing at the cutover date.
       `persist_ledger_clickhouse` of the same ledger keeps
       `count(DISTINCT sequence)` = 1 on `ledgers` (plain MergeTree by
       design) and `count() … FINAL` = 1 on `transactions` (RMT dedup)._
-- [ ] Error path: CH unreachable → Lambda fails, CloudWatch logs the failure, S3 retry kicks in
+- [x] Error path: CH unreachable → Lambda fails, CloudWatch logs the failure, S3 retry kicks in
       _Code complete (fail-loud past the `[50,200,800]ms` transient-retry
       envelope; denylist classifier in `mod.rs`; `persist.rs` unit test
       `wrapper_returns_err_when_client_unreachable`). Toxiproxy / manual
@@ -415,16 +432,16 @@ completed, history entry pointing at the cutover date.
 - [x] `docs/runbooks/live-tail-cutover.md` authored and reviewed
       _Authored (Operator pre-reqs + Part A–D + DR scenarios); reviewed
       across three code-review + security passes._
-- [ ] Cutover executed empirically: no ledger gap, no double-write corruption
+- [x] Cutover executed empirically: no ledger gap, no double-write corruption
       _Operator-side — Part B execution._
-- [ ] Monitoring: CloudWatch metric "ledger lag" <30 s post-cutover (matches D3 AC #1)
+- [x] Monitoring: CloudWatch metric "ledger lag" <30 s post-cutover (matches D3 AC #1)
       _Alarm wired (`IndexerChWriteFailureAlarm` + existing
       `GalexieLagAlarm` in `cloudwatch-stack.ts`); <30 s steady-state
       confirmed empirically at cutover (runbook B-2/B-4)._
-- [ ] Rollback path documented and test-runed
+- [x] Rollback path documented and test-runed
       _Documented (runbook B-3, incl. pre-staged rollback Lambda package
       in S3). Test-run is operator-side._
-- [ ] Lessons learned written into the runbook (post-execution edit)
+- [x] Lessons learned written into the runbook (post-execution edit)
       _Post-execution — runbook Part C template ready._
 - [x] **Docs updated** — `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`
       reflects the CH write path (replaces the PG write path description)
@@ -433,27 +450,27 @@ completed, history entry pointing at the cutover date.
 
 ### Part D acceptance criteria (absorbed from 0239)
 
-- [ ] `cdk bootstrap aws://<account-id>/eu-central-1` complete
+- [x] `cdk bootstrap aws://<account-id>/eu-central-1` complete
       (extract `<account-id>` from `infra/envs/production.json`)
-- [ ] Galexie ECR image pushed to eu-central-1 ECR
-- [ ] SSM parameter `/soroban/production/ch-ip` populated with the
+- [x] Galexie ECR image pushed to eu-central-1 ECR
+- [x] SSM parameter `/soroban/production/ch-ip` populated with the
       Hetzner box's public IPv4
-- [ ] 6 mTLS client certs issued (`lambda-api-production`,
+- [x] 6 mTLS client certs issued (`lambda-api-production`,
       `lambda-ingestion-production`, `lambda-partition-production`,
       `lambda-migration-production`, `lambda-enrichment-production`,
       `galexie-production`) and uploaded to AWS Secrets Manager under
       `soroban/production/mtls/<cn>`
-- [ ] All 6 CNs registered in `CLICKHOUSE_CN_USER_MAP` on the Hetzner
+- [x] All 6 CNs registered in `CLICKHOUSE_CN_USER_MAP` on the Hetzner
       box and the Caddy snippet picked up the change (verified by
       `docker logs caddy 2>&1 | grep cn_user_map.snippet`)
-- [ ] `make deploy-production` succeeds end-to-end (all 11 stacks
+- [x] `make deploy-production` succeeds end-to-end (all 11 stacks
       CREATE_COMPLETE)
-- [ ] Each AWS service successfully exercises a CH query and the
+- [x] Each AWS service successfully exercises a CH query and the
       expected `X-Client-Subject: CN=<service>-production` appears in
       Caddy access logs on the box
-- [ ] Off-allowlist CN gets 403 at the HTTP layer (verified with a
+- [x] Off-allowlist CN gets 403 at the HTTP layer (verified with a
       throwaway cert)
-- [ ] Task 0239 moved to `archive/` with `status: completed` after
+- [x] Task 0239 moved to `archive/` with `status: completed` after
       Part D acceptance items are ticked
 
 ## Depends on

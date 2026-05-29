@@ -185,8 +185,9 @@ Resources by location:
   tasks get a per-task public IPv4 (`assignPublicIp: ENABLED`),
   which is the only egress path.
 - **Lambdas out-of-VPC** — API, Ledger Processor, type-1 enrichment
-  worker, migration, partition. Egress goes via the AWS-managed
-  Lambda pool (no NAT GW cost, no IP pinning).
+  worker. Egress goes via the AWS-managed Lambda pool (no NAT GW cost,
+  no IP pinning). (The PG-era migration + partition Lambdas were removed
+  in task 0241 — CH applies its schema box-side and auto-partitions.)
 - **CloudFront + Route 53** — global resources, region-independent.
 - **`us-east-1` retained for two resources only**: the `CDKToolkit`
   bootstrap stack and the CloudFront viewer-side ACM certificate
@@ -286,7 +287,7 @@ multi-region failover plan.
 - downloads and parses XDR using the Rust `stellar-xdr` crate via
   `crates/xdr-parser` (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md))
 - writes typed columns to the Hetzner-hosted ClickHouse over mTLS,
-  authenticated as the `lambda-ingestion-production` CN → `indexer`
+  authenticated as the `lambda-ingestion-production` CN → `ingestion_writer`
   CH user mapping (see §5.6). Runs OUT-of-VPC; the AWS Parameters
   and Secrets Lambda Extension fetches the cert bundle from Secrets
   Manager at cold start (no SDK call on the hot path).
@@ -446,9 +447,9 @@ minimal. Network shape:
   (CloudFront viewer cert in `us-east-1`, API Gateway regional cert
   in `eu-central-1`).
 - **Application Lambdas (API, Ledger Processor, type-1 enrichment
-  worker, migration, partition)** — run OUTSIDE the VPC. Egress
-  via AWS-managed Lambda pool. Identity to Hetzner CH is asserted
-  by mTLS (no IP pinning, no VPC walls).
+  worker)** — run OUTSIDE the VPC. Egress via AWS-managed Lambda pool.
+  Identity to Hetzner CH is asserted by mTLS (no IP pinning, no VPC
+  walls).
 - **ECS Fargate Galexie** — public subnet, per-task public IPv4
   (`assignPublicIp: ENABLED`). Reaches the Stellar peer overlay,
   the ledger-data S3 bucket, and Hetzner CH directly via the

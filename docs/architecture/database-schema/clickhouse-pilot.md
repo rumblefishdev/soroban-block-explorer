@@ -337,9 +337,11 @@ idempotent file. Two paths apply it; both share the file via
 `docker compose down -v` is safe: the volume is rebuilt cleanly and the
 sidecar re-applies the schema.
 
-Numbered migrations (the `crates/db-migrate` analogue) are deferred until
-the dual-write follow-up task lands. For now the pilot is read-empty and
-schema iteration is "edit `init.sql`, nuke the volume, restart compose."
+There are no numbered migrations: the schema is the single `init.sql`
+applied by the init sidecar — and production does the same, so the PG-era
+`crates/db-migrate` Lambda was removed in the PG→CH cutover (task 0241).
+Schema iteration in the pilot is "edit `init.sql`, nuke the volume, restart
+compose."
 
 ## 8. How this fits the rest of the system
 

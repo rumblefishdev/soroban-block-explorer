@@ -24,14 +24,15 @@ aws-mtls = [
     "dep:rustls",
     "dep:rustls-pemfile",
     "dep:rustls-pki-types",
+    "dep:webpki-roots",
     "dep:reqwest",
 ]
 
 [dependencies]
 # Official ClickHouse Inc.-maintained client (resolves ADR 0044 §Decision §5
-# Q4). Pinned to the latest stable release at task 0204 implementation time
-# (2026-05-08). Bump deliberately in a follow-up PR if blocked by a bug.
-clickhouse = "=0.15.0"
+# Q4). Version pinned in workspace.dependencies (root Cargo.toml) so api,
+# indexer, backfill-runner, and this crate stay in lockstep.
+clickhouse = { workspace = true }
 # Shared Extracted* types — the CH writer consumes the same parser surface
 # the PG persist path does, with the documented `soroban_events` unfold
 # (ADR 0044 §Decision §4a). Domain enums supply the i16 discriminants used
@@ -57,15 +58,18 @@ thiserror = { workspace = true }
 # the rustls / hyper-util stack — that binary talks to plain HTTP CH on
 # loopback and has no need for client cert plumbing.
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
-# `webpki-tokio` (bundled Mozilla CA roots) is intentionally OFF — we
-# build the server-cert store from the per-secret CA in the mTLS bundle
-# (`mtls.rs::client_with_mtls` → `RootCertStore::empty()` + adds from
-# `bundle.ca_pem`). Pulling Mozilla roots would be dead weight in the
-# final binary.
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "tls12", "aws-lc-rs"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "tls12"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
 rustls-pki-types = { version = "1", optional = true }
+# Mozilla WebPKI roots — the CLIENT trust store used to verify the *server's*
+# certificate during the TLS handshake. Caddy fronts ClickHouse with a
+# Let's Encrypt cert (chains to a public root), so the client must trust the
+# public WebPKI. The mTLS bundle's `ca_pem` signs the *client* cert (Caddy
+# verifies that server-side) and is NOT a server-cert root — see
+# `mtls.rs::client_with_mtls`. Version 1.x matches `rustls-pki-types` 1.x
+# (`TLS_SERVER_ROOTS` yields `rustls_pki_types::TrustAnchor`).
+webpki-roots = { version = "1", optional = true }
 # Reused from the workspace `reqwest` (already rustls-tls). Used solely
 # for the localhost:2773 GET against the Secrets Manager Lambda Extension
 # — small surface (one async HTTP call), so we avoid pulling another

@@ -1,4 +1,4 @@
-import { Box, Divider } from '@mui/material';
+import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
   classifyError,
@@ -11,8 +11,8 @@ import {
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
+import { KpiCell } from '../detail/KpiCell.js';
 
-import { ChainOverviewCard } from './ChainOverviewCard.js';
 import { LiveIndicator } from './LiveIndicator.js';
 
 /**
@@ -28,67 +28,70 @@ export function ChainOverview() {
   if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    content = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    content =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} py={4} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} py={4} />
+      ) : (
+        <GenericErrorState onRetry={retry} py={4} />
+      );
   } else {
     content = (
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' },
-          alignItems: 'stretch',
-        }}
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        alignItems="stretch"
+        divider={
+          <Divider
+            orientation="vertical"
+            flexItem
+            sx={{ display: { xs: 'none', md: 'block' } }}
+          />
+        }
+        sx={{ width: '100%' }}
       >
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label={<LiveIndicator />}
           value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
           caption="Current ledger"
           loading={isLoading}
         />
-        <Divider
-          orientation="vertical"
-          flexItem
-          sx={{ display: { xs: 'none', md: 'block' } }}
-        />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="TPS"
           value={data ? formatTps(data.tps_60s) : undefined}
           caption="Last 60s"
-          accentValue
+          valueColor={(theme) => theme.palette.text.success}
           loading={isLoading}
         />
-        <Divider
-          orientation="vertical"
-          flexItem
-          sx={{ display: { xs: 'none', md: 'block' } }}
-        />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="Accounts"
           value={data ? formatAmount(data.total_accounts) : undefined}
           caption="Total"
           loading={isLoading}
         />
-        <Divider
-          orientation="vertical"
-          flexItem
-          sx={{ display: { xs: 'none', md: 'block' } }}
-        />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="Contracts"
           value={data ? formatAmount(data.total_contracts) : undefined}
           caption="Soroban"
           loading={isLoading}
         />
-      </Box>
+      </Stack>
     );
   }
 

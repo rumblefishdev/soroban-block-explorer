@@ -1,4 +1,4 @@
-import { Card, Stack, Typography } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   formatCompactAmount,
@@ -7,46 +7,12 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
+import { KpiCell } from '../detail/KpiCell.js';
 import { assetLegColor } from '../liquidity-pools/assetColor.js';
 
 import { assetLegLabel, isPoolStale, legHref } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
-
-interface KpiCellProps {
-  label: string;
-  value: ReactNode;
-  subtitle: ReactNode;
-  /**
-   * Optional override for the headline value color. Used by the per-leg
-   * reserve cells so the number reads in the asset's brand hue (Figma
-   * node `325:22339` — XLM blue, USDC emerald, etc.). Defaults to the
-   * primary text color when omitted.
-   */
-  valueColor?: string;
-}
-
-function KpiCell({ label, value, subtitle, valueColor }: KpiCellProps) {
-  return (
-    <Card sx={{ p: 2, flex: 1, minWidth: 0 }}>
-      <Stack spacing={1}>
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
-          {label}
-        </Typography>
-        <Typography
-          variant="heading4SemiBold"
-          component="div"
-          sx={{ color: valueColor ?? 'text.primary' }}
-        >
-          {value}
-        </Typography>
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
-          {subtitle}
-        </Typography>
-      </Stack>
-    </Card>
-  );
-}
 
 interface PoolKpiStripProps {
   pool: PoolItem;
@@ -84,30 +50,30 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
-      spacing={2}
+      spacing={{ xs: 2, sm: 3 }}
       sx={{ width: '100%' }}
     >
       <KpiCell
         label="Total shares"
         value={formatCompactAmount(pool.total_shares)}
-        subtitle={stale ? STALE_SUBTITLE : 'shares outstanding'}
+        caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
       />
       <KpiCell
         label={`${codeA} reserve`}
         value={formatCompactAmount(pool.reserve_a)}
-        subtitle={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
+        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
         valueColor={assetLegColor(pool.asset_a).dot}
       />
       <KpiCell
         label={`${codeB} reserve`}
         value={formatCompactAmount(pool.reserve_b)}
-        subtitle={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
+        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
         valueColor={assetLegColor(pool.asset_b).dot}
       />
       <KpiCell
         label="Participants"
         value={formatInteger(pool.participant_count)}
-        subtitle="liquidity providers"
+        caption="liquidity providers"
       />
     </Stack>
   );

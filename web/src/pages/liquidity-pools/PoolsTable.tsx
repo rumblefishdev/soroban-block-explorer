@@ -78,7 +78,10 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
             <AssetAvatar leg={row.asset_b} overlap />
           </Box>
           <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-            <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.primary })}
+            >
               {pair}
             </Typography>
             <IdentifierDisplay
@@ -136,10 +139,16 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       if (row.total_shares == null) return <Dash />;
       return (
         <Stack spacing={0.25} alignItems="flex-end">
-          <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {formatAmount(row.total_shares)}
           </Typography>
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.secondary })}
+          >
             shares
           </Typography>
         </Stack>
@@ -151,7 +160,10 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Participants',
     align: 'right',
     cell: (row) => (
-      <Typography variant="bodySmRegular">
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(row.participant_count)}
       </Typography>
     ),
@@ -159,7 +171,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
 ];
 
 interface PoolsTableProps {
-  rows: PoolItem[];
+  rows: readonly PoolItem[];
 }
 
 /**

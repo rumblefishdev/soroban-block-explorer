@@ -18,7 +18,7 @@ db = { path = "../db" }
 # ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently
 # stubbed; flag-gated via `--target clickhouse`.
 db-clickhouse = { path = "../db-clickhouse" }
-clickhouse = "=0.15.0"
+clickhouse = { workspace = true }
 # `LedgerCloseMeta` is the input type to the sink's `persist_ledger`
 # (task 0205). Already in the workspace via `indexer` and `xdr-parser`.
 stellar-xdr = { workspace = true }

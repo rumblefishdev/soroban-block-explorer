@@ -6,7 +6,10 @@ import { formatOperationType } from './operationTypes.js';
 /** Em-dash placeholder for a missing cell value. */
 export function Dash() {
   return (
-    <Typography component="span" sx={{ color: 'text.tertiary' }}>
+    <Typography
+      component="span"
+      sx={(theme) => ({ color: theme.palette.text.tertiary })}
+    >
       —
     </Typography>
   );
@@ -23,7 +26,10 @@ export function OperationCell({ types }: { types: readonly string[] }) {
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
       <Chip size="sm" color="neutral" label={formatOperationType(first)} />
       {rest.length > 0 && (
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
           +{rest.length}
         </Typography>
       )}

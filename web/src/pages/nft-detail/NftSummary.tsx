@@ -39,7 +39,10 @@ function Row({
           pb: { xs: 0, sm: 1.5 },
         }}
       >
-        <Typography variant="bodySmBold" sx={{ color: 'text.primary' }}>
+        <Typography
+          variant="bodySmBold"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
           {label}
         </Typography>
       </Box>
@@ -68,7 +71,12 @@ export function NftSummary({ nft }: NftSummaryProps) {
       <Row
         label="Token ID"
         value={
-          <Typography variant="bodyMonoSmRegular">#{nft.token_id}</Typography>
+          <Typography
+            variant="bodyMonoSmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            #{nft.token_id}
+          </Typography>
         }
       />
       <Row
@@ -82,7 +90,10 @@ export function NftSummary({ nft }: NftSummaryProps) {
           nft.owner_account ? (
             <IdentifierDisplay value={nft.owner_account} type="account" />
           ) : (
-            <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
               Burned
             </Typography>
           )

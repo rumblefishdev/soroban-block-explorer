@@ -6,6 +6,11 @@ export { useTransactionsList } from './useTransactionsList.js';
 export { useTransactionDetail } from './useTransactionDetail.js';
 export { useAccountDetail } from './useAccountDetail.js';
 export { useAccountTransactions } from './useAccountTransactions.js';
+export {
+  useAccountsList,
+  type AccountListItem,
+  type AccountsSort,
+} from './useAccountsList.js';
 export { useAssetsList } from './useAssetsList.js';
 export { useAssetDetail } from './useAssetDetail.js';
 export { useAssetTransactions } from './useAssetTransactions.js';

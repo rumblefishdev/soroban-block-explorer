@@ -78,12 +78,12 @@ export function SearchResultRow({
         {hit.label && hit.label !== hit.identifier && (
           <Typography
             variant="bodySmRegular"
-            sx={{
-              color: 'text.tertiary',
+            sx={(theme) => ({
+              color: theme.palette.text.tertiary,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-            }}
+            })}
           >
             {hit.label}
           </Typography>

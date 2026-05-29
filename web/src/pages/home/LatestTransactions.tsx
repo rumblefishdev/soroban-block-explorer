@@ -40,23 +40,16 @@ export function LatestTransactions() {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} py={8} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} py={8} />
+      ) : (
+        <GenericErrorState onRetry={retry} py={8} />
+      );
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" />;
   } else {
     body = <LatestTransactionsTable rows={rows} />;
   }
@@ -81,7 +74,7 @@ export function LatestTransactions() {
         <Typography
           component="span"
           variant="bodySmRegular"
-          sx={{ color: 'text.tertiary' }}
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
         >
           {rows.length} latest records
         </Typography>

@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { formatInteger } from '../format/index.js';
-import { bodyFontFamily, monoFontFamily } from '../theme/typography.js';
+import { monoFontFamily, secondaryFontFamily } from '../theme/typography.js';
 
 import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';
@@ -19,7 +19,7 @@ function makeIdentifierSx(
 ): SxProps<Theme> {
   const inheritColor = tone === 'inherit';
   return {
-    fontFamily: mono ? monoFontFamily : bodyFontFamily,
+    fontFamily: mono ? monoFontFamily : secondaryFontFamily,
     fontSize,
     fontWeight: 500,
     lineHeight: 1.4,

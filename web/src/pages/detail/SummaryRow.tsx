@@ -42,7 +42,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
           }}
         >
           <Typography
-            variant="bodySmRegular"
+            variant="bodySmBold"
             sx={(theme) => ({
               color: theme.palette.text.primary,
 
@@ -56,7 +56,7 @@ export function SummaryRow({ cells }: { cells: SummaryCell[] }) {
             {typeof cell.value === 'string' ||
             typeof cell.value === 'number' ? (
               <Typography
-                variant="bodySmRegular"
+                variant="bodySmMedium"
                 sx={(theme) => ({ color: theme.palette.text.primary })}
               >
                 {cell.value}

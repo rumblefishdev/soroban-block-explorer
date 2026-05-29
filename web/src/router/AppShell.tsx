@@ -59,7 +59,7 @@ function HomeLogo({
     >
       <Box
         component="img"
-        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.svg'}
+        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.webp'}
         alt={isSoroban ? 'Soroban' : 'Rumblefish'}
         sx={{ height, width: 'auto', display: 'block' }}
       />

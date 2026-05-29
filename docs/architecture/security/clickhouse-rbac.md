@@ -34,7 +34,7 @@ through Caddy at `:443`. Caddy:
 5. Forwards the request to `clickhouse:8123` with
    `X-ClickHouse-User: <user>` set from the map. The `set`-mode
    `header_up` directive replaces any client-supplied header value,
-   so spoofing `X-ClickHouse-User: migration_admin` from the client
+   so spoofing `X-ClickHouse-User: dev_shared` from the client
    is overwritten before the request leaves Caddy.
 
 ClickHouse-side, every proxy-trust user is `<no_password/>` with
@@ -65,16 +65,19 @@ Caddy does not know the password to forge Basic Auth.
 
 ## Per-service user matrix
 
-| CH user            | Profile          | Quota          | Permitted operations                                                       | Consumer                                               |
-| ------------------ | ---------------- | -------------- | -------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `default`          | `default`        | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                | `db-clickhouse-init` sidecar + backup script + SSH ops |
-| `dev_shared`       | `admin`          | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)            | Dev laptops (one shared cert-gated user)               |
-| `galexie`          | `write_no_ddl`   | `high_write`   | INSERT only on ingestion tables                                            | Galexie ECS task                                       |
-| `api_reader`       | `read_only`      | `api_throttle` | SELECT on `default.*`                                                      | Lambda API (read-heavy)                                |
-| `ingestion_writer` | `write_no_ddl`   | `high_write`   | INSERT on tables Galexie does not touch                                    | Lambda Ingestion                                       |
-| `partition_admin`  | `partition_only` | `low_volume`   | Profile-allowed DDL bounded by quota (100 q/h) + `max_execution_time` 300s | Lambda Partition mgmt                                  |
-| `migration_admin`  | `migration_full` | `low_volume`   | DDL + read + write (one-shot migrations)                                   | Lambda Migration                                       |
-| `dict_reader`      | `read_only_lan`  | n/a (loopback) | SELECT inside container (loopback only)                                    | Dictionary SOURCE clause                               |
+| CH user            | Profile         | Quota          | Permitted operations                                            | Consumer                                               |
+| ------------------ | --------------- | -------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
+| `default`          | `default`       | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)     | `db-clickhouse-init` sidecar + backup script + SSH ops |
+| `dev_shared`       | `admin`         | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks) | Dev laptops (one shared cert-gated user)               |
+| `galexie`          | `write_no_ddl`  | `high_write`   | INSERT only on ingestion tables                                 | Galexie ECS task                                       |
+| `api_reader`       | `read_only`     | `api_throttle` | SELECT on `default.*`                                           | Lambda API (read-heavy)                                |
+| `ingestion_writer` | `write_no_ddl`  | `high_write`   | INSERT on tables Galexie does not touch                         | Lambda Ingestion                                       |
+| `dict_reader`      | `read_only_lan` | n/a (loopback) | SELECT inside container (loopback only)                         | Dictionary SOURCE clause                               |
+
+> `migration_admin` + `partition_admin` were removed in task 0241 (from
+> `crates/db-clickhouse/users.d/services.xml`) together with the PG-era
+> migration + partition Lambdas — CH applies its schema box-side via the
+> `db-clickhouse-init` sidecar and auto-creates partitions on insert.
 
 ## Caddy CN → CH user mapping
 
@@ -87,9 +90,13 @@ the full list. Convention:
 | `galexie-<environment>`          | `galexie`          |
 | `lambda-api-<environment>`       | `api_reader`       |
 | `lambda-ingestion-<environment>` | `ingestion_writer` |
-| `lambda-partition-<environment>` | `partition_admin`  |
-| `lambda-migration-<environment>` | `migration_admin`  |
 | `<firstname>-laptop`             | `dev_shared`       |
+
+> `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
+> 0241: the partition + migration Lambdas were removed, and their CH users
+> (`partition_admin` / `migration_admin`) were dropped from
+> `crates/db-clickhouse/users.d/` (takes effect on the next CH config
+> re-deploy).
 
 Service certs (issued via `infra-hetzner/ca/issue-client-cert.sh`)
 get a CN matching their AWS role; dev certs get the operator's
@@ -106,10 +113,6 @@ returns as 403 before any backend hop.
 - `read_only` — `readonly=1`, 4 GiB memory cap, 30 s execution.
 - `write_no_ddl` — `readonly=0`, `allow_ddl=0`, INSERT-tuned block
   sizes, 8 GiB memory cap.
-- `partition_only` — `readonly=0`, `allow_ddl=1`, 2 GiB memory,
-  300 s execution. See "partition_admin caveat" below.
-- `migration_full` — `readonly=0`, `allow_ddl=1`, 900 s execution
-  (no hung migrations).
 - `read_only_lan` — `read_only` plus loopback `<networks>`
   restriction (used by `dict_reader`).
 
@@ -120,18 +123,6 @@ returns as 403 before any backend hop.
   read_bytes, 1000 s execution_time.
 - `high_write` — unbounded queries / read, 1 PB written_bytes
   ceiling (sanity cap, not a real throttle).
-- `low_volume` — 100 queries / hour for partition / migration
-  one-shot jobs.
-
-### partition_admin caveat
-
-The intent for `partition_admin` was "DROP PARTITION + SELECT
-only". Granular CH-side scoping at this level is constrained by
-the platform; `partition_admin` is therefore bound to the
-`partition_only` profile + `low_volume` quota as the operative
-guardrail. Tighter scoping (SQL-managed user storage) is tracked
-as a follow-up if business requirements change. See task
-0240 history for the implementation analysis.
 
 ## Known limitations
 

@@ -29,6 +29,8 @@ interface NotFoundStateProps {
   identifier?: string;
   action?: ReactNode;
   titleOverride?: string;
+
+  py?: number;
 }
 
 export function NotFoundState({
@@ -36,6 +38,7 @@ export function NotFoundState({
   identifier,
   action,
   titleOverride,
+  py = 8,
 }: NotFoundStateProps) {
   return (
     <EmptyState
@@ -43,6 +46,7 @@ export function NotFoundState({
       title={titleOverride ?? TITLES[entity]}
       description="We couldn't find anything matching this identifier. Double-check the value and try again."
       meta={identifier}
+      py={py}
       action={action}
     />
   );

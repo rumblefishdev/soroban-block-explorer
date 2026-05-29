@@ -44,19 +44,14 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
                   href={routes.asset(String(row.id))}
                 />
               ) : (
-                <Typography
-                  variant="bodySmMedium"
-                  sx={{ color: 'text.primary' }}
-                >
-                  —
-                </Typography>
+                <Dash />
               )}
               <Chip size="sm" color={meta.color} label={meta.label} />
             </Stack>
             {row.name && (
               <Typography
                 variant="bodyXsRegular"
-                sx={{ color: 'text.tertiary' }}
+                sx={(theme) => ({ color: theme.palette.text.secondary })}
               >
                 {row.name}
               </Typography>
@@ -89,7 +84,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           {formatAmount(row.total_supply)}
         </Typography>
         {row.asset_code && (
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             {row.asset_code}
           </Typography>
         )}

@@ -103,20 +103,20 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
         >
           <Typography
             component="span"
-            variant="bodyMonoSmRegular"
-            sx={{ color: 'text.primary' }}
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
           >
             {fn.name}
           </Typography>
           <Typography
             component="span"
-            variant="bodyMonoXsRegular"
-            sx={{
-              color: 'text.tertiary',
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.tertiary,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-            }}
+            })}
           >
             ({params}) → {returnType}
           </Typography>
@@ -135,7 +135,11 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
           {fn.doc !== '' && (
             <Typography
               variant="bodyXsRegular"
-              sx={{ color: 'text.tertiary', mb: 1, display: 'block' }}
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                mb: 1,
+                display: 'block',
+              })}
             >
               {fn.doc}
             </Typography>
@@ -143,8 +147,8 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
           {fn.inputs.length === 0 ? (
             <Typography
               component="div"
-              variant="bodyMonoXsRegular"
-              sx={{ color: 'text.tertiary' }}
+              variant="bodyMonoSmMedium"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
             >
               (no parameters)
             </Typography>
@@ -153,8 +157,8 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
               <Typography
                 key={`${param.name}-${index}`}
                 component="div"
-                variant="bodyMonoXsRegular"
-                sx={{ color: 'text.primary' }}
+                variant="bodyMonoSmMedium"
+                sx={(theme) => ({ color: theme.palette.text.tertiary })}
               >
                 {param.name}: <TypeTok type={param.type_name} position="arg" />
               </Typography>
@@ -168,8 +172,8 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
           />
           <Typography
             component="div"
-            variant="bodyMonoXsRegular"
-            sx={{ color: 'text.tertiary' }}
+            variant="bodyMonoSmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
             returns <TypeTok type={returnType} position="return" />
           </Typography>
@@ -199,29 +203,23 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+    return kind === 'rate-limit' ? (
+      <RateLimitState onRetry={retry} />
+    ) : kind === 'transient' ? (
+      <TransientErrorState onRetry={retry} />
+    ) : (
+      <GenericErrorState onRetry={retry} />
     );
   }
 
   const parsed = parseInterfaceMetadata(data?.interface_metadata);
   if (parsed == null || parsed.functions.length === 0) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <EmptyState
-          icon={<InfoOutlinedIcon fontSize="small" />}
-          title="No public interface"
-          description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
-        />
-      </Box>
+      <EmptyState
+        icon={<InfoOutlinedIcon fontSize="small" />}
+        title="No public interface"
+        description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+      />
     );
   }
 

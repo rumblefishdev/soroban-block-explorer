@@ -19,7 +19,7 @@ export default function HomePage() {
   return (
     <>
       <HomeHero />
-      <Stack spacing={10} sx={{ pb: 4 }}>
+      <Stack spacing={{ xs: 5, md: 10 }} sx={{ pb: 4 }}>
         <SectionErrorBoundary sectionName="chain-overview">
           <ChainOverview />
         </SectionErrorBoundary>

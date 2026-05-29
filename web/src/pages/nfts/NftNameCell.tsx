@@ -82,7 +82,12 @@ export function NftNameCell({ row }: NftNameCellProps) {
         />
         <Typography
           variant="bodyXsRegular"
-          sx={{ color: state === 'error' ? 'text.error' : 'text.secondary' }}
+          sx={(theme) => ({
+            color:
+              state === 'error'
+                ? theme.palette.text.error
+                : theme.palette.text.secondary,
+          })}
         >
           {state === 'error'
             ? `#${row.token_id} · Image unavailable`

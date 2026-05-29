@@ -98,7 +98,7 @@ export function Footer({ logo, navItems }: FooterProps) {
             gap={3}
             sx={{ width: { xs: '100%', md: 283 } }}
           >
-            <Box sx={{ display: 'flex', justifyContent: 'center', pr: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'left', pr: 2 }}>
               {logo}
             </Box>
             <Typography variant="bodySmMedium" color="text.tertiary">

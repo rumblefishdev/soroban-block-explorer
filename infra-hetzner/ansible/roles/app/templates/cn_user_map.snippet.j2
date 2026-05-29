@@ -4,9 +4,9 @@
 
     Imported into Caddyfile via `import snippets/cn_user_map.snippet`.
     Replaces the earlier `cn_allowlist.snippet` (task 0240): the map
-    IS the allowlist — any cert whose CN is not in the map leaves
-    `{ch_user}` empty, and the site block's `@no_user` matcher returns
-    403 before any backend hop.
+    IS the allowlist — any cert whose CN is not in the map gets the
+    `__unmapped__` sentinel (the `default` below), and the site block's
+    `@no_user` matcher returns 403 before any backend hop.
 
     ## Why we match on full DN, not just CN
 
@@ -26,16 +26,20 @@
     asserts every CN against `^[a-zA-Z0-9._-]+$` BEFORE Ansible
     reaches the box; the same regex the issuance script enforces.
 
-    An empty `clickhouse_cn_user_pairs` would emit an empty
-    `map { }` block. Caddy parses that fine; the site block's
-    `@no_user expression {ch_user} == ""` matcher then rejects
-    every request with 403. The site.yml preflight refuses the
-    empty case (`length > 0`) so we never reach that state in
-    practice — it's just the fail-closed behaviour at the Caddy
-    layer if the preflight is ever bypassed. -#}
+    An empty `clickhouse_cn_user_pairs` still emits the `default
+    "__unmapped__"` line, so every request maps to the sentinel and the
+    site block's `@no_user expression {ch_user} == "__unmapped__"`
+    matcher rejects it with 403 — fail-closed. The site.yml preflight
+    refuses the empty case (`length > 0`) so we never reach it anyway.
+
+    NOTE: a bare `== ""` does NOT work — an unset/empty {ch_user} does
+    not compare equal to "" in Caddy's CEL `expression` matcher, so the
+    gate silently never fired. The non-empty `default` sentinel keeps
+    {ch_user} always set, making the comparison reliable (task 0241). -#}
 map {http.request.tls.client.subject} {ch_user} {
 {% for pair in clickhouse_cn_user_pairs %}
 {%   set cn, user = (pair.split(':', 1) | map('trim') | list) %}
     "CN={{ cn }}"    {{ user }}
 {% endfor %}
+    default "__unmapped__"
 }

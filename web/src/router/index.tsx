@@ -45,7 +45,7 @@ export const router = createBrowserRouter([
 
       {
         path: 'accounts',
-        element: <PageStub title="Accounts" path="/accounts" />,
+        element: page(() => import('../pages/AccountsListPage.js')),
       },
       {
         path: 'accounts/:accountId',

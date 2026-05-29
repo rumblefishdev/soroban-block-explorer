@@ -41,38 +41,19 @@ use crate::{liquidity_pools, transactions};
 /// pass `connect_lazy("...")` (free until first query), DB-gated tests
 /// pass a real `PgPool::connect(...)` result.
 fn build_app(db: PgPool) -> Router {
-    let aws_cfg = aws_sdk_s3::config::Builder::new()
-        .region(aws_sdk_s3::config::Region::new("us-east-2"))
-        .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-        .credentials_provider(aws_sdk_s3::config::Credentials::new(
-            "test-access-key",
-            "test-secret-key",
-            None,
-            None,
-            "tests_integration",
-        ))
-        .timeout_config(crate::runtime_enrichment::stellar_archive::default_timeout_config())
-        .build();
-    let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
-    let contract_cache = crate::contracts::cache::new_contract_cache();
-    let network_cache = crate::network::cache::new_network_cache();
     // Real fetchers with default config. Integration tests below never
     // hit a real issuer or S3 (validation tests short-circuit before
     // any handler reaches the fetcher; DB-gated tests use fixtures).
     // Keeping them construct-only ensures AppState wiring stays exercised.
     let runtime_enrichment = RuntimeEnrichment {
-        stellar_archive: StellarArchiveFetcher::new(s3),
+        stellar_archive: StellarArchiveFetcher::new(
+            crate::runtime_enrichment::stellar_archive::test_client(),
+        ),
         sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
         nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .expect("build nft_token_uri fetcher"),
     };
-    let state = AppState {
-        db,
-        runtime_enrichment,
-        contract_cache,
-        network_cache,
-        network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
-    };
+    let state = AppState::for_tests(db, runtime_enrichment);
 
     let (router, _spec) = OpenApiRouter::new()
         .nest("/v1", transactions::router())

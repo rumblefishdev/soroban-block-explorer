@@ -65,9 +65,13 @@ function BalanceRow({
       type="asset"
       truncate={false}
       href={s.href}
+      fontSize={16}
     />
   ) : (
-    <Typography variant="bodyMedium" sx={{ color: 'text.primary' }}>
+    <Typography
+      variant="bodyMedium"
+      sx={(theme) => ({ color: theme.palette.text.primary })}
+    >
       {s.name}
     </Typography>
   );
@@ -136,10 +140,16 @@ function BalanceRow({
         </Box>
       </Stack>
       <Stack sx={{ alignItems: 'flex-end', flexShrink: 0 }} spacing={0.25}>
-        <Typography variant="bodyMedium" sx={{ color: 'text.primary' }}>
+        <Typography
+          variant="bodyMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
           {formatAmount(balance.balance, 2)}
         </Typography>
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
           {s.code}
         </Typography>
       </Stack>
@@ -163,13 +173,11 @@ export function AccountBalances({
   return (
     <SectionCard title="Balances" meta={meta}>
       {balances.length === 0 ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-          <EmptyState
-            icon={<AccountBalanceWalletIcon />}
-            title="No balances yet"
-            description="Balances will appear here once network activity begins"
-          />
-        </Box>
+        <EmptyState
+          icon={<AccountBalanceWalletIcon />}
+          title="No balances yet"
+          description="Balances will appear here once network activity begins"
+        />
       ) : (
         balances.map((balance, index) => (
           <BalanceRow

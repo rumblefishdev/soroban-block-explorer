@@ -64,16 +64,12 @@ export default function LedgerDetailPage() {
       return <NotFoundState entity="ledger" identifier={rawSequence} />;
     }
     const retry = () => void refetch();
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+    return kind === 'rate-limit' ? (
+      <RateLimitState onRetry={retry} py={8} />
+    ) : kind === 'transient' ? (
+      <TransientErrorState onRetry={retry} py={8} />
+    ) : (
+      <GenericErrorState onRetry={retry} py={8} />
     );
   }
 
@@ -92,16 +88,22 @@ export default function LedgerDetailPage() {
           <Link
             component={RouterLink}
             to={routes.ledgers}
-            variant="bodySmRegular"
+            variant="bodySmMedium"
             underline="hover"
-            sx={{ color: 'text.tertiary' }}
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
             Ledger
           </Link>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             /
           </Typography>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {sequenceLabel}
           </Typography>
         </Box>
@@ -114,7 +116,7 @@ export default function LedgerDetailPage() {
             flexWrap: 'wrap',
           }}
         >
-          <Typography variant="heading4SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Ledger {sequenceLabel}
           </Typography>
           <LedgerNav

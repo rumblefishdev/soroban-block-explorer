@@ -215,3 +215,16 @@ re-verify above. Basis: design_parity `06ab34cc` + live Playwright re-verify 202
 Card 8.3 stays **PARTIAL** (not DONE): its original scope bundled hamburger + touch
 targets, which are split out to C11.5/C11.6; only the scrollWidth + table-overflow
 portion is DONE. RESPONSIVE-1/2 RESOLVED are live-confirmed (not code-only).
+
+## RESPONSIVE-5 reclassification — live re-verify 2026-05-29
+
+**F-W6-RESPONSIVE-5 → RESOLVED (page overflow gone, live-confirmed 2026-05-29).** The
+2026-05-28 "NEW FAIL" page overflow (docW=644>375) is REFUTED on the R1+R2-merged build:
+`/search?q=test` @375 reports `documentElement.scrollWidth = 364 ≤ innerWidth 375` — no
+page-level horizontal scroll. The ~651px category-card row now sits in an `overflow-x:auto`
+container (clientWidth 332) and scrolls WITHIN the container — same scroll-within mitigation
+as embedded tables (RESPONSIVE-2), does not push page width. Residual: true per-card
+reflow/wrap still absent → optional NICE enhancement (same class as the RESPONSIVE-2
+table→card transform), not a bug. Card 11.7 → DONE-mitigated. Screenshot:
+`screenshots/search-375-no-page-overflow.png`. Source: `design-parity-impact-2026-05-29.md`
+§Live re-verify 2026-05-29 (item 7).

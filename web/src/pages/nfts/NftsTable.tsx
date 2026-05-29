@@ -14,7 +14,10 @@ interface NftsTableProps {
 
 function Dash() {
   return (
-    <Typography component="span" sx={{ color: 'text.tertiary' }}>
+    <Typography
+      component="span"
+      sx={(theme) => ({ color: theme.palette.text.tertiary })}
+    >
       —
     </Typography>
   );
@@ -31,7 +34,11 @@ const columns: ExplorerTableColumn<NftItem>[] = [
     header: 'Collection',
     cell: (row) =>
       row.collection_name ? (
-        <Typography component="span" variant="bodySmRegular">
+        <Typography
+          component="span"
+          variant="bodySmMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
           {row.collection_name}
         </Typography>
       ) : (

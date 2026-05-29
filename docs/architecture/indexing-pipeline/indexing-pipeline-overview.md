@@ -79,10 +79,41 @@ ends at ClickHouse on Hetzner via the mTLS proxy:
 Stellar Network peers / history archives
   -> Galexie on ECS Fargate (eu-central-1)
   -> S3 bucket: stellar-ledger-data
-  -> Lambda: Ledger Processor (eu-central-1, ARM64, out-of-VPC)
+  -> SQS queue: ledger-ingest          (S3 ObjectCreated notification)
+  -> Lambda: Ledger Processor (eu-central-1, ARM64, out-of-VPC; SQS event-source-mapping)
   -> Caddy mTLS reverse proxy (Hetzner AX52)
   -> ClickHouse 26.x (Hetzner AX52)
 ```
+
+The S3 → SQS → Lambda hop (not a direct S3 → Lambda trigger) is deliberate
+(task 0241), and the SQS message is treated as a **content-free doorbell**, not
+as "process this object":
+
+- S3 `ObjectCreated` → the `ledger-ingest` SQS queue. The message body is
+  ignored by the Lambda.
+- Each invocation runs a **reconcile**: read the durable cursor
+  `max(sequence)` from CH, then persist the **contiguous** run of ledgers from
+  `max + 1` upward — deriving each object key from the ledger number (Galexie's
+  one's-complement-hex scheme, `files_per_partition = 64000`) and HEAD-checking
+  S3 — stopping at the **first gap** (next ledger not yet on S3) or at a
+  per-invocation **time budget** (540 s, under the 600 s function timeout).
+- This guarantees **ascending, gapless processing without FIFO**: order comes
+  from the cursor + S3 contents, not SQS delivery order (which is unordered).
+  It is correct **only** at `reservedConcurrentExecutions = 1` (two concurrent
+  reconciles would race the cursor) — load-bearing, not a preference.
+- A reconcile that hits a gap or the time budget acks the doorbell; a hard
+  CH/S3 failure fails the doorbell → SQS redelivers (per `maxReceiveCount`) →
+  DLQ (`ledger-processor-dlq`), recoverable via SQS redrive-to-source.
+- The S3 → SQS notification stays wired even when the Lambda is paused
+  (`indexerLambdaConcurrency = 0`), so a paused indexer still captures events
+  durably (visible `ApproximateNumberOfMessages`, multi-day retention) instead
+  of dropping them.
+
+A backlog drains across the stream of doorbells (one per S3 file ≫ the handful
+of time-budget stops needed); the next doorbell always resumes from the
+advanced `max`. **Strictly ordered bulk loads** (e.g. a snapshot-restore
+re-run) still go through `crates/backfill-runner` (sequential by ledger
+number), not this live path.
 
 Historical backfill runs through `crates/backfill-runner` on operator
 workstations and lands directly into the same Hetzner ClickHouse (the
@@ -91,13 +122,17 @@ workstations and lands directly into the same Hetzner ClickHouse (the
 
 ### 3.2 Main Runtime Components
 
-The pipeline depends on five primary runtime components:
+The pipeline depends on six primary runtime components:
 
 - **Galexie on ECS Fargate (eu-central-1)** for canonical ledger export
 - **S3** for transient `LedgerCloseMeta` object storage
+- **`ledger-ingest` SQS queue** as the durable buffer between S3 and the
+  Lambda (S3 `ObjectCreated` → SQS; redrive → `ledger-processor-dlq` after
+  `maxReceiveCount`)
 - **Ledger Processor Lambda** for event-driven parsing and persistence (ARM64,
   out-of-VPC, AWS Parameters and Secrets Lambda Extension for mTLS cert
-  retrieval)
+  retrieval; driven by an SQS event-source-mapping with
+  `ReportBatchItemFailures`)
 - **Caddy reverse proxy on Hetzner** terminates mTLS, validates the client
   cert chain, maps the cert CN → CH user via `CLICKHOUSE_CN_USER_MAP`, and
   forwards to the local CH on loopback (per
@@ -284,7 +319,8 @@ Live ingestion and backfill now write to the same Hetzner CH instance. The
 indexer crate's `parse_ledger` half is shared; the persist half is two-flavored:
 
 - **live (Lambda):** Galexie (ECS Fargate eu-central-1) → S3
-  `stellar-ledger-data` → Ledger Processor Lambda → Caddy mTLS → Hetzner CH
+  `stellar-ledger-data` → `ledger-ingest` SQS → Ledger Processor Lambda →
+  Caddy mTLS → Hetzner CH
 - **backfill (CLI):** `backfill-runner --target clickhouse` → same parse path
   → `db_clickhouse::persist::PartitionWriter` → Hetzner CH
 
@@ -354,7 +390,8 @@ The Ledger Processor is the primary ingestion worker.
 
 Its responsibilities are:
 
-- consume S3 PutObject-triggered ledger artifacts
+- consume ledger artifacts via the `ledger-ingest` SQS queue (fed by S3
+  `ObjectCreated`)
 - parse and decode canonical XDR payloads
 - treat ledger sequence as the canonical ordering key for writes
 - extract structured explorer data
@@ -396,6 +433,7 @@ The normal live path is:
 
 ```text
 Galexie (ECS Fargate eu-central-1) -> S3 (~5-6 s per ledger)
+                                    -> ledger-ingest SQS
                                     -> Lambda Ledger Processor
                                     -> Caddy mTLS (Hetzner)
                                     -> ClickHouse 26.x
@@ -412,21 +450,28 @@ The pipeline currently assumes:
 
 - **Galexie restart recovery**: Galexie is checkpoint-aware and resumes from the last
   exported ledger automatically
-- **Ledger Processor failure recovery**: Lambda retries S3-triggered processing
-  automatically
-- **Permanent processing failure**: failed files remain in S3 and can be replayed by
-  re-triggering the Lambda with the S3 key
-- **Replay safety and ordering**: per-ledger CH writes use the commit-marker
-  pattern (`persist_ledger_clickhouse` wrapper writes the `ledgers` row as
-  the last insert per ledger). A mid-ledger failure leaves no `ledgers`
-  row for that ledger; the Lambda returns Err, S3 redelivers the whole
-  batch, and any already-committed earlier ledgers in the batch may
-  produce duplicate `ledgers` rows on replay (handled via
-  `count(DISTINCT sequence)` per runbook B-2 — `ledgers` itself is plain
-  MergeTree by design). `ReplacingMergeTree(version_column)` collapses any
-  orphan non-`ledgers` rows on the next background merge. Derived-state
-  updates are monotonic by ledger sequence so older replays cannot regress
-  newer state
+- **Ledger Processor failure recovery**: the doorbell reconcile resumes from
+  the durable cursor (`max(sequence)`), so recovery needs no per-event state.
+  A reconcile that hits a gap or its time budget acks the doorbell; a hard
+  CH/S3 failure reports it via `ReportBatchItemFailures` → SQS redelivers it
+  after the visibility timeout, up to `maxReceiveCount`. In-band transient CH
+  errors are retried first within the `[50, 200, 800] ms` envelope before the
+  doorbell is failed back to SQS.
+- **Permanent processing failure**: after `maxReceiveCount` the doorbell lands
+  in `ledger-processor-dlq` (the underlying ledger files stay in S3). Recover
+  by SQS redrive-to-source from the DLQ back to `ledger-ingest` (native SQS
+  operation) once the cause is fixed — any doorbell re-triggers the same
+  cursor-based reconcile.
+- **Replay safety and ordering**: the reconcile advances strictly ascending
+  from `max + 1` and stops at the first S3 gap, so a stalled predecessor
+  blocks its successors — no out-of-order persistence. Per-ledger CH writes
+  use the commit-marker pattern (`persist_ledger_clickhouse` writes the
+  `ledgers` row last); a mid-ledger failure leaves no `ledgers` row, so the
+  next reconcile resumes at exactly that ledger without reprocessing the
+  committed ones. `ReplacingMergeTree(version_column)` still collapses any
+  orphan non-`ledgers` rows on the next background merge, and derived state is
+  monotonic by ledger sequence — `ledgers` itself stays plain MergeTree, so
+  correctness queries use `count(DISTINCT sequence)` (runbook B-2)
 
 These are core reliability assumptions of the ingestion architecture.
 

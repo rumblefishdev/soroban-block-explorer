@@ -133,6 +133,37 @@ export function TimeSeriesChart({
   const yData = useMemo(() => data.map((point) => point.value), [data]);
   const isEmpty = data.length === 0;
 
+  const { yMin, yMax } = useMemo(() => {
+    if (yData.length === 0) return { yMin: undefined, yMax: undefined };
+    const min = Math.min(...yData);
+    const max = Math.max(...yData);
+    const pad = Math.max((max - min) * 0.1, max * 0.001);
+    return { yMin: min - pad, yMax: max + pad };
+  }, [yData]);
+
+  const xSpanMs =
+    xData.length > 1
+      ? xData[xData.length - 1]!.getTime() - xData[0]!.getTime()
+      : 0;
+  const formatXTick = (date: Date): string => {
+    if (xSpanMs <= 36 * 60 * 60 * 1000) {
+      return date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+    if (xSpanMs <= 90 * 24 * 60 * 60 * 1000) {
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      });
+    }
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      year: '2-digit',
+    });
+  };
+
   return (
     <Stack spacing={2}>
       <Stack
@@ -142,14 +173,14 @@ export function TimeSeriesChart({
         spacing={2}
         flexWrap="wrap"
       >
-        <Stack spacing={0.25}>
+        <Stack spacing={0.75}>
           {title !== undefined && (
-            <Typography variant="heading5SemiBold" color="text.primary">
+            <Typography variant="heading6SemiBold" color="text.primary">
               {title}
             </Typography>
           )}
           {subtitle !== undefined && (
-            <Typography variant="bodySmRegular" color="text.secondary">
+            <Typography variant="bodyMedium" color="text.secondary">
               {subtitle}
             </Typography>
           )}
@@ -185,35 +216,54 @@ export function TimeSeriesChart({
           height={height}
           hideLegend
           grid={{ horizontal: true }}
-          margin={{ left: 12, right: 12, top: 8, bottom: 8 }}
-          xAxis={[{ data: xData, scaleType: 'time' }]}
-          yAxis={[{ valueFormatter: (value: number) => formatValue(value) }]}
+          margin={{ left: 56, right: 16, top: 8, bottom: 8 }}
+          xAxis={[
+            {
+              data: xData,
+              scaleType: 'time',
+
+              tickNumber: 6,
+              valueFormatter: (date: Date, ctx) => {
+                if (ctx.location === 'tick') return formatXTick(date);
+                return date.toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                });
+              },
+            },
+          ]}
+          yAxis={[
+            {
+              valueFormatter: (value: number) => formatValue(value),
+
+              min: yMin,
+              max: yMax,
+              domainLimit: 'nice',
+
+              width: 64,
+            },
+          ]}
           series={[
             {
               data: yData,
               area: variant === 'area',
               showMark: true,
-              color: scales.blue[600],
+              color: scales.blue[400],
               valueFormatter: formatValue,
             },
           ]}
           sx={{
-            // Figma node `325:24354` — the data line carries a soft
-            // blue glow and the marks are hollow rings (light fill,
-            // brighter blue stroke). MUI X renders marks as `<circle>`
-            // inside `MuiMarkElement-root`; size the circle (`r`),
-            // fill it with the 100 tint, and stroke it with 400 to
-            // match the design.
-            '& .MuiLineElement-root': {
+            '&& .MuiLineChart-line': {
               strokeWidth: 2,
-              filter: `drop-shadow(0px 3px 8px ${scales.blue[600]}59)`,
             },
-            '& .MuiMarkElement-root': {
+            '&& .MuiLineChart-mark': {
               fill: scales.blue[100],
-              stroke: scales.blue[600],
-              strokeWidth: 2,
-              r: 6,
-              scale: '1',
+
+              stroke: `${scales.blue[400]}aa`,
+              strokeWidth: 6,
+              r: 3,
             },
           }}
         />

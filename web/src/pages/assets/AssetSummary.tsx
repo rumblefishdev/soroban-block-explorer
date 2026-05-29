@@ -18,11 +18,17 @@ function SupplyValue({
 }) {
   return (
     <Stack>
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
+      <Typography
+        variant="bodySmBold"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(supply)}
       </Typography>
       {code && (
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.secondary })}
+        >
           {code}
         </Typography>
       )}

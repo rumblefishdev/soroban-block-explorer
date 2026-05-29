@@ -32,7 +32,10 @@ interface NftTransfersProps {
 
 function Dash() {
   return (
-    <Typography component="span" sx={{ color: 'text.tertiary' }}>
+    <Typography
+      component="span"
+      sx={(theme) => ({ color: theme.palette.text.tertiary })}
+    >
       —
     </Typography>
   );
@@ -115,26 +118,22 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} py={8} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} py={8} />
+      ) : (
+        <GenericErrorState onRetry={retry} py={8} />
+      );
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <EmptyState
-          icon={<SwapHorizIcon />}
-          title="No transfer history"
-          description="This NFT has no recorded mint, transfer or burn events."
-        />
-      </Box>
+      <EmptyState
+        icon={<SwapHorizIcon />}
+        title="No transfer history"
+        description="This NFT has no recorded mint, transfer or burn events."
+        py={8}
+      />
     );
   } else {
     body = (

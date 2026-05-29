@@ -131,7 +131,13 @@ export interface EnvironmentConfig {
 
   // Observability — CloudWatch alarms (consumed by CloudWatchStack)
 
-  /** Minutes of zero Ledger Processor invocations before the Galexie lag alarm fires. */
+  /**
+   * Length of the rolling window (in minutes) over which the Galexie lag alarm
+   * sums Ledger Processor invocations. Alarm fires when the sum is 0 — i.e.,
+   * no invocation started in the last N minutes. Must exceed the worst-case
+   * single-invocation runtime so a long-running batch does not trigger a
+   * false positive (current cap = `indexerLambdaTimeout` ≈ 10 min).
+   */
   readonly galexieLagMinutes: number;
   /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
@@ -142,7 +148,7 @@ export interface EnvironmentConfig {
   /** Slack channel ID for AWS Chatbot alarm notifications. */
   readonly slackChannelId: string;
 
-  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, MigrationStack, PartitionStack, HetznerDnsStack)
+  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, HetznerDnsStack)
 
   /**
    * FQDN that Route 53 maps to the Hetzner ClickHouse box. Used as both

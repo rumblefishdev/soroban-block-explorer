@@ -182,6 +182,8 @@ export function ExplorerTable<T>({
                       idx % 2 === 1
                         ? theme.palette.surface.grayMainAlt
                         : theme.palette.surface.grayMain,
+
+                    height: 44,
                   })}
                 >
                   {columns.map((col) => (

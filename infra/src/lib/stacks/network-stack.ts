@@ -61,7 +61,7 @@ export class NetworkStack extends cdk.Stack {
     // ---------------------
     const ecsSg = new ec2.SecurityGroup(this, 'EcsSg', {
       vpc,
-      description: 'ECS Fargate tasks (Galexie ingestion) — public subnet',
+      description: 'ECS Fargate tasks (Galexie ingestion) - public subnet',
       allowAllOutbound: false,
     });
     // DNS — Fargate tasks resolve ECR / CloudWatch / S3 / Hetzner CH

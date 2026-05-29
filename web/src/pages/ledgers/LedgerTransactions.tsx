@@ -32,13 +32,11 @@ export function LedgerTransactions({
       <TableSectionHeader title="Transactions in this ledger" />
       <Box sx={{ minHeight: 200 }}>
         {rows.length === 0 ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-            <TableEmptyState
-              kind="transactions"
-              title="No transactions in this ledger"
-              description="This ledger closed without any transactions."
-            />
-          </Box>
+          <TableEmptyState
+            kind="transactions"
+            title="No transactions in this ledger"
+            description="This ledger closed without any transactions."
+          />
         ) : (
           <TransactionsTable rows={rows} />
         )}

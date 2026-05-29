@@ -34,7 +34,11 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Shares',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(row.shares)}
       </Typography>
     ),
@@ -44,7 +48,11 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Share %',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {row.share_percentage != null
           ? `${formatAmount(row.share_percentage, 2)}%`
           : '—'}
@@ -104,26 +112,21 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} />
+      ) : (
+        <GenericErrorState onRetry={retry} />
+      );
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <EmptyState
-          icon={<GroupIcon />}
-          title="No participants yet"
-          description="This pool currently has no active liquidity providers."
-        />
-      </Box>
+      <EmptyState
+        icon={<GroupIcon />}
+        title="No participants yet"
+        description="This pool currently has no active liquidity providers."
+      />
     );
   } else {
     body = (

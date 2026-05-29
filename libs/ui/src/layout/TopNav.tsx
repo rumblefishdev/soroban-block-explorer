@@ -4,7 +4,6 @@ import type { ReactNode } from 'react';
 
 import { formatInteger, formatTps } from '../format/index.js';
 import { grid } from '../theme/grid.js';
-import { monoFontFamily } from '../theme/typography.js';
 import { SearchInput } from './SearchInput.js';
 
 /**
@@ -56,20 +55,12 @@ function Stat({
   valueColor?: string;
 }) {
   return (
-    <Box display="flex" alignItems="center" gap={1} flexShrink={0}>
+    <Box display="flex" alignItems="baseline" gap={1} flexShrink={0}>
       <Typography variant="bodySmMedium" color="text.tertiary" noWrap>
         {label}
       </Typography>
-      <Typography
-        noWrap
-        sx={{
-          fontFamily: monoFontFamily,
-          fontSize: 14,
-          fontWeight: 500,
-          lineHeight: 1.4,
-          color: valueColor,
-        }}
-      >
+
+      <Typography variant="bodyMonoSmMedium" noWrap sx={{ color: valueColor }}>
         {value}
       </Typography>
     </Box>
@@ -107,6 +98,7 @@ export function TopNav({
       <Box
         sx={{
           display: 'flex',
+          flexWrap: { xs: 'wrap', lg: 'nowrap' },
           alignItems: 'center',
           justifyContent: 'space-between',
           width: '100%',
@@ -130,11 +122,13 @@ export function TopNav({
         >
           <Box
             sx={{
-              display: { xs: 'none', md: 'flex' },
+              display: 'flex',
               alignItems: 'center',
               gap: 1.5,
               minWidth: 0,
-              overflow: 'hidden',
+              overflowX: 'auto',
+              scrollbarWidth: 'none',
+              '&::-webkit-scrollbar': { display: 'none' },
             }}
           >
             <Stat
@@ -160,7 +154,14 @@ export function TopNav({
           </Box>
         </Box>
 
-        <Box sx={{ position: 'relative', flexShrink: 0, minWidth: 0 }}>
+        <Box
+          sx={{
+            position: 'relative',
+            flexShrink: 0,
+            minWidth: 0,
+            width: { xs: '100%', lg: 'auto' },
+          }}
+        >
           <SearchInput
             value={searchValue}
             onChange={onSearchChange}

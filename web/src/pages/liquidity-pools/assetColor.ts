@@ -27,19 +27,19 @@ export interface AssetColor {
 const BLUE: AssetColor = {
   bg: colorsLight.blue[100],
   fg: colorsLight.blue[900],
-  dot: colorsLight.blue[600],
+  dot: colorsLight.blue[400],
 };
 
 const EMERALD: AssetColor = {
   bg: colorsLight.emerald[100],
   fg: colorsLight.emerald[900],
-  dot: colorsLight.emerald[600],
+  dot: colorsLight.emerald[400],
 };
 
 const VIOLET: AssetColor = {
   bg: colorsLight.violet[100],
   fg: colorsLight.violet[900],
-  dot: colorsLight.violet[600],
+  dot: colorsLight.violet[400],
 };
 
 const GREEN: AssetColor = {

@@ -180,7 +180,18 @@ pub fn client_with_mtls(
     }
     let key = parse_private_key(&bundle.key_pem)?;
 
+    // Server-cert trust store — used by the client to verify the *server's*
+    // certificate during the TLS handshake. Caddy fronts ClickHouse with a
+    // Let's Encrypt cert (chains to a public root), so we MUST seed the
+    // Mozilla WebPKI roots; the original implementation seeded only
+    // `bundle.ca_pem`, so every handshake failed server-cert verification of
+    // the LE chain → `Error::Network` ("ClickHouse network error") on every
+    // persist. We additionally keep the bundle CA so an internal-PKI server
+    // cert would also verify (defence-in-depth; harmless alongside WebPKI).
+    // Note: `bundle.ca_pem` is primarily the CA that signed *our client*
+    // cert, which the server (Caddy `client_auth`) verifies — not us.
     let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     for ca in parse_certs(&bundle.ca_pem)? {
         roots
             .add(ca)

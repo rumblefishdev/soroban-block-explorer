@@ -85,19 +85,35 @@ async fn main() {
         .json()
         .init();
 
-    tracing::info!("api cold start — resolving database credentials");
+    let config = AppConfig::from_env();
+    tracing::info!(ch_enabled = config.ch_enabled, "api cold start");
 
-    let database_url = db::secrets::resolve_or_env()
-        .await
-        .expect("failed to resolve database URL");
-
-    let db = db::pool::create_pool(&database_url).expect("failed to create DB pool");
-    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+    // Overlap the two independent network fetches: PG secrets resolution
+    // and (when configured) the mTLS bundle fetch from the Secrets
+    // Lambda Extension. Both are tens to hundreds of milliseconds; running
+    // them sequentially would double the cold-start budget on CH-enabled
+    // deploys.
+    let database_url_fut = db::secrets::resolve_or_env();
+    let ch_fut = async {
+        if config.ch_enabled {
+            Some(
+                db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
+                    .await
+                    .expect("failed to build mTLS ClickHouse client"),
+            )
+        } else {
+            None
+        }
+    };
+    let aws_config_fut = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
         .region(aws_sdk_s3::config::Region::new("us-east-2"))
         .timeout_config(runtime_enrichment::stellar_archive::default_timeout_config())
-        .load()
-        .await;
+        .load();
+    let (database_url, ch, aws_config) = tokio::join!(database_url_fut, ch_fut, aws_config_fut);
+    let database_url = database_url.expect("failed to resolve database URL");
+
+    let db = db::pool::create_pool(&database_url).expect("failed to create DB pool");
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(s3_client),
@@ -106,7 +122,6 @@ async fn main() {
             .expect("failed to build NFT token_uri HTTP client"),
     };
 
-    let config = AppConfig::from_env();
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
         panic!(
             "STELLAR_NETWORK_PASSPHRASE env not set; required to align tx_set \
@@ -116,13 +131,7 @@ async fn main() {
         )
     });
     let network_id = xdr_parser::network_id(&passphrase);
-    let state = AppState {
-        db,
-        runtime_enrichment,
-        contract_cache: contracts::cache::new_contract_cache(),
-        network_cache: network::cache::new_network_cache(),
-        network_id,
-    };
+    let state = AppState::new(db, ch, runtime_enrichment, network_id);
     let app = app(&config, state);
 
     lambda_http::run(app).await.expect("failed to run Lambda");
@@ -139,6 +148,7 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             base_url: "http://localhost:9000".to_string(),
+            ch_enabled: false,
         }
     }
 
@@ -146,15 +156,10 @@ mod tests {
     fn test_app() -> Router {
         let db = sqlx::PgPool::connect_lazy("postgres://localhost/test_unused")
             .expect("connect_lazy never fails");
-        // Build a minimal StellarArchiveFetcher using a stub AWS config.
-        // The S3 client will not be called during spec/health tests.
-        let aws_cfg = aws_sdk_s3::config::Builder::new()
-            .region(aws_sdk_s3::config::Region::new("us-east-2"))
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .build();
-        let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
         let runtime_enrichment = RuntimeEnrichment {
-            stellar_archive: StellarArchiveFetcher::new(s3),
+            stellar_archive: StellarArchiveFetcher::new(
+                runtime_enrichment::stellar_archive::test_client(),
+            ),
             // Real SEP-1 fetcher with a stub HTTP client. The spec / health
             // tests below never reach get_asset, so the client never makes a
             // real request.
@@ -162,16 +167,7 @@ mod tests {
             nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        app(
-            &test_config(),
-            AppState {
-                db,
-                runtime_enrichment,
-                contract_cache: contracts::cache::new_contract_cache(),
-                network_cache: network::cache::new_network_cache(),
-                network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
-            },
-        )
+        app(&test_config(), AppState::for_tests(db, runtime_enrichment))
     }
 
     #[tokio::test]

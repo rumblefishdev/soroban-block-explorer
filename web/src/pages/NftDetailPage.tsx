@@ -29,7 +29,10 @@ function Breadcrumb({
   tokenId: string;
 }) {
   const sep = (
-    <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+    <Typography
+      variant="bodySmMedium"
+      sx={(theme) => ({ color: theme.palette.text.tertiary })}
+    >
       /
     </Typography>
   );
@@ -38,22 +41,28 @@ function Breadcrumb({
       <Link
         component={RouterLink}
         to={routes.nfts}
-        variant="bodySmRegular"
+        variant="bodySmMedium"
         underline="hover"
-        sx={{ color: 'text.tertiary' }}
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
       >
         NFTs
       </Link>
       {collection ? (
         <>
           {sep}
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             {collection}
           </Typography>
         </>
       ) : null}
       {sep}
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         #{tokenId}
       </Typography>
     </Box>
@@ -101,16 +110,12 @@ export default function NftDetailPage() {
       );
     }
     const retry = () => void refetch();
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+    return kind === 'rate-limit' ? (
+      <RateLimitState onRetry={retry} py={8} />
+    ) : kind === 'transient' ? (
+      <TransientErrorState onRetry={retry} py={8} />
+    ) : (
+      <GenericErrorState onRetry={retry} py={8} />
     );
   }
 
@@ -122,7 +127,10 @@ export default function NftDetailPage() {
 
   const title = nft.name?.trim() || `Token ${nft.token_id}`;
   const collectionLine: ReactNode = nft.collection_name ? (
-    <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
+    <Typography
+      variant="bodyMedium"
+      sx={(theme) => ({ color: theme.palette.text.secondary })}
+    >
       Collection:{' '}
       <Box component="span" sx={{ fontWeight: 700 }}>
         {nft.collection_name}
@@ -150,7 +158,7 @@ export default function NftDetailPage() {
 
         <Stack spacing={2} sx={{ flex: 1, minWidth: 320 }}>
           <Box>
-            <Typography variant="heading4SemiBold" component="h1">
+            <Typography variant="heading5SemiBold" component="h1">
               {title}
             </Typography>
             {collectionLine}

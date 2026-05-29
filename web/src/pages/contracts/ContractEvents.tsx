@@ -61,21 +61,24 @@ function TopicsCell({ topics }: { topics: readonly unknown[] }) {
       component="span"
       variant="bodyMonoXsRegular"
       title={full}
-      sx={{
+      sx={(theme) => ({
         display: 'block',
         maxWidth: 380,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
-        color: 'text.secondary',
-      }}
+        color: theme.palette.text.secondary,
+      })}
     >
       [
       {topics.map((topic, index) => (
         <Box component="span" key={index}>
           {index > 0 && ', '}
           {typeof topic === 'string' ? (
-            <Box component="span" sx={{ color: 'text.success' }}>
+            <Box
+              component="span"
+              sx={(theme) => ({ color: theme.palette.text.success })}
+            >
               {`"${truncateMiddle(topic, { prefix: 4, suffix: 4 })}"`}
             </Box>
           ) : (
@@ -107,14 +110,14 @@ function DataCell({ data }: { data: unknown }) {
       component="span"
       variant="bodyMonoXsRegular"
       title={full}
-      sx={{
+      sx={(theme) => ({
         display: 'block',
         maxWidth: 260,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
-        color: 'text.primary',
-      }}
+        color: theme.palette.text.primary,
+      })}
     >
       {display}
     </Typography>
@@ -187,26 +190,22 @@ export function ContractEvents({ contractId }: { contractId: string }) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} />
+      ) : (
+        <GenericErrorState onRetry={retry} />
+      );
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState
-          kind="transactions"
-          title="No events"
-          description="This contract has not emitted any events yet."
-        />
-      </Box>
+      <TableEmptyState
+        kind="transactions"
+        title="No events"
+        description="This contract has not emitted any events yet."
+        py={6}
+      />
     );
   } else {
     body = (

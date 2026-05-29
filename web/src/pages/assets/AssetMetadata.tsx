@@ -50,16 +50,21 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
             href={safeUrl}
             target="_blank"
             rel="noopener noreferrer"
-            variant="bodySmRegular"
-            sx={{ color: 'text.accent', wordBreak: 'break-all' }}
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.accent,
+              wordBreak: 'break-all',
+            })}
           >
             {asset.home_page}
           </Link>
         ) : (
-          // Non-http(s) value — show as plain text, never as a clickable href.
           <Typography
-            variant="bodySmRegular"
-            sx={{ color: 'text.primary', wordBreak: 'break-all' }}
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.primary,
+              wordBreak: 'break-all',
+            })}
           >
             {asset.home_page}
           </Typography>
@@ -82,7 +87,10 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
     <SectionCard title="Metadata" meta="From TOML">
       {!hasAny ? (
         <Box sx={{ p: 3, textAlign: 'center' }}>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             No metadata available for this asset
           </Typography>
         </Box>

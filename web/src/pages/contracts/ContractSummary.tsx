@@ -1,4 +1,4 @@
-import { Card, Stack, Typography } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { ContractDetailResponse } from '@rumblefish/api-types';
 import {
   formatAmount,
@@ -6,25 +6,10 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { KpiCell } from '../detail/KpiCell.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 import { Dash } from '../transactions/cells.js';
-
-/** One left-aligned stat tile: small label above a large value. */
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card sx={{ flex: 1, p: 2 }}>
-      <Stack spacing={1}>
-        <Typography variant="bodySmRegular" sx={{ color: 'text.secondary' }}>
-          {label}
-        </Typography>
-        <Typography variant="heading2Bold" sx={{ color: 'text.primary' }}>
-          {value}
-        </Typography>
-      </Stack>
-    </Card>
-  );
-}
 
 /**
  * Contract summary block — windowed stat tiles plus the metadata card
@@ -41,11 +26,11 @@ export function ContractSummary({
   return (
     <Stack spacing={3}>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3}>
-        <StatCard
+        <KpiCell
           label="Total invocations"
           value={formatAmount(stats.recent_invocations)}
         />
-        <StatCard
+        <KpiCell
           label="Unique callers"
           value={formatAmount(stats.recent_unique_callers)}
         />

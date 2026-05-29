@@ -168,6 +168,58 @@ impl StellarArchiveFetcher {
 }
 
 #[cfg(test)]
+pub(crate) fn test_client() -> S3Client {
+    use aws_smithy_runtime_api::client::http::{
+        HttpClient, HttpConnector, HttpConnectorFuture, HttpConnectorSettings, SharedHttpConnector,
+    };
+    use aws_smithy_runtime_api::client::orchestrator::HttpRequest;
+    use aws_smithy_runtime_api::client::result::ConnectorError;
+    use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
+
+    #[derive(Debug)]
+    struct NoTrafficHttpClient;
+
+    impl HttpClient for NoTrafficHttpClient {
+        fn http_connector(
+            &self,
+            _settings: &HttpConnectorSettings,
+            _components: &RuntimeComponents,
+        ) -> SharedHttpConnector {
+            SharedHttpConnector::new(NoTrafficConnector)
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoTrafficConnector;
+
+    impl HttpConnector for NoTrafficConnector {
+        fn call(&self, _request: HttpRequest) -> HttpConnectorFuture {
+            HttpConnectorFuture::new(async {
+                Err(ConnectorError::user(
+                    std::io::Error::other("test S3 client does not allow network traffic").into(),
+                ))
+            })
+        }
+    }
+
+    let aws_cfg = aws_sdk_s3::config::Builder::new()
+        .region(aws_sdk_s3::config::Region::new("us-east-2"))
+        .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+        .credentials_provider(aws_sdk_s3::config::Credentials::new(
+            "test-access-key",
+            "test-secret-key",
+            None,
+            None,
+            "stellar_archive_test_client",
+        ))
+        .timeout_config(default_timeout_config())
+        .http_client(NoTrafficHttpClient)
+        .build();
+
+    S3Client::from_conf(aws_cfg)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use aws_config::BehaviorVersion;

@@ -46,7 +46,10 @@ export function LiveIndicator() {
       <Typography
         component="span"
         variant="bodyXsMedium"
-        sx={{ color: 'text.secondary', letterSpacing: '0.06em' }}
+        sx={(theme) => ({
+          color: theme.palette.text.secondary,
+          letterSpacing: '0.06em',
+        })}
       >
         {STATUS_LABEL[status]}
       </Typography>
