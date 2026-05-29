@@ -753,18 +753,20 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **AL
 - **Effort:** ~1w
 - **Severity / Class:** 🟠 D (pre-launch maintenance risk)
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** PARTIAL
 
-**Rationale.** Zero `*.test.*` / `*.spec.*` files across `web/src/` + `libs/ui/src/`. Single biggest pre-launch maintenance risk per F-AD-5. Documented as 0257 dropped scope `O`. Spawn the testing-baseline task with the inheritance chain `related_tasks: ['0238', '0254', '0257']` (per Q-7 forward-link note).
+- **0226 landed 2026-05-29 note:** Task 0226 SHIPPED via PR #225 (ab170804) — Vitest + Testing Library infra + 132 tests across 17 files (libs/ui: PaginationControls, usePageHandlers, useTableUrlState; web: AccountDetailPage, AccountsListPage, AssetDetailPage, AssetsListPage, TransactionsListPage + format/formatters/operationTypes/assetType/interfaceMetadata/pool-detail-helpers/directRouteFor). Vitest infra + unit/component baseline = DONE. **Residual (keeps card PARTIAL):** Playwright CLI smoke for 11 paginated pages, CI test gate wiring, `useDebouncedDraft` tests (hook is C2.1 refactor output — not yet created), explicit `truncateMiddle`/`useCursorPagination` unit tests. The 0226 test files also now PROTECT the C2.1 format-truncate refactor (format/formatters/operationTypes tests guard the unification).
 
-**Scope.** Spawn / promote task 0226 (libs/ui vitest infra). Promote / activate. Add unit tests for: `truncateMiddle`, `useCursorPagination`, `formatAmount`, `useDebouncedDraft`. Add Playwright CLI smoke for 11 paginated pages (blocks 0077, 0238). Wire CI gate.
+**Rationale.** Zero `*.test.*` / `*.spec.*` files across `web/src/` + `libs/ui/src/`. Single biggest pre-launch maintenance risk per F-AD-5. Documented as 0257 dropped scope `O`. Spawn the testing-baseline task with the inheritance chain `related_tasks: ['0238', '0254', '0257']` (per Q-7 forward-link note). **[0226 shipped — see landed note above; zero-coverage premise no longer holds.]**
+
+**Scope.** ~~Spawn / promote task 0226 (libs/ui vitest infra).~~ **DONE (PR #225).** Residual: explicit `truncateMiddle`, `useCursorPagination`, `useDebouncedDraft` (post-C2.1) unit tests. Add Playwright CLI smoke for 11 paginated pages (blocks 0077, 0238). Wire CI gate.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-AD-5 — Zero test coverage (cross-cite)
-- [ ] F-AH-6 — No tests collocated or in `__tests__/`
-- [ ] A4 — Task 0226 backlog since 2026-05-15 unblocks 4 deferred items
-- [ ] 0226 promote — blocks 0073/0074/0077/0238 Playwright CLI runs + unit tests
+- [~] F-AD-5 — Zero test coverage (cross-cite) — **PARTIAL: 132 tests shipped 0226 PR #225; zero-coverage premise gone**
+- [ ] F-AH-6 — No tests collocated or in `__tests__/` — **0226 collocated `*.test.*` next to source ✓ (verify convention)**
+- [x] A4 — Task 0226 backlog since 2026-05-15 unblocks 4 deferred items — **RESOLVED: 0226 shipped PR #225**
+- [x] 0226 promote — blocks 0073/0074/0077/0238 Playwright CLI runs + unit tests — **DONE: 0226 landed; Playwright CLI smoke still pending (separate)**
 - [ ] 0077 Future Work — Playwright CLI regression for both LP pages
 - [ ] 0238 Future Work — Unit tests for `useCursorPagination`, Playwright CLI smoke
 - [ ] 0257 dropped scope O — testing coverage
@@ -1220,7 +1222,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | A1                                             | 1           | 🔴      | —                       | RESOLVED    | TxDetail stub — a2c1b205 (FilipDz PR #215)                                  |
 | A2                                             | 1           | 🟠      | C 6.1                   | TODO        | 0066 task body drift                                                        |
 | A3                                             | 1           | 🟠      | C 6.2                   | TODO        | 25/28 Future Work un-spawned                                                |
-| A4                                             | 1           | 🟡      | C 8.1                   | TODO        | 0226 test infra blocked                                                     |
+| A4                                             | 1           | 🟡      | C 8.1                   | RESOLVED    | 0226 shipped PR #225 (ab170804) — 132 tests + vitest infra; unblocks deferred items |
 | A5                                             | 1           | 🟡      | C 10.1                  | TODO        | 0199/0215 LP blocked                                                        |
 | F-AF-1                                         | 1           | 🟡      | C 8.4                   | TODO        | Error interceptor flattens envelope                                         |
 | F-AF-2                                         | 1           | 🟢      | C 8.4                   | TODO        | Object.assign(error) smell                                                  |
@@ -1449,7 +1451,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-AD-2                                         | 5           | 🟢      | C 6.4                   | TODO        | Onboarding doc polish                                                       |
 | F-AD-3                                         | 5           | 🟢      | C 7.1                   | TODO        | 3 inline magic numbers (1500ms, 1062, 1064)                                 |
 | F-AD-4                                         | 5           | 🟢      | —                       | RESOLVED    | Zero implicit-context surprises (baseline)                                  |
-| F-AD-5                                         | 5           | 🟠      | C 8.1                   | TODO        | Zero test coverage (cross-cite)                                             |
+| F-AD-5                                         | 5           | 🟠      | C 8.1                   | PARTIAL     | 0226 shipped 132 tests + vitest infra (PR #225) — zero-coverage no longer true; residual: Playwright CLI smoke + broader page coverage |
 | F-AC checks (AC-1..AC-14)                      | 5           | —       | (rolled up)             | (rolled up) | See F-A-1..F-A-7 above                                                      |
 | F-EX-1                                         | 5 sweep     | 🟡      | C 5.4                   | TODO        | NFT minted_at_ledger plain text (Figma check)                               |
 | F-EX-2                                         | 5 sweep     | 🟢      | C 5.2                   | TODO        | Pool chart metric/period useState                                           |
@@ -1547,7 +1549,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | 0251 B1                                        | arch        | 🟢      | C 10.3                  | TODO        | linked=false fix-by-hide root cause                                         |
 | 0059 Future Work (live stats)                  | arch        | —       | —                       | RESOLVED    | Wired via 0066 (TopNav still shows MOCK_STATS — re-verify in C 7.6 / 8.6)   |
 | 0059 Future Work (responsive nav)              | arch        | —       | C 8.3                   | TODO        | Hamburger menu                                                              |
-| 0061 FW (libs/ui vitest)                       | arch        | —       | C 8.1                   | TODO        | 0226 promote                                                                |
+| 0061 FW (libs/ui vitest)                       | arch        | —       | C 8.1                   | RESOLVED    | 0226 shipped PR #225 (vitest infra)                                         |
 | 0062 FW (validators → libs/domain)             | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
 | 0062 FW (IdentifierDisplay router Link audit)  | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
 | 0067 FW (route param validation per page)      | arch        | —       | C 6.2                   | TODO        | Partly absorbed by 0251                                                     |
@@ -1566,11 +1568,11 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | 0077 FW (Tx Amount column on PoolTransactions) | arch        | —       | C 6.2                   | TODO        | Gated on 0247                                                               |
 | 0077 FW (chart series wiring)                  | arch        | —       | C 10.1                  | TODO        | Gated on 0199                                                               |
 | 0077 FW (per-leg icon_url backend)             | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
-| 0077 FW (Playwright CLI for LP pages)          | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
+| 0077 FW (Playwright CLI for LP pages)          | arch        | —       | C 8.1                   | TODO        | UNBLOCKED 2026-05-29 (0226 landed); Playwright CLI smoke still pending      |
 | 0077 FW (LP senior-eye 6 items)                | arch        | —       | C 6.2                   | TODO        | Bulk spawn batch                                                            |
 | 0238 FW (backend prev_cursor)                  | arch        | —       | —                       | RESOLVED    | 0254                                                                        |
-| 0238 FW (unit tests useCursorPagination)       | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
-| 0238 FW (Playwright smoke 11 pages)            | arch        | —       | C 8.1                   | TODO        | Gated on 0226                                                               |
+| 0238 FW (unit tests useCursorPagination)       | arch        | —       | C 8.1                   | PARTIAL     | 0226 added usePageHandlers + useTableUrlState tests; useCursorPagination explicit still pending |
+| 0238 FW (Playwright smoke 11 pages)            | arch        | —       | C 8.1                   | TODO        | UNBLOCKED 2026-05-29 (0226 landed); Playwright CLI smoke still pending      |
 | 0238 FW (ADR multi-cursor)                     | arch        | —       | C 6.4                   | TODO        | Cross-cite                                                                  |
 | 0251 FW (ScVal decoder Contract Events)        | arch        | —       | C 6.2                   | TODO        | Spawn                                                                       |
 | 0251 FW (network runtime toggle)               | arch        | —       | C 6.2                   | TODO        | Spawn (post-launch)                                                         |
