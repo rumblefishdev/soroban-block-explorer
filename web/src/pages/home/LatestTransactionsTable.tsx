@@ -1,7 +1,6 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
   ExplorerTable,
-  IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -24,7 +23,7 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
     header: 'Source account',
     cell: (row) =>
       row.source_account ? (
-        <IdentifierDisplay value={row.source_account} type="account" />
+        <IdentifierWithCopy value={row.source_account} type="account" />
       ) : (
         <Dash />
       ),

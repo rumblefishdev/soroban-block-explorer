@@ -7,11 +7,13 @@ export const routes = {
   ledgers: '/ledgers',
   ledger: (sequence: number | string) => `/ledgers/${sequence}`,
 
+  accounts: '/accounts',
   account: (accountId: string) => `/accounts/${accountId}`,
 
   assets: '/assets',
   asset: (id: string) => `/assets/${encodeURIComponent(id)}`,
 
+  contracts: '/contracts',
   contract: (contractId: string) => `/contracts/${contractId}`,
 
   nfts: '/nfts',
@@ -30,10 +32,11 @@ export const routes = {
 } as const;
 
 export const NAV_LINKS = [
-  { to: routes.home, label: 'Home' },
   { to: routes.transactions, label: 'Transactions' },
+  { to: routes.accounts, label: 'Accounts' },
   { to: routes.ledgers, label: 'Ledgers' },
   { to: routes.assets, label: 'Assets' },
+  { to: routes.contracts, label: 'Contracts' },
   { to: routes.nfts, label: 'NFTs' },
-  { to: routes.pools, label: 'Pools' },
+  { to: routes.pools, label: 'Liquidity Pools' },
 ] as const;

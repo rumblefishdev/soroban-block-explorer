@@ -57,6 +57,10 @@ export function Footer({ logo, navItems }: FooterProps) {
         width: '100%',
         backgroundColor: theme.palette.surface.backgroundAlt,
         borderTop: `1px solid ${theme.palette.stroke.default}`,
+        // Sit above the page grid backdrop on every route so the grid
+        // lines never bleed through the footer.
+        position: 'relative',
+        zIndex: 2,
       })}
     >
       <Box
@@ -64,8 +68,11 @@ export function Footer({ logo, navItems }: FooterProps) {
           width: '100%',
           maxWidth: grid.desktop.maxWidth,
           mx: 'auto',
-          px: `${grid.desktop.margin}px`,
-          pt: 10,
+          px: {
+            xs: `${grid.mobile.margin}px`,
+            md: `${grid.desktop.margin}px`,
+          },
+          pt: { xs: 5, md: 10 },
           pb: 5,
           display: 'flex',
           flexDirection: 'column',
@@ -73,18 +80,22 @@ export function Footer({ logo, navItems }: FooterProps) {
         }}
       >
         <Box
-          display="flex"
-          alignItems="flex-start"
-          justifyContent="space-between"
+          sx={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            flexDirection: { xs: 'column', md: 'row' },
+            gap: { xs: 4, md: 2 },
+          }}
         >
           {/* Left: logo + description + status */}
           <Box
             display="flex"
             flexDirection="column"
             gap={3}
-            sx={{ width: 283 }}
+            sx={{ width: { xs: '100%', md: 283 } }}
           >
-            <Box>{logo}</Box>
+            <Box sx={{ display: 'flex', justifyContent: 'left' }}>{logo}</Box>
             <Box display="flex" flexDirection="column" gap={1}>
               <Typography variant="bodySmMedium" color="text.tertiary">
                 A block explorer for the Stellar and Soroban network. Browse
@@ -123,7 +134,7 @@ export function Footer({ logo, navItems }: FooterProps) {
             display="flex"
             flexDirection="column"
             gap={1}
-            sx={{ width: 320 }}
+            sx={{ width: { xs: '100%', md: 320 } }}
           >
             <Typography variant="heading6SemiBold" color="text.primary">
               Explorer
@@ -140,7 +151,7 @@ export function Footer({ logo, navItems }: FooterProps) {
             display="flex"
             flexDirection="column"
             gap={1}
-            sx={{ width: 244 }}
+            sx={{ width: { xs: '100%', md: 244 } }}
           >
             <Typography variant="heading6SemiBold" color="text.primary">
               Resources
@@ -164,14 +175,25 @@ export function Footer({ logo, navItems }: FooterProps) {
         />
 
         {/* Bottom: copyright + legal + network badge */}
-        <Box display="flex" alignItems="center" gap={4}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: { xs: 'flex-start', md: 'center' },
+            flexDirection: { xs: 'column', md: 'row' },
+            gap: { xs: 1, md: 4 },
+          }}
+        >
           <Box flex={1} minWidth={0}>
-            <Typography variant="bodySmMedium" color="text.tertiary" noWrap>
+            <Typography
+              variant="bodySmMedium"
+              color="text.tertiary"
+              sx={{ whiteSpace: { xs: 'normal', md: 'nowrap' } }}
+            >
               © {new Date().getFullYear()} Stellar Explorer. Built on the
               Stellar network.
             </Typography>
           </Box>
-          <Box display="flex" alignItems="center">
+          <Box display="flex" alignItems="center" flexWrap="wrap">
             {LEGAL.map((item) => (
               <FooterLink key={item.label} {...item} />
             ))}

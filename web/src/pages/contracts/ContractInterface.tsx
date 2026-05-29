@@ -37,20 +37,41 @@ const TYPE_REF_COLOR = '#155dfc';
 
 /**
  * Syntax colour for a Soroban type token, matching the Figma interface
- * panel: integer types green, `bool` accent-yellow, `void` dimmed, every
- * other type (`Address`, `Symbol`, custom structs) blue.
+ * panel.
+ *
+ * - `arg` position: integer types green, `bool` accent-yellow, reference
+ *   types (`Address`, `Symbol`, custom structs) blue.
+ * - `return` position: everything except `void` is accent-yellow, so the
+ *   return value reads as the function's "output highlight" regardless of
+ *   the underlying primitive (Figma: `returns i128`, `returns bool` both
+ *   render yellow).
+ * - `void` / empty always dimmed.
  */
-function typeColor(theme: Theme, type: string): string {
+function typeColor(
+  theme: Theme,
+  type: string,
+  position: 'arg' | 'return'
+): string {
   if (type === '' || type === 'void') return theme.palette.text.tertiary;
+  if (position === 'return') return theme.palette.text.accent;
   if (type === 'bool') return theme.palette.text.accent;
   if (INT_TYPE.test(type)) return theme.palette.text.success;
   return TYPE_REF_COLOR;
 }
 
 /** Syntax-coloured type token. */
-function TypeTok({ type }: { type: string }) {
+function TypeTok({
+  type,
+  position,
+}: {
+  type: string;
+  position: 'arg' | 'return';
+}) {
   return (
-    <Box component="span" sx={(theme) => ({ color: typeColor(theme, type) })}>
+    <Box
+      component="span"
+      sx={(theme) => ({ color: typeColor(theme, type, position) })}
+    >
       {type}
     </Box>
   );
@@ -87,20 +108,20 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
         >
           <Typography
             component="span"
-            variant="bodyMonoSmRegular"
-            sx={{ color: 'text.primary' }}
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
           >
             {fn.name}
           </Typography>
           <Typography
             component="span"
-            variant="bodyMonoXsRegular"
-            sx={{
-              color: 'text.tertiary',
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.tertiary,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-            }}
+            })}
           >
             ({params}) → {returnType}
           </Typography>
@@ -119,7 +140,11 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
           {fn.doc !== '' && (
             <Typography
               variant="bodyXsRegular"
-              sx={{ color: 'text.tertiary', mb: 1, display: 'block' }}
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                mb: 1,
+                display: 'block',
+              })}
             >
               {fn.doc}
             </Typography>
@@ -127,8 +152,8 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
           {fn.inputs.length === 0 ? (
             <Typography
               component="div"
-              variant="bodyMonoXsRegular"
-              sx={{ color: 'text.tertiary' }}
+              variant="bodyMonoSmMedium"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
             >
               (no parameters)
             </Typography>
@@ -137,25 +162,25 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
               <Typography
                 key={`${param.name}-${index}`}
                 component="div"
-                variant="bodyMonoXsRegular"
-                sx={{ color: 'text.primary' }}
+                variant="bodyMonoSmMedium"
+                sx={(theme) => ({ color: theme.palette.text.tertiary })}
               >
-                {param.name}: <TypeTok type={param.type_name} />
+                {param.name}: <TypeTok type={param.type_name} position="arg" />
               </Typography>
             ))
           )}
           <Box
             sx={(theme) => ({
               borderTop: `1px solid ${theme.palette.stroke.default}`,
-              my: 1.5,
+              my: 1,
             })}
           />
           <Typography
             component="div"
-            variant="bodyMonoXsRegular"
-            sx={{ color: 'text.tertiary' }}
+            variant="bodyMonoSmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
-            returns <TypeTok type={returnType} />
+            returns <TypeTok type={returnType} position="return" />
           </Typography>
         </Box>
       </AccordionDetails>
@@ -183,29 +208,23 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+    return kind === 'rate-limit' ? (
+      <RateLimitState onRetry={retry} />
+    ) : kind === 'transient' ? (
+      <TransientErrorState onRetry={retry} />
+    ) : (
+      <GenericErrorState onRetry={retry} />
     );
   }
 
   const parsed = parseInterfaceMetadata(data?.interface_metadata);
   if (parsed == null || parsed.functions.length === 0) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <EmptyState
-          icon={<InfoOutlinedIcon fontSize="small" />}
-          title="No public interface"
-          description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
-        />
-      </Box>
+      <EmptyState
+        icon={<InfoOutlinedIcon fontSize="small" />}
+        title="No public interface"
+        description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+      />
     );
   }
 

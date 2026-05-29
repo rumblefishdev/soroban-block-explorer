@@ -17,6 +17,7 @@ import type { ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useContractDetail } from '../api/index.js';
+import { routes } from '../router/routes.js';
 
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
@@ -24,18 +25,10 @@ import { ContractInvocations } from './contracts/ContractInvocations.js';
 import { ContractSummary } from './contracts/ContractSummary.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
-// Breadcrumb crumb uses tighter truncation than the DS default for contracts —
-// matches the existing AccountDetailPage breadcrumb (4 / 4 instead of 6 / 4).
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
 
 const TAB_KEYS = ['interface', 'invocations', 'events'] as const;
 
-/**
- * Contract detail page (`/contracts/:contractId`) — summary with windowed
- * stats, then tabbed Interface / Invocations / Events sections. Each section
- * fetches independently so one failing query never collapses the others;
- * the active tab is mirrored in the URL `?tab=` query param.
- */
 export default function ContractDetailPage() {
   const { contractId = '' } = useParams<{ contractId: string }>();
   const valid = isContractId(contractId);
@@ -46,37 +39,37 @@ export default function ContractDetailPage() {
   });
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="contract" identifier={contractId} />
-      </Box>
-    );
+    return <NotFoundState entity="contract" identifier={contractId} />;
   }
 
   let summary: ReactNode = null;
   if (contract.isLoading) {
     summary = <CardSkeleton />;
   } else if (contract.isError) {
-    summary = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(classifyError(contract.error)) ? (
-          <NotFoundState entity="contract" identifier={contractId} />
-        ) : (
-          <GenericErrorState onRetry={() => void contract.refetch()} />
-        )}
-      </Box>
+    summary = isMissingResource(classifyError(contract.error)) ? (
+      <NotFoundState entity="contract" identifier={contractId} />
+    ) : (
+      <GenericErrorState onRetry={() => void contract.refetch()} />
     );
   } else if (contract.data) {
     summary = <ContractSummary contract={contract.data} />;
   }
 
-  // Count pills are intentionally omitted for now — the API has no honest
-  // per-tab totals (no event count at all; invocation/function counts are
-  // windowed or query-dependent).
   const tabs: TabDefinition[] = [
     { key: 'interface', label: 'Interface' },
-    { key: 'invocations', label: 'Invocations' },
-    { key: 'events', label: 'Events' },
+    {
+      key: 'invocations',
+      label: 'Invocations',
+      count: contract.data?.stats.recent_invocations,
+    },
+    {
+      key: 'events',
+      label: 'Events',
+      // Placeholder count — `recent_unique_callers` is a callers metric,
+      // not an events total. Stays until the API exposes a real events
+      // count (tracked in the FE→API gaps doc).
+      count: contract.data?.stats.recent_unique_callers,
+    },
   ];
 
   return (
@@ -84,7 +77,7 @@ export default function ContractDetailPage() {
       <Box>
         <PageBreadcrumb
           items={[
-            { label: 'Contract' },
+            { label: 'Contracts', to: routes.contracts },
             { label: truncateMiddle(contractId, BREADCRUMB_TRUNCATION) },
           ]}
         />
@@ -94,7 +87,7 @@ export default function ContractDetailPage() {
           alignItems="center"
           sx={{ flexWrap: 'wrap' }}
         >
-          <Typography variant="heading3SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Contract
           </Typography>
           {contract.data?.is_sac === true && (
@@ -102,8 +95,11 @@ export default function ContractDetailPage() {
           )}
         </Stack>
         <Typography
-          variant="bodyMonoSmRegular"
-          sx={{ color: 'text.secondary', wordBreak: 'break-all' }}
+          variant="bodyMedium"
+          sx={(theme) => ({
+            color: theme.palette.text.secondary,
+            wordBreak: 'break-all',
+          })}
         >
           {contractId}
         </Typography>
@@ -117,7 +113,6 @@ export default function ContractDetailPage() {
         <Card>
           <Box
             sx={(theme) => ({
-              // Tab bar sits on the darker surface (Figma "Table sections").
               backgroundColor: theme.palette.surface.grayMainAlt,
               borderBottom: `1px solid ${theme.palette.stroke.default}`,
               px: 1,

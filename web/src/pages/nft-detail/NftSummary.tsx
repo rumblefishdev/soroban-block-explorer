@@ -24,13 +24,25 @@ function Row({
     <Box
       sx={(theme) => ({
         display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
         borderBottom: last
           ? 'none'
           : `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <Box sx={{ width: 150, flexShrink: 0, px: 2, py: 1.5 }}>
-        <Typography variant="bodySmBold" sx={{ color: 'text.primary' }}>
+      <Box
+        sx={{
+          width: { xs: '100%', sm: 150 },
+          flexShrink: 0,
+          px: 2,
+          pt: 1.5,
+          pb: { xs: 0, sm: 1.5 },
+        }}
+      >
+        <Typography
+          variant="bodySmBold"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
           {label}
         </Typography>
       </Box>
@@ -39,7 +51,8 @@ function Row({
           flex: 1,
           minWidth: 0,
           px: 2,
-          py: 1.5,
+          pt: { xs: 0.5, sm: 1.5 },
+          pb: 1.5,
           display: 'flex',
           alignItems: 'center',
         }}
@@ -58,7 +71,12 @@ export function NftSummary({ nft }: NftSummaryProps) {
       <Row
         label="Token ID"
         value={
-          <Typography variant="bodyMonoSmRegular">#{nft.token_id}</Typography>
+          <Typography
+            variant="bodyMonoSmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            #{nft.token_id}
+          </Typography>
         }
       />
       <Row
@@ -72,7 +90,10 @@ export function NftSummary({ nft }: NftSummaryProps) {
           nft.owner_account ? (
             <IdentifierDisplay value={nft.owner_account} type="account" />
           ) : (
-            <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
               Burned
             </Typography>
           )
@@ -84,7 +105,10 @@ export function NftSummary({ nft }: NftSummaryProps) {
           label="Minted at ledger"
           // Plain Satoshi text per Figma — not a mono/linked identifier.
           value={
-            <Typography variant="bodySmMedium">
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.primary })}
+            >
               {nft.minted_at_ledger.toLocaleString('en-US')}
             </Typography>
           }

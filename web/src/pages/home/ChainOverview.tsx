@@ -1,4 +1,4 @@
-import { Box, Divider } from '@mui/material';
+import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
   classifyError,
@@ -9,9 +9,9 @@ import {
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
+import { KpiCell } from '../detail/KpiCell.js';
 import { formatAmount } from '../format.js';
 
-import { ChainOverviewCard } from './ChainOverviewCard.js';
 import { LiveIndicator } from './LiveIndicator.js';
 
 /**
@@ -27,60 +27,79 @@ export function ChainOverview() {
   if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    content = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    content =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} py={4} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} py={4} />
+      ) : (
+        <GenericErrorState onRetry={retry} py={4} />
+      );
   } else {
     content = (
-      <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
-        <ChainOverviewCard
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        alignItems="stretch"
+        divider={
+          <Divider
+            orientation="vertical"
+            flexItem
+            sx={{ display: { xs: 'none', md: 'block' } }}
+          />
+        }
+        sx={{ width: '100%' }}
+      >
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label={<LiveIndicator />}
           value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
           caption="Current ledger"
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="TPS"
           value={data ? data.tps_60s.toFixed(1) : undefined}
           caption="Last 60s"
-          accentValue
+          valueColor={(theme) => theme.palette.text.success}
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="Accounts"
           value={data ? formatAmount(data.total_accounts) : undefined}
           caption="Total"
           loading={isLoading}
         />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
+        <KpiCell
+          card={false}
+          align="center"
+          valueVariant="heading4SemiBold"
+          labelVariant="bodyMedium"
           label="Contracts"
           value={data ? formatAmount(data.total_contracts) : undefined}
           caption="Soroban"
           loading={isLoading}
         />
-      </Box>
+      </Stack>
     );
   }
 
   return (
-    <Box sx={{ px: 10 }}>
+    <Box sx={{ display: 'flex', justifyContent: 'center' }}>
       <Box
         sx={(theme) => ({
+          width: '100%',
           maxWidth: 1064,
-          mx: 'auto',
-          // Exact Figma panel (node 4:2727): 16px radius, 80%-opaque
-          // surface so the hero glow shows through, 6px backdrop blur.
           borderRadius: '16px',
           border: `1px solid ${theme.palette.stroke.default}`,
           backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),

@@ -31,11 +31,7 @@ export default function TransactionDetailPage() {
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="transaction" identifier={hash} />
-      </Box>
-    );
+    return <NotFoundState entity="transaction" identifier={hash} />;
   }
 
   if (query.isLoading) {
@@ -61,14 +57,10 @@ export default function TransactionDetailPage() {
 
   if (query.isError) {
     const kind = classifyError(query.error);
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'not-found' ? (
-          <NotFoundState entity="transaction" identifier={hash} />
-        ) : (
-          <GenericErrorState onRetry={() => void query.refetch()} />
-        )}
-      </Box>
+    return kind === 'not-found' ? (
+      <NotFoundState entity="transaction" identifier={hash} />
+    ) : (
+      <GenericErrorState onRetry={() => void query.refetch()} py={8} />
     );
   }
 

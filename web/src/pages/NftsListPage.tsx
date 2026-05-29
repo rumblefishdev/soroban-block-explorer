@@ -1,23 +1,16 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Button, Card, Stack, Typography } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { ListNftsData } from '@rumblefish/api-types';
 import {
-  classifyError,
-  EmptyState,
-  GenericErrorState,
   isContractId,
-  PaginationControls,
-  RateLimitState,
-  TableEmptyState,
-  TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { useNftsList } from '../api/index.js';
 
+import { DataListCard } from './detail/DataListCard.js';
+import { PageHeader } from './detail/PageHeader.js';
 import { NftFilters } from './nfts/NftFilters.js';
 import { NFT_COLUMN_COUNT, NftsTable } from './nfts/NftsTable.js';
 
@@ -61,77 +54,37 @@ export default function NftsListPage() {
     setFilter('contract', null);
   }, [setFilter]);
 
-  let body: ReactNode;
-  if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={NFT_COLUMN_COUNT} />
-      </Box>
-    );
-  } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
-  } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {hasFilters ? (
-          <EmptyState
-            icon={<SearchIcon />}
-            title="No NFTs match your filters"
-            description="Try adjusting or clearing the active filters"
-            action={
-              <Button variant="contained" onClick={handleClearFilters}>
-                Clear filters
-              </Button>
-            }
-          />
-        ) : (
-          <TableEmptyState kind="nft" />
-        )}
-      </Box>
-    );
-  } else {
-    body = <NftsTable rows={rows} />;
-  }
-
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="heading3SemiBold" component="h1">
-          NFTs
-        </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
-          Soroban-based NFT contracts on the Stellar network
-        </Typography>
-      </Box>
-
-      <Card>
-        <NftFilters
-          collection={collection}
-          contractId={contract}
-          onCollectionChange={(v) => setFilter('collection', v || null)}
-          onContractIdChange={(v) => setFilter('contract', v || null)}
-        />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
-        <PaginationControls
-          caption="Latest results"
-          canPrev={canPrev}
-          canNext={canNext}
-          onPrev={handlePrev}
-          onNext={handleNext}
-        />
-      </Card>
+      <PageHeader
+        title="NFTs"
+        subtitle="Soroban-based NFT contracts on the Stellar network"
+      />
+      <DataListCard
+        filters={
+          <NftFilters
+            collection={collection}
+            contractId={contract}
+            onCollectionChange={(v) => setFilter('collection', v || null)}
+            onContractIdChange={(v) => setFilter('contract', v || null)}
+          />
+        }
+        columnCount={NFT_COLUMN_COUNT}
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        onRetry={() => void refetch()}
+        rows={rows}
+        renderTable={(visibleRows) => <NftsTable rows={visibleRows} />}
+        hasActiveFilters={hasFilters}
+        emptyKind="nft"
+        emptyNoun="NFTs"
+        onClearFilters={handleClearFilters}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
     </Stack>
   );
 }

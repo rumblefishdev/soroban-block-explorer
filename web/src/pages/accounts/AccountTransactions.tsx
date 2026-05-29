@@ -8,6 +8,7 @@ import {
   IdentifierWithCopy,
   PaginationControls,
   RateLimitState,
+  type SortDirection,
   TableEmptyState,
   TableSkeleton,
   TransientErrorState,
@@ -15,7 +16,7 @@ import {
   usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -51,7 +52,11 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
     header: 'Fee',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatFee(row.fee_charged)}
       </Typography>
     ),
@@ -59,6 +64,7 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'time',
     header: 'Time',
+    sortable: true,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -69,15 +75,26 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
  * account summary so a failure here never collapses the rest of the page.
  */
 export function AccountTransactions({ accountId }: { accountId: string }) {
+  const [sortDir, setSortDir] = useState<SortDirection>('desc');
   // Cursors are account-scoped — `resetKey` drops the URL cursor when
   // the user navigates to a different account.
-  const { cursor, goNext, goPrev } = useCursorPagination({
+  const { cursor, goNext, goPrev, reset } = useCursorPagination({
     resetKey: accountId,
   });
 
+  const handleSortChange = useCallback(
+    (_id: string, next: SortDirection) => {
+      setSortDir(next);
+
+      reset();
+    },
+    [reset]
+  );
+
   const { data, isLoading, isError, error, refetch } = useAccountTransactions(
     accountId,
-    cursor
+    cursor,
+    sortDir
   );
 
   const rows = data?.data ?? [];
@@ -97,26 +114,26 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} />
+      ) : (
+        <GenericErrorState onRetry={retry} />
+      );
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" py={6} />;
   } else {
     body = (
-      <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.hash}
+        sortBy="time"
+        sortDir={sortDir}
+        onSortChange={handleSortChange}
+      />
     );
   }
 

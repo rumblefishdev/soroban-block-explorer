@@ -1,10 +1,32 @@
 import type { ChipProps } from '@rumblefish/soroban-block-explorer-ui';
 
+import type { AssetIconKind } from './AssetIcon.js';
+
 export interface AssetTypeMeta {
   /** Human-readable badge label. */
   label: string;
   /** Chip colour distinguishing the asset class. */
   color: ChipProps['color'];
+}
+
+/**
+ * Maps the API `asset_type_name` to the colour variant on `AssetIcon`'s
+ * letter avatar. Keeps the Token cell on the Assets list, the Balances
+ * row on Account detail, and the Asset detail header in sync.
+ */
+export function iconKindFor(typeName?: string | null): AssetIconKind {
+  switch (typeName) {
+    case 'native':
+      return 'native';
+    case 'classic_credit':
+      return 'classic';
+    case 'sac':
+      return 'sac';
+    case 'soroban':
+      return 'classic';
+    default:
+      return 'default';
+  }
 }
 
 /**
@@ -15,7 +37,7 @@ export interface AssetTypeMeta {
 const META: Record<string, AssetTypeMeta> = {
   native: { label: 'Native', color: 'blue' },
   classic_credit: { label: 'Classic', color: 'neutral' },
-  sac: { label: 'SAC', color: 'violet' },
+  sac: { label: 'SAC', color: 'brown' },
   soroban: { label: 'Soroban', color: 'emerald' },
 };
 

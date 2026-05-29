@@ -55,8 +55,9 @@ function Frame({
   return (
     <Box
       sx={(theme) => ({
-        width: BOX_SIZE,
-        height: BOX_SIZE,
+        width: { xs: '100%', md: BOX_SIZE },
+        maxWidth: BOX_SIZE,
+        aspectRatio: '1 / 1',
         flexShrink: 0,
         borderRadius: `${theme.shape.radius.lg}px`,
         overflow: 'hidden',
@@ -99,10 +100,40 @@ export function NftMediaPreview({ mediaUrl, name }: NftMediaPreviewProps) {
   if (!mediaUrl) {
     return (
       <Frame bg="empty">
-        <Stack spacing={1} alignItems="center" sx={{ color: 'text.tertiary' }}>
-          <ImageIcon sx={{ fontSize: 48 }} />
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+        <Stack
+          spacing={1}
+          alignItems="center"
+          sx={(theme) => ({
+            color: theme.palette.text.tertiary,
+            px: 3,
+            textAlign: 'center',
+          })}
+        >
+          <Box
+            sx={(theme) => ({
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: theme.palette.surface.background,
+              color: theme.palette.text.tertiary,
+            })}
+          >
+            <ImageIcon />
+          </Box>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             No media available
+          </Typography>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
+            There is no image
           </Typography>
         </Stack>
       </Frame>
@@ -131,10 +162,16 @@ export function NftMediaPreview({ mediaUrl, name }: NftMediaPreviewProps) {
           >
             <ErrorOutlineIcon />
           </Box>
-          <Typography variant="bodySmMedium" sx={{ color: 'text.error' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.error })}
+          >
             Failed to load media
           </Typography>
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.secondary })}
+          >
             The media URL is unavailable or unsupported
           </Typography>
         </Stack>

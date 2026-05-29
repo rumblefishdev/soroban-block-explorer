@@ -21,8 +21,7 @@ export function TableSectionHeader({
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 2,
-        px: 2,
-        py: 2,
+        p: 2,
         backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
@@ -35,7 +34,7 @@ export function TableSectionHeader({
           {badge}
         </Stack>
         {description ? (
-          <Typography variant="bodyRegular" color="text.secondary">
+          <Typography variant="bodyMedium" color="text.secondary">
             {description}
           </Typography>
         ) : null}

@@ -22,10 +22,16 @@ interface SummaryCell {
 function BaseFee({ stroops }: { stroops: number }) {
   return (
     <Stack spacing={0.25}>
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
+      <Typography
+        variant="bodySmBold"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatFee(stroops)}
       </Typography>
-      <Typography variant="bodyMonoXsRegular" sx={{ color: 'text.tertiary' }}>
+      <Typography
+        variant="bodyMonoXsRegular"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
         ({stroops.toLocaleString('en-US')} stroops)
       </Typography>
     </Stack>
@@ -34,10 +40,25 @@ function BaseFee({ stroops }: { stroops: number }) {
 
 function Cell({ label, value }: SummaryCell) {
   return (
-    <Box sx={{ display: 'flex', flex: 1, minWidth: 0, gap: 2, px: 2, py: 1.5 }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flex: 1,
+        minWidth: 0,
+        gap: 2,
+        px: 2,
+        py: 1.5,
+
+        alignItems: 'center',
+      }}
+    >
       <Typography
-        variant="bodySmRegular"
-        sx={{ color: 'text.secondary', width: 160, flexShrink: 0 }}
+        variant="bodySmMedium"
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
+          width: { xs: 'auto', sm: 160 },
+          flexShrink: 0,
+        })}
       >
         {label}
       </Typography>
@@ -51,6 +72,7 @@ function Row({ cells, alt }: { cells: SummaryCell[]; alt: boolean }) {
     <Box
       sx={(theme) => ({
         display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
         backgroundColor: alt
           ? theme.palette.surface.grayMainAlt
           : theme.palette.surface.grayMain,
@@ -70,7 +92,10 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
       {
         label: 'Sequence',
         value: (
-          <Typography variant="bodySmMedium">
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {ledger.sequence.toLocaleString('en-US')}
           </Typography>
         ),
@@ -96,6 +121,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
             value={ledger.hash}
             type="ledger"
             linked={false}
+            truncate={false}
           />
         ),
       },
@@ -111,7 +137,10 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
       {
         label: 'TX Count',
         value: (
-          <Typography variant="bodySmRegular">
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {ledger.transaction_count.toLocaleString('en-US')}
           </Typography>
         ),

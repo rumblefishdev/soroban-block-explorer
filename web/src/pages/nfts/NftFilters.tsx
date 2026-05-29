@@ -43,12 +43,17 @@ function DebouncedField({
       onChange={(e) => setDraft(e.target.value)}
       placeholder={placeholder}
       aria-label={ariaLabel}
-      sx={{ width, maxWidth: '100%' }}
+      sx={{ width: { xs: '100%', sm: width }, maxWidth: '100%' }}
       slotProps={{
         input: {
           startAdornment: (
             <InputAdornment position="start">
-              <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
+              <SearchIcon
+                sx={(theme) => ({
+                  fontSize: 18,
+                  color: theme.palette.text.tertiary,
+                })}
+              />
             </InputAdornment>
           ),
         },
@@ -83,6 +88,7 @@ export function NftFilters({
         p: 2,
         flexWrap: 'wrap',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
+        backgroundColor: theme.palette.surface.grayMainAlt,
       })}
     >
       <DebouncedField

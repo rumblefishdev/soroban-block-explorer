@@ -1,7 +1,7 @@
 import type { TypographyVariantsOptions } from '@mui/material/styles';
 
-const headingFontFamily = '"Mona Sans", system-ui, sans-serif';
-const bodyFontFamily = '"Inter", system-ui, sans-serif';
+export const primaryFontFamily = '"Clash Display", system-ui, sans-serif';
+export const secondaryFontFamily = '"Satoshi", system-ui, sans-serif';
 export const monoFontFamily =
   '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
@@ -15,7 +15,7 @@ function makeHeading(opts: {
 }) {
   const { desktopSize, mobileSize, weight, lineHeight = 1.2 } = opts;
   const base = {
-    fontFamily: headingFontFamily,
+    fontFamily: primaryFontFamily,
     fontWeight: weight,
     fontSize: desktopSize,
     lineHeight,
@@ -33,7 +33,7 @@ function makeHeading(opts: {
 
 function makeBody(size: number, weight: Weight, lineHeight: number) {
   return {
-    fontFamily: bodyFontFamily,
+    fontFamily: secondaryFontFamily,
     fontSize: size,
     fontWeight: weight,
     lineHeight,
@@ -52,7 +52,7 @@ function makeMono(size: number, weight: Weight, lineHeight: number) {
 }
 
 export const typography: TypographyVariantsOptions = {
-  fontFamily: bodyFontFamily,
+  fontFamily: secondaryFontFamily,
 
   heading1Bold: makeHeading({ desktopSize: 60, weight: 700 }),
   heading1SemiBold: makeHeading({ desktopSize: 60, weight: 600 }),
@@ -150,5 +150,6 @@ export const typography: TypographyVariantsOptions = {
   bodyMonoSmMedium: makeMono(14, 500, 1.4),
   bodyMonoSmRegular: makeMono(14, 400, 1.4),
   bodyMonoXsBold: makeMono(12, 700, 1.4),
+  bodyMonoXsMedium: makeMono(12, 500, 1.4),
   bodyMonoXsRegular: makeMono(12, 400, 1.4),
 };

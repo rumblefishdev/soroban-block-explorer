@@ -18,9 +18,11 @@ import { assetLegColor } from './assetColor.js';
 export function AssetAvatar({
   leg,
   overlap = false,
+  size = 32,
 }: {
   leg: PoolAssetLeg;
   overlap?: boolean;
+  size?: number;
 }) {
   const { bg, fg } = assetLegColor(leg);
   const letter = assetLegLabel(leg).charAt(0).toUpperCase();
@@ -31,8 +33,8 @@ export function AssetAvatar({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 32,
-        height: 32,
+        width: size,
+        height: size,
         borderRadius: '50%',
         backgroundColor: bg,
         color: fg,
