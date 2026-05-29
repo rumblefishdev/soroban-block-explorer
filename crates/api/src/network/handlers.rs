@@ -117,13 +117,10 @@ mod tests {
     use crate::state::AppState;
 
     fn app(db: PgPool) -> Router {
-        let aws_cfg = aws_sdk_s3::config::Builder::new()
-            .region(aws_sdk_s3::config::Region::new("us-east-2"))
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .build();
-        let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
         let runtime_enrichment = RuntimeEnrichment {
-            stellar_archive: StellarArchiveFetcher::new(s3),
+            stellar_archive: StellarArchiveFetcher::new(
+                crate::runtime_enrichment::stellar_archive::test_client(),
+            ),
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),

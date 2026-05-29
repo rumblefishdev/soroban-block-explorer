@@ -156,15 +156,10 @@ mod tests {
     fn test_app() -> Router {
         let db = sqlx::PgPool::connect_lazy("postgres://localhost/test_unused")
             .expect("connect_lazy never fails");
-        // Build a minimal StellarArchiveFetcher using a stub AWS config.
-        // The S3 client will not be called during spec/health tests.
-        let aws_cfg = aws_sdk_s3::config::Builder::new()
-            .region(aws_sdk_s3::config::Region::new("us-east-2"))
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .build();
-        let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
         let runtime_enrichment = RuntimeEnrichment {
-            stellar_archive: StellarArchiveFetcher::new(s3),
+            stellar_archive: StellarArchiveFetcher::new(
+                runtime_enrichment::stellar_archive::test_client(),
+            ),
             // Real SEP-1 fetcher with a stub HTTP client. The spec / health
             // tests below never reach get_asset, so the client never makes a
             // real request.

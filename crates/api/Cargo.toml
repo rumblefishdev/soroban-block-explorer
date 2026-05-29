@@ -49,4 +49,5 @@ bytes = "1"
 moka = { version = "0.12", features = ["sync", "future"] }
 
 [dev-dependencies]
+aws-smithy-runtime-api = "=1.11.6"
 tower = "0.5"
