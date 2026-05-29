@@ -77,7 +77,6 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
       truncate={false}
       href={href}
       fontSize="inherit"
-      mono={false}
     />
   );
 }

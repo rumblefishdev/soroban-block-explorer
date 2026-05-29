@@ -42,7 +42,6 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
                   type="asset"
                   truncate={false}
                   href={routes.asset(String(row.id))}
-                  mono={false}
                 />
               ) : (
                 <Typography

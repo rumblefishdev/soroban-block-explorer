@@ -79,7 +79,7 @@ export interface IdentifierDisplayProps {
 
 function formatForDisplay(type: EntityType, value: string): string {
   if (type === 'ledger' && /^\d+$/.test(value)) {
-    return Number(value).toLocaleString('en-US');
+    return formatInteger(Number(value));
   }
   return value;
 }

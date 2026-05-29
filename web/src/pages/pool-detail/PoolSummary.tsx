@@ -31,7 +31,6 @@ function AssetReserveCell({
       type="asset"
       truncate={false}
       href={href}
-      mono={false}
     />
   ) : (
     <Typography component="span" variant="bodySmRegular">
