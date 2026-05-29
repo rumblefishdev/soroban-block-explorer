@@ -2,10 +2,9 @@
 id: '0233'
 title: 'DOCS: merge-parallel-backfills runbook — Phase 3 FREEZE + rsync + Phase 4 ATTACH PART on Hetzner CH'
 type: DOCS
-status: backlog
+status: canceled
 related_adr: ['0040', '0044', '0045']
 related_tasks: ['0216', '0225', '0227', '0228']
-blocks: ['0228']
 tags:
   [
     priority-high,
@@ -22,6 +21,21 @@ links:
   - docs/runbooks/backfill_soroban_2of5_fresh_machine.md
   - lore/2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md
 history:
+  - date: '2026-05-27'
+    status: canceled
+    who: stkrolikiewicz
+    reason: obsolete
+    note: >
+      Closed as obsolete. Task 0228 archived GREEN (Phase 6 validated) without
+      this runbook — the parallel-backfill merge happened in prod using the
+      operator script `scripts/merge-freeze-worker.sh` (delivered under this
+      task's ID in commit ef530362) plus inline operator notes. Empirical
+      timings from laptop1's FREEZE were not captured in runbook form and the
+      moment for co-development has passed. No future parallel-backfill is
+      planned (Hetzner CH on prod via ADR 0047 = single primary store).
+      Dangling link in docs/runbooks/0228_phase6_validation.md:543 removed
+      in the same change. If a re-sync scenario emerges later, re-spawn from
+      this task as historical reference.
   - date: '2026-05-19'
     status: backlog
     who: stkrolikiewicz
