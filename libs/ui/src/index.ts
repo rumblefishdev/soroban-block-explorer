@@ -23,7 +23,6 @@ export {
   formatAmount,
   formatCompactAmount,
   STROOPS_PER_XLM_BIGINT,
-  stroopsToXlmString,
   formatFee,
   formatStroops,
   formatInteger,

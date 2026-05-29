@@ -178,9 +178,6 @@ commit state noted per item.
   Figma reserves (`980,000 USDC` uniform sans). Also added `fontSize` prop so
   inline legs match the 12px amount, and dropped `tone="inherit"` (gave
   underline-hover) so legs use the canonical gold hover. **Uncommitted.**
-- **ChainOverview 2×2 → 1×4** — grid `repeat(4,1fr)` counted the 3 dividers as
-  columns and wrapped to a 2×2; fixed to explicit `1fr auto …` 7-track template
-  (md). Matches Figma single-row summary. **Uncommitted.**
 - **Hero gold gradient bleeds full-width** — glow was inside the constrained
   `<main>`, clipped to side margins while the grid bled full-width. Extracted
   `HomeHeroGlow` and mounted it in AppShell's full-bleed wrapper (home-gated),
@@ -224,7 +221,7 @@ vocabulary (compact vs descriptive).
 - [ ] F-AH-7 — `web/src/search/` parallel top-level folder
 - [ ] F-AH-8 — Page-root helpers (`cursorParams`/`format`/`url`) mixed with `*Page.tsx`
 - [ ] F-AH-4 — `web/src/utils/` single-file folder (`poolIdStrkey.ts`)
-- [ ] F-X-1 — `assetLegLabel` cross-folder reach `liquidity-pools/` → `pool-detail/`
+- [ ] F-X-1 — cross-folder reach `liquidity-pools/` ↔ `pool-detail/`. **Fresh-eyes 2026-05-29: it's BIDIRECTIONAL and wider than just `assetLegLabel`** — `pool-detail/PoolKpiStrip` imports `assetColor` from `liquidity-pools/`, `PoolDetailHeader` imports `AssetAvatar`/`FeePill` from `liquidity-pools/`; reverse, `liquidity-pools/PoolsTable` + `AssetAvatar` import `assetLegLabel`/`legHref` from `pool-detail/helpers`. The two folders are one feature split in two. Fix: hoist shared pool primitives (`assetColor`, `AssetAvatar`, `FeePill`, `helpers`) into a single `pools/shared/` (or merge the folders).
 - [ ] F-X-2 — `web/src/pages/detail/` single-file folder (recap F-U-1)
 - [ ] F-X-5 — `web/src/utils/` 1-file (recap F-AH-4)
 - [ ] F-U-2 (partial) — EmptyState reimplemented locally per page (covered by component reuse)
@@ -253,6 +250,102 @@ vocabulary (compact vs descriptive).
 - [ ] F-W6-AP-4 — Inline vs overlay vs full-page loading not standardised
 
 **Notes:** **\_**
+
+---
+
+### 2.4 Post-merge DRY smells — duplicated render blocks + primitives (fresh-eyes audit 2026-05-29)
+
+- **Type:** REFACTOR
+- **Effort:** ~1d (incremental; #SM-1 alone is the bulk)
+- **Severity / Class:** 🟡 C
+- **Pre-launch:** SHOULD (incremental — not launch-blocking)
+- **STATUS:** TODO
+
+**Rationale.** A fresh-eyes architecture sweep on 2026-05-29 (after the
+design_parity round-2 merge + this session's consolidation work) surfaced
+a batch of *incomplete-consolidation* smells: render blocks and tiny
+primitives copy-pasted across many files instead of lifted to a shared
+home — the same pattern 2.1 fixed for formatters/truncation, now found in
+error-state JSX, status chips, timestamp/clipboard helpers, and the `Dash`
+em-dash. Mostly low-risk pure refactors; #SM-1 removes ~250 lines alone.
+Not the same as card 8.4 (which is about the *error envelope / interceptor
+/ boundary coverage / reporter*), nor 2.3 (loading primitives) — these are
+duplicated **render/logic blocks** built on the already-good primitives.
+
+**Findings (sub-checklist):**
+
+- [ ] SM-1 — **Query error-state switch duplicated ~18×**: identical
+  `classifyError(error)` → `rate-limit ? <RateLimitState> : transient ?
+  <TransientErrorState> : <GenericErrorState>` + centering `<Box py:8>` +
+  `retry` closure, verbatim across 18 list/section files (LedgersListPage,
+  TransactionsListPage, AssetsListPage, NftsListPage, LiquidityPoolsListPage,
+  home/LatestLedgers, home/LatestTransactions, home/ChainOverview,
+  contracts/{ContractInterface,ContractEvents,ContractInvocations},
+  nft-detail/NftTransfers, accounts/AccountTransactions,
+  pool-detail/{PoolParticipants,PoolTransactions}, assets/AssetTransactions,
+  NftDetailPage, LedgerDetailPage). Fix: `<QueryErrorState kind onRetry/>`
+  (or `renderQueryError(query)`) in `libs/ui/src/states/`. ~250 lines saved.
+- [ ] SM-2 — **Detail NotFound-vs-Generic block duplicated 5×**:
+  `isMissingResource(classifyError(err)) ? <NotFoundState entity> :
+  <GenericErrorState onRetry>` in AccountDetailPage:50, AssetDetailPage:53,
+  ContractDetailPage:63, LiquidityPoolDetailPage:69, LedgerDetailPage:58.
+  Fix: `<DetailErrorState entity error onRetry identifier/>`.
+- [ ] SM-3 — **`Dash` em-dash component duplicated 5×**: canonical exported
+  `transactions/cells.tsx:7`; local copies in nfts/NftsTable:15,
+  nft-detail/NftTransfers:33, transaction-detail/sections/SignaturesTable:30,
+  transaction-detail/sections/TransactionSummary:20. Fix: hoist `Dash` to
+  `libs/ui` (pure primitive), import everywhere.
+- [ ] SM-4 — **Status Success/Failed chip 3 impls**: canonical `StatusCell`
+  (transactions/cells.tsx:35) + hand-rolled in search/SearchResultRow:21-31,99
+  + inline in transaction-detail/sections/TransactionSummary:123. Fix: export
+  a shared `<StatusChip successful>` from `libs/ui`.
+- [ ] SM-5 — **UTC absolute-timestamp formatter duplicated**:
+  `formatUtcAbsolute` (+`pad`) in TransactionSummary:59-74 ≈ canonical
+  `formatAbsoluteUtc` in transactions/formatters.ts:1-21 (only `null` vs `—`
+  sentinel differs); `pad` independently defined a 3rd time in
+  advanced/HighlightedJson.tsx:24. Fix: import the canonical formatter.
+- [ ] SM-6 — **Clipboard write/reset duplicated**: XdrRow.tsx:20-24
+  reimplements CopyButton's copy+1500ms-reset (without the `execCommand`
+  fallback). Fix: reuse `CopyButton` or extract `useCopyToClipboard()` in
+  `libs/ui`.
+- [ ] SM-7 — **Fee "XLM + (N stroops)" two-line cell duplicated ×2**:
+  LedgerSummary:31 + TransactionSummary FeeCell:93-110, identical markup.
+  Fix: shared `<FeeCell>`.
+- [ ] SM-8 — **Dead / over-exposed `libs/ui` exports**: `entityRoutes`
+  (routes.ts:41) + `isValidIdentifier` (validators.ts:30) have zero
+  consumers → drop. Internal-only but exported from the public barrel
+  (demote): `getIdentifierHref`, `useIntersectionObserver`,
+  `DEFAULT_TIME_SERIES_INTERVALS`, `ELLIPSIS_CHAR`, `STROOPS_PER_XLM_BIGINT`.
+  (`stroopsToXlmString` already demoted 2026-05-29.)
+- [ ] SM-9 — **`SEARCH_DEBOUNCE_MS = 300` redefined 4×** (the 4 filter
+  components) + inline `{prefix,suffix}` truncation literals coexisting with
+  `getDefaultTruncation` (e.g. ContractDetailPage `BREADCRUMB_TRUNCATION`).
+  Fix: export `DEFAULT_DEBOUNCE_MS` from the `useDebouncedDraft` home; prefer
+  `getDefaultTruncation(type)` over inline literals.
+- [ ] SM-10 — **`capitalize` inlined 4×** (NftEventBadge:31, ContractEvents
+  EventTypeBadge:42, AssetIcon:52, AssetAvatar:26) + `reserveDotColor`
+  (assetColor.ts:136) thin pass-through used inconsistently (PoolsTable uses
+  it, PoolKpiStrip inlines `.dot`). Fix: tiny shared `capitalize`; pick one
+  side for the dot color. (Low priority.)
+- [ ] SM-11 — **`sx` text-color style inconsistency**: string token
+  `sx={{ color: 'text.tertiary' }}` (86× / 42 files) vs theme-callback
+  `sx={(theme) => ({ color: theme.palette.text.tertiary })}` (45×), even
+  co-existing in single files. Fix: standardise on the string-token form;
+  reserve the callback for non-palette theme reads. (Lint-rule candidate.)
+- [ ] SM-12 — **two debounce hooks**: `libs/ui` `useDebouncedDraft`
+  (draft+commit, 4 consumers) and `web/src/search/useDebounced.ts`
+  (value-only, 1 consumer). Not strict dups, but both debounce hooks in
+  different homes — consider hoisting `useDebounced` into `libs/ui` alongside.
+
+**Notes:** All findings empirically verified (consumer/dup counts) by the
+2026-05-29 fresh-eyes sweep. **SM-1 is the highest-ROI item** (~250 lines,
+18 files, pure refactor). Overlaps: SM-1/SM-2/SM-6 are adjacent to card 8.4
+(but 8.4 is envelope/interceptor/boundary/reporter, not these render-block
+dups) — coordinate so the shared error components land once. The
+`pool-detail/` ↔ `liquidity-pools/` **bidirectional** sibling coupling found
+in the same sweep is folded into card 2.2 (extends F-X-1, which only noted
+the one-way `assetLegLabel` reach). Overall FE health judged good — these are
+incomplete consolidation, not bad architecture.
 
 ---
 
@@ -374,7 +467,7 @@ vocabulary (compact vs descriptive).
 - [x] F-W6-E13-2 — Pool NotFound h1 (via NotFoundState)
 - [~] F-D-3 — NotFound h1 variant covered; non-error detail-page `<h1>` consistency still open (broader scope)
 
-**Notes:** New files: `web/src/pages/NotFoundPage.tsx`; `EmptyState` gained a `titleComponent` prop (defaults to `<p>`, NotFoundState passes `h1`). RouteErrorBoundary left as-is — it still catches genuinely *thrown* errors (outside AppShell), but unmatched URLs no longer reach it. Uncommitted.
+**Notes:** New files: `web/src/pages/NotFoundPage.tsx`; `EmptyState` gained a `titleComponent` prop (defaults to `<p>`, NotFoundState passes `h1`). **Dedup (fresh-eyes 2026-05-29):** adding the catch-all left two near-identical 404 UIs — NotFoundPage (in-shell) and RouteErrorBoundary's `isRouteErrorResponse(404)` branch (out-of-shell). The app uses TanStack Query in components (no RR loaders), so nothing throws route-404 → that branch was dead + duplicated NotFoundPage. Removed it; RouteErrorBoundary now handles only genuinely thrown render errors (GenericErrorState). Single 404 home = NotFoundPage. Uncommitted.
 
 ---
 
