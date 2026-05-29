@@ -41,23 +41,27 @@ This is the master action queue for closing audit 0257. Structure:
 
 These items were judged from **code inspection only** (no live Playwright run in the design_parity impact analysis). They are marked `PARTIAL` in cards/appendix and MUST be confirmed in a live run at **375px + 768px** viewports before any flip to `DONE`. Source: `design-parity-impact-2026-05-27.md` §Live-Playwright re-verify queue.
 
-- [ ] **All 14 routes × 375/768 responsive cells** — confirm `document.documentElement.scrollWidth === clientWidth` (no page-level horizontal scrollbar) on every route. THE gating check for the responsive matrix (F-W6-RESPONSIVE-1).
+- [ ] **All 14 routes × 375/768 responsive cells** — confirm `document.documentElement.scrollWidth === clientWidth` (no page-level horizontal scrollbar) on every route. THE gating check for the responsive matrix (F-W6-RESPONSIVE-1). **Partial live re-verify 2026-05-29: `/search` @375 VERIFIED PASS (scrollWidth 364 ≤ 375 — last remaining route-overflow, F-W6-RESPONSIVE-5, now mitigated); desktop 1280 sweep VERIFIED no regressions (9 routes clean, scrollWidth 1269).**
 - [ ] **Embedded/list table overflow** — confirm tables scroll within their own container and do NOT push page width on E1–E8/E10/E12/E13 (F-W6-RESPONSIVE-2).
 - [ ] **Touch targets ≥44px** — measure nav, copy buttons, pagination prev/next at 375 (F-W6-RESPONSIVE-4).
-- [ ] **Catch-all 404 `<main>` landmark** — confirm the catch-all 404 still renders inside `<main>` after the AppShell `<main>` restructure in `06ab34cc` (F-E-3 / card 5.1).
+- [x] **Catch-all 404 `<main>` landmark** — **VERIFIED BROKEN (live 2026-05-29)** — catch-all 404 (`/foobar`) has NO `<main>` (`hasMain: false`) AND no h1 after the AppShell `<main>` restructure. F-E-3 + F-W6-NOTFOUND-1 confirmed open. Card 5.1 stays TODO.
 - [ ] **Home KPI grid** — confirm KPI 2×2 grid + hero wrap render without overflow at 375; confirm TopNav hidden-on-home does not break header search/network affordance expectations.
 - [ ] **SecondaryNav scroll-nav** — confirm horizontal-scroll nav is usable at 375, and decide whether it substitutes for the hamburger (F-W6-RESPONSIVE-3 / 0059).
-- [ ] **NetworkToggle no-op confirm** — confirm clicking Testnet visibly does nothing to data (documents the decorative behavior) and is invisible on `/` (F-DP-1 / F-AN-6).
+- [x] **NetworkToggle no-op confirm** — **VERIFIED FAKE (live 2026-05-29)** — on `/transactions`, clicking Testnet flips `aria-pressed` only; no URL/banner/refetch; only request is the LiveIndicator poll to the same Mainnet host. Pure decorative; still invisible on `/`. F-DP-1 / card 11.1 stays TODO.
 
 ### Pending live verification — design_parity ROUND 2 (PR #224, merge `35ac27c0`, 2026-05-29)
 
-Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code-inspection-only verdicts; confirm live before any DONE flip.
+Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **ALL VERIFIED live 2026-05-29** — verdicts below; see `design-parity-impact-2026-05-29.md` §Live re-verify 2026-05-29 for full evidence.
 
-- [ ] **/accounts list page functionality** — `/accounts` is a REAL page now (`AccountsListPage` + `useAccountsList`). Load at 1280/768/375: rows render, filters (search/sort/with-domain) work, pagination prev/next, empty + error + loading states. Confirms card 1.3 accounts half.
-- [ ] **share-% actual precision at `/liquidity-pools/:id`** — illusory-fix check (card 7.3 / F-W6-E13-1). Read an actual fractional `share_percentage` in the participants table; if it shows >2 decimals, R2's `formatAmount(_, 2)` did NOT fix it (minDecimals trap) — card 7.3 stays open.
-- [ ] **font swap visual sweep across 14 routes** — Clash Display headings + Satoshi body/mono render correctly; no overflow/clipping/truncation regressions from the metric change (card 4.1 / AG-performance R2 note).
-- [ ] **EmptyState + 404 state restyle visual check** — trigger empty `/accounts?q=zzz`, a 404 detail route, a forced error: confirm restyled states render and NotFound still has no h1 (card 5.1 open).
-- [ ] **OperationFlowTree flat render vs Figma** — a tx with nested Soroban invocations: confirm flat render (no collapse affordance); feeds card 11.4 / F-DP-4 Figma sign-off.
+- [x] **/accounts list page functionality** — **VERIFIED PASS (live 2026-05-29)** — 20 rows, sort/search/with-domain filters, cursor pagination (`?cursor=20`), row→detail links, empty state all work. Confirms card 1.3 accounts half DONE.
+- [x] **share-% actual precision at `/liquidity-pools/:id`** — **VERIFIED ILLUSORY (live 2026-05-29, stays open)** — pool `LD5MMO2Q…` renders `33.3333333333333333%` raw; `formatAmount(_, 2)` minDecimals ≠ rounding. Card 7.3 STAYS TODO.
+- [x] **font swap visual sweep across 14 routes** — **VERIFIED PASS (live 2026-05-29)** — Clash Display / Satoshi / JetBrains Mono all `status: "loaded"` on every route sampled; no FOUT/missing-glyph/fallback; no overflow from the metric change (desktop scrollWidth 1269 ≤ 1280).
+- [x] **EmptyState + 404 state restyle visual check** — **VERIFIED (live 2026-05-29)** — EmptyState + 404 restyle render styled, but NotFound still has NO h1 (see card 5.1, stays open).
+- [x] **OperationFlowTree flat render vs Figma** — **VERIFIED flat (live 2026-05-29, data-limited)** — confirmed flat render (0 expand/collapse, no chevron); nested-tree verify blocked by local data (0 soroban/multi-op txs). See card 11.4; Figma sign-off still pending.
+- [x] **/search @375 page overflow** — **VERIFIED PASS (live 2026-05-29)** — `documentElement.scrollWidth = 364 ≤ 375`, NO page overflow (RESPONSIVE-5 reclassified RESOLVED — page overflow gone; category-card row scrolls within `overflow-x:auto` container). See card 11.7.
+- [x] **Desktop (1280) regression sweep** — **VERIFIED none (live 2026-05-29)** — 9 routes clean (home, transactions, tx-detail, accounts, ledgers, nfts, nft-detail, pool-detail, search); no page overflow (scrollWidth 1269), fonts loaded, no breakage from R2's heavy pool/nft/ledger touches.
+
+> **Live re-verify 2026-05-29 — general note.** No new regressions from design_parity R1+R2 confirmed live (desktop sweep 9 routes clean). **Data limitation:** local dataset has 0 soroban / 0 multi-op txs (all 38 single-op) — blocks full OperationFlowTree nested-tree verify (card 11.4). Full evidence + verdict table in `design-parity-impact-2026-05-29.md` §Live re-verify 2026-05-29.
 
 ## Excluded from this queue (background only)
 
@@ -123,7 +127,7 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 - **Pre-launch:** MUST
 - **STATUS:** PARTIAL
 - **design_parity note:** `/contracts` + `/accounts` nav entries (`NAV_LINKS` in routes.ts) AND stub routes landed in `06ab34cc` (design_parity). F-A-5 Gap 1 **nav-link half DONE**; the real list-page half is still TODO — both routes currently render via `<PageStub>` placeholder, not a real list. PageStub is now the stub renderer for these two routes (see card 2.2 scope conflict).
-- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`):** **`/accounts` is now a REAL list page** — `web/src/pages/AccountsListPage.tsx` + `web/src/api/hooks/useAccountsList.ts` + `accounts/AccountsTable.tsx` + `accounts/AccountsFilters.tsx` (cursor pagination, filters, sort, empty/error/loading states), route wired `router/index.tsx:48`. **`/contracts` STILL `<PageStub>`** (`router/index.tsx:66`). F-A-5 Gap 1 **accounts half DONE; contracts half still TODO.** Card stays **PARTIAL** until `/contracts` real list ships. Live re-verify of `/accounts` queued (see Pending-live-verification block). Source: `design-parity-impact-2026-05-29.md` §1, §2, §3.
+- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`):** **`/accounts` is now a REAL list page** — `web/src/pages/AccountsListPage.tsx` + `web/src/api/hooks/useAccountsList.ts` + `accounts/AccountsTable.tsx` + `accounts/AccountsFilters.tsx` (cursor pagination, filters, sort, empty/error/loading states), route wired `router/index.tsx:48`. **`/contracts` STILL `<PageStub>`** (`router/index.tsx:66`). F-A-5 Gap 1 **accounts half DONE; contracts half still TODO.** Card stays **PARTIAL** until `/contracts` real list ships. **live re-verify 2026-05-29:** `/accounts` PASS (20 rows, sort/search/with-domain filters, cursor pagination `?cursor=20`, row→detail links, empty state all functional — accounts half now live-VERIFIED DONE); `/contracts` confirmed live stub ("implementation pending" PageStub, no h1/table). Card OVERALL stays PARTIAL. Source: `design-parity-impact-2026-05-29.md` §1, §2, §3, §Live re-verify 2026-05-29.
 
 **Rationale.** Contract detail pages exist at `/contracts/:id` but are reachable only by deep link — no list page, no nav entry. Users browsing the explorer cannot discover any contract. Per Wave 1 archaeology this is a launch-blocker carried over from 0075's Future Work. F-A-5 spec/source consistency audit also flagged it.
 
@@ -134,8 +138,8 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 - [~] Archaeology Recommendation 2 — Contracts list + nav missing (nav added `06ab34cc`; **accounts list DONE `fce0d666`**; contracts list still missing)
 - [~] F-A-5 Gap 1 — Contract detail unreachable by browsing (nav entry `06ab34cc`; **accounts list page DONE `fce0d666`**; contracts list page still TODO — partial)
 - [~] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS (NAV_LINKS entry DONE `06ab34cc`; **accounts list page DONE `fce0d666`**; contracts list page TODO)
-- [x] **Accounts list page** — `/accounts` REAL list page (`AccountsListPage` + `useAccountsList` + `AccountsTable` + `AccountsFilters`, `fce0d666`, PR #224). DONE pending live re-verify.
-- [ ] **Contracts list page** — `/contracts` STILL `<PageStub>` (`router/index.tsx:66`). TODO.
+- [x] **Accounts list page** — `/accounts` REAL list page (`AccountsListPage` + `useAccountsList` + `AccountsTable` + `AccountsFilters`, `fce0d666`, PR #224). **live re-verify 2026-05-29: /accounts PASS — 20 rows, sort/search/domain filters, cursor pagination (?cursor=20), row→detail links, empty state all work.** DONE (live-verified).
+- [ ] **Contracts list page** — `/contracts` STILL `<PageStub>` (`router/index.tsx:66`). TODO — confirmed live stub 2026-05-29 ("Page implementation pending. Routing skeleton only.", no h1/table).
 
 **Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq. design_parity `06ab34cc` landed the nav-entry + stub-route half; **R2 `fce0d666` (PR #224) shipped the real `/accounts` list page** (PageStub → real `AccountsListPage`); remaining scope is the real `ContractsListPage` (PageStub still live for `/contracts`).
 
@@ -350,7 +354,7 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 - [ ] F-W6-E13-2 — Pool NotFound has no h1
 - [ ] F-D-3 — Detail page H1 heading inconsistency (partial — covers NotFound variant)
 
-**Notes:** **\_**
+**Notes:** **live re-verify 2026-05-29:** catch-all 404 (`/foobar`) has NO `<main>` landmark (F-E-3) AND NO h1 (F-W6-NOTFOUND-1) — both confirmed broken post-AppShell restructure (`hasMain: false`, `headings: []`); account-404 also has no heading. EmptyState/404 restyle is visually styled but heading-less. Card STAYS TODO.
 
 ---
 
@@ -626,9 +630,9 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision — **R2 (`fce0d666`) `formatAmount(_, 2)` is minDecimals PADDING not rounding → ILLUSORY fix, still open. Verify live / use `.toFixed(2)`.**
+- [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision — **ILLUSORY CONFIRMED LIVE 2026-05-29 — pool `LD5MMO2Q…` participant renders `33.3333333333333333%` raw. `formatAmount(_, 2)` minDecimals ≠ rounding. Needs API pre-round OR FE `Number(x).toFixed(2)`.**
 
-**Notes:** Fast standalone fix; do not wait for card 2.1. **R2 ILLUSORY-FIX WARNING:** `formatAmount(share_percentage, 2)` does NOT round — see design_parity R2 note above. Card NOT done.
+**Notes:** Fast standalone fix; do not wait for card 2.1. **R2 ILLUSORY-FIX WARNING (live re-verify 2026-05-29):** ILLUSORY CONFIRMED LIVE — pool `LD5MMO2Q…` participant renders `33.3333333333333333%` raw. `formatAmount(share_percentage, 2)` minDecimals ≠ rounding (minDecimals is PADDING, not capping). Needs API pre-round OR FE `Number(x).toFixed(2)`. Card NOT done — STAYS TODO.
 
 ---
 
@@ -1073,7 +1077,7 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 - [ ] F-DP-1 — NetworkToggle non-functional (wire OR hide)
 - [ ] F-AN-6 (cross-cite) — single-environment config doc must reflect the chosen outcome
 
-**Notes:** Introduced by design_parity `06ab34cc`. Cross-ref card 6.4 (documentation) + "Pending live verification" (no-op confirm). Decision owner: user/designer + backend (is multi-network served?). **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT address this** — `web/src/api/config.ts` unchanged (still static `apiBaseUrl` from `VITE_API_BASE_URL`, no `network` read); `queryKeys.ts` network set is endpoint-grouping not per-network namespacing; AppShell still local `useState<Network>` flowing only into TopNav; TopNav still hidden on `/`. Toggle remains neither wired nor removed. STILL FAKE. Source: `design-parity-impact-2026-05-29.md` §1 (11.1), §2 (F-DP-1).
+**Notes:** Introduced by design_parity `06ab34cc`. Cross-ref card 6.4 (documentation) + "Pending live verification" (no-op confirm). Decision owner: user/designer + backend (is multi-network served?). **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT address this** — `web/src/api/config.ts` unchanged (still static `apiBaseUrl` from `VITE_API_BASE_URL`, no `network` read); `queryKeys.ts` network set is endpoint-grouping not per-network namespacing; AppShell still local `useState<Network>` flowing only into TopNav; TopNav still hidden on `/`. Toggle remains neither wired nor removed. STILL FAKE. **VERIFIED-FAKE live 2026-05-29** — on `/transactions`, clicking Testnet flips `aria-pressed` only; no URL change, no banner, no list refetch; the only request fired is the periodic LiveIndicator poll (`GET localhost:9000/v1/network/stats`) hitting the SAME Mainnet host (no testnet base URL, no network query param). Pure decorative. Card STAYS TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.1), §2 (F-DP-1), §Live re-verify 2026-05-29 (item 3).
 
 ---
 
@@ -1135,7 +1139,7 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 
 - [ ] F-DP-4 — OperationFlowTree collapse/expand removed (verify vs Figma; restore if regression)
 
-**Notes:** Introduced by design_parity `06ab34cc`. Designer / Figma confirmation required to classify as regression vs intended. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`):** R2 **rewrote `OperationFlowTree` again** (202 lines in merge) but collapse/expand is **still absent** — renders flat with static indented `borderLeft` dashed connectors; no `useState` / `Collapse` / chevron; `defaultExpanded?` on the `FlowNode` interface (line 44) is now a dead/unused prop. Still needs verify-vs-Figma (intended flat vs regression). Source: `design-parity-impact-2026-05-29.md` §1 (11.4), §2 (F-DP-4).
+**Notes:** Introduced by design_parity `06ab34cc`. Designer / Figma confirmation required to classify as regression vs intended. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`):** R2 **rewrote `OperationFlowTree` again** (202 lines in merge) but collapse/expand is **still absent** — renders flat with static indented `borderLeft` dashed connectors; no `useState` / `Collapse` / chevron; `defaultExpanded?` on the `FlowNode` interface (line 44) is now a dead/unused prop. Still needs verify-vs-Figma (intended flat vs regression). **live re-verify 2026-05-29:** flat render confirmed live (tx `7b9bacc8…` Advanced mode `?mode=advanced`: 0 expand/collapse buttons, no chevron affordance) BUT nested-tree verify is BLOCKED — local dev dataset has 0 soroban / 0 multi-op txs (all 38 single-op, `has_soroban:false`, `operation_count:1`). Full verify needs `invoke_host_function` / multi-op data. Figma sign-off still pending. Card STAYS TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.4), §2 (F-DP-4), §Live re-verify 2026-05-29 (item 6).
 
 ---
 
@@ -1179,23 +1183,23 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code
 
 ---
 
-### 11.7 Search page overflow <660px
+### 11.7 Search page overflow <660px — RE-CLASSIFIED: page overflow RESOLVED (live 2026-05-29)
 
 - **Type:** BUG
 - **Effort:** ~1h
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** NICE
-- **STATUS:** TODO
+- **STATUS:** DONE-mitigated (page overflow RESOLVED live 2026-05-29; residual per-card reflow = optional NICE enhancement, same treatment as RESPONSIVE-2 table→card)
 
-**Rationale.** The /search page is the only route still causing document horizontal scroll below ~660px viewport (docW=644 at 375px). Root cause: a search-results category card with ~628px intrinsic min-width that won't shrink. Page-specific — NOT the AppShell root cause (that's fixed) and NOT a design_parity regression (search was untested in Wave 6). Passes at 768/1280.
+**Rationale.** ~~The /search page causes document horizontal scroll below ~660px viewport.~~ **RE-CLASSIFIED (live re-verify 2026-05-29):** the page-level overflow is GONE — `/search?q=test` @375 reports `documentElement.scrollWidth = 364 ≤ innerWidth 375` (NO page-level horizontal scroll; R1/R2 "~644px still overflowing" prediction REFUTED live). The 651px category-card row (Transactions/Accounts/Contract/Token/NFT/Liquidity Pool) now sits in an `overflow-x:auto` container (clientWidth 332) and scrolls WITHIN the container — same scroll-within mitigation as tables (RESPONSIVE-2), does not push the page. The gating page-overflow check PASSES. Residual: the category-card row lacks per-card reflow (scrolls within container, NOT page overflow) — a softer enhancement, same class as the RESPONSIVE-2 table→card transform (separate optional NICE, not a bug).
 
-**Scope.** Find the search-results category card (web/src/search/ or web/src/pages/SearchResultsPage.tsx) forcing ~628px min-width; make it responsive (flex-wrap, min-width:0, or stack on narrow). Verify docW ≤ viewport at 375.
+**Scope.** Page-overflow bug is RESOLVED (no action needed). OPTIONAL enhancement (NICE, not pre-launch): make the search result-category row reflow/wrap per-card at narrow widths instead of scrolling within its container (`flex-wrap` / `min-width:0` / stack on narrow). Track as a NICE enhancement only if worth following up — otherwise this card is effectively closed-as-mitigated.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-RESPONSIVE-5 — search category card 628px intrinsic, overflows <660px
+- [x] F-W6-RESPONSIVE-5 — search category card overflows <660px — **RESOLVED (page overflow gone, live-confirmed 2026-05-29: scrollWidth 364 ≤ 375); 651px category-card row scrolls within `overflow-x:auto` container (same mitigation as RESPONSIVE-2). Residual per-card reflow = optional NICE enhancement.**
 
-**Notes:** Newly-surfaced live 2026-05-28; screenshot at .playwright-mcp/e14-search-375-overflow.png. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT fix search overflow** — R2 `search/*` changes are theme-token-form refactors ONLY (`sx={{color:'text.tertiary'}}` → `sx={(t)=>({color:t.palette.text.tertiary})}`); no width/flex/`min-width:0` structural change. The ~628px category card is untouched; expect STILL overflowing (~644px @375). Needs live re-verify. Card remains TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.7), §2 (RESPONSIVE-5).
+**Notes:** Newly-surfaced live 2026-05-28; original screenshot at .playwright-mcp/e14-search-375-overflow.png (pre-swap Mona Sans state, retained for before/after). **RE-CLASSIFIED live re-verify 2026-05-29:** page-level overflow is GONE — `/search?q=test` @375 `documentElement.scrollWidth = 364 ≤ 375`. The R1/R2 code-only prediction (~644px page overflow, search untouched by R2 theme-token refactor) is REFUTED by the live run: the 651px category-card row scrolls inside an `overflow-x:auto` container rather than pushing page width (same scroll-within mitigation as tables, RESPONSIVE-2). F-W6-RESPONSIVE-5 → RESOLVED (page overflow mitigated). True per-card reflow/wrap still absent → optional NICE enhancement, mirroring how RESPONSIVE-2 table→card transform was treated (RESOLVED-as-bug; transform = separate optional). Screenshot: `screenshots/search-375-no-page-overflow.png`. Source: `design-parity-impact-2026-05-29.md` §Live re-verify 2026-05-29 (item 7).
 
 ---
 
@@ -1340,7 +1344,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-K-9                                          | 3           | 🟠      | —                       | RESOLVED    | PoolAssetLeg schema gap — 473de2a2                                          |
 | F-E-1                                          | 3           | 🔴      | —                       | RESOLVED    | URL cursor write — f646047d (0254 merge)                                    |
 | F-E-2                                          | 3           | 🟠      | —                       | SKIP        | URL wire contract — user-dropped 2026-05-25                                 |
-| F-E-3                                          | 3           | 🟡      | C 5.1                   | TODO        | Catch-all 404 `<main>` landmark                                             |
+| F-E-3                                          | 3           | 🟡      | C 5.1                   | TODO        | Catch-all 404 `<main>` landmark — **VERIFIED BROKEN live 2026-05-29: `/foobar` catch-all has NO `<main>` (`hasMain: false`) post-AppShell restructure. STAYS TODO** |
 | F-E-4                                          | 3           | ✓       | —                       | RESOLVED    | Filter URL preserves refresh OK                                             |
 | F-E-5                                          | 3           | ✓       | —                       | RESOLVED    | Trailing slash tolerated                                                    |
 | F-E-6                                          | 3           | ✓       | —                       | RESOLVED    | Deep link from raw URL OK                                                   |
@@ -1485,8 +1489,8 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | RESOLVED    | tables in overflowX:auto; table→card transform = separate optional enhancement |
 | F-W6-RESPONSIVE-3                              | 6           | 🟠      | C 11.5                  | TODO        | user decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alt rejected → card 11.5. **R2 (PR #224 merge `35ac27c0`) responsive nav tweaks did NOT add hamburger — grep MenuIcon/Drawer/aria-label="Open menu" = 0. Remains TODO.** |
 | F-W6-RESPONSIVE-4                              | 6           | 🟠      | C 11.6                  | TODO        | still failing live; 105/106 elements <44px @375 → card 11.6. **R2 (PR #224 merge `35ac27c0`) did NOT enlarge touch targets — no sizing pass. Remains TODO.** |
-| F-W6-RESPONSIVE-5                              | 6           | 🟡      | C 11.7                  | TODO        | search page overflow <660px, category card 628px intrinsic; newly-surfaced live 2026-05-28. **R2 (PR #224 merge `35ac27c0`) search/* changes theme-token-form only, no width/min-width:0 structural fix — overflow remains. TODO; live re-verify.** |
-| F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 on 4 of 5 detail                                        |
+| F-W6-RESPONSIVE-5                              | 6           | 🟡      | C 11.7                  | RESOLVED    | search page overflow <660px — **RESOLVED (page overflow mitigated, live-confirmed 2026-05-29): `/search?q=test` @375 `documentElement.scrollWidth = 364 ≤ 375`, NO page-level scroll (R1/R2 ~644px prediction REFUTED). 651px category-card row scrolls within `overflow-x:auto` container (same mitigation as RESPONSIVE-2). Residual per-card reflow = optional NICE enhancement, not a bug.** |
+| F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 — **VERIFIED BROKEN live 2026-05-29: catch-all 404 (`/foobar`) AND account-404 have NO h1 (`headings: []`) post-AppShell restructure; EmptyState/404 restyle is styled but heading-less. STAYS TODO** |
 | F-W6-NOTFOUND-2                                | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on parent 404                                      |
 | F-W6-E0-1                                      | 6           | 🟠      | C 1.1                   | TODO        | Footer dead spans (recap)                                                   |
 | F-W6-E0-2                                      | 6           | 🟠      | C 7.2                   | TODO        | Footer hardcoded operational (recap)                                        |
@@ -1521,16 +1525,16 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-E11-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT Contract ID in Details plain text                                       |
 | F-W6-E12-1                                     | 6           | 🟡      | C 7.1                   | TODO        | Pool ID truncation twice per row                                            |
 | F-W6-E12-2                                     | 6           | 🟢      | C 7.1                   | TODO        | "Any TVL" filter looks like loading                                         |
-| F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision — **R2 (PR #224 `fce0d666`) ILLUSORY fix: `formatAmount(_, 2)` is minDecimals PADDING not rounding; raw `33.3333…` still full precision unless API pre-rounds. NOT fixed; verify live or use `.toFixed(2)`** |
+| F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision — **ILLUSORY CONFIRMED LIVE 2026-05-29: pool `LD5MMO2Q…` renders `33.3333333333333333%` raw. `formatAmount(_, 2)` minDecimals ≠ rounding. NOT fixed; needs API pre-round OR FE `Number(x).toFixed(2)`. STAYS TODO** |
 | F-W6-E13-2                                     | 6           | 🟢      | C 5.1                   | TODO        | Pool NotFound no h1                                                         |
 | F-W6-E13-3                                     | 6           | 🟢      | C 7.1                   | TODO        | Pool tx operation type plain text — UNCHANGED by `06ab34cc` (LP-detail recent-tx + home op-type not in diff) |
 | F-W6-E14-1                                     | 6           | 🟢      | C 7.1                   | TODO        | Empty-state hint at ?q= no examples                                         |
 | F-W6-E14-2                                     | 6           | 🟢      | C 7.1                   | TODO        | Search has two clear buttons                                                |
 | F-W6-E14-3                                     | 6           | 🟢      | —                       | SKIP        | First Tab lands on header search (informational)                            |
-| F-DP-1                                         | design_parity | 🟠   | C 11.1                  | TODO        | NetworkToggle non-functional — fake Mainnet/Testnet toggle (no apiBaseUrl/query-key change), invisible on `/`. Introduced by `06ab34cc`. Wire OR hide. **R2 (PR #224 merge `35ac27c0`) did NOT address — config.ts unchanged, still static apiBaseUrl, toggle not wired/removed. STILL FAKE.** See design-parity-impact-2026-05-29 |
+| F-DP-1                                         | design_parity | 🟠   | C 11.1                  | TODO        | NetworkToggle non-functional — fake Mainnet/Testnet toggle (no apiBaseUrl/query-key change), invisible on `/`. Introduced by `06ab34cc`. Wire OR hide. **VERIFIED-FAKE live 2026-05-29: clicking Testnet flips `aria-pressed` only; no URL/banner/refetch; only request is LiveIndicator poll to same Mainnet host. STILL FAKE — STAYS TODO.** See design-parity-impact-2026-05-29 §Live re-verify |
 | F-DP-2                                         | design_parity | 🟠   | C 11.2                  | TODO        | AssetIcon hardcoded hex `#724311`/`#fffcc2` (sac kind) — regresses F-AK-1 (3→5). Introduced by `06ab34cc`. Move to theme tokens. **R2 (PR #224): `#724311`/`#fffcc2` confirmed token VALUES but bound raw not via theme.palette; `assetColor.ts` touch was red herring (already uses tokens). Regression persists at AssetIcon.** |
 | F-DP-3                                         | design_parity | 🟠   | C 11.3                  | TODO        | Raw `zIndex: 2` added across shell (AppShell/TopNav/SecondaryNav/Footer) — regresses F-AK-2. Introduced by `06ab34cc`. Move to z-index scale |
-| F-DP-4                                         | design_parity | 🟠   | C 11.4                  | TODO        | OperationFlowTree collapse/expand removed (now flat w/ dashed connectors) — verify vs Figma; restore if regression. Introduced by `06ab34cc`. **R2 (PR #224 merge `35ac27c0`) rewrote OperationFlowTree again but collapse/expand still absent (`defaultExpanded` now dead prop) — verify vs Figma whether intended.** |
+| F-DP-4                                         | design_parity | 🟠   | C 11.4                  | TODO        | OperationFlowTree collapse/expand removed (now flat w/ dashed connectors) — verify vs Figma; restore if regression. Introduced by `06ab34cc`. **Flat render CONFIRMED LIVE 2026-05-29 (tx `7b9bacc8…` Advanced: 0 expand/collapse, no chevron); nested-tree verify BLOCKED — local dataset 0 soroban / 0 multi-op txs (all 38 single-op). Figma sign-off still pending. STAYS TODO.** |
 | Z-1 Spot 5                                     | 5           | 🟢      | C 6.3                   | TODO        | Op-type enum hand-typed (cross-cite F-Z-2)                                  |
 | Z-1 Spot 1                                     | 5           | A       | C 8.4                   | TODO        | Error envelope flatten (cross-cite F-AF-1)                                  |
 | 0061 #4                                        | arch        | 🟢      | C 8.7                   | TODO        | Sort caret middle-ground sign-off                                           |
@@ -1597,6 +1601,8 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 (Appendix row count tracked above — see report. +4 design_parity regression rows F-DP-1..F-DP-4 appended 2026-05-27 per design-parity-impact-2026-05-27.md.)
 
 (design_parity ROUND 2 annotation pass 2026-05-29 per design-parity-impact-2026-05-29.md / PR #224 / merge `35ac27c0`: no new rows added — no new regressions. Annotated in place: cards 1.3 / 2.2 / 4.1 / 7.3 / 11.1 / 11.2 / 11.4 / 11.5 / 11.6 / 11.7; appendix rows F-A-5, F-P-1, F-W6-E13-1, F-DP-1/2/4, F-W6-RESPONSIVE-3/4/5. Only flip: `/accounts` sub-item DONE within card 1.3 (`fce0d666`); card 1.3 stays PARTIAL — `/contracts` still PageStub. Card 7.3 stays TODO — share-% R2 fix is ILLUSORY (formatAmount minDecimals ≠ rounding). 5 R2 live-re-verify items added to Pending-live-verification block.)
+
+(LIVE re-verify pass 2026-05-29 per design-parity-impact-2026-05-29.md §Live re-verify 2026-05-29 — live Playwright, R1+R2 merged, viewports 1280+375. Status flips applied: **card 11.7 / F-W6-RESPONSIVE-5 → RESOLVED** (page overflow GONE live, scrollWidth 364 ≤ 375; residual per-card reflow = optional NICE, same treatment as RESPONSIVE-2); **card 1.3 `/accounts` sub-item → DONE live-verified** (drop "pending re-verify"; card 1.3 OVERALL stays PARTIAL — `/contracts` confirmed live stub). Hardened-but-STILL-TODO: 7.3/F-W6-E13-1 (share-% ILLUSORY CONFIRMED LIVE `33.33…%`), 11.1/F-DP-1 (NetworkToggle VERIFIED-FAKE), 5.1/F-E-3+F-W6-NOTFOUND-1 (catch-all 404 NO main AND NO h1, live-confirmed), 11.4/F-DP-4 (flat confirmed but nested verify BLOCKED — 0 soroban/multi-op txs in local data). Pending-live-verification checklist items marked VERIFIED. No new regressions; desktop sweep 9 routes clean.)
 
 ## End of queue
 

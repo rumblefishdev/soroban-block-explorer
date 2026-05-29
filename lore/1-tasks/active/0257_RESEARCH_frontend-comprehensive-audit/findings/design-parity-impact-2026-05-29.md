@@ -169,3 +169,49 @@ Carry-over still-open from round 1 (unchanged by round 2): hamburger (11.5), tou
 - **Accounts list:** REAL. **Contracts list:** still PageStub.
 - **New regressions:** none severe; 1 illusory fix (share %), whole-app font swap + EmptyState/error restyle → visual re-verify; `web/src/pages/detail/` folder grew (mild card-2.2 scope creep).
 - **Top 3 highest-value closures:** (1) real `/accounts` list page; (2) contract-detail breadcrumb fix (closes round-1 regression); (3) font→woff2 migration (load win).
+
+---
+
+## Live re-verify 2026-05-29 (design_parity R1+R2)
+
+**Method:** live Playwright MCP, single session. Vite `localhost:4200` (200, R1+R2 merged), API `localhost:9000`, Postgres `:5433`. Viewports 1280 (desktop) + 375 (mobile). Branch tip `35ac27c0`.
+**Stance:** read-only audit; verdicts only. Screenshots in `findings/screenshots/`.
+**Data caveat:** local dev dataset has NO soroban txs and NO multi-op txs (all 38 txs single-op, `has_soroban:false`, `operation_count:1`) — limits OperationFlowTree nested-tree verification (item 6).
+
+### Verdict table (9 items)
+
+| # | Item | Card / Finding | Verdict | Evidence |
+|---|------|----------------|---------|----------|
+| 1 | `/accounts` list page | 1.3 (accounts half) | **PASS** | Real list: 20 rows, sort combobox (`xlm_desc` = "Top XLM holders"), search field, "With domain" filter, row→`/accounts/:id` links. Pagination: Next → `?cursor=20` (rows 21–40, Previous enables); Prev disabled on page 1. "With domain" → `?domain=1`, all rows gain a domain (stellar.org/mintbase.com/fairx.io/binance.com). Account detail renders (h1 "Account", `<main>` present). Only console error = `favicon.ico` 404 (harmless). |
+| 1b | `/contracts` still stub | 1.3 (contracts half) | **FAIL (still stub)** | `/contracts` renders PageStub: "Page implementation pending. Routing skeleton only." No h1, no table. Card 1.3 stays PARTIAL. |
+| 2 | share-% precision | 7.3 / F-W6-E13-1 | **ILLUSORY (confirmed)** | Pool `LD5MMO2Q…WD3O6TL` PoolParticipants "Share %" col renders **`33.3333333333333333%`** (raw full precision) for the 200-share participant; 100.00% for the 600-share one. The `formatAmount(share_percentage, 2)` minDecimals-trap is real — API sends a high-precision float, renders unrounded. **Card 7.3 STAYS TODO.** Screenshot: `screenshots/e13-share-pct-illusory.png`. |
+| 3 | NetworkToggle no-op | F-DP-1 / 11.1 | **FAIL (still fake)** | `/transactions`: clicking Testnet flips visual `aria-pressed` (Mainnet→false, Testnet→true) but: no URL change, no banner, transactions list does NOT refetch. One request fired (`GET localhost:9000/v1/network/stats`) = periodic LiveIndicator poll hitting the SAME Mainnet host (no testnet base URL, no network query param). Pure decorative. **Card 11.1 / F-DP-1 STAYS TODO.** |
+| 4 | Font swap sweep | 4.1 / R2 note | **PASS** | All 3 `@font-face` (Clash Display 200–700, Satoshi 300–900, JetBrains Mono 100–800) report `status: "loaded"` on every route sampled (home, transactions, tx-detail, pool-detail, search, accounts, ledgers, nfts, nft-detail). h1 = `"Clash Display", system-ui, sans-serif`; body = `Satoshi`. No FOUT/missing-glyph/fallback. No layout overflow from the metric change (all desktop scrollWidth = 1269 ≤ 1280). |
+| 5 | EmptyState + 404 restyle | 5.1 | **PARTIAL** | EmptyState PASS: `/accounts?q=zzz…` → styled "No accounts match your filters / Try adjusting or clearing the active filters / Clear filters". 404 restyle PASS visually (account 404: "Account not found / We couldn't find anything matching this identifier"; catch-all: "Page not found … Back to home"). BUT **NO h1/heading anywhere** in either NotFound state (`headings: []`). **F-W6-NOTFOUND-1 STAYS TODO.** |
+| 6 | OperationFlowTree flat render | F-DP-4 / 11.4 | **FAIL (flat, as predicted) — data-limited** | Tx `7b9bacc8…` Advanced mode (`?mode=advanced` — URL state ✓): Operations section renders FLAT — 0 expand/collapse buttons, no chevron affordance (the 1 chevron found = the op-type select dropdown). Single-op only ("Account Merge #1") due to data caveat above; could not exercise nested Soroban tree. Consistent with code verdict (flat render, `defaultExpanded` dead prop). **Card 11.4 STAYS TODO** (Figma sign-off still needed; full nested verify blocked by local data). |
+| 7 | `/search` @375 overflow | F-W6-RESPONSIVE-5 / 11.7 | **PASS (page overflow GONE) — partial reflow** | `/search?q=test` @375: **`documentElement.scrollWidth = 364 ≤ innerWidth 375` → NO page-level horizontal scroll.** Round-1/2 predicted ~644px page overflow — **REFUTED live.** The category-card row (Transactions/Accounts/Contract/Token/NFT/Liquidity Pool) is 651px wide but now sits in a `overflow-x:auto` container (clientWidth 332) — scrolls WITHIN container, does not push the page (same scroll-within mitigation as tables, RESPONSIVE-2). True per-card reflow/wrap still absent, but the gating page-overflow check PASSES. Screenshot: `screenshots/search-375-no-page-overflow.png`. |
+| 8 | Catch-all 404 `<main>` + h1 | F-E-3 / 5.1 | **FAIL (still broken)** | `/foobar-unknown-route`: 404 renders ("Page not found … Back to home") but **`<main>` ABSENT entirely** (`hasMain: false`) and **no h1** (`h1: NONE`). Catch-all (react-router "No routes matched" warning ×2) bypasses AppShell's `<main>` landmark — SR users skip page main, no heading anchor. **F-E-3 + F-W6-NOTFOUND-1 confirmed open. Card 5.1 STAYS TODO.** |
+| 9 | Desktop regression spot-check | general | **PASS (no regressions)** | 1280px sweep: home, transactions, tx-detail, accounts, ledgers (h1 "Ledgers", table ✓), nfts, nft-detail (h1 "Cat #2", breadcrumb ✓), pool-detail (h1 "USDCOIN / EUR", 2 tables ✓). All: no page overflow (scrollWidth 1269), fonts loaded, no error states. No visual breakage from R2's heavy touches to pool/nft/ledger files. |
+
+### KEY verdicts (return)
+
+- **share-%: ILLUSORY CONFIRMED.** Renders `33.3333333333333333%` live. Fix is fake (minDecimals ≠ rounding). Card 7.3 stays TODO. **This is the headline: R2's `formatAmount(_,2)` did NOT fix F-W6-E13-1.**
+- **NetworkToggle: STILL FAKE.** Visual-only flip, zero data/URL/base-URL change. F-DP-1 / card 11.1 stays TODO.
+- **`/accounts`: functionally REAL & complete** (rows, filters, cursor pagination, row links, empty/detail states all work). Accounts half of card 1.3 DONE.
+- **`/search` @375: scrollWidth = 364 (≤ 375), NO page overflow.** RESPONSIVE-5 page-overflow prediction refuted; category-card row scrolls within its own `overflow-x:auto` container.
+
+### Queue flips for parent to apply (DO NOT auto-applied here — list only)
+
+- **Card 1.3 — `/accounts` sub-item → confirmed DONE (live).** The `[x] Accounts list page … DONE pending live re-verify` line (audit-action-queue.md:137) → drop "pending live re-verify" — live PASS (rows/filters/cursor-pagination/row-links/empty-state all functional). Card 1.3 OVERALL stays PARTIAL (contracts half FAIL — still PageStub, confirmed live).
+- **Card 7.3 — STAYS TODO.** Flip the suggested "PARTIAL (illusory)" annotation to a hard verdict: illusory fix CONFIRMED live (`33.3333333333333333%`). Do NOT advance toward DONE.
+- **F-DP-1 / Card 11.1 — STAYS TODO.** No-op confirmed live; clear the "Pending live verification → NetworkToggle no-op confirm" checkbox (audit-action-queue.md:50) as VERIFIED-fake.
+- **Card 5.1 — STAYS TODO, now LIVE-CONFIRMED.** Both sub-findings verified open live: catch-all 404 has NO `<main>` (F-E-3) AND NO h1 (F-W6-NOTFOUND-1), account-404 also has no heading. Clear the "Pending live verification → Catch-all 404 `<main>` landmark" checkbox (audit-action-queue.md:47) as VERIFIED-broken.
+- **Card 11.7 / F-W6-RESPONSIVE-5 — re-classify.** Page-level overflow is GONE live (scrollWidth 364 ≤ 375) — the R1/R2 "~644px still overflowing" prediction is REFUTED. Downgrade from "page overflow" to "category-card row lacks per-card reflow (scrolls within container)". The gating page-overflow check PASSES; residual is the softer card-reflow goal (same class as RESPONSIVE-2). Parent decision: this may be closeable-as-mitigated like RESPONSIVE-2, or kept open for true reflow.
+- **Card 11.4 / F-DP-4 — STAYS TODO.** Flat render confirmed (no collapse affordance); full nested-tree verify blocked by local data (no soroban/multi-op txs). Figma sign-off still required.
+- **Pending live verification block** (audit-action-queue.md:52–60, R2 queue): can mark `/accounts functionality`, `share-% precision` (illusory), `font swap sweep` (pass), `EmptyState+404 restyle` (partial — no h1), `OperationFlowTree flat` (confirmed flat, data-limited) all as VERIFIED with the verdicts above.
+
+### Screenshots
+
+- `findings/screenshots/e13-share-pct-illusory.png` — pool detail @375, PoolParticipants showing `33.3333333333333333%`.
+- `findings/screenshots/search-375-no-page-overflow.png` — `/search?q=test` @375, page fits 375 (category chips clip within scroll container).
+- Pre-existing repo-root `e14-search-375-overflow.png` (old Mona Sans state) retained for before/after comparison — that older capture shows the prior page-level overflow now resolved.
