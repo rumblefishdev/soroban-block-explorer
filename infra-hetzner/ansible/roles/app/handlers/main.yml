@@ -48,11 +48,16 @@
   # invocation and serialises the sidecar after CH reports
   # healthy.
   #
-  # `wait: true` blocks the handler until every service is
-  # running + (healthy | no-healthcheck), giving us the same
-  # guarantee the "Wait for services healthy" handler provides
-  # but without a separate polling task that can race
-  # `restart`'s asynchronous semantics.
+  # `wait: false` deliberately. `docker compose up --wait` blocks
+  # until EVERY service is running + healthy — but `db-clickhouse-init`
+  # is a one-shot (`restart: no`) that exits 0 after applying init.sql,
+  # which `--wait` reports as "container ... exited (0)" and fails the
+  # handler. The health guarantee is instead delegated to the
+  # "Wait for services healthy" handler below, which polls only the
+  # long-running services (clickhouse, caddy) and correctly ignores the
+  # one-shot sidecar. (`recreate: always` still re-creates every
+  # service and respects `depends_on: service_healthy` ordering, so the
+  # sidecar is serialised after CH reports healthy regardless of wait.)
   community.docker.docker_compose_v2:
     project_src: '{{ app_repo_dest }}'
     files:
@@ -60,8 +65,7 @@
       - docker-compose.prod.yml
     state: present
     recreate: always
-    wait: true
-    wait_timeout: 180
+    wait: false
   listen: Restart compose stack
 
 - name: Reload systemd

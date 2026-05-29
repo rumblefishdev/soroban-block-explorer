@@ -9,6 +9,7 @@
 
 pub mod cache_control;
 pub mod cursor;
+pub mod datasource;
 pub mod errors;
 pub mod extractors;
 pub mod filters;

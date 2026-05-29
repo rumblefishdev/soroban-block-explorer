@@ -74,8 +74,17 @@ async fn main() -> Result<(), Error> {
 
     let enrichment_publisher = handler::enrichment_publish::Publisher::from_env(sqs_client)?;
 
+    // The doorbell handler derives S3 keys from ledger numbers and reads them
+    // from this bucket (it does not parse the S3 event). CDK always injects
+    // `BUCKET_NAME` (`compute-stack.ts`); a missing value fails init loudly.
+    let bucket = std::env::var("BUCKET_NAME").unwrap_or_default();
+    if bucket.is_empty() {
+        return Err("BUCKET_NAME env var is missing or empty".into());
+    }
+
     let state = handler::HandlerState {
         s3_client,
+        bucket,
         cw_client,
         ch_client,
         enrichment_publisher,

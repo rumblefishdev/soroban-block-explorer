@@ -26,6 +26,11 @@ pub const DEFAULT_URL: &str = "http://localhost:8123";
 /// secrets in the compose file.
 pub const DEFAULT_USER: &str = "default";
 
+/// Production CH database — `schema/init.sql` creates every table here.
+/// Shared so the api / indexer / backfill-runner Lambdas all reach the
+/// same logical store under mTLS.
+pub const PROD_DATABASE: &str = "default";
+
 /// Configuration for a ClickHouse client, sourced from environment variables
 /// with safe local-dev defaults.
 #[derive(Debug, Clone)]
