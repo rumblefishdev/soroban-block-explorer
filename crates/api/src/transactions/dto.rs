@@ -22,6 +22,34 @@ pub struct ListParams {
     pub filter_operation_type: Option<String>,
 }
 
+/// Opaque pagination payload for `GET /v1/transactions` (encoded via
+/// [`common::cursor`](crate::common::cursor)).
+///
+/// The PG and CH read paths key their list scans differently, so this
+/// payload is a superset that serves both. Field meanings by datasource:
+///
+/// | field      | PG (`created_at, id` keyset) | CH (`ledger_sequence, id` keyset) |
+/// |------------|------------------------------|-----------------------------------|
+/// | `ts`       | `transactions.created_at`    | parent ledger `closed_at`         |
+/// | `id`       | `transactions.id` (BIGSERIAL)| parent `ledger_sequence`          |
+/// | `tiebreak` | absent                       | `transactions.id` hash surrogate  |
+///
+/// CH orders by `(ledger_sequence, id)` and partition-prunes on
+/// `intDiv(ledger_sequence, 500000)` (canonical SQL 02), so it needs the
+/// `ledger_sequence` partition key (`id`) plus the within-ledger tie-break
+/// (`tiebreak`). PG's `(created_at, id)` keyset needs no third field, so
+/// `tiebreak` is omitted from the wire on that path. `tiebreak` carries a
+/// serde default so cursors minted before this field existed still decode
+/// (ADR 0008: the payload may evolve as long as old cursors decode or fail
+/// cleanly — the wire format stays opaque to clients either way).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxListCursor {
+    pub ts: DateTime<Utc>,
+    pub id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiebreak: Option<i64>,
+}
+
 /// Slim transaction row returned in the list endpoint.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct TransactionListItem {
@@ -148,4 +176,64 @@ pub struct OperationItem {
     pub application_order: Option<i16>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::cursor::{self, Direction};
+    use chrono::TimeZone;
+
+    #[test]
+    fn ch_cursor_round_trips_with_tiebreak() {
+        // CH path: id = ledger_sequence, tiebreak = transactions.id hash
+        // surrogate (may be negative — cityhash64 lower-bits as i64).
+        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
+        let c = TxListCursor {
+            ts,
+            id: 50_000,
+            tiebreak: Some(-123),
+        };
+        let encoded = cursor::encode(&c, Direction::Next);
+        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
+        assert_eq!(dir, Direction::Next);
+        assert_eq!(decoded.id, 50_000);
+        assert_eq!(decoded.tiebreak, Some(-123));
+    }
+
+    #[test]
+    fn pg_cursor_omits_tiebreak_on_the_wire() {
+        // `skip_serializing_if` keeps the PG cursor wire-identical to the
+        // pre-0243 `(ts, id)` shape — no `tiebreak` key emitted.
+        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
+        let c = TxListCursor {
+            ts,
+            id: 42,
+            tiebreak: None,
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        assert!(
+            json.get("tiebreak").is_none(),
+            "tiebreak must be omitted on the PG path: {json}"
+        );
+        assert_eq!(json["id"], 42);
+    }
+
+    #[test]
+    fn legacy_ts_id_cursor_decodes_with_no_tiebreak() {
+        // A cursor minted before `tiebreak` existed (`{ts, id}` only) must
+        // still decode — serde default → None — so in-flight PG cursors
+        // survive the 0243 deploy (ADR 0008 cursor opacity / evolvability).
+        #[derive(serde::Serialize)]
+        struct Legacy {
+            ts: DateTime<Utc>,
+            id: i64,
+        }
+        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
+        let encoded = cursor::encode(&Legacy { ts, id: 7 }, Direction::Prev);
+        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
+        assert_eq!(dir, Direction::Prev);
+        assert_eq!(decoded.id, 7);
+        assert_eq!(decoded.tiebreak, None);
+    }
 }

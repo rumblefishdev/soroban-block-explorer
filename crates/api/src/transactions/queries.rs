@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, direction_sql};
+
+use super::dto::TxListCursor;
 
 #[derive(Debug)]
 pub struct TxListRow {
@@ -44,9 +46,13 @@ pub struct TxDetailRow {
     pub parse_error: bool,
 }
 
+/// Result of the `transaction_hash_index` seek: the `created_at` partition
+/// key the detail read needs to key the `transactions` row by
+/// `(hash, created_at)`. `ledger_sequence` is not carried here — the detail
+/// handler reads it back from the resolved `TxDetailRow` (same value, fewer
+/// fields to keep in sync).
 #[derive(Debug)]
 pub struct HashIndexRow {
-    pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -88,7 +94,7 @@ pub struct InvocationAppearanceRow {
 
 pub struct ResolvedListParams {
     pub limit: i64,
-    pub cursor: Option<TsIdCursor>,
+    pub cursor: Option<TxListCursor>,
     pub source_account: Option<String>,
     pub contract_id: Option<String>,
     pub op_type: Option<i16>,
@@ -101,7 +107,7 @@ fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bo
 
 fn push_cursor_predicate(
     qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
-    cursor: &TsIdCursor,
+    cursor: &TxListCursor,
     op: &str,
 ) {
     qb.push(" (t.created_at, t.id) ");
@@ -314,7 +320,7 @@ fn push_contract_union_arm<'q>(
     qb: &mut sqlx::QueryBuilder<'q, sqlx::Postgres>,
     table: &'static str,
     cid_strkey: &'q str,
-    cursor: &Option<TsIdCursor>,
+    cursor: &Option<TxListCursor>,
     op: &str,
 ) {
     qb.push("SELECT created_at, transaction_id FROM ");
@@ -346,15 +352,13 @@ pub async fn lookup_hash_index(
     pool: &PgPool,
     hash_bytes: &[u8],
 ) -> Result<Option<HashIndexRow>, sqlx::Error> {
-    let raw: Option<PgRow> = sqlx::query(
-        "SELECT ledger_sequence, created_at FROM transaction_hash_index WHERE hash = $1",
-    )
-    .bind(hash_bytes)
-    .fetch_optional(pool)
-    .await?;
+    let raw: Option<PgRow> =
+        sqlx::query("SELECT created_at FROM transaction_hash_index WHERE hash = $1")
+            .bind(hash_bytes)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(raw.map(|r| HashIndexRow {
-        ledger_sequence: r.get("ledger_sequence"),
         created_at: r.get("created_at"),
     }))
 }
