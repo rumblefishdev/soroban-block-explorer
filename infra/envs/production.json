@@ -42,7 +42,7 @@
   "apiWafRateLimit": 2000,
   "xraySamplingRate": 0.05,
   "xrayReservoirSize": 1,
-  "galexieLagMinutes": 1,
+  "galexieLagMinutes": 15,
   "processorErrorRateThreshold": 0.01,
   "apiGateway5xxThreshold": 0.5,
   "slackWorkspaceId": "T83HLEDJN",

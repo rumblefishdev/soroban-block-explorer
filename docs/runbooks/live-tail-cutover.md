@@ -647,6 +647,92 @@ fi
 Expected: lag ≤ 6 ledgers (~30 s at 5 s ledger close time, allowing
 Galexie + S3 propagation + Lambda processing).
 
+#### B-2.1 — Per-table population check
+
+The gap check above only proves `ledgers` is gapless. It does **not** prove
+the production `persist_ledger_clickhouse` fills the _other_ 16 tables — the
+`persist_e2e` fixture only populated `ledgers` + the transaction-derived
+tables (`transactions`, `transaction_hash_index`, `transaction_participants`,
+`accounts`), leaving every other slice empty. The only place the full
+multi-table write is exercised with real data is live traffic, so confirm it
+here. (Invocation matches B-0 / D-7: container `app-clickhouse-1` +
+`--config-file=…/client.xml` — the authenticated form validated on the box;
+adjust the container alias if your compose project prefix differs.)
+
+```bash
+# L_last_closed — the 0228 backfill terminus; bump to your actual value.
+CUTOVER=62527999
+
+# (a) Append-only FACT tables — each carries `ledger_sequence`, so a windowed
+#     count proves the persist function writes each table per ledger.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
+SELECT 'ledgers'                            AS tbl, count() AS rows_post_cutover FROM ledgers                          WHERE sequence        > {cut:Int64}
+UNION ALL SELECT 'transactions',                    count() FROM transactions                    WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_hash_index',          count() FROM transaction_hash_index          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'operations_appearances',          count() FROM operations_appearances          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'soroban_invocations_appearances', count() FROM soroban_invocations_appearances WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'liquidity_pool_snapshots',        count() FROM liquidity_pool_snapshots        WHERE ledger_sequence > {cut:Int64}
+ORDER BY tbl FORMAT PrettyCompact
+\""
+
+# (b) STATE tables (ReplacingMergeTree upserts) — windowed by their ledger
+#     watermark column; counts entities touched in the post-cutover range.
+#     Plain count() (no FINAL) is enough for a non-zero / growth sanity check.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
+SELECT 'accounts'                  AS tbl, count() AS rows_touched FROM accounts                  WHERE last_seen_ledger        > {cut:Int64}
+UNION ALL SELECT 'account_balances_current', count() FROM account_balances_current WHERE last_updated_ledger     > {cut:Int64}
+UNION ALL SELECT 'soroban_contracts',        count() FROM soroban_contracts        WHERE wasm_uploaded_at_ledger > {cut:Int64}
+UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE minted_at_ledger        > {cut:Int64}
+UNION ALL SELECT 'liquidity_pools',           count() FROM liquidity_pools           WHERE last_updated_ledger     > {cut:Int64}
+UNION ALL SELECT 'lp_positions',              count() FROM lp_positions              WHERE last_updated_ledger     > {cut:Int64}
+ORDER BY tbl FORMAT PrettyCompact
+\""
+
+# (c) assets + wasm_interface_metadata have NO per-ledger column (asset-keyed /
+#     wasm_hash-keyed). Snapshot total count() at B-0 and re-check here; any
+#     positive delta proves the persist function is upserting them. Record the
+#     B-0 baseline in the Part C worklog.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml -q \"
+SELECT 'assets'                  AS tbl, count() AS total_rows FROM assets
+UNION ALL SELECT 'wasm_interface_metadata', count() FROM wasm_interface_metadata
+FORMAT PrettyCompact
+\""
+```
+
+**Interpretation:**
+
+- `ledgers`, `transactions`, `transaction_hash_index`,
+  `transaction_participants`, `operations_appearances` — **must** be `> 0`
+  and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
+  Zero here = persist not running or a broken core write → page.
+- `soroban_events`, `soroban_invocations_appearances` — `> 0` over any
+  non-trivial pubnet window (Soroban traffic is continuous). The parser
+  extracts these (`extract_events` / `extract_invocations` in
+  `process.rs`) and persist writes them — they are **not** behind the
+  enrichment stub. Sustained `0` across thousands of post-cutover ledgers
+  points at a specific broken/unported persist branch, not a generic write
+  failure → investigate that slice.
+- `nft_ownership`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
+  `lp_positions` — activity-dependent; may legitimately be low/0 in a short
+  window. Cross-check against a known-active ledger range before concluding
+  a regression.
+- `accounts`, `account_balances_current`, `soroban_contracts` — `> 0`
+  (every ledger touches accounts/balances; contract deploys are steady on
+  pubnet).
+- `assets` / `wasm_interface_metadata` — confirm via the B-0 baseline delta.
+
+**Do not** confuse an empty _row count_ (a real problem) with the known-stale
+_columns_ below — the stubbed type-1 enrichment (SEP-1 asset `name`, NFT token
+URI) and the unported `recompute_asset_aggregates` leave certain **columns**
+NULL, but the **rows still land**. See [Known stale fields
+post-cutover](#known-stale-fields-post-cutover-not-a-regression).
+
 ### B-3 — Rollback (if needed)
 
 **Important context — `cdk synth` cross-compiles every Rust Lambda
