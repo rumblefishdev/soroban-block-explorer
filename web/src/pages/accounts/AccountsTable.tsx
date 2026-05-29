@@ -1,12 +1,13 @@
 import { Typography } from '@mui/material';
 import {
   ExplorerTable,
+  formatAmount,
+  formatPercent,
   IdentifierWithCopy,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import type { AccountListItem } from '../../api/hooks/useAccountsList.js';
-import { formatAmount } from '../format.js';
 import { Dash } from '../transactions/cells.js';
 
 interface AccountsTableProps {
@@ -58,7 +59,7 @@ export function AccountsTable({ rows, startRank = 0 }: AccountsTableProps) {
           variant="bodyMonoSmMedium"
           sx={(theme) => ({ color: theme.palette.text.secondary })}
         >
-          {row.xlm_supply_percent.toFixed(2)}%
+          {formatPercent(row.xlm_supply_percent)}
         </Typography>
       ),
     },

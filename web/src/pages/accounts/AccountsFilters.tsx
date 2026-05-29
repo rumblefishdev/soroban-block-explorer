@@ -8,8 +8,7 @@ import {
   Stack,
   TextField,
 } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, useState } from 'react';
+import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 import type { AccountsSort } from '../../api/hooks/useAccountsList.js';
 
@@ -38,17 +37,11 @@ export function AccountsFilters({
   onSortChange,
   onWithDomainChange,
 }: AccountsFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
+  const [draft, setDraft] = useDebouncedDraft(
+    search,
+    onSearchChange,
+    SEARCH_DEBOUNCE_MS
+  );
 
   return (
     <Box
