@@ -52,7 +52,11 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
     header: 'Fee',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatFee(row.fee_charged)}
       </Typography>
     ),
@@ -110,23 +114,16 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} />
+      ) : (
+        <GenericErrorState onRetry={retry} />
+      );
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" py={6} />;
   } else {
     body = (
       <ExplorerTable

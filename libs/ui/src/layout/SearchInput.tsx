@@ -54,7 +54,7 @@ export function SearchInput({
         flexDirection: isActive ? 'column' : 'row',
         alignItems: isActive ? 'flex-start' : 'center',
         justifyContent: isActive ? 'center' : undefined,
-        width: isExpanded ? 628 : 350,
+        width: { xs: '100%', lg: isExpanded ? 628 : 350 },
         height,
         px: 1.5,
         py,
@@ -220,7 +220,7 @@ export function SearchInput({
 
           <Box
             sx={(theme) => ({
-              display: 'inline-flex',
+              display: { xs: 'none', md: 'inline-flex' },
               alignItems: 'center',
               justifyContent: 'center',
               height: 20,

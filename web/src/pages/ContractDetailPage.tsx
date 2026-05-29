@@ -25,18 +25,10 @@ import { ContractInvocations } from './contracts/ContractInvocations.js';
 import { ContractSummary } from './contracts/ContractSummary.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
-// Breadcrumb crumb uses tighter truncation than the DS default for contracts —
-// matches the existing AccountDetailPage breadcrumb (4 / 4 instead of 6 / 4).
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
 
 const TAB_KEYS = ['interface', 'invocations', 'events'] as const;
 
-/**
- * Contract detail page (`/contracts/:contractId`) — summary with windowed
- * stats, then tabbed Interface / Invocations / Events sections. Each section
- * fetches independently so one failing query never collapses the others;
- * the active tab is mirrored in the URL `?tab=` query param.
- */
 export default function ContractDetailPage() {
   const { contractId = '' } = useParams<{ contractId: string }>();
   const valid = isContractId(contractId);
@@ -47,25 +39,17 @@ export default function ContractDetailPage() {
   });
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="contract" identifier={contractId} />
-      </Box>
-    );
+    return <NotFoundState entity="contract" identifier={contractId} />;
   }
 
   let summary: ReactNode = null;
   if (contract.isLoading) {
     summary = <CardSkeleton />;
   } else if (contract.isError) {
-    summary = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(classifyError(contract.error)) ? (
-          <NotFoundState entity="contract" identifier={contractId} />
-        ) : (
-          <GenericErrorState onRetry={() => void contract.refetch()} />
-        )}
-      </Box>
+    summary = isMissingResource(classifyError(contract.error)) ? (
+      <NotFoundState entity="contract" identifier={contractId} />
+    ) : (
+      <GenericErrorState onRetry={() => void contract.refetch()} />
     );
   } else if (contract.data) {
     summary = <ContractSummary contract={contract.data} />;
@@ -109,7 +93,7 @@ export default function ContractDetailPage() {
           alignItems="center"
           sx={{ flexWrap: 'wrap' }}
         >
-          <Typography variant="heading4SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Contract
           </Typography>
           {contract.data?.is_sac === true && (
@@ -117,8 +101,11 @@ export default function ContractDetailPage() {
           )}
         </Stack>
         <Typography
-          variant="bodyMonoSmRegular"
-          sx={{ color: 'text.secondary', wordBreak: 'break-all' }}
+          variant="bodyMedium"
+          sx={(theme) => ({
+            color: theme.palette.text.secondary,
+            wordBreak: 'break-all',
+          })}
         >
           {contractId}
         </Typography>
@@ -132,7 +119,6 @@ export default function ContractDetailPage() {
         <Card>
           <Box
             sx={(theme) => ({
-              // Tab bar sits on the darker surface (Figma "Table sections").
               backgroundColor: theme.palette.surface.grayMainAlt,
               borderBottom: `1px solid ${theme.palette.stroke.default}`,
               px: 1,

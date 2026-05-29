@@ -1,31 +1,43 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
+import {
+  Box,
+  Divider,
+  InputAdornment,
+  MenuItem,
+  Select,
+  Stack,
+  TextField,
+} from '@mui/material';
 import { Chip } from '@rumblefish/soroban-block-explorer-ui';
 import { useEffect, useState } from 'react';
 
-import { ASSET_TYPE_FILTERS } from './assetType.js';
+import type { AccountsSort } from '../../api/hooks/useAccountsList.js';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
-interface AssetFiltersProps {
-  /** Asset-code search value (`filter[code]`). */
+const SORT_OPTIONS: { value: AccountsSort; label: string }[] = [
+  { value: 'xlm_desc', label: 'Top XLM holders' },
+  { value: 'last_seen_desc', label: 'Recently active' },
+  { value: 'first_seen_desc', label: 'New accounts' },
+];
+
+interface AccountsFiltersProps {
   search: string;
-  /** Active asset-type filter, or `''` for "All types". */
-  type: string;
+  sort: AccountsSort;
+  withDomain: boolean;
   onSearchChange: (value: string) => void;
-  onTypeChange: (value: string) => void;
+  onSortChange: (value: AccountsSort) => void;
+  onWithDomainChange: (value: boolean) => void;
 }
 
-/**
- * Filter bar for the assets list — an asset-code search input plus a row of
- * type chips (All types / Classic / SAC / Soroban), matching the Figma design.
- */
-export function AssetFilters({
+export function AccountsFilters({
   search,
-  type,
+  sort,
+  withDomain,
   onSearchChange,
-  onTypeChange,
-}: AssetFiltersProps) {
+  onSortChange,
+  onWithDomainChange,
+}: AccountsFiltersProps) {
   const [draft, setDraft] = useState(search);
 
   useEffect(() => {
@@ -53,9 +65,9 @@ export function AssetFilters({
       <TextField
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Search by asset code..."
-        aria-label="Search by asset code"
-        sx={{ width: { xs: '100%', sm: 320 } }}
+        placeholder="Search by account address..."
+        aria-label="Search by account address"
+        sx={{ width: { xs: '100%', sm: 360 } }}
         slotProps={{
           input: {
             startAdornment: (
@@ -76,21 +88,27 @@ export function AssetFilters({
         flexItem
         sx={{ display: { xs: 'none', sm: 'block' }, my: 0.5 }}
       />
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-        {ASSET_TYPE_FILTERS.map((option) => {
-          const active = option.value === type;
-          return (
-            <Chip
-              key={option.value}
-              label={option.label}
-              size="lg"
-              color={active ? 'accent' : 'neutral'}
-              clickable
-              onClick={() => onTypeChange(option.value)}
-              aria-pressed={active}
-            />
-          );
-        })}
+      <Select
+        value={sort}
+        onChange={(e) => onSortChange(e.target.value as AccountsSort)}
+        aria-label="Sort accounts"
+        sx={{ width: { xs: '100%', sm: 220 } }}
+      >
+        {SORT_OPTIONS.map((option) => (
+          <MenuItem key={option.value} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </Select>
+      <Stack direction="row" spacing={1}>
+        <Chip
+          label="With domain"
+          size="lg"
+          color={withDomain ? 'accent' : 'neutral'}
+          clickable
+          onClick={() => onWithDomainChange(!withDomain)}
+          aria-pressed={withDomain}
+        />
       </Stack>
     </Box>
   );

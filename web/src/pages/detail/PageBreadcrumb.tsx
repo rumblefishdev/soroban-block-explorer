@@ -20,8 +20,8 @@ export function PageBreadcrumb({ items }: { items: BreadcrumbItem[] }) {
           return (
             <Typography
               key={index}
-              variant="bodySmRegular"
-              sx={{ color: 'text.secondary' }}
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.primary })}
             >
               {item.label}
             </Typography>
@@ -32,8 +32,8 @@ export function PageBreadcrumb({ items }: { items: BreadcrumbItem[] }) {
             key={index}
             component={RouterLink}
             to={item.to}
-            variant="bodySmRegular"
-            sx={{ color: 'text.tertiary' }}
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
             {item.label}
           </Link>

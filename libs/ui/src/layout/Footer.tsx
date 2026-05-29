@@ -95,9 +95,7 @@ export function Footer({ logo, navItems }: FooterProps) {
             gap={3}
             sx={{ width: { xs: '100%', md: 283 } }}
           >
-            <Box sx={{ display: 'flex', justifyContent: 'center', pr: 2 }}>
-              {logo}
-            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'left' }}>{logo}</Box>
             <Box display="flex" flexDirection="column" gap={1}>
               <Typography variant="bodySmMedium" color="text.tertiary">
                 A block explorer for the Stellar and Soroban network. Browse

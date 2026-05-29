@@ -35,11 +35,7 @@ export default function AccountDetailPage() {
   const account = useAccountDetail(valid ? accountId : '');
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="account" identifier={accountId} />
-      </Box>
-    );
+    return <NotFoundState entity="account" identifier={accountId} />;
   }
 
   let summary: ReactNode = null;
@@ -48,14 +44,10 @@ export default function AccountDetailPage() {
     summary = <CardSkeleton />;
     balances = <CardSkeleton />;
   } else if (account.isError) {
-    summary = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(classifyError(account.error)) ? (
-          <NotFoundState entity="account" identifier={accountId} />
-        ) : (
-          <GenericErrorState onRetry={() => void account.refetch()} />
-        )}
-      </Box>
+    summary = isMissingResource(classifyError(account.error)) ? (
+      <NotFoundState entity="account" identifier={accountId} />
+    ) : (
+      <GenericErrorState onRetry={() => void account.refetch()} />
     );
   } else if (account.data) {
     summary = <AccountSummary account={account.data} />;
@@ -68,12 +60,15 @@ export default function AccountDetailPage() {
         <PageBreadcrumb
           items={[{ label: 'Account' }, { label: shortId(accountId) }]}
         />
-        <Typography variant="heading4SemiBold" component="h1">
+        <Typography variant="heading5SemiBold" component="h1">
           Account
         </Typography>
         <Typography
-          variant="bodyMonoSmRegular"
-          sx={{ color: 'text.secondary', wordBreak: 'break-all' }}
+          variant="bodyMedium"
+          sx={(theme) => ({
+            color: theme.palette.text.secondary,
+            wordBreak: 'break-all',
+          })}
         >
           {accountId}
         </Typography>

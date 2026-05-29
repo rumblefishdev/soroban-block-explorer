@@ -40,7 +40,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
                 component={RouterLink}
                 to={routes.asset(String(row.id))}
                 variant="bodySmMedium"
-                sx={{ color: 'text.primary' }}
+                sx={(theme) => ({ color: theme.palette.text.primary })}
               >
                 {row.asset_code ?? '—'}
               </Link>
@@ -49,7 +49,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
             {row.name && (
               <Typography
                 variant="bodyXsRegular"
-                sx={{ color: 'text.tertiary' }}
+                sx={(theme) => ({ color: theme.palette.text.secondary })}
               >
                 {row.name}
               </Typography>
@@ -82,7 +82,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           {formatAmount(row.total_supply)}
         </Typography>
         {row.asset_code && (
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             {row.asset_code}
           </Typography>
         )}

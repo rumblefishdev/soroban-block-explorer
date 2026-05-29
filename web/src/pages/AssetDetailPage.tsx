@@ -31,11 +31,7 @@ export default function AssetDetailPage() {
   const asset = useAssetDetail(id);
 
   if (id === '') {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="asset" />
-      </Box>
-    );
+    return <NotFoundState entity="asset" />;
   }
 
   const data = asset.data;
@@ -48,14 +44,10 @@ export default function AssetDetailPage() {
     summary = <CardSkeleton />;
     metadata = <CardSkeleton />;
   } else if (asset.isError) {
-    summary = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(classifyError(asset.error)) ? (
-          <NotFoundState entity="asset" identifier={id} />
-        ) : (
-          <GenericErrorState onRetry={() => void asset.refetch()} />
-        )}
-      </Box>
+    summary = isMissingResource(classifyError(asset.error)) ? (
+      <NotFoundState entity="asset" identifier={id} py={6} />
+    ) : (
+      <GenericErrorState onRetry={() => void asset.refetch()} />
     );
   } else if (data) {
     summary = <AssetSummary asset={data} />;
@@ -79,15 +71,15 @@ export default function AssetDetailPage() {
           )}
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="heading4SemiBold" component="h1">
+              <Typography variant="heading5SemiBold" component="h1">
                 {code}
               </Typography>
               {meta && <Chip size="sm" color={meta.color} label={meta.label} />}
             </Stack>
             {data?.name && (
               <Typography
-                variant="bodyRegular"
-                sx={{ color: 'text.secondary' }}
+                variant="bodyMedium"
+                sx={(theme) => ({ color: theme.palette.text.secondary })}
               >
                 {data.name}
               </Typography>

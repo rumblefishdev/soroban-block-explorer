@@ -7,11 +7,13 @@ import { EmptyState } from '../empty/EmptyState.js';
 interface RateLimitStateProps {
   retryAfterSeconds?: number;
   onRetry?: () => void;
+  py?: number;
 }
 
 export function RateLimitState({
   retryAfterSeconds,
   onRetry,
+  py,
 }: RateLimitStateProps) {
   const [remaining, setRemaining] = useState(retryAfterSeconds ?? 0);
 
@@ -43,6 +45,7 @@ export function RateLimitState({
       title="Too many requests"
       description="Too many requests. Please try again shortly."
       meta={countdown}
+      py={py}
       action={
         !retryAfterSeconds && onRetry ? (
           <Button variant="contained" onClick={onRetry}>

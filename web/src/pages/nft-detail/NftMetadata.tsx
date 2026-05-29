@@ -59,8 +59,13 @@ function parseAttributes(value: unknown): Attribute[] {
 function Empty({ label }: { label: string }) {
   return (
     <Stack spacing={1} alignItems="center" sx={{ py: 6 }}>
-      <InfoIcon sx={{ fontSize: 32, color: 'text.tertiary' }} />
-      <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+      <InfoIcon
+        sx={(theme) => ({ fontSize: 32, color: theme.palette.text.tertiary })}
+      />
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
         {label}
       </Typography>
     </Stack>
@@ -81,25 +86,31 @@ function TraitCard({ label, value, rarityPercent }: Attribute) {
       })}
     >
       <Typography
-        variant="bodySmRegular"
-        sx={{ color: 'text.secondary', textAlign: 'center' }}
+        variant="bodySmMedium"
+        sx={(theme) => ({
+          color: theme.palette.text.secondary,
+          textAlign: 'center',
+        })}
       >
         {label}
       </Typography>
       <Typography
         variant="heading5SemiBold"
-        sx={{
-          color: 'text.primary',
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
           textAlign: 'center',
           overflowWrap: 'anywhere',
-        }}
+        })}
       >
         {value || 'N/A'}
       </Typography>
       {rarityPercent !== undefined && (
         <Typography
-          variant="bodyXsRegular"
-          sx={{ color: 'text.tertiary', textAlign: 'center' }}
+          variant="bodySmMedium"
+          sx={(theme) => ({
+            color: theme.palette.text.secondary,
+            textAlign: 'center',
+          })}
         >
           {`${rarityPercent}% have this`}
         </Typography>

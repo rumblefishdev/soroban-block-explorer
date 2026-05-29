@@ -12,15 +12,10 @@ import { usePoolChart, type ChartPeriod } from '../../api/index.js';
 
 type ChartMetric = 'tvl' | 'volume' | 'fees';
 
-// Figma uses the placeholder labels "Invocations" and "Events" alongside
-// TVL — those are designer mock-ups (LPs do not have invocation or
-// event streams). We keep TVL / Volume / Fees because those are the
-// metrics the backend actually serves. The task notes flag this as an
-// explicit deviation from Figma.
 const TABS = [
   { key: 'tvl', label: 'TVL' },
+  { key: 'fees', label: 'Fee revenue' },
   { key: 'volume', label: 'Volume' },
-  { key: 'fees', label: 'Fees' },
 ] as const;
 
 const PERIODS: ChartPeriod[] = ['1D', '7D', '30D', '1Y'];
@@ -56,7 +51,7 @@ const usdFormatter = (value: number): string =>
 const METRIC_LABELS: Record<ChartMetric, string> = {
   tvl: 'TVL',
   volume: 'Volume',
-  fees: 'Fees',
+  fees: 'Fee revenue',
 };
 
 /**
@@ -126,7 +121,7 @@ interface PoolChartsProps {
 
 function PoolChartsContent({ poolId }: { poolId: string }) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
-  const [period, setPeriod] = useState<ChartPeriod>('30D');
+  const [period, setPeriod] = useState<ChartPeriod>('1D');
 
   const { data, isLoading, isError } = usePoolChart(poolId, period);
 
@@ -176,11 +171,12 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
         sx={(theme) => ({
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: 'flex-end',
           flexWrap: 'wrap',
           gap: 1,
           px: 2,
-          py: 1,
+          pt: 1,
+          backgroundColor: theme.palette.surface.grayMainAlt,
           borderBottom: `1px solid ${theme.palette.stroke.default}`,
         })}
       >
@@ -190,20 +186,29 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
           onChange={(key) => setMetric(key as ChartMetric)}
           aria-label="Chart metric"
         />
-        <IntervalPills
-          intervals={PERIODS}
-          active={period}
-          onChange={setPeriod}
-        />
+
+        <Box sx={{ mb: 1 }}>
+          <IntervalPills
+            intervals={PERIODS}
+            active={period}
+            onChange={setPeriod}
+          />
+        </Box>
       </Box>
 
       <Box sx={{ p: 2 }}>
         {showPendingOraclePlaceholder ? (
           <Stack spacing={0.5} sx={{ py: 4, textAlign: 'center' }}>
-            <Typography variant="bodyRegular" color="text.secondary">
+            <Typography
+              variant="bodyMedium"
+              sx={(theme) => ({ color: theme.palette.text.secondary })}
+            >
               Chart data not yet available
             </Typography>
-            <Typography variant="bodySmRegular" color="text.tertiary">
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
               Pending the price-oracle integration (task 0199).
             </Typography>
           </Stack>
@@ -228,10 +233,16 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
                 alignItems="center"
                 sx={{ py: 4, textAlign: 'center' }}
               >
-                <Typography variant="bodyRegular" color="text.secondary">
+                <Typography
+                  variant="bodyMedium"
+                  sx={(theme) => ({ color: theme.palette.text.secondary })}
+                >
                   No activity in this period
                 </Typography>
-                <Typography variant="bodySmRegular" color="text.tertiary">
+                <Typography
+                  variant="bodySmMedium"
+                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                >
                   Try a longer range.
                 </Typography>
               </Stack>

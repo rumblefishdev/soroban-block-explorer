@@ -100,26 +100,21 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
   } else if (isError) {
     const kind = classifyError(error);
     const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body =
+      kind === 'rate-limit' ? (
+        <RateLimitState onRetry={retry} />
+      ) : kind === 'transient' ? (
+        <TransientErrorState onRetry={retry} />
+      ) : (
+        <GenericErrorState onRetry={retry} />
+      );
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState
-          kind="transactions"
-          title="No invocations"
-          description="This contract has not been invoked yet."
-        />
-      </Box>
+      <TableEmptyState
+        kind="transactions"
+        title="No invocations"
+        description="This contract has not been invoked yet."
+      />
     );
   } else {
     body = (
