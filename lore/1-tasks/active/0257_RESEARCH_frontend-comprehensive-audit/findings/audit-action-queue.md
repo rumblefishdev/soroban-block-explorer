@@ -49,6 +49,16 @@ These items were judged from **code inspection only** (no live Playwright run in
 - [ ] **SecondaryNav scroll-nav** — confirm horizontal-scroll nav is usable at 375, and decide whether it substitutes for the hamburger (F-W6-RESPONSIVE-3 / 0059).
 - [ ] **NetworkToggle no-op confirm** — confirm clicking Testnet visibly does nothing to data (documents the decorative behavior) and is invisible on `/` (F-DP-1 / F-AN-6).
 
+### Pending live verification — design_parity ROUND 2 (PR #224, merge `35ac27c0`, 2026-05-29)
+
+Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). Code-inspection-only verdicts; confirm live before any DONE flip.
+
+- [ ] **/accounts list page functionality** — `/accounts` is a REAL page now (`AccountsListPage` + `useAccountsList`). Load at 1280/768/375: rows render, filters (search/sort/with-domain) work, pagination prev/next, empty + error + loading states. Confirms card 1.3 accounts half.
+- [ ] **share-% actual precision at `/liquidity-pools/:id`** — illusory-fix check (card 7.3 / F-W6-E13-1). Read an actual fractional `share_percentage` in the participants table; if it shows >2 decimals, R2's `formatAmount(_, 2)` did NOT fix it (minDecimals trap) — card 7.3 stays open.
+- [ ] **font swap visual sweep across 14 routes** — Clash Display headings + Satoshi body/mono render correctly; no overflow/clipping/truncation regressions from the metric change (card 4.1 / AG-performance R2 note).
+- [ ] **EmptyState + 404 state restyle visual check** — trigger empty `/accounts?q=zzz`, a 404 detail route, a forced error: confirm restyled states render and NotFound still has no h1 (card 5.1 open).
+- [ ] **OperationFlowTree flat render vs Figma** — a tx with nested Soroban invocations: confirm flat render (no collapse affordance); feeds card 11.4 / F-DP-4 Figma sign-off.
+
 ## Excluded from this queue (background only)
 
 - Already-resolved on develop (Gate A + Gate B + 0270): F-D-2, F-AE-5, F-K-2/3/9, F-AN-8, F-CO-1, F-L-1, F-K-4, NFT search-404 regression, F-E-1, F-E-8 — all marked `RESOLVED` in appendix.
@@ -113,6 +123,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Pre-launch:** MUST
 - **STATUS:** PARTIAL
 - **design_parity note:** `/contracts` + `/accounts` nav entries (`NAV_LINKS` in routes.ts) AND stub routes landed in `06ab34cc` (design_parity). F-A-5 Gap 1 **nav-link half DONE**; the real list-page half is still TODO — both routes currently render via `<PageStub>` placeholder, not a real list. PageStub is now the stub renderer for these two routes (see card 2.2 scope conflict).
+- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`):** **`/accounts` is now a REAL list page** — `web/src/pages/AccountsListPage.tsx` + `web/src/api/hooks/useAccountsList.ts` + `accounts/AccountsTable.tsx` + `accounts/AccountsFilters.tsx` (cursor pagination, filters, sort, empty/error/loading states), route wired `router/index.tsx:48`. **`/contracts` STILL `<PageStub>`** (`router/index.tsx:66`). F-A-5 Gap 1 **accounts half DONE; contracts half still TODO.** Card stays **PARTIAL** until `/contracts` real list ships. Live re-verify of `/accounts` queued (see Pending-live-verification block). Source: `design-parity-impact-2026-05-29.md` §1, §2, §3.
 
 **Rationale.** Contract detail pages exist at `/contracts/:id` but are reachable only by deep link — no list page, no nav entry. Users browsing the explorer cannot discover any contract. Per Wave 1 archaeology this is a launch-blocker carried over from 0075's Future Work. F-A-5 spec/source consistency audit also flagged it.
 
@@ -120,11 +131,13 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [~] Archaeology Recommendation 2 — Contracts list + nav missing (nav added in `06ab34cc`; list still missing)
-- [~] F-A-5 Gap 1 — Contract detail unreachable by browsing (nav entry added `06ab34cc`; list page still TODO — partial)
-- [~] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS (NAV_LINKS entry DONE `06ab34cc`; list page TODO)
+- [~] Archaeology Recommendation 2 — Contracts list + nav missing (nav added `06ab34cc`; **accounts list DONE `fce0d666`**; contracts list still missing)
+- [~] F-A-5 Gap 1 — Contract detail unreachable by browsing (nav entry `06ab34cc`; **accounts list page DONE `fce0d666`**; contracts list page still TODO — partial)
+- [~] 0075 Future Work — Contracts list page + `Contracts` entry in NAV_LINKS (NAV_LINKS entry DONE `06ab34cc`; **accounts list page DONE `fce0d666`**; contracts list page TODO)
+- [x] **Accounts list page** — `/accounts` REAL list page (`AccountsListPage` + `useAccountsList` + `AccountsTable` + `AccountsFilters`, `fce0d666`, PR #224). DONE pending live re-verify.
+- [ ] **Contracts list page** — `/contracts` STILL `<PageStub>` (`router/index.tsx:66`). TODO.
 
-**Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq. design_parity `06ab34cc` landed the nav-entry + stub-route half; remaining scope is the real list page (PageStub → real `ContractsListPage` / `AccountsListPage`).
+**Notes:** Verify backend endpoint exists. If not, spawn backend task as prereq. design_parity `06ab34cc` landed the nav-entry + stub-route half; **R2 `fce0d666` (PR #224) shipped the real `/accounts` list page** (PageStub → real `AccountsListPage`); remaining scope is the real `ContractsListPage` (PageStub still live for `/contracts`).
 
 ---
 
@@ -173,6 +186,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Pre-launch:** SHOULD
 - **STATUS:** TODO
 - **design_parity note:** SCOPE CONFLICT — `06ab34cc` (design_parity) **revives `PageStub`** as the render target for the new `/accounts` + `/contracts` stub routes. F-AH-1 ("PageStub dead orphan, delete") is now **FALSE** — PageStub has 2 live consumers. The "Delete `web/src/pages/PageStub.tsx` dead orphan" line is removed from scope below; PageStub deletion is now **gated behind card 1.3** shipping real `ContractsListPage` / `AccountsListPage`. but are used universally — they belong in `libs/ui`. The `web/src/search/` parallel top-level folder is structural debt. `web/src/utils/` is a single-file folder. `assetLegLabel` cross-folder reach couples sibling page folders. One refactor PR fixes all five.
+- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`):** PageStub now has **1** live consumer (`/contracts` only — `/accounts` graduated to a real page, `fce0d666`); F-AH-1 stays FALSE while `/contracts` is a stub, and PageStub deletion remains gated behind the contracts half of card 1.3. R2 also **grew the `web/src/pages/detail/` folder** — NEW `detail/DataListCard.tsx`, `detail/KpiCell.tsx`, `detail/PageHeader.tsx` — mildly enlarging this card's hoist target (more shared detail primitives to move to `libs/ui`). Scope still valid, slightly larger. Source: `design-parity-impact-2026-05-29.md` §1 (card 2.2), §5.3.
 
 **Scope.** Hoist `web/src/pages/detail/{SectionCard,PageBreadcrumb,SummaryRow}.tsx` → `libs/ui/src/layout/`. Add to `libs/ui/src/index.ts` barrel. Update 16+ consumer imports. Delete the `web/src/pages/detail/` folder. Move `assetLegLabel` + `classifyLpTx` to `web/src/pages/liquidity-pools/shared/`. Hoist `GlobalSearchBar` to `libs/ui/src/layout/` and move `web/src/search/` body into `web/src/pages/search/`. Move `web/src/pages/{cursorParams,format,url}.ts` to `web/src/pages/_shared/`. ~~Delete `web/src/pages/PageStub.tsx` (dead orphan post tx-detail merge).~~ **[design_parity `06ab34cc`: PageStub REVIVED as `/accounts` + `/contracts` stub — no longer deletable; deletion gated behind card 1.3 real pages.]**
 
@@ -308,7 +322,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - [ ] F-W6-AG-1 — Main bundle still > 500KB / Vite warn (recap)
 - [ ] F-W6-AG-2 — LP detail chunk still 300KB (recap)
 
-**Notes:** F-AI-4 / F-AI-9 / F-AI-11 informational; do not need own fix.
+**Notes:** F-AI-4 / F-AI-9 / F-AI-11 informational; do not need own fix. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) — font swap to woff2 (net POSITIVE):** R2 migrated fonts TTF→woff2 (Mona Sans 348KB + Inter 874KB removed; Clash Display ~29KB + Satoshi ~42KB added) — **~1.08MB load reduction** (~1.15MB TTF → ~72KB woff2). No manualChunks / lazy LP chart / visualizer added (those remain TODO). Positive, but **needs visual re-verify across 14 routes** (Clash Display headings + Satoshi body/mono — metrics differ, watch overflow/clipping/truncation). Source: `design-parity-impact-2026-05-29.md` §1 (4.1), §3, §5.1.
 
 ---
 
@@ -604,6 +618,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Severity / Class:** 🟠 A
 - **Pre-launch:** SHOULD
 - **STATUS:** TODO
+- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`) — ILLUSORY FIX, STILL TODO:** R2 changed `PoolParticipants.tsx:58` to `formatAmount(row.share_percentage, 2)`, BUT `formatAmount(value, minDecimals)` (`web/src/pages/format.ts:12`) treats the 2nd arg as **minimum-decimal PADDING, NOT rounding** — it trims trailing zeros and pads UP to `minDecimals` but never caps precision. A raw `33.3333…` still renders full precision. The bug is **NOT actually fixed** unless the API pre-rounds `share_percentage` to 2dp. Card stays **TODO** (NOT done). **Needs live confirm** at `/liquidity-pools/:id` participants table before any DONE; if precision >2dp persists, switch to `.toFixed(2)` / a true max-decimals formatter. Source: `design-parity-impact-2026-05-29.md` §4 (F-W6-E13-1), §6.
 
 **Rationale.** Pool participants "Share %" column renders at full precision (`33.3333333333333333%`). Two decimals (`33.33%`) is the universal convention. UX-degrading on every fractional share.
 
@@ -611,9 +626,9 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision
+- [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision — **R2 (`fce0d666`) `formatAmount(_, 2)` is minDecimals PADDING not rounding → ILLUSORY fix, still open. Verify live / use `.toFixed(2)`.**
 
-**Notes:** Fast standalone fix; do not wait for card 2.1.
+**Notes:** Fast standalone fix; do not wait for card 2.1. **R2 ILLUSORY-FIX WARNING:** `formatAmount(share_percentage, 2)` does NOT round — see design_parity R2 note above. Card NOT done.
 
 ---
 
@@ -1058,7 +1073,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - [ ] F-DP-1 — NetworkToggle non-functional (wire OR hide)
 - [ ] F-AN-6 (cross-cite) — single-environment config doc must reflect the chosen outcome
 
-**Notes:** Introduced by design_parity `06ab34cc`. Cross-ref card 6.4 (documentation) + "Pending live verification" (no-op confirm). Decision owner: user/designer + backend (is multi-network served?).
+**Notes:** Introduced by design_parity `06ab34cc`. Cross-ref card 6.4 (documentation) + "Pending live verification" (no-op confirm). Decision owner: user/designer + backend (is multi-network served?). **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT address this** — `web/src/api/config.ts` unchanged (still static `apiBaseUrl` from `VITE_API_BASE_URL`, no `network` read); `queryKeys.ts` network set is endpoint-grouping not per-network namespacing; AppShell still local `useState<Network>` flowing only into TopNav; TopNav still hidden on `/`. Toggle remains neither wired nor removed. STILL FAKE. Source: `design-parity-impact-2026-05-29.md` §1 (11.1), §2 (F-DP-1).
 
 ---
 
@@ -1079,7 +1094,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - [ ] F-DP-2 — AssetIcon `#724311` / `#fffcc2` hardcoded (move to theme tokens)
 - [ ] F-AK-1 / F-W6-AK-1 (cross-cite) — regression must be undone as part of the hex consolidation
 
-**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1.
+**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT fix this** — `AssetIcon.tsx:28` still inlines `#724311`/`#fffcc2`. R2 confirmed `#724311`/`#fffcc2` ARE legit token VALUES (`colors.ts:91`) but they are bound **raw, not via `theme.palette`** — still the regression. The R2 `assetColor.ts` touch was a **red herring** (that file already uses `colorsLight.*` tokens; it is NOT the hardcoded-hex regression site, which is AssetIcon). Regression persists at AssetIcon. Source: `design-parity-impact-2026-05-29.md` §1 (11.2), §2 (F-DP-2).
 
 ---
 
@@ -1120,7 +1135,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 - [ ] F-DP-4 — OperationFlowTree collapse/expand removed (verify vs Figma; restore if regression)
 
-**Notes:** Introduced by design_parity `06ab34cc`. Designer / Figma confirmation required to classify as regression vs intended.
+**Notes:** Introduced by design_parity `06ab34cc`. Designer / Figma confirmation required to classify as regression vs intended. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`):** R2 **rewrote `OperationFlowTree` again** (202 lines in merge) but collapse/expand is **still absent** — renders flat with static indented `borderLeft` dashed connectors; no `useState` / `Collapse` / chevron; `defaultExpanded?` on the `FlowNode` interface (line 44) is now a dead/unused prop. Still needs verify-vs-Figma (intended flat vs regression). Source: `design-parity-impact-2026-05-29.md` §1 (11.4), §2 (F-DP-4).
 
 ---
 
@@ -1140,7 +1155,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 - [ ] F-W6-RESPONSIVE-3 — no hamburger nav at <768px (user requires hamburger)
 
-**Notes:** Live re-verify 2026-05-28 confirmed scroll-nav alt present but user rejected it. Effort ~3-4h (drawer + breakpoint + a11y focus trap).
+**Notes:** Live re-verify 2026-05-28 confirmed scroll-nav alt present but user rejected it. Effort ~3-4h (drawer + breakpoint + a11y focus trap). **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT add a hamburger** — R2 "responsive nav tweaks" (`fce0d666`) = TopNav stats `overflowX:auto` + SecondaryNav scroll-nav (already from round 1); grep for hamburger/MenuIcon/Drawer/`aria-label="Open menu"` = zero hits. Card remains TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.5), §2 (RESPONSIVE-3).
 
 ---
 
@@ -1160,7 +1175,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 - [ ] F-W6-RESPONSIVE-4 — 105/106 interactive elements <44px at 375px
 
-**Notes:** Live-confirmed 2026-05-28. WCAG 2.1 AA 2.5.5 target size.
+**Notes:** Live-confirmed 2026-05-28. WCAG 2.1 AA 2.5.5 target size. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT enlarge touch targets** — no min-height/min-width sizing pass; 105/106 <44px @375 from 2026-05-28 live still stands. Card remains TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.6), §2 (RESPONSIVE-4).
 
 ---
 
@@ -1180,7 +1195,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 - [ ] F-W6-RESPONSIVE-5 — search category card 628px intrinsic, overflows <660px
 
-**Notes:** Newly-surfaced live 2026-05-28; screenshot at .playwright-mcp/e14-search-375-overflow.png.
+**Notes:** Newly-surfaced live 2026-05-28; screenshot at .playwright-mcp/e14-search-375-overflow.png. **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT fix search overflow** — R2 `search/*` changes are theme-token-form refactors ONLY (`sx={{color:'text.tertiary'}}` → `sx={(t)=>({color:t.palette.text.tertiary})}`); no width/flex/`min-width:0` structural change. The ~628px category card is untouched; expect STILL overflowing (~644px @375). Needs live re-verify. Card remains TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.7), §2 (RESPONSIVE-5).
 
 ---
 
@@ -1215,7 +1230,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-AQ-6                                         | 1           | 🟢      | —                       | SKIP        | Generic constraints sensible — no issue                                     |
 | F-AQ-7                                         | 1           | 🟡      | C 6.3                   | TODO        | XDR unknown casts (backend coordination)                                    |
 | F-AQ-8                                         | 1           | 🟡      | C 6.3                   | TODO        | results_meta_xdr codegen drift                                              |
-| F-P-1                                          | 1           | 🟡      | C 3.1                   | TODO        | Lint warning assetColor.ts:131                                              |
+| F-P-1                                          | 1           | 🟡      | C 3.1                   | TODO        | Lint warning assetColor.ts:131 — R2 (PR #224): still present, live `nx lint` 2026-05-29 confirms 1 warning unchanged (`assetColor.ts:131:10 Forbidden non-null assertion`) |
 | F-P-2                                          | 1           | 🟡      | C 8.2                   | TODO        | No knip/ts-prune in CI                                                      |
 | F-P-3                                          | 1           | ✓       | —                       | RESOLVED    | Zero console.\* in source (baseline)                                        |
 | F-P-4                                          | 1           | ✓       | —                       | RESOLVED    | Zero TODO/FIXME markers (baseline)                                          |
@@ -1394,7 +1409,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-A-2                                          | 5           | 🟡      | —                       | RESOLVED    | 0254 BREAKING wire rename clean (positive baseline)                         |
 | F-A-3                                          | 5           | 🟡      | C 6.4                   | TODO        | ADR 0032 partial gap on 0254 (doc sync)                                     |
 | F-A-4                                          | 5           | 🟡      | —                       | RESOLVED    | LP feature gold-standard exemplar (positive note)                           |
-| F-A-5                                          | 5           | 🟡      | C 1.3                   | PARTIAL     | Contract list page gap (launch blocker) — nav added, page stubbed via PageStub (design_parity `06ab34cc`); list page still TODO |
+| F-A-5                                          | 5           | 🟡      | C 1.3                   | PARTIAL     | Contract list page gap (launch blocker) — nav added, page stubbed via PageStub (design_parity `06ab34cc`); list page still TODO. **R2 (PR #224 `fce0d666`): `/accounts` half RESOLVED — real `AccountsListPage` + `useAccountsList` shipped. `/contracts` half STILL TODO — `router/index.tsx:66` still `<PageStub>`.** Card stays PARTIAL until `/contracts` real list ships |
 | F-A-6                                          | 5           | 🟢      | —                       | RESOLVED    | Tx-detail spec/ship chain clean                                             |
 | F-A-7                                          | 5           | 🟢      | —                       | RESOLVED    | Deviation notes discipline excellent                                        |
 | F-AH-1                                         | 5           | 🟡      | C 2.2                   | STALE       | PageStub.tsx dead orphan — FALSE post-`06ab34cc`: PageStub revived as `/accounts`+`/contracts` stub (2 live consumers); deletion gated behind card 1.3 |
@@ -1468,9 +1483,9 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-CH-2                                      | 6           | 🟢      | C 7.1                   | PARTIAL     | Operation type chips text-only (informational) — design_parity `06ab34cc` adds NEW Classic/SAC + protocol_version chips (tangential, not op-type-on-tx grouping) |
 | F-W6-RESPONSIVE-1                              | 6           | 🟠      | C 8.3                   | RESOLVED    | design_parity 06ab34cc + live re-verify 2026-05-28: 41/42 no doc-scroll, 802px root cause gone |
 | F-W6-RESPONSIVE-2                              | 6           | 🟡      | C 8.3                   | RESOLVED    | tables in overflowX:auto; table→card transform = separate optional enhancement |
-| F-W6-RESPONSIVE-3                              | 6           | 🟠      | C 11.5                  | TODO        | user decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alt rejected → card 11.5 |
-| F-W6-RESPONSIVE-4                              | 6           | 🟠      | C 11.6                  | TODO        | still failing live; 105/106 elements <44px @375 → card 11.6 |
-| F-W6-RESPONSIVE-5                              | 6           | 🟡      | C 11.7                  | TODO        | search page overflow <660px, category card 628px intrinsic; newly-surfaced live 2026-05-28 |
+| F-W6-RESPONSIVE-3                              | 6           | 🟠      | C 11.5                  | TODO        | user decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alt rejected → card 11.5. **R2 (PR #224 merge `35ac27c0`) responsive nav tweaks did NOT add hamburger — grep MenuIcon/Drawer/aria-label="Open menu" = 0. Remains TODO.** |
+| F-W6-RESPONSIVE-4                              | 6           | 🟠      | C 11.6                  | TODO        | still failing live; 105/106 elements <44px @375 → card 11.6. **R2 (PR #224 merge `35ac27c0`) did NOT enlarge touch targets — no sizing pass. Remains TODO.** |
+| F-W6-RESPONSIVE-5                              | 6           | 🟡      | C 11.7                  | TODO        | search page overflow <660px, category card 628px intrinsic; newly-surfaced live 2026-05-28. **R2 (PR #224 merge `35ac27c0`) search/* changes theme-token-form only, no width/min-width:0 structural fix — overflow remains. TODO; live re-verify.** |
 | F-W6-NOTFOUND-1                                | 6           | 🟡      | C 5.1                   | TODO        | NotFound missing h1 on 4 of 5 detail                                        |
 | F-W6-NOTFOUND-2                                | 6           | 🟡      | C 5.3                   | TODO        | Sub-section queries fire on parent 404                                      |
 | F-W6-E0-1                                      | 6           | 🟠      | C 1.1                   | TODO        | Footer dead spans (recap)                                                   |
@@ -1506,16 +1521,16 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-E11-3                                     | 6           | 🟡      | C 5.4                   | TODO        | NFT Contract ID in Details plain text                                       |
 | F-W6-E12-1                                     | 6           | 🟡      | C 7.1                   | TODO        | Pool ID truncation twice per row                                            |
 | F-W6-E12-2                                     | 6           | 🟢      | C 7.1                   | TODO        | "Any TVL" filter looks like loading                                         |
-| F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision                                    |
+| F-W6-E13-1                                     | 6           | 🟠      | C 7.3                   | TODO        | Pool participants share % full precision — **R2 (PR #224 `fce0d666`) ILLUSORY fix: `formatAmount(_, 2)` is minDecimals PADDING not rounding; raw `33.3333…` still full precision unless API pre-rounds. NOT fixed; verify live or use `.toFixed(2)`** |
 | F-W6-E13-2                                     | 6           | 🟢      | C 5.1                   | TODO        | Pool NotFound no h1                                                         |
 | F-W6-E13-3                                     | 6           | 🟢      | C 7.1                   | TODO        | Pool tx operation type plain text — UNCHANGED by `06ab34cc` (LP-detail recent-tx + home op-type not in diff) |
 | F-W6-E14-1                                     | 6           | 🟢      | C 7.1                   | TODO        | Empty-state hint at ?q= no examples                                         |
 | F-W6-E14-2                                     | 6           | 🟢      | C 7.1                   | TODO        | Search has two clear buttons                                                |
 | F-W6-E14-3                                     | 6           | 🟢      | —                       | SKIP        | First Tab lands on header search (informational)                            |
-| F-DP-1                                         | design_parity | 🟠   | C 11.1                  | TODO        | NetworkToggle non-functional — fake Mainnet/Testnet toggle (no apiBaseUrl/query-key change), invisible on `/`. Introduced by `06ab34cc`. Wire OR hide. See design-parity-impact |
-| F-DP-2                                         | design_parity | 🟠   | C 11.2                  | TODO        | AssetIcon hardcoded hex `#724311`/`#fffcc2` (sac kind) — regresses F-AK-1 (3→5). Introduced by `06ab34cc`. Move to theme tokens |
+| F-DP-1                                         | design_parity | 🟠   | C 11.1                  | TODO        | NetworkToggle non-functional — fake Mainnet/Testnet toggle (no apiBaseUrl/query-key change), invisible on `/`. Introduced by `06ab34cc`. Wire OR hide. **R2 (PR #224 merge `35ac27c0`) did NOT address — config.ts unchanged, still static apiBaseUrl, toggle not wired/removed. STILL FAKE.** See design-parity-impact-2026-05-29 |
+| F-DP-2                                         | design_parity | 🟠   | C 11.2                  | TODO        | AssetIcon hardcoded hex `#724311`/`#fffcc2` (sac kind) — regresses F-AK-1 (3→5). Introduced by `06ab34cc`. Move to theme tokens. **R2 (PR #224): `#724311`/`#fffcc2` confirmed token VALUES but bound raw not via theme.palette; `assetColor.ts` touch was red herring (already uses tokens). Regression persists at AssetIcon.** |
 | F-DP-3                                         | design_parity | 🟠   | C 11.3                  | TODO        | Raw `zIndex: 2` added across shell (AppShell/TopNav/SecondaryNav/Footer) — regresses F-AK-2. Introduced by `06ab34cc`. Move to z-index scale |
-| F-DP-4                                         | design_parity | 🟠   | C 11.4                  | TODO        | OperationFlowTree collapse/expand removed (now flat w/ dashed connectors) — verify vs Figma; restore if regression. Introduced by `06ab34cc` |
+| F-DP-4                                         | design_parity | 🟠   | C 11.4                  | TODO        | OperationFlowTree collapse/expand removed (now flat w/ dashed connectors) — verify vs Figma; restore if regression. Introduced by `06ab34cc`. **R2 (PR #224 merge `35ac27c0`) rewrote OperationFlowTree again but collapse/expand still absent (`defaultExpanded` now dead prop) — verify vs Figma whether intended.** |
 | Z-1 Spot 5                                     | 5           | 🟢      | C 6.3                   | TODO        | Op-type enum hand-typed (cross-cite F-Z-2)                                  |
 | Z-1 Spot 1                                     | 5           | A       | C 8.4                   | TODO        | Error envelope flatten (cross-cite F-AF-1)                                  |
 | 0061 #4                                        | arch        | 🟢      | C 8.7                   | TODO        | Sort caret middle-ground sign-off                                           |
@@ -1580,6 +1595,8 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | NFT search-404 regression (0264 carry-over)    | 0270        | 🟠      | —                       | RESOLVED    | 6421d3d7 + 69d9f529                                                         |
 
 (Appendix row count tracked above — see report. +4 design_parity regression rows F-DP-1..F-DP-4 appended 2026-05-27 per design-parity-impact-2026-05-27.md.)
+
+(design_parity ROUND 2 annotation pass 2026-05-29 per design-parity-impact-2026-05-29.md / PR #224 / merge `35ac27c0`: no new rows added — no new regressions. Annotated in place: cards 1.3 / 2.2 / 4.1 / 7.3 / 11.1 / 11.2 / 11.4 / 11.5 / 11.6 / 11.7; appendix rows F-A-5, F-P-1, F-W6-E13-1, F-DP-1/2/4, F-W6-RESPONSIVE-3/4/5. Only flip: `/accounts` sub-item DONE within card 1.3 (`fce0d666`); card 1.3 stays PARTIAL — `/contracts` still PageStub. Card 7.3 stays TODO — share-% R2 fix is ILLUSORY (formatAmount minDecimals ≠ rounding). 5 R2 live-re-verify items added to Pending-live-verification block.)
 
 ## End of queue
 
