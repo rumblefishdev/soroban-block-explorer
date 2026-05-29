@@ -283,7 +283,7 @@ async fn s3_object_exists(state: &HandlerState, key: &str) -> Result<bool, Handl
     {
         Ok(_) => Ok(true),
         Err(err) => {
-            if err.as_service_error().map_or(false, |e| e.is_not_found()) {
+            if err.as_service_error().is_some_and(|e| e.is_not_found()) {
                 Ok(false)
             } else {
                 Err(HandlerError::S3Download(format!(
