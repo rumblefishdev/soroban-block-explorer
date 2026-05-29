@@ -101,8 +101,13 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // Alarm 1: Galexie ingestion lag
-    // Fires when Ledger Processor has 0 invocations for N consecutive minutes.
-    // This is a proxy for "Galexie stopped writing to S3".
+    // Fires when Ledger Processor has 0 invocations across an N-minute window.
+    // Window-based (not N consecutive 1-min periods) because the SQS-doorbell
+    // indexer runs one invocation up to ~9 min long with reserved concurrency
+    // = 1, so most 1-min buckets between two invocations legitimately report
+    // 0 invocations — a per-minute alarm flaps non-stop. Sum over a window
+    // long enough to span the worst-case invocation duration is steady-state
+    // ≥ 1, and only collapses to 0 if invocations truly stop.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(this, 'GalexieLagAlarm', {
@@ -110,13 +115,13 @@ export class CloudWatchStack extends cdk.Stack {
         alarmDescription:
           'Ledger Processor invocations dropped to 0 — Galexie may have stopped writing to S3.',
         metric: processorFunction.metricInvocations({
-          period: cdk.Duration.minutes(1),
+          period: cdk.Duration.minutes(config.galexieLagMinutes),
           statistic: cloudwatch.Stats.SUM,
         }),
         threshold: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-        evaluationPeriods: config.galexieLagMinutes,
-        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
 

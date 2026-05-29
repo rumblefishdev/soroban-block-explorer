@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as lambdaDestinations from 'aws-cdk-lib/aws-lambda-destinations';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -124,6 +123,32 @@ export class ComputeStack extends cdk.Stack {
     this.deadLetterQueue = dlq;
 
     // ---------------------
+    // Ledger ingest queue (task 0241 — S3 → SQS → Lambda)
+    // ---------------------
+    // S3 `ObjectCreated` lands here; the indexer's SQS event-source-mapping
+    // drains it. A burst while the reserved concurrency slot is busy buffers
+    // in the queue (visible `ApproximateNumberOfMessages`, multi-day
+    // retention) rather than in Lambda's opaque ~6h async-invoke buffer.
+    // After `maxReceiveCount` failed deliveries a message moves to `dlq`,
+    // from which SQS redrive-to-source recovers it once the cause is fixed.
+    const ingestQueue = new sqs.Queue(this, 'LedgerIngestQueue', {
+      queueName: `${config.envName}-ledger-ingest`,
+      // MUST be ≥ the function timeout, else SQS redelivers a doorbell the
+      // indexer is still legitimately processing (a reconcile can run up to
+      // the full timeout). timeout + 60 s margin.
+      visibilityTimeout: cdk.Duration.seconds(config.indexerLambdaTimeout + 60),
+      retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
+      deadLetterQueue: {
+        queue: dlq,
+        // Higher than the usual 3: with `indexerLambdaConcurrency = 1` the SQS
+        // ESM over-polls and gets throttled (429) — those redeliveries bump
+        // ReceiveCount without being real failures. 10 absorbs the throttle
+        // churn so a genuinely processable ledger is not DLQ'd by accident.
+        maxReceiveCount: 10,
+      },
+    });
+
+    // ---------------------
     // Type-1 Enrichment Queue (task 0191)
     // ---------------------
     const enrichmentDlq = new sqs.Queue(this, 'EnrichmentDlq', {
@@ -194,19 +219,35 @@ export class ComputeStack extends cdk.Stack {
     this.processorFunction = processorFunction;
     grantMtlsSecretRead(this, processorFunction, processorSecretName);
 
-    new lambda.EventInvokeConfig(this, 'ProcessorInvokeConfig', {
-      function: processorFunction,
-      retryAttempts: config.indexerLambdaRetryAttempts,
-      onFailure: new lambdaDestinations.SqsDestination(dlq),
-    });
+    // S3 `ObjectCreated` → SQS. Always wired (not gated on concurrency) so a
+    // paused indexer (`indexerLambdaConcurrency = 0`) still captures events
+    // durably in the queue instead of dropping them on the floor.
+    ledgerBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.SqsDestination(ingestQueue),
+      { suffix: '.xdr.zst' }
+    );
 
+    // SQS → indexer event-source-mapping. Gated on concurrency so a
+    // `concurrency = 0` pause leaves messages waiting in the queue with no
+    // poller (no `maxReceiveCount` churn → no DLQ spam) until resume.
+    // `reportBatchItemFailures` lets the handler fail just the offending
+    // message; the rest of the batch is acknowledged and deleted.
     if (config.indexerLambdaConcurrency > 0) {
-      ledgerBucket.addEventNotification(
-        s3.EventType.OBJECT_CREATED,
-        new s3n.LambdaDestination(processorFunction),
-        { suffix: '.xdr.zst' }
+      processorFunction.addEventSource(
+        new lambdaEventSources.SqsEventSource(ingestQueue, {
+          batchSize: 1,
+          reportBatchItemFailures: true,
+          // No `maxConcurrency`: AWS requires ESM MaximumConcurrency ≤ the
+          // function's reserved concurrency AND its minimum is 2, so it is
+          // unsettable while `indexerLambdaConcurrency = 1`. Execution is
+          // capped to one-at-a-time by reserved concurrency alone; the ESM may
+          // over-poll and get throttled, which the queue's `maxReceiveCount`
+          // (10) absorbs without false-DLQ'ing a processable ledger.
+        })
       );
     }
+    ingestQueue.grantConsumeMessages(processorFunction);
 
     // ---------------------
     // Type-1 Enrichment Worker Lambda (task 0191)
