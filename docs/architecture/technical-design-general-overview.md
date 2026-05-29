@@ -1349,16 +1349,34 @@ Ledger and transaction history are kept indefinitely.
 > in §6 (Architecture) and §7.3 (Scaling Model) of this document still describes
 > the pre-pivot baseline; a comprehensive sweep is deferred to the
 > docs-architecture cleanup follow-up.
+>
+> **Note (2026-05-27):** The Ledger Processor trigger mechanism was reworked
+> from per-S3-event Lambda invocations to an **SQS doorbell + ClickHouse-cursor
+> reconcile** in [task 0241](../../lore/1-tasks/active/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+> The PG-era migration + partition Lambdas (`crates/db-migrate`,
+> `crates/db-partition-mgmt`) and their CDK stacks were removed in the same
+> task; ClickHouse applies its schema box-side via the `db-clickhouse-init`
+> sidecar and auto-creates parts via `PARTITION BY intDiv(sequence, 500000)`.
 
 Galexie ECS Fargate task running on mainnet, writing `LedgerCloseMeta` XDR files to S3
-every ~5–6 seconds. Lambda Ledger Processor triggered per file, parsing and writing
+every ~5–6 seconds. Lambda Ledger Processor woken by an **SQS doorbell** (S3
+`ObjectCreated` notifications enqueue a doorbell message; `batchSize 1`,
+`ReportBatchItemFailures`); each invocation reconciles forward from
+`max(sequence) + 1` in ClickHouse oldest-first and persists the contiguous run until
+the next ledger is absent on S3 (gap) or the 540 s time budget is reached.
+`reservedConcurrentExecutions = 1` guarantees ascending, gapless ordering without
+needing an SQS FIFO queue; per-invocation state lives in ClickHouse, so the Lambda
+itself is stateless and freely re-runnable. The Lambda parses and writes
 ledgers, transactions, operations, accounts, Soroban invocations, and CAP-67 events to a
 dedicated **ClickHouse on Hetzner** database (`ch-prod-01`, single-node MergeTree, mTLS
 behind Caddy). Historical backfill from Soroban mainnet activation ledger (late 2023)
 delivered via FREEZE + rsync + ATTACH PART transport per
 [ADR 0045](../../lore/2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md).
 Rust API scaffolding with core modules (axum + utoipa). OpenAPI specification. AWS CDK
-infrastructure-as-code. CI/CD pipeline. CloudWatch dashboards and ingestion lag alarms.
+infrastructure-as-code (AWS side) plus an Ansible playbook for the Hetzner database host;
+both halves are run from an operator's machine (`cdk deploy` and
+`ansible-playbook`) against clean environments with no manual one-off steps.
+CloudWatch dashboards and ingestion lag alarms.
 
 **Acceptance criteria:**
 
