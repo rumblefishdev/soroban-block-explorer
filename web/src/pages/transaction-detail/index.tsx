@@ -31,11 +31,7 @@ export default function TransactionDetailPage() {
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="transaction" identifier={hash} />
-      </Box>
-    );
+    return <NotFoundState entity="transaction" identifier={hash} />;
   }
 
   if (query.isLoading) {
@@ -48,7 +44,7 @@ export default function TransactionDetailPage() {
               { label: shortHash(hash) },
             ]}
           />
-          <Typography variant="heading4SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Transaction Detail
           </Typography>
         </Box>
@@ -61,14 +57,10 @@ export default function TransactionDetailPage() {
 
   if (query.isError) {
     const kind = classifyError(query.error);
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'not-found' ? (
-          <NotFoundState entity="transaction" identifier={hash} />
-        ) : (
-          <GenericErrorState onRetry={() => void query.refetch()} />
-        )}
-      </Box>
+    return kind === 'not-found' ? (
+      <NotFoundState entity="transaction" identifier={hash} />
+    ) : (
+      <GenericErrorState onRetry={() => void query.refetch()} py={8} />
     );
   }
 
@@ -92,7 +84,7 @@ export default function TransactionDetailPage() {
           spacing={2}
           sx={{ flexWrap: 'wrap' }}
         >
-          <Typography variant="heading4SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Transaction Detail
           </Typography>
           <ModeToggle mode={mode} onChange={setMode} />

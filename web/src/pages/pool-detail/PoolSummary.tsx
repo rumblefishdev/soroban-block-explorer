@@ -8,6 +8,8 @@ import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 import { formatAmount } from '../format.js';
 
+import { reserveDotColor } from '../liquidity-pools/assetColor.js';
+
 import { assetLegLabel, legHref } from './helpers.js';
 
 interface AssetReserveCellProps {
@@ -27,13 +29,13 @@ function AssetReserveCell({
     <Link
       component={RouterLink}
       to={href}
-      variant="bodySmRegular"
-      sx={{ color: 'text.primary' }}
+      variant="bodyXsMedium"
+      sx={(theme) => ({ color: theme.palette.text.primary })}
     >
       {code}
     </Link>
   ) : (
-    <Typography component="span" variant="bodySmRegular">
+    <Typography component="span" variant="bodyXsMedium">
       {code}
     </Typography>
   );
@@ -51,7 +53,7 @@ function AssetReserveCell({
           flexShrink: 0,
         }}
       />
-      <Typography component="span" variant="bodySmRegular">
+      <Typography component="span" variant="bodyXsMedium">
         {amount != null ? formatAmount(amount) : '—'}
       </Typography>
       {amount != null ? codeNode : null}
@@ -86,6 +88,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
                 value={pool.pool_id}
                 type="pool"
                 href={routes.pool(pool.pool_id)}
+                truncate={false}
               />
             ),
           },
@@ -108,7 +111,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
               <AssetReserveCell
                 amount={pool.reserve_a}
                 code={codeA}
-                dotColor="primary.main"
+                dotColor={reserveDotColor(pool.asset_a)}
                 href={legHref(pool.asset_a)}
               />
             ),
@@ -119,7 +122,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
               <AssetReserveCell
                 amount={pool.reserve_b}
                 code={codeB}
-                dotColor="success.main"
+                dotColor={reserveDotColor(pool.asset_b)}
                 href={legHref(pool.asset_b)}
               />
             ),

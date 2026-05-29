@@ -1,3 +1,4 @@
+import AccountCircleIcon from '@mui/icons-material/AccountCircleOutlined';
 import AddBoxIcon from '@mui/icons-material/AddBoxOutlined';
 import AddCircleIcon from '@mui/icons-material/AddCircleOutline';
 import ImageIcon from '@mui/icons-material/ImageOutlined';
@@ -9,6 +10,7 @@ import type { ReactNode } from 'react';
 export type TableEmptyKind =
   | 'transactions'
   | 'ledgers'
+  | 'accounts'
   | 'tokens'
   | 'nft'
   | 'pools';
@@ -29,6 +31,11 @@ const PRESETS: Record<TableEmptyKind, Preset> = {
     icon: <AddBoxIcon fontSize="small" />,
     title: 'No ledgers indexed',
     description: 'Ledger data will appear once the indexer is running',
+  },
+  accounts: {
+    icon: <AccountCircleIcon fontSize="small" />,
+    title: 'No accounts found',
+    description: 'Accounts will appear here once activity is indexed',
   },
   tokens: {
     icon: <AddCircleIcon fontSize="small" />,
@@ -51,38 +58,42 @@ export interface TableEmptyStateProps {
   kind: TableEmptyKind;
   title?: string;
   description?: string;
+  py?: number;
 }
 
 export function TableEmptyState({
   kind,
   title,
   description,
+  py = 8,
 }: TableEmptyStateProps) {
   const preset = PRESETS[kind];
   return (
-    <Stack spacing={1} alignItems="center" sx={{ maxWidth: 240, mx: 'auto' }}>
-      <Box
-        sx={(theme) => ({
-          width: 40,
-          height: 40,
-          borderRadius: theme.shape.radius.pills,
-          backgroundColor: theme.palette.surface.grayMainAlt,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: theme.palette.text.secondary,
-        })}
-      >
-        {preset.icon}
-      </Box>
-      <Stack spacing={0.5} alignItems="center" sx={{ textAlign: 'center' }}>
-        <Typography variant="bodyRegular" color="text.primary">
-          {title ?? preset.title}
-        </Typography>
-        <Typography variant="bodySmRegular" color="text.secondary">
-          {description ?? preset.description}
-        </Typography>
+    <Box sx={{ display: 'flex', justifyContent: 'center', py }}>
+      <Stack spacing={1} alignItems="center" sx={{ maxWidth: 240, mx: 'auto' }}>
+        <Box
+          sx={(theme) => ({
+            width: 40,
+            height: 40,
+            borderRadius: theme.shape.radius.pills,
+            backgroundColor: theme.palette.surface.grayMainAlt,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: theme.palette.text.secondary,
+          })}
+        >
+          {preset.icon}
+        </Box>
+        <Stack spacing={0.5} alignItems="center" sx={{ textAlign: 'center' }}>
+          <Typography variant="bodyBold" color="text.primary">
+            {title ?? preset.title}
+          </Typography>
+          <Typography variant="bodySmRegular" color="text.secondary">
+            {description ?? preset.description}
+          </Typography>
+        </Stack>
       </Stack>
-    </Stack>
+    </Box>
   );
 }

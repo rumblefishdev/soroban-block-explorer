@@ -1,4 +1,4 @@
-import { Box, Stack } from '@mui/material';
+import { Stack } from '@mui/material';
 import {
   CardSkeleton,
   classifyError,
@@ -50,11 +50,7 @@ export default function LiquidityPoolDetailPage() {
   const validPoolId = isPoolId(poolId);
   const detail = usePoolDetail(validPoolId ? poolId : '');
   if (!validPoolId) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="liquidity-pool" identifier={poolId} />
-      </Box>
-    );
+    return <NotFoundState entity="liquidity-pool" identifier={poolId} />;
   }
 
   let summarySection: ReactNode = null;
@@ -64,14 +60,10 @@ export default function LiquidityPoolDetailPage() {
     summarySection = <CardSkeleton />;
   } else if (detail.isError) {
     const kind = classifyError(detail.error);
-    summarySection = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(kind) ? (
-          <NotFoundState entity="liquidity-pool" identifier={poolId} />
-        ) : (
-          <GenericErrorState onRetry={() => void detail.refetch()} />
-        )}
-      </Box>
+    summarySection = isMissingResource(kind) ? (
+      <NotFoundState entity="liquidity-pool" identifier={poolId} py={6} />
+    ) : (
+      <GenericErrorState onRetry={() => void detail.refetch()} />
     );
   } else if (detail.data) {
     kpiSection = <PoolKpiStrip pool={detail.data} />;

@@ -17,36 +17,36 @@ export function ViewAllLink({ to }: ViewAllLinkProps) {
       component={RouterLink}
       to={to}
       underline="none"
-      sx={{
+      sx={(theme) => ({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 1,
-        color: 'text.primary',
+        color: theme.palette.text.primary,
         '&:hover .ViewAllLink-arrow': {
-          backgroundColor: 'surface.primaryHover',
+          backgroundColor: theme.palette.surface.primaryHover,
         },
         '&:focus-visible': {
-          outline: (theme) => `2px solid ${theme.palette.stroke.action}`,
+          outline: `2px solid ${theme.palette.stroke.action}`,
           outlineOffset: 2,
           borderRadius: 1,
         },
-      }}
+      })}
     >
       <Typography component="span" variant="bodySmMedium">
         View All
       </Typography>
       <Box
         className="ViewAllLink-arrow"
-        sx={{
+        sx={(theme) => ({
           width: 24,
           height: 24,
           borderRadius: '50%',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'surface.primaryMain',
+          backgroundColor: theme.palette.surface.primaryMain,
           color: 'common.black',
-        }}
+        })}
       >
         <ArrowForwardIcon sx={{ fontSize: 14 }} />
       </Box>

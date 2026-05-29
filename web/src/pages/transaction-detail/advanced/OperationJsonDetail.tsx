@@ -97,14 +97,13 @@ function inlineScalar(value: unknown): ReactNode {
 
 function HeavyUnavailable() {
   return (
-    <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-      <EmptyState
-        icon={<WarningAmberOutlinedIcon />}
-        variant="warning"
-        title="Raw operation details unavailable"
-        description="Heavy XDR fields could not be loaded for this transaction."
-      />
-    </Box>
+    <EmptyState
+      icon={<WarningAmberOutlinedIcon />}
+      variant="warning"
+      title="Raw operation details unavailable"
+      description="Heavy XDR fields could not be loaded for this transaction."
+      py={4}
+    />
   );
 }
 

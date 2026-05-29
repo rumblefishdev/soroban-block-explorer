@@ -22,10 +22,16 @@ interface SummaryCell {
 function BaseFee({ stroops }: { stroops: number }) {
   return (
     <Stack spacing={0.25}>
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
+      <Typography
+        variant="bodySmBold"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatFee(stroops)}
       </Typography>
-      <Typography variant="bodyMonoXsRegular" sx={{ color: 'text.tertiary' }}>
+      <Typography
+        variant="bodyMonoXsRegular"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
         ({stroops.toLocaleString('en-US')} stroops)
       </Typography>
     </Stack>
@@ -47,12 +53,12 @@ function Cell({ label, value }: SummaryCell) {
       }}
     >
       <Typography
-        variant="bodySmRegular"
-        sx={{
-          color: 'text.secondary',
+        variant="bodySmMedium"
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
           width: { xs: 'auto', sm: 160 },
           flexShrink: 0,
-        }}
+        })}
       >
         {label}
       </Typography>
@@ -86,7 +92,10 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
       {
         label: 'Sequence',
         value: (
-          <Typography variant="bodySmMedium">
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {ledger.sequence.toLocaleString('en-US')}
           </Typography>
         ),
@@ -112,6 +121,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
             value={ledger.hash}
             type="ledger"
             linked={false}
+            truncate={false}
           />
         ),
       },
@@ -127,7 +137,10 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
       {
         label: 'TX Count',
         value: (
-          <Typography variant="bodySmRegular">
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {ledger.transaction_count.toLocaleString('en-US')}
           </Typography>
         ),

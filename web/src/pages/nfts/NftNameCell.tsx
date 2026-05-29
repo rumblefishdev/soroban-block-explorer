@@ -79,13 +79,18 @@ export function NftNameCell({ row }: NftNameCellProps) {
           to={routes.nft(row.contract_id, row.token_id)}
           variant="bodySmMedium"
           underline="hover"
-          sx={{ color: 'text.primary' }}
+          sx={(theme) => ({ color: theme.palette.text.primary })}
         >
           {nftLabel(row)}
         </Link>
         <Typography
           variant="bodyXsRegular"
-          sx={{ color: state === 'error' ? 'text.error' : 'text.secondary' }}
+          sx={(theme) => ({
+            color:
+              state === 'error'
+                ? theme.palette.text.error
+                : theme.palette.text.secondary,
+          })}
         >
           {state === 'error'
             ? `#${row.token_id} · Image unavailable`

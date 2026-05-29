@@ -58,7 +58,7 @@ function HomeLogo({
       sx={{ display: 'inline-flex', lineHeight: 0 }}
     >
       <img
-        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.svg'}
+        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.webp'}
         alt={isSoroban ? 'Soroban' : 'Rumblefish'}
         style={{ height, width: 'auto', display: 'block' }}
       />

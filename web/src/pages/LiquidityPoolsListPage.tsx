@@ -1,22 +1,15 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Button, Card, Stack, Typography } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { ListPoolsData } from '@rumblefish/api-types';
 import {
-  classifyError,
-  EmptyState,
-  GenericErrorState,
-  PaginationControls,
-  RateLimitState,
-  TableEmptyState,
-  TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { usePoolsList } from '../api/index.js';
 
+import { DataListCard } from './detail/DataListCard.js';
+import { PageHeader } from './detail/PageHeader.js';
 import { PoolsFilterBar } from './liquidity-pools/PoolsFilterBar.js';
 import { POOL_COLUMN_COUNT, PoolsTable } from './liquidity-pools/PoolsTable.js';
 
@@ -70,77 +63,37 @@ export default function LiquidityPoolsListPage() {
     setFilter('min_tvl', null);
   }, [setFilter]);
 
-  let body: ReactNode;
-  if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={POOL_COLUMN_COUNT} />
-      </Box>
-    );
-  } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
-  } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {hasFilters ? (
-          <EmptyState
-            icon={<SearchIcon />}
-            title="No pools match your filters"
-            description="Try adjusting or clearing the active filters"
-            action={
-              <Button variant="contained" onClick={handleClearFilters}>
-                Clear filters
-              </Button>
-            }
-          />
-        ) : (
-          <TableEmptyState kind="pools" />
-        )}
-      </Box>
-    );
-  } else {
-    body = <PoolsTable rows={rows} />;
-  }
-
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="heading3SemiBold" component="h1">
-          Liquidity Pools
-        </Typography>
-        <Typography variant="bodyRegular" sx={{ color: 'text.secondary' }}>
-          Liquidity pools on the Stellar network
-        </Typography>
-      </Box>
-
-      <Card>
-        <PoolsFilterBar
-          asset={asset}
-          minTvl={minTvl}
-          onAssetChange={handleAssetChange}
-          onMinTvlChange={handleMinTvlChange}
-        />
-        <Box>{body}</Box>
-        <PaginationControls
-          caption="Latest results"
-          canPrev={canPrev}
-          canNext={canNext}
-          onPrev={handlePrev}
-          onNext={handleNext}
-        />
-      </Card>
+      <PageHeader
+        title="Liquidity Pools"
+        subtitle="All AMM liquidity pools on the Stellar network"
+      />
+      <DataListCard
+        filters={
+          <PoolsFilterBar
+            asset={asset}
+            minTvl={minTvl}
+            onAssetChange={handleAssetChange}
+            onMinTvlChange={handleMinTvlChange}
+          />
+        }
+        columnCount={POOL_COLUMN_COUNT}
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        onRetry={() => void refetch()}
+        rows={rows}
+        renderTable={(visibleRows) => <PoolsTable rows={visibleRows} />}
+        hasActiveFilters={hasFilters}
+        emptyKind="pools"
+        emptyNoun="pools"
+        onClearFilters={handleClearFilters}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
     </Stack>
   );
 }

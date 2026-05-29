@@ -103,7 +103,11 @@ export function NftMediaPreview({ mediaUrl, name }: NftMediaPreviewProps) {
         <Stack
           spacing={1}
           alignItems="center"
-          sx={{ color: 'text.tertiary', px: 3, textAlign: 'center' }}
+          sx={(theme) => ({
+            color: theme.palette.text.tertiary,
+            px: 3,
+            textAlign: 'center',
+          })}
         >
           <Box
             sx={(theme) => ({
@@ -119,10 +123,16 @@ export function NftMediaPreview({ mediaUrl, name }: NftMediaPreviewProps) {
           >
             <ImageIcon />
           </Box>
-          <Typography variant="bodySmMedium" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             No media available
           </Typography>
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             There is no image
           </Typography>
         </Stack>
@@ -152,10 +162,16 @@ export function NftMediaPreview({ mediaUrl, name }: NftMediaPreviewProps) {
           >
             <ErrorOutlineIcon />
           </Box>
-          <Typography variant="bodySmMedium" sx={{ color: 'text.error' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.error })}
+          >
             Failed to load media
           </Typography>
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.secondary })}
+          >
             The media URL is unavailable or unsupported
           </Typography>
         </Stack>

@@ -12,17 +12,20 @@ export function LiveIndicator() {
     >
       <Box
         component="span"
-        sx={{
+        sx={(theme) => ({
           width: 6,
           height: 6,
           borderRadius: '50%',
-          backgroundColor: 'stroke.success',
-        }}
+          backgroundColor: theme.palette.stroke.success,
+        })}
       />
       <Typography
         component="span"
         variant="bodyXsMedium"
-        sx={{ color: 'text.secondary', letterSpacing: '0.06em' }}
+        sx={(theme) => ({
+          color: theme.palette.text.secondary,
+          letterSpacing: '0.06em',
+        })}
       >
         LIVE
       </Typography>

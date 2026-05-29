@@ -92,6 +92,7 @@ interface ExplorerMonoVariants {
   bodyMonoSmMedium: CSSProperties;
   bodyMonoSmRegular: CSSProperties;
   bodyMonoXsBold: CSSProperties;
+  bodyMonoXsMedium: CSSProperties;
   bodyMonoXsRegular: CSSProperties;
 }
 
@@ -244,6 +245,7 @@ declare module '@mui/material/Typography' {
     bodyMonoSmMedium: true;
     bodyMonoSmRegular: true;
     bodyMonoXsBold: true;
+    bodyMonoXsMedium: true;
     bodyMonoXsRegular: true;
   }
 }

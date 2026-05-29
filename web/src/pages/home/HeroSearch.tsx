@@ -46,7 +46,12 @@ export function HeroSearch({
       })}
     >
       <SearchIcon
-        sx={{ width: 16, height: 16, flexShrink: 0, color: 'text.secondary' }}
+        sx={(theme) => ({
+          width: 16,
+          height: 16,
+          flexShrink: 0,
+          color: theme.palette.text.secondary,
+        })}
       />
       <Box
         component="input"

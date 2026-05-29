@@ -56,7 +56,7 @@ export default function SearchResultsPage() {
         <Typography
           variant="bodySmRegular"
           component="p"
-          sx={{ color: 'text.tertiary' }}
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
         >
           Refine your query to find transactions, accounts, contracts, tokens,
           NFTs, and liquidity pools.

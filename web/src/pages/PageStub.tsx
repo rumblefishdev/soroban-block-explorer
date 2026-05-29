@@ -16,7 +16,7 @@ export function PageStub({ title, path, rows, body }: PageStubProps) {
         <Typography
           variant="bodyMonoSmRegular"
           component="span"
-          sx={{ color: 'text.tertiary' }}
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
         >
           {path}
         </Typography>
@@ -33,13 +33,16 @@ export function PageStub({ title, path, rows, body }: PageStubProps) {
             >
               <Typography
                 variant="bodySmMedium"
-                sx={{ color: 'text.secondary', minWidth: 120 }}
+                sx={(theme) => ({
+                  color: theme.palette.text.secondary,
+                  minWidth: 120,
+                })}
               >
                 {label}
               </Typography>
               <Typography
                 variant="bodyMonoSmRegular"
-                sx={{ color: 'text.primary' }}
+                sx={(theme) => ({ color: theme.palette.text.primary })}
               >
                 {value}
               </Typography>
@@ -48,7 +51,10 @@ export function PageStub({ title, path, rows, body }: PageStubProps) {
         </Stack>
       )}
       {body === undefined && (!rows || rows.length === 0) && (
-        <Typography variant="bodyRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
           Page implementation pending. Routing skeleton only.
         </Typography>
       )}
