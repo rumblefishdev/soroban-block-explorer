@@ -2,13 +2,13 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   ExplorerTable,
+  formatAmount,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
 // `assetLegLabel` + `legHref` live in the detail-page helpers but the
 // labelling + linking rules apply equally to the list — reuse the
 // shared helpers rather than duplicating, to keep native-asset / SAC

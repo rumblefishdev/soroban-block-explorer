@@ -4,13 +4,13 @@ import type { AccountBalance } from '@rumblefish/api-types';
 import {
   Chip,
   EmptyState,
+  formatAmount,
   IdentifierDisplay,
   monoFontFamily,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 import { AssetIcon, type AssetIconKind } from '../assets/AssetIcon.js';
 
 interface BalanceShape {

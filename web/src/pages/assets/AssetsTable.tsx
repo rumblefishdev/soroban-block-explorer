@@ -3,6 +3,7 @@ import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
   ExplorerTable,
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
@@ -10,7 +11,6 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
 import { Dash } from '../transactions/cells.js';
 
 import { AssetIcon } from './AssetIcon.js';

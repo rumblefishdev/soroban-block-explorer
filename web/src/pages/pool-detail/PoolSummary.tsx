@@ -1,6 +1,7 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { PoolItem } from '@rumblefish/api-types';
 import {
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -8,7 +9,6 @@ import {
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { formatAmount } from '../format.js';
 
 import { assetLegLabel, legHref } from './helpers.js';
 

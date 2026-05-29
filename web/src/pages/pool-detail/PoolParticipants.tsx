@@ -5,6 +5,7 @@ import {
   classifyError,
   EmptyState,
   ExplorerTable,
+  formatAmount,
   GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -21,7 +22,6 @@ import type { ReactNode } from 'react';
 import { usePoolParticipants } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 
 const columns: ExplorerTableColumn<ParticipantItem>[] = [
   {

@@ -136,7 +136,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~1d
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** SHOULD
-- **STATUS:** DONE (working tree; some files still uncommitted — see Notes)
+- **STATUS:** DONE (2026-05-29 — debounce migration completed)
 
 **Rationale.** Per audit's #1 maintenance-cost finding (F-AD-1): a single "change how addresses truncate" today requires editing 6 files. Plus 2 STROOPS_PER_XLM constants, 2 formatFee implementations, 10 inline toLocaleString sites, 4 toFixed bypasses, 4 debounce-pattern reimplementations. All are organic accretion across feature task boundaries that each got self-consistency but no cross-task DRY check. Phase 3 single-PR consolidation cuts ~10 audit findings in one atomic change. Junior maintenance cost drops from "moderate" to "low".
 
@@ -153,15 +153,15 @@ These items were judged from **code inspection only** (no live Playwright run in
 - [x] F-J-7 — 6 truncation re-impls (cross-cite F-U-3)
 - [x] F-J-16 — single `formatFee` (BigInt) — Number variant removed
 - [x] F-J-17 — `formatStroops` single entry point
-- [x] F-Y-2 — debounce → single `useDebouncedDraft`
+- [x] F-Y-2 — `useDebouncedDraft` extracted to `libs/ui/src/hooks/`; all 4 filter components migrated (AssetFilters, NftFilters DebouncedField, TransactionFilters, PoolsFilterBar) — inline draft+setTimeout removed. Hook now has 4 consumers; debounce-commit verified live on /assets (URL → `?code=USD` after pause). (2026-05-29)
 - [x] F-Y-6 — recap
 - [x] F-AB-5 — recap
 - [x] F-AD-1 — leaked-concern (truncation now 1-file change)
 - [x] F-AN-7 — recap of F-U-4
-- [x] F-Z-1 — single formatter home (`libs/ui/src/format/`)
-- [x] J-3 — TopNav compact-number → shared
+- [x] F-Z-1 — single formatter home (`libs/ui/src/format/`): `formatAmount`/`formatCompactAmount` migrated off the web-local `web/src/pages/format.ts` (deleted) + `pool-detail/helpers.ts` compact dup (removed) onto libs/ui; 8 consumers + PoolKpiStrip repointed. Output verified identical (thousands separators on /assets). (2026-05-29)
+- [x] J-3 — **NOT a true duplicate of `formatCompactAmount`** (finding premise was wrong). TopNav's `formatNumber` is a deliberate hybrid: compact only at ≥1M (`8.4M`), full thousands below (`1,024` accounts, not `1K`) — the stat strip needs exact counts. `formatCompactAmount` compacts everything (`1.2K`), which would degrade the strip. Kept TopNav's `formatNumber` local (it already delegates the <1M path to the shared `formatInteger`); NOT consolidated by design. The one genuine number-format dup that DID exist — `PoolKpiStrip`'s `COUNT_FORMATTER = new Intl.NumberFormat('en-US')` — was swapped to the shared `formatInteger` (output-identical). (2026-05-29)
 
-**Notes:** Done across two parts: (a) format/numbers/stroops + `useDebouncedDraft` + number/fee migration (committed in WIP checkpoint `03c11a1e`); (b) truncation consolidation + `…` ellipsis unification (committed `c57f7c4d`). **Emerged (2026-05-28):** made the single-glyph `…` the *default* ellipsis in `truncateMiddle`, so every truncation app-wide (incl. IdentifierDisplay, previously `...`) now matches — global but consistent. Single-use truncate wrappers inlined; multi-use kept. **Still uncommitted as of 2026-05-28:** `libs/ui/src/format/{amount,index,stroops}.ts` + `libs/ui/src/hooks/` are still untracked, so the WIP checkpoints don't typecheck standalone — a follow-up commit must land them to make HEAD green. Other emerged session work tracked under the 2026-05-28 session note below.
+**Notes:** **2026-05-29: now genuinely DONE.** Two consolidations were initially mis-marked DONE (canonical home created but consumers not migrated + duplicate left alive), caught on review, then finished: (1) **debounce** — `useDebouncedDraft` had zero consumers; migrated all 4 filters, deleted inline draft+setTimeout; (2) **formatAmount** — libs/ui `format/amount.ts` had zero consumers while 8 pages still used the web-local `web/src/pages/format.ts`; migrated 8 pages + PoolKpiStrip onto libs/ui, deleted `format.ts` and the `pool-detail/helpers.ts` compact dup. Lesson: verify *consumers*, not file existence, before marking a consolidation done. **Exhaustive re-audit 2026-05-29** (grepped every pattern in scope — toLocaleString/toFixed/STROOPS/truncate re-impls/setTimeout-debounce/Intl.NumberFormat/duplicate formatter defs): all clean EXCEPT J-3 (resolved above — TopNav kept local by design + PoolKpiStrip COUNT_FORMATTER → formatInteger). `numbers.ts` (formatInteger/Tps/Percent) confirmed to have real consumers (not orphaned). `humanizeOp.shortId` is a kept multi-use wrapper delegating to `truncateMiddle`, not a re-impl. PoolCharts USD axis formatters left local (currency/chart-specific, out of scope). 2.1 genuinely complete after this pass. Done across two parts: (a) format/numbers/stroops + number/fee migration (committed in WIP checkpoint `03c11a1e`); (b) truncation consolidation + `…` ellipsis unification (committed `c57f7c4d`). **Emerged (2026-05-28):** made the single-glyph `…` the *default* ellipsis in `truncateMiddle`, so every truncation app-wide (incl. IdentifierDisplay, previously `...`) now matches — global but consistent. Single-use truncate wrappers inlined; multi-use kept. **Still uncommitted as of 2026-05-28:** `libs/ui/src/format/{amount,index,stroops}.ts` + `libs/ui/src/hooks/` are still untracked, so the WIP checkpoints don't typecheck standalone — a follow-up commit must land them to make HEAD green. Other emerged session work tracked under the 2026-05-28 session note below.
 
 ---
 

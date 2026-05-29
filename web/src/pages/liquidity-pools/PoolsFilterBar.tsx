@@ -7,7 +7,7 @@ import {
   TextField,
   type SelectChangeEvent,
 } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 const SEARCH_DEBOUNCE_MS = 300;
 

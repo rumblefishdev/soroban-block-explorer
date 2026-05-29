@@ -1,7 +1,6 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, useState } from 'react';
+import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
 

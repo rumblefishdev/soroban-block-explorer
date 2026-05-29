@@ -1,22 +1,17 @@
 import { Card, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
-import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  formatCompactAmount,
+  formatInteger,
+  IdentifierDisplay,
+} from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { assetLegColor } from '../liquidity-pools/assetColor.js';
 
-import {
-  assetLegLabel,
-  formatCompactAmount,
-  isPoolStale,
-  legHref,
-} from './helpers.js';
+import { assetLegLabel, isPoolStale, legHref } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
-
-/** Module-level formatter — Intl.NumberFormat is expensive to
- *  instantiate on every render. */
-const COUNT_FORMATTER = new Intl.NumberFormat('en-US');
 
 interface KpiCellProps {
   label: string;
@@ -111,7 +106,7 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       />
       <KpiCell
         label="Participants"
-        value={COUNT_FORMATTER.format(pool.participant_count)}
+        value={formatInteger(pool.participant_count)}
         subtitle="liquidity providers"
       />
     </Stack>
