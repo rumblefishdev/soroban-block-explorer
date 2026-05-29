@@ -12,6 +12,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useNetworkStats } from '../api/index.js';
+import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
@@ -164,6 +165,7 @@ export function AppShell() {
       />
       <Box sx={{ flex: 1, position: 'relative', width: '100%' }}>
         <PageGridBackdrop />
+        {isHome && <HomeHeroGlow />}
         <Box
           component="main"
           sx={{

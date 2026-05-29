@@ -89,6 +89,10 @@ export const router = createBrowserRouter([
         path: 'search',
         element: page(() => import('../pages/SearchResultsPage.js')),
       },
+      {
+        path: '*',
+        element: page(() => import('../pages/NotFoundPage.js')),
+      },
     ],
   },
 ]);

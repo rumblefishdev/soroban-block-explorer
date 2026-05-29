@@ -26,7 +26,13 @@ function AssetReserveCell({
   href,
 }: AssetReserveCellProps) {
   const codeNode = href ? (
-    <IdentifierDisplay value={code} type="asset" truncate={false} href={href} />
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      mono={false}
+    />
   ) : (
     <Typography component="span" variant="bodySmRegular">
       {code}

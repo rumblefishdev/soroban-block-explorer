@@ -36,6 +36,7 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
       truncate={false}
       href={href}
       fontSize="inherit"
+      mono={false}
     />
   );
 }

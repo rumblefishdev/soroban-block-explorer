@@ -16,7 +16,7 @@ import { useLiveStatus, type LiveStatus } from '../../api/index.js';
 
 const STATUS_LABEL: Record<LiveStatus, string> = {
   live: 'LIVE',
-  delayed: 'DELAYED',
+  delayed: 'STALE',
   offline: 'OFFLINE',
 };
 

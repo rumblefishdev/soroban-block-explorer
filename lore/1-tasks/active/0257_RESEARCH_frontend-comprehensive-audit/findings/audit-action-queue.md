@@ -67,7 +67,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~2h (if hrefs available) / ~30min (if hiding)
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** MUST
-- **STATUS:** SKIP
+- **STATUS:** DONE (2026-05-29)
 
 **Rationale.** The footer renders Terms of Service, Privacy Policy, Cookies, and external Resources links (GitHub, Stellar docs, Soroban docs, Stellar dashboard) as plain `<span>` elements with no `href`. Shipping a public block explorer with non-functional Terms/Privacy is a legal/compliance liability. Resources are a discoverability gap. Even the project's own GitHub link is missing. This was already flagged as Gate B fix-first but deferred to this queue.
 
@@ -75,12 +75,12 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [ ] CA-1 — Terms of Service / Privacy Policy / Cookies render as dead `<span>` (no href)
-- [ ] CA-2 — Resources (GitHub / Stellar docs / Soroban docs / Stellar dashboard) render as dead `<span>` (no href)
-- [ ] CA-3 — When wiring external links, ensure `target="_blank" rel="noopener noreferrer"`
-- [ ] F-W6-E0-1 — Wave 6 re-confirmed dead spans across all 14 routes
+- [x] CA-1 — Terms of Service / Privacy Policy / Cookies **removed from footer entirely** (per user 2026-05-29) — dead spans deleted rather than wired (no legal content)
+- [x] CA-2 — Resources wired: GitHub → repo, Stellar docs → `developers.stellar.org/docs`, Soroban docs → `developers.stellar.org/docs/build/smart-contracts`, Stellar dashboard → `dashboard.stellar.org` (2026-05-29)
+- [x] CA-3 — `FooterLink` adds `target="_blank" rel="noopener noreferrer"` for external links (href without onClick); SPA Explorer nav links unaffected
+- [x] F-W6-E0-1 — footer is shared across all routes; no dead `<span>` left (legal removed, Resources wired, Explorer nav uses onClick)
 
-**Notes:** SKIP per user 2026-05-28. Legal pages (Terms/Privacy/Cookies) have no content and no destination — blocker not resolvable pre-launch without legal team input. Resources links (GitHub / Stellar docs / Soroban docs / Stellar dashboard) are cheap external wins still wireable later if revisited; deferred along with the legal items rather than split. CA-1, CA-2, CA-3, F-W6-E0-1 left open.
+**Notes:** SKIP per user 2026-05-28 → DONE 2026-05-29. **CA-1 (legal)** resolved by deletion — no legal content/destination, so Terms/Privacy/Cookies removed from footer (not wired). **CA-2/CA-3 (Resources)** wired this session with external `target/rel`. The footer "All systems operational" badge was also removed this session (see 2026-05-29 session note). Footer now has zero dead spans. Uncommitted.
 
 ---
 
@@ -136,7 +136,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~1d
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** DONE (working tree; some files still uncommitted — see Notes)
 
 **Rationale.** Per audit's #1 maintenance-cost finding (F-AD-1): a single "change how addresses truncate" today requires editing 6 files. Plus 2 STROOPS_PER_XLM constants, 2 formatFee implementations, 10 inline toLocaleString sites, 4 toFixed bypasses, 4 debounce-pattern reimplementations. All are organic accretion across feature task boundaries that each got self-consistency but no cross-task DRY check. Phase 3 single-PR consolidation cuts ~10 audit findings in one atomic change. Junior maintenance cost drops from "moderate" to "low".
 
@@ -144,24 +144,62 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-U-3 — 6 truncation re-impls (shortId/shortStr/shortHash/shortenStrKey/truncateHex + inline)
-- [ ] F-U-4 — 2 STROOPS_PER_XLM constants (number + bigint variants)
-- [ ] F-U-2 — 10 inline toFixed/toLocaleString sites bypass formatter
-- [ ] F-J-2 — 10 `toLocaleString('en-US')` sites bypass formatAmount
-- [ ] F-J-3 — 4 toFixed bypasses canonical formatter
-- [ ] F-J-4 — STROOPS_PER_XLM constant single site no shared util (drift risk realised)
-- [ ] F-J-7 — 6 truncation re-impls (cross-cite F-U-3)
-- [ ] F-J-16 — Duplicate `formatFee` BigInt vs Number, 2 implementations
-- [ ] F-J-17 — `formatStroops` introduced as 3rd entry point for stroop display
-- [ ] F-Y-2 — Debounce pattern duplicated 4× across filter components
-- [ ] F-Y-6 — Cross-cite formatter/truncation findings (recap)
-- [ ] F-AB-5 — 6 cross-task formatter/truncation duplications (recap symptom)
-- [ ] F-AD-1 — Leaked-concern bug fixes requiring 5+ files
-- [ ] F-AN-7 — Stroop/XLM conversion in 2 places (recap of F-U-4)
-- [ ] F-Z-1 — Multiple formatter homes (recap)
-- [ ] J-3 — TopNav.formatNumber duplicate of formatCompactAmount
+- [x] F-U-3 — 6 truncation re-impls → canonical `truncateMiddle` (shortId/shortStr/shortHash/shortenStrKey/truncateHex + inline slices)
+- [x] F-U-4 — STROOPS_PER_XLM → single `STROOPS_PER_XLM_BIGINT`
+- [x] F-U-2 — inline toFixed/toLocaleString → shared formatters (0 left)
+- [x] F-J-2 — `toLocaleString('en-US')` sites → `formatAmount`/`formatInteger` (0 left)
+- [x] F-J-3 — toFixed bypasses → canonical formatter
+- [x] F-J-4 — STROOPS single shared util
+- [x] F-J-7 — 6 truncation re-impls (cross-cite F-U-3)
+- [x] F-J-16 — single `formatFee` (BigInt) — Number variant removed
+- [x] F-J-17 — `formatStroops` single entry point
+- [x] F-Y-2 — debounce → single `useDebouncedDraft`
+- [x] F-Y-6 — recap
+- [x] F-AB-5 — recap
+- [x] F-AD-1 — leaked-concern (truncation now 1-file change)
+- [x] F-AN-7 — recap of F-U-4
+- [x] F-Z-1 — single formatter home (`libs/ui/src/format/`)
+- [x] J-3 — TopNav compact-number → shared
 
-**Notes:** **\_**
+**Notes:** Done across two parts: (a) format/numbers/stroops + `useDebouncedDraft` + number/fee migration (committed in WIP checkpoint `03c11a1e`); (b) truncation consolidation + `…` ellipsis unification (committed `c57f7c4d`). **Emerged (2026-05-28):** made the single-glyph `…` the *default* ellipsis in `truncateMiddle`, so every truncation app-wide (incl. IdentifierDisplay, previously `...`) now matches — global but consistent. Single-use truncate wrappers inlined; multi-use kept. **Still uncommitted as of 2026-05-28:** `libs/ui/src/format/{amount,index,stroops}.ts` + `libs/ui/src/hooks/` are still untracked, so the WIP checkpoints don't typecheck standalone — a follow-up commit must land them to make HEAD green. Other emerged session work tracked under the 2026-05-28 session note below.
+
+---
+
+### Session emerged work — 2026-05-28 (lore-0272)
+
+Visual / consistency work done this session that wasn't a discrete card (mostly
+design-parity + identifier follow-ups surfaced live). All in working tree;
+commit state noted per item.
+
+- **Asset codes render sans, not mono** — added `mono?: boolean` to
+  `IdentifierDisplay` (default true for hashes/addresses/IDs); asset-code links
+  (AssetsTable, AccountBalances, PoolsTable/PoolSummary/PoolKpiStrip legs) pass
+  `mono={false}` → Inter, matching the amount beside them. Confirmed against
+  Figma reserves (`980,000 USDC` uniform sans). Also added `fontSize` prop so
+  inline legs match the 12px amount, and dropped `tone="inherit"` (gave
+  underline-hover) so legs use the canonical gold hover. **Uncommitted.**
+- **ChainOverview 2×2 → 1×4** — grid `repeat(4,1fr)` counted the 3 dividers as
+  columns and wrapped to a 2×2; fixed to explicit `1fr auto …` 7-track template
+  (md). Matches Figma single-row summary. **Uncommitted.**
+- **Hero gold gradient bleeds full-width** — glow was inside the constrained
+  `<main>`, clipped to side margins while the grid bled full-width. Extracted
+  `HomeHeroGlow` and mounted it in AppShell's full-bleed wrapper (home-gated),
+  so it spills past the margins like the grid. **Uncommitted (HomeHeroGlow.tsx
+  untracked).**
+- **Footer "All systems operational" badge — REMOVED entirely** (per user
+  2026-05-29). Was briefly wired to a shared `useLiveStatus()`
+  (operational/degraded/down via a Footer `status` prop); user then decided
+  it should disappear completely, so the `status` prop, `FooterSystemStatus`
+  type, `STATUS_TONE` map and the AppShell wiring were all deleted — the pill
+  is gone from the footer. `useLiveStatus()` stays (still feeds the home
+  **LiveIndicator** pills). Card 7.2 **DM-1** is now N/A (badge deleted, not
+  driven). **Uncommitted.**
+- **Theme defaults to dark** (per user) — `ExplorerThemeProvider` default mode.
+  **Committed in `03c11a1e`.**
+
+**Open decisions (pending user):** pill label `DELAYED` → `STALE`/`BEHIND`;
+footer status *logic* (#2 ledger-freshness vs #3 real `/health` probe) + label
+vocabulary (compact vs descriptive).
 
 ---
 
@@ -320,23 +358,23 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~1h
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
-- **design_parity note:** `06ab34cc` restructured AppShell's `<main>` (now wraps `<Outlet/>` inside a relative Box). Catch-all 404 routing itself was NOT touched in the diff, and NotFound h1 was NOT touched. **Re-verify F-E-3 landmark still holds after the AppShell refactor** (see "Pending live verification" block). No status change yet — scope unchanged, but live re-check required before DONE. but bypasses the `AppShell` `<main>` landmark — screen readers skip the page main, selector tests break. Additionally, NotFound pages on 4 of 5 detail routes lack an `<h1>` element (only `/contracts/<invalid>` has one). SR users navigating by heading shortcut land mid-content. Two small a11y fixes in one PR.
+- **STATUS:** DONE (2026-05-28, lore-0272)
+- **resolution:** There was no catch-all route at all — unmatched URLs fell to the root `errorElement` (`RouteErrorBoundary`), which renders *outside* AppShell (no nav/main/footer). Added a `{ path: '*' }` child route inside the AppShell `/` route rendering a new `NotFoundPage`, so 404s now render inside the `<main>` landmark with nav + footer. NotFoundState (via EmptyState's new `titleComponent` prop) now renders the title as `<h1>` — fixes the missing/inconsistent h1 across every detail-route NotFound at once. Live-verified on `/foobar-xyz`: `<main>` + `<footer>` + 8 nav links present, single `<h1>` "Page not found" inside `<main>`. **Original finding text:** catch-all 404 bypasses the `AppShell` `<main>` landmark — screen readers skip the page main, selector tests break. Additionally, NotFound pages on 4 of 5 detail routes lack an `<h1>` element (only `/contracts/<invalid>` has one). SR users navigating by heading shortcut land mid-content. Two small a11y fixes in one PR.
 
 **Scope.** Wrap catch-all 404 in `AppShell` `<main>` landmark. Update `libs/ui/src/states/errors/NotFoundState.tsx` to render an `<h1>` (entity-typed). Verify all detail-route NotFound paths use the canonical state component.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-E-3 — Catch-all 404 `<main>` landmark gap
-- [ ] F-W6-NOTFOUND-1 — NotFound missing h1 on 4 of 5 detail routes
-- [ ] F-W6-E3-3 — NotFound h1 inconsistency (cross-cite)
-- [ ] F-W6-E5- — NotFound h1 inconsistency (cross-cite)
-- [ ] F-W6-E6-2 — NotFound has no h1
-- [ ] F-W6-E9-3 — h1 inconsistent on NotFound across detail routes
-- [ ] F-W6-E13-2 — Pool NotFound has no h1
-- [ ] F-D-3 — Detail page H1 heading inconsistency (partial — covers NotFound variant)
+- [x] F-E-3 — catch-all now a `path:'*'` child inside AppShell `<main>` (NotFoundPage)
+- [x] F-W6-NOTFOUND-1 — NotFoundState title now `<h1>` (all detail routes use it)
+- [x] F-W6-E3-3 — NotFound h1 (via NotFoundState)
+- [x] F-W6-E5- — NotFound h1 (via NotFoundState)
+- [x] F-W6-E6-2 — NotFound h1 (via NotFoundState)
+- [x] F-W6-E9-3 — NotFound h1 (via NotFoundState)
+- [x] F-W6-E13-2 — Pool NotFound h1 (via NotFoundState)
+- [~] F-D-3 — NotFound h1 variant covered; non-error detail-page `<h1>` consistency still open (broader scope)
 
-**Notes:** **\_**
+**Notes:** New files: `web/src/pages/NotFoundPage.tsx`; `EmptyState` gained a `titleComponent` prop (defaults to `<p>`, NotFoundState passes `h1`). RouteErrorBoundary left as-is — it still catches genuinely *thrown* errors (outside AppShell), but unmatched URLs no longer reach it. Uncommitted.
 
 ---
 
@@ -1072,7 +1110,7 @@ These items were judged from **code inspection only** (no live Playwright run in
 - **Effort:** ~30min
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** NICE
-- **STATUS:** TODO
+- **STATUS:** DONE (`0139a8a3`, 2026-05-28)
 
 **Rationale.** `06ab34cc` added inline hardcoded hex `'#724311'` + `'#fffcc2'` in AssetIcon (`sac` kind), bringing the hardcoded-hex count from 3 → 5 (`ContractInterface` `TYPE_REF_COLOR='#155dfc'` retained). Directly **regresses F-AK-1 / F-W6-AK-1**, which card 7.1 was meant to close.
 
@@ -1080,10 +1118,10 @@ These items were judged from **code inspection only** (no live Playwright run in
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-DP-2 — AssetIcon `#724311` / `#fffcc2` hardcoded (move to theme tokens)
-- [ ] F-AK-1 / F-W6-AK-1 (cross-cite) — regression must be undone as part of the hex consolidation
+- [x] F-DP-2 — AssetIcon `#724311` / `#fffcc2` → `colorsLight.primary[900]/[100]` (`0139a8a3`)
+- [x] F-AK-1 / F-W6-AK-1 (cross-cite) — regression undone: same commit also moved `ContractInterface` `#155dfc` → `blue[600]` + Chip variant / Switch-thumb hex → `scales.*`
 
-**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1.
+**Notes:** Introduced by design_parity `06ab34cc`; reverted 2026-05-28 in `0139a8a3` (DS-token sweep). AssetIcon now has zero hardcoded hex (verified). Card 7.1 hex sweep can drop the AssetIcon item.
 
 ---
 

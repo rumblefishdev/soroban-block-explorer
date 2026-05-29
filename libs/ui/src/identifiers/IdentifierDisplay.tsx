@@ -3,7 +3,8 @@ import { useMemo } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { monoFontFamily } from '../theme/typography.js';
+import { formatInteger } from '../format/index.js';
+import { bodyFontFamily, monoFontFamily } from '../theme/typography.js';
 
 import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';

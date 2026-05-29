@@ -65,6 +65,7 @@ function BalanceRow({
       type="asset"
       truncate={false}
       href={s.href}
+      mono={false}
     />
   ) : (
     <Typography variant="bodyMedium" sx={{ color: 'text.primary' }}>

@@ -99,7 +99,6 @@ export {
   Footer,
   type FooterProps,
   type FooterNavItem,
-  type FooterSystemStatus,
   PageGridBackdrop,
 } from './layout/index.js';
 

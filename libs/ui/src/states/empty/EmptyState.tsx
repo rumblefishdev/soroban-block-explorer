@@ -1,5 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
-import type { ReactNode } from 'react';
+import type { ElementType, ReactNode } from 'react';
 
 import { monoFontFamily } from '../../theme/typography.js';
 
