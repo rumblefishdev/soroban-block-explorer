@@ -51,6 +51,7 @@ mod tests {
             stats: super::super::dto::ContractStats {
                 recent_invocations: 0,
                 recent_unique_callers: 0,
+                recent_events: 0,
                 stats_window: "7 days".to_string(),
             },
         }

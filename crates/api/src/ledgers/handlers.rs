@@ -7,11 +7,12 @@
 //! fields (those live on the transaction detail endpoint instead).
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 
 use crate::common::cache_control;
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -25,12 +26,22 @@ use super::dto::{LedgerDetailResponse, LedgerListItem};
 use super::queries::LedgerTxRow;
 use super::{queries, queries_ch};
 
+/// Optional first-page sort flip for `GET /v1/ledgers`. Only meaningful
+/// when no `?cursor=` is supplied — once the client is paginating, the
+/// direction is encoded in the cursor envelope and `order` is ignored.
+#[derive(Debug, Deserialize)]
+pub struct LedgersListQuery {
+    #[serde(default)]
+    order: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // GET /v1/ledgers
 // ---------------------------------------------------------------------------
 
-/// List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor
-/// pagination.
+/// List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;
+/// pass `?order=asc` on a first-page request to flip the initial walk to
+/// oldest-first. Cursor pagination otherwise.
 #[utoipa::path(
     get,
     path = "/ledgers",
@@ -39,6 +50,8 @@ use super::{queries, queries_ch};
         ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        ("order"  = Option<String>, Query,
+         description = "First-page sort flip: `asc` walks oldest→newest, `desc` (default) walks newest→oldest. Ignored when `cursor` is supplied — direction is then encoded in the cursor envelope."),
     ),
     responses(
         (status = 200, description = "Paginated ledger list",
@@ -50,18 +63,28 @@ use super::{queries, queries_ch};
 pub async fn list_ledgers(
     State(state): State<AppState>,
     pagination: Pagination<TsIdCursor>,
+    Query(order_query): Query<LedgersListQuery>,
 ) -> Response {
     let source = DataSource::for_module(Module::Ledgers);
+    // `?order=` only matters on a first-page request (no cursor). With a
+    // cursor present, direction is already encoded in the envelope so we
+    // leave `pagination.direction` alone.
+    let direction =
+        if pagination.cursor.is_none() && matches!(order_query.order.as_deref(), Some("asc")) {
+            Direction::Prev
+        } else {
+            pagination.direction
+        };
+
     // Fetch limit+1 rows — the extra peek row drives forward-continuation
     // detection in `finalize_ts_id_page` below (cursor: Some/None). Direction
-    // propagates straight from the cursor envelope so the SQL walks DESC
-    // (Next) or ASC (Prev).
+    // walks DESC (Next) or ASC (Prev), flipped on first page by `?order=asc`.
     let mut rows: Vec<LedgerListItem> = match fetch_list_for_source(
         &state,
         source,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
-        pagination.direction,
+        direction,
     )
     .await
     {
@@ -77,7 +100,7 @@ pub async fn list_ledgers(
     let page = finalize_ts_id_page(
         &mut rows,
         pagination.limit,
-        pagination.direction,
+        direction,
         pagination.has_predecessor(),
         |r| r.closed_at,
         |r| r.sequence,

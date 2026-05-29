@@ -185,7 +185,55 @@ export type ContractDetailResponse = {
   wasm_uploaded_at_ledger?: number | null;
 };
 
+/**
+ * One parameter on a Soroban contract function signature.
+ */
+export type ContractFunctionParam = {
+  name: string;
+  type_name: string;
+};
+
+/**
+ * A single public function signature extracted from a Soroban contract's
+ * WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+ * the indexer-side source of the persisted shape.
+ */
+export type ContractFunctionSig = {
+  /**
+   * Documentation string; may be empty.
+   */
+  doc: string;
+  inputs: Array<ContractFunctionParam>;
+  name: string;
+  /**
+   * Output type names; empty array == void return.
+   */
+  outputs: Array<string>;
+};
+
+/**
+ * Soroban contract interface metadata persisted in
+ * `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+ * indexer's `xdr_parser::types::ContractInterface` exactly — the API
+ * hands the same JSON object to clients that the indexer wrote.
+ */
+export type ContractInterfaceMetadata = {
+  functions: Array<ContractFunctionSig>;
+  /**
+   * Raw WASM byte length (informational).
+   */
+  wasm_byte_len: number;
+};
+
 export type ContractStats = {
+  /**
+   * Sum of `soroban_events_appearances.amount` over the same window
+   * as `recent_invocations`. One appearance row can represent multiple
+   * actual events (`amount > 1`) so we sum rather than COUNT(*) — the
+   * figure matches what `GET /v1/contracts/:id/events` would return
+   * over the window.
+   */
+  recent_events: number;
   recent_invocations: number;
   recent_unique_callers: number;
   /**
@@ -380,7 +428,7 @@ export type HeavyFieldsStatus = 'ok' | 'unavailable';
  */
 export type InterfaceResponse = {
   contract_id: string;
-  interface_metadata?: unknown;
+  interface_metadata?: null | ContractInterfaceMetadata;
   wasm_hash?: string | null;
 };
 
@@ -1912,6 +1960,10 @@ export type ListLedgersData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * First-page sort flip: `asc` walks oldest→newest, `desc` (default) walks newest→oldest. Ignored when `cursor` is supplied — direction is then encoded in the cursor envelope.
+     */
+    order?: string;
   };
   url: '/v1/ledgers';
 };

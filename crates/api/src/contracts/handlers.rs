@@ -21,7 +21,8 @@ use crate::runtime_enrichment::stellar_archive::extractors::collect_tx_metas;
 use crate::state::AppState;
 
 use super::dto::{
-    ContractDetailResponse, ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractDetailResponse, ContractInterfaceMetadata, ContractStats, EventItem, InterfaceResponse,
+    InvocationItem,
 };
 use super::queries::{
     EventAppearanceRow, InvocationAppearanceRow, fetch_contract, fetch_contract_stats,
@@ -150,7 +151,7 @@ pub async fn get_contract(
         }
     };
 
-    let (recent_invocations, recent_unique_callers, stats_window) =
+    let (recent_invocations, recent_unique_callers, recent_events, stats_window) =
         match fetch_contract_stats(&state.db, contract.id, STATS_WINDOW).await {
             Ok(v) => v,
             Err(e) => {
@@ -172,6 +173,7 @@ pub async fn get_contract(
         stats: ContractStats {
             recent_invocations,
             recent_unique_callers,
+            recent_events,
             stats_window,
         },
     });
@@ -217,10 +219,23 @@ pub async fn get_interface(
         }
     };
 
+    // Decode JSONB into the typed schema; shape drift → None + warn.
+    let interface_metadata = row.interface_metadata.and_then(|raw| {
+        match serde_json::from_value::<ContractInterfaceMetadata>(raw) {
+            Ok(parsed) => Some(parsed),
+            Err(err) => {
+                tracing::warn!(
+                    "interface_metadata shape drift for {}: {err}",
+                    row.contract_id
+                );
+                None
+            }
+        }
+    });
     let mut resp = Json(InterfaceResponse {
         contract_id: row.contract_id,
         wasm_hash: row.wasm_hash,
-        interface_metadata: row.interface_metadata,
+        interface_metadata,
     })
     .into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);

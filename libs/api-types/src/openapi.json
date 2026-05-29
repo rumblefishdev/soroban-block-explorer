@@ -669,7 +669,7 @@
     "/v1/ledgers": {
       "get": {
         "tags": ["ledgers"],
-        "summary": "List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor\npagination.",
+        "summary": "List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;\npass `?order=asc` on a first-page request to flip the initial walk to\noldest-first. Cursor pagination otherwise.",
         "operationId": "list_ledgers",
         "parameters": [
           {
@@ -688,6 +688,15 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "First-page sort flip: `asc` walks oldest→newest, `desc` (default) walks newest→oldest. Ignored when `cursor` is supplied — direction is then encoded in the cursor envelope.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2099,14 +2108,78 @@
           }
         }
       },
+      "ContractFunctionParam": {
+        "type": "object",
+        "description": "One parameter on a Soroban contract function signature.",
+        "required": ["name", "type_name"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ContractFunctionSig": {
+        "type": "object",
+        "description": "A single public function signature extracted from a Soroban contract's\nWASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is\nthe indexer-side source of the persisted shape.",
+        "required": ["name", "doc", "inputs", "outputs"],
+        "properties": {
+          "doc": {
+            "type": "string",
+            "description": "Documentation string; may be empty."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContractFunctionParam"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output type names; empty array == void return."
+          }
+        }
+      },
+      "ContractInterfaceMetadata": {
+        "type": "object",
+        "description": "Soroban contract interface metadata persisted in\n`wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the\nindexer's `xdr_parser::types::ContractInterface` exactly — the API\nhands the same JSON object to clients that the indexer wrote.",
+        "required": ["functions", "wasm_byte_len"],
+        "properties": {
+          "functions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContractFunctionSig"
+            }
+          },
+          "wasm_byte_len": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Raw WASM byte length (informational)."
+          }
+        }
+      },
       "ContractStats": {
         "type": "object",
         "required": [
           "recent_invocations",
           "recent_unique_callers",
+          "recent_events",
           "stats_window"
         ],
         "properties": {
+          "recent_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of `soroban_events_appearances.amount` over the same window\nas `recent_invocations`. One appearance row can represent multiple\nactual events (`amount > 1`) so we sum rather than COUNT(*) — the\nfigure matches what `GET /v1/contracts/:id/events` would return\nover the window."
+          },
           "recent_invocations": {
             "type": "integer",
             "format": "int64"
@@ -2408,7 +2481,16 @@
           "contract_id": {
             "type": "string"
           },
-          "interface_metadata": {},
+          "interface_metadata": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContractInterfaceMetadata"
+              }
+            ]
+          },
           "wasm_hash": {
             "type": ["string", "null"]
           }

@@ -58,18 +58,27 @@ pub async fn fetch_contract(
 }
 
 /// Bounded-window stats per canonical 11 Statement B. `window` is bound
-/// twice — `$2::interval` for the predicate, `$2::text` for the echoed
-/// label. Drops the unbounded `SUM(amount)` over events table that the
-/// task 0167 audit flagged as a HIGH-severity full-history scan.
+/// twice — `$2::interval` for the predicates, `$2::text` for the echoed
+/// label. `recent_events` is computed via a correlated subquery against
+/// `soroban_events_appearances` over the SAME window, summing `amount`
+/// (one appearance row can represent multiple actual events). Both
+/// predicates have the shape `(contract_id, created_at >= …)` so they
+/// ride the standard appearance `(contract_id, created_at)` index.
 pub async fn fetch_contract_stats(
     pool: &PgPool,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, String), sqlx::Error> {
+) -> Result<(i64, i64, i64, String), sqlx::Error> {
     let row: PgRow = sqlx::query(
-        "SELECT COUNT(*)::BIGINT                          AS recent_invocations, \
-                COUNT(DISTINCT caller_id)::BIGINT         AS recent_unique_callers, \
-                $2::text                                  AS stats_window \
+        "SELECT COUNT(*)::BIGINT                              AS recent_invocations, \
+                COUNT(DISTINCT caller_id)::BIGINT             AS recent_unique_callers, \
+                ( \
+                    SELECT COALESCE(SUM(amount), 0)::BIGINT \
+                    FROM soroban_events_appearances \
+                    WHERE contract_id = $1 \
+                      AND created_at >= NOW() - $2::interval \
+                )                                             AS recent_events, \
+                $2::text                                      AS stats_window \
          FROM soroban_invocations_appearances \
          WHERE contract_id = $1 \
            AND created_at >= NOW() - $2::interval",
@@ -82,6 +91,7 @@ pub async fn fetch_contract_stats(
     Ok((
         row.get("recent_invocations"),
         row.get("recent_unique_callers"),
+        row.get("recent_events"),
         row.get("stats_window"),
     ))
 }

@@ -9,6 +9,12 @@ use utoipa::ToSchema;
 pub struct ContractStats {
     pub recent_invocations: i64,
     pub recent_unique_callers: i64,
+    /// Sum of `soroban_events_appearances.amount` over the same window
+    /// as `recent_invocations`. One appearance row can represent multiple
+    /// actual events (`amount > 1`) so we sum rather than COUNT(*) — the
+    /// figure matches what `GET /v1/contracts/:id/events` would return
+    /// over the window.
+    pub recent_events: i64,
     /// Echoed window label (e.g. `"7 days"`) so the UI can label "last N days".
     pub stats_window: String,
 }
@@ -31,13 +37,44 @@ pub struct ContractDetailResponse {
     pub stats: ContractStats,
 }
 
+/// One parameter on a Soroban contract function signature.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// A single public function signature extracted from a Soroban contract's
+/// WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+/// the indexer-side source of the persisted shape.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionSig {
+    pub name: String,
+    /// Documentation string; may be empty.
+    pub doc: String,
+    pub inputs: Vec<ContractFunctionParam>,
+    /// Output type names; empty array == void return.
+    pub outputs: Vec<String>,
+}
+
+/// Soroban contract interface metadata persisted in
+/// `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+/// indexer's `xdr_parser::types::ContractInterface` exactly — the API
+/// hands the same JSON object to clients that the indexer wrote.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractInterfaceMetadata {
+    pub functions: Vec<ContractFunctionSig>,
+    /// Raw WASM byte length (informational).
+    pub wasm_byte_len: i64,
+}
+
 /// `interface_metadata` is `null` for SAC / pre-upload / stub rows;
 /// stubs (task 0153) are filtered at the SQL layer so they don't leak.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct InterfaceResponse {
     pub contract_id: String,
     pub wasm_hash: Option<String>,
-    pub interface_metadata: Option<serde_json::Value>,
+    pub interface_metadata: Option<ContractInterfaceMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
