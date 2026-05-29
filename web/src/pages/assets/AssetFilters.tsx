@@ -25,17 +25,11 @@ export function AssetFilters({
   onSearchChange,
   onTypeChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
+  const [draft, setDraft] = useDebouncedDraft(
+    search,
+    onSearchChange,
+    SEARCH_DEBOUNCE_MS
+  );
 
   return (
     <Box

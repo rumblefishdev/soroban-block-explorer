@@ -33,20 +33,11 @@ export function TransactionFilters({
   onSearchChange,
   onOperationTypeChange,
 }: TransactionFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  // Re-sync the local input when the value changes externally
-  // (e.g. the "Clear filters" action).
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  // Debounce committing the typed value so we don't refetch per keystroke.
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
+  const [draft, setDraft] = useDebouncedDraft(
+    search,
+    onSearchChange,
+    SEARCH_DEBOUNCE_MS
+  );
 
   return (
     <Box

@@ -10,15 +10,16 @@ import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';
 import type { EntityType, TruncationConfig } from './types.js';
 
-function makeMonoSx(
+function makeIdentifierSx(
   linked: boolean,
   fullWidth: boolean,
   tone: 'default' | 'inherit',
-  fontSize: number | string
+  fontSize: number | string,
+  mono: boolean
 ): SxProps<Theme> {
   const inheritColor = tone === 'inherit';
   return {
-    fontFamily: monoFontFamily,
+    fontFamily: mono ? monoFontFamily : bodyFontFamily,
     fontSize,
     fontWeight: 500,
     lineHeight: 1.4,
@@ -96,12 +97,18 @@ export function IdentifierDisplay({
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
+  // Type-driven font: opaque identifiers (hashes, addresses, contract / tx /
+  // pool ids) read in the mono font where fixed width aids scanning. Asset
+  // "ids" are human ticker codes (USDC, AQUA) and ledger ids are plain
+  // sequence numbers — both read in the body font like the value beside
+  // them (matches Figma). Ledger stays a link, just not mono.
+  const isMono = type !== 'asset' && type !== 'ledger';
   const cfg = truncation ?? getDefaultTruncation(type);
   const formatted = formatForDisplay(type, value);
   const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;
   const sx = useMemo(
-    () => makeMonoSx(linked, !truncate, tone, fontSize),
-    [linked, truncate, tone, fontSize]
+    () => makeIdentifierSx(linked, !truncate, tone, fontSize, isMono),
+    [linked, truncate, tone, fontSize, isMono]
   );
 
   // NFT identity is composite `(contract_id, token_id)`; pass `href`

@@ -25,17 +25,11 @@ function DebouncedField({
   width,
   onCommit,
 }: DebouncedFieldProps) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
-
-  useEffect(() => {
-    if (draft === value) return;
-    const id = setTimeout(() => onCommit(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, value, onCommit]);
+  const [draft, setDraft] = useDebouncedDraft(
+    value,
+    onCommit,
+    SEARCH_DEBOUNCE_MS
+  );
 
   return (
     <TextField
