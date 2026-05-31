@@ -87,9 +87,7 @@ export default function NftDetailPage() {
   } = useNftDetail(contractId, tokenId, valid);
 
   if (!valid) {
-    return (
-      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
-    );
+    return <NotFoundState entity="nft" identifier={identifier} />;
   }
 
   if (isLoading) {
@@ -103,8 +101,7 @@ export default function NftDetailPage() {
     return (
       <DetailErrorState
         error={error}
-        entity="generic"
-        titleOverride="NFT not found"
+        entity="nft"
         identifier={identifier}
         onRetry={() => void refetch()}
         py={8}
@@ -113,9 +110,7 @@ export default function NftDetailPage() {
   }
 
   if (!nft) {
-    return (
-      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
-    );
+    return <NotFoundState entity="nft" identifier={identifier} />;
   }
 
   const title = nft.name?.trim() || `Token ${nft.token_id}`;

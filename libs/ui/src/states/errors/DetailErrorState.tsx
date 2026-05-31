@@ -10,8 +10,6 @@ interface DetailErrorStateProps {
   entity: NotFoundEntity;
   /** The id from the URL, echoed in the not-found copy. */
   identifier?: string;
-  /** Overrides the not-found title (e.g. composite entities like NFTs). */
-  titleOverride?: string;
   /** Retry handler wired to the query's `refetch`. */
   onRetry?: () => void;
   /** Vertical padding passed to whichever state renders. */
@@ -29,17 +27,11 @@ export function DetailErrorState({
   error,
   entity,
   identifier,
-  titleOverride,
   onRetry,
   py,
 }: DetailErrorStateProps) {
   return isMissingResource(classifyError(error)) ? (
-    <NotFoundState
-      entity={entity}
-      identifier={identifier}
-      titleOverride={titleOverride}
-      py={py}
-    />
+    <NotFoundState entity={entity} identifier={identifier} py={py} />
   ) : (
     <QueryErrorState error={error} onRetry={onRetry} py={py} />
   );

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
-/** Default debounce for filter-input commits (ms). */
-const DEFAULT_DEBOUNCE_MS = 300;
+/** Default debounce for filter-input + search commits (ms). */
+export const DEFAULT_DEBOUNCE_MS = 300;
 
 /**
  * Local-draft-with-debounced-commit pattern for filter inputs.

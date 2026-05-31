@@ -31,7 +31,12 @@ export {
   formatPercent,
 } from './format/index.js';
 
-export { useDebouncedDraft, useCopyToClipboard } from './hooks/index.js';
+export {
+  useDebouncedDraft,
+  useDebounced,
+  DEFAULT_DEBOUNCE_MS,
+  useCopyToClipboard,
+} from './hooks/index.js';
 
 export {
   TableSkeleton,
