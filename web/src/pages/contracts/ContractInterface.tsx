@@ -11,11 +11,8 @@ import {
 import type { Theme } from '@mui/material/styles';
 import {
   CardSkeleton,
-  classifyError,
   EmptyState,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useContractInterface } from '../../api/index.js';
@@ -201,15 +198,7 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   }
 
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    return kind === 'rate-limit' ? (
-      <RateLimitState onRetry={retry} />
-    ) : kind === 'transient' ? (
-      <TransientErrorState onRetry={retry} />
-    ) : (
-      <GenericErrorState onRetry={retry} />
-    );
+    return <QueryErrorState error={error} onRetry={() => void refetch()} />;
   }
 
   const parsed = parseInterfaceMetadata(data?.interface_metadata);

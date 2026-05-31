@@ -4,16 +4,13 @@ import type { PoolTransactionItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
-  classifyError,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   RelativeTimestamp,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -147,16 +144,7 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <EmptyState

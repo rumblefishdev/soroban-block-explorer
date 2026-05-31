@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import {
   CopyButton,
+  Dash,
   IdentifierWithCopy,
   monoFontFamily,
   truncateMiddle,
@@ -25,17 +26,6 @@ export interface SignatureRow extends SignatureDto {
 
 interface SignaturesTableProps {
   signatures: readonly SignatureRow[];
-}
-
-function Dash() {
-  return (
-    <Typography
-      component="span"
-      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-    >
-      —
-    </Typography>
-  );
 }
 
 export function SignaturesTable({ signatures }: SignaturesTableProps) {

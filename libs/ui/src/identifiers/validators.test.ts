@@ -6,7 +6,6 @@ import {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
-  isValidIdentifier,
 } from './validators.js';
 
 const VALID_ACCOUNT =
@@ -87,22 +86,5 @@ describe('isLedgerSequence', () => {
     expect(isLedgerSequence('1.5')).toBe(false);
     expect(isLedgerSequence('abc')).toBe(false);
     expect(isLedgerSequence('')).toBe(false);
-  });
-});
-
-describe('isValidIdentifier', () => {
-  it('dispatches to the per-type validator', () => {
-    expect(isValidIdentifier('account', VALID_ACCOUNT)).toBe(true);
-    expect(isValidIdentifier('contract', VALID_CONTRACT)).toBe(true);
-    expect(isValidIdentifier('pool', VALID_POOL)).toBe(true);
-    expect(isValidIdentifier('transaction', VALID_TX)).toBe(true);
-    expect(isValidIdentifier('ledger', '12345')).toBe(true);
-  });
-
-  it('asset/nft pass through with any non-empty value (composite ids)', () => {
-    expect(isValidIdentifier('asset', 'USDC-GA5Z')).toBe(true);
-    expect(isValidIdentifier('asset', '')).toBe(false);
-    expect(isValidIdentifier('nft', '123')).toBe(true);
-    expect(isValidIdentifier('nft', '')).toBe(false);
   });
 });

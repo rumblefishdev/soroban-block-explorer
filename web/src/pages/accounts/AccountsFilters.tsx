@@ -12,8 +12,6 @@ import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 import type { AccountsSort } from '../../api/hooks/useAccountsList.js';
 
-const SEARCH_DEBOUNCE_MS = 300;
-
 const SORT_OPTIONS: { value: AccountsSort; label: string }[] = [
   { value: 'xlm_desc', label: 'Top XLM holders' },
   { value: 'last_seen_desc', label: 'Recently active' },
@@ -37,11 +35,7 @@ export function AccountsFilters({
   onSortChange,
   onWithDomainChange,
 }: AccountsFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(
-    search,
-    onSearchChange,
-    SEARCH_DEBOUNCE_MS
-  );
+  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
 
   return (
     <Box

@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react';
 
+/** Default debounce for filter-input commits (ms). */
+const DEFAULT_DEBOUNCE_MS = 300;
+
 /**
  * Local-draft-with-debounced-commit pattern for filter inputs.
  *
  * Holds an editable `draft` mirroring the committed `value`, re-syncing
  * whenever `value` changes externally (e.g. a "Clear filters" action or
- * browser back/forward). After the user pauses typing for `delay` ms the
- * draft is committed via `onChange` — so filtering does not refetch on every
- * keystroke. No commit fires while the draft already equals the committed
- * value.
+ * browser back/forward). After the user pauses typing for `delay` ms
+ * (default {@link DEFAULT_DEBOUNCE_MS}) the draft is committed via
+ * `onChange` — so filtering does not refetch on every keystroke. No commit
+ * fires while the draft already equals the committed value.
  *
  * Returns the standard `[draft, setDraft]` tuple.
  */
 export function useDebouncedDraft<T>(
   value: T,
   onChange: (next: T) => void,
-  delay: number
+  delay: number = DEFAULT_DEBOUNCE_MS
 ): [T, (next: T) => void] {
   const [draft, setDraft] = useState(value);
 

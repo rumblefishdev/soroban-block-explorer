@@ -2,17 +2,14 @@ import GroupIcon from '@mui/icons-material/GroupOutlined';
 import { Box, Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
-  classifyError,
   EmptyState,
   ExplorerTable,
   formatAmount,
-  GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -110,16 +107,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <EmptyState

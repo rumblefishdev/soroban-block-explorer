@@ -9,8 +9,6 @@ import {
 } from '@mui/material';
 import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
-const SEARCH_DEBOUNCE_MS = 300;
-
 /**
  * TVL preset options (Figma node 267:60674).
  *
@@ -45,11 +43,7 @@ export function PoolsFilterBar({
   onAssetChange,
   onMinTvlChange,
 }: PoolsFilterBarProps) {
-  const [draft, setDraft] = useDebouncedDraft(
-    asset,
-    onAssetChange,
-    SEARCH_DEBOUNCE_MS
-  );
+  const [draft, setDraft] = useDebouncedDraft(asset, onAssetChange);
 
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);

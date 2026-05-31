@@ -1,12 +1,9 @@
 import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  classifyError,
   formatAmount,
   formatTps,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -26,16 +23,9 @@ export function ChainOverview() {
 
   let content: ReactNode;
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    content =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={4} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={4} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={4} />
-      );
+    content = (
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
+    );
   } else {
     content = (
       <Stack

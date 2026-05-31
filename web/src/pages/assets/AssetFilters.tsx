@@ -4,8 +4,6 @@ import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
 
-const SEARCH_DEBOUNCE_MS = 300;
-
 interface AssetFiltersProps {
   /** Asset-code search value (`filter[code]`). */
   search: string;
@@ -25,11 +23,7 @@ export function AssetFilters({
   onSearchChange,
   onTypeChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(
-    search,
-    onSearchChange,
-    SEARCH_DEBOUNCE_MS
-  );
+  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
 
   return (
     <Box

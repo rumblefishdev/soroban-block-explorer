@@ -11,7 +11,6 @@ import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 import { OPERATION_TYPE_OPTIONS } from './operationTypes.js';
 
 const ALL_OPERATIONS = '';
-const SEARCH_DEBOUNCE_MS = 300;
 
 interface TransactionFiltersProps {
   /** Combined source-account / contract-ID search value. */
@@ -33,11 +32,7 @@ export function TransactionFilters({
   onSearchChange,
   onOperationTypeChange,
 }: TransactionFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(
-    search,
-    onSearchChange,
-    SEARCH_DEBOUNCE_MS
-  );
+  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
 
   return (
     <Box

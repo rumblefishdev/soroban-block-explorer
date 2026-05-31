@@ -2,6 +2,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
+  Dash,
   ExplorerTable,
   formatAmount,
   IdentifierDisplay,
@@ -11,7 +12,6 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
-import { Dash } from '../transactions/cells.js';
 
 import { AssetIcon } from './AssetIcon.js';
 import { assetTypeMeta, iconKindFor } from './assetType.js';

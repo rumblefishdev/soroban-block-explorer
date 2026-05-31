@@ -1,13 +1,10 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
-  classifyError,
-  GenericErrorState,
   PollingIndicator,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -38,16 +35,9 @@ export function LatestTransactions() {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={8} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={8} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={8} />
-      );
+    body = (
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
+    );
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" />;
   } else {

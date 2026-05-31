@@ -1,11 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
   getDefaultTruncation,
   isAccountId,
-  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
   truncateMiddle,
@@ -41,10 +39,13 @@ export default function AccountDetailPage() {
     summary = <CardSkeleton />;
     balances = <CardSkeleton />;
   } else if (account.isError) {
-    summary = isMissingResource(classifyError(account.error)) ? (
-      <NotFoundState entity="account" identifier={accountId} />
-    ) : (
-      <GenericErrorState onRetry={() => void account.refetch()} />
+    summary = (
+      <DetailErrorState
+        error={account.error}
+        entity="account"
+        identifier={accountId}
+        onRetry={() => void account.refetch()}
+      />
     );
   } else if (account.data) {
     summary = <AccountSummary account={account.data} />;
@@ -58,10 +59,7 @@ export default function AccountDetailPage() {
           items={[
             { label: 'Account' },
             {
-              label: truncateMiddle(
-                accountId,
-                getDefaultTruncation('account')
-              ),
+              label: truncateMiddle(accountId, getDefaultTruncation('account')),
             },
           ]}
         />

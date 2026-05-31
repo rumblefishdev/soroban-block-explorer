@@ -1,6 +1,7 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
   formatAmount,
   IdentifierDisplay,
@@ -14,7 +15,6 @@ import { routes } from '../../router/routes.js';
 // shared helpers rather than duplicating, to keep native-asset / SAC
 // mirror / classic-credit precedence in one place.
 import { assetLegLabel, legHref } from '../pool-detail/helpers.js';
-import { Dash } from '../transactions/cells.js';
 
 import { AssetAvatar } from './AssetAvatar.js';
 import { reserveDotColor } from './assetColor.js';

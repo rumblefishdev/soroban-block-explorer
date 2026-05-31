@@ -3,15 +3,12 @@ import type { PaginatedEventItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
-  classifyError,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   truncateMiddle,
   useCursorPagination,
   usePageHandlers,
@@ -20,6 +17,7 @@ import {
 import { useMemo, type ReactNode } from 'react';
 
 import { useContractEvents } from '../../api/index.js';
+import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -38,8 +36,7 @@ const EVENT_TYPE_COLOR: Record<string, ChipProps['color']> = {
 /** Event-type chip — colour-coded by the event's `event_type`. */
 function EventTypeBadge({ type }: { type: string }) {
   const color = EVENT_TYPE_COLOR[type] ?? 'neutral';
-  const label =
-    type.length > 0 ? type.charAt(0).toUpperCase() + type.slice(1) : 'Unknown';
+  const label = type.length > 0 ? capitalize(type) : 'Unknown';
   return <Chip size="sm" color={color} label={label} />;
 }
 
@@ -188,16 +185,7 @@ export function ContractEvents({ contractId }: { contractId: string }) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <TableEmptyState

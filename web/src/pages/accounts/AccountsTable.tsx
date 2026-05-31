@@ -1,5 +1,6 @@
 import { Typography } from '@mui/material';
 import {
+  Dash,
   ExplorerTable,
   formatAmount,
   formatPercent,
@@ -8,7 +9,6 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import type { AccountListItem } from '../../api/hooks/useAccountsList.js';
-import { Dash } from '../transactions/cells.js';
 
 interface AccountsTableProps {
   rows: readonly AccountListItem[];

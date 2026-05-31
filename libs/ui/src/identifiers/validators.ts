@@ -1,5 +1,3 @@
-import type { EntityType } from './types.js';
-
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const STELLAR_ACCOUNT = /^G[A-Z2-7]{55}$/;
 const STELLAR_CONTRACT = /^C[A-Z2-7]{55}$/;
@@ -25,22 +23,4 @@ export function isLedgerSequence(value: string | number): boolean {
 
 export function isPoolId(value: string): boolean {
   return STELLAR_POOL.test(value);
-}
-
-export function isValidIdentifier(type: EntityType, value: string): boolean {
-  switch (type) {
-    case 'transaction':
-      return isTransactionHash(value);
-    case 'account':
-      return isAccountId(value);
-    case 'contract':
-      return isContractId(value);
-    case 'ledger':
-      return isLedgerSequence(value);
-    case 'pool':
-      return isPoolId(value);
-    case 'asset':
-    case 'nft':
-      return value.length > 0;
-  }
 }

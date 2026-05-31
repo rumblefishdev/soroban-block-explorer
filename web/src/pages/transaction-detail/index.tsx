@@ -1,8 +1,7 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
   getDefaultTruncation,
   NotFoundState,
   SectionErrorBoundary,
@@ -40,8 +39,11 @@ export default function TransactionDetailPage() {
             items={[
               { label: 'Transactions', to: '/transactions' },
               {
-              label: truncateMiddle(hash, getDefaultTruncation('transaction')),
-            },
+                label: truncateMiddle(
+                  hash,
+                  getDefaultTruncation('transaction')
+                ),
+              },
             ]}
           />
           <Typography variant="heading5SemiBold" component="h1">
@@ -56,11 +58,14 @@ export default function TransactionDetailPage() {
   }
 
   if (query.isError) {
-    const kind = classifyError(query.error);
-    return kind === 'not-found' ? (
-      <NotFoundState entity="transaction" identifier={hash} />
-    ) : (
-      <GenericErrorState onRetry={() => void query.refetch()} py={8} />
+    return (
+      <DetailErrorState
+        error={query.error}
+        entity="transaction"
+        identifier={hash}
+        onRetry={() => void query.refetch()}
+        py={8}
+      />
     );
   }
 

@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-
 import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import { styled } from '@mui/material/styles';
 
-const COPIED_DURATION_MS = 1500;
+import { useCopyToClipboard } from '../hooks/useCopyToClipboard.js';
 
 const StyledButton = styled(IconButton, {
   shouldForwardProp: (prop) => prop !== 'copied',
@@ -34,26 +32,6 @@ const StyledButton = styled(IconButton, {
   },
 }));
 
-async function copyToClipboard(value: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-  if (typeof document === 'undefined') return;
-  const el = document.createElement('textarea');
-  el.value = value;
-  el.setAttribute('readonly', '');
-  el.style.position = 'fixed';
-  el.style.opacity = '0';
-  document.body.appendChild(el);
-  el.select();
-  try {
-    document.execCommand('copy');
-  } finally {
-    document.body.removeChild(el);
-  }
-}
-
 export interface CopyButtonProps {
   value: string;
   ariaLabel?: string;
@@ -63,29 +41,7 @@ export function CopyButton({
   value,
   ariaLabel = 'Copy to clipboard',
 }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  const handleClick = useCallback(
-    async (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      try {
-        await copyToClipboard(value);
-      } catch {
-        return;
-      }
-      setCopied(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), COPIED_DURATION_MS);
-    },
-    [value]
-  );
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <Tooltip
@@ -120,7 +76,10 @@ export function CopyButton({
       <StyledButton
         copied={copied}
         aria-label={ariaLabel}
-        onClick={handleClick}
+        onClick={(event) => {
+          event.stopPropagation();
+          void copy(value);
+        }}
         size="small"
       >
         {copied ? <CheckIcon /> : <ContentCopyIcon />}
