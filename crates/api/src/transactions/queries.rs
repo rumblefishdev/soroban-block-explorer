@@ -107,15 +107,16 @@ fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bo
 
 fn push_cursor_predicate(
     qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
-    cursor: &TxListCursor,
+    ts: DateTime<Utc>,
+    id: i64,
     op: &str,
 ) {
     qb.push(" (t.created_at, t.id) ");
     qb.push(op);
     qb.push(" (");
-    qb.push_bind(cursor.ts);
+    qb.push_bind(ts);
     qb.push(", ");
-    qb.push_bind(cursor.id);
+    qb.push_bind(id);
     qb.push(")");
 }
 
@@ -189,26 +190,23 @@ pub async fn fetch_list(
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
     let (op, order) = direction_sql(direction);
 
+    // PG keys on `(created_at, id)`. Extract the `Pg` cursor variant; a
+    // non-`Pg` cursor never reaches here (`list_transactions` rejects a
+    // cross-datasource cursor with `invalid_cursor` before dispatch), so the
+    // `_` arm only ever means "first page".
+    let cursor: Option<(DateTime<Utc>, i64)> = match &params.cursor {
+        Some(TxListCursor::Pg { ts, id }) => Some((*ts, *id)),
+        _ => None,
+    };
+
     match (&params.contract_id, params.op_type) {
         (Some(cid), op_type_opt) => {
             qb.push("WITH matched_tx AS (SELECT DISTINCT created_at, transaction_id FROM (");
-            push_contract_union_arm(&mut qb, "operations_appearances", cid, &params.cursor, op);
+            push_contract_union_arm(&mut qb, "operations_appearances", cid, cursor, op);
             qb.push(" UNION ");
-            push_contract_union_arm(
-                &mut qb,
-                "soroban_invocations_appearances",
-                cid,
-                &params.cursor,
-                op,
-            );
+            push_contract_union_arm(&mut qb, "soroban_invocations_appearances", cid, cursor, op);
             qb.push(" UNION ");
-            push_contract_union_arm(
-                &mut qb,
-                "soroban_events_appearances",
-                cid,
-                &params.cursor,
-                op,
-            );
+            push_contract_union_arm(&mut qb, "soroban_events_appearances", cid, cursor, op);
 
             qb.push(format!(
                 ") u ORDER BY created_at {order}, transaction_id {order} LIMIT "
@@ -252,11 +250,11 @@ pub async fn fetch_list(
                    WHERE oa.type = ",
             );
             qb.push_bind(op_type);
-            if let Some(c) = &params.cursor {
+            if let Some((ts, id)) = cursor {
                 qb.push(format!(" AND (oa.created_at, oa.transaction_id) {op} ("));
-                qb.push_bind(c.ts);
+                qb.push_bind(ts);
                 qb.push(", ");
-                qb.push_bind(c.id);
+                qb.push_bind(id);
                 qb.push(")");
             }
             qb.push(format!(
@@ -279,9 +277,9 @@ pub async fn fetch_list(
                 push_source_predicate(&mut qb, acct);
             }
             // Re-applied: CTE LIMIT $1*4 may overshoot the cursor boundary.
-            if let Some(cursor) = &params.cursor {
+            if let Some((ts, id)) = cursor {
                 push_glue(&mut qb, &mut has_where);
-                push_cursor_predicate(&mut qb, cursor, op);
+                push_cursor_predicate(&mut qb, ts, id, op);
             }
         }
 
@@ -300,9 +298,9 @@ pub async fn fetch_list(
                 push_glue(&mut qb, &mut has_where);
                 push_source_predicate(&mut qb, acct);
             }
-            if let Some(cursor) = &params.cursor {
+            if let Some((ts, id)) = cursor {
                 push_glue(&mut qb, &mut has_where);
-                push_cursor_predicate(&mut qb, cursor, op);
+                push_cursor_predicate(&mut qb, ts, id, op);
             }
         }
     }
@@ -320,7 +318,7 @@ fn push_contract_union_arm<'q>(
     qb: &mut sqlx::QueryBuilder<'q, sqlx::Postgres>,
     table: &'static str,
     cid_strkey: &'q str,
-    cursor: &Option<TxListCursor>,
+    cursor: Option<(DateTime<Utc>, i64)>,
     op: &str,
 ) {
     qb.push("SELECT created_at, transaction_id FROM ");
@@ -328,13 +326,13 @@ fn push_contract_union_arm<'q>(
     qb.push(" WHERE contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ");
     qb.push_bind(cid_strkey);
     qb.push(")");
-    if let Some(c) = cursor {
+    if let Some((ts, id)) = cursor {
         qb.push(" AND (created_at, transaction_id) ");
         qb.push(op);
         qb.push(" (");
-        qb.push_bind(c.ts);
+        qb.push_bind(ts);
         qb.push(", ");
-        qb.push_bind(c.id);
+        qb.push_bind(id);
         qb.push(")");
     }
 }

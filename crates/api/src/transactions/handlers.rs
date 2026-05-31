@@ -100,6 +100,19 @@ pub async fn list_transactions(
     }
 
     let source = DataSource::for_module(Module::Transactions);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor
+    // replayed after a flag flip to CH). Its keyset values are meaningless
+    // under the active backend, so per ADR 0008 we fail with `invalid_cursor`
+    // instead of silently mis-paginating. A legacy/untagged cursor already
+    // fails to decode upstream in the extractor; this guards the
+    // decodes-but-wrong-intent case.
+    if let Some(cursor) = &pagination.cursor
+        && !cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
@@ -162,20 +175,34 @@ pub async fn list_transactions(
 
 /// Build the opaque list cursor for a boundary row. PG keys the list scan
 /// on `(created_at, id)`; CH keys on `(ledger_sequence, id)` and carries the
-/// `transactions.id` hash surrogate as the within-ledger tie-break.
+/// `transactions.id` hash surrogate as the within-ledger tie-break. The
+/// emitted variant is tagged with the active datasource so a later request
+/// can reject a cursor minted for the other backend (see `list_transactions`).
 fn list_cursor_for(source: DataSource, r: &TxListRow) -> TxListCursor {
     match source {
-        DataSource::Pg => TxListCursor {
+        DataSource::Pg => TxListCursor::Pg {
             ts: r.created_at,
             id: r.id,
-            tiebreak: None,
         },
-        DataSource::Ch => TxListCursor {
-            ts: r.created_at,
-            id: r.ledger_sequence,
-            tiebreak: Some(r.id),
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.id,
         },
     }
+}
+
+/// True when the decoded cursor was minted for the currently-active
+/// datasource. A mismatch (e.g. a PG cursor replayed after an operator flips
+/// `API_DATASOURCE_TRANSACTIONS=ch` mid-pagination) must be rejected with
+/// `invalid_cursor` rather than silently mis-paginating — the PG keyset
+/// values (`transactions.id` BIGSERIAL) are meaningless as a CH
+/// `(ledger_sequence, id)` anchor and vice versa. ADR 0008: a cursor that
+/// decodes but lacks the current intent fails cleanly (HTTP 400).
+fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
 }
 
 // ---------------------------------------------------------------------------

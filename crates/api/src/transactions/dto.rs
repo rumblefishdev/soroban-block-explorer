@@ -25,29 +25,29 @@ pub struct ListParams {
 /// Opaque pagination payload for `GET /v1/transactions` (encoded via
 /// [`common::cursor`](crate::common::cursor)).
 ///
-/// The PG and CH read paths key their list scans differently, so this
-/// payload is a superset that serves both. Field meanings by datasource:
+/// The PG and CH read paths key their list scans on different columns, so
+/// the cursor is a **datasource-tagged** enum rather than a shared superset:
 ///
-/// | field      | PG (`created_at, id` keyset) | CH (`ledger_sequence, id` keyset) |
-/// |------------|------------------------------|-----------------------------------|
-/// | `ts`       | `transactions.created_at`    | parent ledger `closed_at`         |
-/// | `id`       | `transactions.id` (BIGSERIAL)| parent `ledger_sequence`          |
-/// | `tiebreak` | absent                       | `transactions.id` hash surrogate  |
+/// - `Pg` — `(created_at, id)` keyset (`transactions.id` is a `BIGSERIAL`).
+/// - `Ch` — `(ledger_sequence, id)` keyset with single-partition prune on
+///   `intDiv(ledger_sequence, 500000)` (canonical SQL 02); `tiebreak` is the
+///   `transactions.id` hash surrogate (the within-ledger tie-break).
 ///
-/// CH orders by `(ledger_sequence, id)` and partition-prunes on
-/// `intDiv(ledger_sequence, 500000)` (canonical SQL 02), so it needs the
-/// `ledger_sequence` partition key (`id`) plus the within-ledger tie-break
-/// (`tiebreak`). PG's `(created_at, id)` keyset needs no third field, so
-/// `tiebreak` is omitted from the wire on that path. `tiebreak` carries a
-/// serde default so cursors minted before this field existed still decode
-/// (ADR 0008: the payload may evolve as long as old cursors decode or fail
-/// cleanly — the wire format stays opaque to clients either way).
+/// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
+/// format is opaque to clients, so the backend may change the encoding
+/// freely; the flip side is that a cursor which decodes but carries the
+/// *other* backend's intent MUST be rejected with `invalid_cursor` rather
+/// than silently mis-paginating. `list_transactions` enforces that the
+/// decoded variant matches the active `DataSource`, and a legacy/untagged
+/// cursor (pre-0243, no `src`) fails to decode at all — both surface as a
+/// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
+/// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
+/// CH keyset can never bind a NULL tuple element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxListCursor {
-    pub ts: DateTime<Utc>,
-    pub id: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tiebreak: Option<i64>,
+#[serde(tag = "src", rename_all = "snake_case")]
+pub enum TxListCursor {
+    Pg { ts: DateTime<Utc>, id: i64 },
+    Ch { ledger_sequence: i64, tiebreak: i64 },
 }
 
 /// Slim transaction row returned in the list endpoint.
@@ -181,49 +181,66 @@ pub struct OperationItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::cursor::{self, Direction};
+    use crate::common::cursor::{self, CursorError, Direction};
     use chrono::TimeZone;
 
     #[test]
-    fn ch_cursor_round_trips_with_tiebreak() {
-        // CH path: id = ledger_sequence, tiebreak = transactions.id hash
-        // surrogate (may be negative — cityhash64 lower-bits as i64).
+    fn pg_cursor_round_trips() {
         let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let c = TxListCursor {
-            ts,
-            id: 50_000,
-            tiebreak: Some(-123),
-        };
+        let c = TxListCursor::Pg { ts, id: 42 };
         let encoded = cursor::encode(&c, Direction::Next);
         let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
         assert_eq!(dir, Direction::Next);
-        assert_eq!(decoded.id, 50_000);
-        assert_eq!(decoded.tiebreak, Some(-123));
+        assert!(matches!(decoded, TxListCursor::Pg { id: 42, .. }));
     }
 
     #[test]
-    fn pg_cursor_omits_tiebreak_on_the_wire() {
-        // `skip_serializing_if` keeps the PG cursor wire-identical to the
-        // pre-0243 `(ts, id)` shape — no `tiebreak` key emitted.
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let c = TxListCursor {
-            ts,
-            id: 42,
-            tiebreak: None,
+    fn ch_cursor_round_trips() {
+        // CH path: id = ledger_sequence, tiebreak = transactions.id hash
+        // surrogate (may be negative — cityhash64 lower-bits as i64).
+        let c = TxListCursor::Ch {
+            ledger_sequence: 50_000,
+            tiebreak: -123,
         };
-        let json = serde_json::to_value(&c).unwrap();
-        assert!(
-            json.get("tiebreak").is_none(),
-            "tiebreak must be omitted on the PG path: {json}"
-        );
-        assert_eq!(json["id"], 42);
+        let encoded = cursor::encode(&c, Direction::Prev);
+        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
+        assert_eq!(dir, Direction::Prev);
+        assert!(matches!(
+            decoded,
+            TxListCursor::Ch {
+                ledger_sequence: 50_000,
+                tiebreak: -123
+            }
+        ));
     }
 
     #[test]
-    fn legacy_ts_id_cursor_decodes_with_no_tiebreak() {
-        // A cursor minted before `tiebreak` existed (`{ts, id}` only) must
-        // still decode — serde default → None — so in-flight PG cursors
-        // survive the 0243 deploy (ADR 0008 cursor opacity / evolvability).
+    fn variant_carries_the_src_tag_on_the_wire() {
+        // The `src` discriminant is what lets `list_transactions` detect a
+        // cross-datasource cursor and reject it (ADR 0008 fail-clean).
+        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
+        assert_eq!(
+            serde_json::to_value(TxListCursor::Pg { ts, id: 1 }).unwrap()["src"],
+            "pg"
+        );
+        assert_eq!(
+            serde_json::to_value(TxListCursor::Ch {
+                ledger_sequence: 1,
+                tiebreak: 2
+            })
+            .unwrap()["src"],
+            "ch"
+        );
+    }
+
+    #[test]
+    fn legacy_untagged_cursor_is_rejected() {
+        // A pre-0243 `{ts, id}` cursor carries no `src` tag, so it MUST fail
+        // to decode as the tagged enum — surfacing as `invalid_cursor` (400)
+        // rather than silently promoting to a PG (or CH) walk. This is the
+        // ADR 0008 "clean break / no silent-promotion" contract: a cursor
+        // that lacks the current backend's intent fails, it does not
+        // mis-paginate.
         #[derive(serde::Serialize)]
         struct Legacy {
             ts: DateTime<Utc>,
@@ -231,9 +248,7 @@ mod tests {
         }
         let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
         let encoded = cursor::encode(&Legacy { ts, id: 7 }, Direction::Prev);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Prev);
-        assert_eq!(decoded.id, 7);
-        assert_eq!(decoded.tiebreak, None);
+        let err = cursor::decode::<TxListCursor>(&encoded).unwrap_err();
+        assert!(matches!(err, CursorError::InvalidPayload));
     }
 }

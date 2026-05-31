@@ -51,6 +51,7 @@ use serde::Deserialize;
 
 use crate::common::cursor::{Direction, direction_sql};
 
+use super::dto::TxListCursor;
 use super::queries::{
     EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow, TxListRow,
 };
@@ -305,11 +306,22 @@ pub async fn fetch_list(
     };
 
     let (op, order) = direction_sql(direction);
-    // Cursor keyset is `(ledger_sequence, id)` (canonical SQL 02). On the CH
-    // path `TxListCursor.id` carries the parent `ledger_sequence` and
-    // `tiebreak` carries the `transactions.id` hash surrogate.
-    let cursor_ledger: Option<i64> = params.cursor.as_ref().map(|c| c.id);
-    let cursor_tiebreak: Option<i64> = params.cursor.as_ref().and_then(|c| c.tiebreak);
+    // Cursor keyset is `(ledger_sequence, id)` (canonical SQL 02). The CH
+    // cursor variant carries `ledger_sequence` (partition key + primary sort)
+    // and `tiebreak` (the `transactions.id` hash surrogate, within-ledger
+    // tie-break). Both are present together or absent together, so the keyset
+    // tuple never binds a NULL element. A `Pg`-variant cursor never reaches
+    // here — `list_transactions` rejects a cross-datasource cursor with
+    // `invalid_cursor` before dispatch — so the `_` arm only ever means
+    // "first page".
+    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match params.cursor.as_ref()
+    {
+        Some(TxListCursor::Ch {
+            ledger_sequence,
+            tiebreak,
+        }) => (Some(*ledger_sequence), Some(*tiebreak)),
+        _ => (None, None),
+    };
 
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
@@ -391,23 +403,22 @@ pub async fn fetch_list(
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  WHERE (? IS NULL OR t.source_id = ?) \
-                   AND (? IS NULL OR (t.ledger_sequence, t.id) {op} (?, ?)) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
                  LIMIT ?",
             );
+            // No outer keyset re-check: the driver subquery already filtered
+            // `(ledger_sequence, transaction_id) {op} (cursor)`, and the JOIN
+            // binds `t.id = m.transaction_id` / `t.ledger_sequence =
+            // m.ledger_sequence`, so every joined row already satisfies it.
             client
                 .query(&sql)
                 .bind(op_type)
-                .bind(cursor_ledger)
                 .bind(cursor_ledger)
                 .bind(cursor_ledger)
                 .bind(cursor_tiebreak)
                 .bind(params.limit * 4)
                 .bind(source_id)
                 .bind(source_id)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_tiebreak)
                 .bind(params.limit + 1) // peek row drives next-page detection
                 .fetch_all::<TxListChRow>()
                 .await?
