@@ -315,9 +315,20 @@ pub async fn fetch_list(
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
+            // Same partition-bounded restructure as Statement C (see there):
+            // `transactions t` pruned to a single partition + streamed, the
+            // small driver `m` hashed, FINAL dropped (append-only, Rust dedup)
+            // — so the join never merges the whole 3.6B-row table.
+            //
+            // The driver is the 3-arm contract UNION. The
+            // `soroban_invocations_appearances` and `soroban_events` arms seek
+            // by `contract_id` (their primary-key prefix); the
+            // `operations_appearances` arm scans the pruned partition
+            // (`contract_id` is not its PK prefix — deferred skip-index
+            // follow-up, same as op_type).
             let arm = |table: &str| {
                 format!(
-                    "SELECT ledger_sequence, transaction_id FROM {table} FINAL \
+                    "SELECT ledger_sequence, transaction_id FROM {table} \
                      WHERE contract_id = ? \
                        AND intDiv(ledger_sequence, 500000) \
                            = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
@@ -327,19 +338,22 @@ pub async fn fetch_list(
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                 ) t \
+                 INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT ? \
-                 ) m \
-                 INNER JOIN transactions t FINAL \
-                    ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
+                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  WHERE (? IS NULL OR t.source_id = ?) \
                    AND (? IS NULL OR ( \
-                        SELECT count() FROM operations_appearances oa2 FINAL \
+                        SELECT count() FROM operations_appearances oa2 \
                         WHERE oa2.transaction_id = t.id \
                           AND oa2.ledger_sequence = t.ledger_sequence \
                           AND oa2.type = ? \
@@ -352,7 +366,7 @@ pub async fn fetch_list(
                 arm_evt = arm("soroban_events"),
             );
 
-            let mut q = client.query(&sql);
+            let mut q = client.query(&sql).bind(cursor_ledger); // `t` partition prune
             // Three UNION arms, identical bind tuple each:
             // (contract_id, cursor_ledger, cursor_ledger, cursor_ledger, tiebreak)
             for _ in 0..3 {
@@ -375,20 +389,37 @@ pub async fn fetch_list(
 
         // --- Statement C: op_type filter only ------------------------------
         (None, Some(op_type)) => {
+            // Restructured so NEITHER side of the join is a full-table read:
+            //
+            //  - `transactions t` is pruned to a single partition and is the
+            //    STREAMED (left) side; the ≤ `limit*4`-row driver `m` is the
+            //    hash side. The previous `... INNER JOIN transactions t FINAL`
+            //    had no prune on `t`, so FINAL merged the entire 3.6B-row
+            //    table per request — a single op_type page read billions of
+            //    rows and exhausted the `read_rows` quota (CH Code: 201). FINAL
+            //    is dropped (append-only, immutable columns, Rust-side dedup).
+            //  - `m` (driver) scans the pruned partition by `type`, which is
+            //    NOT an `operations_appearances` primary-key prefix (~8e7 rows;
+            //    bounded, and op_type filtering is user-initiated, not polled).
+            //    Making this a seek needs a skip-index on `type` — deferred
+            //    follow-up.
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                 ) t \
+                 INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
-                    FROM operations_appearances FINAL \
+                    FROM operations_appearances \
                     WHERE type = ? \
                       AND intDiv(ledger_sequence, 500000) \
                           = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
                       AND (? IS NULL OR (ledger_sequence, transaction_id) {op} (?, ?)) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT ? \
-                 ) m \
-                 INNER JOIN transactions t FINAL \
-                    ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
+                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  WHERE (? IS NULL OR t.source_id = ?) \
@@ -401,11 +432,12 @@ pub async fn fetch_list(
             // m.ledger_sequence`, so every joined row already satisfies it.
             client
                 .query(&sql)
-                .bind(op_type)
-                .bind(cursor_ledger) // ifNull partition prune
-                .bind(cursor_ledger) // `? IS NULL` guard
-                .bind(cursor_ledger) // keyset tuple .0 (ledger_sequence)
-                .bind(cursor_tiebreak) // keyset tuple .1 (transaction_id)
+                .bind(cursor_ledger) // `t` partition prune
+                .bind(op_type) // driver: type
+                .bind(cursor_ledger) // driver partition prune
+                .bind(cursor_ledger) // driver `? IS NULL` guard
+                .bind(cursor_ledger) // driver keyset tuple .0 (ledger_sequence)
+                .bind(cursor_tiebreak) // driver keyset tuple .1 (transaction_id)
                 .bind(params.limit * 4)
                 .bind(source_id)
                 .bind(source_id)
