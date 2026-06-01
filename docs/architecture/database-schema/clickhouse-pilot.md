@@ -696,7 +696,7 @@ set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
 > `operation_types` / `contract_ids` with **correlated** scalar subqueries in
 > the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
 > 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
-> correlated column …`. The live read path instead fetches the page of tx
+correlated column …`. The live read path instead fetches the page of tx
 > keys, then aggregates per `(ledger_sequence, transaction_id) IN (…)` with
 > `GROUP BY transaction_id` (non-correlated), merged in Rust. The shared
 > implementation is
@@ -704,6 +704,23 @@ set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
 > reuse it for any new transaction-list module rather than the inline
 > correlated projection the reference SQL still shows (those files carry a
 > correction banner).
+
+> **CH read-cost correction — `contract_ids` is ops-only (task 0243).** The
+> reference SQL builds `contract_ids` from a 3-source UNION
+> (`operations_appearances` + `soroban_invocations_appearances` +
+> `soroban_events`) for full PG parity. Both `soroban_*` tables are
+> `ORDER BY (contract_id, …)`, so the per-page
+> `(ledger_sequence, transaction_id) IN (…)` key filter is a **partition scan**
+> on them, not a key seek. In production a single `/transactions` page read
+> ~1e8 rows and a handful of requests exhausted the `api_reader` `read_rows`
+> hourly quota (`Code: 201 QUOTA_EXCEEDED`), 500-ing every CH endpoint. The
+> live helper therefore sources `contract_ids` from `operations_appearances` > **only** (primary-key seek, ~hundreds of rows/page). **Parity cost:** a
+> contract touched solely via a nested sub-invocation or an emitted event
+> (never a root-op `contract_id`) is not listed; for the vast majority of
+> Soroban transactions the invoked contract IS the root-op `contract_id`, so
+> list-row `contract_ids` match PG in practice. A cheap full-parity path
+> (skip-index on `transaction_id`, or a precomputed per-tx `contract_ids`
+> column written at ingest) is a deferred follow-up.
 
 ---
 

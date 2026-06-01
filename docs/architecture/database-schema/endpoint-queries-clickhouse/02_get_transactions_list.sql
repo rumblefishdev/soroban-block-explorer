@@ -11,6 +11,23 @@
 --     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates` for any new
 --     transaction-list module instead of the inline projection here.
 -- ============================================================================
+-- ⚠️  CH READ-COST CORRECTION (task 0243) — `contract_ids` is OPS-ONLY in the
+--     live read path. The `arrayConcat`/UNION over operations_appearances +
+--     soroban_invocations_appearances + soroban_events shown in statements
+--     B/C below is NOT what runs. Both soroban_* tables are ORDER BY
+--     (contract_id, …), so the per-page `(ledger_sequence, transaction_id) IN
+--     (…)` key filter is a PARTITION SCAN on them, not a key seek. In
+--     production a single /transactions page read ~1e8 rows and a handful of
+--     requests exhausted the api_reader read_rows hourly quota
+--     (CH Code: 201 QUOTA_EXCEEDED), 500-ing every CH endpoint.
+--     The live helper sources `contract_ids` from operations_appearances ONLY
+--     (primary-key seek). PARITY COST: a contract touched solely via a nested
+--     sub-invocation or an emitted event (never a root-op contract_id) is not
+--     listed; for the vast majority of Soroban tx the invoked contract IS the
+--     root-op contract_id, so list-row contract_ids match PG in practice.
+--     A cheap full-parity path (skip-index on transaction_id, or a precomputed
+--     per-tx contract_ids column) is a deferred follow-up.
+-- ============================================================================
 -- Endpoint:     GET /transactions
 -- Purpose:      Paginated list of transactions. Optional filters:
 --               source_account, contract_id, operation_type.
