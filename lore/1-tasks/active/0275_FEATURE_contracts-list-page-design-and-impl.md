@@ -2,7 +2,7 @@
 id: '0275'
 title: 'Contracts list page: design + implementation (no Figma source)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0226', '0274']
 tags:
@@ -29,6 +29,15 @@ history:
       without a Figma source: Accounts and Contracts. Accounts was
       spec and is live. Contracts is still a `PageStub` — needs
       columns / sort / filter decided, then implemented FE + BE.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      Activated alongside 0274 — taking both over as a pair (0275's
+      `GET /v1/contracts` mirrors 0274's `GET /v1/accounts`; FE
+      Contracts list mirrors the Accounts list pattern). No prior work
+      exists on 0275 — still a `PageStub`, no branch. Work continues on
+      the shared 0274 branch (renamed to span both).
 ---
 
 # Contracts list page: design + implementation (no Figma source)
