@@ -392,9 +392,10 @@ pub async fn fetch_list(
             client
                 .query(&sql)
                 .bind(op_type)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_tiebreak)
+                .bind(cursor_ledger) // ifNull partition prune
+                .bind(cursor_ledger) // `? IS NULL` guard
+                .bind(cursor_ledger) // keyset tuple .0 (ledger_sequence)
+                .bind(cursor_tiebreak) // keyset tuple .1 (transaction_id)
                 .bind(params.limit * 4)
                 .bind(source_id)
                 .bind(source_id)
