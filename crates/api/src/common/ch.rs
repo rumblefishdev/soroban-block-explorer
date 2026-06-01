@@ -28,13 +28,20 @@
 //! injection surface, and it sidesteps binding a tuple array. The key set is
 //! the page (≤ 101 rows) and a partition prune on
 //! `intDiv(ledger_sequence, 500000)` confines every scan to the touched
-//! partition(s). The result is page-bounded, but the *scan* is only a true
-//! key-seek for `operations_appearances` (whose `ORDER BY` leads with
-//! `(ledger_sequence, transaction_id)`); `soroban_events` and
-//! `soroban_invocations_appearances` order by `(contract_id, …)`, so for them
-//! the key filter scans the pruned partition's index rather than seeking —
-//! O(partition), which is why the prod flag flip is gated on an operator
-//! memory smoke (the canonical SQL 02 memory warning).
+//! partition(s).
+//!
+//! ## Both aggregates source `operations_appearances` only (read cost)
+//!
+//! `operations_appearances` leads its `ORDER BY` with `(ledger_sequence,
+//! transaction_id)`, so the key filter is a **primary-key seek** — it reads
+//! only the page transactions' op rows. An earlier revision unioned
+//! `soroban_events` + `soroban_invocations_appearances` into `contract_ids`
+//! for full PG parity, but both order by `(contract_id, …)`, so the key filter
+//! is NOT a seek on them — it scans the whole pruned partition's index per
+//! page. Production proved this read-prohibitive: a single `/transactions`
+//! page read ~1e8 rows and a handful of requests exhausted the `api_reader`
+//! `read_rows` hourly quota (CH `Code: 201 QUOTA_EXCEEDED`). The `contract_ids`
+//! aggregate is therefore **ops-only** — see the parity caveat at `ctr_sql`.
 
 use std::collections::HashMap;
 
@@ -100,45 +107,57 @@ pub async fn fetch_tx_list_aggregates(
         .join(",");
 
     // Single source of truth for the page-key filter + partition prune — the
-    // load-bearing memory guard, applied identically to every scan below.
+    // load-bearing read guard, applied identically to every scan below.
     //
-    // Cost note: only `operations_appearances` (ORDER BY `(ledger_sequence,
-    // transaction_id, application_order)`) gets a primary-key seek from this.
-    // `soroban_events` and `soroban_invocations_appearances` ORDER BY
-    // `(contract_id, …)`, so for them this is NOT a key seek — it scans the
-    // pruned partition's index. Bounded to the partition (and the result to
-    // the page), but O(partition) in scan, hence the operator memory smoke
-    // before the prod flag flip.
+    // Cost note: `operations_appearances` is ORDER BY `(ledger_sequence,
+    // transaction_id, application_order)`, so this filter is a primary-key seek
+    // — it reads only the page transactions' op rows. Both aggregations below
+    // source from `operations_appearances` exclusively for exactly this reason.
+    //
+    // We deliberately do NOT union `soroban_events` /
+    // `soroban_invocations_appearances` into `contract_ids`: both are ORDER BY
+    // `(contract_id, …)`, so this filter is NOT a key seek on them — it scans
+    // the whole pruned partition's index per page. Production proved this
+    // read-prohibitive: a single `/transactions` page read ~1e8 rows and a
+    // handful of requests blew the `api_reader` `read_rows` hourly quota
+    // (CH error 201, QUOTA_EXCEEDED). The parity cost of the ops-only source is
+    // documented at `ctr_sql` below.
+    //
+    // Columns are qualified `oa.` so the filter is unambiguous when reused
+    // inside `ctr_sql`'s JOIN to `soroban_contracts`; both statements below
+    // alias `operations_appearances` as `oa`.
     let key_filter = format!(
-        "(ledger_sequence, transaction_id) IN ({in_tuples}) \
-         AND intDiv(ledger_sequence, 500000) IN ({partitions})"
+        "(oa.ledger_sequence, oa.transaction_id) IN ({in_tuples}) \
+         AND intDiv(oa.ledger_sequence, 500000) IN ({partitions})"
     );
 
     // The two aggregations are independent — build both and run them
     // concurrently (one round-trip wall-clock, not two). Mirrors the
     // `tokio::join!` of the detail-fallback reads in `transactions::handlers`.
     let op_sql = format!(
-        "SELECT transaction_id, groupUniqArray(type) AS codes \
-         FROM operations_appearances FINAL \
+        "SELECT oa.transaction_id AS transaction_id, \
+                groupUniqArray(oa.type) AS codes \
+         FROM operations_appearances oa FINAL \
          WHERE {key_filter} \
-         GROUP BY transaction_id"
+         GROUP BY oa.transaction_id"
     );
+    // `contract_ids` — ops-only (primary-key seek, cheap). Sources the root-op
+    // `contract_id` from `operations_appearances` only.
+    //
+    // PARITY CAVEAT vs PG: a contract touched ONLY via a nested sub-invocation
+    // or an emitted event (never the root-op `contract_id` of any operation in
+    // the transaction) is NOT listed here. For the overwhelming majority of
+    // Soroban transactions the invoked contract IS the root-op `contract_id`
+    // (`INVOKE_HOST_FUNCTION` sets it), so the list-row `contract_ids` match PG;
+    // the gap is nested/event-only contracts. Deliberate trade for a servable
+    // read cost — see the `key_filter` cost note above.
     let ctr_sql = format!(
-        "SELECT u.transaction_id AS transaction_id, \
+        "SELECT oa.transaction_id AS transaction_id, \
                 groupUniqArray(sc.contract_id) AS contract_ids \
-         FROM ( \
-            SELECT transaction_id, assumeNotNull(contract_id) AS contract_id \
-            FROM operations_appearances FINAL \
-            WHERE {key_filter} AND isNotNull(contract_id) \
-            UNION ALL \
-            SELECT transaction_id, contract_id \
-            FROM soroban_invocations_appearances FINAL WHERE {key_filter} \
-            UNION ALL \
-            SELECT transaction_id, contract_id \
-            FROM soroban_events FINAL WHERE {key_filter} \
-         ) u \
-         JOIN soroban_contracts sc FINAL ON sc.id = u.contract_id \
-         GROUP BY u.transaction_id"
+         FROM operations_appearances oa FINAL \
+         JOIN soroban_contracts sc FINAL ON sc.id = assumeNotNull(oa.contract_id) \
+         WHERE {key_filter} AND isNotNull(oa.contract_id) \
+         GROUP BY oa.transaction_id"
     );
     let (op_rows, ctr_rows) = tokio::join!(
         client.query(&op_sql).fetch_all::<OpTypeCodesRow>(),
