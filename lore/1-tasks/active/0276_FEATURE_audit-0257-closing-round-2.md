@@ -2,7 +2,7 @@
 id: '0276'
 title: 'Audit 0257 closing round 2 — pre-launch SHOULD batch from full re-run findings'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0257', '0272', '0274', '0275']
 tags:
@@ -32,6 +32,10 @@ history:
       queue tier triage = source of truth (1 MUST backend-owned by 0274,
       14 SHOULD here, ~20 NICE deferred). Same elastic card-by-card model
       as 0272; commits cite F-IDs.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: Promoted backlog → active for implementation (round-2 pre-launch SHOULD batch).
 ---
 
 # Audit 0257 closing round 2 — pre-launch SHOULD batch
