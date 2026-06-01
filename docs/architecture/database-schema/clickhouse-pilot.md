@@ -690,6 +690,21 @@ set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
 `intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
 `ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
 
+> **CH 26.3 gotcha — no correlated subqueries (task 0243).** The reference
+> set was authored as a spec and never executed against a live cluster; the
+> transaction-list queries (`02`, `05`, `07`, `10`, `20`) compute
+> `operation_types` / `contract_ids` with **correlated** scalar subqueries in
+> the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
+> 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
+> correlated column …`. The live read path instead fetches the page of tx
+> keys, then aggregates per `(ledger_sequence, transaction_id) IN (…)` with
+> `GROUP BY transaction_id` (non-correlated), merged in Rust. The shared
+> implementation is
+> [`crates/api/src/common/ch.rs::fetch_tx_list_aggregates`](../../../crates/api/src/common/ch.rs);
+> reuse it for any new transaction-list module rather than the inline
+> correlated projection the reference SQL still shows (those files carry a
+> correction banner).
+
 ---
 
 ## References

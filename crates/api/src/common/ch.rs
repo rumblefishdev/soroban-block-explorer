@@ -26,8 +26,15 @@
 //!
 //! Keys are `i64`, so they are inlined into the `IN (…)` list directly — no
 //! injection surface, and it sidesteps binding a tuple array. The key set is
-//! the page (≤ 101 rows), so each source scan is bounded; a partition prune
-//! on `intDiv(ledger_sequence, 500000)` keeps it to the touched partition(s).
+//! the page (≤ 101 rows) and a partition prune on
+//! `intDiv(ledger_sequence, 500000)` confines every scan to the touched
+//! partition(s). The result is page-bounded, but the *scan* is only a true
+//! key-seek for `operations_appearances` (whose `ORDER BY` leads with
+//! `(ledger_sequence, transaction_id)`); `soroban_events` and
+//! `soroban_invocations_appearances` order by `(contract_id, …)`, so for them
+//! the key filter scans the pruned partition's index rather than seeking —
+//! O(partition), which is why the prod flag flip is gated on an operator
+//! memory smoke (the canonical SQL 02 memory warning).
 
 use std::collections::HashMap;
 
@@ -75,61 +82,70 @@ pub async fn fetch_tx_list_aggregates(
         return Ok(HashMap::new());
     }
 
-    // `(ledger_sequence, transaction_id)` tuple-list + the touched partitions.
-    // Both are `i64`, inlined directly — integers carry no injection risk.
+    // `(ledger_sequence, transaction_id)` tuple-list + the distinct touched
+    // partitions. Both are `i64`, inlined directly — integers carry no
+    // injection risk.
     let in_tuples = keys
         .iter()
         .map(|(ledger, tx)| format!("({ledger},{tx})"))
         .collect::<Vec<_>>()
         .join(",");
-    let partitions = {
-        let mut parts: Vec<i64> = keys.iter().map(|(ledger, _)| ledger / 500_000).collect();
-        parts.sort_unstable();
-        parts.dedup();
-        parts
-            .iter()
-            .map(i64::to_string)
-            .collect::<Vec<_>>()
-            .join(",")
-    };
+    let partitions = keys
+        .iter()
+        .map(|(ledger, _)| ledger / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
 
-    // Step A — operation type codes per tx (single partitioned scan).
+    // Single source of truth for the page-key filter + partition prune — the
+    // load-bearing memory guard, applied identically to every scan below.
+    //
+    // Cost note: only `operations_appearances` (ORDER BY `(ledger_sequence,
+    // transaction_id, application_order)`) gets a primary-key seek from this.
+    // `soroban_events` and `soroban_invocations_appearances` ORDER BY
+    // `(contract_id, …)`, so for them this is NOT a key seek — it scans the
+    // pruned partition's index. Bounded to the partition (and the result to
+    // the page), but O(partition) in scan, hence the operator memory smoke
+    // before the prod flag flip.
+    let key_filter = format!(
+        "(ledger_sequence, transaction_id) IN ({in_tuples}) \
+         AND intDiv(ledger_sequence, 500000) IN ({partitions})"
+    );
+
+    // The two aggregations are independent — build both and run them
+    // concurrently (one round-trip wall-clock, not two). Mirrors the
+    // `tokio::join!` of the detail-fallback reads in `transactions::handlers`.
     let op_sql = format!(
         "SELECT transaction_id, groupUniqArray(type) AS codes \
          FROM operations_appearances FINAL \
-         WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
-           AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+         WHERE {key_filter} \
          GROUP BY transaction_id"
     );
-    let op_rows = client.query(&op_sql).fetch_all::<OpTypeCodesRow>().await?;
-
-    // Step B — contract ids per tx, unioned across the three sources a
-    // contract can appear in (root op, nested invocation, event emission),
-    // resolved to C-StrKeys via `soroban_contracts`.
     let ctr_sql = format!(
         "SELECT u.transaction_id AS transaction_id, \
                 groupUniqArray(sc.contract_id) AS contract_ids \
          FROM ( \
             SELECT transaction_id, assumeNotNull(contract_id) AS contract_id \
             FROM operations_appearances FINAL \
-            WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
-              AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
-              AND isNotNull(contract_id) \
+            WHERE {key_filter} AND isNotNull(contract_id) \
             UNION ALL \
             SELECT transaction_id, contract_id \
-            FROM soroban_invocations_appearances FINAL \
-            WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
-              AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+            FROM soroban_invocations_appearances FINAL WHERE {key_filter} \
             UNION ALL \
             SELECT transaction_id, contract_id \
-            FROM soroban_events FINAL \
-            WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
-              AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+            FROM soroban_events FINAL WHERE {key_filter} \
          ) u \
          JOIN soroban_contracts sc FINAL ON sc.id = u.contract_id \
          GROUP BY u.transaction_id"
     );
-    let ctr_rows = client.query(&ctr_sql).fetch_all::<ContractIdsRow>().await?;
+    let (op_rows, ctr_rows) = tokio::join!(
+        client.query(&op_sql).fetch_all::<OpTypeCodesRow>(),
+        client.query(&ctr_sql).fetch_all::<ContractIdsRow>(),
+    );
+    let op_rows = op_rows?;
+    let ctr_rows = ctr_rows?;
 
     let mut map: HashMap<i64, TxListAggregates> = HashMap::with_capacity(keys.len());
     for row in op_rows {
