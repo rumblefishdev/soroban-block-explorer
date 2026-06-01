@@ -91,8 +91,11 @@ export function TopNav({
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.backgroundAlt,
 
+        // Above SecondaryNav (zIndex 2) so the search-results dropdown —
+        // which lives in this header's stacking context — paints over the
+        // nav row below instead of being covered by it.
         position: 'relative',
-        zIndex: 2,
+        zIndex: 3,
       })}
     >
       <Box

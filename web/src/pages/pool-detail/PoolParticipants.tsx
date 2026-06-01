@@ -5,6 +5,7 @@ import {
   EmptyState,
   ExplorerTable,
   formatAmount,
+  formatPercent,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
@@ -51,7 +52,7 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
         {row.share_percentage != null
-          ? `${formatAmount(row.share_percentage, 2)}%`
+          ? formatPercent(Number(row.share_percentage))
           : '—'}
       </Typography>
     ),

@@ -1,6 +1,5 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
-  PollingIndicator,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
@@ -19,12 +18,11 @@ import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
 /**
- * Latest Transactions section — the 10 newest transactions with a polling
+ * Latest Transactions section — the 10 newest transactions with a live
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, dataUpdatedAt, refetch } =
-    useLatestTransactions();
+  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
   const rows = data?.data ?? [];
 
   let body: ReactNode;
@@ -49,7 +47,6 @@ export function LatestTransactions() {
       <TableSectionHeader
         title="Latest transactions"
         badge={<LiveIndicator />}
-        description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>

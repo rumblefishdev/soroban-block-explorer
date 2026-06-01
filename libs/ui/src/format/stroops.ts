@@ -6,10 +6,12 @@ export const STROOPS_PER_XLM_BIGINT = 10_000_000n;
 /**
  * Formats a fee in stroops as an XLM amount with unit, trimming trailing
  * zeros. BigInt arithmetic keeps large values exact. `100` → `0.00001 XLM`,
- * `0` → `0 XLM`. Non-finite input → `—` (unknown fee, not a real zero).
+ * `0` → `0 XLM`. Non-finite or negative input → `—` (fees are never negative;
+ * a negative value is bad data, not a real fee — avoids a padded-minus-sign
+ * corruption from BigInt modulo).
  */
 export function formatFee(stroops: number): string {
-  if (!Number.isFinite(stroops)) return '—';
+  if (!Number.isFinite(stroops) || stroops < 0) return '—';
   const safe = BigInt(Math.trunc(stroops));
   const whole = safe / STROOPS_PER_XLM_BIGINT;
   const frac = safe % STROOPS_PER_XLM_BIGINT;

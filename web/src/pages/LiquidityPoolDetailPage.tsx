@@ -83,7 +83,10 @@ export default function LiquidityPoolDetailPage() {
       <SectionErrorBoundary sectionName="pool-summary">
         {summarySection}
       </SectionErrorBoundary>
-      {!detail.isError && (
+      {/* Gate the sub-sections on resolved parent data so their queries never
+          fire while the pool is still loading — a parent 404 then produces
+          zero sub-section 404s. */}
+      {detail.data != null && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} />
