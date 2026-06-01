@@ -13,6 +13,12 @@ describe('formatFee', () => {
     expect(formatFee(0)).toBe('0 XLM');
   });
 
+  it('returns em-dash for negative input (bad data, not a real fee)', () => {
+    // Guards against BigInt-modulo padded-minus-sign corruption.
+    expect(formatFee(-100)).toBe('—');
+    expect(formatFee(-10_000_000)).toBe('—');
+  });
+
   it('converts stroops to XLM and trims trailing zeros', () => {
     expect(formatFee(100)).toBe('0.00001 XLM');
     expect(formatFee(10_000_000)).toBe('1 XLM');

@@ -110,7 +110,10 @@ export default function ContractDetailPage() {
         {summary}
       </SectionErrorBoundary>
 
-      {!contract.isError && (
+      {/* Gate the tabbed sub-sections on resolved parent data so their
+          queries never fire while the contract is still loading — a parent
+          404 then produces zero sub-section 404s. */}
+      {contract.data != null && (
         <Card>
           <Box
             sx={(theme) => ({

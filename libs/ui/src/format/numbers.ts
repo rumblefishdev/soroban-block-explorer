@@ -1,10 +1,17 @@
 /**
+ * Cached `en-US` integer formatter. Built once at module load rather than
+ * per call — `formatInteger` runs in tables and nav stats, so repeated
+ * `Intl.NumberFormat` allocation is wasteful (mirrors `formatCompactAmount`).
+ */
+const INTEGER_FORMAT = new Intl.NumberFormat('en-US');
+
+/**
  * Integer display with `en-US` thousands separators (e.g. `1,234,567`).
  * Canonical replacement for scattered inline `n.toLocaleString('en-US')`
  * calls on integer counts (ledger sequence, tx counts, stroop counts).
  */
 export function formatInteger(value: number): string {
-  return value.toLocaleString('en-US');
+  return INTEGER_FORMAT.format(value);
 }
 
 /**

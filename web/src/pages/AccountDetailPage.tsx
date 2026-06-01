@@ -85,7 +85,10 @@ export default function AccountDetailPage() {
           {balances}
         </SectionErrorBoundary>
       )}
-      {!account.isError && (
+      {/* Gate on resolved parent data (not just `!isError`) so the
+          transactions query never fires while the parent is still loading —
+          a parent 404 then produces zero sub-section 404s. */}
+      {account.data != null && (
         <SectionErrorBoundary sectionName="account-transactions">
           <AccountTransactions accountId={accountId} />
         </SectionErrorBoundary>
