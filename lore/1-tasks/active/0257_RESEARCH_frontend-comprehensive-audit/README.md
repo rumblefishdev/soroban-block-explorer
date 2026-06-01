@@ -73,9 +73,9 @@ history:
       audit-action-queue.md "Full re-run 2026-06-01" section. Baseline:
       typecheck GREEN (deps built; stale-libs/ui-dist gives false errors —
       benign build-order artifact, NOT regression); tests 60/86 local pass,
-      26 fail with React-null-in-QueryClientProvider = local dual-React
-      artifact from building libs/ui dist (0226 records green-on-develop),
-      classified NEEDS-CI-CONFIRM not regression. 0272 consolidation
+      26 fail with React-null-in-QueryClientProvider = local-worktree env
+      artifact (VERIFIED 2026-06-01: main-repo checkout of same 0272 code =
+      86/86 PASS), NOT a regression — develop/CI green. 0272 consolidation
       (NetworkToggle/formatters/hex/debounce/truncate) + error-state
       primitives VERIFIED clean. 32 NEW findings F-RR-1..32 (2 🟠:
       order-param cast drift F-RR-1, PoolCharts error-masking F-RR-17; ~13
@@ -85,8 +85,14 @@ history:
       search a11y F-RR-21, libs/ui barrel tree-shake F-RR-26; rest 🟢
       consistency/reuse). Earlier-session NEW: card 7.10 loading-skeleton
       flicker (F-W6-LOADSKEL-1/2/3), card 6.5 list-page F-0272S-1..6. No
-      spawns (per user); all captured in queue. Live Waves 5-6 full matrix
-      NOT re-run (targeted only) — separate pass if needed.
+      spawns (per user); all captured in queue. Live Waves 5-6: @375
+      responsive sweep DONE (15 routes clean except account-detail
+      NotFound overflow F-RR-33 + /contracts PageStub h1:0); F-0272S-1
+      live-confirmed (mock account → 404); runtime theme = light
+      (OS-driven, code default dark). 768px + Tier-4 visual + F-RR-17
+      error-inject NOT covered (optional). Test-fail classification
+      RESOLVED-benign: main-repo checkout of same 0272 code = 86/86 PASS,
+      so worktree 26-fail = local env artifact, develop/CI green.
 ---
 
 # Frontend comprehensive audit (pre-launch)

@@ -1558,7 +1558,7 @@ Full audit re-run against merged HEAD `e3fe1968` (0272 fixes + 0243 ClickHouse +
 ### Deterministic baseline
 
 - **Typecheck: GREEN** once deps built (`nx build @rumblefish/soroban-block-explorer-ui` → `nx typecheck web` passes). ⚠️ Standalone `nx typecheck web` with a **stale `libs/ui` dist** throws ~dozens of false `Property 'surface'/'stroke'/'tertiary' does not exist` + `bodyXsRegular` errors — the MUI theme augmentation (`libs/ui/src/theme/types.ts`, `declare module '@mui/material/styles'`) ships via libs/ui's **emitted `.d.ts`**, so web typecheck is fragile to dist freshness. CI builds deps first → green. **Benign build-order artifact, NOT a code regression** (libs/ui typechecks clean alone). Minor hygiene note → fits card 8.8 / nx build-graph docs (no card needed).
-- **Tests: 60/86 pass locally; 26 fail** with `TypeError: Cannot read properties of null (reading 'useEffect')` in `QueryClientProvider` across the 5 provider-wrapped suites (AccountDetail/AccountsList/AssetDetail/AssetsList/TransactionsList). Textbook **dual-React resolution** artifact — almost certainly triggered by building libs/ui dist (vitest normally aliases libs/ui→src; fresh dist shadows it). 0226 archive records "132 tests green on develop." **Classified local-env artifact, NEEDS-CI-CONFIRM — NOT a merged-code regression.** If CI ever shows the same → real dedupe-React/vitest-alias fix needed (would be 🟠).
+- **Tests: 60/86 pass in THIS worktree; 26 fail** with `TypeError: Cannot read properties of null (reading 'useEffect')` in `QueryClientProvider` across the 5 provider-wrapped suites (AccountDetail/AccountsList/AssetDetail/AssetsList/TransactionsList). **RESOLVED-BENIGN (verified 2026-06-01):** ran the same target in the **main repo checkout** (`feat/0272` @ `8bc0ced8`, same 0272 code, separate node_modules) → **86/86 PASS**. So this is a **local-worktree environment artifact** (React deduped + vitest uses `conditions:['soroban-block-explorer-source']`→src; the corrupt state is worktree-local node_modules/dist, likely perturbed by an ad-hoc `nx build libs/ui` this session). **NOT a merged-code regression — develop/CI green.** Fix for clean worktree test runs = fresh `npm ci` in the worktree (cosmetic, not a product finding).
 
 ### 0272 consolidation — VERIFIED clean (grep-confirmed, not file-existence)
 
@@ -1600,6 +1600,7 @@ NetworkToggle (0 source refs, dist rebuilt clean), formatter consolidation (`web
 | F-RR-30 | 🟢 | `AccountTransactions`/`AssetTransactions`/`ContractInvocations`/`ContractEvents`/`PoolParticipants`/`PoolTransactions`/`NftTransfers` | Identical loading/error/empty/table body-switch + pagination hand-copied 7× (no `SectionTableCard` primitive) | extract primitive (= F-W4R-2, card 2.3) |
 | F-RR-31 | 🟢 | `AccountDetailPage.tsx:36-53`; `AssetDetailPage.tsx:39-57`; `LiquidityPoolDetailPage.tsx:54-72` | Success-with-null-data path renders blank (no `if(!data) NotFound` guard) — other detail pages have it | add guard (= F-W4R-5, defensive) |
 | F-RR-32 | 🟢 | `search/SearchResultsPage.tsx:38-43` | Singleton-redirect depends on a 2-pass auto-tab-switch effect — works today, fragile | note only, no fix |
+| F-RR-33 | 🟡 | `libs/ui/src/states/errors/NotFoundState.tsx` (+ consumers) | **Live @375:** entity-404 NotFoundState echoes the full unbroken strkey in "We couldn't find anything matching this `G…`" → element width 403px on 364px viewport → **page horizontal overflow (sw 383 > cw 364)**. Affects every entity-404 with a long id (account/contract/pool). Found live on `/accounts/GSETYMKA…` (a mock-list id → 404). | add `word-break:break-all`/`overflow-wrap` to the id echo |
 
 ### CONFIRMED still-open (existing cards — no new action, reconfirmed valid on merged code)
 
@@ -1611,9 +1612,20 @@ NetworkToggle (0 source refs, dist rebuilt clean), formatter consolidation (`web
 - **F-AH-7 / F-X-2 / F-AH-4 / F-U-1** — folder structure (`web/src/search/` sibling, `web/src/utils/` single-file now `text.ts`, `web/src/pages/detail/` 7 generic primitives) → card 2.2.
 - **F-X-1** — `liquidity-pools/` ↔ `pool-detail/` cross-folder coupling → existing.
 
-### Live re-run scope note
+### Live Waves 5-6 — 2026-06-01 (responsive @375 sweep, fresh `:4201`)
 
-Live waves 5-6 (full 42-cell responsive matrix + Tier-4 subjective visual) were NOT exhaustively re-run this pass. Targeted live done this session: 404 main/h1, NetworkToggle gone, home h1+live indicator, responsive hamburger @375 (scrollWidth 364≤375), share-% real, loading-skeleton flicker (card 7.10). Two NEW visual findings need a live light-mode check to confirm severity: **F-RR-16** (NftEventBadge dark colors — only visible if app supports light mode) and **F-RR-17** (PoolCharts error masking — needs error injection). Full live matrix re-run = separate pass if required.
+**@375 sweep, 15 routes — all CLEAN (sw 364 = cw, no page overflow, h1 + main present) EXCEPT:**
+
+- ✅ `/`, `/transactions`, `/accounts`, `/ledgers`, `/assets`, `/nfts`, `/liquidity-pools`, `/search?q=`, tx-detail, ledger-detail, asset-detail, nft-detail, pool-detail — all sw 364, h1+main ✓.
+- ⚠️ `/contracts` — clean overflow-wise but **h1: 0** (PageStub, known card 1.3 — folds into real page / 0275).
+- ❌ **account-detail (NotFound state) — OVERFLOW sw 383 > 364** → **F-RR-33** (long strkey not wrapping in NotFoundState; general to all entity-404s).
+
+**Other live confirmations this sweep:**
+
+- **F-0272S-1 LIVE-CONFIRMED** — `/accounts/GSETYMKA…` (a mock-list account id) → detail page renders "Account not found." The mock-list-→-real-404 bug is reproduced live, not just code-inferred.
+- **Runtime theme = LIGHT** (`document.body` bg `rgb(245,245,245)`) despite code `defaultMode='dark'` — `readInitialMode` follows `prefers-color-scheme`/stored pref, so **both modes are reachable**. This makes the hardcoded-palette theme-coupling (F-RR-16 NftEventBadge `colorsDark`; AssetIcon `colorsLight`) genuinely wrong in whichever mode the component wasn't hardcoded for — not latent. In light mode the NftEventBadge "Mint" pill still renders readably (violet on light-violet), so F-RR-16 stays 🟡 cosmetic; would clash in dark mode. **Open Q for next pass:** is there an in-app theme toggle, or is mode purely OS-driven? (screenshot: `screenshots/rr16-nft-badge-light-mode.png`)
+
+**NOT covered this pass:** 768px tier (between 375-clean and 1280-clean-2026-05-29 — low risk), full Tier-4 subjective visual polish, and **F-RR-17** PoolCharts error masking (needs request-error injection — code-confirmed, not live-reproduced; chart showed neither error nor empty text on the live pool, likely had data). These = optional follow-up.
 
 ---
 
