@@ -1352,7 +1352,7 @@ Ledger and transaction history are kept indefinitely.
 >
 > **Note (2026-05-27):** The Ledger Processor trigger mechanism was reworked
 > from per-S3-event Lambda invocations to an **SQS doorbell + ClickHouse-cursor
-> reconcile** in [task 0241](../../lore/1-tasks/active/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+> reconcile** in [task 0241](../../lore/1-tasks/archive/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
 > The PG-era migration + partition Lambdas (`crates/db-migrate`,
 > `crates/db-partition-mgmt`) and their CDK stacks were removed in the same
 > task; ClickHouse applies its schema box-side via the `db-clickhouse-init`

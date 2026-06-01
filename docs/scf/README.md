@@ -32,7 +32,7 @@ Render:
 ./build-pdf.sh
 ```
 
-Output: `milestone-1-evidence.pdf` (~11 pages, ~230 KB). The script also lists
+Output: `milestone-1-evidence.pdf` (~11 pages, ~2.2 MB). The script also lists
 any unresolved `<TODO:>` markers in the source so you remember to fill in
 screenshots before the final upload.
 

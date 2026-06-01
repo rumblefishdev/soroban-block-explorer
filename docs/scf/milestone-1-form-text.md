@@ -44,12 +44,12 @@
 > **In-tranche scope refinement:** the production datastore was migrated
 > mid-tranche from PostgreSQL on AWS RDS to ClickHouse on Hetzner. The
 > deliverable scope is unchanged. The drivers were fit (columnar OLAP for
-> our read-heavy explorer workload, ~10× compression) and cost (~$126/mo
+> our read-heavy explorer workload, ~10× compression) and cost (~$140/mo
 > Hetzner vs $800+/mo RDS for the equivalent ~8 TB working set).
 >
 > **Full evidence — acceptance criteria mapping, queries with current output,
 > AWS screenshots, architecture diagram, ADR references, and the complete pivot
-> rationale:** > `<DRIVE_LINK_TO_milestone-1-evidence.pdf>`
+> rationale:** `<DRIVE_LINK_TO_milestone-1-evidence.pdf>`
 
 ---
 
