@@ -2,7 +2,7 @@
 id: '0272'
 title: 'Audit 0257 closing — elastic single-task implementation of remaining findings'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0032']
 related_tasks: ['0257', '0262', '0263', '0264', '0265', '0270', '0271']
 tags:
@@ -22,6 +22,19 @@ links:
   - 'Prior fix batches: 0262/0263/0264 (Gate B), 0265 (Vite CVE), 0270 (search canonical)'
   - 'Spawned follow-ups: 0271 (search broad enhancement)'
 history:
+  - date: '2026-06-01'
+    status: completed
+    who: karolkow
+    note: >
+      Closed by user direction. Pre-launch subset shipped via PR #230
+      (feat/0272): formatter/truncate/debounce consolidation (C2.1, C2.4),
+      identifier-link + design-token consistency, live status indicator,
+      NetworkToggle removal, typed NFT not-found entity — 117 files,
+      +2465/-1667. Elastic container retired; remaining NICE/POST-LAUNCH
+      cards stay in master action queue. Session findings (list-page
+      filter/sort/search audit) recorded with 5 follow-ups flagged for
+      backlog spawning from develop. Docs + API-types N/A (no schema/API
+      shape change). 0257 parent stays active.
   - date: '2026-05-27'
     status: active
     who: karolkow
@@ -55,9 +68,14 @@ Pre-launch closure target: ~3-4 working days for MUST + SHOULD tier
 cards. Full backlog (incl. NICE + POST-LAUNCH cards): ~24 days FE
 spread across pre-launch sprint + post-launch maintenance.
 
-## Status: Active
+## Status: Completed
 
-Active closure sprint. Independent of other in-flight tasks — this is pure FE closure work plus minor backend coordination cards.
+Closed 2026-06-01 by user direction. Pre-launch subset of the elastic
+queue landed across PRs #219/#220/#230; remaining NICE/POST-LAUNCH cards
+stay tracked in the master action queue (the designed closed-state doc)
+and as Future Work below for backlog spawning from develop. The elastic
+container is retired — further audit-0257 work proceeds as discrete
+backlog tasks, not card flips in this container.
 
 ## Context
 
@@ -129,20 +147,66 @@ Pending user decisions during impl (capture in queue card Notes):
 
 High-level — granular checkpoints tracked per-card in the queue file.
 
-- [ ] All C1 (pre-launch must-fix) cards STATUS = DONE or SKIP with rationale
-- [ ] Sufficient C2-C5 cards landed for pre-launch quality bar (user decides quorum)
-- [ ] C9.1 spawn pass executed (13 out-of-scope follow-up tasks live in backlog)
-- [ ] All RESOLVED appendix rows verified post-merge (positive checks against develop)
-- [ ] All SKIP appendix rows documented with rationale in audit-summary.md
-- [ ] Master audit task 0257 archived: `git mv active/0257_* archive/0257_*` + frontmatter `status: completed`
-- [ ] `lore/3-wiki/` updated if patterns emerged worth documenting
-      (FE testing standards, formatter conventions, error state taxonomy,
-      useTableUrlState ADR cross-link)
-- [ ] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`
-      cross-link to audit-action-queue.md final state per ADR 0032.
-- [ ] **API types regenerated** — `N/A` if no `crates/api/**` changes;
-      mark explicitly per card requiring backend coordination
-      (C6.3 XDR codegen, C10.1 if Figma URL surfaces backend gaps).
+- [x] Sufficient C2-C5 cards landed for pre-launch quality bar — C2.1
+      (formatter/truncate/debounce consolidation), C2.4, identifier-link + design-token consistency, live status indicator, NetworkToggle
+      removal, NFT not-found typing shipped via PR #230.
+- [ ] All C1 (pre-launch must-fix) cards — DEFERRED (C1.1/C1.3 SKIP per
+      queue; remaining tracked in queue file).
+- [ ] C9.1 spawn pass (13 out-of-scope follow-ups) — DEFERRED to backlog
+      (spawn from develop).
+- [ ] All RESOLVED appendix rows verified post-merge — DEFERRED.
+- [ ] All SKIP appendix rows documented in audit-summary.md — DEFERRED
+      (separate close-out task).
+- [ ] Master audit task 0257 archived — DEFERRED (0257 stays active;
+      this elastic container closes independently).
+- [ ] `lore/3-wiki/` patterns doc — DEFERRED.
+- [x] **Docs updated** — N/A: PR #230 changes do not alter system shape
+      (formatter consolidation + token/style refactors, no schema/API/
+      ingestion/topology change per ADR 0032).
+- [x] **API types regenerated** — N/A: no `crates/api/**` changes in PR #230.
+
+## Session findings 2026-06-01 — list-page filter/sort/search audit
+
+Code analysis (no fixes applied) of list-page search, sort, type filter,
+and the accounts not-found bug. Concrete dispositions for backlog spawning:
+
+- **Accounts list = mock data (root cause of "account not found").**
+  `web/src/api/hooks/useAccountsList.ts` generates 80 synthetic G-strkey
+  accounts; `/v1/accounts` list endpoint not implemented. Row click →
+  real `GET /v1/accounts/{id}` → 404. Link/encoding correct; pure
+  mock-vs-real gap. Fix = implement `/v1/accounts` list endpoint, then
+  swap mock hook. The "New accounts" control is a sort (`first_seen_desc`)
+  operating on the fake data.
+- **LP vs assets search inconsistency (real bug).** LP `filter[asset_code]`
+  is EXACT (`UPPER(asset_a_code)=$9 OR UPPER(asset_b_code)=$9`,
+  `liquidity_pools/queries.rs:340`); assets `filter[code]` is partial
+  (`ILIKE '%'||$1||'%'`, `assets/queries.rs:132`). Fix = make LP ILIKE
+  partial on both legs.
+- **Dead sort UIs.** Assets total-supply sort and ledgers sequence sort
+  send an `order` param the API ignores/type-casts away; backends use
+  fixed order + cursor pagination. Fix = remove the sort arrows now, or
+  add backend sort param baked into the cursor (backlog).
+- **Silent no-op searches.** Transactions search only fires on full
+  G-/C- strkey (no tx-hash/partial); NFT collection = exact match. UX:
+  add placeholder/empty-state hints.
+- **Transaction type dropdown** single-select only; backend
+  `filter[operation_type]` accepts one string. Multi-select needs
+  backend `IN (...)`.
+
+## Future Work — spawn as backlog tasks (from develop, not this branch)
+
+1. Implement `/v1/accounts` list endpoint + swap mock hook (fixes
+   not-found bug + makes accounts sort real). **High** — visible bug.
+2. LP `filter[asset_code]` → ILIKE partial to match assets. **Small.**
+3. Remove dead sort arrows (assets supply, ledgers sequence), OR add
+   backend sort params with cursor support. **Small (remove) / Medium (add).**
+4. Search UX hints: placeholders + empty states explaining strkey-gated /
+   exact-match behavior on transactions + NFT pages. **Small.**
+5. Transaction operation-type multi-select (FE + backend `IN (...)`).
+   **Medium.**
+
+(New task files must be created on `develop` per project convention —
+not committed on this feature branch.)
 
 ## Out of scope (explicit)
 
