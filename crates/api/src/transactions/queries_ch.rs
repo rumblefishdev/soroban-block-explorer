@@ -251,16 +251,25 @@ struct AccountIdRow {
 /// and merged by `id` — CH 26.3 rejects correlated subqueries in SELECT.
 ///
 /// Column order MUST match `TxPageChRow` field order (positional decode).
+///
+/// EVERY column carries an explicit `AS` alias on purpose. The clickhouse
+/// crate validates the result column *names* against the `Row` struct fields.
+/// Statements B/C join this projection's `t` to a driver subquery `m` that
+/// also has a `ledger_sequence` column, so a bare `t.ledger_sequence` comes
+/// back named `t.ledger_sequence` (CH keeps the qualifier to disambiguate) and
+/// fails struct decode with "column t.ledger_sequence not found in the struct".
+/// Statement A has no such join so the bare form happened to work — aliasing
+/// all columns makes the projection robust regardless of the surrounding joins.
 const SLIM_PROJECTION: &str = "\
     lower(hex(t.hash)) AS hash, \
-    t.ledger_sequence, \
-    t.application_order, \
+    t.ledger_sequence AS ledger_sequence, \
+    t.application_order AS application_order, \
     nullIf(src.account_id, '') AS source_account, \
-    t.fee_charged, \
+    t.fee_charged AS fee_charged, \
     lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
-    t.successful, \
-    t.operation_count, \
-    t.has_soroban, \
+    t.successful AS successful, \
+    t.operation_count AS operation_count, \
+    t.has_soroban AS has_soroban, \
     t.id AS id, \
     l.closed_at AS created_at";
 
