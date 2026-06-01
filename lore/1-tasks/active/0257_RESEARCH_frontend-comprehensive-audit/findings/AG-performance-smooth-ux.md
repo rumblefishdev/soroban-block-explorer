@@ -94,7 +94,7 @@ Cross-ref: `design-parity-impact-2026-05-27.md`; F-DP-4 (appendix); cards 7.1 + 
 
 Source: `design-parity-impact-2026-05-29.md` §1 (card 4.1), §3, §5.1. Maps to queue card **4.1** (bundle/fonts).
 
-- **Font migration TTF→woff2 (NEW, net POSITIVE load win).** R2 swapped the app typography: Mona Sans (TTF ~348KB) + Inter (TTF ~874KB) **removed**; Clash Display (woff2 ~29KB) + Satoshi (woff2 ~42KB) **added**. Net **~1.08MB font-payload reduction** (~1.15MB → ~72KB). Not a tracked audit finding (no F-AI-* row owns font weight), recorded here as the canonical perf-finding home. Bundle still > 500KB / Vite warn (F-W6-AG-1) and LP chunk still ~300KB (F-W6-AG-2) — **no manualChunks / lazy LP chart / visualizer added by R2**; those cards stay TODO.
+- **Font migration TTF→woff2 (NEW, net POSITIVE load win).** R2 swapped the app typography: Mona Sans (TTF ~348KB) + Inter (TTF ~874KB) **removed**; Clash Display (woff2 ~29KB) + Satoshi (woff2 ~42KB) **added**. Net **~1.08MB font-payload reduction** (~1.15MB → ~72KB). Not a tracked audit finding (no F-AI-\* row owns font weight), recorded here as the canonical perf-finding home. Bundle still > 500KB / Vite warn (F-W6-AG-1) and LP chunk still ~300KB (F-W6-AG-2) — **no manualChunks / lazy LP chart / visualizer added by R2**; those cards stay TODO.
 - **Visual re-verify REQUIRED.** Whole-app font swap changes every text surface — Clash Display heading metrics ≠ Mona Sans; Satoshi body/mono ≠ Inter. Sweep all 14 routes for overflow / clipping / truncation regressions (queued in audit-action-queue "Pending live verification" block).
 - **F-W6-AG-3 / -4 / -5 (transitions, route indicator): UNCHANGED by R2.** No move to transform/opacity; no route-transition indicator added.
 

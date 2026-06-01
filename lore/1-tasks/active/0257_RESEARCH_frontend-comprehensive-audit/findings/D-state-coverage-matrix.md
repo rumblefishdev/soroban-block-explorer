@@ -258,6 +258,7 @@ Originally task 0262 scoped account + contract only. User extended to pool detai
 **7-route 404 hygiene uniform — positive verify of F-D-2 + 0262 fix.** Per 0271 archived task body emerged note: "All 7 detail routes (account, transaction, contract, pool, ledger, NFT, asset) handle 404 via `isMissingResource(classifyError(error))` → `NotFoundState` uniformly. No crash / no infinite spinner. Safe to land."
 
 7-route coverage explicit confirmed:
+
 - E3 transactions/:hash (Filip 0070+0071 TxDetail)
 - E5 ledgers/:seq
 - E6 accounts/:id (0262 sub-section gate)
