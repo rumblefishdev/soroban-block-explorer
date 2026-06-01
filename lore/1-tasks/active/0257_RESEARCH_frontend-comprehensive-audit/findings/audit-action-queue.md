@@ -178,7 +178,7 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **AL
 - [x] F-Z-1 — single formatter home (`libs/ui/src/format/`): `formatAmount`/`formatCompactAmount` migrated off the web-local `web/src/pages/format.ts` (deleted) + `pool-detail/helpers.ts` compact dup (removed) onto libs/ui; 8 consumers + PoolKpiStrip repointed. Output verified identical (thousands separators on /assets). (2026-05-29)
 - [x] J-3 — **NOT a true duplicate of `formatCompactAmount`** (finding premise was wrong). TopNav's `formatNumber` is a deliberate hybrid: compact only at ≥1M (`8.4M`), full thousands below (`1,024` accounts, not `1K`) — the stat strip needs exact counts. `formatCompactAmount` compacts everything (`1.2K`), which would degrade the strip. Kept TopNav's `formatNumber` local (it already delegates the <1M path to the shared `formatInteger`); NOT consolidated by design. The one genuine number-format dup that DID exist — `PoolKpiStrip`'s `COUNT_FORMATTER = new Intl.NumberFormat('en-US')` — was swapped to the shared `formatInteger` (output-identical). (2026-05-29)
 
-**Notes:** **2026-05-29: now genuinely DONE.** Two consolidations were initially mis-marked DONE (canonical home created but consumers not migrated + duplicate left alive), caught on review, then finished: (1) **debounce** — `useDebouncedDraft` had zero consumers; migrated all 4 filters, deleted inline draft+setTimeout; (2) **formatAmount** — libs/ui `format/amount.ts` had zero consumers while 8 pages still used the web-local `web/src/pages/format.ts`; migrated 8 pages + PoolKpiStrip onto libs/ui, deleted `format.ts` and the `pool-detail/helpers.ts` compact dup. Lesson: verify _consumers_, not file existence, before marking a consolidation done. **Exhaustive re-audit 2026-05-29** (grepped every pattern in scope — toLocaleString/toFixed/STROOPS/truncate re-impls/setTimeout-debounce/Intl.NumberFormat/duplicate formatter defs): all clean EXCEPT J-3 (resolved above — TopNav kept local by design + PoolKpiStrip COUNT_FORMATTER → formatInteger). `numbers.ts` (formatInteger/Tps/Percent) confirmed to have real consumers (not orphaned). `humanizeOp.shortId` is a kept multi-use wrapper delegating to `truncateMiddle`, not a re-impl. PoolCharts USD axis formatters left local (currency/chart-specific, out of scope). 2.1 genuinely complete after this pass. Done across two parts: (a) format/numbers/stroops + number/fee migration (committed in WIP checkpoint `03c11a1e`); (b) truncation consolidation + `…` ellipsis unification (committed `c57f7c4d`). **Emerged (2026-05-28):** made the single-glyph `…` the _default_ ellipsis in `truncateMiddle`, so every truncation app-wide (incl. IdentifierDisplay, previously `...`) now matches — global but consistent. Single-use truncate wrappers inlined; multi-use kept. **Still uncommitted as of 2026-05-28:** `libs/ui/src/format/{amount,index,stroops}.ts` + `libs/ui/src/hooks/` are still untracked, so the WIP checkpoints don't typecheck standalone — a follow-up commit must land them to make HEAD green. Other emerged session work tracked under the 2026-05-28 session note below.
+**Notes:** **2026-05-29: now genuinely DONE.** Two consolidations were initially mis-marked DONE (canonical home created but consumers not migrated + duplicate left alive), caught on review, then finished: (1) **debounce** — `useDebouncedDraft` had zero consumers; migrated all 4 filters, deleted inline draft+setTimeout; (2) **formatAmount** — libs/ui `format/amount.ts` had zero consumers while 8 pages still used the web-local `web/src/pages/format.ts`; migrated 8 pages + PoolKpiStrip onto libs/ui, deleted `format.ts` and the `pool-detail/helpers.ts` compact dup. Lesson: verify _consumers_, not file existence, before marking a consolidation done. **Exhaustive re-audit 2026-05-29** (grepped every pattern in scope — toLocaleString/toFixed/STROOPS/truncate re-impls/setTimeout-debounce/Intl.NumberFormat/duplicate formatter defs): all clean EXCEPT J-3 (resolved above — TopNav kept local by design + PoolKpiStrip COUNT*FORMATTER → formatInteger). `numbers.ts` (formatInteger/Tps/Percent) confirmed to have real consumers (not orphaned). `humanizeOp.shortId` is a kept multi-use wrapper delegating to `truncateMiddle`, not a re-impl. PoolCharts USD axis formatters left local (currency/chart-specific, out of scope). 2.1 genuinely complete after this pass. Done across two parts: (a) format/numbers/stroops + number/fee migration (committed in WIP checkpoint `03c11a1e`); (b) truncation consolidation + `…` ellipsis unification (committed `c57f7c4d`). **Emerged (2026-05-28):** made the single-glyph `…` the \_default* ellipsis in `truncateMiddle`, so every truncation app-wide (incl. IdentifierDisplay, previously `...`) now matches — global but consistent. Single-use truncate wrappers inlined; multi-use kept. **Still uncommitted as of 2026-05-28:** `libs/ui/src/format/{amount,index,stroops}.ts` + `libs/ui/src/hooks/` are still untracked, so the WIP checkpoints don't typecheck standalone — a follow-up commit must land them to make HEAD green. Other emerged session work tracked under the 2026-05-28 session note below.
 
 ---
 
@@ -296,8 +296,8 @@ vocabulary (compact vs descriptive).
     cross-file), 17 findings confirmed + actioned; ui 45 + web 85 tests green.
 
 **Rationale.** A fresh-eyes architecture sweep on 2026-05-29 (after the
-design_parity round-2 merge + this session's consolidation work) surfaced
-a batch of _incomplete-consolidation_ smells: render blocks and tiny
+design*parity round-2 merge + this session's consolidation work) surfaced
+a batch of \_incomplete-consolidation* smells: render blocks and tiny
 primitives copy-pasted across many files instead of lifted to a shared
 home — the same pattern 2.1 fixed for formatters/truncation, now found in
 error-state JSX, status chips, timestamp/clipboard helpers, and the `Dash`
@@ -485,21 +485,30 @@ incomplete consolidation, not bad architecture.
 - **Effort:** ~1h
 - **Severity / Class:** 🟡 C
 - **Pre-launch:** SHOULD
-- **STATUS:** PARTIAL — `<main>` landmark DONE; **h1 normalization DROPPED per user**
+- **STATUS:** DONE (2026-06-01) — functional half (`<main>` landmark) complete + verified; h1 half is a deliberate non-fix per user, not outstanding work.
+  - **Verified in code (2026-06-01):** catch-all `path: '*'` → `NotFoundPage`
+    (`router/index.tsx:93-94`) renders inside AppShell `component="main"`
+    (`AppShell.tsx:170`) with nav + footer. Screen-reader `<main>` landmark
+    present on every unmatched route.
+  - **h1 normalization — closed as WONTFIX (user, 2026-05-29):** adding `<h1>`
+    to NotFound titles changes only the HTML tag, not the rendered look
+    (Typography `variant` drives styling). User declined the non-visual a11y
+    tweak; NotFound titles stay `<p>`. The h1 sub-findings below are marked as
+    such — not deferred work.
 - **resolution:** There was no catch-all route at all — unmatched URLs fell to the root `errorElement` (`RouteErrorBoundary`), rendering _outside_ AppShell. Added a `{ path: '*' }` child route in the AppShell `/` route → new `NotFoundPage` renders inside the `<main>` landmark with nav + footer. **Verified present post-merge (2026-05-30): `router/index.tsx` catch-all + `NotFoundPage.tsx` + AppShell `component="main"`.** The h1 part (EmptyState `titleComponent` + NotFoundState `<h1>`) was added then **REVERTED per user 2026-05-29** — no visual difference (Typography `variant` drives styling, only the tag changes) and the user declined a non-visual change; NotFound titles render `<p>`. **Original finding text:** catch-all 404 bypasses the `AppShell` `<main>` landmark — screen readers skip the page main, selector tests break. Additionally, NotFound pages on 4 of 5 detail routes lack an `<h1>`. _(design_parity R2's "live re-verify 2026-05-29: no main, no h1 — STAYS TODO" note is superseded: that branch lacked our catch-all NotFoundPage, which the merge brought → main landmark now present; h1 intentionally not done.)_
 
 **Scope.** Wrap catch-all 404 in `AppShell` `<main>` landmark. Update `libs/ui/src/states/errors/NotFoundState.tsx` to render an `<h1>` (entity-typed). Verify all detail-route NotFound paths use the canonical state component.
 
 **Findings closed (sub-checklist):**
 
-- [x] F-E-3 — catch-all `path:'*'` NotFoundPage inside AppShell `<main>` (lore-0272; verified post-merge)
-- [ ] F-W6-NOTFOUND-1 — h1 **dropped per user 2026-05-29** (no visual diff; reverted)
-- [ ] F-W6-E3-3 — NotFound h1 (dropped)
-- [ ] F-W6-E5- — NotFound h1 (dropped)
-- [ ] F-W6-E6-2 — NotFound h1 (dropped)
-- [ ] F-W6-E9-3 — NotFound h1 (dropped)
-- [ ] F-W6-E13-2 — Pool NotFound h1 (dropped)
-- [ ] F-D-3 — h1 consistency (dropped / open)
+- [x] F-E-3 — catch-all `path:'*'` NotFoundPage inside AppShell `<main>` (lore-0272; verified 2026-06-01)
+- [x] F-W6-NOTFOUND-1 — h1 **WONTFIX per user 2026-05-29** (tag-only change, no visual diff)
+- [x] F-W6-E3-3 — NotFound h1 — WONTFIX (h1 dropped)
+- [x] F-W6-E5- — NotFound h1 — WONTFIX (h1 dropped)
+- [x] F-W6-E6-2 — NotFound h1 — WONTFIX (h1 dropped)
+- [x] F-W6-E9-3 — NotFound h1 — WONTFIX (h1 dropped)
+- [x] F-W6-E13-2 — Pool NotFound h1 — WONTFIX (h1 dropped)
+- [x] F-D-3 — h1 consistency — WONTFIX (h1 dropped)
 
 **Notes:** `<main>`-landmark half DONE (catch-all NotFoundPage, verified post-merge). h1 half intentionally dropped (user, no visual diff). design_parity R2's "no main, no h1, STAYS TODO" verdict was correct on the research/0257 branch (it had no catch-all) but is **superseded by this merge** — our NotFoundPage supplies the `<main>` landmark. The remaining h1 a11y gap is a deliberate non-fix, not an oversight.
 
@@ -533,20 +542,34 @@ incomplete consolidation, not bad architecture.
 - **Effort:** ~1h
 - **Severity / Class:** 🟡 A
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** DONE (2026-06-01, live-verified)
+  - **Approach changed from the planned `enabled`-param:** instead of threading
+    an `enabled` arg through 6 hooks + prop-drilling it via the section
+    components, the 3 detail pages now gate the sub-section RENDER on resolved
+    parent data: `{!parent.isError && …}` → `{parent.data != null && …}`
+    (AccountDetailPage, ContractDetailPage, LiquidityPoolDetailPage). Sections
+    mount only after the parent query succeeds, so their hooks never fire while
+    the parent is still loading — same effect, far smaller surface, zero hook/
+    section changes. (Initial enabled-param edits were reverted in favour of
+    this.)
+  - **Live-verified (Playwright, network panel):** 404 account → parent req 1,
+    sub-section reqs **0**; 404 contract → interface/invocations/events **0**;
+    404 pool → participants/transactions/charts **0**; **valid** account →
+    transactions sub-req fires normally (happy path intact). All three 404s
+    render the NotFound state.
 
-**Rationale.** Gate B fix closed the visual side of composite NotFound (sub-section render gated on `!parent.isError`), but Wave 6 confirmed sub-section queries STILL FIRE — producing extra 404 entries in the network panel. Move from render-gate to `enabled: !!parentData` on each sub-section hook to prevent the request entirely.
+**Rationale.** Gate B fix closed the visual side of composite NotFound (sub-section render gated on `!parent.isError`), but Wave 6 confirmed sub-section queries STILL FIRE — producing extra 404 entries in the network panel. **Resolved by render-gating on `parent.data != null`** (sections never mount until the parent resolves OK) rather than the originally-planned per-hook `enabled` arg.
 
-**Scope.** Update each detail-page sub-section hook (`useAccountTransactions`, `useContractInterface`, `useContractInvocations`, `useContractEvents`, `usePoolCharts`, `usePoolParticipants`, `usePoolTransactions`) to accept `enabled` arg and gate via parent query status. Update consumer pages to pass `enabled: !parentQuery.isError`.
+**Scope (as built).** Changed the render gate on the 3 detail pages from `!parent.isError` to `parent.data != null`. No hook or section-component changes needed (the `!isError` gate was true during loading, letting sections mount + fetch before the parent 404'd; `data != null` defers mount until success).
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-NOTFOUND-2 — Sub-section queries fire on parent 404, console noise
-- [ ] F-W6-E6-1 — Sub-section queries still fire on 404
-- [ ] F-W6-E9-1 — Same on contract detail
-- [ ] F-W6-E13- (Network requests) — Same on pool detail
+- [x] F-W6-NOTFOUND-2 — Sub-section queries fire on parent 404, console noise — **0 sub-reqs live**
+- [x] F-W6-E6-1 — Sub-section queries still fire on 404 (account) — **0 live**
+- [x] F-W6-E9-1 — Same on contract detail — **0 live**
+- [x] F-W6-E13- (Network requests) — Same on pool detail — **0 live**
 
-**Notes:** **\_**
+**Notes:** Render-gate approach chosen over per-hook `enabled` for minimal surface. Happy-path (valid parent) sub-section fetch verified still firing.
 
 ---
 
@@ -743,7 +766,21 @@ incomplete consolidation, not bad architecture.
 - **Effort:** ~5h FE + ~2h backend
 - **Severity / Class:** 🟠 A
 - **Pre-launch:** SHOULD
-- **STATUS:** PARTIAL
+- **STATUS:** DONE — FE scope complete (2026-06-01); backend-dependent sub-items DEFERRED (see below)
+  - **FE done:** `useLiveStatus()` hook (`web/src/api/hooks/`) is the single source
+    of truth — derives `live / delayed / offline / unknown` from
+    `NetworkStats.latest_ledger_closed_at` + query error/loading. Returns `unknown`
+    (CONNECTING pill) while loading instead of a false `live`. `LiveIndicator`
+    consumes it on all 3 pill sites (ChainOverview, LatestTransactions, LatestLedgers);
+    dot colour bound to `theme.palette.stroke[...]` (type-safe, no magic string).
+  - **DM-1 (footer "All systems operational") — RESOLVED AS ABSENT:** the hardcoded
+    footer status string no longer exists anywhere in the codebase (grep = 0). Per
+    user (2026-06-01) the footer carries **no** live/health badge at all — nothing to
+    fix or remove. F-W6-V-1 fully closed.
+  - **DEFERRED — backend-dependent (not FE pre-launch):** DM-2 (`/v1/health` probe),
+    F-W6-V-2 (backfill-on-historical should disable LIVE — needs `is_live` field),
+    F-W6-AP-2 (poll-refresh pulse, NICE). These need backend endpoints/fields that
+    don't exist yet → out of FE scope. Spawn as backend-coord follow-ups if pursued.
 - **progress note (2026-05-28, `2c31a87a`):** `LiveIndicator` (used by ChainOverview + the Latest transactions / Latest ledgers section headers) now derives **LIVE / DELAYED / OFFLINE** from `NetworkStats.latest_ledger_closed_at` freshness instead of a static green dot, and stays visible in every state. Closes the freshness gap for those pill sites. **Diverged from planned scope (emerged):** logic lives inline in `web/src/pages/home/LiveIndicator.tsx`, NOT a shared `useLiveStatus()` hook in `libs/ui/timestamps/`; threshold is a single `LIVE_MAX_AGE_MS = 20_000` (LIVE→DELAYED) rather than the scoped 30s/5min tiers; OFFLINE is driven by the stats query `isError` (single failure), not a 5-min age cutoff — flicker risk noted, `failureCount` variant was tried then reverted per user. **Still TODO:** footer "All systems operational" (DM-1) still hardcoded; no `/health` probe (DM-2); `PollingIndicator` still 0 consumers on detail pages (F-D-4); backfill-disables-LIVE (F-W6-V-2); poll-refresh pulse (F-W6-AP-2); consolidation into one shared source of truth.
 
 **Rationale.** All 5 "live" indicator sites + footer "All systems operational" are hardcoded — no logic compares latest ledger close time to now or probes API health. Data on display can be hours stale while badge shows green. Backfill activity is not surfaced to FE. Universal pre-launch credibility hit.
@@ -752,14 +789,14 @@ incomplete consolidation, not bad architecture.
 
 **Findings closed (sub-checklist):**
 
-- [ ] DM-1 — Footer "All systems operational" hardcoded
-- [ ] DM-2 — No `/health` or `/status` endpoint hit anywhere
-- [ ] F-D-4 — Polling indicator absent on detail pages (PollingIndicator has 0 consumers)
-- [~] F-W6-V-1 — DM-1 re-confirmed + ALL live pills lack freshness logic (LiveIndicator pills now have LIVE/DELAYED/OFFLINE freshness `2c31a87a`; footer DM-1 still static)
-- [ ] F-W6-V-2 — Backfill-on-historical doesn't disable LIVE
-- [ ] F-W6-V-3 — Latest-ledger polling works (informational)
-- [ ] F-W6-AP-2 — Polling refresh silent (no visual indicator)
-- [~] F-W6-E1-1 — LIVE badge on Latest tx/Ledgers shown always (cross-cite DM-1) — resolved for these pills: now DELAYED/OFFLINE when stale/errored (`2c31a87a`)
+- [x] DM-1 — Footer "All systems operational" — RESOLVED AS ABSENT (string no longer in codebase; per user, footer carries no health badge)
+- [ ] DM-2 — No `/health` or `/status` endpoint hit anywhere — **DEFERRED (backend dependency)**
+- [~] F-D-4 — Polling indicator on detail pages — PollingIndicator now has 1 consumer (LatestTransactions); detail-page coverage still open (NICE)
+- [x] F-W6-V-1 — ALL live pills now have freshness logic via `useLiveStatus` (live/delayed/offline/unknown); footer DM-1 resolved-as-absent
+- [ ] F-W6-V-2 — Backfill-on-historical doesn't disable LIVE — **DEFERRED (needs backend `is_live` field)**
+- [x] F-W6-V-3 — Latest-ledger polling works (informational)
+- [ ] F-W6-AP-2 — Polling refresh silent (no visual indicator) — **DEFERRED (NICE, post-launch)**
+- [x] F-W6-E1-1 — LIVE badge freshness on Latest tx/Ledgers — DELAYED/OFFLINE/CONNECTING when stale/errored/loading
 
 **Notes:** Requires backend `/v1/health` endpoint and `is_live` / `latest_close_at` field on `/v1/network/stats`.
 
@@ -771,8 +808,13 @@ incomplete consolidation, not bad architecture.
 - **Effort:** ~15min
 - **Severity / Class:** 🟠 A
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
-- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`) — ILLUSORY FIX, STILL TODO:** R2 changed `PoolParticipants.tsx:58` to `formatAmount(row.share_percentage, 2)`, BUT `formatAmount(value, minDecimals)` (`web/src/pages/format.ts:12`) treats the 2nd arg as **minimum-decimal PADDING, NOT rounding** — it trims trailing zeros and pads UP to `minDecimals` but never caps precision. A raw `33.3333…` still renders full precision. The bug is **NOT actually fixed** unless the API pre-rounds `share_percentage` to 2dp. Card stays **TODO** (NOT done). **Needs live confirm** at `/liquidity-pools/:id` participants table before any DONE; if precision >2dp persists, switch to `.toFixed(2)` / a true max-decimals formatter. Source: `design-parity-impact-2026-05-29.md` §4 (F-W6-E13-1), §6.
+- **STATUS:** DONE (2026-06-01)
+  - `PoolParticipants.tsx:55` now renders `formatPercent(Number(row.share_percentage))`
+    = `Number.toFixed(2) + '%'` (true 2-decimal cap, not minDecimals padding).
+    `33.3333…` → `33.33%`. The illusory `formatAmount(_, 2)` is gone; this is a
+    real rounding fix. (The `formatPercent` migration landed with the 2.1/post-merge
+    consolidation; verified live this session.)
+- **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`) — ILLUSORY FIX (now superseded — see STATUS DONE above):** R2 changed `PoolParticipants.tsx:58` to `formatAmount(row.share_percentage, 2)`, BUT `formatAmount(value, minDecimals)` (`web/src/pages/format.ts:12`) treats the 2nd arg as **minimum-decimal PADDING, NOT rounding** — it trims trailing zeros and pads UP to `minDecimals` but never caps precision. A raw `33.3333…` still renders full precision. The bug is **NOT actually fixed** unless the API pre-rounds `share_percentage` to 2dp. Card stays **TODO** (NOT done). **Needs live confirm** at `/liquidity-pools/:id` participants table before any DONE; if precision >2dp persists, switch to `.toFixed(2)` / a true max-decimals formatter. Source: `design-parity-impact-2026-05-29.md` §4 (F-W6-E13-1), §6.
 
 **Rationale.** Pool participants "Share %" column renders at full precision (`33.3333333333333333%`). Two decimals (`33.33%`) is the universal convention. UX-degrading on every fractional share.
 
@@ -780,7 +822,7 @@ incomplete consolidation, not bad architecture.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-E13-1 — Pool participants Share % rendered at full precision — **ILLUSORY CONFIRMED LIVE 2026-05-29 — pool `LD5MMO2Q…` participant renders `33.3333333333333333%` raw. `formatAmount(_, 2)` minDecimals ≠ rounding. Needs API pre-round OR FE `Number(x).toFixed(2)`.**
+- [x] F-W6-E13-1 — Pool participants Share % rendered at full precision — **FIXED 2026-06-01: `formatPercent(Number(share_percentage))` caps at 2dp (`33.33%`). The illusory `formatAmount(_, 2)` minDecimals path is replaced.**
 
 **Notes:** Fast standalone fix; do not wait for card 2.1. **R2 ILLUSORY-FIX WARNING (live re-verify 2026-05-29):** ILLUSORY CONFIRMED LIVE — pool `LD5MMO2Q…` participant renders `33.3333333333333333%` raw. `formatAmount(share_percentage, 2)` minDecimals ≠ rounding (minDecimals is PADDING, not capping). Needs API pre-round OR FE `Number(x).toFixed(2)`. Card NOT done — STAYS TODO.
 
@@ -895,6 +937,47 @@ incomplete consolidation, not bad architecture.
 
 ---
 
+### 7.9 Clickable table rows → detail view (UX + touch-target)
+
+- **Type:** FEATURE
+- **Effort:** ~2-3h
+- **Severity / Class:** 🟡 C
+- **Pre-launch:** NICE (deferred — revisit later, user 2026-06-01)
+- **STATUS:** TODO
+
+**Rationale.** Standard explorer affordance (Etherscan / Solscan): the whole
+table row is clickable → navigates to the row's detail view, not just the
+identifier link in the first column. Bigger hit area also helps mobile
+touch-targets (cross-cites C11.6 / F-W6-RESPONSIVE-4). Today only the inline
+`IdentifierDisplay` link (col 1) + other inline links / CopyButton are
+clickable; the rest of the row is dead space.
+
+**Scope (scoped 2026-06-01).** Add an optional `onRowClick?: (row) => void` to
+the shared `ExplorerTable` (`libs/ui/src/table/ExplorerTable.tsx`) — keep it
+**router-agnostic** (callback; the consuming page calls `navigate`, libs/ui must
+not import react-router). On the `<TableRow>`: `cursor: pointer` + hover bg + the
+handler. **Nested-click priority:** guard with `e.target.closest('a, button')`
+so clicking an inner link / CopyButton runs its own action and does NOT trigger
+row-nav (CopyButton already `stopPropagation`s; the closest-guard also covers the
+`<a>` identifier links). Keyboard path stays the col-1 `<a>` link (row-click is a
+mouse/touch convenience). Wire `onRowClick` on the ~7 list tables with a clear
+detail target (Transactions, Accounts, Assets, Ledgers, Pools, NFTs,
+Contracts-when-real); embedded section tables (AccountTransactions,
+PoolTransactions, …) target the row's primary entity (col-1 type+value).
+
+**Findings closed (sub-checklist):**
+
+- [ ] (new) Whole-row click → detail across list tables
+- [ ] cross-cite C11.6 — larger row hit area aids mobile touch targets
+
+**Notes:** Investigated 2026-06-01 — ExplorerTable shared across 13 tables; rows
+already carry a col-1 detail link via `IdentifierDisplay`
+(`getIdentifierHref(type,value)`), so this is a convenience layer, not new
+navigation. `CopyButton` already `stopPropagation`s. Deferred by user to revisit
+later; spec captured so it can be picked up cold.
+
+---
+
 ## Category 8 — Catalog / lore / docs
 
 ### 8.1 Test coverage baseline (libs/ui vitest + critical components)
@@ -971,10 +1054,10 @@ incomplete consolidation, not bad architecture.
 
 - [x] F-W6-RESPONSIVE-1 — All routes break at viewport <800px due to fixed minimum — **RESOLVED `06ab34cc` + live re-verify 2026-05-28: 41/42 cells no doc-scroll, 768 docW=757 (was 802), 1280 pristine; 802px root cause gone**
 - [x] F-W6-RESPONSIVE-2 — No table → card layout responsive transformation — **RESOLVED as bug `06ab34cc` + live re-verify 2026-05-28: tables contained in `overflowX:auto`, doc never overflows; table→card transform = separate optional enhancement (not a failure)**
-- [→] F-W6-RESPONSIVE-3 — No hamburger / mobile nav — **SPLIT → C11.5. User decision 2026-05-28: REQUIRE hamburger <768px; scroll-nav alternative rejected**
+- [x] F-W6-RESPONSIVE-3 — No hamburger / mobile nav — **DONE via C11.5 (slim right Drawer, live-verified 2026-06-01)**
 - [→] F-W6-RESPONSIVE-4 — Touch targets <44px on mobile — **SPLIT → C11.6. Still failing live 2026-05-28: 105/106 interactive elements <44px @375 (pagination 36px, nav 24–32px)**
-- [→] F-W6-E0-3 — No hamburger menu at mobile (recap) — **SPLIT → C11.5 (user requires hamburger; see RESPONSIVE-3)**
-- [→] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile) — **SPLIT → C11.5 (user requires hamburger)**
+- [x] F-W6-E0-3 — No hamburger menu at mobile (recap) — **DONE via C11.5**
+- [x] 0059 Future Work — Responsive nav (collapsible / hamburger on mobile) — **DONE via C11.5**
 
 **Notes:** Live re-verify 2026-05-28 (Playwright) + design_parity `06ab34cc` resolved the scrollWidth/802px root cause and table page-overflow (RESPONSIVE-1/2 RESOLVED). User decision 2026-05-28 requires a hamburger menu (scroll-nav alt rejected). Residual responsive work split to new cards: **C11.5** hamburger, **C11.6** touch targets, **C11.7** search-page overflow. Card stays PARTIAL because its original scope bundled hamburger + touch targets; only the scrollWidth + table-overflow portion is DONE. User decision still needed: pre-launch (MUST) vs post-launch (DEFER-M2) for the residual cards.
 
@@ -1302,15 +1385,33 @@ incomplete consolidation, not bad architecture.
 - **Effort:** ~3-4h
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** SHOULD
-- **STATUS:** TODO
+- **STATUS:** DONE (2026-06-01, live-verified)
+  - Built in **`SecondaryNav`** (not TopNav — that's where the nav links live;
+    TopNav holds only search + stats). Below `md` (900px) the inline links hide
+    (`display:{ xs:'none', md:'flex' }`) and a hamburger `IconButton` (44×44,
+    `display:{ xs:'inline-flex', md:'none' }`) toggles a **slim right Drawer**
+    (`min(72vw,256px)`, `surface.grayMain`, `stroke.default` left border) holding
+    the same NavButton links (size lg). a11y: `aria-label` Open/Close,
+    `aria-expanded`, `<nav aria-label="Primary">`, MUI focus-trap, Escape +
+    backdrop close, link-click closes drawer. The same hamburger flips ☰→✕ while
+    open (no separate close button — slim).
+  - **Breakpoint chosen `md`/900** (not the card's loose "768") — repo had no
+    `sm`-nav split; the inline nav already hid `<md` via the prior scroll-nav,
+    so `md` is the clean, consistent threshold.
+  - **Design iteration:** first a full Drawer w/ close button, then a
+    Collapse-dropdown (user: "wysuwane z góry słabe"), settled on the slim right
+    Drawer per user choice 2026-06-01.
+  - **Live-verified (Playwright):** @390 hamburger 44×44 visible, inline hidden,
+    drawer 256px w/ 7 links, Escape closes; @1280 hamburger hidden, inline nav
+    back. ui 45 + web 86 green.
 
 **Rationale.** design_parity removed the 802px doc-scroll root cause but left no hamburger menu at narrow viewports. At 375px the 8 nav links happen to fit in 364px without scrolling, but that's fragile — any nav label change or i18n overflows. User decision 2026-05-28: require a proper hamburger menu, not the scroll-nav fallback.
 
-**Scope.** Add hamburger menu component to TopNav (libs/ui/src/layout/TopNav.tsx) that collapses nav links into a drawer/menu below ~768px breakpoint. Desktop unchanged.
+**Scope (as built).** Hamburger + slim right Drawer added to **`SecondaryNav`** (`libs/ui/src/layout/SecondaryNav.tsx`) — collapses nav links into a drawer below the `md` breakpoint. Desktop unchanged.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-W6-RESPONSIVE-3 — no hamburger nav at <768px (user requires hamburger)
+- [x] F-W6-RESPONSIVE-3 — hamburger nav <md (slim right Drawer, live-verified 2026-06-01)
 
 **Notes:** Live re-verify 2026-05-28 confirmed scroll-nav alt present but user rejected it. Effort ~3-4h (drawer + breakpoint + a11y focus trap). **design_parity R2 (2026-05-29, PR #224, merge `35ac27c0`) did NOT add a hamburger** — R2 "responsive nav tweaks" (`fce0d666`) = TopNav stats `overflowX:auto` + SecondaryNav scroll-nav (already from round 1); grep for hamburger/MenuIcon/Drawer/`aria-label="Open menu"` = zero hits. Card remains TODO. Source: `design-parity-impact-2026-05-29.md` §1 (11.5), §2 (RESPONSIVE-3).
 
@@ -1674,7 +1775,7 @@ Compact per-finding cross-reference. One line per finding ID surfaced by audit W
 | F-W6-E10-2                                     | 6             | 🟢      | C 7.1                   | TODO        | NFT row token IDs inline text                                                                                                                                                                                                                                    |
 | F-W6-E10-3                                     | 6             | 🟡      | C 5.4                   | TODO        | NFT row Contract ID plain text                                                                                                                                                                                                                                   |
 | F-W6-E11-1                                     | 6             | 🟡      | C 7.5                   | TODO        | NFT detail no h2/h3                                                                                                                                                                                                                                              |
-| F-W6-E11-2                                     | 6             | 🟢      | C 7.1                   | PARTIAL     | NFT Traits "Metadata unavailable" no guidance — design_parity `06ab34cc`: NFT _media_ empty-state improved; Traits guidance NOT improved                                                                                                                         |
+| F-W6-E11-2                                     | 6             | 🟢      | C 7.1                   | PARTIAL     | NFT Traits "Metadata unavailable" no guidance — design*parity `06ab34cc`: NFT \_media* empty-state improved; Traits guidance NOT improved                                                                                                                        |
 | F-W6-E11-3                                     | 6             | 🟡      | C 5.4                   | TODO        | NFT Contract ID in Details plain text                                                                                                                                                                                                                            |
 | F-W6-E12-1                                     | 6             | 🟡      | C 7.1                   | TODO        | Pool ID truncation twice per row                                                                                                                                                                                                                                 |
 | F-W6-E12-2                                     | 6             | 🟢      | C 7.1                   | TODO        | "Any TVL" filter looks like loading                                                                                                                                                                                                                              |
