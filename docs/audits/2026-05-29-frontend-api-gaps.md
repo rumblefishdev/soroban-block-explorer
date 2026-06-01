@@ -4,9 +4,13 @@
 > branch `feat/0274-0275_api-gaps-and-contracts-list` (commit `c6bec5ee`),
 > pending merge — do **not** redo them:
 >
-> - ✅ `order` param on `GET /v1/ledgers` (§2)
-> - ✅ `recent_events` on `ContractStats` (§2)
-> - ✅ typed `interface_metadata` schema (§3)
+> - ✅ `order` param on `GET /v1/ledgers` (§2) — wired in `c6bec5ee`, but the
+>   asc path was broken (reversed order + dead forward pagination); fixed
+>   correctly in `08279072` with a behaviour test.
+> - ✅ `recent_events` on `ContractStats` (§2) — verified genuinely correct.
+> - ✅ typed `interface_metadata` schema (§3) — `08279072` also makes a
+>   decode failure return 500 instead of silently `null` (re-index legacy
+>   rows before deploy; fresh-data parse-success not yet verified e2e).
 >
 > Still open: `GET /v1/accounts` list (§1), per-op LP amounts (§2),
 > `PoolAssetLeg.icon_url` (§2). Pool chart nulls (§2) stay with task 0199.

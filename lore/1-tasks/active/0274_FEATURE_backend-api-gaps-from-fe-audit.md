@@ -61,19 +61,31 @@ The FE is in design-parity / pre-launch state. The audit catalogues
 seven concrete gaps blocking either a feature surface or a quality
 detail:
 
-> **Progress (2026-06-01).** Gaps #3, #6, #7 are **DONE** on this branch
-> (commit `c6bec5ee`, FilipD's WIP rebased) — backend + OpenAPI +
-> regenerated `api-types` all in sync. Remaining: #1, #2, #5. #4 stays with
-> task 0199.
+> **Progress (2026-06-01).** Gaps #3, #6, #7 landed in `c6bec5ee` (FilipD's
+> WIP rebased). A skeptical re-audit (existence ≠ correct) found two of the
+> three were only _present_, not _correct_ — both hardened in `08279072`:
+>
+> - **#3 was broken** — asc reused `Direction::Prev`, presented oldest-first
+>   block in DESC order + broke forward pagination. Reworked properly
+>   (sticky `?order=` sort ⊥ cursor nav) + DB-backed behaviour test.
+> - **#6 silently degraded** — unparseable metadata → `null` (warn-only).
+>   Now fails loud (HTTP 500 + `interface_metadata_corrupt`).
+> - **#7 verified genuinely correct** (`amount` = event count per
+>   migration `0004:12`; `SUM` = total events).
+>
+> Remaining: #1, #2, #5. #4 stays with task 0199.
 
 1. **No `GET /v1/accounts` list endpoint** — Accounts page renders
    from 80 in-memory synthesized rows (`useAccountsList.ts`).
 2. **Per-op LP amounts missing** on
    `GET /v1/liquidity-pools/{pool_id}/transactions` — the "Amount"
    column in the pool-tx table is intentionally hidden.
-3. ✅ **DONE — `order` query param** on `GET /v1/ledgers` — was
-   silently _ignored_ by the real backend (only the mock honoured it);
-   now wired + declared in OpenAPI (`c6bec5ee`).
+3. ✅ **DONE — `order` query param** on `GET /v1/ledgers`. Was silently
+   _ignored_ by the real backend (only the mock honoured it). Wired in
+   `c6bec5ee` but with a broken asc (reversed order + dead forward
+   pagination); reworked correctly in `08279072` — sticky `?order=` sort
+   orthogonal to cursor navigation, `keyset_sql` 2×2 matrix, DB-backed
+   behaviour test.
 4. **Pool chart values always `null`** — endpoint contract is in
    the spec but `tvl` / `volume` / `fee_revenue` are `null` for
    every bucket until task **0199** (LP analytics + price oracle)
@@ -82,7 +94,14 @@ detail:
    the first letter of the asset code instead of a real icon.
 6. ✅ **DONE — `interface_metadata` typed schema** on
    `GET /v1/contracts/{contract_id}/interface` — typed DTO + OpenAPI
-   schema; FE defensive parser deleted (`c6bec5ee`).
+   schema; FE defensive parser deleted (`c6bec5ee`). Decode failure
+   hardened in `08279072`: a present-but-unparseable blob now returns
+   HTTP 500 + `interface_metadata_corrupt` instead of silently `null`.
+   **Caveats:** (a) legacy-shape rows (e.g. `functions` as bare strings,
+   no `wasm_byte_len`) now 500 until re-indexed — re-index before deploy;
+   (b) end-to-end parse-success on freshly-indexed data not yet verified
+   (only the indexer-output ↔ DTO shapes were read and confirmed to
+   match; no fresh-indexed DB available locally to prove `Some`).
 7. ✅ **DONE — real events count** (`recent_events`) on
    `ContractStats` — Events tab pill no longer borrows
    `recent_unique_callers` (`c6bec5ee`).
@@ -123,8 +142,9 @@ amount_b }`. Backend research tracked as **0247**; FE follow-up task
   row → LEFT JOIN per leg (2/pool). Design for the N+1 cost on the pool
   **list** endpoint.
 
-Done in `c6bec5ee` (no further work): #3 `order` on `/v1/ledgers`,
-#6 `interface_metadata` schema, #7 `recent_events` on `ContractStats`.
+Done: #3 `order` on `/v1/ledgers` (`c6bec5ee` + correctness rework
+`08279072`), #6 `interface_metadata` schema (`c6bec5ee` + loud-fail
+`08279072`), #7 `recent_events` on `ContractStats` (`c6bec5ee`, verified).
 Pool chart fields (gap #4) are covered by **0199**.
 
 ## Acceptance Criteria
@@ -135,11 +155,15 @@ Pool chart fields (gap #4) are covered by **0199**.
 - [ ] `?expand=lp_op_details` on pool transactions is wired and the
       "Amount" column on the LP tx table is un-hidden FE-side
       (or tracked via 0247/0249).
-- [x] OpenAPI declares the `order` param on `/v1/ledgers`. (`c6bec5ee`)
+- [x] OpenAPI declares the `order` param on `/v1/ledgers`, and asc
+      actually returns oldest-first with working forward pagination.
+      (`c6bec5ee` wired it; `08279072` fixed the asc semantics + test)
 - [ ] `PoolAssetLeg` carries `icon_url`; pool avatars render real
       icons when available.
 - [x] `InterfaceResponse.interface_metadata` has a real schema in
-      OpenAPI; FE deletes `parseInterfaceMetadata`'s defensive parse. (`c6bec5ee`)
+      OpenAPI; FE deletes `parseInterfaceMetadata`'s defensive parse.
+      Decode failure surfaces as 500, not silent null. (`c6bec5ee` +
+      `08279072`)
 - [x] `ContractStats` exposes a real events count; FE points the
       Events tab pill at the new field. (`c6bec5ee`)
 - [x] `tools/dev-mock-api.mjs` removed (done 2026-06-01, ahead of
