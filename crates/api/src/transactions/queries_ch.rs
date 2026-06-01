@@ -251,7 +251,7 @@ const SLIM_PROJECTION: &str = "\
     t.successful, \
     t.operation_count, \
     t.has_soroban, \
-    t.id, \
+    t.id AS id, \
     l.closed_at AS created_at";
 
 // ---------------------------------------------------------------------------
@@ -483,7 +483,7 @@ pub async fn fetch_detail(
     let row = client
         .query(
             "SELECT \
-                t.id, \
+                t.id AS id, \
                 lower(hex(t.hash)) AS hash, \
                 t.ledger_sequence, \
                 t.application_order, \

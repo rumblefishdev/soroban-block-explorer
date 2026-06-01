@@ -42,11 +42,11 @@ pub async fn fetch_stats(
                      WHERE closed_at >= now64() - INTERVAL 60 SECOND), \
                     0 \
                 )) AS tps_60s, \
-                (SELECT total_rows FROM system.tables \
-                    WHERE database = currentDatabase() AND name = 'accounts') \
+                ifNull((SELECT total_rows FROM system.tables \
+                    WHERE database = currentDatabase() AND name = 'accounts'), 0) \
                     AS total_accounts, \
-                (SELECT total_rows FROM system.tables \
-                    WHERE database = currentDatabase() AND name = 'soroban_contracts') \
+                ifNull((SELECT total_rows FROM system.tables \
+                    WHERE database = currentDatabase() AND name = 'soroban_contracts'), 0) \
                     AS total_contracts \
              FROM ( \
                  SELECT sequence, closed_at \
