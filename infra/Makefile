@@ -78,6 +78,25 @@ deploy-production-hetzner-dns: build
 destroy-production-hetzner-dns: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
+# --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
+# Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
+# VITE_API_BASE_URL is baked from apiDomainName in envs/production.json.
+
+build-production-web:
+	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.apiDomainName' infra/envs/production.json) \
+		npx nx build @rumblefish/soroban-block-explorer-web
+
+deploy-production-web: build-production-web
+	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-production-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" --output text); \
+	DIST=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-production-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
+	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
+	cd .. && aws s3 sync web/dist/ "s3://$$BUCKET/" --delete && \
+	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
+
 # --- CI/CD (shared, deploy once per account) ---
 
 deploy-cicd: build
