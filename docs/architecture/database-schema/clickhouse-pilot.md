@@ -722,6 +722,35 @@ correlated column …`. The live read path instead fetches the page of tx
 > (skip-index on `transaction_id`, or a precomputed per-tx `contract_ids`
 > column written at ingest) is a deferred follow-up.
 
+> **CH read-cost correction — list reads must stay on the primary key (task
+> 0243).** `... FINAL ... ORDER BY ... LIMIT` over a partition reads the
+> **whole partition** — FINAL merges it before the limit applies (~1.2e8
+> transactions on the mainnet head). Under frontend polling this exhausted the
+> `api_reader` `read_rows` hourly quota (CH `Code: 201`). The live read paths
+> were corrected to read in primary-key order:
+>
+> - **transactions list** (no filter, polled) drops FINAL and orders/keys on
+>   `(ledger_sequence, application_order)` — the table's physical sort key — so
+>   CH stops at the limit (~2e5 rows/page, validated). The cursor tie-break is
+>   `application_order` (also the correct in-ledger order; the `id` hash
+>   surrogate did not preserve it). The filtered statements still key on `id`.
+> - **filtered transactions list** (contract / op_type) must not join the
+>   driver to an unpruned `transactions FINAL` — that merges the whole 3.6B-row
+>   table per request (measured ~1e9+ rows; blew the quota). `transactions` is
+>   pruned to the driver's partition and streamed, the driver is the hash side
+>   (~2e8 rows/page, validated). Making the driver itself a seek (it scans the
+>   partition by `type` / `contract_id`, neither a PK prefix) needs a
+>   skip-index — deferred follow-up.
+> - **ledgers list** + **network stats** are ORDER BY `sequence`, not
+>   `closed_at`; both now drive off `sequence` (monotonic with `closed_at`) to
+>   stay on the primary key instead of scanning the ~12M-row table per request.
+>
+> FINAL is retained only for single-key / per-page key-seek reads (transaction
+> detail, embedded ledger transactions, the aggregate helper), where it is
+> cheap. This is the general rule for any new CH read path: a polled or
+> list-shaped query must read in primary-key order; reserve FINAL for reads
+> already bounded to a key seek.
+
 ---
 
 ## References

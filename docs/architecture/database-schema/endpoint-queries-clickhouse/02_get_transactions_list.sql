@@ -28,6 +28,27 @@
 --     A cheap full-parity path (skip-index on transaction_id, or a precomputed
 --     per-tx contract_ids column) is a deferred follow-up.
 -- ============================================================================
+-- ⚠️  CH FINAL READ-COST CORRECTION (task 0243) — `... FINAL ... ORDER BY ...
+--     LIMIT` over a partition reads the WHOLE partition: FINAL must merge it
+--     before the limit applies (~1.2e8 transactions on the mainnet head).
+--     Live read path:
+--     • Statement A (no filter, polled) DROPS FINAL and orders/keys on the
+--       physical sort key `(ledger_sequence, application_order)` so CH reads in
+--       primary-key order and stops at the limit (~2e5 rows/page, validated).
+--       Cursor tie-break is `application_order` (also the correct in-ledger
+--       order — the `id` hash tie-break shown below does NOT preserve it).
+--     • Statements B/C (filtered) must NOT join the driver to
+--       `transactions t FINAL` unpruned — that merges the whole 3.6B-row table
+--       per request (measured; blew the read_rows quota, Code: 201). Prune
+--       `transactions` to the driver's partition and stream it (driver = hash
+--       side). The driver still scans the partition by `type` / `contract_id`
+--       (~8e7; not a PK prefix) — bounded, user-initiated, skip-index follow-up.
+--     • ledgers (04) + network (01) are ORDER BY `sequence`, NOT `closed_at`;
+--       drive their reads off `sequence` (monotonic with closed_at) to stay on
+--       the primary key.
+--     FINAL is kept only for single-key / per-page key-seek reads (detail,
+--       embedded ledger tx, the aggregate helper) where it is cheap.
+-- ============================================================================
 -- Endpoint:     GET /transactions
 -- Purpose:      Paginated list of transactions. Optional filters:
 --               source_account, contract_id, operation_type.
