@@ -1,3 +1,13 @@
+-- ============================================================================
+-- ⚠️  CH 26.3 CORRECTION (task 0243) — do NOT implement the
+--     `operation_types` / `contract_ids` arrays with the correlated scalar
+--     subqueries shown below (`… WHERE oa.transaction_id = t.id`): ClickHouse
+--     26.3 rejects them with `Code: 48 NOT_IMPLEMENTED`. Use the NON-correlated
+--     two-step the shipped modules use — fetch the page of tx keys, then
+--     aggregate per `(ledger_sequence, transaction_id) IN (…)` with
+--     `GROUP BY transaction_id`. Reuse the shared Rust helper
+--     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates`.
+-- ============================================================================
 -- Endpoint:     GET /accounts/:account_id/transactions
 -- Purpose:      Paginated transactions involving a given account (as source
 --               OR as a participant). Default ordering: newest first.

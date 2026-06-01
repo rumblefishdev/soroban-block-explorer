@@ -1,3 +1,16 @@
+-- ============================================================================
+-- ⚠️  CH 26.3 CORRECTION (task 0243) — do NOT copy the correlated-subquery
+--     `operation_types` / `contract_ids` projection below verbatim.
+--     Those use CORRELATED scalar subqueries (`SELECT groupUniqArray(oa.type)
+--     … WHERE oa.transaction_id = t.id`), which ClickHouse 26.3 rejects:
+--       Code: 48 NOT_IMPLEMENTED: can't find correlated column …
+--     The live read path uses a NON-correlated two-step (validated on prod
+--     CH 26.3): fetch the page of tx keys, then aggregate per
+--     `(ledger_sequence, transaction_id) IN (…)` with `GROUP BY transaction_id`.
+--     Reuse the shared Rust helper
+--     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates` for any new
+--     transaction-list module instead of the inline projection here.
+-- ============================================================================
 -- Endpoint:     GET /transactions
 -- Purpose:      Paginated list of transactions. Optional filters:
 --               source_account, contract_id, operation_type.
