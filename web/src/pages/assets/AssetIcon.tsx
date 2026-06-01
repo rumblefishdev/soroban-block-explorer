@@ -36,9 +36,12 @@ function kindColors(theme: Theme, kind: AssetIconKind) {
 }
 
 /**
- * Round asset icon used in the assets table, account balances, and the asset
- * detail header. Renders the metadata icon when present, otherwise a letter
- * avatar derived from the asset code.
+ * Round token avatar used everywhere an asset (or pool leg — a pool is two
+ * assets) is shown: assets table, account balances, asset detail header,
+ * and liquidity-pool legs. Renders the metadata `iconUrl` when present
+ * (sanitised via `safeHttpUrl`), otherwise falls back to a letter avatar
+ * derived from the code — the fallback is MUI `Avatar`'s native behaviour,
+ * so a broken/absent image needs no manual handling.
  */
 export function AssetIcon({
   code,

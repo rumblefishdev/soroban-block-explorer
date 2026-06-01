@@ -46,7 +46,6 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
     })`
   );
 }
-
 /**
  * A pool is "stale" when its newest snapshot is older than 7 days (matches
  * the freshness window enforced by `18_get_liquidity_pools_list.sql` and

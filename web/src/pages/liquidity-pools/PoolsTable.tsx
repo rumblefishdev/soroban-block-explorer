@@ -17,8 +17,8 @@ import { formatAmount } from '../format.js';
 import { assetLegLabel, legHref } from '../pool-detail/helpers.js';
 import { Dash } from '../transactions/cells.js';
 
-import { AssetAvatar } from './AssetAvatar.js';
 import { reserveDotColor } from './assetColor.js';
+import { PoolAssetPair } from './PoolAssetPair.js';
 import { FeePill } from './FeePill.js';
 
 export const POOL_COLUMN_COUNT = 5;
@@ -46,7 +46,7 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
 }
 
 /** Colored dot for the per-leg reserves rows — color comes from the
- *  same `assetLegColor` mapping that drives `AssetAvatar`. */
+ *  same `assetLegColor` mapping that drives the leg `AssetIcon`. */
 function AssetDot({ color }: { color: string }) {
   return (
     <Box
@@ -78,10 +78,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <AssetAvatar leg={row.asset_a} />
-            <AssetAvatar leg={row.asset_b} overlap />
-          </Box>
+          <PoolAssetPair a={row.asset_a} b={row.asset_b} />
           <Stack spacing={0.25} sx={{ minWidth: 0 }}>
             <Typography
               variant="bodySmMedium"

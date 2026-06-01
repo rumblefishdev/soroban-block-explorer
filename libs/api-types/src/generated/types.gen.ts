@@ -1245,6 +1245,13 @@ export type PoolAssetLeg = {
    * native legs and for classic credit legs without an SAC mirror.
    */
   contract_id?: string | null;
+  /**
+   * Asset icon URL, mirrored from the leg's `assets.icon_url` row so
+   * pool avatars render the same icon as the assets list. `None` for
+   * native legs and assets without an enriched icon — the FE falls back
+   * to the asset-code initial.
+   */
+  icon_url?: string | null;
   issuer?: string | null;
 };
 

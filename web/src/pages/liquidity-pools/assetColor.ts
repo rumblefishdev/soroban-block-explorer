@@ -2,11 +2,11 @@ import type { PoolAssetLeg } from '@rumblefish/api-types';
 import { colorsLight } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
- * Per-leg color used by `AssetAvatar` and the matching reserve dot in
- * the pools list. Backend `PoolAssetLeg` does not (yet) ship an
- * `icon_url`, so we derive a stable color from the leg identity instead
- * of an icon. When `icon_url` lands, the avatar component will prefer
- * it and these colors become the dot/fallback only.
+ * Per-leg color used as the leg `AssetIcon`'s letter-fallback fill (when
+ * `PoolAssetLeg.icon_url` is absent) and the matching reserve dot in the
+ * pools list. Derived stably from the leg identity, so a given leg always
+ * reads as the same color whether it falls back to a glyph or renders a
+ * real icon next to its dot.
  *
  * Each palette entry is a `{ bg, fg, dot }` triplet from a single
  * color family in the design-system scales: `bg` is the pastel `.100`

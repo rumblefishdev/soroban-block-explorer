@@ -182,6 +182,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
             asset_code: row.asset_a_code,
             issuer: row.asset_a_issuer,
             contract_id: row.asset_a_contract_id,
+            icon_url: row.asset_a_icon_url,
         },
         asset_b: PoolAssetLeg {
             asset_type_name: row.asset_b_type_name,
@@ -189,6 +190,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
             asset_code: row.asset_b_code,
             issuer: row.asset_b_issuer,
             contract_id: row.asset_b_contract_id,
+            icon_url: row.asset_b_icon_url,
         },
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
@@ -673,11 +675,13 @@ mod map_pool_item_tests {
             asset_a_code: None,
             asset_a_issuer: None,
             asset_a_contract_id: None,
+            asset_a_icon_url: None,
             asset_b_type: 1,
             asset_b_type_name: Some("credit_alphanum4".into()),
             asset_b_code: Some("USDC".into()),
             asset_b_issuer: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
             asset_b_contract_id: None,
+            asset_b_icon_url: None,
             fee_bps: 30,
             fee_percent: "0.30".into(),
             created_at_ledger: 100,
@@ -699,6 +703,20 @@ mod map_pool_item_tests {
         assert_eq!(item.asset_a.asset_type, 0, "asset_a is native");
         assert_eq!(item.asset_a.contract_id, None);
         assert_eq!(item.asset_b.asset_type, 1, "asset_b is classic credit");
+    }
+
+    #[test]
+    fn icon_url_propagates_per_leg() {
+        // gap #5: each leg's icon_url threads from the row to the DTO leg,
+        // independently. Native leg (no icon) stays None.
+        let mut row = base_row();
+        row.asset_b_icon_url = Some("https://cdn.example.test/icons/usdc.svg".into());
+        let item = map_pool_item(row);
+        assert_eq!(item.asset_a.icon_url, None, "native leg has no icon");
+        assert_eq!(
+            item.asset_b.icon_url.as_deref(),
+            Some("https://cdn.example.test/icons/usdc.svg")
+        );
     }
 
     #[test]

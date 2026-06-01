@@ -3706,6 +3706,10 @@
             "type": ["string", "null"],
             "description": "C-strkey of the SAC mirror, when a matching `assets` row\n(`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for\nnative legs and for classic credit legs without an SAC mirror."
           },
+          "icon_url": {
+            "type": ["string", "null"],
+            "description": "Asset icon URL, mirrored from the leg's `assets.icon_url` row so\npool avatars render the same icon as the assets list. `None` for\nnative legs and assets without an enriched icon — the FE falls back\nto the asset-code initial."
+          },
           "issuer": {
             "type": ["string", "null"]
           }

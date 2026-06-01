@@ -4715,3 +4715,70 @@ async fn ledgers_order_asc_is_oldest_first_and_paginates_forward() {
         asc.last().unwrap()
     );
 }
+
+/// Task 0274 gap #5 — pool legs carry `icon_url` mirrored from the leg's
+/// `assets` row (classic or SAC). Proves the SQL join + DTO plumbing
+/// end-to-end. Every leg must always serialise the key (string|null); if
+/// the DB has any enriched icon, at least one leg must surface it.
+#[tokio::test]
+async fn lp_legs_carry_icon_url_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping LP icon_url integration test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping LP icon_url test");
+            return;
+        }
+    };
+    let assert_pool = pool.clone();
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/liquidity-pools?limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "expected 200: {json}");
+
+    let pools = json["data"].as_array().cloned().unwrap_or_default();
+    if pools.is_empty() {
+        eprintln!("no pools in DB — skipping icon_url assertions");
+        return;
+    }
+
+    let legs: Vec<&Value> = pools
+        .iter()
+        .flat_map(|p| [&p["asset_a"], &p["asset_b"]])
+        .collect();
+
+    // Wiring: every leg always serialises an `icon_url` key, string or null.
+    for leg in &legs {
+        let icon = &leg["icon_url"];
+        assert!(
+            icon.is_string() || icon.is_null(),
+            "leg.icon_url must be string|null, got {icon} on {leg}"
+        );
+    }
+
+    // Data: if any asset in the DB is enriched, at least one leg shows it.
+    let any_icon = legs.iter().any(|leg| leg["icon_url"].is_string());
+    let db_has_icons = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM assets WHERE icon_url IS NOT NULL AND asset_type IN (1, 2)",
+    )
+    .fetch_one(&assert_pool)
+    .await
+    .unwrap_or(0);
+    if db_has_icons > 0 {
+        assert!(
+            any_icon,
+            "DB has {db_has_icons} enriched classic/SAC assets but no pool leg surfaced an icon_url — join is broken"
+        );
+    }
+}
