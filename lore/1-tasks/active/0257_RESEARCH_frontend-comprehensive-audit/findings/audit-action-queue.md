@@ -83,7 +83,17 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **AL
 > 4. **Silent no-op searches.** Transactions search only fires on full G-/C- strkey; NFT collection = exact match. UX: placeholder/empty-state hints. → spawn backlog from develop.
 > 5. **Transaction type dropdown** single-select only (backend `filter[operation_type]` one string). Multi-select needs backend `IN (...)`. → spawn backlog from develop.
 >
-> Source: `archive/0272_FEATURE_audit-0257-closing.md` §Session findings + §Future Work. Items 3-5 not yet spawned (backlog, from develop). **0274/0275 currently lack `related_tasks: ['0257']` backlink** — add from develop.
+> Source: `archive/0272_FEATURE_audit-0257-closing.md` §Session findings + §Future Work. Items 3-6 not yet spawned (backlog, from develop) — now captured as **card 6.5 / F-0272S-1..6** (incl. F-0272S-6 architectural no-shared-search-semantics + per-page audit table, re-verified valid+current 2026-06-01). **0274/0275 currently lack `related_tasks: ['0257']` backlink** — add from develop.
+>
+> **Live re-verify 2026-06-01 (fresh dev server `:4201` from this worktree, post-merge HEAD `e3fe1968`).** All 0272 UI claims confirmed live — **0 surprises, 0 new findings**:
+>
+> - **Catch-all 404** (`/foobar-nonexistent-route`): `<main>` landmark **present** ✓ (was VERIFIED BROKEN pre-0272). h1 **absent** (title is `<span>` MuiTypography, 0 headings) — **matches the documented WONTFIX** (card 5.1: tag-only change, no visual diff, user declined 2026-05-29). Card 5.1 DONE is correct.
+> - **NetworkToggle**: **gone** ✓ — no mainnet/testnet text, no toggle element on `/transactions` shell. F-DP-1 / card 11.1 RESOLVED confirmed live.
+> - **Home** `/`: h1 present (1) ✓, live indicator rendering ("…ago") ✓, `<main>` ✓, no horizontal overflow (scrollWidth ≤ clientWidth @1422). Card 7.2 confirmed.
+> - **Responsive @375**: hamburger button present (`aria-label="Open navigation menu"`), nav collapsed, `scrollWidth 364 ≤ 375` (no page overflow) ✓. Card 11.5 / F-W6-RESPONSIVE-1/3 confirmed live.
+> - **Share-% @ pool detail** (`LD5MMO2Q…`, the same pool that was ILLUSORY on 2026-05-29): renders `1.00%` 2-decimal-capped, **no long-decimal raw values** ✓. `formatPercent` `.toFixed(2)` real. Card 7.3 RESOLVED confirmed live — **definitively supersedes the 2026-05-29 ILLUSORY verdict**.
+>
+> Still data-blocked (unchanged): F-DP-4 / card 11.4 OperationFlowTree nested-tree (local dataset 0 soroban/multi-op txs).
 
 ## Excluded from this queue (background only)
 
@@ -731,6 +741,42 @@ incomplete consolidation, not bad architecture.
 
 ---
 
+### 6.5 0272-session list-page findings (filter / sort / search audit, 2026-06-01)
+
+- **Type:** BUG / FEATURE (mixed FE + backend)
+- **Effort:** ~1-2d total across items
+- **Severity / Class:** 🟠 B (item 1 user-visible 404) + 🟡 C/D (rest)
+- **Pre-launch:** SHOULD (item 1) / NICE (items 2-5)
+- **STATUS:** TODO (NOT yet spawned — captured here per user 2026-06-01 "no spawn, ensure it's in the queue")
+
+**Rationale.** 0272's closure session ran a list-page filter/sort/search code audit (no fixes applied) and surfaced concrete dispositions. NOT spawned as backlog tasks yet (user deferred spawning). Captured here as the authoritative record so nothing is lost. Items 1-2 partly owned by spawned active tasks 0274/0275; items 3-6 fully unspawned. Source: `archive/0272_FEATURE_audit-0257-closing.md` §Session findings + §Future Work + top-of-file 0272 merge-note block.
+
+**ALL ITEMS RE-VERIFIED VALID + CURRENT — 2026-06-01 (this session, 4-explorer fan-out + direct backend SQL + live `:4201` reads).** Verdicts below carry confirmed file:line refs. One earlier doc claim corrected: the LP `asset_code` type-stub comment said "partial" — **actual SQL is exact equality** (see F-0272S-2).
+
+**Findings closed (sub-checklist):**
+
+- [ ] **F-0272S-1 — Accounts list = MOCK data (account-not-found root cause). VALID+CURRENT.** `web/src/api/hooks/useAccountsList.ts:32` fabricates 80 synthetic G-strkey accounts (in-code comment: "Local fixtures… `GET /v1/accounts` endpoint not yet implemented"). No backend call. Row click → `/accounts/G…` → detail page calls real `GET /v1/accounts/{id}` → **404 "Account not found."** Link build + encoding correct; pure mock-vs-real mismatch (NOT a DB-seed gap). Global topbar search → account works (real `/v1/search`), so detail page itself OK. 🟠 user-visible. **Owned by 0274** (real endpoint) — cross-ref card 1.3.
+- [ ] **F-0272S-2 — LP vs assets search inconsistency (real bug). VALID+CURRENT.** Assets `filter[code]` = partial substring `a.asset_code ILIKE '%'||$1||'%'` (`assets/queries.rs:132`); LP `filter[asset_code]` = **EXACT** `UPPER(lp.asset_a_code)=$9 OR UPPER(lp.asset_b_code)=$9` (`liquidity_pools/queries.rs:340`). That is why LP needs the whole code, assets does not. **Correction:** prior type-stub comment said LP was "partial" — wrong, SQL is equality. Note LP searches by **asset code**, not pool id. Fix → LP `ILIKE '%'||..||'%'` on both legs (1 line + regen). **Owned by 0274** (backend) — cross-ref card 6.3.
+- [ ] **F-0272S-3 — Dead sort UIs (assets total-supply + ledgers sequence). VALID+CURRENT.** Assets: FE sends `order` (`useAssetsList.ts:22`) but `/v1/assets` has no `order` param → ignored; arrow = client state only, never hits DB. Ledgers: FE builds then type-casts `order` away (`useLedgersList.ts:24`); API takes only `limit`+`cursor`, backend hardcodes `ORDER BY closed_at DESC, sequence DESC`. **User's cursor intuition is correct** — cursor pagination can't client-sort one page; sort must be a backend param baked into the cursor key, which neither backend supports today. Two honest options: (1) **remove the arrows now** (FE-small, stop lying to user) — recommended near-term; (2) add backend sort param + cursor that encodes sort key (backend-medium, backlog).
+- [ ] **F-0272S-4 — Silent no-op searches (transactions + NFT). VALID+CURRENT.** Transactions (`TransactionsListPage.tsx:40`): only fires a filter when input is a full G-account (`→ filter[source_account]`) or full C-contract (`→ filter[contract_id]`); tx-hash / partial / anything-else → **no filter sent, silent no-op** (no tx-hash search, no partial). NFT (`NftsListPage.tsx`): collection = exact equality on `collection_name`; contract requires valid C-strkey; partial → empty. By design but reads as broken. UX fix = placeholder + empty-state hints. **Unspawned** — FE-small.
+- [ ] **F-0272S-5 — Transaction type dropdown single-select. VALID+CURRENT.** Single `<Select>`, one type at a time (`TransactionFilters.tsx:69`); backend `filter[operation_type]` accepts one string only. Multi-select would need backend to accept CSV/array (`IN (...)`) + FE multi-select UI. **Unspawned** — medium (FE + backend).
+- [ ] **F-0272S-6 — No shared filter/search semantics across list pages (architectural). NEW 2026-06-01.** Each list page rolls its own match semantics — exact vs partial vs strkey-gated — with no shared abstraction; the topbar global search (`/v1/search`, broad multi-entity, redirects on single hit) is the **only** broad one. This divergence is the root of every per-page inconsistency above (and the accounts "filter" confusion). Covers user concerns "compare list-page filter logic to topbar + search endpoint" + "check the search filter on every page". **Disposition:** define a consistent search-semantics contract (recommend partial-ILIKE baseline for code/name fields; strkey-exact only for ID fields; document which pages intentionally differ). FE-medium + backend-coordination. **Unspawned.** Per-page audit table:
+
+  | Page | Field | Match | Reaches API? | Verdict |
+  | --- | --- | --- | --- | --- |
+  | Transactions | account/contract strkey | exact, prefix-gated | yes (only valid strkey) | works; no partial/hash |
+  | NFT | collection / contract | collection=exact, contract=strkey | yes | feels dead on partial |
+  | Assets | code | partial (ILIKE) | yes | good baseline |
+  | Liquidity Pools | asset_code | exact | yes | inconsistent w/ assets (F-0272S-2) |
+  | Accounts | account_id | substring in-memory | **no — mock** | fake (F-0272S-1) |
+  | Global (topbar) | `/v1/search` | broad multi-entity | yes | real, redirects on single hit |
+
+- [ ] **Accounts "New accounts" control = a SORT, not a filter (decode).** Part of F-0272S-1's fake-data caveat. `AccountsListPage.tsx:30` dropdown, 3 options: "Top XLM holders" = `xlm_desc`; "Recently active" = `last_seen_desc`; "New accounts" = `first_seen_desc` (newest-created first). Operates in-memory on the 80 synthetic accounts → **means nothing real until `/v1/accounts` exists** (0274).
+
+**Notes:** When the next 272-like closure container is spawned, fold items 3-6 into its scope (or spawn discrete backlog tasks from develop). Items 1-2 track via 0274/0275 — verify they actually cover F-0272S-1/F-0272S-2 when those tasks are picked up. **Suggested action split:** quick FE-only = remove dead sort arrows (F-0272S-3) + add search placeholder/empty-state hints (F-0272S-4); backend-small = LP `asset_code` ILIKE (F-0272S-2); backend-medium/backlog = `/v1/accounts` list endpoint (F-0272S-1, kills not-found bug + makes accounts sort real), assets/ledgers sort params w/ cursor (F-0272S-3 option 2), op-type multi-select (F-0272S-5); architectural = shared search-semantics contract (F-0272S-6).
+
+---
+
 ## Category 7 — Wave 6 visual / UX
 
 ### 7.1 Wave 6 visual polish micro-batch (chips, badges, transitions)
@@ -999,6 +1045,30 @@ already carry a col-1 detail link via `IdentifierDisplay`
 (`getIdentifierHref(type,value)`), so this is a convenience layer, not new
 navigation. `CopyButton` already `stopPropagation`s. Deferred by user to revisit
 later; spec captured so it can be picked up cold.
+
+---
+
+### 7.10 Route Suspense fallback shape mismatch — 3-phase load flicker
+
+- **Type:** BUG (UX / perceived performance)
+- **Effort:** ~2-4h (add per-route skeleton fallbacks)
+- **Severity / Class:** 🟡 C (visual)
+- **Pre-launch:** SHOULD (worst on home = first impression)
+- **STATUS:** TODO — **NEW finding 2026-06-01 (user-reported + code-root-caused this session)**
+
+**Rationale.** User observed the homepage flashes **three** distinct visual phases on refresh: (1) empty/generic skeletons that don't match the real layout, (2) skeletons of the actual components, (3) loaded data. Phases 1↔2 look jarringly inconsistent. **Root cause confirmed (code):** all routes are `React.lazy` + wrapped in a single shared `<Suspense fallback={<DetailSkeleton />}>` (`web/src/router/index.tsx:11-18`). `DetailSkeleton` (`libs/ui/src/states/skeletons/DetailSkeleton.tsx:9-21`) = title stub + 3 stacked `CardSkeleton`s — shown while the lazy JS chunk downloads (**phase 1**). Once `HomePage` mounts, its per-component skeletons render — `ChainOverview` KpiCell `<Skeleton>` + `LatestTransactions`/`LatestLedgers` `<TableSkeleton>` — which DO match the final layout (**phase 2**), then data resolves (**phase 3**). So phase-1 fallback (generic 3-card) is structurally unrelated to phase-2 (hero + 4 KPIs + 2 tables) → the jump.
+
+**Universal, severity varies.** Same lazy+`DetailSkeleton` mechanism on every route. Detail pages: phase-1 ≈ phase-2 (both "title + cards") → mild. List pages (`TransactionsListPage`/`LedgersListPage`): 3-cards vs header+table → moderate. **Home: worst** — real layout (hero + stat row + 2 tables) bears no resemblance to `DetailSkeleton` → most jarring, and it's the first-impression route.
+
+**Scope.** Replace the one-size `DetailSkeleton` Suspense fallback with route-appropriate fallbacks: a `HomeSkeleton` (hero + 4-up stat row + 2 table cards) for `/`, a list-shaped fallback for list routes, keep `DetailSkeleton` for detail routes. Or render the page shell synchronously and only Suspense the data region. Goal: phase-1 ≈ phase-2 so the lazy-chunk boundary is invisible.
+
+**Findings closed (sub-checklist):**
+
+- [ ] **F-W6-LOADSKEL-1** — Home route Suspense fallback (`DetailSkeleton`) does not match home layout → 3-phase flicker (`router/index.tsx:14`). Add `HomeSkeleton`.
+- [ ] **F-W6-LOADSKEL-2** — List routes: generic `DetailSkeleton` fallback ≠ header+table content skeleton (moderate). Add list-shaped fallback.
+- [ ] **F-W6-LOADSKEL-3** — Detail routes: mild mismatch (acceptable) — verify `DetailSkeleton` close enough, or per-entity fallback if cheap.
+
+**Notes:** Distinct from card **2.3** (EmptyState/LoadingState primitive consolidation, SKIP — about primitive existence, not fallback shape) and card **7.7 / F-W6-AG-5** (route-*transition* progress indicator for nav between routes, TODO — different mechanism, doesn't fix the fallback-shape mismatch). Confirmed NOT a duplicate. Live-observable on slow chunk load; localhost too fast to reliably screenshot the sub-second phase-1, but code path is definitive + user observes it directly.
 
 ---
 
@@ -1478,6 +1548,72 @@ later; spec captured so it can be picked up cold.
 - [x] F-W6-RESPONSIVE-5 — search category card overflows <660px — **RESOLVED (page overflow gone, live-confirmed 2026-05-29: scrollWidth 364 ≤ 375); 651px category-card row scrolls within `overflow-x:auto` container (same mitigation as RESPONSIVE-2). Residual per-card reflow = optional NICE enhancement.**
 
 **Notes:** Newly-surfaced live 2026-05-28; original screenshot at .playwright-mcp/e14-search-375-overflow.png (pre-swap Mona Sans state, retained for before/after). **RE-CLASSIFIED live re-verify 2026-05-29:** page-level overflow is GONE — `/search?q=test` @375 `documentElement.scrollWidth = 364 ≤ 375`. The R1/R2 code-only prediction (~644px page overflow, search untouched by R2 theme-token refactor) is REFUTED by the live run: the 651px category-card row scrolls inside an `overflow-x:auto` container rather than pushing page width (same scroll-within mitigation as tables, RESPONSIVE-2). F-W6-RESPONSIVE-5 → RESOLVED (page overflow mitigated). True per-card reflow/wrap still absent → optional NICE enhancement, mirroring how RESPONSIVE-2 table→card transform was treated (RESOLVED-as-bug; transform = separate optional). Screenshot: `screenshots/search-375-no-page-overflow.png`. Source: `design-parity-impact-2026-05-29.md` §Live re-verify 2026-05-29 (item 7).
+
+---
+
+## Full re-run 2026-06-01 — post-merge re-audit (Waves 1-4 code-level + deterministic baseline)
+
+Full audit re-run against merged HEAD `e3fe1968` (0272 fixes + 0243 ClickHouse + 0273 deploy). 5-agent code fan-out (API/type-safety, routes group 1, routes group 2, cross-cutting quality, Wave-4 state matrix) + deterministic baseline + targeted live (`:4201`). Live visual/responsive Waves 5-6 NOT fully re-run here (see note at end). New IDs = **F-RR-***.
+
+### Deterministic baseline
+
+- **Typecheck: GREEN** once deps built (`nx build @rumblefish/soroban-block-explorer-ui` → `nx typecheck web` passes). ⚠️ Standalone `nx typecheck web` with a **stale `libs/ui` dist** throws ~dozens of false `Property 'surface'/'stroke'/'tertiary' does not exist` + `bodyXsRegular` errors — the MUI theme augmentation (`libs/ui/src/theme/types.ts`, `declare module '@mui/material/styles'`) ships via libs/ui's **emitted `.d.ts`**, so web typecheck is fragile to dist freshness. CI builds deps first → green. **Benign build-order artifact, NOT a code regression** (libs/ui typechecks clean alone). Minor hygiene note → fits card 8.8 / nx build-graph docs (no card needed).
+- **Tests: 60/86 pass locally; 26 fail** with `TypeError: Cannot read properties of null (reading 'useEffect')` in `QueryClientProvider` across the 5 provider-wrapped suites (AccountDetail/AccountsList/AssetDetail/AssetsList/TransactionsList). Textbook **dual-React resolution** artifact — almost certainly triggered by building libs/ui dist (vitest normally aliases libs/ui→src; fresh dist shadows it). 0226 archive records "132 tests green on develop." **Classified local-env artifact, NEEDS-CI-CONFIRM — NOT a merged-code regression.** If CI ever shows the same → real dedupe-React/vitest-alias fix needed (would be 🟠).
+
+### 0272 consolidation — VERIFIED clean (grep-confirmed, not file-existence)
+
+NetworkToggle (0 source refs, dist rebuilt clean), formatter consolidation (`web/src/pages/format.ts` + `formatFee.ts` deleted, single `libs/ui/src/format/`), truncate (canonical `truncateMiddle`), debounce (`useDebouncedDraft`, no setTimeout reimpls), hex→token (AssetIcon/ContractInterface hex gone) — all **RESOLVED confirmed**. State handling: `QueryErrorState`/`DetailErrorState` landed + consumed uniformly across all 6 list pages + 7 detail pages; composite-NotFound sub-section gates present (`AccountDetailPage.tsx:91`, `ContractDetailPage.tsx:116`, `LiquidityPoolDetailPage.tsx:89`). Cards 2.1/2.4/5.3/11.1/11.2 reconfirmed DONE; SM-1/SM-2 landed.
+
+### NEW findings (F-RR-*)
+
+| ID | Sev | File:line | Finding | Disposition |
+| --- | --- | --- | --- | --- |
+| F-RR-1 | 🟠 | `useLedgersList.ts:24`, `useAccountTransactions.ts:24`, `useAssetsList.ts:26` | `order` query param injected via cast past generated query type (codegen has no `order`) — type-safety face of F-0272S-3; either backend ignores it (dead sort) or honours undocumented param | backend OpenAPI add `order`/`sort`; FE regen drops casts. Pairs w/ F-0272S-3 |
+| F-RR-2 | 🟡 | `home/HeroSearch.tsx:100` | "CTRL + K" hint pill — no global Cmd/Ctrl+K handler exists anywhere; advertises dead shortcut | wire hotkey or drop pill |
+| F-RR-3 | 🟡 | `home/LatestTransactions.tsx:53-68`, `LatestLedgers.tsx:51-66` | Footer "{rows.length} latest records" renders in loading+error (shows "0 latest records" under skeleton/error) | gate footer on success branch (= F-W4R-4) |
+| F-RR-4 | 🟢 | `LatestTransactions.tsx:48` vs `LatestLedgers.tsx:46` | Casing "Latest transactions" vs "Latest Ledgers" | pick one |
+| F-RR-5 | 🟢 | `transactions/TransactionsTable.tsx:38` vs `home/LatestTransactionsTable.tsx:28` | Same source-account field: list uses `IdentifierDisplay` (no copy), home uses `IdentifierWithCopy` | unify |
+| F-RR-6 | 🟡 | `transaction-detail/sections/OperationPicker.tsx:89` | Heading hardcoded "Choose payment" but lists ALL op types (Figma copy bleed) | "Choose operation" |
+| F-RR-7 | 🟡 | `transaction-detail/advanced/EventsSection.tsx:80-90` | `event.contract_id` rendered as plain `truncateMiddle` text, not a contract link — missed by the 2026-05-28 7-site identifier sweep | wrap in `IdentifierDisplay` |
+| F-RR-8 | 🟢 | `normal/humanizeOp.ts:43` | PAYMENT fallback summary omits amount (it's in `heavy.details`) | include amount |
+| F-RR-9 | 🟢 | `AccountDetailPage.tsx:60` | Breadcrumb 'Account' crumb has no `to` (not a link back) — likely deliberate while accounts mock | revisit w/ real `/accounts` |
+| F-RR-10 | 🟢 | `accounts/AccountSummary.tsx:41`; `AccountsTable.tsx:73,86` | `sequence_number` rendered with `formatAmount` (thousands separators "123,456,789") — Stellar seq usually raw | verify vs Figma |
+| F-RR-11 | 🟡 | `accounts/AccountsTable.tsx:73,86` | "Last/First Seen" ledger = plain `formatAmount` number, not a ledger link nor time (detail page links these) — decision carries into real page | link + format on real page |
+| F-RR-12 | 🟢 | `useAccountsList.ts:126` | `listPolicy` polling applied to `Promise.resolve(mock)` — pointless re-resolve of static data | remove while mock |
+| F-RR-13 | 🟡 | `LedgerDetailPage.tsx:80-102` | Breadcrumb hand-rolled (inline Link + "/") instead of shared `PageBreadcrumb` (TxDetail/AccountDetail use shared) | reuse `PageBreadcrumb` |
+| F-RR-14 | 🟡 | `ledgers/LedgerSummary.tsx:23-68` | Summary key/value reimplemented via local `Cell`/`Row` instead of shared `SummaryRow`/`SectionCard`; also no semantic `<h2>` | reuse primitives |
+| F-RR-15 | 🟢 | `ledgers/LedgerTransactions.tsx:41` | Reuses `TransactionsTable` incl. redundant "Ledger" column on a single-ledger page | hide column |
+| F-RR-16 | 🟡 | `nft-detail/NftEventBadge.tsx:13-22` | `EVENT_STYLES`/`FALLBACK_STYLE` use `colorsDark.*` literals unconditionally. App defaults `mode='dark'` (`ThemeProvider.tsx:54`) → **correct in default view, latent**; wrong only if light mode reachable. **Inverse concern:** card 11.2 "fix" made `AssetIcon` hardcode `colorsLight.*` — suspect in the dark DEFAULT (needs live dark-mode visual check). Both = theme-coupling via hardcoded palette objects instead of theme-aware `Chip`/`sx` callback | reuse `Chip`/theme palette; live-check both in dark default + verify light-mode reachability |
+| F-RR-17 | 🟠 | `pool-detail/PoolCharts.tsx:126,155,200-251` | `isError` destructured but never surfaced → fetch error renders as "No activity / try longer range" empty state, no retry; every sibling section shows `QueryErrorState` | add error+retry branch |
+| F-RR-18 | 🟡 | `liquidity-pools/FeePill.tsx:24` | `formatPercent(Number(raw), raw)` — 2nd arg is the non-finite fallback string; NaN fee renders raw `0.300000…` instead of em-dash | drop 2nd arg / pass `'—'` |
+| F-RR-19 | 🟡 | `pool-detail/PoolSummary.tsx:99` | Pool fee shown 2 ways: summary `formatAmount(fee,2)%` vs FeePill `formatPercent` (`.toFixed(2)`) — `0.305` → `0.305%` vs `0.30%` same page | reuse FeePill/formatPercent |
+| F-RR-20 | 🟡 | `pool-detail/helpers.ts:21,41`; `liquidity-pools/assetColor.ts:122,128` | Native-leg detected via `asset_type === 0` (link) vs `asset_type_name === 'native'` (label/color) — diverge under schema drift | single field for native check |
+| F-RR-21 | 🟡 | `search/GlobalSearchBar.tsx:81`; `search/SearchResultsTabs.tsx:20,40` | Search a11y incomplete: `role=listbox` rows lack `role=option`/`id`/`aria-activedescendant`; `role=tablist` has no `tabpanel`/`aria-controls` | complete ARIA patterns |
+| F-RR-22 | 🟢 | `search/useSearchResults.ts:31-38` | Tab labels mix singular/plural (Transactions/Accounts plural; Contract/Token/NFT/Liquidity Pool singular) — all are count tabs | pluralise all |
+| F-RR-23 | 🟢 | `search/SearchResultsTabs.tsx:67,105` | Active tab/badge use hardcoded `common.black` instead of token (low confidence — may be brand) | tokenise or confirm intentional |
+| F-RR-24 | 🟢 | `NftsListPage.tsx:34-37` | Invalid C-strkey contract filter silently applies no filter, `hasFilters` still true → unfiltered list, no hint | validation hint (adjacent F-0272S-4) |
+| F-RR-25 | 🟡 | `search/SearchResultsView.tsx:69-135` | `/search` reimplements error + 3 empty states INLINE — no retry button, swallows error classification (rate-limit/transient/generic→one msg). The one true SM-1 straggler (= F-W4R-1) | route through `QueryErrorState` + `EmptyState`; hook expose `error`/`refetch` |
+| F-RR-26 | 🟡 | `libs/ui/src/index.ts`; `libs/ui/package.json` | Main barrel re-exports `TimeSeriesChart` (`@mui/x-charts`, heaviest dep) + `OperationFlowTree`; no `"sideEffects": false` → tree-shake contract absent (works today via route split, fragile) | add `sideEffects:false` + sub-path export; reinforces F-AI-2 |
+| F-RR-27 | 🟢 | `accounts/AccountsTable.tsx:19`; `ledgers/LedgersTable.tsx:88` | Columns rebuilt in-render (no `useMemo`) while 12 sibling tables use module-level const; `ExplorerTable` not `React.memo` | useMemo or memo ExplorerTable |
+| F-RR-28 | 🟢 | `web/src/pages/format.test.ts` | Test outlived its deleted source (`format.ts` removed in 0272); now tests a libs/ui formatter from web root | move beside `libs/ui/src/format/amount.ts` |
+| F-RR-29 | 🟢 | `EmptyState` / `TableEmptyState` / `nft-detail/NftMetadata.tsx:59-73` / `assets/AssetMetadata.tsx:88-96` | 4 parallel empty-state renderers (visual drift: icon size/chip-bg/radius differ) | consolidate (= F-W4R-3, confirms F-U-5 / card 2.3) |
+| F-RR-30 | 🟢 | `AccountTransactions`/`AssetTransactions`/`ContractInvocations`/`ContractEvents`/`PoolParticipants`/`PoolTransactions`/`NftTransfers` | Identical loading/error/empty/table body-switch + pagination hand-copied 7× (no `SectionTableCard` primitive) | extract primitive (= F-W4R-2, card 2.3) |
+| F-RR-31 | 🟢 | `AccountDetailPage.tsx:36-53`; `AssetDetailPage.tsx:39-57`; `LiquidityPoolDetailPage.tsx:54-72` | Success-with-null-data path renders blank (no `if(!data) NotFound` guard) — other detail pages have it | add guard (= F-W4R-5, defensive) |
+| F-RR-32 | 🟢 | `search/SearchResultsPage.tsx:38-43` | Singleton-redirect depends on a 2-pass auto-tab-switch effect — works today, fragile | note only, no fix |
+
+### CONFIRMED still-open (existing cards — no new action, reconfirmed valid on merged code)
+
+- **F-AQ-8** — `results_meta_xdr` triple-cast (`transaction-detail/index.tsx:130-137`) now provably DEAD (generated type documents the field is intentionally not surfaced) → card 6.3.
+- **F-Z-2** — operation-type 27-entry enum hand-typed (`transactions/operationTypes.ts:21-58`); backend exposes `filter[operation_type]` as bare `string` → card 6.3.
+- **F-AQ-1** — `noUncheckedIndexedAccess` disabled; live hazards `utils/text.ts:3`, `ledgers/LedgerSummary.tsx:146` → card 3.1.
+- **F-AQ-7** — XDR `details: unknown` defensive narrowing (correct-by-design; root fix backend) → card 6.3.
+- **F-AK-2 / F-DP-3** — raw z-index literals, no scale (`AppShell:182`/`SecondaryNav:49`/`TopNav:98`/`Footer:66`/`PageGridBackdrop:26`/`HomeHeroGlow:18`) → card 11.3.
+- **F-AH-7 / F-X-2 / F-AH-4 / F-U-1** — folder structure (`web/src/search/` sibling, `web/src/utils/` single-file now `text.ts`, `web/src/pages/detail/` 7 generic primitives) → card 2.2.
+- **F-X-1** — `liquidity-pools/` ↔ `pool-detail/` cross-folder coupling → existing.
+
+### Live re-run scope note
+
+Live waves 5-6 (full 42-cell responsive matrix + Tier-4 subjective visual) were NOT exhaustively re-run this pass. Targeted live done this session: 404 main/h1, NetworkToggle gone, home h1+live indicator, responsive hamburger @375 (scrollWidth 364≤375), share-% real, loading-skeleton flicker (card 7.10). Two NEW visual findings need a live light-mode check to confirm severity: **F-RR-16** (NftEventBadge dark colors — only visible if app supports light mode) and **F-RR-17** (PoolCharts error masking — needs error injection). Full live matrix re-run = separate pass if required.
 
 ---
 

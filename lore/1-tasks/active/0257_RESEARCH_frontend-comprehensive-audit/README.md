@@ -63,6 +63,30 @@ history:
       silent no-op search, tx-type multi-select) → 0274/0275 own items
       1-2; items 3-5 still need backlog spawn from develop. Queue 0272
       merge-note block + card 1.3/6.3 cross-refs added.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      FULL RE-RUN on merged HEAD e3fe1968 (user-requested). 5-agent code
+      fan-out (API/type-safety, routes ×2, cross-cutting, Wave-4 state
+      matrix) + deterministic baseline + targeted live (:4201). Results in
+      audit-action-queue.md "Full re-run 2026-06-01" section. Baseline:
+      typecheck GREEN (deps built; stale-libs/ui-dist gives false errors —
+      benign build-order artifact, NOT regression); tests 60/86 local pass,
+      26 fail with React-null-in-QueryClientProvider = local dual-React
+      artifact from building libs/ui dist (0226 records green-on-develop),
+      classified NEEDS-CI-CONFIRM not regression. 0272 consolidation
+      (NetworkToggle/formatters/hex/debounce/truncate) + error-state
+      primitives VERIFIED clean. 32 NEW findings F-RR-1..32 (2 🟠:
+      order-param cast drift F-RR-1, PoolCharts error-masking F-RR-17; ~13
+      🟡 incl. search inline error/no-retry F-RR-25, dead Ctrl+K F-RR-2,
+      OperationPicker mislabel F-RR-6, EventsSection unlinked contract
+      F-RR-7, Ledger reuse F-RR-13/14, FeePill/fee-format F-RR-18/19,
+      search a11y F-RR-21, libs/ui barrel tree-shake F-RR-26; rest 🟢
+      consistency/reuse). Earlier-session NEW: card 7.10 loading-skeleton
+      flicker (F-W6-LOADSKEL-1/2/3), card 6.5 list-page F-0272S-1..6. No
+      spawns (per user); all captured in queue. Live Waves 5-6 full matrix
+      NOT re-run (targeted only) — separate pass if needed.
 ---
 
 # Frontend comprehensive audit (pre-launch)
