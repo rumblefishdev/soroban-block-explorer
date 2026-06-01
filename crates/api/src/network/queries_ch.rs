@@ -29,6 +29,15 @@ struct StatsRow {
 pub async fn fetch_stats(
     client: &clickhouse::Client,
 ) -> Result<NetworkStats, clickhouse::error::Error> {
+    // `ledgers` is ORDER BY `sequence`, NOT `closed_at`. Ordering or filtering
+    // by `closed_at` forces a full 12M-row table scan (measured) — and this
+    // endpoint is polled, so that scan recurs and eats the `read_rows` quota.
+    // `sequence` is monotonic with `closed_at` (a later ledger closes later),
+    // so we drive both reads off `sequence`: the latest ledger via
+    // `ORDER BY sequence DESC LIMIT 1` (primary-key read-in-order, one
+    // granule), and the 60s TPS window via a `sequence > max-200` prune that
+    // bounds the scan to the most recent ~200 ledgers (~20 min of headroom for
+    // a 60s window) before the `closed_at` predicate refines it.
     let row_opt = client
         .query(
             "SELECT \
@@ -39,7 +48,8 @@ pub async fn fetch_stats(
                     (SELECT sum(transaction_count) \
                             / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0) \
                      FROM ledgers \
-                     WHERE closed_at >= now64() - INTERVAL 60 SECOND), \
+                     WHERE sequence > (SELECT max(sequence) FROM ledgers) - 200 \
+                       AND closed_at >= now64() - INTERVAL 60 SECOND), \
                     0 \
                 )) AS tps_60s, \
                 ifNull((SELECT total_rows FROM system.tables \
@@ -51,7 +61,7 @@ pub async fn fetch_stats(
              FROM ( \
                  SELECT sequence, closed_at \
                  FROM ledgers \
-                 ORDER BY closed_at DESC \
+                 ORDER BY sequence DESC \
                  LIMIT 1 \
              ) AS latest",
         )

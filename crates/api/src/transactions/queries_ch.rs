@@ -22,27 +22,37 @@
 //!   CH analogue of the PG `soroban_events_appearances.amount` fold count,
 //!   not a token amount (same non-amount semantic as the PG column).
 //!
-//! ### List pagination + the partition-prune memory guard
+//! ### List pagination + the partition-prune / read-in-order guard
 //!
 //! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
-//! `intDiv(ledger_sequence, 500000)` partition: a global
-//! `transactions FINAL` scan over 20M+ rows otherwise blows the CH memory
-//! limit. We reproduce that here — first page prunes to the latest
-//! partition (`intDiv(max(sequence), 500000)`), subsequent pages prune to
-//! the cursor's partition. The known cost is that backward pagination
-//! across a 500k-ledger partition boundary stops early; this matches the
-//! reference design and is acceptable for an explorer (deep cross-partition
-//! cursor walks do not occur in the UI).
+//! `intDiv(ledger_sequence, 500000)` partition. We reproduce that — first
+//! page prunes to the latest partition (`intDiv(max(sequence), 500000)`),
+//! subsequent pages prune to the cursor's partition. The known cost is that
+//! backward pagination across a 500k-ledger partition boundary stops early;
+//! acceptable for an explorer (deep cross-partition cursor walks do not
+//! occur in the UI).
 //!
-//! `contract_ids` is populated on every statement, including the no-filter
-//! path, for full parity with PG (team decision 2026-05-29). Two of the
-//! three source subqueries (`soroban_invocations_appearances`,
-//! `soroban_events`) are `ORDER BY (contract_id, …)`, so filtering them by
-//! `transaction_id` is a partition scan rather than a PK seek — the exact
-//! pattern canonical SQL 02 flagged as a memory risk. It is bounded here
-//! because the inner `LIMIT` is applied before these correlated subqueries
-//! run (≤ `limit + 1` driver rows), but the no-filter first-page path
-//! still warrants an operator memory smoke before the prod flag flip.
+//! The partition prune alone is NOT enough. A partition is ~1e8 transactions
+//! on mainnet, and `transactions FINAL ... ORDER BY ... LIMIT` reads the
+//! **whole partition** (FINAL must merge it before the limit applies) —
+//! ~118M rows per page, which under frontend polling exhausted the
+//! `api_reader` `read_rows` hourly quota (CH `Code: 201`). The no-filter
+//! **Statement A** therefore drops FINAL and orders by the table's physical
+//! sort key `(ledger_sequence, application_order)`, so CH reads in primary-key
+//! order and stops at the limit (~2e5 rows/page; validated). This is safe
+//! because `transactions` is append-only and effectively unique on that key,
+//! with all projected columns immutable across versions; a Rust-side dedup is
+//! the belt-and-braces. The cursor keys on `application_order` for this path
+//! (also the correct in-ledger order — the old `id`-hash tie-break did not
+//! preserve it). The filtered Statements B/C still key on the
+//! `transactions.id` surrogate (they drive off `operations_appearances`).
+//!
+//! `operation_types` + `contract_ids` come from the shared
+//! [`ch::fetch_tx_list_aggregates`] keyed on the ≤ `limit + 1` page rows.
+//! `contract_ids` is **ops-only** there (sourced from `operations_appearances`
+//! by primary-key seek) — the full 3-source parity scan was itself a per-page
+//! partition read that blew the same quota; see `common::ch` for the parity
+//! caveat.
 
 use clickhouse::Row;
 use serde::Deserialize;
@@ -406,20 +416,41 @@ pub async fn fetch_list(
 
         // --- Statement A: no contract / op_type filter (default path) ------
         (None, None) => {
+            // Read-in-order fast path. `transactions` is ORDER BY
+            // `(ledger_sequence, application_order)`, so ordering + keying the
+            // page on that tuple lets CH read in primary-key order and stop at
+            // LIMIT instead of scanning + sorting the whole partition.
+            //
+            // FINAL is dropped here ON PURPOSE. With FINAL, CH must merge the
+            // entire partition before it can apply the limit — measured ~118M
+            // rows read per page on the mainnet head partition; without FINAL
+            // the same page reads ~2e5. This is the load-bearing fix for the
+            // `read_rows` quota blow-up (CH Code: 201) the polled list path
+            // caused. It is safe because `transactions` is append-only and
+            // effectively unique on `(ledger_sequence, application_order)`
+            // (validated: zero net dedup on the live partition), and every
+            // projected column is immutable across ReplacingMergeTree versions,
+            // so a non-FINAL read returns identical values. Any rare duplicate
+            // row is dropped by the `dedup_by_id` pass below.
+            //
+            // The cursor therefore keys on `application_order` (the physical
+            // sort key — also the correct in-ledger apply order, which the old
+            // `id`-hash tie-break did NOT preserve), not the `id` surrogate.
+            // See `handlers::list_cursor_for`.
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
-                    SELECT * FROM transactions FINAL \
+                    SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
                           = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND (? IS NULL OR (ledger_sequence, id) {op} (?, ?)) \
+                      AND (? IS NULL OR (ledger_sequence, toInt64(application_order)) {op} (?, ?)) \
                       AND (? IS NULL OR source_id = ?) \
-                    ORDER BY ledger_sequence {order}, id {order} \
+                    ORDER BY ledger_sequence {order}, application_order {order} \
                     LIMIT ? \
                  ) t \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 ORDER BY t.ledger_sequence {order}, t.id {order}",
+                 ORDER BY t.ledger_sequence {order}, t.application_order {order}",
             );
             client
                 .query(&sql)
@@ -434,6 +465,16 @@ pub async fn fetch_list(
                 .await?
         }
     };
+
+    // Statement A drops FINAL for the read-in-order fast path (see above), so
+    // a re-ingested transaction could in principle surface as two rows with
+    // the same `id`. Drop any such duplicate, keeping the first (the rows are
+    // already in the requested order). A no-op on the FINAL'd B/C paths and on
+    // the live partition (validated zero net dedup), but cheap insurance on
+    // ≤ `limit + 1` rows.
+    let mut rows = rows;
+    let mut seen = std::collections::HashSet::with_capacity(rows.len());
+    rows.retain(|r| seen.insert(r.id));
 
     // Second pass: fetch operation_types + contract_ids for the page's keys
     // (non-correlated derived-table aggregation; CH 26.3 rejects correlated
