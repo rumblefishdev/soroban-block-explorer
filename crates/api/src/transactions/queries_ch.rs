@@ -675,6 +675,15 @@ async fn resolve_contract_surrogate(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Decode a `DateTime64(3, 'UTC')` millisecond value into a `DateTime<Utc>`.
+///
+/// Fails loudly (`expect`) on an out-of-range value rather than degrading,
+/// matching the ledgers CH read path (the 0243 review explicitly removed a
+/// `Utc::now()` fallback in favour of fail-loud, to never silently substitute
+/// a wrong timestamp). The input is a `ledgers.closed_at` written by the
+/// indexer from a real Stellar ledger header, so an out-of-`i64`-millis-range
+/// value is a data-integrity violation, not an expected condition — the panic
+/// is effectively unreachable and surfaces a corrupt row immediately.
 fn millis_to_utc(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms)
         .single()

@@ -196,8 +196,10 @@ mod tests {
 
     #[test]
     fn ch_cursor_round_trips() {
-        // CH path: id = ledger_sequence, tiebreak = transactions.id hash
-        // surrogate (may be negative — cityhash64 lower-bits as i64).
+        // CH variant: ledger_sequence is the partition key + primary sort;
+        // tiebreak is the transactions.id hash surrogate (the SQL `id`
+        // column in the (ledger_sequence, id) keyset — may be negative,
+        // cityhash64 lower bits as i64).
         let c = TxListCursor::Ch {
             ledger_sequence: 50_000,
             tiebreak: -123,
