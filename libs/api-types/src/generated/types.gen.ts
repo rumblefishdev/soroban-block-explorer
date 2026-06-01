@@ -1961,7 +1961,7 @@ export type ListLedgersData = {
      */
     cursor?: string;
     /**
-     * First-page sort flip: `asc` walks oldest→newest, `desc` (default) walks newest→oldest. Ignored when `cursor` is supplied — direction is then encoded in the cursor envelope.
+     * Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.
      */
     order?: string;
   };

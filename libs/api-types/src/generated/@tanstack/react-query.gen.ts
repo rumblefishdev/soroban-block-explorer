@@ -661,9 +661,9 @@ export const listLedgersQueryKey = (options?: Options<ListLedgersData>) =>
   createQueryKey('listLedgers', options);
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;
- * pass `?order=asc` on a first-page request to flip the initial walk to
- * oldest-first. Cursor pagination otherwise.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgersOptions = (options?: Options<ListLedgersData>) =>
   queryOptions<
@@ -690,9 +690,9 @@ export const listLedgersInfiniteQueryKey = (
   createQueryKey('listLedgers', options, true);
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;
- * pass `?order=asc` on a first-page request to flip the initial walk to
- * oldest-first. Cursor pagination otherwise.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgersInfiniteOptions = (
   options?: Options<ListLedgersData>

@@ -4621,3 +4621,97 @@ async fn ledgers_forward_then_backward_walk_matches() {
         forward_seqs[0]
     );
 }
+
+/// Behaviour regression for `?order=asc` (task 0274 gap #3).
+///
+/// The first implementation reused `Direction::Prev` for asc, which
+/// presented the oldest block in DESC order and broke forward
+/// pagination (the `next` cursor led nowhere). Correct behaviour:
+///
+/// - `order=desc` (default) → sequences strictly DECREASING (newest first),
+/// - `order=asc` → sequences strictly INCREASING (oldest first),
+/// - asc `next_cursor` keeps walking ascending, strictly past the page.
+#[tokio::test]
+async fn ledgers_order_asc_is_oldest_first_and_paginates_forward() {
+    async fn page(app: &Router, uri: String) -> (Vec<i64>, Option<String>) {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let seqs = json["data"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|r| r["sequence"].as_i64().unwrap())
+            .collect();
+        let next = json["page"]["next_cursor"].as_str().map(str::to_owned);
+        (seqs, next)
+    }
+
+    fn is_strictly_increasing(s: &[i64]) -> bool {
+        s.windows(2).all(|w| w[0] < w[1])
+    }
+    fn is_strictly_decreasing(s: &[i64]) -> bool {
+        s.windows(2).all(|w| w[0] > w[1])
+    }
+
+    let Some(pool) = cursor_matrix_pool().await else {
+        return;
+    };
+    let app = build_app(pool);
+    const LIMIT: u32 = 5;
+
+    // desc (default): newest-first.
+    let (desc, _) = page(&app, format!("/v1/ledgers?limit={LIMIT}&order=desc")).await;
+    if desc.len() < 2 {
+        eprintln!("DB has <2 ledgers — skipping order assertions");
+        return;
+    }
+    assert!(
+        is_strictly_decreasing(&desc),
+        "order=desc must be newest-first (strictly decreasing): {desc:?}"
+    );
+
+    // asc: oldest-first — the fix.
+    let (asc, asc_next) = page(&app, format!("/v1/ledgers?limit={LIMIT}&order=asc")).await;
+    assert!(
+        is_strictly_increasing(&asc),
+        "order=asc must be oldest-first (strictly increasing): {asc:?}"
+    );
+
+    // The two orders genuinely address opposite ends of the table.
+    assert!(
+        asc[0] < desc[0],
+        "asc head (oldest={}) must be below desc head (newest={})",
+        asc[0],
+        desc[0]
+    );
+
+    // asc forward pagination: next_cursor continues ascending, strictly
+    // past the first page (the exact behaviour the old impl broke).
+    let Some(next) = asc_next else {
+        eprintln!(
+            "DB too small for an asc second page (needs >{LIMIT} ledgers) — skipping forward step"
+        );
+        return;
+    };
+    let (asc2, _) = page(
+        &app,
+        format!("/v1/ledgers?limit={LIMIT}&order=asc&cursor={next}"),
+    )
+    .await;
+    assert!(
+        is_strictly_increasing(&asc2),
+        "asc page 2 must stay ascending: {asc2:?}"
+    );
+    assert!(
+        *asc.last().unwrap() < asc2[0],
+        "asc page 2 head ({}) must be strictly after page 1 tail ({})",
+        asc2[0],
+        asc.last().unwrap()
+    );
+}

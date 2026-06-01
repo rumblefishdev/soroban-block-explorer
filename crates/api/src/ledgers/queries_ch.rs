@@ -14,7 +14,7 @@ use clickhouse::Row;
 use domain::OperationType;
 use serde::Deserialize;
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, direction_sql, keyset_sql};
 
 use super::dto::LedgerListItem;
 use super::queries::{LedgerDetailRow, LedgerTxRow};
@@ -122,11 +122,12 @@ pub async fn fetch_list(
     client: &clickhouse::Client,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<LedgerListItem>, clickhouse::error::Error> {
     let cursor_closed_at_ms = cursor.map(|c| c.ts.timestamp_millis());
     let cursor_sequence = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     let sql = format!(
         "SELECT \

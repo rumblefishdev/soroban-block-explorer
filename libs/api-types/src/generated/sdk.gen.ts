@@ -200,9 +200,9 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
   >({ url: '/v1/contracts/{contract_id}/invocations', ...options });
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;
- * pass `?order=asc` on a first-page request to flip the initial walk to
- * oldest-first. Cursor pagination otherwise.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgers = <ThrowOnError extends boolean = false>(
   options?: Options<ListLedgersData, ThrowOnError>

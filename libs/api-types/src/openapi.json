@@ -669,7 +669,7 @@
     "/v1/ledgers": {
       "get": {
         "tags": ["ledgers"],
-        "summary": "List ledgers ordered by `(closed_at DESC, sequence DESC)` by default;\npass `?order=asc` on a first-page request to flip the initial walk to\noldest-first. Cursor pagination otherwise.",
+        "summary": "List ledgers ordered by `(closed_at, sequence)` — newest-first by\ndefault, oldest-first with `?order=asc`. The order is sticky across\npages; cursor pagination walks forward/back within the chosen order.",
         "operationId": "list_ledgers",
         "parameters": [
           {
@@ -696,7 +696,7 @@
           {
             "name": "order",
             "in": "query",
-            "description": "First-page sort flip: `asc` walks oldest→newest, `desc` (default) walks newest→oldest. Ignored when `cursor` is supplied — direction is then encoded in the cursor envelope.",
+            "description": "Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.",
             "required": false,
             "schema": {
               "type": "string"

@@ -219,19 +219,27 @@ pub async fn get_interface(
         }
     };
 
-    // Decode JSONB into the typed schema; shape drift → None + warn.
-    let interface_metadata = row.interface_metadata.and_then(|raw| {
-        match serde_json::from_value::<ContractInterfaceMetadata>(raw) {
-            Ok(parsed) => Some(parsed),
-            Err(err) => {
-                tracing::warn!(
-                    "interface_metadata shape drift for {}: {err}",
-                    row.contract_id
-                );
-                None
-            }
+    // Decode JSONB into the typed schema. `None` (no `functions` key) is a
+    // legit empty (SAC / stub). Present-but-unparseable is shape drift or a
+    // legacy-shape row — fail LOUD (500) so it is noticed and fixed,
+    // not silently degraded to `interface_metadata: null`.
+    let interface_metadata = match row
+        .interface_metadata
+        .map(serde_json::from_value::<ContractInterfaceMetadata>)
+        .transpose()
+    {
+        Ok(m) => m,
+        Err(err) => {
+            tracing::error!(
+                contract_id = %row.contract_id,
+                "interface_metadata present but failed to decode — shape drift between indexer output and the API DTO, or a legacy-shape row needing re-index: {err}"
+            );
+            return errors::internal_error(
+                errors::INTERFACE_METADATA_CORRUPT,
+                "interface metadata could not be decoded",
+            );
         }
-    });
+    };
     let mut resp = Json(InterfaceResponse {
         contract_id: row.contract_id,
         wasm_hash: row.wasm_hash,
