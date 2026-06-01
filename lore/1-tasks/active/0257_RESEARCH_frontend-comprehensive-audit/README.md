@@ -41,6 +41,28 @@ history:
     status: active
     who: karolkow
     note: 'Wave 1 done (6 sub-phases, ~40 findings, 1 CRITICAL + 9 HIGH). Added Triage Gates section to Execution Strategy: Gate A (end Wave 3) + Gate B (end Wave 5). Invalidation taxonomy + cascade compression table + anti-pattern list. Findings classified A-E (baseline-breaker / routing-contract / visual-layout / catalog-only / off-band). Class A+B+C → fix-first at gates; Class D → defer Phase 3; Class E → off-band immediate.'
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      Incoming-merge protocol: merged develop into audit branch (ZERO
+      conflicts) bringing closure task 0272 (PR #230, archived), 0273
+      (CloudFront deploy, archived), 0243 (ClickHouse read paths), and
+      spawned active tasks 0274 (backend API gaps) + 0275 (contracts
+      list). 0272 self-reconciled the master action queue during its own
+      closure — code-verified impact pass found 0 residual finding/card
+      flips needed. Confirmed RESOLVED by 0272: F-DP-1 (NetworkToggle
+      removed e9122732), F-DP-2 (hex→tokens 0139a8a3), cards 2.1/2.4
+      (formatter consolidation), 5.1/5.3 (404 dedup), 7.2 (live
+      indicator), 11.5 (hamburger nav d184457f), and 7.3 share-% NOW
+      genuinely fixed (formatPercent .toFixed(2)) — supersedes the
+      2026-05-29 ILLUSORY verdict. Still TODO: F-DP-3/card 11.3 (z-index
+      scale), F-DP-4/card 11.4 (OperationFlowTree, data-blocked). New:
+      5 list-page findings from 0272 session (accounts=mock-data 404 root
+      cause, LP-vs-assets exact-vs-partial search, dead sort arrows,
+      silent no-op search, tx-type multi-select) → 0274/0275 own items
+      1-2; items 3-5 still need backlog spawn from develop. Queue 0272
+      merge-note block + card 1.3/6.3 cross-refs added.
 ---
 
 # Frontend comprehensive audit (pre-launch)

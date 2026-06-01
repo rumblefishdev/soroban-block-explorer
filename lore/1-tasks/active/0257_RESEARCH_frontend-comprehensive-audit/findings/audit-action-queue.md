@@ -63,6 +63,28 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **AL
 
 > **Live re-verify 2026-05-29 — general note.** No new regressions from design_parity R1+R2 confirmed live (desktop sweep 9 routes clean). **Data limitation:** local dataset has 0 soroban / 0 multi-op txs (all 38 single-op) — blocks full OperationFlowTree nested-tree verify (card 11.4). Full evidence + verdict table in `design-parity-impact-2026-05-29.md` §Live re-verify 2026-05-29.
 
+> **0272 closure merge note (2026-06-01, PR #230 merge `016e6a6d`, develop merge into `research/0257` = ZERO conflicts).** The elastic closure task **0272** (now `archive/`, `status: completed`) shipped the pre-launch fix subset and **self-reconciled this queue during its own closure** — card STATUS + sub-checklists + appendix already reflect its work. Post-merge impact pass (code-verified against merged prod) found **0 residual flips needed**. What 0272 landed:
+>
+> - **NetworkToggle removal** (`e9122732`) → **F-DP-1 / card 11.1 RESOLVED** — component + wiring deleted (not hidden); 0 source refs remain (stale `libs/ui/dist/` type defs are compiled artifacts only — non-blocking, worth a `dist/` rebuild/gitignore check).
+> - **Hardcoded hex → design tokens** (`0139a8a3`) → **F-DP-2 / card 11.2 RESOLVED** — AssetIcon hex gone; only `libs/ui/src/theme/colors.ts` holds hex (correct token source).
+> - **C2.1 + C2.4 formatter/truncate/debounce consolidation** → cards 2.1 + 2.4 DONE — `libs/ui/src/format/{amount,numbers,stroops}.ts` + `libs/ui/src/hooks/useDebouncedDraft.ts` created; `web/src/pages/format.ts` + `transaction-detail/shared/formatFee.ts` deleted. (`web/src/pages/transactions/formatters.ts` survives by design — now holds only `formatAbsoluteUtc`, out of 2.1 scope.)
+> - **Catch-all 404 dedup + typed NFT not-found** → cards 5.1 + 5.3 DONE — `web/src/pages/NotFoundPage.tsx` + `RouteErrorBoundary.tsx`.
+> - **Live status indicator** → card 7.2 DONE (FE scope) — `web/src/api/hooks/useLiveStatus.ts` + `home/LiveIndicator.tsx`.
+> - **Responsive hamburger nav** (`d184457f`) → card 11.5 DONE — `SecondaryNav.tsx` drawer <768px.
+> - **PoolParticipants share-% — NOW GENUINELY FIXED** (card 7.3 DONE). Under design_parity R2 this was **VERIFIED ILLUSORY** (`formatAmount(_,2)` = minDecimals, no rounding — see line above). 0272 replaced it with `formatPercent(Number(row.share_percentage))` (`PoolParticipants.tsx:54-55`, real `.toFixed(2)` cap). Code-verified real this pass. **Supersedes the 2026-05-29 ILLUSORY verdict.**
+>
+> **Still TODO (0272 did NOT touch):** F-DP-3 / card 11.3 (raw z-index → named scale — `d184457f` even *added* a new raw `zIndex:3` on TopNav); F-DP-4 / card 11.4 (OperationFlowTree collapse — verify still data-blocked).
+>
+> **New findings from 0272 session (list-page filter/sort/search audit, 2026-06-01)** — 5 items, NOT previously in this queue. Spawned as active tasks **0274** (backend) + **0275** (contracts list) on develop:
+>
+> 1. **Accounts list = MOCK data (root cause of "account not found").** `web/src/api/hooks/useAccountsList.ts` generates 80 synthetic G-strkey accounts; `/v1/accounts` list endpoint NOT implemented → row click → real `GET /v1/accounts/{id}` → 404. **Important:** this partially un-resolves the card 1.3 "accounts half DONE" claim — the list renders but its data is fake. Real endpoint owned by **0274**.
+> 2. **LP vs assets search inconsistency (real bug).** LP `filter[asset_code]` is EXACT (`liquidity_pools/queries.rs:340`); assets `filter[code]` is partial ILIKE (`assets/queries.rs:132`). Fix → LP ILIKE both legs. Owned by **0274**.
+> 3. **Dead sort UIs.** Assets total-supply + ledgers sequence sort send `order` param the API ignores (fixed-order cursor). Remove arrows or add backend sort. → spawn backlog from develop.
+> 4. **Silent no-op searches.** Transactions search only fires on full G-/C- strkey; NFT collection = exact match. UX: placeholder/empty-state hints. → spawn backlog from develop.
+> 5. **Transaction type dropdown** single-select only (backend `filter[operation_type]` one string). Multi-select needs backend `IN (...)`. → spawn backlog from develop.
+>
+> Source: `archive/0272_FEATURE_audit-0257-closing.md` §Session findings + §Future Work. Items 3-5 not yet spawned (backlog, from develop). **0274/0275 currently lack `related_tasks: ['0257']` backlink** — add from develop.
+
 ## Excluded from this queue (background only)
 
 - Already-resolved on develop (Gate A + Gate B + 0270): F-D-2, F-AE-5, F-K-2/3/9, F-AN-8, F-CO-1, F-L-1, F-K-4, NFT search-404 regression, F-E-1, F-E-8 — all marked `RESOLVED` in appendix.
@@ -128,6 +150,8 @@ Added from `design-parity-impact-2026-05-29.md` §7 (live re-verify queue). **AL
 - **STATUS:** PARTIAL
 - **design_parity note:** `/contracts` + `/accounts` nav entries (`NAV_LINKS` in routes.ts) AND stub routes landed in `06ab34cc` (design_parity). F-A-5 Gap 1 **nav-link half DONE**; the real list-page half is still TODO — both routes currently render via `<PageStub>` placeholder, not a real list. PageStub is now the stub renderer for these two routes (see card 2.2 scope conflict).
 - **design_parity R2 note (2026-05-29, PR #224, `fce0d666` / merge `35ac27c0`):** **`/accounts` is now a REAL list page** — `web/src/pages/AccountsListPage.tsx` + `web/src/api/hooks/useAccountsList.ts` + `accounts/AccountsTable.tsx` + `accounts/AccountsFilters.tsx` (cursor pagination, filters, sort, empty/error/loading states), route wired `router/index.tsx:48`. **`/contracts` STILL `<PageStub>`** (`router/index.tsx:66`). F-A-5 Gap 1 **accounts half DONE; contracts half still TODO.** Card stays **PARTIAL** until `/contracts` real list ships. **live re-verify 2026-05-29:** `/accounts` PASS (20 rows, sort/search/with-domain filters, cursor pagination `?cursor=20`, row→detail links, empty state all functional — accounts half now live-VERIFIED DONE); `/contracts` confirmed live stub ("implementation pending" PageStub, no h1/table). Card OVERALL stays PARTIAL. Source: `design-parity-impact-2026-05-29.md` §1, §2, §3, §Live re-verify 2026-05-29.
+
+- **0272 closure note (2026-06-01, PR #230):** `/contracts` real-list half now owned by spawned active task **0275** (`active/0275_FEATURE_contracts-list-page-design-and-impl.md`). **Caveat on the accounts half:** 0272's list-page audit found `/accounts` list renders from **MOCK data** (`useAccountsList.ts` = 80 synthetic G-strkeys; `/v1/accounts` list endpoint not implemented → row click 404s). The list page UI is DONE but its data is fake — real endpoint owned by spawned task **0274**. So "accounts half DONE" is UI-only; data path still open under 0274.
 
 **Rationale.** Contract detail pages exist at `/contracts/:id` but are reachable only by deep link — no list page, no nav entry. Users browsing the explorer cannot discover any contract. Per Wave 1 archaeology this is a launch-blocker carried over from 0075's Future Work. F-A-5 spec/source consistency audit also flagged it.
 
@@ -672,7 +696,7 @@ incomplete consolidation, not bad architecture.
 - [ ] 0075 #6 Emerged — `interface_metadata` hand-typed from indexer source
 - [ ] 0073 #5 Emerged — Balances cannot distinguish SAC from API (backend gap)
 
-**Notes:** Spawn backend tasks where needed; this card mostly coordinates.
+**Notes:** Spawn backend tasks where needed; this card mostly coordinates. **0272 closure note (2026-06-01):** spawned active task **0274** (`active/0274_FEATURE_backend-api-gaps-from-fe-audit.md`) now owns the backend API-gap follow-ups surfaced by the 0272 FE-gaps audit — `/v1/accounts` list endpoint + LP `filter[asset_code]` ILIKE + other field gaps (`docs/audits/2026-05-29-frontend-api-gaps.md`). Some of this card's items (esp. backend field/enum exposure) may fold into 0274 — reconcile when picking this card up.
 
 ---
 
