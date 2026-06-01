@@ -14,7 +14,7 @@ import { formatAmount } from '../format.js';
 import { Dash } from '../transactions/cells.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta, iconKindFor } from './assetType.js';
+import { assetTypeMeta } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -29,11 +29,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <AssetIcon
-            code={row.asset_code}
-            iconUrl={row.icon_url}
-            kind={iconKindFor(row.asset_type_name)}
-          />
+          <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               <Link

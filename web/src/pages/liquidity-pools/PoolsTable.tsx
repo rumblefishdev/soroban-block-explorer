@@ -14,10 +14,13 @@ import { formatAmount } from '../format.js';
 // labelling + linking rules apply equally to the list — reuse the
 // shared helpers rather than duplicating, to keep native-asset / SAC
 // mirror / classic-credit precedence in one place.
-import { assetLegLabel, legHref } from '../pool-detail/helpers.js';
+import {
+  assetLegLabel,
+  legHref,
+  reserveDotColor,
+} from '../pool-detail/helpers.js';
 import { Dash } from '../transactions/cells.js';
 
-import { reserveDotColor } from './assetColor.js';
 import { PoolAssetPair } from './PoolAssetPair.js';
 import { FeePill } from './FeePill.js';
 
@@ -46,7 +49,7 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
 }
 
 /** Colored dot for the per-leg reserves rows — color comes from the
- *  same `assetLegColor` mapping that drives the leg `AssetIcon`. */
+ *  same per-asset `assetColor` hash that drives the leg `AssetIcon`. */
 function AssetDot({ color }: { color: string }) {
   return (
     <Box

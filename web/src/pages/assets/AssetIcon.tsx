@@ -1,38 +1,16 @@
 import { Avatar } from '@mui/material';
-import type { Theme } from '@mui/material/styles';
 
 import { safeHttpUrl } from '../url.js';
 
-export type AssetIconKind = 'native' | 'classic' | 'sac' | 'default';
+import { assetColor } from './assetColor.js';
 
 interface AssetIconProps {
-  /** Asset code — its first letter is the fallback when no icon is available. */
+  /** Asset code — its first letter is the letter fallback, and the value
+   *  hashed for the fallback colour (same code → same colour everywhere). */
   code?: string | null;
   /** Asset icon URL from metadata; falls back to a letter avatar when absent. */
   iconUrl?: string | null;
   size?: number;
-
-  kind?: AssetIconKind;
-}
-
-function kindColors(theme: Theme, kind: AssetIconKind) {
-  switch (kind) {
-    case 'native':
-      return { bg: theme.palette.blue[100], fg: theme.palette.blue[600] };
-    case 'classic':
-      return {
-        bg: theme.palette.emerald[100],
-        fg: theme.palette.emerald[600],
-      };
-    case 'sac':
-      return { bg: '#724311', fg: '#fffcc2' };
-    case 'default':
-    default:
-      return {
-        bg: theme.palette.surface.grayMain,
-        fg: theme.palette.text.secondary,
-      };
-  }
 }
 
 /**
@@ -40,31 +18,25 @@ function kindColors(theme: Theme, kind: AssetIconKind) {
  * assets) is shown: assets table, account balances, asset detail header,
  * and liquidity-pool legs. Renders the metadata `iconUrl` when present
  * (sanitised via `safeHttpUrl`), otherwise falls back to a letter avatar
- * derived from the code — the fallback is MUI `Avatar`'s native behaviour,
- * so a broken/absent image needs no manual handling.
+ * coloured per asset identity via `assetColor` — so the same asset reads
+ * as the same colour across every view. The image/letter switch is MUI
+ * `Avatar`'s native behaviour, so a broken/absent image needs no handling.
  */
-export function AssetIcon({
-  code,
-  iconUrl,
-  size = 32,
-  kind = 'default',
-}: AssetIconProps) {
+export function AssetIcon({ code, iconUrl, size = 32 }: AssetIconProps) {
   const letter = (code ?? '?').trim().charAt(0).toUpperCase() || '?';
+  const { bg, fg } = assetColor(code);
   return (
     <Avatar
       src={safeHttpUrl(iconUrl) ?? undefined}
       alt=""
-      sx={(theme) => {
-        const { bg, fg } = kindColors(theme, kind);
-        return {
-          width: size,
-          height: size,
-          fontSize: size * 0.42,
-          fontWeight: 600,
-          bgcolor: bg,
-          color: fg,
-          flexShrink: 0,
-        };
+      sx={{
+        width: size,
+        height: size,
+        fontSize: size * 0.42,
+        fontWeight: 600,
+        bgcolor: bg,
+        color: fg,
+        flexShrink: 0,
       }}
     >
       {letter}

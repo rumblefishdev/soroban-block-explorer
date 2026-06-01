@@ -4,13 +4,13 @@ import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 
 import { KpiCell } from '../detail/KpiCell.js';
-import { assetLegColor } from '../liquidity-pools/assetColor.js';
 
 import {
   assetLegLabel,
   formatCompactAmount,
   isPoolStale,
   legHref,
+  reserveDotColor,
 } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
@@ -71,13 +71,13 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
         label={`${codeA} reserve`}
         value={formatCompactAmount(pool.reserve_a)}
         caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
-        valueColor={assetLegColor(pool.asset_a).dot}
+        valueColor={reserveDotColor(pool.asset_a)}
       />
       <KpiCell
         label={`${codeB} reserve`}
         value={formatCompactAmount(pool.reserve_b)}
         caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
-        valueColor={assetLegColor(pool.asset_b).dot}
+        valueColor={reserveDotColor(pool.asset_b)}
       />
       <KpiCell
         label="Participants"

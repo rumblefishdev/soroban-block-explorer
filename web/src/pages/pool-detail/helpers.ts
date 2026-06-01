@@ -1,5 +1,6 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 
+import { assetColor } from '../assets/assetColor.js';
 import { routes } from '../../router/routes.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -45,6 +46,15 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
       leg.asset_type_name ?? 'null'
     })`
   );
+}
+
+/**
+ * Reserve-dot colour for a pool leg — the saturated mid-tone of the leg's
+ * per-asset colour (`assetColor`), keyed identically to the leg avatar so
+ * each reserve row's dot matches its asset's avatar.
+ */
+export function reserveDotColor(leg: PoolAssetLeg): string {
+  return assetColor(assetLegLabel(leg)).dot;
 }
 /**
  * A pool is "stale" when its newest snapshot is older than 7 days (matches

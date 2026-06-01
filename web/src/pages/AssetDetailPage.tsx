@@ -18,7 +18,7 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta, iconKindFor } from './assets/assetType.js';
+import { assetTypeMeta } from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -65,7 +65,6 @@ export default function AssetDetailPage() {
             <AssetIcon
               code={data.asset_code}
               iconUrl={data.icon_url}
-              kind={iconKindFor(data.asset_type_name)}
               size={40}
             />
           )}

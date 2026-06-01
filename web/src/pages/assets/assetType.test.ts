@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ASSET_TYPE_FILTERS, assetTypeMeta, iconKindFor } from './assetType.js';
+import { ASSET_TYPE_FILTERS, assetTypeMeta } from './assetType.js';
 
 describe('assetTypeMeta', () => {
   it('maps known type names to label + color', () => {
@@ -33,22 +33,6 @@ describe('assetTypeMeta', () => {
 
   it('renders empty type name as-is (nullish coalescing keeps "")', () => {
     expect(assetTypeMeta('')).toEqual({ label: '', color: 'neutral' });
-  });
-});
-
-describe('iconKindFor', () => {
-  it('maps each known type name to the avatar kind', () => {
-    expect(iconKindFor('native')).toBe('native');
-    expect(iconKindFor('classic_credit')).toBe('classic');
-    expect(iconKindFor('sac')).toBe('sac');
-    // Soroban tokens reuse the classic avatar palette today.
-    expect(iconKindFor('soroban')).toBe('classic');
-  });
-
-  it('falls back to the default kind for unknown / null / undefined', () => {
-    expect(iconKindFor(null)).toBe('default');
-    expect(iconKindFor(undefined)).toBe('default');
-    expect(iconKindFor('mystery')).toBe('default');
   });
 });
 
