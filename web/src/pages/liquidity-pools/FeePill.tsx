@@ -21,7 +21,7 @@ export function FeePill({
   raw: string;
   prefix?: boolean;
 }) {
-  const text = formatPercent(Number(raw), raw);
+  const text = formatPercent(Number(raw));
   return (
     <Box
       component="span"
