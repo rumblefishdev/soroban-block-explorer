@@ -1,3 +1,22 @@
+# FE → API gaps audit (2026-05-29)
+
+> **Status update (2026-06-01).** 3 of the 7 gaps are already implemented on
+> branch `feat/0274-0275_api-gaps-and-contracts-list` (commit `c6bec5ee`),
+> pending merge — do **not** redo them:
+>
+> - ✅ `order` param on `GET /v1/ledgers` (§2)
+> - ✅ `recent_events` on `ContractStats` (§2)
+> - ✅ typed `interface_metadata` schema (§3)
+>
+> Still open: `GET /v1/accounts` list (§1), per-op LP amounts (§2),
+> `PoolAssetLeg.icon_url` (§2). Pool chart nulls (§2) stay with task 0199.
+>
+> **Task-number corrections:** the "0249" and "0250" cites below are **wrong**
+> — 0249 is an archived AWS-teardown task, 0250 is ClickHouse quota
+> enforcement. Neither tracks the FE follow-ups implied here; those tasks do
+> not exist yet. 0247 (LP per-tx amounts research) and 0199 (LP analytics)
+> are correct.
+
 ## 1. Missing endpoints
 
 ### `GET /v1/accounts` — Accounts list
@@ -39,6 +58,23 @@ interface AccountListResponse {
 Each `sort` mode wants its own DB index (`xlm_balance DESC`,
 `last_seen_ledger DESC`, `first_seen_ledger DESC`).
 
+> **⚠ Data-feasibility — resolve before implementing.** This shape writes
+> cheques the current schema can't fully cash:
+>
+> - **`xlm_supply_percent` has no backing data.** No network-wide XLM total /
+>   circulating supply is stored anywhere (`assets.total_supply` exists only
+>   per-asset, never for native XLM). The mock fakes it with a hardcoded
+>   constant (`useAccountsList.ts`). Decide: hardcode a constant, compute
+>   `SUM(balance)` over native rows (cost), or drop the column for v1.
+> - **`xlm_balance` + `sort=xlm_desc` cross a table boundary.** Balance lives in
+>   `account_balances_current` (asset_type=0), not on `accounts`. Ordering
+>   `accounts` by a column in another table complicates the keyset cursor and
+>   needs a new index on the native balance (none today).
+> - **`sort=first_seen_desc` has no index** (`accounts.first_seen_ledger`);
+>   only `last_seen` is indexed.
+> - **`rank` (`#` column)** is only stable for one sort mode and breaks under
+>   filtering — needs a deliberate design, not an afterthought.
+
 ---
 
 ## 2. Missing fields on existing endpoints
@@ -47,7 +83,8 @@ Each `sort` mode wants its own DB index (`xlm_balance DESC`,
 
 The "Amount" column in the pool-tx table is intentionally hidden
 because the endpoint doesn't return per-operation reserves moved.
-Tracked as backend **0247** (research) → FE **0249**.
+Tracked as backend **0247** (research). FE follow-up task TBD — the
+original "0249" cite was wrong (0249 = archived AWS-teardown task).
 
 Proposed: opt-in expansion via query param.
 
@@ -73,17 +110,20 @@ interface PoolTransactionItem {
 }
 ```
 
-### `GET /v1/contracts/{contract_id}` — events count metric
+### `GET /v1/contracts/{contract_id}` — events count metric ✅ SHIPPED (c6bec5ee)
 
 `stats.recent_unique_callers` is a **callers** metric, but the contract
 detail page's "Events" tab pill currently borrows it as a stand-in for
 an event count. Need a real `recent_events` (or similar) on
 `ContractStats` so the pill shows actual event volume.
 
-### `GET /v1/ledgers` — undocumented `order` param
+### `GET /v1/ledgers` — undocumented `order` param ✅ SHIPPED (c6bec5ee)
 
-FE passes `order` today and backend accepts it (mock does too), but
-the OpenAPI spec doesn't declare it. Either add it or have FE drop it.
+FE passes `order` today but — correction — the real backend **silently
+ignored** it (only the mock honoured it); Axum dropped the unknown param,
+so the list was never actually re-sorted. Now wired (`LedgersListQuery`)
+and declared in OpenAPI: `order=asc` flips the first-page walk to
+oldest-first; ignored once a cursor is supplied.
 
 ```ts
 type Query = {
@@ -112,8 +152,9 @@ interface ChartDataPoint {
 ```
 
 Once 0199 lands, the `null`s become NUMERIC strings and FE renders
-the chart with no further code change. Tracked FE-side as task
-**0250** (placeholder removal).
+the chart with no further code change. (FE placeholder-removal follow-up
+TBD — the original "0250" cite was wrong; 0250 = ClickHouse quota
+enforcement, unrelated.)
 
 ### `PoolAssetLeg` — missing `icon_url`
 
@@ -121,6 +162,12 @@ the chart with no further code change. Tracked FE-side as task
 and pool-detail avatars fall back to drawing the first letter of the
 asset code (e.g. `X` for XLM). Adding the field would let pools
 share the same icon rendering as the assets list.
+
+> **Note — not a column copy.** `PoolAssetLeg` carries only XDR
+> `(asset_code, issuer)` (+ optional SAC `contract_id`); `icon_url` lives on
+> the `assets` row. So this is a LEFT JOIN to `assets` per leg (2 per pool) —
+> on the pool **list** endpoint that's an N+1-style cost to design for, not a
+> trivial field add.
 
 ```ts
 interface PoolAssetLeg {
@@ -133,7 +180,7 @@ interface PoolAssetLeg {
 
 ## 3. Type clarifications needed
 
-### `GET /v1/contracts/{contract_id}/interface` — `interface_metadata`
+### `GET /v1/contracts/{contract_id}/interface` — `interface_metadata` ✅ SHIPPED (c6bec5ee)
 
 OpenAPI types this as `unknown` (`{}`). FE hand-parses it through
 [`parseInterfaceMetadata`](../../web/src/pages/contracts/interfaceMetadata.ts)

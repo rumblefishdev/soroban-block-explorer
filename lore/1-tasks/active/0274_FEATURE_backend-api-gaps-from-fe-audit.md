@@ -58,62 +58,74 @@ mocks, hidden Amount column on pool tx, hand-rolled
 ## Context
 
 The FE is in design-parity / pre-launch state. The audit catalogues
-six concrete gaps blocking either a feature surface or a quality
+seven concrete gaps blocking either a feature surface or a quality
 detail:
+
+> **Progress (2026-06-01).** Gaps #3, #6, #7 are **DONE** on this branch
+> (commit `c6bec5ee`, FilipD's WIP rebased) — backend + OpenAPI +
+> regenerated `api-types` all in sync. Remaining: #1, #2, #5. #4 stays with
+> task 0199.
 
 1. **No `GET /v1/accounts` list endpoint** — Accounts page renders
    from 80 in-memory synthesized rows (`useAccountsList.ts`).
 2. **Per-op LP amounts missing** on
    `GET /v1/liquidity-pools/{pool_id}/transactions` — the "Amount"
    column in the pool-tx table is intentionally hidden.
-3. **`order` query param undocumented** on `GET /v1/ledgers` —
-   accepted by the backend, missing from the OpenAPI spec.
+3. ✅ **DONE — `order` query param** on `GET /v1/ledgers` — was
+   silently _ignored_ by the real backend (only the mock honoured it);
+   now wired + declared in OpenAPI (`c6bec5ee`).
 4. **Pool chart values always `null`** — endpoint contract is in
    the spec but `tvl` / `volume` / `fee_revenue` are `null` for
    every bucket until task **0199** (LP analytics + price oracle)
    ships. FE renders a placeholder card.
 5. **`PoolAssetLeg.icon_url` missing** — pool avatars fall back to
    the first letter of the asset code instead of a real icon.
-6. **`interface_metadata` typed as `unknown`** on
-   `GET /v1/contracts/{contract_id}/interface` — FE hand-parses the
-   Soroban spec at runtime in
-   [`interfaceMetadata.ts`](../../../web/src/pages/contracts/interfaceMetadata.ts).
-7. **No real events count** on `ContractStats` — the Events tab
-   pill borrows `recent_unique_callers`, which is misleading.
+6. ✅ **DONE — `interface_metadata` typed schema** on
+   `GET /v1/contracts/{contract_id}/interface` — typed DTO + OpenAPI
+   schema; FE defensive parser deleted (`c6bec5ee`).
+7. ✅ **DONE — real events count** (`recent_events`) on
+   `ContractStats` — Events tab pill no longer borrows
+   `recent_unique_callers` (`c6bec5ee`).
 
-The audit doc has the full TypeScript shapes FE expects. The
-runnable dev mock at [`tools/dev-mock-api.mjs`](../../../tools/dev-mock-api.mjs)
-serves every one of those shapes against synthesized fixtures — use
-it as a reference when implementing the real endpoints (`node
-tools/dev-mock-api.mjs` boots it on `http://localhost:9000`).
+The audit doc has the full TypeScript shapes FE expects — it is now
+the single reference for those shapes. (The runnable dev mock
+`tools/dev-mock-api.mjs` was removed 2026-06-01, ahead of the AC
+below — shapes live in the audit doc.)
 
 ## Implementation
 
-Each gap is independent and can ship piecemeal:
+Remaining gaps (#1, #2, #5) — each independent, can ship piecemeal:
 
 - **`GET /v1/accounts` (list)** — Query: `limit`, `cursor`,
   `sort=xlm_desc|last_seen_desc|first_seen_desc`, `filter[q]`,
   `filter[with_domain]`. Response item:
   `{ account_id, xlm_balance, xlm_supply_percent, first_seen_ledger,
-last_seen_ledger, home_domain, rank? }`. Each sort mode wants its
-  own DB index. Consider returning `rank` per row so FE doesn't have
-  to parse the opaque cursor for the `#` column.
+last_seen_ledger, home_domain, rank? }`. The `accounts` module already
+  has detail + tx-list scaffolding to reuse (`crates/api/src/accounts/`).
+
+  > **⚠ Resolve on paper before coding — schema can't fully back this shape:**
+  >
+  > - **`xlm_supply_percent` has no backing data.** No network-wide XLM total
+  >   supply is stored (`assets.total_supply` is per-asset only). Mock fakes a
+  >   constant. Decide: hardcode / `SUM(balance)` aggregate / drop for v1.
+  > - **`xlm_balance` + `sort=xlm_desc` cross a table boundary** —
+  >   balance is in `account_balances_current` (asset_type=0), not `accounts`.
+  >   Cross-table keyset cursor + a new balance index needed.
+  > - **`sort=first_seen_desc`** needs a new index (only `last_seen` exists).
+  > - **`rank`** stable only for one sort mode, breaks under filter — design it.
+
 - **`?expand=lp_op_details`** on pool transactions — opt-in field
   per row: `lp_operation_detail { operation_type, amount_a,
-amount_b }`. Tracked separately as the **0247 / 0249** envelope;
-  cross-link when those move.
-- **Document `order` on `/v1/ledgers`** — add the param to the
-  OpenAPI schema, or remove the FE usage and document why.
-- **`icon_url` on `PoolAssetLeg`** — mirror the `AssetItem` field.
-- **`interface_metadata` schema** — codify the
-  `{ functions[], wasm_byte_len }` JSON Schema in OpenAPI so typegen
-  produces a real type and the FE defensive parser can be deleted.
-- **Events count metric on `ContractStats`** — add `recent_events`
-  (or similar) so the Events tab pill stops borrowing the callers
-  metric.
+amount_b }`. Backend research tracked as **0247**; FE follow-up task
+  TBD (the original "0249" cite was wrong — 0249 = archived AWS-teardown).
+- **`icon_url` on `PoolAssetLeg`** — NOT a column copy: `PoolAssetLeg`
+  carries only XDR `(code, issuer)`; `icon_url` lives on the `assets`
+  row → LEFT JOIN per leg (2/pool). Design for the N+1 cost on the pool
+  **list** endpoint.
 
-Pool chart fields (gap #4) are covered by **0199** — link in
-`related_tasks` rather than duplicate work here.
+Done in `c6bec5ee` (no further work): #3 `order` on `/v1/ledgers`,
+#6 `interface_metadata` schema, #7 `recent_events` on `ContractStats`.
+Pool chart fields (gap #4) are covered by **0199**.
 
 ## Acceptance Criteria
 
@@ -123,17 +135,16 @@ Pool chart fields (gap #4) are covered by **0199** — link in
 - [ ] `?expand=lp_op_details` on pool transactions is wired and the
       "Amount" column on the LP tx table is un-hidden FE-side
       (or tracked via 0247/0249).
-- [ ] OpenAPI declares the `order` param on `/v1/ledgers`.
+- [x] OpenAPI declares the `order` param on `/v1/ledgers`. (`c6bec5ee`)
 - [ ] `PoolAssetLeg` carries `icon_url`; pool avatars render real
       icons when available.
-- [ ] `InterfaceResponse.interface_metadata` has a real schema in
-      OpenAPI; FE deletes `parseInterfaceMetadata`'s defensive parse.
-- [ ] `ContractStats` exposes a real events count; FE points the
-      Events tab pill at the new field.
-- [ ] Once every endpoint above ships and FE points
-      `VITE_API_BASE_URL` at the real backend, delete
-      [`tools/dev-mock-api.mjs`](../../../tools/dev-mock-api.mjs) —
-      it stops being a reference and starts being drift bait.
+- [x] `InterfaceResponse.interface_metadata` has a real schema in
+      OpenAPI; FE deletes `parseInterfaceMetadata`'s defensive parse. (`c6bec5ee`)
+- [x] `ContractStats` exposes a real events count; FE points the
+      Events tab pill at the new field. (`c6bec5ee`)
+- [x] `tools/dev-mock-api.mjs` removed (done 2026-06-01, ahead of
+      sequence — shapes preserved in the audit doc). FE still needs to
+      point `VITE_API_BASE_URL` at the real backend once #1 ships.
 
 ## Notes
 
