@@ -44,11 +44,10 @@
 //! run (≤ `limit + 1` driver rows), but the no-filter first-page path
 //! still warrants an operator memory smoke before the prod flag flip.
 
-use chrono::{DateTime, TimeZone, Utc};
 use clickhouse::Row;
-use domain::OperationType;
 use serde::Deserialize;
 
+use crate::common::ch::{self, millis_to_utc, operation_type_label};
 use crate::common::cursor::{Direction, direction_sql};
 
 use super::dto::TxListCursor;
@@ -60,8 +59,11 @@ use super::queries::{
 // Row structs (positional decode — SELECT column order MUST match field order)
 // ---------------------------------------------------------------------------
 
+/// One page row — slim base columns only. `operation_types` + `contract_ids`
+/// are fetched separately via [`ch::fetch_tx_list_aggregates`] and merged by
+/// `id` (CH 26.3 cannot compute them inline with correlated subqueries).
 #[derive(Debug, Row, Deserialize)]
-struct TxListChRow {
+struct TxPageChRow {
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -71,28 +73,29 @@ struct TxListChRow {
     successful: bool,
     operation_count: i16,
     has_soroban: bool,
-    operation_type_codes: Vec<i16>,
-    contract_ids: Vec<String>,
     id: i64,
     created_at: i64,
 }
 
-impl From<TxListChRow> for TxListRow {
-    fn from(row: TxListChRow) -> Self {
-        Self {
-            id: row.id,
-            hash: row.hash,
-            ledger_sequence: row.ledger_sequence,
-            application_order: row.application_order,
-            source_account: row.source_account.filter(|s| !s.is_empty()),
-            fee_charged: row.fee_charged,
-            inner_tx_hash: row.inner_tx_hash.filter(|s| !s.is_empty()),
-            successful: row.successful,
-            operation_count: row.operation_count,
-            has_soroban: row.has_soroban,
-            operation_types: sorted_unique_labels(row.operation_type_codes),
-            contract_ids: sorted_unique(row.contract_ids),
-            created_at: millis_to_utc(row.created_at),
+impl TxPageChRow {
+    /// Merge this page row with its pre-fetched aggregates into the
+    /// public `TxListRow`. A tx absent from the aggregate map (no ops /
+    /// contracts) gets empty vecs via `unwrap_or_default`.
+    fn into_list_row(self, agg: ch::TxListAggregates) -> TxListRow {
+        TxListRow {
+            id: self.id,
+            hash: self.hash,
+            ledger_sequence: self.ledger_sequence,
+            application_order: self.application_order,
+            source_account: self.source_account.filter(|s| !s.is_empty()),
+            fee_charged: self.fee_charged,
+            inner_tx_hash: self.inner_tx_hash.filter(|s| !s.is_empty()),
+            successful: self.successful,
+            operation_count: self.operation_count,
+            has_soroban: self.has_soroban,
+            operation_types: agg.operation_types,
+            contract_ids: agg.contract_ids,
+            created_at: millis_to_utc(self.created_at),
         }
     }
 }
@@ -230,11 +233,15 @@ struct AccountIdRow {
 // Shared projection fragments
 // ---------------------------------------------------------------------------
 
-/// Per-row projection shared by every list statement. Selects the slim list
-/// columns plus the two correlated array aggregates (`operation_type_codes`,
-/// `contract_ids`) and threads `t.id` + `l.closed_at` for the cursor and the
-/// derived `created_at`. References only `t.*` / `l.*` columns — no binds.
-const LIST_PROJECTION: &str = "\
+/// Slim per-row projection shared by every list statement: the base list
+/// columns plus `t.id` (cursor tie-break / aggregate join key) and
+/// `l.closed_at` (derived `created_at`). References only `t.*` / `l.*` — no
+/// binds, no correlated subqueries. `operation_types` + `contract_ids` are
+/// fetched in a second, non-correlated pass (`ch::fetch_tx_list_aggregates`)
+/// and merged by `id` — CH 26.3 rejects correlated subqueries in SELECT.
+///
+/// Column order MUST match `TxPageChRow` field order (positional decode).
+const SLIM_PROJECTION: &str = "\
     lower(hex(t.hash)) AS hash, \
     t.ledger_sequence, \
     t.application_order, \
@@ -244,34 +251,6 @@ const LIST_PROJECTION: &str = "\
     t.successful, \
     t.operation_count, \
     t.has_soroban, \
-    ( \
-        SELECT groupUniqArray(oa.type) \
-        FROM operations_appearances oa FINAL \
-        WHERE oa.transaction_id = t.id \
-          AND oa.ledger_sequence = t.ledger_sequence \
-          AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
-    ) AS operation_type_codes, \
-    arrayDistinct(arrayConcat( \
-        (SELECT groupArray(sc.contract_id) \
-         FROM operations_appearances oa FINAL \
-         JOIN soroban_contracts sc FINAL ON sc.id = assumeNotNull(oa.contract_id) \
-         WHERE oa.transaction_id = t.id \
-           AND oa.ledger_sequence = t.ledger_sequence \
-           AND isNotNull(oa.contract_id) \
-           AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)), \
-        (SELECT groupArray(sc.contract_id) \
-         FROM soroban_invocations_appearances sia FINAL \
-         JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
-         WHERE sia.transaction_id = t.id \
-           AND sia.ledger_sequence = t.ledger_sequence \
-           AND intDiv(sia.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)), \
-        (SELECT groupArray(sc.contract_id) \
-         FROM soroban_events se FINAL \
-         JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
-         WHERE se.transaction_id = t.id \
-           AND se.ledger_sequence = t.ledger_sequence \
-           AND intDiv(se.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)) \
-    )) AS contract_ids, \
     t.id, \
     l.closed_at AS created_at";
 
@@ -336,7 +315,7 @@ pub async fn fetch_list(
                 )
             };
             let sql = format!(
-                "SELECT {LIST_PROJECTION} \
+                "SELECT {SLIM_PROJECTION} \
                  FROM ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
@@ -381,13 +360,13 @@ pub async fn fetch_list(
                 .bind(op_type_opt)
                 .bind(op_type_opt)
                 .bind(params.limit + 1); // peek row drives next-page detection
-            q.fetch_all::<TxListChRow>().await?
+            q.fetch_all::<TxPageChRow>().await?
         }
 
         // --- Statement C: op_type filter only ------------------------------
         (None, Some(op_type)) => {
             let sql = format!(
-                "SELECT {LIST_PROJECTION} \
+                "SELECT {SLIM_PROJECTION} \
                  FROM ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
                     FROM operations_appearances FINAL \
@@ -420,14 +399,14 @@ pub async fn fetch_list(
                 .bind(source_id)
                 .bind(source_id)
                 .bind(params.limit + 1) // peek row drives next-page detection
-                .fetch_all::<TxListChRow>()
+                .fetch_all::<TxPageChRow>()
                 .await?
         }
 
         // --- Statement A: no contract / op_type filter (default path) ------
         (None, None) => {
             let sql = format!(
-                "SELECT {LIST_PROJECTION} \
+                "SELECT {SLIM_PROJECTION} \
                  FROM ( \
                     SELECT * FROM transactions FINAL \
                     WHERE intDiv(ledger_sequence, 500000) \
@@ -450,12 +429,23 @@ pub async fn fetch_list(
                 .bind(source_id)
                 .bind(source_id)
                 .bind(params.limit + 1)
-                .fetch_all::<TxListChRow>()
+                .fetch_all::<TxPageChRow>()
                 .await?
         }
     };
 
-    Ok(rows.into_iter().map(Into::into).collect())
+    // Second pass: fetch operation_types + contract_ids for the page's keys
+    // (non-correlated derived-table aggregation; CH 26.3 rejects correlated
+    // subqueries in SELECT), then merge them onto the page rows by tx id.
+    let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
+    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let agg = aggregates.remove(&r.id).unwrap_or_default();
+            r.into_list_row(agg)
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -671,86 +661,16 @@ async fn resolve_contract_surrogate(
     Ok(row.map(|r| r.id))
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Decode a `DateTime64(3, 'UTC')` millisecond value into a `DateTime<Utc>`.
-///
-/// Fails loudly (`expect`) on an out-of-range value rather than degrading,
-/// matching the ledgers CH read path (the 0243 review explicitly removed a
-/// `Utc::now()` fallback in favour of fail-loud, to never silently substitute
-/// a wrong timestamp). The input is a `ledgers.closed_at` written by the
-/// indexer from a real Stellar ledger header, so an out-of-`i64`-millis-range
-/// value is a data-integrity violation, not an expected condition — the panic
-/// is effectively unreachable and surfaces a corrupt row immediately.
-fn millis_to_utc(ms: i64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(ms)
-        .single()
-        .expect("ClickHouse DateTime64(3, 'UTC') must decode to a valid UTC timestamp")
-}
-
-fn operation_type_label(code: i16) -> String {
-    OperationType::try_from(code).map_or_else(|_| format!("UNKNOWN_{code}"), |op| op.to_string())
-}
-
-/// Map raw `operations_appearances.type` codes to canonical labels, then
-/// sort + dedup for deterministic PG parity (`array_agg(DISTINCT … ORDER BY)`).
-fn sorted_unique_labels(codes: Vec<i16>) -> Vec<String> {
-    let mut labels: Vec<String> = codes.into_iter().map(operation_type_label).collect();
-    labels.sort_unstable();
-    labels.dedup();
-    labels
-}
-
-fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
-    values.sort_unstable();
-    values.dedup();
-    values
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn operation_type_label_known_and_unknown() {
-        // A valid OperationType code maps to its SCREAMING_SNAKE label;
-        // an out-of-range code degrades to a stable `UNKNOWN_<code>` tag
-        // rather than panicking, so a forward-compatible op type from a
-        // newer protocol still renders.
-        assert_eq!(operation_type_label(0), "CREATE_ACCOUNT");
-        assert_eq!(
-            operation_type_label(i16::MAX),
-            format!("UNKNOWN_{}", i16::MAX)
-        );
-    }
-
-    #[test]
-    fn sorted_unique_labels_dedups_and_orders() {
-        // groupUniqArray returns codes in arbitrary order; the mapper must
-        // produce the same deterministic, deduplicated, sorted label array
-        // PG emits via `array_agg(DISTINCT … ORDER BY)`.
-        let codes = vec![1, 0, 1]; // PAYMENT, CREATE_ACCOUNT, PAYMENT
-        assert_eq!(
-            sorted_unique_labels(codes),
-            vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
-        );
-    }
-
-    #[test]
-    fn sorted_unique_dedups_contract_ids() {
-        let ids = vec!["C2".to_string(), "C1".to_string(), "C2".to_string()];
-        assert_eq!(sorted_unique(ids), vec!["C1".to_string(), "C2".to_string()]);
-    }
-
-    #[test]
-    fn list_row_maps_empty_sentinels_to_none() {
-        // CH `nullIf(account_id, '')` and `hex(NULL)` already yield NULL →
-        // None, but a defensive `.filter(!is_empty)` guards the empty-string
-        // composite-PK sentinel. Verify None for empty, Some for populated,
-        // and the millis → UTC timestamp decode.
-        let row = TxListChRow {
+    fn page_row_merges_aggregates_and_maps_sentinels() {
+        // Slim page row: empty-string sentinels → None, millis → UTC, and the
+        // separately-fetched aggregates (op types + contract ids) merge in by
+        // id. Replaces the old correlated-projection mapping.
+        let row = TxPageChRow {
             hash: "ab".repeat(32),
             ledger_sequence: 100,
             application_order: 2,
@@ -760,12 +680,14 @@ mod tests {
             successful: true,
             operation_count: 1,
             has_soroban: false,
-            operation_type_codes: vec![1, 0],
-            contract_ids: vec![],
             id: 999,
             created_at: 1_700_000_000_000,
         };
-        let mapped: TxListRow = row.into();
+        let agg = ch::TxListAggregates {
+            operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
+            contract_ids: vec!["C1".to_string()],
+        };
+        let mapped = row.into_list_row(agg);
         assert_eq!(mapped.source_account, None);
         assert_eq!(mapped.inner_tx_hash, None);
         assert_eq!(mapped.id, 999);
@@ -774,12 +696,8 @@ mod tests {
             mapped.operation_types,
             vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
         );
-        assert_eq!(
-            mapped.created_at,
-            Utc.timestamp_millis_opt(1_700_000_000_000)
-                .single()
-                .unwrap(),
-        );
+        assert_eq!(mapped.contract_ids, vec!["C1".to_string()]);
+        assert_eq!(mapped.created_at, ch::millis_to_utc(1_700_000_000_000));
     }
 
     #[test]
