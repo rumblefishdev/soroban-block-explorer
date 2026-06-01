@@ -8,6 +8,25 @@
 --     `GROUP BY transaction_id`. Reuse the shared Rust helper
 --     `crates/api/src/common/ch.rs::fetch_tx_list_aggregates`.
 -- ============================================================================
+-- ⚠️  CH READ-COST NOTE (task 0243) — the live read path is a THREE-step shape,
+--     not the single JOIN below. An account's transactions span MANY ledger
+--     partitions (it is active over time), so the global `/transactions`
+--     single-partition prune does NOT apply here:
+--       1. Driver: `transaction_participants` WHERE account_id = <surrogate>
+--          — `account_id` is the LEADING primary key (ORDER BY (account_id,
+--          ledger_sequence, transaction_id)), so this is an account-scoped
+--          SEEK, not a scan. ORDER BY (ledger_sequence, transaction_id) +
+--          keyset, LIMIT.
+--       2. Fetch the ≤limit transaction rows by `(ledger_sequence, id) IN
+--          (keys)` — a primary-key-prefix prune per ledger that spans
+--          partitions safely. Do NOT join the driver to an unpruned
+--          `transactions FINAL` (that merges the whole 3.6B-row table and blew
+--          the api_reader read_rows quota in the global list — CH Code: 201).
+--       3. operation_types via the shared two-step aggregate; re-order rows in
+--          Rust by the driver keyset order.
+--     Cursor keys on `(ledger_sequence, transaction_id)` on CH (PG keeps
+--     `(created_at, transaction_id)`); see `transactions::dto::TxListCursor`.
+-- ============================================================================
 -- Endpoint:     GET /accounts/:account_id/transactions
 -- Purpose:      Paginated transactions involving a given account (as source
 --               OR as a participant). Default ordering: newest first.
