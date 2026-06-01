@@ -1627,6 +1627,40 @@ NetworkToggle (0 source refs, dist rebuilt clean), formatter consolidation (`web
 
 **NOT covered this pass:** 768px tier (between 375-clean and 1280-clean-2026-05-29 — low risk), full Tier-4 subjective visual polish, and **F-RR-17** PoolCharts error masking (needs request-error injection — code-confirmed, not live-reproduced; chart showed neither error nor empty text on the live pool, likely had data). These = optional follow-up.
 
+### Pre-launch tier triage (2026-06-01) — all new findings
+
+Proposed pre-launch tiers for the rerun + earlier-session findings (F-RR-1..33, F-0272S-1..6, F-W6-LOADSKEL-1..3). User adjusts as needed. Tiers: **MUST** = launch-blocker / broken feature; **SHOULD** = real user-facing bug/UX trap or public-launch a11y, cheap-to-medium; **NICE** = consistency/reuse/cosmetic; **POST** = deep refactor / type-infra / backend-heavy.
+
+**MUST (1)**
+- **F-0272S-1** — accounts list = mock → row click 404 ("Account not found"). Broken feature if `/accounts` ships. Owned by **0274** (backend `/v1/accounts`). Until then either ship real endpoint or hide the list.
+
+**SHOULD (14)** — pre-launch quality bar
+- **F-RR-17** 🟠 PoolCharts shows fetch-error as "no activity", no retry — error indistinguishable from empty.
+- **F-RR-33** 🟡 NotFoundState long-strkey overflow @375 — visible responsive break on every entity-404 (mobile).
+- **F-RR-25** 🟡 `/search` error has no retry + swallows error class (SM-1 straggler).
+- **F-RR-2** 🟡 dead "CTRL + K" pill (advertises non-existent shortcut).
+- **F-RR-3** 🟡 home footer "0 latest records" during load/error.
+- **F-RR-6** 🟡 "Choose payment" heading on all-op picker (mislabel).
+- **F-RR-7** 🟡 EventsSection contract_id not a link (broken cross-entity nav).
+- **F-RR-18** 🟡 FeePill NaN fee renders raw `0.300000…` instead of em-dash.
+- **F-RR-21** 🟡 search a11y incomplete (listbox/tablist ARIA) — public launch.
+- **F-RR-14** 🟡 LedgerSummary missing semantic `<h2>` (a11y) [reuse half = NICE].
+- **F-W6-LOADSKEL-1** 🟡 home Suspense fallback shape flicker (first impression) [card 7.10].
+- **F-0272S-3** 🟡 dead sort arrows (assets supply, ledgers seq) — remove arrows (FE-quick) [backend-sort variant = POST].
+- **F-0272S-4** 🟡 silent no-op search (tx/NFT) — add placeholder/empty-state hints.
+- **F-0272S-2** 🟡 LP exact vs assets partial search — owned 0274 (backend ILIKE).
+
+**NICE (20)** — consistency / reuse / cosmetic
+- F-RR-4 casing, F-RR-5 identifier-cell inconsistency, F-RR-8 PAYMENT summary amount, F-RR-9 Account breadcrumb link, F-RR-10 sequence_number separators (verify Figma), F-RR-11 AccountsTable Seen-ledger link/time (mock-gated), F-RR-12 mock polling, F-RR-13 LedgerDetail breadcrumb reuse, F-RR-15 redundant Ledger column, F-RR-16 NftEventBadge theme-coupling (readable in light), F-RR-19 dual fee format, F-RR-20 legHref native-field mismatch, F-RR-22 tab labels plural, F-RR-23 common.black, F-RR-24 NFT invalid-contract-filter hint, F-RR-27 columns useMemo, F-RR-28 misplaced test, F-RR-29 empty-state fragmentation [card 2.3], F-RR-30 section-table dup ×7 [card 2.3], F-RR-31 null-data guard, F-RR-32 singleton fragility (note), F-W6-LOADSKEL-2/3 list/detail fallback [card 7.10], F-0272S-5 tx-type multi-select.
+- **F-0272S-6** (no shared search semantics) — NICE *artifact*, but the **decision** (define a search-semantics contract) is SHOULD-grade and gates several SHOULD fixes above.
+
+**POST / backend-heavy**
+- **F-RR-1** order-param cast drift — backend OpenAPI add `order`/`sort` (the typed face of F-0272S-3 backend-sort variant).
+- **F-RR-26** libs/ui barrel tree-shake (`sideEffects:false` + chart sub-path) — perf hardening, pairs F-AI-2.
+- Existing-card confirmations (F-AQ-8/Z-2/AQ-1/AQ-7 backend-codegen, F-DP-3 z-index, F-AH-7/X-2 folder) stay on their cards (3.x/6.3/11.3/2.2).
+
+**Triage roll-up:** 1 MUST (backend-owned 0274), 14 SHOULD (~mostly FE-quick — the pre-launch closure batch), ~20 NICE, 3 POST/backend. The 14 SHOULD + 1 MUST = the realistic next-container pre-launch scope.
+
 ---
 
 ## Appendix — 281-finding STATUS table
