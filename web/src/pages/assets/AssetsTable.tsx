@@ -1,17 +1,17 @@
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
+  Dash,
   ExplorerTable,
+  formatAmount,
+  IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
   type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
-import { Dash } from '../transactions/cells.js';
 
 import { AssetIcon } from './AssetIcon.js';
 import { assetTypeMeta, iconKindFor } from './assetType.js';
@@ -36,14 +36,16 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              <Link
-                component={RouterLink}
-                to={routes.asset(String(row.id))}
-                variant="bodySmMedium"
-                sx={(theme) => ({ color: theme.palette.text.primary })}
-              >
-                {row.asset_code ?? '—'}
-              </Link>
+              {row.asset_code ? (
+                <IdentifierDisplay
+                  value={row.asset_code}
+                  type="asset"
+                  truncate={false}
+                  href={routes.asset(String(row.id))}
+                />
+              ) : (
+                <Dash />
+              )}
               <Chip size="sm" color={meta.color} label={meta.label} />
             </Stack>
             {row.name && (

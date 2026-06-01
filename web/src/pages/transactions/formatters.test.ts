@@ -1,6 +1,7 @@
+import { formatFee } from '@rumblefish/soroban-block-explorer-ui';
 import { describe, expect, it } from 'vitest';
 
-import { formatAbsoluteUtc, formatFee } from './formatters.js';
+import { formatAbsoluteUtc } from './formatters.js';
 
 describe('formatFee', () => {
   it('returns em-dash for non-finite input', () => {

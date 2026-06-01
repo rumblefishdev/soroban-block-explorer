@@ -1,9 +1,9 @@
 import CloseIcon from '@mui/icons-material/Close';
 import ImageIcon from '@mui/icons-material/ImageOutlined';
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { NftItem } from '@rumblefish/api-types';
+import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 import { useEffect, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 
@@ -74,15 +74,12 @@ export function NftNameCell({ row }: NftNameCellProps) {
       </Box>
 
       <Stack sx={{ minWidth: 0 }}>
-        <Link
-          component={RouterLink}
-          to={routes.nft(row.contract_id, row.token_id)}
-          variant="bodySmMedium"
-          underline="hover"
-          sx={(theme) => ({ color: theme.palette.text.primary })}
-        >
-          {nftLabel(row)}
-        </Link>
+        <IdentifierDisplay
+          value={nftLabel(row)}
+          type="nft"
+          truncate={false}
+          href={routes.nft(row.contract_id, row.token_id)}
+        />
         <Typography
           variant="bodyXsRegular"
           sx={(theme) => ({

@@ -68,8 +68,9 @@ describe('TransactionsListPage', () => {
       screen.getByRole('heading', { level: 1, name: /transactions/i })
     ).toBeInTheDocument();
     // Truncated hash (prefix 6 + suffix 4) — exact format from
-    // getDefaultTruncation('transaction').
-    expect(screen.getByText('7b2a8c...6a3b')).toBeInTheDocument();
+    // getDefaultTruncation('transaction'); single-glyph ellipsis (…) per
+    // the lore-0272 truncateMiddle default.
+    expect(screen.getByText('7b2a8c…6a3b')).toBeInTheDocument();
   });
 
   it('renders the empty state when zero rows come back with no filters', () => {

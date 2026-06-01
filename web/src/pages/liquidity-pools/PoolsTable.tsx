@@ -1,21 +1,20 @@
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
+  formatAmount,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
 // `assetLegLabel` + `legHref` live in the detail-page helpers but the
 // labelling + linking rules apply equally to the list — reuse the
 // shared helpers rather than duplicating, to keep native-asset / SAC
 // mirror / classic-credit precedence in one place.
 import { assetLegLabel, legHref } from '../pool-detail/helpers.js';
-import { Dash } from '../transactions/cells.js';
 
 import { AssetAvatar } from './AssetAvatar.js';
 import { reserveDotColor } from './assetColor.js';
@@ -31,17 +30,13 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
   const href = legHref(leg);
   if (!href) return code;
   return (
-    <Link
-      component={RouterLink}
-      to={href}
-      sx={{
-        color: 'inherit',
-        textDecoration: 'none',
-        '&:hover': { textDecoration: 'underline' },
-      }}
-    >
-      {code}
-    </Link>
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      fontSize="inherit"
+    />
   );
 }
 

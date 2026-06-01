@@ -83,7 +83,7 @@ export function SearchResultsTabs({
               },
             })}
           >
-            <span>{ENTITY_LABEL[t]}</span>
+            <Box component="span">{ENTITY_LABEL[t]}</Box>
             <CountBadge count={count} />
           </Box>
         );

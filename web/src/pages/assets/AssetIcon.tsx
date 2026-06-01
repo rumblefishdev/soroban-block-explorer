@@ -1,5 +1,6 @@
 import { Avatar } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
+import { colorsLight } from '@rumblefish/soroban-block-explorer-ui';
 
 import { safeHttpUrl } from '../url.js';
 
@@ -25,7 +26,9 @@ function kindColors(theme: Theme, kind: AssetIconKind) {
         fg: theme.palette.emerald[600],
       };
     case 'sac':
-      return { bg: '#724311', fg: '#fffcc2' };
+      // DS `primary` scale (brand brown/cream) — not exposed on
+      // theme.palette, so read the mode-independent scale directly.
+      return { bg: colorsLight.primary[900], fg: colorsLight.primary[100] };
     case 'default':
     default:
       return {

@@ -3,15 +3,13 @@ import type { PaginatedEventItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
-  classifyError,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
+  truncateMiddle,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -19,6 +17,7 @@ import {
 import { useMemo, type ReactNode } from 'react';
 
 import { useContractEvents } from '../../api/index.js';
+import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -37,14 +36,8 @@ const EVENT_TYPE_COLOR: Record<string, ChipProps['color']> = {
 /** Event-type chip — colour-coded by the event's `event_type`. */
 function EventTypeBadge({ type }: { type: string }) {
   const color = EVENT_TYPE_COLOR[type] ?? 'neutral';
-  const label =
-    type.length > 0 ? type.charAt(0).toUpperCase() + type.slice(1) : 'Unknown';
+  const label = type.length > 0 ? capitalize(type) : 'Unknown';
   return <Chip size="sm" color={color} label={label} />;
-}
-
-/** Middle-truncates long identifier-like strings; leaves short labels whole. */
-function shortStr(value: string): string {
-  return value.length > 14 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value;
 }
 
 /**
@@ -83,7 +76,7 @@ function TopicsCell({ topics }: { topics: readonly unknown[] }) {
               component="span"
               sx={(theme) => ({ color: theme.palette.text.success })}
             >
-              {`"${shortStr(topic)}"`}
+              {`"${truncateMiddle(topic, { prefix: 4, suffix: 4 })}"`}
             </Box>
           ) : (
             JSON.stringify(topic) ?? String(topic)
@@ -107,7 +100,7 @@ function DataCell({ data }: { data: unknown }) {
   }, [data]);
   const display =
     typeof data === 'string' && data.length > 24
-      ? `${data.slice(0, 10)}…${data.slice(-10)}`
+      ? truncateMiddle(data, { prefix: 10, suffix: 10 })
       : full;
   return (
     <Typography
@@ -192,16 +185,7 @@ export function ContractEvents({ contractId }: { contractId: string }) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <TableEmptyState

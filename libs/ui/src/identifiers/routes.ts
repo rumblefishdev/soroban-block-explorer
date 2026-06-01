@@ -31,15 +31,6 @@ export function getIdentifierHref(type: EntityType, id: string): string {
   return routes[type](id);
 }
 
-/**
- * Canonical entity URL builders re-exported as `entityRoutes` for
- * callers that need direct access to the raw builders (e.g. composing
- * a higher-level `routes` table at the app level). NFT entry throws
- * on call — composite identity requires a separate 2-arg path
- * builder; see `web/src/router/routes.ts::routes.nft`.
- */
-export const entityRoutes = routes;
-
 interface HitLike {
   entity_type: EntityType;
   identifier: string;

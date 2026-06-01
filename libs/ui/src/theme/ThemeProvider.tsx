@@ -51,7 +51,7 @@ interface ExplorerThemeProviderProps {
 }
 
 export function ExplorerThemeProvider({
-  defaultMode = 'light',
+  defaultMode = 'dark',
   children,
 }: ExplorerThemeProviderProps) {
   const [mode, setMode] = useState<PaletteMode>(() =>

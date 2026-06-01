@@ -1,14 +1,16 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
+  formatFee,
   IdentifierDisplay,
   IdentifierWithCopy,
+  StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Typography } from '@mui/material';
 
-import { Dash, OperationCell, StatusCell } from './cells.js';
-import { formatFee } from './formatters.js';
+import { OperationCell } from './cells.js';
 import { TransactionTime } from './TransactionTime.js';
 
 interface TransactionsTableProps {
@@ -46,7 +48,7 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'fee',

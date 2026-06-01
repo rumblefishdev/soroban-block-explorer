@@ -1,14 +1,10 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
 import {
-  classifyError,
+  DetailErrorState,
   DetailSkeleton,
-  GenericErrorState,
   isContractId,
-  isMissingResource,
   NotFoundState,
-  RateLimitState,
   SectionErrorBoundary,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
@@ -91,9 +87,7 @@ export default function NftDetailPage() {
   } = useNftDetail(contractId, tokenId, valid);
 
   if (!valid) {
-    return (
-      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
-    );
+    return <NotFoundState entity="nft" identifier={identifier} />;
   }
 
   if (isLoading) {
@@ -101,28 +95,22 @@ export default function NftDetailPage() {
   }
 
   if (isError) {
-    const kind = classifyError(error);
-    if (isMissingResource(kind)) {
-      // 400 (e.g. malformed strkey / oversized token_id) and 404 both
-      // mean "this NFT isn't here" — single NotFound (task 0251 H8).
-      return (
-        <NotFoundState titleOverride="NFT not found" identifier={identifier} />
-      );
-    }
-    const retry = () => void refetch();
-    return kind === 'rate-limit' ? (
-      <RateLimitState onRetry={retry} py={8} />
-    ) : kind === 'transient' ? (
-      <TransientErrorState onRetry={retry} py={8} />
-    ) : (
-      <GenericErrorState onRetry={retry} py={8} />
+    // 400 (e.g. malformed strkey / oversized token_id) and 404 both mean
+    // "this NFT isn't here" — single NotFound (task 0251 H8); other errors
+    // get the shared rate-limit / transient / generic handling.
+    return (
+      <DetailErrorState
+        error={error}
+        entity="nft"
+        identifier={identifier}
+        onRetry={() => void refetch()}
+        py={8}
+      />
     );
   }
 
   if (!nft) {
-    return (
-      <NotFoundState titleOverride="NFT not found" identifier={identifier} />
-    );
+    return <NotFoundState entity="nft" identifier={identifier} />;
   }
 
   const title = nft.name?.trim() || `Token ${nft.token_id}`;

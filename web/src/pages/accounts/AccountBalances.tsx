@@ -1,16 +1,16 @@
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { AccountBalance } from '@rumblefish/api-types';
 import {
   Chip,
   EmptyState,
+  formatAmount,
+  IdentifierDisplay,
   monoFontFamily,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 import { AssetIcon, type AssetIconKind } from '../assets/AssetIcon.js';
 
 interface BalanceShape {
@@ -60,14 +60,13 @@ function BalanceRow({
 }) {
   const s = shape(balance);
   const nameNode = s.href ? (
-    <Link
-      component={RouterLink}
-      to={s.href}
-      variant="bodyMedium"
-      sx={(theme) => ({ color: theme.palette.text.primary })}
-    >
-      {s.name}
-    </Link>
+    <IdentifierDisplay
+      value={s.name}
+      type="asset"
+      truncate={false}
+      href={s.href}
+      fontSize={16}
+    />
   ) : (
     <Typography
       variant="bodyMedium"

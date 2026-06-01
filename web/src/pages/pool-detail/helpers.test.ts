@@ -1,12 +1,8 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
+import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  assetLegLabel,
-  formatCompactAmount,
-  isPoolStale,
-  legHref,
-} from './helpers.js';
+import { assetLegLabel, isPoolStale, legHref } from './helpers.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
   return {

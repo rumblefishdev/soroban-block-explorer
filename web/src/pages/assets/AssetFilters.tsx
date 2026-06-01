@@ -1,11 +1,8 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, useState } from 'react';
+import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
-
-const SEARCH_DEBOUNCE_MS = 300;
 
 interface AssetFiltersProps {
   /** Asset-code search value (`filter[code]`). */
@@ -26,17 +23,7 @@ export function AssetFilters({
   onSearchChange,
   onTypeChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
+  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
 
   return (
     <Box

@@ -140,6 +140,18 @@
 
 ## Top issues
 
-1. **F-AH-1 (🟡 D)** — `PageStub.tsx` dead orphan, simple `mv .trash/` in Phase 3.
+1. **F-AH-1 (🟡 D)** — `PageStub.tsx` dead orphan, simple `mv .trash/` in Phase 3. **[STALE post-`06ab34cc` — see design_parity update below; PageStub is no longer dead.]**
 2. **F-AH-3 (🟡 C)** — `SectionCard` hoist, cross-cite Wave 4 F-U-1 ; consolidates 2 findings into 1 refactor PR.
 3. **F-AH-7 (🟢 C)** — `web/src/search/` parallel folder cleanup.
+
+## design_parity update 2026-05-27 (06ab34cc)
+
+Source: `design-parity-impact-2026-05-27.md` §1 (card 2.2) + §5. Maps to queue card **2.2** (scope conflict).
+
+**F-AH-1 (PageStub dead orphan): STALE / FALSE.** The `feat/design_parity` merge (`06ab34cc`, merge `62c988d4`) **revives `PageStub`** as the render target for the new `/accounts` + `/contracts` stub routes (added alongside the `NAV_LINKS` entries — see A-AC F-A-5 Gap 1 partial). PageStub now has **2 live consumers**, so:
+
+- The "zero importers" basis of F-AH-1 is no longer true. The `mv .trash/` recommendation is **withdrawn** until card 1.3 ships real `ContractsListPage` / `AccountsListPage`.
+- Card 2.2's "Delete `web/src/pages/PageStub.tsx`" scope line is removed; PageStub deletion is **gated behind card 1.3**.
+- The other AH findings in card 2.2 (SectionCard hoist, folder asymmetry, `web/src/search/`, page-root helpers, `web/src/utils/` single-file) are **unaffected** — design_parity did not touch them.
+
+Cross-ref: `design-parity-impact-2026-05-27.md`; A-AC-spec-source-consistency (F-A-5 update); card 2.2.

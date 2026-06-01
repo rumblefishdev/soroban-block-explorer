@@ -16,16 +16,16 @@ export interface FooterProps {
 }
 
 const RESOURCES: FooterNavItem[] = [
-  { label: 'GitHub' },
-  { label: 'Stellar docs' },
-  { label: 'Soroban docs' },
-  { label: 'Stellar dashboard' },
-];
-
-const LEGAL: FooterNavItem[] = [
-  { label: 'Terms of Service' },
-  { label: 'Privacy Policy' },
-  { label: 'Cookies' },
+  {
+    label: 'GitHub',
+    href: 'https://github.com/rumblefishdev/soroban-block-explorer',
+  },
+  { label: 'Stellar docs', href: 'https://developers.stellar.org/docs' },
+  {
+    label: 'Soroban docs',
+    href: 'https://developers.stellar.org/docs/build/smart-contracts',
+  },
+  { label: 'Stellar dashboard', href: 'https://dashboard.stellar.org/' },
 ];
 
 function FooterLink({ label, href, onClick }: FooterNavItem) {
@@ -34,6 +34,9 @@ function FooterLink({ label, href, onClick }: FooterNavItem) {
       component={href ? 'a' : 'span'}
       {...(href ? { href } : {})}
       {...(onClick ? { onClick } : {})}
+      {...(href && !onClick
+        ? { target: '_blank', rel: 'noopener noreferrer' }
+        : {})}
       sx={(theme) => ({
         px: 1,
         py: 0.5,
@@ -95,38 +98,13 @@ export function Footer({ logo, navItems }: FooterProps) {
             gap={3}
             sx={{ width: { xs: '100%', md: 283 } }}
           >
-            <Box sx={{ display: 'flex', justifyContent: 'left' }}>{logo}</Box>
-            <Box display="flex" flexDirection="column" gap={1}>
-              <Typography variant="bodySmMedium" color="text.tertiary">
-                A block explorer for the Stellar and Soroban network. Browse
-                transactions, accounts, contracts and more.
-              </Typography>
-              <Box
-                sx={(theme) => ({
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  px: 1,
-                  py: 0.25,
-                  borderRadius: '8px',
-                  backgroundColor: theme.palette.surface.success,
-                  alignSelf: 'flex-start',
-                })}
-              >
-                <Box
-                  sx={(theme) => ({
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: theme.palette.text.success,
-                    flexShrink: 0,
-                  })}
-                />
-                <Typography variant="bodySmMedium" color="text.success" noWrap>
-                  All systems operational
-                </Typography>
-              </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'left', pr: 2 }}>
+              {logo}
             </Box>
+            <Typography variant="bodySmMedium" color="text.tertiary">
+              A block explorer for the Stellar and Soroban network. Browse
+              transactions, accounts, contracts and more.
+            </Typography>
           </Box>
 
           {/* Middle: Explorer nav links */}
@@ -174,30 +152,16 @@ export function Footer({ logo, navItems }: FooterProps) {
           })}
         />
 
-        {/* Bottom: copyright + legal + network badge */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: { xs: 'flex-start', md: 'center' },
-            flexDirection: { xs: 'column', md: 'row' },
-            gap: { xs: 1, md: 4 },
-          }}
-        >
-          <Box flex={1} minWidth={0}>
-            <Typography
-              variant="bodySmMedium"
-              color="text.tertiary"
-              sx={{ whiteSpace: { xs: 'normal', md: 'nowrap' } }}
-            >
-              © {new Date().getFullYear()} Stellar Explorer. Built on the
-              Stellar network.
-            </Typography>
-          </Box>
-          <Box display="flex" alignItems="center" flexWrap="wrap">
-            {LEGAL.map((item) => (
-              <FooterLink key={item.label} {...item} />
-            ))}
-          </Box>
+        {/* Bottom: copyright */}
+        <Box flex={1} minWidth={0}>
+          <Typography
+            variant="bodySmMedium"
+            color="text.tertiary"
+            sx={{ whiteSpace: { xs: 'normal', md: 'nowrap' } }}
+          >
+            © {new Date().getFullYear()} Stellar Explorer. Built on the Stellar
+            network.
+          </Typography>
         </Box>
       </Box>
     </Box>

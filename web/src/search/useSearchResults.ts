@@ -7,9 +7,12 @@ import type {
   SearchHit,
   SearchResults,
 } from '@rumblefish/api-types';
+import {
+  DEFAULT_DEBOUNCE_MS,
+  useDebounced,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { searchPolicy } from '../api/polling.js';
-import { useDebounced } from './useDebounced.js';
 
 // `/v1/search` returns a flat `SearchResults` payload — task 0271
 // dropped the previous `SearchResponse::Redirect` wire variant. The
@@ -36,7 +39,6 @@ export const ENTITY_LABEL: Record<EntityType, string> = {
 
 interface UseSearchResultsParams {
   q: string;
-  debounceMs?: number;
 }
 
 export interface SearchResultsState {
@@ -54,9 +56,8 @@ export interface SearchResultsState {
 
 export function useSearchResults({
   q,
-  debounceMs = 300,
 }: UseSearchResultsParams): SearchResultsState {
-  const debouncedRaw = useDebounced(q, debounceMs);
+  const debouncedRaw = useDebounced(q, DEFAULT_DEBOUNCE_MS);
   const effectiveQuery = debouncedRaw.trim();
   const enabled = effectiveQuery.length > 0;
 

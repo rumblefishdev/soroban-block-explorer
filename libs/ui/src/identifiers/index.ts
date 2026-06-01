@@ -7,7 +7,7 @@ export {
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
 } from './IdentifierWithCopy.js';
-export { entityRoutes, getIdentifierHref, routeForHit } from './routes.js';
+export { routeForHit } from './routes.js';
 export { getDefaultTruncation, truncateMiddle } from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {
@@ -16,5 +16,4 @@ export {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
-  isValidIdentifier,
 } from './validators.js';

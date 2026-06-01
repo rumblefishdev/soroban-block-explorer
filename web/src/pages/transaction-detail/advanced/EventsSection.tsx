@@ -8,7 +8,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
+import { Chip, truncateMiddle } from '@rumblefish/soroban-block-explorer-ui';
 import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -24,10 +24,6 @@ type EventKind = 'contract' | 'diagnostic';
 
 interface MergedEvent extends XdrEventDto {
   kind: EventKind;
-}
-
-function shortenStrKey(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 5)}…${value.slice(-4)}` : value;
 }
 
 export function EventsSection({
@@ -87,7 +83,10 @@ export function EventsSection({
                         variant="bodyMonoSmMedium"
                         sx={(theme) => ({ color: theme.palette.text.primary })}
                       >
-                        {shortenStrKey(event.contract_id)}
+                        {truncateMiddle(event.contract_id, {
+                          prefix: 5,
+                          suffix: 4,
+                        })}
                       </Typography>
                     ) : (
                       <Typography

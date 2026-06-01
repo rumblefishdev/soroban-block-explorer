@@ -1,9 +1,10 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
+import { truncateMiddle } from '@rumblefish/soroban-block-explorer-ui';
 
 import { formatOperationType } from '../../transactions/operationTypes.js';
 
 function shortId(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
+  return truncateMiddle(value, { prefix: 6, suffix: 4 });
 }
 
 function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {

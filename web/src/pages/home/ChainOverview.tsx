@@ -1,16 +1,14 @@
 import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  classifyError,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  formatAmount,
+  formatTps,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
 import { KpiCell } from '../detail/KpiCell.js';
-import { formatAmount } from '../format.js';
 
 import { LiveIndicator } from './LiveIndicator.js';
 
@@ -25,16 +23,9 @@ export function ChainOverview() {
 
   let content: ReactNode;
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    content =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={4} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={4} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={4} />
-      );
+    content = (
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
+    );
   } else {
     content = (
       <Stack
@@ -65,7 +56,7 @@ export function ChainOverview() {
           valueVariant="heading4SemiBold"
           labelVariant="bodyMedium"
           label="TPS"
-          value={data ? data.tps_60s.toFixed(1) : undefined}
+          value={data ? formatTps(data.tps_60s) : undefined}
           caption="Last 60s"
           valueColor={(theme) => theme.palette.text.success}
           loading={isLoading}

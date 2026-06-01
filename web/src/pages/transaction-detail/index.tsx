@@ -1,10 +1,11 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
+  getDefaultTruncation,
   NotFoundState,
   SectionErrorBoundary,
+  truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 
@@ -19,10 +20,6 @@ import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
 import { useDetailMode } from './useDetailMode.js';
 import { useTxHashParam } from './useTxHashParam.js';
-
-function shortHash(hash: string): string {
-  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
-}
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
@@ -41,7 +38,12 @@ export default function TransactionDetailPage() {
           <PageBreadcrumb
             items={[
               { label: 'Transactions', to: '/transactions' },
-              { label: shortHash(hash) },
+              {
+                label: truncateMiddle(
+                  hash,
+                  getDefaultTruncation('transaction')
+                ),
+              },
             ]}
           />
           <Typography variant="heading5SemiBold" component="h1">
@@ -56,11 +58,14 @@ export default function TransactionDetailPage() {
   }
 
   if (query.isError) {
-    const kind = classifyError(query.error);
-    return kind === 'not-found' ? (
-      <NotFoundState entity="transaction" identifier={hash} />
-    ) : (
-      <GenericErrorState onRetry={() => void query.refetch()} py={8} />
+    return (
+      <DetailErrorState
+        error={query.error}
+        entity="transaction"
+        identifier={hash}
+        onRetry={() => void query.refetch()}
+        py={8}
+      />
     );
   }
 
@@ -74,7 +79,9 @@ export default function TransactionDetailPage() {
         <PageBreadcrumb
           items={[
             { label: 'Transactions', to: '/transactions' },
-            { label: shortHash(hash) },
+            {
+              label: truncateMiddle(hash, getDefaultTruncation('transaction')),
+            },
           ]}
         />
         <Stack

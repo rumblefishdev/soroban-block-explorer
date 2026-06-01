@@ -41,3 +41,44 @@ E13,1280,✓,—,—,observed,clean
 E14,375,?,—,—,not-tested-this-pass,inferred — likely same page-level horiz-scroll; tabs row may wrap
 E14,768,?,—,—,not-tested-this-pass,spot-check needed
 E14,1280,✓,—,—,observed-earlier,clean
+# === POST-design_parity LIVE RE-VERIFY 2026-05-27 (Playwright MCP, vw=375/768/1280) ===
+# scrollWidth gating metric: overflow=false means doc-level horizontal scroll is GONE (Wave 6 was docW=802 on all <800px routes)
+route,breakpoint,result,severity,class,evidence,notes
+E1,375,✓,—,—,reverify2026-05-27,docW=364 vw=375 no-overflow; 2 tables contained in overflowX:auto parents (718/498 in 330)
+E1,768,✓,—,—,reverify2026-05-27,docW=757 vw=768 no-overflow (was 802); tables contained
+E1,1280,✓,—,—,reverify2026-05-27,docW=1269 no-overflow (no regression)
+E2,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; tx table 908 contained in 330 overflowX:auto
+E2,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E3,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; 64-char hash no longer forces width (was 802)
+E3,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E4,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; table 519 contained
+E4,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E5,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; embedded tx table 853 contained
+E5,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E6,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; long G-strkey no longer forces width; table 781 contained
+E6,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E7,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; table 598 contained
+E7,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E8,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; table 683 contained
+E8,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E9,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow (tested CSTELLARCATS strkey; page renders)
+E9,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E10,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; table 472 contained
+E10,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E11,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; composite path /nfts/:cid/:tid; table 490 contained
+E11,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E12,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; table 590 contained
+E12,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E13,375,✓,—,—,reverify2026-05-27,docW=374 no-overflow; 2 LP tables contained (504/498); no chart overflow
+E13,768,✓,—,—,reverify2026-05-27,docW=757 no-overflow
+E14,375,✗,🟡,C,reverify2026-05-27:F-W6-RESPONSIVE-5,docW=644 vs vw=375 DOC-OVERFLOW; search-results category card (DIV.css-83xvrh ~628px) does not shrink below ~660px; PAGE-SPECIFIC (not AppShell root cause); was untested in Wave 6
+E14,768,✓,—,—,reverify2026-05-27,docW=768 no-overflow (search results fit at tablet width)
+E14,1280,✓,—,—,reverify2026-05-27,docW=1280 no-overflow (no regression)
+
+# === FINDING DISPOSITION 2026-05-28 (user decisions; design_parity 06ab34cc + live re-verify) ===
+finding,status,severity,class,card,note
+F-W6-RESPONSIVE-1,RESOLVED,🟠,C,8.3,802px root cause gone; 41/42 cells no doc-scroll; 768 docW=757 (was 802); live-confirmed
+F-W6-RESPONSIVE-2,RESOLVED,🟡,C,8.3,tables contained in overflowX:auto; table->card transform = separate optional enhancement
+F-W6-RESPONSIVE-3,TODO,🟠,C,11.5,user decision 2026-05-28 REQUIRE hamburger <768px; scroll-nav alt rejected
+F-W6-RESPONSIVE-4,TODO,🟠,C,11.6,still failing live; 105/106 interactive elements <44px @375 (pagination 36px nav 24-32px)
+F-W6-RESPONSIVE-5,TODO,🟡,C,11.7,search category card ~628px intrinsic; overflows <660px; newly-surfaced live

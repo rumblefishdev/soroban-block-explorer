@@ -2,8 +2,8 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
 
+import { formatInteger, formatTps } from '../format/index.js';
 import { grid } from '../theme/grid.js';
-import { NetworkToggle, type Network } from './NetworkToggle.js';
 import { SearchInput } from './SearchInput.js';
 
 /**
@@ -25,8 +25,6 @@ export interface TopNavProps {
    *  fallback so callers don't ship visually-misleading hard-coded
    *  zeros. */
   stats?: NetworkStats;
-  network: Network;
-  onNetworkChange?: (next: Network) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -74,13 +72,11 @@ function formatNumber(n: number): string {
     const value = n / 1_000_000;
     return Number.isInteger(value) ? `${value}M` : `${value.toFixed(1)}M`;
   }
-  return n.toLocaleString('en-US');
+  return formatInteger(n);
 }
 
 export function TopNav({
   stats,
-  network,
-  onNetworkChange,
   searchValue,
   onSearchChange,
   onSearchSubmit,
@@ -124,8 +120,6 @@ export function TopNav({
           minWidth={0}
           overflow="hidden"
         >
-          <NetworkToggle network={network} onNetworkChange={onNetworkChange} />
-
           <Box
             sx={{
               display: 'flex',
@@ -139,7 +133,7 @@ export function TopNav({
           >
             <Stat
               label="TPS"
-              value={stats ? stats.tps_60s.toFixed(1) : '—'}
+              value={stats ? formatTps(stats.tps_60s) : '—'}
               valueColor="text.success"
             />
             <StatDivider />

@@ -252,3 +252,21 @@ Composite NotFound dual error blocks fix landed via Gate B batch (PR #219 merged
 Reference pattern `AssetDetailPage.tsx:127` (E8 already gated) — applied consistently across E6 + E9 + E13.
 
 Originally task 0262 scoped account + contract only. User extended to pool detail (E13) on activation per sweep recommendation. AC `[x] Valid-format-404 IDs render single NotFound block on E6, E9, and E13`.
+
+## Post-0271 positive verification 2026-05-27 — develop @ 53f13673
+
+**7-route 404 hygiene uniform — positive verify of F-D-2 + 0262 fix.** Per 0271 archived task body emerged note: "All 7 detail routes (account, transaction, contract, pool, ledger, NFT, asset) handle 404 via `isMissingResource(classifyError(error))` → `NotFoundState` uniformly. No crash / no infinite spinner. Safe to land."
+
+7-route coverage explicit confirmed:
+
+- E3 transactions/:hash (Filip 0070+0071 TxDetail)
+- E5 ledgers/:seq
+- E6 accounts/:id (0262 sub-section gate)
+- E8 assets/:id (already gated at AssetDetailPage.tsx:127 pre-0262)
+- E9 contracts/:id (0262 sub-section gate)
+- E11 nfts/:contractId/:tokenId (0264 NFT composite route)
+- E13 liquidity-pools/:id (0262 sub-section gate; 0271 post-merge verify)
+
+Verification incidental during 0271 search refactor (Karol audited routes for graceful 404 before landing the SearchResponse wrapper drop — FE-side singleton routing requires routes handle 404 on stale inputs). Result: uniform `isMissingResource → NotFoundState` pattern across all 7. No regression from 0262 cleanup; no detail page missing the pattern.
+
+F-D-2 cluster (composite NotFound on E6/E9/E13) STAYS RESOLVED. F-W6-NOTFOUND-2 (request-side leak — sub-section queries still fire on parent 404) was Wave 6 follow-up flagged separately — tracked in audit-action-queue card C 5.3, NOT addressed by 0271 (orthogonal scope).

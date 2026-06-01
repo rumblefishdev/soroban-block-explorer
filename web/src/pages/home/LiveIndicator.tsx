@@ -1,10 +1,34 @@
 import { Box, Typography } from '@mui/material';
 
+import { useLiveStatus, type LiveStatus } from '../../api/index.js';
+
 /**
- * Small green-dot "LIVE" indicator — shown on the chain-overview panel and
- * the activity-table section headers to signal the page auto-refreshes.
+ * Live status pip shown on the chain-overview panel and the activity-
+ * table section headers. Driven by `NetworkStats.latest_ledger_closed_at`:
+ *
+ * - **LIVE** — newest ledger closed within `LIVE_MAX_AGE_MS` and no error
+ * - **DELAYED** — data present but the chain (or our polling) is behind
+ * - **OFFLINE** — the stats query is erroring
+ *
+ * It stays visible in every state on purpose — a disappearing pip reads
+ * as "broken / frozen" rather than "data is stale".
  */
+
+const STATUS_LABEL: Record<LiveStatus, string> = {
+  live: 'LIVE',
+  delayed: 'STALE',
+  offline: 'OFFLINE',
+};
+
+const STATUS_DOT_COLOR: Record<LiveStatus, string> = {
+  live: 'stroke.success',
+  delayed: 'stroke.warning',
+  offline: 'stroke.error',
+};
+
 export function LiveIndicator() {
+  const status = useLiveStatus();
+
   return (
     <Box
       component="span"
@@ -12,12 +36,12 @@ export function LiveIndicator() {
     >
       <Box
         component="span"
-        sx={(theme) => ({
+        sx={{
           width: 6,
           height: 6,
           borderRadius: '50%',
-          backgroundColor: theme.palette.stroke.success,
-        })}
+          backgroundColor: STATUS_DOT_COLOR[status],
+        }}
       />
       <Typography
         component="span"
@@ -27,7 +51,7 @@ export function LiveIndicator() {
           letterSpacing: '0.06em',
         })}
       >
-        LIVE
+        {STATUS_LABEL[status]}
       </Typography>
     </Box>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatAmount } from './format.js';
+import { formatAmount } from '@rumblefish/soroban-block-explorer-ui';
 
 describe('formatAmount', () => {
   it('returns em-dash for null/undefined', () => {

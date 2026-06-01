@@ -2,10 +2,8 @@ import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
   Chip,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
   isContractId,
-  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
   Tabs,
@@ -46,10 +44,13 @@ export default function ContractDetailPage() {
   if (contract.isLoading) {
     summary = <CardSkeleton />;
   } else if (contract.isError) {
-    summary = isMissingResource(classifyError(contract.error)) ? (
-      <NotFoundState entity="contract" identifier={contractId} />
-    ) : (
-      <GenericErrorState onRetry={() => void contract.refetch()} />
+    summary = (
+      <DetailErrorState
+        error={contract.error}
+        entity="contract"
+        identifier={contractId}
+        onRetry={() => void contract.refetch()}
+      />
     );
   } else if (contract.data) {
     summary = <ContractSummary contract={contract.data} />;

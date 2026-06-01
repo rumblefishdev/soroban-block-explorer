@@ -11,6 +11,7 @@ export type NotFoundEntity =
   | 'operation'
   | 'asset'
   | 'liquidity-pool'
+  | 'nft'
   | 'generic';
 
 const TITLES: Record<NotFoundEntity, string> = {
@@ -21,6 +22,7 @@ const TITLES: Record<NotFoundEntity, string> = {
   operation: 'Operation not found',
   asset: 'Asset not found',
   'liquidity-pool': 'Liquidity pool not found',
+  nft: 'NFT not found',
   generic: 'Not found',
 };
 

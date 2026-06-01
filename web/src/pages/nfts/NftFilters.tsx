@@ -1,8 +1,6 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { Box, InputAdornment, TextField } from '@mui/material';
-import { useEffect, useState } from 'react';
-
-const SEARCH_DEBOUNCE_MS = 300;
+import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 interface DebouncedFieldProps {
   value: string;
@@ -25,17 +23,7 @@ function DebouncedField({
   width,
   onCommit,
 }: DebouncedFieldProps) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
-
-  useEffect(() => {
-    if (draft === value) return;
-    const id = setTimeout(() => onCommit(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, value, onCommit]);
+  const [draft, setDraft] = useDebouncedDraft(value, onCommit);
 
   return (
     <TextField

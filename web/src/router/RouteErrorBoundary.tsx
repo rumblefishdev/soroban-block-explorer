@@ -1,44 +1,18 @@
-import HomeIcon from '@mui/icons-material/Home';
-import { Button, Container, Stack } from '@mui/material';
-import {
-  isRouteErrorResponse,
-  useNavigate,
-  useRouteError,
-} from 'react-router-dom';
+import { Container, Stack } from '@mui/material';
+import { useNavigate, useRouteError } from 'react-router-dom';
 
-import {
-  GenericErrorState,
-  NotFoundState,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { GenericErrorState } from '@rumblefish/soroban-block-explorer-ui';
 
-import { routes } from './routes.js';
-
+/**
+ * Root `errorElement` — catches genuinely *thrown* render/loader errors and
+ * shows a generic, retryable error state. Unknown URLs are NOT handled here:
+ * they hit the catch-all `path: '*'` route (`NotFoundPage`), which renders a
+ * 404 inside the AppShell `<main>`. This boundary deliberately has no 404
+ * special-case (nothing in the app throws route-404 responses).
+ */
 export function RouteErrorBoundary() {
   const error = useRouteError();
   const navigate = useNavigate();
-
-  const goHome = () => navigate(routes.home);
-
-  if (isRouteErrorResponse(error) && error.status === 404) {
-    return (
-      <Container maxWidth="sm" sx={{ py: 6 }}>
-        <Stack alignItems="center">
-          <NotFoundState
-            titleOverride="Page not found"
-            action={
-              <Button
-                variant="contained"
-                startIcon={<HomeIcon />}
-                onClick={goHome}
-              >
-                Back to home
-              </Button>
-            }
-          />
-        </Stack>
-      </Container>
-    );
-  }
 
   const message =
     error instanceof Error ? error.message : 'An unexpected error occurred.';

@@ -11,11 +11,8 @@ import {
 import type { Theme } from '@mui/material/styles';
 import {
   CardSkeleton,
-  classifyError,
   EmptyState,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useContractInterface } from '../../api/index.js';
@@ -27,13 +24,6 @@ import {
 } from './interfaceMetadata.js';
 
 const INT_TYPE = /^[iu](8|16|32|64|128|256)$/;
-
-/**
- * Blue for reference / struct types (`Address`, `Symbol`, custom). The DS
- * has no `text` blue token, so this mirrors the design-system blue/600 —
- * the same value the Chip `color="blue"` variant renders.
- */
-const TYPE_REF_COLOR = '#155dfc';
 
 /**
  * Syntax colour for a Soroban type token, matching the Figma interface
@@ -56,7 +46,9 @@ function typeColor(
   if (position === 'return') return theme.palette.text.accent;
   if (type === 'bool') return theme.palette.text.accent;
   if (INT_TYPE.test(type)) return theme.palette.text.success;
-  return TYPE_REF_COLOR;
+  // Reference / struct types (Address, Symbol, custom) — DS blue/600,
+  // matching the Chip color="blue" variant.
+  return theme.palette.blue[600];
 }
 
 /** Syntax-coloured type token. */
@@ -206,15 +198,7 @@ export function ContractInterface({ contractId }: { contractId: string }) {
   }
 
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    return kind === 'rate-limit' ? (
-      <RateLimitState onRetry={retry} />
-    ) : kind === 'transient' ? (
-      <TransientErrorState onRetry={retry} />
-    ) : (
-      <GenericErrorState onRetry={retry} />
-    );
+    return <QueryErrorState error={error} onRetry={() => void refetch()} />;
   }
 
   const parsed = parseInterfaceMetadata(data?.interface_metadata);
