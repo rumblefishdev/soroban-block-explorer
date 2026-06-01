@@ -2,7 +2,7 @@
 id: '0274'
 title: 'Backend: API endpoints + fields surfaced by FE gaps audit'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0199', '0226']
 tags:
@@ -28,6 +28,20 @@ history:
       Accounts page against an in-memory mock + worked around several
       missing fields on existing endpoints. This task tracks the
       backend work to close those gaps.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      Activated alongside 0275 — taking both over as a pair. Prior
+      WIP exists on `origin/feat/0274_backend-api-gaps-from-fe-audit`
+      (FilipD, commit f0ff1a72): OpenAPI cleanups subset covering 3 of
+      7 gaps (#3 ledgers `order` param, #6 `interface_metadata` schema
+      + FE defensive-parser deletion, #7 `recent_events` on
+      ContractStats). Remaining: #1 `GET /v1/accounts` (headline), #2
+      lp_op_details amounts, #5 `PoolAssetLeg.icon_url`. Continuing on
+      FilipD's branch (rebased on develop) rather than a fresh start to
+      avoid duplicating his 3 gaps; branch to be renamed to span both
+      0274 + 0275.
 ---
 
 # Backend: API endpoints + fields surfaced by FE gaps audit
