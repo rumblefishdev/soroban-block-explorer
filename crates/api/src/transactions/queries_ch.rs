@@ -383,6 +383,7 @@ pub async fn fetch_list(
                           AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
                    ) > 0) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
+                 LIMIT 1 BY t.id \
                  LIMIT {lim_peek}",
                 arm_ops = arm("operations_appearances"),
                 arm_inv = arm("soroban_invocations_appearances"),
@@ -407,6 +408,17 @@ pub async fn fetch_list(
             //    bounded, and op_type filtering is user-initiated, not polled).
             //    Making this a seek needs a skip-index on `type` — deferred
             //    follow-up.
+            //
+            // `LIMIT 1 BY t.id` before the page `LIMIT`: the `accounts` join has
+            // no FINAL (a 16M-row FINAL would be ruinous), so un-merged
+            // ReplacingMergeTree versions of the source account fan a single
+            // transaction into N identical-`id` rows. Here the page `LIMIT` is
+            // applied AFTER the join, so without the dedup it fills with copies
+            // of the top tx and the page collapses to 1 row (measured rows=4 /
+            // distinct_ids=1). `LIMIT 1 BY t.id` collapses the fan-out in SQL
+            // before the page cut, so the limit counts distinct transactions and
+            // next-page detection stays correct. (Statement A applies its LIMIT
+            // inside the pre-join subquery, so it is unaffected.)
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
@@ -428,6 +440,7 @@ pub async fn fetch_list(
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  WHERE ({src} IS NULL OR t.source_id = {src}) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
+                 LIMIT 1 BY t.id \
                  LIMIT {lim_peek}",
             );
             // No outer keyset re-check: the driver subquery already filtered
