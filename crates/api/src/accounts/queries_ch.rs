@@ -195,13 +195,19 @@ pub async fn fetch_transactions(
     let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
 
     // Step 1: account-scoped driver seek. `account_id` is the leading PK of
-    // `transaction_participants`, so this reads only this account's rows.
+    // `transaction_participants`. FINAL is dropped: on a hot account it merges
+    // the account's rows across every part — measured 1.16B vs 327M rows read
+    // (3.5x), and one such FINAL page is ~11% of the hourly read_rows quota.
+    // `LIMIT 1 BY (ledger_sequence, transaction_id)` collapses any rare
+    // re-ingest duplicate, so the page still yields `limit` distinct keys
+    // (box-verified: 21/21 distinct on the hottest account).
     let driver_sql = format!(
         "SELECT tp.ledger_sequence AS ledger_sequence, tp.transaction_id AS transaction_id \
-         FROM transaction_participants tp FINAL \
+         FROM transaction_participants tp \
          WHERE tp.account_id = ? \
            AND ({cl} IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} ({cl}, {ct})) \
          ORDER BY tp.ledger_sequence {order}, tp.transaction_id {order} \
+         LIMIT 1 BY tp.ledger_sequence, tp.transaction_id \
          LIMIT ?"
     );
     let key_rows = client
