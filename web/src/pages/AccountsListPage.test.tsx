@@ -98,11 +98,13 @@ describe('AccountsListPage', () => {
     expect(filtersArg).toMatchObject({ limit: 20, sort: 'xlm_desc' });
   });
 
-  it('reads ?sort= from the URL and forwards it as the sort filter', () => {
+  it('reads the split ?sort=&dir= params and forwards the recombined sort', () => {
     mockOk([]);
 
+    // Sort lives split across `sort` (column) + `dir` (direction); the page
+    // recombines them into the `<column>_<dir>` token the API expects.
     renderWithProviders(<AccountsListPage />, {
-      initialEntries: ['/accounts?sort=last_seen_desc'],
+      initialEntries: ['/accounts?sort=last_seen&dir=desc'],
     });
 
     const lastCall =

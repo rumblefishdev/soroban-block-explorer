@@ -1,5 +1,6 @@
 import { Stack } from '@mui/material';
 import {
+  type SortDirection,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';

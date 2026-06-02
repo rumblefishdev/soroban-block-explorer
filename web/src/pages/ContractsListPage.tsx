@@ -21,9 +21,10 @@ type Filters = NonNullable<ListContractsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function ContractsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['q', 'type'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['q', 'type'],
+    });
   const q = state.filters.q ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = q !== '' || type !== '';
@@ -55,10 +56,6 @@ export default function ContractsListPage() {
     (value: string) => setFilter('type', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('q', null);
-    setFilter('type', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -85,7 +82,7 @@ export default function ContractsListPage() {
         hasActiveFilters={hasFilters}
         emptyKind="contracts"
         emptyNoun="contracts"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}
