@@ -1,3 +1,14 @@
+-- ============================================================================
+-- ⚠️  CH STATUS (task 0243) — NOT YET MIGRATED. The CH read path for this
+--     endpoint is deferred. CH soroban_events stores topics_xdr / data_xdr
+--     inline per event, so the live path must ScVal-decode them in Rust
+--     (replacing the PG Archive overlay) and page on a 3-component
+--     (ledger_sequence, transaction_id, event_index) keyset (multi-event-tx
+--     tie-break). It also diverges from the PG folded-appearance + `amount`
+--     fold-count model (per-event vs per-appearance). `list_events` stays
+--     PG-only until this is designed + landed, so API_DATASOURCE_CONTRACTS=ch
+--     must remain OFF.
+-- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/events
 -- Purpose:      Paginated list of recent events emitted by a contract.
 --               Default ordering: most recent first.
