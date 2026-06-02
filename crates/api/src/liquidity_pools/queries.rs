@@ -337,8 +337,8 @@ pub async fn fetch_pool_list(
             -- cursor predicate when present, and a full pool-table scan
             -- is bounded (current Stellar pubnet ≈ 10⁴ pools).
             AND ($9::varchar IS NULL
-                 OR UPPER(lp.asset_a_code) = $9
-                 OR UPPER(lp.asset_b_code) = $9)
+                 OR lp.asset_a_code ILIKE '%' || $9 || '%'
+                 OR lp.asset_b_code ILIKE '%' || $9 || '%')
         ORDER BY lp.created_at_ledger {order}, lp.pool_id {order}
         LIMIT $1
         "#
