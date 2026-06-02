@@ -28,11 +28,16 @@ export class LedgerBucketStack extends cdk.Stack {
 
     this.bucket = new s3.Bucket(this, 'LedgerData', {
       bucketName: `${prefix}-stellar-ledger-data`,
-      encryption: config.kmsEncryption
-        ? s3.BucketEncryption.KMS_MANAGED
-        : s3.BucketEncryption.S3_MANAGED,
+      // SSE-S3 (AES256), never SSE-KMS: the contents are public on-chain XDR,
+      // so KMS buys no real confidentiality here — but the high-volume ingest
+      // (one Put per ledger + one Get per processor invocation) would make a
+      // per-object KMS call, driving an avoidable request bill (task 0278).
+      // SSE-S3 still encrypts at rest with zero KMS traffic.
+      encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: false,
+      // Retention is independent of the (now-fixed) encryption choice:
+      // production keeps its data, ephemeral envs auto-clean on teardown.
       removalPolicy: config.kmsEncryption
         ? cdk.RemovalPolicy.RETAIN
         : cdk.RemovalPolicy.DESTROY,
