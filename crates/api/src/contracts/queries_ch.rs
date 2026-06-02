@@ -241,8 +241,22 @@ pub async fn fetch_invocation_appearances(
     };
     let (op, order) = direction_sql(direction);
 
+    // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
+    // 0.15 bound-parameter path returns an empty result when `None` is bound
+    // into a tuple keyset comparison (the same defect that forced transactions
+    // B/C to inline). Values are i64 / None→NULL, no injection surface.
+    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+
     // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of
     // `soroban_invocations_appearances`.
+    //
+    // `LIMIT 1 BY (ledger_sequence, transaction_id)` before the page LIMIT: the
+    // `accounts caller` join has no FINAL (a 16M-row FINAL would be ruinous), so
+    // un-merged versions of the caller account fan one invocation appearance
+    // into N identical-key rows. Without this, the page LIMIT fills with those
+    // copies and the page yields fewer distinct (ledger, tx) keys than `limit`,
+    // breaking next-page detection (same class as the transactions B/C fix).
     let driver_sql = format!(
         "SELECT \
             sia.ledger_sequence AS ledger_sequence, \
@@ -252,16 +266,14 @@ pub async fn fetch_invocation_appearances(
          FROM soroban_invocations_appearances sia FINAL \
          LEFT JOIN accounts caller ON caller.id = sia.caller_id \
          WHERE sia.contract_id = ? \
-           AND (? IS NULL OR (sia.ledger_sequence, sia.transaction_id) {op} (?, ?)) \
+           AND ({cl} IS NULL OR (sia.ledger_sequence, sia.transaction_id) {op} ({cl}, {ct})) \
          ORDER BY sia.ledger_sequence {order}, sia.transaction_id {order} \
+         LIMIT 1 BY sia.ledger_sequence, sia.transaction_id \
          LIMIT ?"
     );
     let key_rows = client
         .query(&driver_sql)
         .bind(contract_surrogate_id)
-        .bind(cursor_ledger)
-        .bind(cursor_ledger)
-        .bind(cursor_tiebreak)
         .bind(limit)
         .fetch_all::<InvocationKeyRow>()
         .await?;
