@@ -78,8 +78,8 @@ Implement these from the master action queue (file:line + repro in queue):
 10. [ ] **F-RR-14** — LedgerSummary semantic `<h2>` (a11y). `ledgers/LedgerSummary.tsx`.
 11. [x] **F-W6-LOADSKEL-1** — route Suspense fallback shape: add `HomeSkeleton` (hero+KPI+2 tables) so phase-1 ≈ phase-2 (kills home load flicker). `router/index.tsx` + new skeleton. (✅ DONE)
 12. [ ] **F-0272S-3** — remove dead sort arrows (assets total-supply, ledgers sequence). FE-quick; backend-sort variant = POST (F-RR-1).
-13. [ ] **F-0272S-4** — silent no-op search: add placeholder + empty-state hints (transactions tx-hash gate, NFT exact-match).
-14. [ ] **F-0272S-2** — LP `filter[asset_code]` → ILIKE partial (match assets). **Backend — coordinate with 0274.**
+13. [x] **F-0272S-4** — silent no-op search: add placeholder + empty-state hints (transactions tx-hash gate, NFT exact-match). (✅ DONE via helper text validation warning in `9146d4ee`)
+14. [x] **F-0272S-2** — LP `filter[asset_code]` → ILIKE partial (match assets). (✅ DONE via ILIKE substring matching in `9146d4ee`)
 
 ## Out of scope
 
