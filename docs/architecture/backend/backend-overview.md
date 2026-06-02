@@ -33,11 +33,10 @@ This document covers the target design of the backend application only. It does 
 infrastructure provisioning, ingestion implementation, or the full database schema beyond
 what is needed to explain backend behavior.
 
-The current Nx workspace already reserves the backend boundary as:
+The target workspace structure (per ADR 0005, tasks 0094/0095) reserves the backend boundary as:
 
-- `apps/api` - application entrypoint for the public REST API
-- `libs/domain` - shared explorer-domain types that may be reused by backend and frontend
-- `libs/shared` - generic cross-cutting utilities with no explorer-domain vocabulary
+- `crates/api` - application entrypoint for the public REST API (Rust/axum)
+- `crates/domain` - shared explorer-domain types used by backend crates
 
 This document describes the intended production architecture for that boundary. It is not
 a description of the current implementation state, which is still skeletal.
@@ -56,7 +55,6 @@ Its job is to make indexed chain data usable:
 
 - hide ingestion and storage details behind stable REST resources
 - normalize raw indexed records into frontend-friendly responses
-- enrich Soroban-specific data with readable interpretations where available
 - provide unified search and consistent pagination semantics
 - expose raw XDR only where advanced inspection genuinely requires it
 
@@ -67,7 +65,7 @@ proxy.
 
 ### 3.1 Runtime Model
 
-The backend is a NestJS application running on AWS Lambda behind API Gateway. It is a
+The backend is a Rust application (axum + sqlx) running on AWS Lambda behind API Gateway. It is a
 REST API. The backend does not perform chain indexing; it reads from the block explorer's
 own PostgreSQL database, which is populated by the Galexie-based ingestion pipeline.
 
@@ -78,14 +76,14 @@ non-browser consumers.
 
 ```
 ┌──────────┐    HTTPS    ┌─────────────┐              ┌──────────────────────┐
-│  Client  │────────────>│ API Gateway │─────────────>│  Lambda (NestJS)     │
+│  Client  │────────────>│ API Gateway │─────────────>│  Lambda (Rust/axum)  │
 └──────────┘             └─────────────┘              │                      │
-                                                      │  NestJS Modules:     │
+                                                      │  axum Modules:       │
                                                       │  ├─ Network ─────────┤
                                                       │  ├─ Transactions ────┤
                                                       │  ├─ Ledgers ─────────┤
                                                       │  ├─ Accounts ────────┤
-                                                      │  ├─ Tokens ──────────┤
+                                                      │  ├─ Assets ──────────┤
                                                       │  ├─ Contracts ───────┤
                                                       │  ├─ NFTs ────────────┤
                                                       │  ├─ Liquidity Pools ─┤
@@ -104,7 +102,7 @@ non-browser consumers.
 The typical request path is:
 
 1. client calls a public REST endpoint through API Gateway
-2. API Gateway routes the request to the NestJS Lambda handler
+2. API Gateway routes the request to the Rust/axum Lambda handler
 3. the relevant module validates input and queries the explorer database
 4. backend-level normalization and enrichment are applied where needed
 5. the response is returned in a frontend-friendly form
@@ -113,17 +111,23 @@ The typical request path is:
 
 The backend implementation direction implied by the current design is:
 
-- **NestJS** for modular API composition and transport-layer structure
-- **TypeScript** for typed application code and shared contracts with workspace libraries
-- **AWS Lambda** for serverless compute and on-demand scaling
+- **axum** for modular API composition and transport-layer structure (per ADR 0005)
+- **Rust** for typed application code with compile-time safety
+- **sqlx** for compile-time checked database queries (per ADR 0005)
+- **utoipa** for OpenAPI spec generation (per ADR 0005). The spec is the single
+  source of truth for API contracts and is consumed by the frontend via the
+  `libs/api-types` codegen pipeline (task 0096). A secondary `extract_openapi`
+  binary in the `api` crate dumps the spec at build time, so codegen does not
+  require booting the Lambda.
+- **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
 - **AWS WAF** for managed-rule abuse protection on public ingress
 - **PostgreSQL** as the only source of indexed chain data served by the API
-- **`@stellar/stellar-sdk`** for targeted XDR decoding when advanced transaction views need it
+- **No XDR dependencies** — API serves pre-materialized data; raw XDR is passthrough only (per ADR 0004)
 
 This document assumes the backend follows the implementation direction already
-reflected in the general overview, including NestJS and Drizzle ORM, while keeping the API
+reflected in the general overview, including axum, sqlx, and utoipa (per ADR 0005), while keeping the API
 behavior here as the primary contract to preserve.
 
 ## 4. Responsibilities and Boundaries
@@ -134,42 +138,85 @@ The backend serves data from the block explorer's own database, adding:
 
 - **Data normalization** - transforms raw indexed records into a consistent,
   frontend-friendly format (e.g. flattening nested fields, attaching human-readable
-  operation summaries and event interpretations)
-- **Soroban enrichment** - decorates contract invocations with metadata, function names,
-  and structured interpretations stored at ingestion time
+  operation summaries)
+- **Soroban enrichment** - decorates contract invocations with metadata and function names
+  stored at ingestion time
 - **Search** - unified search across transaction hashes, account IDs, contract IDs, token
   identifiers, NFT identifiers, pool IDs, and indexed metadata using PostgreSQL full-text
   indexes
-- **Raw XDR on demand** - the `envelope_xdr`, `result_xdr`, and `result_meta_xdr` fields
-  are stored verbatim for advanced inspection; the backend returns the first two in the
-  advanced transaction view, decodes the raw payloads on request using
-  `@stellar/stellar-sdk`, and can serve a stored `operation_tree` for transaction-detail
-  debugging sections
+- **Runtime details enrichment** — per
+  [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md),
+  the backend resolves enrichable detail fields at request time rather than
+  persisting them. Two transport-specific submodules under
+  `crates/api/src/runtime_enrichment/` share the architectural shape
+  (per-request, fail-soft, in-process LRU-cached). Status surfacing is
+  per-submodule: archive-backed endpoints expose a `heavy_fields_status`
+  discriminator (`ok` / `unavailable`); SEP-1 enrichment surfaces failures
+  silently as `null` description / home_page (warn-logged) and adds no
+  status field today:
+  - **`runtime_enrichment::stellar_archive`** — fetches `.xdr.zst` ledger files
+    from the public Stellar archive on S3, decompresses with `crates/xdr-parser`
+    and merges decoded payload into responses. Drives E3 `/transactions/:hash`
+    (full envelope + parsed invocation tree, per
+    [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) /
+    [ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md))
+    and E14 `/contracts/:id/events` (full event detail). List endpoints never
+    call the archive and answer from typed summary columns + appearance indexes only.
+  - **`runtime_enrichment::sep1`** — issues HTTPS GETs to
+    `https://{issuer.home_domain}/.well-known/stellar.toml`, parses the SEP-1
+    schema, and merges `[[CURRENCIES]]` per-token fields plus
+    `[DOCUMENTATION]` org info into asset detail responses (task 0188).
+    Built-in safeguards: 100 KB body cap (per SEP-1 spec), 1 s connect / 2 s
+    request timeouts, RFC 1035 hostname validation rejecting IP literals, and
+    a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
+    consumed only by `GET /v1/assets/{id}`; future detail endpoints
+    (accounts, etc.) will reuse the same fetcher
+  - **`runtime_enrichment::nft_token_uri`** — drives the detail-only
+    `metadata` field on `GET /v1/nfts/:id` (task 0195 §2d). Per ADR 0043
+    detail-only carve-out — the `nfts.metadata` JSONB column was dropped
+    in migration `20260507120000_drop_nfts_metadata.up.sql`. Flow:
+    Soroban RPC `simulateTransaction` of `token_uri(token_id)`
+    (SEP-50 per-token form, falls back to zero-arg `token_uri()` form
+    for SEP-39 contracts on `MismatchingParameterLen` — see audit 0197
+    Bug #5), then IPFS gateway fetch + JSON parse. Built-in safeguards:
+    3 s wall-clock timeout, 256 KB body cap, scheme/hostname validation
+    (https / ipfs only), 24 h LRU (1024 entries). Fail-soft NULL on any
+    error class. Code is shared with the Lambda 2 write-side worker
+    (`crates/enrichment-shared::nft_token_uri`); only the persistence
+    half differs (handler returns the JSON inline, worker writes
+    `nfts.name` / `media_url` / `collection_name`).
+- **Surrogate-key resolution** — every StrKey that enters a route parameter
+  (`G...`, `C...`) is resolved to the `BIGINT` surrogate via the relevant
+  `UNIQUE` index at the request boundary
+  ([ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md),
+  [ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md));
+  every StrKey in a response comes from a join back to `accounts.account_id`
+  or `soroban_contracts.contract_id`. The public API shape is unchanged
 
 ### 4.2 What the Backend Must Not Do
 
 The backend does **not**:
 
 - perform live chain indexing
-- call Horizon or any external chain API
+- call Horizon or any private chain API
 - rely on a third-party explorer database
-- shift protocol-specific interpretation responsibility back onto the frontend
 
-All chain data lives in the block explorer's RDS.
+Backend dependencies at runtime: (1) the explorer's own RDS for every
+partition-pruned read, (2) the public Stellar ledger archive for read-time
+XDR expansion on E3 / E14.
 
 ### 4.3 Boundary with Other Applications
 
 Responsibility split across the workspace should remain clear:
 
-- `apps/indexer` and related workers own ingestion and persistence into the explorer DB
-- `apps/api` owns query APIs, response shaping, search, and transport concerns
-- `apps/web` consumes the REST API and should not reconstruct backend behavior client-side
-- `libs/domain` may hold reusable explorer-domain types shared across the boundary
-- `libs/shared` may hold generic helpers that are not explorer-specific
+- `crates/indexer` and related workers own ingestion and persistence into the explorer DB
+- `crates/api` owns query APIs, response shaping, search, and transport concerns
+- `web` consumes the REST API and should not reconstruct backend behavior client-side
+- `crates/domain` holds reusable explorer-domain types shared across backend crates
 
 ## 5. Module Design
 
-The backend is best structured as resource-oriented NestJS modules matching the public API
+The backend is best structured as resource-oriented axum route modules matching the public API
 surface.
 
 ### 5.1 Primary Modules
@@ -178,7 +225,7 @@ surface.
 - `Transactions` - list and detail queries, filter handling, advanced/raw payload support
 - `Ledgers` - ledger list/detail access and linked transaction retrieval
 - `Accounts` - account summary, balances, and account-related transaction history
-- `Tokens` - classic asset and Soroban token listing and detail retrieval
+- `Assets` - classic and Soroban-native asset listing and detail retrieval
 - `Contracts` - contract metadata, interface, invocations, and events
 - `NFTs` - NFT list/detail retrieval and transfer history access
 - `Liquidity Pools` - pool listing, detail, transaction history, and chart data
@@ -192,7 +239,7 @@ In addition to resource modules, the backend will need shared internal capabilit
 - cursor-based pagination helpers
 - response serialization and error mapping
 - search-query classification and exact-match resolution
-- XDR decode helpers for advanced transaction sections
+- raw XDR passthrough for advanced transaction sections (no server-side decode)
 - caching and freshness metadata
 
 These are backend concerns even when their outputs are consumed by frontend pages.
@@ -205,17 +252,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                    |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                          |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                |
-| Accounts        | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                   |
-| Tokens          | `GET /tokens`, `GET /tokens/:id`, `GET /tokens/:id/transactions`                                                                                        |
-| Contracts       | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                 |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`                           |
-| Search          | `GET /search?q=&type=transaction,contract,token,account,nft,pool`                                                                                       |
+| Resource        | Endpoint(s)                                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                   |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                         |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                               |
+| Accounts        | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                  |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                       |
+| Contracts       | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events`                |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants` |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                             |
 
 ### 6.3 Resource Details
 
@@ -246,8 +293,7 @@ and advanced representations):
     {
       "type": "invoke_host_function",
       "contract_id": "CCAB...DEF",
-      "function_name": "swap",
-      "human_readable": "Swapped 100 USDC for 95.2 XLM on Soroswap"
+      "function_name": "swap"
     }
   ],
   "operation_tree": [...],
@@ -291,22 +337,22 @@ The current account scope is intentionally limited to:
 This keeps account support aligned with the currently documented product scope and avoids
 expanding the backend contract beyond what the frontend is expected to show.
 
-#### Tokens
+#### Assets
 
-**`GET /tokens`** - Paginated list of tokens (classic assets + Soroban token contracts).
-Query params: `limit`, `cursor`, `filter[type]` (classic/sac/soroban), `filter[code]`.
+**`GET /assets`** - Paginated list of assets (native XLM, classic credit assets, SACs, and Soroban-native assets).
+Query params: `limit`, `cursor`, `filter[type]` (native/classic_credit/sac/soroban), `filter[code]`.
 
-**`GET /tokens/:id`** - Token detail: asset code, issuer/contract, type, supply, holder
+**`GET /assets/:id`** - Asset detail: asset code, issuer/contract, type, supply, holder
 count, metadata.
 
-**`GET /tokens/:id/transactions`** - Paginated transactions involving this token.
+**`GET /assets/:id/transactions`** - Paginated transactions involving this asset.
 
-The backend must preserve the distinction between classic assets and contract-based tokens
-while still serving both through a unified explorer API.
+The backend must preserve the distinction between native, classic credit, SAC, and
+Soroban-native assets while still serving all through a unified explorer API.
 
 #### Contracts
 
-**`GET /contracts/:contract_id`** - Contract metadata, deployer, WASM hash, stats.
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), and per-contract activity stats. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped.
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
@@ -321,7 +367,8 @@ place where indexed contract metadata and decoded usage history are exposed.
 #### NFTs
 
 **`GET /nfts`** - Paginated list of NFTs. Query params: `limit`, `cursor`,
-`filter[collection]`, `filter[contract_id]`.
+`filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
+(substring; rejects `%`/`_` literals — canonical SQL `15_get_nfts_list.sql`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL.
@@ -334,39 +381,143 @@ quality may vary significantly.
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** - Paginated list of pools. Query params: `limit`, `cursor`,
-`filter[assets]`, `filter[min_tvl]`.
+`filter[asset_code]` (single-asset, case-insensitive, matches either leg —
+task 0246), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
+`filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
+`filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
+or both omitted (classic identity). The single-asset and per-leg modes coexist
+additively. Each `PoolItem` carries `participant_count` (count of active LP
+positions; task 0246) alongside the snapshot fields. Filter and projection
+semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
-**`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares, TVL.
+**`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares,
+TVL, plus `participant_count` (task 0246). Dynamic snapshot fields come from
+the latest snapshot row; clients that care about freshness read
+`latest_snapshot_at` in the response. `participant_count` is independent of
+snapshot freshness — populated even on stale pools.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
-Query params: `interval` (1h/1d/1w), `from`, `to`.
+Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,
+default `1d`), `from` (ISO 8601, default `to` minus interval-appropriate
+window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
+exclusive upper bound). `from < to` enforced; bucket count capped to keep
+aggregation bounded. Bucket aggregation policy in canonical SQL
+`21_get_liquidity_pools_chart.sql`.
+
+**`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
+with their share size, share percentage of the pool, first deposit ledger, and last
+update ledger. Powers the "Pool participants" table on the LP detail page
+(frontend §6.14). Backed by `lp_positions` (ADR 0037 §16). Added during task 0167
+to close a doc-drift gap between the frontend page and the original endpoint
+inventory.
 
 These endpoints combine factual current-state reads with historical aggregate reads, so the
 backend should keep raw pool state and chart-series generation concerns clearly separated.
 
+**Sentinel placeholder pools.** During partial / mid-stream backfills, the persist
+layer can emit placeholder rows in `liquidity_pools` to satisfy the
+`lp_positions.pool_id` FK when the parent pool's `LedgerEntry` is not in the
+indexed window — see [ADR 0041](../../../lore/2-adrs/0041_lp-positions-orphan-handling-state-filter-and-sentinel-pool.md)
+and the database-schema overview §4.14 "Sentinel placeholder rows". Marker:
+`created_at_ledger = 0` (no real Stellar pool can carry this value — pubnet
+genesis seq is 1). Every pool-surfacing endpoint above hides sentinel rows at
+two layers: the handler-level `pool_exists()` gate filters them (so per-pool
+endpoints return 404), and each of the five canonical SQL queries carries its
+own sentinel predicate (`18` / `19` inline `lp.created_at_ledger > 0`,
+`20` / `21` / `23` an `EXISTS` guard) for defense-in-depth against callers that
+bypass the handler. Task 0193 implements this filter.
+
 #### Search
 
-**`GET /search?q=&type=transaction,contract,token,account,nft,pool`** - Generic search
-across all entity types. Uses prefix/exact matching on hashes, account IDs, contract IDs,
-asset codes, pool IDs, and NFT identifiers. Full-text search on metadata via
-`tsvector`/`tsquery` and GIN indexes where entity metadata is indexed.
+**`GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`** - Generic
+search across all entity types. The classifier maps the raw `q` to two derived inputs
+consumed by the canonical SQL: `hash_bytes` (32-byte BYTEA — drives `transaction` and
+`pool` exact-match branches because pool ids are also 32-byte BYTEA) and `strkey_prefix`
+(upper-cased StrKey or any `G…` / `C…` prefix — drives the `account` and `contract`
+prefix branches). The raw `q` is also fed to the trigram / FTS branches (`assets`,
+`nfts`, `soroban_contracts.search_vector`).
 
-Search is not just a DB query wrapper. It is an API behavior surface that must:
+Behaviour:
 
-- classify likely query types
-- support exact-match redirect behavior in the consuming frontend
-- return grouped broad-search results for ambiguous inputs
+- when `q` is a fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey) **and**
+  an exact row exists in `transaction_hash_index` / `liquidity_pools` / `accounts` /
+  `soroban_contracts`, the response is `{ "type": "redirect", "entity_type", "entity_id" }`
+  and the frontend navigates directly to the entity page.
+- otherwise the response is `{ "type": "results", "groups": {...} }` with up to `limit`
+  rows per entity bucket (default 10, hard ceiling 50). Each row carries the same four
+  columns regardless of bucket: `entity_type`, `identifier`, `label`, `surrogate_id`
+  (BIGINT FK or `null` for tx / pool which route by `identifier`). `groups` includes
+  only buckets that have at least one match — empty buckets are omitted from the
+  response (the OpenAPI schema marks them optional); frontend treats absent and empty
+  array identically.
+
+Authoritative SQL:
+[`22_get_search.sql`](../database-schema/endpoint-queries/22_get_search.sql) — UNION ALL
+of six narrow CTEs, each `LIMIT $per_group_limit`-bounded, with `:include_*` BOOLEAN
+flags resolved from the optional `?type=` filter (the planner removes branches whose
+flag is FALSE).
+
+No caching: `q` variability makes a TTL cache useless and the per-CTE `LIMIT` keeps each
+query bounded.
+
+### 6.4 Response Caching
+
+Per task 0055, every public endpoint sets an explicit `Cache-Control` header
+that the API Gateway stage cache (CDK config — task 0097) honours. Constants
+live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
+
+| Tier             | `Cache-Control`       | Endpoints                                                                                                                                                                                                           |
+| ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Long** (300s)  | `public, max-age=300` | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                      |
+| **Medium** (60s) | `public, max-age=60`  | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                   |
+| **Short** (10s)  | `public, max-age=10`  | `GET /network/stats`, list endpoints, `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, etc. |
+| **No-store**     | `no-store`            | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                              |
+
+Two endpoints carry **conditional** logic:
+
+- `GET /ledgers/:sequence` — Long when `next_sequence` is `Some` (closed
+  ledger, immutable per Stellar consensus); Short when the requested ledger
+  is the chain head and the indexer may still be settling.
+- `GET /transactions/:hash` — Long when `heavy_fields_status = Ok` (full
+  archive overlay merged); Short when archive fetch failed
+  (`heavy_fields_status = Unavailable`) so a retry can pick up the archive
+  sooner. The handler also **short-circuits the archive fetch entirely**
+  for any row carrying `parse_error = true` in the DB (task 0190):
+  re-fetching cannot make a degraded row whole, and serving the row through
+  the unavailable-heavy path preserves the lore-0044 / lore-0046 contract
+  (light slice always returned, heavy explicitly absent). The Short TTL
+  applies in this case as well, so a fix that ever re-parses the row
+  cleanly surfaces within one ledger cycle.
+
+The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
+`infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
+clamps to its configured floor); raising above 10s would expose stale data
+past one Stellar ledger cycle (~5s).
+
+Cache-key requirements (consumed by CDK task 0097): full path + every query
+parameter, including `cursor`. Different filter combinations produce
+distinct cache entries. See
+[`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md) for the
+infrastructure contract.
 
 ## 7. Data Access and Response Model
 
 ### 7.1 Source of Data
 
-All backend reads come from the block explorer's own PostgreSQL database. The API should
-never depend on live calls to Horizon, Soroban RPC, or third-party indexers for core
-resource responses.
+List endpoints and all partition-pruned reads come from the block explorer's own
+PostgreSQL database. Heavy-field detail endpoints (E3 `/transactions/:hash`,
+E14 `/contracts/:id/events`) additionally fetch raw `.xdr.zst` from the **public
+Stellar ledger archive** and re-parse it at request time per
+[ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md).
+Detail-only off-chain fields exempt from persistence per
+[ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) (§4 `runtime_enrichment`
+umbrella) are also fetched at request time — currently the SEP-1 issuer TOML
+(asset `description` / `home_page`, task 0188) and the NFT `token_uri()` JSON
+(`metadata`, task 0195). The API does not depend on Horizon or third-party
+indexers for any response.
 
 ### 7.2 Response Shaping
 
@@ -374,7 +525,7 @@ The backend should expose read models designed for explorer use, not raw storage
 That means:
 
 - flattening or restructuring nested data where that improves client usability
-- attaching human-readable labels produced upstream during ingestion or interpretation
+- attaching human-readable labels produced upstream during ingestion
 - keeping raw protocol payloads available only for advanced/detail use cases
 - preserving stable identifier fields needed for linking across pages
 
@@ -393,7 +544,7 @@ API-level expectations:
 
 Transaction detail is the clearest example of a dual-mode backend contract:
 
-- the normal view is centered on interpreted operations, call trees, and readable summaries
+- the normal view is centered on decoded operations and call trees
 - the advanced view includes raw parameters, raw event payloads, and raw XDR where needed
 
 The backend should treat these as two representations over the same transaction resource,
@@ -411,7 +562,20 @@ Caching operates at two levels:
   reserved for static frontend/document delivery in the initial topology.
 - **Backend in-memory caching** - frequently accessed reference data (contract metadata,
   network stats) is cached in the Lambda execution environment with TTLs of 30-60 seconds
-  to reduce database round-trips.
+  to reduce database round-trips. All in-process caches are built on the
+  `moka` crate via the shared `crate::cache::ttl_cache` helper in
+  `crates/api/src/cache.rs`, which fixes the TTL + `max_capacity` bound
+  and yields lock-free reads, TinyLFU eviction and stampede protection
+  out of the box (see task 0180). Concrete caches:
+  - `ContractMetadataCache` (`crates/api/src/contracts/cache.rs`,
+    45 s TTL, 10 000 entries) — keyed by contract StrKey, populated on
+    `GET /v1/contracts/{contract_id}`.
+  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`, 30 s TTL,
+    single-entry; uses `moka::future::Cache::try_get_with` so concurrent
+    cold-cache requests deduplicate down to a single Postgres query).
+    Every cache is a field of `AppState` and shared across handler
+    invocations on the same warm Lambda container; cold starts begin with
+    empty caches and rebuild on demand.
 
 ### 8.2 Performance Expectations
 
@@ -432,7 +596,7 @@ inconsistent results or duplicated logic across screens.
 - **Ingestion lag** - if the Galexie pipeline falls behind, the API continues serving
   data from the database with a freshness indicator showing the highest indexed ledger
   sequence. A CloudWatch alarm fires at >60 s lag.
-- **Lambda cold starts** - mitigated via ARM/Graviton2 runtime and provisioned concurrency
+- **Lambda cold starts** - mitigated via Rust's fast startup on ARM/Graviton2 and provisioned concurrency
   at higher traffic tiers.
 - **Database connection pooling** - RDS Proxy manages connection pools to prevent
   exhaustion under burst traffic.
@@ -451,15 +615,14 @@ It should also remain operationally simple:
 
 ## 10. Workspace Placement and Delivery Notes
 
-The workspace currently provides the structural backend boundary (`apps/api`) but not the
-final NestJS runtime implementation yet. That is consistent with the repository README and
+The target workspace will provide the structural backend boundary (`crates/api`, per tasks 0094/0095) but the
+Rust/axum runtime implementation is not yet in place. That is consistent with the repository README and
 current bootstrap status.
 
 Expected code placement:
 
-- `apps/api` for application bootstrap, route wiring, NestJS modules, and runtime integrations
-- `libs/domain` for reusable explorer-domain types and value objects shared with other apps
-- `libs/shared` for generic helpers that are not specific to explorer business concepts
+- `crates/api` for application bootstrap, route wiring, axum modules, and runtime integrations
+- `crates/domain` for reusable explorer-domain types and value objects shared across backend crates
 
 This document should be treated as the detailed reference for future backend implementation
 planning, with

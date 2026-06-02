@@ -1,0 +1,35 @@
+[package]
+name = "enrichment-shared"
+version = "0.1.0"
+edition = "2024"
+description = "Shared HTTP-based enrichment building blocks (SEP-1 toml fetcher, future LP price source) used by api runtime_enrichment, the enrichment-worker Lambda, and any local backfill tools."
+
+[lib]
+name = "enrichment_shared"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+moka = { version = "0.12", features = ["sync", "future"] }
+sqlx = { workspace = true }
+# Soroban RPC token_uri pipeline (task 0195 §2d Phase E): builds the
+# `InvokeContract` envelope, decodes the ScVal result string. Same
+# version as the rest of the workspace.
+stellar-xdr = { workspace = true }
+# Decode the `C...` contract StrKey from `soroban_contracts.contract_id`
+# into the 32-byte ContractId hash the XDR envelope expects.
+stellar-strkey = "0.0.16"
+# Base64 encode/decode for the `transaction` param + `xdr` result of
+# simulateTransaction.
+base64 = { workspace = true }
+
+[dev-dependencies]
+# Mock Soroban RPC + IPFS gateway for fetcher integration tests
+# (Phase E.2). De facto standard for async reqwest mocking.
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

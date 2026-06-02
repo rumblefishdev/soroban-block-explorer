@@ -1,0 +1,45 @@
+---
+# Baseline OS configuration: hostname, timezone, package index,
+# common utilities. Idempotent in every step.
+
+- name: Ensure hostname matches the inventory name
+  ansible.builtin.hostname:
+    name: '{{ inventory_hostname }}'
+
+- name: Ensure /etc/hosts maps the hostname to loopback
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: '127.0.1.1 {{ inventory_hostname }}'
+    state: present
+
+- name: Configure system timezone
+  community.general.timezone:
+    name: '{{ host_timezone }}'
+
+- name: Update apt cache (>24h old)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Install baseline utility packages
+  ansible.builtin.apt:
+    name:
+      # Network / TLS introspection.
+      - curl
+      - wget
+      - ca-certificates
+      # Disk / system introspection.
+      - htop
+      - iotop
+      - dstat
+      - lsof
+      # Editing on the box when ad-hoc inspection is unavoidable.
+      - vim
+      - tmux
+      # apt prerequisites for adding the Docker repo (used by the
+      # docker role; staged here so the base layer is self-sufficient).
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+    state: present

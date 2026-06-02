@@ -1,0 +1,10 @@
+# backfill-enrichment-runner — nft_token_uri drain report
+
+**Timestamp:** 2026-05-13T12:25:54.533057+00:00
+**Processed:** 1000
+**Succeeded (incl. sentinel writes):** 1000
+**Unreachable (transient, retry candidate):** 0
+**DB failures:** 0
+**Duration:** 2204 ms
+
+✓ All processed rows reached a terminal outcome.

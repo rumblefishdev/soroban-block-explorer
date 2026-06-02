@@ -1,6 +1,9 @@
 # Add files here to ignore them from prettier formatting
 dist
 coverage
+target
+Cargo.lock
+crates/
 .nx
 AGENTS.md
 CLAUDE.md

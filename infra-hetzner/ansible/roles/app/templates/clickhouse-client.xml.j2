@@ -1,0 +1,42 @@
+<!--
+  Managed by infra-hetzner/ansible/roles/app — do not edit by hand.
+
+  Credentials file consumed by `clickhouse-client` (read via its
+  config-file option) from the host-side backup script. Mounted
+  read-only into the CH container at /etc/clickhouse-backup/client.xml
+  via the production compose overlay; the client picks up user
+  and password from this file instead of from argv or environment.
+
+  ## Why no double-hyphen anywhere in this comment
+
+  XML 1.0 §2.5 forbids the literal sequence "‑‑" inside a comment
+  body (it terminates the comment). Poco XML (the parser CH uses)
+  is strict about this and rejects the file outright with
+  "Invalid token". Spell CLI flags as words rather than copying
+  the literal `‑‑flag` form into the comment.
+
+  ## Mode 0400 owner=101 — group intentionally absent
+
+  GID 101 on Ubuntu 24.04 is allocated dynamically by `useradd`
+  and may map to an unrelated system group (`messagebus`,
+  `systemd-resolve`, …) which would inadvertently gain read on
+  the plaintext password. With mode 0400 and a numeric owner
+  matching the in-container CH UID, only the CH container user
+  can read the file; no host group is involved.
+
+  ## Password XML-escape via CDATA
+
+  Jinja2 autoescape is off for `.xml.j2` (autoescape triggers
+  only on `.html`/`.htm` by default), so a password containing
+  `&`, `<`, `>`, `'`, or `"` would otherwise produce invalid XML
+  and break CH config parsing on startup. CDATA neutralises the
+  special-char interpretation; the only sequence that breaks
+  CDATA is `]]>`, which is rejected by the env-source CN/password
+  validation upstream.
+-->
+<config>
+  <user>default</user>
+  <password><![CDATA[{{ clickhouse_password }}]]></password>
+  <host>127.0.0.1</host>
+  <port>9000</port>
+</config>

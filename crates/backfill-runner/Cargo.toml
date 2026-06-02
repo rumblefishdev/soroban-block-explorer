@@ -1,0 +1,64 @@
+[package]
+name = "backfill-runner"
+version = "0.1.0"
+edition = "2024"
+description = "Production-grade Stellar pubnet backfill runner — public S3 → Postgres or ClickHouse via parse-and-persist"
+
+[[bin]]
+name = "backfill-runner"
+path = "src/main.rs"
+
+[dependencies]
+# Task 0241 — indexer's PG persist tree is now feature-gated behind
+# `pg-persist`. backfill-runner's Postgres sink (`--target postgres`)
+# still drives the 15-step PG flow, so we opt into the feature here.
+indexer = { path = "../indexer", features = ["pg-persist"] }
+xdr-parser = { path = "../xdr-parser" }
+db = { path = "../db" }
+# ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently
+# stubbed; flag-gated via `--target clickhouse`.
+db-clickhouse = { path = "../db-clickhouse" }
+clickhouse = { workspace = true }
+# `LedgerCloseMeta` is the input type to the sink's `persist_ledger`
+# (task 0205). Already in the workspace via `indexer` and `xdr-parser`.
+stellar-xdr = { workspace = true }
+serde = { workspace = true }
+# Task 0214: JSON-RPC encoding for the Soroban RPC `getLedgerEntries`
+# bootstrap call (E06 critical gap from the 2026-05-12 CH pilot audit).
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "signal",
+    "fs",
+    "process",
+    "time",
+] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sqlx = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+indicatif = "0.18"
+tracing-indicatif = "0.3"
+# Task 0214: HTTP client for the Soroban RPC bootstrap call. Same
+# defaults the audit-harness uses (rustls-tls + json, no native-tls).
+reqwest = { workspace = true }
+# Task 0214: base64-encode `LedgerKey` XDR bytes for the JSON-RPC
+# request body, and decode `LedgerEntryData` XDR bytes from the
+# response. Workspace baseline.
+base64 = { workspace = true }
+# Task 0214: StrKey decode for `G…` → 32-byte ed25519 public key
+# when constructing `LedgerKey::Account` keys to request.
+stellar-strkey = "0.0.16"
+# Task 0225: dyn-dispatch S3 driver trait so the sync orchestrator
+# can be unit-tested with a mock without spinning an `aws s3 ls`
+# subprocess. Single use site in sync.rs.
+async-trait = "0.1"
+
+[dev-dependencies]
+# Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
+# directories without polluting the developer's filesystem.
+tempfile = "3"

@@ -4,9 +4,9 @@
   "private": true,
   "license": "MIT",
   "workspaces": [
-    "apps/*",
     "libs/*",
-    "infra/*"
+    "infra",
+    "web"
   ],
   "scripts": {
     "build": "npx nx run-many -t build",
@@ -16,29 +16,54 @@
     "lint": "npx nx run-many -t lint",
     "test": "npx nx run-many -t test",
     "typecheck": "npx nx run-many -t typecheck",
-    "format:staged": "node tools/scripts/format-staged.mjs",
     "prepare": "husky",
     "verify:staged": "node tools/scripts/run-affected-checks.mjs staged",
-    "verify:push": "node tools/scripts/run-affected-checks.mjs push"
+    "verify:push": "node tools/scripts/run-affected-checks.mjs push",
+    "board": "node tools/scripts/generate-lore-board.mjs",
+    "db:migrate": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer sqlx migrate run --source crates/db/migrations",
+    "db:revert": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer sqlx migrate revert --source crates/db/migrations",
+    "db:add": "sqlx migrate add --source crates/db/migrations -r",
+    "db:status": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer sqlx migrate info --source crates/db/migrations",
+    "db:prepare": "DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer cargo sqlx prepare --workspace",
+    "db:reset": "docker compose down -v && docker compose up -d && sleep 2 && npm run db:migrate",
+    "db:tunnel": "./tools/scripts/db-tunnel.sh",
+    "infra:bootstrap": "make -C infra bootstrap",
+    "infra:diff:staging": "make -C infra diff-staging",
+    "infra:diff:production": "make -C infra diff-production",
+    "infra:deploy:staging": "make -C infra deploy-staging",
+    "infra:deploy:production": "make -C infra deploy-production",
+    "infra:synth:staging": "make -C infra synth-staging",
+    "infra:synth:production": "make -C infra synth-production"
   },
   "devDependencies": {
     "@eslint/js": "^9.8.0",
+    "@hey-api/openapi-ts": "0.97.0",
     "@nx/eslint": "22.6.1",
     "@nx/eslint-plugin": "22.6.1",
     "@nx/js": "22.6.1",
+    "@nx/react": "^22.6.1",
     "@nx/vite": "22.6.1",
     "@nx/vitest": "22.6.1",
     "@nx/web": "22.6.1",
     "@swc-node/register": "1.11.1",
     "@swc/core": "1.15.8",
     "@swc/helpers": "0.5.18",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "20.19.9",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "4.0.9",
     "@vitest/ui": "4.0.9",
     "eslint": "~8.57.0",
     "husky": "^9.1.7",
     "jiti": "2.4.2",
+    "jsdom": "^27.0.1",
     "jsonc-eslint-parser": "^2.1.0",
+    "lint-staged": "^16.4.0",
     "nx": "22.6.1",
     "prettier": "^2.6.2",
     "tslib": "^2.3.0",
@@ -46,5 +71,24 @@
     "typescript-eslint": "^8.40.0",
     "vite": "^7.0.0",
     "vitest": "4.0.9"
+  },
+  "lint-staged": {
+    "*.rs": [
+      "rustfmt --edition 2024"
+    ],
+    "!(*.rs)": [
+      "npx nx format:write --files"
+    ]
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.9",
+    "@mui/material": "^7.3.9",
+    "@tanstack/react-query": "^5.95.2",
+    "@tanstack/react-query-devtools": "^5.95.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.2"
   }
 }

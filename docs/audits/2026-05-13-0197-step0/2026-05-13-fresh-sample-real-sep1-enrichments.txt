@@ -1,0 +1,24 @@
+ asset_code |           home_domain           |                        icon_url                        |                    name                     
+------------+---------------------------------+--------------------------------------------------------+---------------------------------------------
+ IBM        | silicon.stellar-commodities.com | https://silicon.stellar-commodities.com/images/ibm.png | IBM Semiconductors
+ FTT        | go-dls.com                      | https://www.go-dls.com/images/FTT.png                  | FTX Token
+ XAIF       | stellarfunds.org                | https://stellarfunds.org/images/xeq.png                | Alternative Investment Mutual Fund
+ VOX        | luxbank.co                      | https://images.app.goo.gl/p5MHs55U1oCERAhv7            | VOX
+ XEME       | stellarfunds.org                | https://stellarfunds.org/images/xeq.png                | Emerging Markets Mutual Fund
+ IFX        | germany.indus.exchange          | https://germany.indus.exchange/images/ifx.png          | Infineon Technologies AG
+ RIO        | copper.stellar-commodities.com  | https://copper.stellar-commodities.com/images/rio.png  | Rio Tinto Group
+ TNPC       | saudi.indus.exchange            | https://saudi.indus.exchange/images/tnpc.png           | The National Petrochemical Company
+ EXK        | silver.stellar-commodities.com  | https://silver.stellar-commodities.com/images/exk.png  | Endeavour Silver Corp.
+ GATO       | silver.stellar-commodities.com  | https://silver.stellar-commodities.com/images/gato.png | Gatos Silver Inc.
+ VOD        | UK.indus.exchange               | https://uk.indus.exchange/images/vod.png               | Vodafone
+ POG        | iron.stellar-commodities.com    | https://iron.stellar-commodities.com/images/pog.png    | Petropavlovsk PLC
+ SONY       | jp.indus.exchange               | https://indus.exchange/images/sony.png                 | SONY
+ BASF       | agro.stellar-commodities.com    | https://agro.stellar-commodities.com/images/basf.png   | BASF Co. Ltd.
+ SKH        | silicon.stellar-commodities.com | https://silicon.stellar-commodities.com/images/skh.png | SK hynix Inc.
+ JPM        | stellarbonds.exchange           | https://stellarbonds.exchange/images/jpm.png           | JPMorgan 1.05%
+ MFL        | stellarbonds.exchange           | https://stellarbonds.exchange/images/mfl.png           | MFL 11.75%
+ TRYB       | kbtrading.org                   | https://kbtrading.org/static/tryb.200x200.png          | Turkish TRYB
+ ICBC       | cn.indus.exchange               | https://cn.indus.exchange/images/icbc.png              | Industrial and Commercial Bank of China Ltd
+ TCEHY      | cn.indus.exchange               | https://cn.indus.exchange/images/tcehy.png             | Tencent Holdings Ltd
+(20 rows)
+

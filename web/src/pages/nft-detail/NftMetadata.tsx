@@ -1,0 +1,168 @@
+import InfoIcon from '@mui/icons-material/InfoOutlined';
+import { Box, Card, Stack, Typography } from '@mui/material';
+import { TableSectionHeader } from '@rumblefish/soroban-block-explorer-ui';
+
+interface NftMetadataProps {
+  /**
+   * Off-chain JSON metadata. `null` means runtime enrichment could not
+   * resolve it (IPFS timeout / unsupported content-type, ADR 0043) — this
+   * is distinct from an NFT that simply has no attributes.
+   */
+  metadata?: Record<string, unknown> | null;
+}
+
+interface Attribute {
+  label: string;
+  value: string;
+  rarityPercent?: number;
+}
+
+const MAX_VALUE_LEN = 120;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Render any JSON value as a single readable string, capped in length. */
+function stringifyValue(v: unknown): string {
+  let text: string;
+  if (v === null || v === undefined) text = 'N/A';
+  else if (typeof v === 'string') text = v;
+  else if (typeof v === 'number' || typeof v === 'boolean') text = String(v);
+  else text = JSON.stringify(v);
+  return text.length > MAX_VALUE_LEN
+    ? `${text.slice(0, MAX_VALUE_LEN)}…`
+    : text;
+}
+
+/** Extract trait objects from an OpenSea-style `attributes` array. */
+function parseAttributes(value: unknown): Attribute[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry, index) => {
+    if (isPlainObject(entry)) {
+      const label = stringifyValue(entry.trait_type ?? `Trait ${index + 1}`);
+      const rarityRaw = entry.rarity_percent ?? entry.rarity;
+      const rarityPercent =
+        typeof rarityRaw === 'number' && Number.isFinite(rarityRaw)
+          ? rarityRaw
+          : undefined;
+      return {
+        label,
+        value: stringifyValue(entry.value ?? ''),
+        rarityPercent,
+      };
+    }
+    return { label: `Trait ${index + 1}`, value: stringifyValue(entry) };
+  });
+}
+
+function Empty({ label }: { label: string }) {
+  return (
+    <Stack spacing={1} alignItems="center" sx={{ py: 6 }}>
+      <InfoIcon
+        sx={(theme) => ({ fontSize: 32, color: theme.palette.text.tertiary })}
+      />
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
+        {label}
+      </Typography>
+    </Stack>
+  );
+}
+
+function TraitCard({ label, value, rarityPercent }: Attribute) {
+  return (
+    <Box
+      sx={(theme) => ({
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 0.5,
+        p: 2,
+        borderRadius: `${theme.shape.radius.s}px`,
+        backgroundColor: theme.palette.surface.grayMainAlt,
+      })}
+    >
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({
+          color: theme.palette.text.secondary,
+          textAlign: 'center',
+        })}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="heading5SemiBold"
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
+          textAlign: 'center',
+          overflowWrap: 'anywhere',
+        })}
+      >
+        {value || 'N/A'}
+      </Typography>
+      {rarityPercent !== undefined && (
+        <Typography
+          variant="bodySmMedium"
+          sx={(theme) => ({
+            color: theme.palette.text.secondary,
+            textAlign: 'center',
+          })}
+        >
+          {`${rarityPercent}% have this`}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/**
+ * The "Traits" card on the NFT detail page. Renders OpenSea-style
+ * `attributes` as a grid of trait cards; tolerates a missing metadata blob
+ * and NFTs with no attributes.
+ */
+export function NftMetadata({ metadata }: NftMetadataProps) {
+  const attributes =
+    metadata == null ? [] : parseAttributes(metadata.attributes);
+
+  let body;
+  if (metadata == null) {
+    body = <Empty label="Metadata unavailable" />;
+  } else if (attributes.length === 0) {
+    body = <Empty label="No traits for this NFT" />;
+  } else {
+    body = (
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: {
+            xs: '1fr',
+            sm: 'repeat(2, 1fr)',
+            md: 'repeat(3, 1fr)',
+          },
+          gap: 1.5,
+          p: 2,
+        }}
+      >
+        {attributes.map((attr, index) => (
+          <TraitCard key={`${attr.label}-${index}`} {...attr} />
+        ))}
+      </Box>
+    );
+  }
+
+  return (
+    <Card>
+      <TableSectionHeader
+        title="Traits"
+        description={
+          attributes.length > 0 ? `${attributes.length} attributes` : undefined
+        }
+      />
+      {body}
+    </Card>
+  );
+}

@@ -25,17 +25,18 @@
 XDR parsing is the translation layer between canonical Stellar ledger payloads and the
 structured explorer data model stored in PostgreSQL and served by the backend API.
 
-This document covers the target design of XDR parsing only. It does not redefine frontend
+This document covers the current XDR parsing design. It does not redefine frontend
 behavior, backend transport contracts, or the full database schema except where those are
 needed to explain decode responsibilities and storage outcomes.
 
-This document describes the intended production parsing model. It is not a description of
-current implementation state in the repository, which is still skeletal.
+The parsing implementation lives in `crates/xdr-parser/` (shared between the ingest
+Lambda and the backend API).
 
 If any statement in this file conflicts with
 [`technical-design-general-overview.md`](../technical-design-general-overview.md), the
 main overview document takes precedence. This file is an XDR-parsing-focused refinement of
-that source, not an independent redesign.
+that source, not an independent redesign — kept in sync with the code per
+[ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md).
 
 ## 2. Architectural Role
 
@@ -45,55 +46,70 @@ without relying on Horizon, Soroban RPC, or any third-party explorer API.
 
 The parsing layer has four jobs:
 
-- decode canonical Stellar payloads into structured records at ingestion time
-- preserve raw payloads where advanced inspection and debugging still need them
+- decode canonical Stellar payloads into typed summary records + appearance indexes
+  at ingestion time (ingest path)
+- re-decode heavy-field XDR at request time for the two detail endpoints that need
+  it (E3, E14 per
+  [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)),
+  fetching `.xdr.zst` from the public Stellar ledger archive
 - extract Soroban-specific structures such as invocation trees, events, and contract
   metadata
 - keep frontend and normal API responses free from protocol-level decode work
 
-The parsing layer is not a generic XDR inspection service for arbitrary clients. Its main
-purpose is to feed the explorer's own storage and read paths.
+The parser itself is shared: both the ingest Lambda and the backend API link
+`crates/xdr-parser`. The parsing layer is not a generic XDR inspection service for
+arbitrary clients. Its main purpose is to feed the explorer's own storage and read
+paths.
 
 ## 3. Parsing Strategy
 
-### 3.1 Two Parsing Paths
+### 3.1 Two Parsing Paths, One Rust Parser
 
-The source design defines two places where XDR parsing happens:
+> Per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md): Rust-only XDR
+> parsing — the shared `crates/xdr-parser` crate is the single decoder.
+> Per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md):
+> raw XDR is not stored in RDS; heavy-field endpoints re-parse from the public
+> Stellar ledger archive at read time.
 
-- **Ledger Processor Lambda (ingestion time)** as the primary parsing path
-- **NestJS API (request time)** as a secondary, on-demand decode path for advanced views
+**Ingest path (Ledger Processor Lambda).** Every ledger's `LedgerCloseMeta` is
+fully deserialized with `stellar-xdr` via `crates/xdr-parser`. The ingest extracts
+typed summary columns + appearance-index rows (per
+[ADR 0027](../../../lore/2-adrs/0027_post-surrogate-schema-and-endpoint-realizability.md) /
+[ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md) /
+[ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md))
+and commits them in a single atomic per-ledger DB transaction via the 14-step
+`persist_ledger` method.
 
-This split is intentional.
+**Read path (axum API).** For two endpoints the API fetches the relevant
+`.xdr.zst` from the public archive on demand, decompresses it with zstd, and
+re-parses with the same shared `crates/xdr-parser`:
 
-### 3.2 Ingestion-Time Parsing Is the Default
+- **E3 `/transactions/:hash`** — fetches envelope + result-meta to expand the
+  operation list into a full invocation tree, render decoded events, and carry
+  `envelope_xdr` / `result_xdr` / `result_meta_xdr` in the advanced view
+- **E14 `/contracts/:id/events`** — fetches result-meta for every appearance
+  row returned by `soroban_events_appearances` to produce decoded event detail
 
-Every ledger's `LedgerCloseMeta` is fully deserialized in the Ledger Processor Lambda using
-`@stellar/stellar-sdk` XDR types.
+List endpoints never invoke the parser at read time — they answer from typed
+summary columns and appearance indexes.
 
-This is the default path because it lets the system:
+Using one parser crate for both paths means no dual-language sync on protocol
+upgrades and no decode drift between ingest and read.
 
-- write structured explorer records once instead of reparsing the same payload repeatedly
-- store normalized transaction, operation, invocation, and event data in PostgreSQL
-- keep normal frontend views independent from raw XDR decoding
-- centralize protocol-specific interpretation in one pipeline stage
+### 3.2 What Is Not Stored
 
-Normal explorer behavior should assume that required structured data has already been
-materialized during ingestion.
+Per ADR 0029 the following are **not** stored in RDS:
 
-### 3.3 API-Time Parsing Is Narrow and On-Demand
+- `envelope_xdr`, `result_xdr`, `result_meta_xdr` as strings or blobs on the
+  `transactions` row
+- decoded invocation-tree JSONB (`transactions.operation_tree` does not exist)
+- full decoded event payload (no `soroban_events` JSONB table — only the
+  `soroban_events_appearances` index)
+- per-node invocation detail (no `soroban_invocations` row per node — only
+  the `soroban_invocations_appearances` index)
 
-The backend also retains a limited decode role.
-
-At request time, the API can decode stored raw payloads using `@stellar/stellar-sdk` when a
-transaction advanced view or a validation/debug path needs fields that are not part of the
-standard stored read model.
-
-The API-side decode path should remain narrow:
-
-- it should not become the primary way normal transaction data is produced
-- it should not shift decode responsibility to the frontend
-- it should mainly serve advanced inspection, troubleshooting, and validation of stored
-  structured output such as `operation_tree`
+All of these are re-derived at request time from the public archive by the
+read-path code in §3.1.
 
 ### 3.4 Frontend Parsing Boundary
 
@@ -105,7 +121,7 @@ The frontend receives pre-decoded data for:
 - operation lists and details
 - Soroban invocations
 - Soroban events
-- account, token, NFT, and pool views derived from indexed chain state
+- account, asset, NFT, and pool views derived from indexed chain state
 
 Raw XDR is exposed only for advanced transaction inspection.
 
@@ -113,8 +129,13 @@ Raw XDR is exposed only for advanced transaction inspection.
 
 ### 4.1 Ledger Header
 
-From `LedgerHeader`, the parsing layer extracts:
+From the enclosing `LedgerHeaderHistoryEntry` and its `LedgerHeader`, the
+parsing layer extracts:
 
+- `hash` — the canonical Stellar ledger hash, taken **directly** from
+  `LedgerHeaderHistoryEntry.hash` (already populated by stellar-core).
+  Never recomputed by the parser — that is the value Horizon
+  (`/ledgers/:N.hash`) and every other Stellar tool publishes
 - `sequence`
 - `closeTime`
 - `protocolVersion`
@@ -125,185 +146,387 @@ These fields anchor ledger ordering, freshness checks, and high-level network st
 
 ### 4.2 Transaction Envelope and Result
 
-From `TransactionEnvelope` and `TransactionResult`, the parsing layer extracts:
+From `TransactionEnvelope` and `TransactionResult`, the ingest path extracts typed
+summary columns:
 
-- `hash`, computed by hashing the envelope XDR
-- `sourceAccount`
-- `feeCharged`
-- `successful`
-- `resultCode`
+- `hash`, stored as `BYTEA(32)`
+  ([ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md))
+- `source_id`, resolved from the source StrKey to `accounts.id`
+  ([ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md))
+- `fee_charged`, `successful`
+- `application_order`, `operation_count`, `has_soroban`, `inner_tx_hash` (fee-bump)
+- `result_code` is not persisted at ingest; it is re-derived on demand from
+  the archive for the advanced view
 
-In addition to structured fields, the following raw payloads are retained verbatim:
+Raw envelope / result / result-meta XDR is **not** retained in RDS (ADR 0029).
+The advanced transaction view pulls the corresponding `.xdr.zst` from the public
+archive at request time.
 
-- `envelopeXdr`
-- `resultXdr`
-- `resultMetaXdr`
+### 4.3 Operation-Level Data (Appearance Index)
 
-These raw artifacts support the advanced transaction view and transaction-tree debugging.
+Per task 0163, `operations` was collapsed to an appearance index and renamed
+to `operations_appearances`. Ingest aggregates operations by identity at
+staging time (`HashMap<OpIdentity, i64>`), writing one row per distinct
+identity per transaction with `amount BIGINT` counting collapsed duplicates.
 
-### 4.3 Operation-Level Data
+From `OperationMeta` per transaction, the ingest path extracts:
 
-From `OperationMeta` per transaction, the parsing layer extracts:
+- operation `type` as `SMALLINT` backed by the Rust `OperationType` enum
+  ([ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md))
+- `source_id`, `destination_id` surrogate FKs (ADR 0026)
+- `contract_id` surrogate FK
+  ([ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md))
+- `asset_code`, `asset_issuer_id`, `pool_id` (BYTEA 32)
+- `ledger_sequence`, `created_at`
+- `amount` aggregate count of physical operations collapsed into this identity
 
-- operation `type`
-- structured `details` JSONB with type-specific decoded fields
+Not stored at ingest (re-derived from XDR at read time per ADR 0029):
+`transfer_amount` (dropped), `application_order` (dropped), per-op JSONB
+`details` (never existed), envelope/args/memo/predicates decode.
 
-For `INVOKE_HOST_FUNCTION`, the parser additionally extracts:
+For `INVOKE_HOST_FUNCTION`, ingest captures only the appearance-index rows
+(§4.4 / §4.5). The `functionName`, decoded `functionArgs`, `returnValue`, and
+per-node invocation tree are re-expanded at request time from the archive by
+the E3 read path.
 
-- `contractId`
-- `functionName`
-- `functionArgs`, decoded from `ScVal`
-- `returnValue`, decoded from `ScVal`
+### 4.4 Soroban Event Data (Ingest: Appearance Index)
 
-The goal is to persist operation-specific structure once, rather than reconstructing it in
-API handlers on every request.
+From `SorobanTransactionMeta.events`, the ingest path extracts one
+**appearance-index row** per `(contract, tx, ledger)` trio in
+`soroban_events_appearances` with:
 
-### 4.4 Soroban Event Data
+- `contract_id` surrogate FK (ADR 0030), `transaction_id`, `ledger_sequence`,
+  `created_at`
+- `amount` = count of consensus events in the trio (tx-level + per-op
+  sources only — the entire `*.diagnostic_events` container is dropped
+  at staging by source, see §5.1; task 0182)
 
-From `SorobanTransactionMeta.events`, the parser extracts:
+Full decoded event detail (`eventType` as `SMALLINT`, `topics` as decoded
+`ScVal[]`, `data` as decoded `ScVal`) is **not** stored. Known NFT-related
+event patterns are still interpreted at ingest into derived state updates on
+`nfts` / `nft_ownership` / `assets` (classification happens by looking at the
+events without persisting them).
 
-- `eventType`
-- `contractId`
-- `topics`, decoded from `ScVal[]`
-- `data`, decoded from `ScVal`
+At read time, `xdr_parser::extract_events` re-expands the decoded payload from
+the archive for E14 `/contracts/:id/events`.
 
-Known NFT-related event patterns may also be interpreted into derived NFT ownership and
-metadata updates used by explorer-facing NFT views.
+### 4.5 Soroban Invocations (Ingest: Appearance Index)
 
-### 4.5 Ledger Entry Changes
+Mirroring §4.4, ingest writes one row per `(contract, tx, ledger)` trio to
+`soroban_invocations_appearances` with:
 
-From `LedgerEntryChanges`, the parser extracts derived state used by explorer entities.
+- surrogate `contract_id`, `transaction_id`, `ledger_sequence`, `created_at`
+- `caller_id` — the root-level caller `accounts.id`, NULL for C-contract
+  sub-invocation callers
+- `amount` = count of invocation-tree nodes in the trio
 
-Current documented outputs include:
+Per-node decode (function name, args, return value, depth) happens at read
+time in `xdr_parser::extract_invocations` for E3 and E11 /
+E-contract-invocations endpoints.
 
-- contract deployments: `contractId`, `wasmHash`, `deployerAccount`
-- account state snapshots: `sequence_number`, `balances`, `home_domain`
-- liquidity pool state changes: `poolId`, asset pair, reserves, total shares
+### 4.6 Ledger Entry Changes
 
-This stage is where low-level ledger changes are translated into query-oriented explorer
-records.
+From `LedgerEntryChanges`, the parser extracts derived state used by explorer
+entities:
+
+- contract deployments → `soroban_contracts` row (contract_id surrogate, wasm_hash
+  BYTEA 32, deployer_id surrogate, is_sac, contract_type SMALLINT). The
+  `deployer_id` value is the **operation-level effective source** of the
+  `CreateContract*` host function (`op.source_account` override or inner
+  `tx.source_account` fallback; fee-bump `feeSource` is never used). For
+  factory-pattern deploys nested in an `InvokeContract` auth tree, the
+  deployer is the signer of the enclosing `SorobanAuthorizationEntry`.
+  `xdr_parser::extract_op_source_per_contract` produces the per-contract
+  override map consumed by `extract_contract_deployments`. Task 0255
+  Phase 1; pre-fix the parser stored the inner-tx source unconditionally
+  and misattributed deploys with per-op overrides
+- WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
+  wasm_hash BYTEA)
+- account state → `accounts` row + `account_balances_current` entries per
+  trustline / native (balances are typed `NUMERIC(28,7)` per-asset rows, not a
+  JSONB blob on `accounts`)
+- classic LP state → `liquidity_pools` row + `liquidity_pool_snapshots` row +
+  `lp_positions` upsert per participating account (asset pair modeled as typed
+  `asset_*_type SMALLINT` + code + issuer_id, not JSONB)
+- **classic-credit + native asset entity rows** → `assets` row per distinct
+  `(asset_code, issuer)` pair observed in a `trustline` LedgerEntryChange
+  (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
+  per-ledger singleton emit (`xdr_parser::native_asset_singleton`) — the
+  persist `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.
+  These two paths complement `detect_assets`, which only emits SAC + Soroban
+  variants from observed contract deployments. Without the dedicated
+  classic-credit producer, `account_balances_current` would carry the
+  balances but the entity row never existed (Karol's pre-audit Bug #1).
+
+This stage is where low-level ledger changes are translated into query-oriented
+explorer records.
+
+**Post-parse derivations not produced by the XDR parser itself** (covered in
+[`indexing-pipeline-overview.md`](../indexing-pipeline/indexing-pipeline-overview.md) §5.2
+step 14, called out here so the parser/indexer boundary stays explicit):
+
+- `assets.total_supply` / `assets.holder_count` — computed by
+  `recompute_asset_aggregates` in `crates/indexer/src/handler/persist/write.rs`
+  from `account_balances_current` _after_ the parser writes the balance rows.
+  Per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
+  on-chain-derivable, hence indexer-owned. The parser only produces the
+  per-trustline / per-balance rows; the aggregate is a downstream rollup.
+- `liquidity_pool_snapshots.volume` / `fee_revenue` / `tvl` — per-op extraction
+  half is on-chain (parser provides PathPayment `claimedOffers[].amount_sold`),
+  USD denomination half is off-chain (Lambda 2 / price oracle). Consolidated
+  under task 0199. The parser does NOT compute these aggregates today —
+  columns stay NULL until 0199 ships.
+- `assets.name` for classic credit — extracted from issuer's SEP-1 TOML by
+  Lambda 2 (`sep1_assets` kind, task 0195 §2a). Parser produces only
+  `asset_code` / `issuer_id` for classic credits; the human-readable name is
+  off-chain and lives outside parser scope.
+- `nfts.name` / `nfts.media_url` / `nfts.collection_name` — extracted from the
+  NFT contract's `token_uri()` JSON by Lambda 2 (`nft_token_uri` kind,
+  task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
+  `current_owner_id`) tuple — see §5.1 NFT pattern.
 
 ## 5. Soroban-Specific Handling
 
 ### 5.1 CAP-67 Events
 
-CAP-67 contract events are decoded at ingestion time and stored in the
-`soroban_events` table as structured JSONB.
+CAP-67 contract events follow the **appearance-index + read-time decode** pattern
+per [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-detail.md):
 
-This means:
+- at ingest, one row per `(contract, tx, ledger)` trio is written to
+  `soroban_events_appearances` with a non-diagnostic-event count — no decoded
+  event type, topics, or data are persisted
+- at read time, E14 re-parses the archive via `xdr_parser::extract_events` and
+  renders decoded `ScVal` topics / data per event
+- known NFT / SEP-41 patterns are still interpreted at ingest to drive
+  `assets` / `nfts` / `nft_ownership` upserts, but the triggering events
+  themselves are not retained as rows
 
-- the backend serves decoded event data directly
-- the frontend does not need raw event XDR for normal event rendering
-- event interpretation jobs can work from structured persisted events rather than reparsing
-  chain payloads repeatedly
+#### V3 vs V4 meta dispatch (Protocol 22 ↔ Protocol 23+)
+
+`xdr_parser::extract_events` dispatches on the `TransactionMeta` variant
+because Protocol 23 (CAP-67) reorganised the on-chain event surface
+([ADR 0002](../../../lore/2-adrs/0002_rust-ledger-processor-lambda.md) §1):
+
+- **V3** (`TransactionMetaV3`, Protocol ≤ 22): all Soroban contract events
+  are at `soroban_meta.events`; diagnostic events at
+  `soroban_meta.diagnostic_events`. The parser reads both.
+- **V4** (`TransactionMetaV4`, Protocol ≥ 23): events live in **three**
+  locations and the parser reads all three in this order:
+
+  1. `tx_meta.events` (`VecM<TransactionEvent>`) — transaction-level
+     events: fee `BeforeAllTxs` charge, `AfterTx` refund, `AfterAllTxs`.
+  2. `tx_meta.operations[i].events` (`OperationMetaV2.events: VecM<ContractEvent>`) —
+     per-operation events: Soroban contract events emitted during
+     `InvokeHostFunction` execution **and** SAC `transfer` / `mint` / `burn`
+     events emitted by classic operations under Protocol 23 unification.
+  3. `tx_meta.diagnostic_events` (`VecM<DiagnosticEvent>`) — host-level
+     diagnostic / trace events.
+
+  `SorobanTransactionMetaV2` (the V4 `soroban_meta`) no longer carries an
+  `events` field — that field was removed in CAP-67. `event_index` is
+  numbered sequentially across all three sources within a single
+  transaction so the V3 contract (monotonic per-tx index) is preserved.
+
+The split matters because per-operation events carry the bulk of
+post-Protocol 23 Soroban traffic. Missing them produces a silently
+incomplete `soroban_events_appearances` index for every Protocol ≥ 23
+ledger — the canonical symptom is a Soroban tx with exactly two events,
+both XLM-SAC fee events at the tx-level location, while the contract's
+own `transfer` / `mint` / `burn` events (which lived under
+`operations[i].events`) are dropped.
+
+##### Source-container tagging (task 0182)
+
+Every `ExtractedEvent` carries an `EventSource` discriminator —
+`TxLevel`, `PerOp`, or `Diagnostic` — populated by the parser at the
+extraction site. **The diagnostic_events container is dropped at staging
+regardless of inner type**: the staging filter
+(`crates/indexer/src/handler/persist/staging.rs`) routes on
+`source == EventSource::Diagnostic`, not on inner `event_type`.
+
+Why: when diagnostic mode is enabled (the default for archive-bound
+captive-core like Galexie), `v4.diagnostic_events` **holds
+byte-identical Contract-typed copies of every consensus per-op
+Contract event** — the copy carries the same inner `type_ = Contract`
+as the original. CAP-67 explicitly says diagnostic_events are
+auxiliary, "not hashed into the ledger, and therefore are not part of
+the protocol", so they must not contribute to the appearance index.
+A type-based filter (`event_type == Diagnostic`) cannot tell the
+original from the copy and silently double-counts. Container-based
+filtering is the only reliable signal.
+
+The same routing applies at read time: `split_events`
+(`crates/api/src/runtime_enrichment/stellar_archive/extractors.rs`) and the
+`/contracts/:id/events` handler (`crates/api/src/contracts/handlers.rs`)
+both filter on `EventSource::Diagnostic` to suppress the duplicates when
+rendering contract event lists. The host-VM Diagnostic-typed entries
+(`fn_call`, `fn_return`, `core_metrics`, errors) drop out the same way.
+
+Mapping per location (after task 0182):
+
+| Source location                         | `EventSource` | Counts in `amount` |
+| --------------------------------------- | ------------- | ------------------ |
+| `v3.soroban_meta.events`                | `TxLevel`     | yes                |
+| `v3.soroban_meta.diagnostic_events`     | `Diagnostic`  | no                 |
+| `v4.events`                             | `TxLevel`     | yes                |
+| `v4.operations[i].events`               | `PerOp`       | yes                |
+| `v4.diagnostic_events` (any inner type) | `Diagnostic`  | no                 |
 
 ### 5.2 Return Values
 
-The return value of `invokeHostFunction` is an XDR `ScVal` and is decoded into a typed
-representation such as integer, string, address, bytes, map, or list.
-
-The decoded value is stored with `soroban_invocations` so contract invocation history can be
-served without request-time decode for the common case.
+Return values of `invokeHostFunction` are decoded from XDR `ScVal` into typed
+representations (integer, string, address, bytes, map, list) by
+`xdr_parser::extract_invocations` at **request time** — not at ingest.
+Ingest only records the appearance-index row in
+`soroban_invocations_appearances` (ADR 0034).
 
 ### 5.3 Invocation Tree
 
 Complex Soroban transactions may contain nested contract-to-contract calls.
 
-The source design requires the parser to:
+Per [ADR 0034](../../../lore/2-adrs/0034_soroban-invocations-appearances-read-time-detail.md)
+the parser's responsibilities are split:
 
-- decode the full invocation hierarchy from `result_meta_xdr`
-- store that hierarchy in `transactions.operation_tree`
-- preserve the raw `result_meta_xdr` alongside the decoded tree for advanced decode/debug use
+- **ingest**: write an appearance row per trio with `amount` = node count and
+  `caller_id` = root-level account caller (C-contract sub-callers collapsed to
+  NULL by the `is_strkey_account` filter so that `COUNT(DISTINCT caller_id)`
+  answers E11's `unique_callers` stat directly)
+- **read**: E3's transaction-detail renderer pulls the `.xdr.zst` from the
+  public archive, decodes the full tree with `xdr_parser::extract_invocations`,
+  and returns it as the `operation_tree` field of the response
 
-This lets the transaction detail page render the call tree directly while still keeping the
-underlying raw protocol artifact for validation or troubleshooting.
+Raw `result_meta_xdr` is not persisted on `transactions` (ADR 0029); the
+archive is the authoritative source.
 
 ### 5.4 Contract Interface Extraction
 
-Public function signatures are extracted from contract WASM at deployment time.
+Public function signatures are extracted from contract WASM at deployment time
+and stored in `wasm_interface_metadata.metadata` (keyed by `wasm_hash BYTEA(32)`),
+deduplicated across every contract instance that shares the same WASM.
 
-The extracted interface data is stored inside `soroban_contracts.metadata` and is used by
-contract-detail and contract-interface responses.
+`soroban_contracts.name VARCHAR(256)` (per
+[ADR 0042](../../../lore/2-adrs/0042_soroban-contracts-typed-name-column.md))
+carries the human-readable contract name extracted from the standard
+`Symbol("name")` ContractData persistent storage entry. The parser's
+`extract_contract_deployments` second pass (state.rs) populates the
+field at deploy time when the storage init lands in the same ledger
+(constructor pattern); `extract_contract_data_name_writes` plus the
+indexer's `apply_contract_name_writes` helper covers the deploy-then-init
+and re-init patterns by emitting a retroactive UPDATE on every ledger
+that surfaces a `Symbol("name")` Created or Updated event. The earlier
+JSONB-backed metadata column was retired by ADR 0042 in favour of the
+typed shape; richer metadata enrichment (description, icon, home_page)
+landed off-row per [ADR 0023](../../../lore/2-adrs/0023_tokens-typed-metadata-columns.md)
+narrowing rather than as further JSONB fields.
 
-This extraction is part of the broader XDR/protocol decode pipeline because it turns deployment-related protocol artifacts into stable explorer-facing contract metadata.
+This extraction is part of the broader XDR/protocol decode pipeline because it
+turns deployment-related protocol artifacts into stable explorer-facing contract
+metadata.
 
 ## 6. Storage Contract
 
-### 6.1 Raw and Structured Forms Are Both Deliberate
+### 6.1 Typed Columns and Appearance Indexes, No Raw XDR
 
-The design intentionally stores both raw and derived representations where needed.
+Per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md),
+the DB holds only what list endpoints and partition-pruned reads need.
 
-Raw artifacts retained for advanced inspection:
+Typed summary columns / structured artifacts retained for normal explorer reads:
 
-- `transactions.envelope_xdr`
-- `transactions.result_xdr`
-- `transactions.result_meta_xdr`
+- `transactions` — `hash BYTEA`, `source_id BIGINT`, `fee_charged`, `successful`,
+  `application_order`, `operation_count`, `has_soroban`, `inner_tx_hash`,
+  `parse_error`, `created_at`
+- `operations_appearances` — `type SMALLINT`, surrogate FKs, `BYTEA pool_id`, `amount BIGINT` count,
+  typed `asset_code`/`asset_issuer_id`
+- `soroban_events_appearances` / `soroban_invocations_appearances` — appearance
+  indexes only (per §4.4 / §4.5)
+- `soroban_contracts`, `wasm_interface_metadata` — with surrogate PK, BYTEA
+  wasm_hash, SMALLINT contract_type, JSONB metadata
+- derived explorer entities: `accounts`, `assets`, `nfts`, `nft_ownership`,
+  `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`,
+  `account_balances_current` (the previously-planned
+  `account_balance_history` was dropped per
+  [ADR 0035](../../../lore/2-adrs/0035_drop-account-balance-history.md))
 
-Structured artifacts retained for normal explorer reads:
+Raw artifacts **not** retained in the DB (fetched at request time from the
+public archive):
 
-- `operations.details`
-- `transactions.operation_tree`
-- `soroban_invocations`
-- `soroban_events`
-- explorer-facing derived entities such as accounts, tokens, NFTs, and liquidity pools
+- envelope / result / result-meta XDR
+- decoded event payload (type, topics, data)
+- per-node invocation detail (function name, args, return value, depth)
+- full invocation tree
 
-This is not accidental duplication. It is a deliberate tradeoff to support both fast
-explorer reads and protocol-level debugging.
+### 6.2 Two Phases of Materialization
 
-### 6.2 Ingestion Owns Materialization
+Ingestion owns writing typed summary + appearance-index rows into PostgreSQL.
+That is the only phase that runs unconditionally per ledger close.
 
-The ingestion path owns writing structured decode results into PostgreSQL.
-
-That includes:
-
-- ledger and transaction summaries
-- operation records
-- Soroban invocation rows
-- Soroban event rows
-- derived account, token, NFT, and liquidity-pool state where current product scope needs it
-
-The API reads those materialized results. It should not become the main materialization
-layer.
+The backend read path owns re-materializing heavy fields on demand for E3 / E14
+via `xdr_parser::extract_*`; this phase runs only when a request asks for it
+and is cacheable at the API Gateway / CloudFront layer.
 
 ### 6.3 Advanced View Contract
 
-The advanced transaction experience depends on raw payload retention.
+The advanced transaction experience is served by the read path, not by stored
+raw payloads:
 
-The source design currently assumes:
+- E3 `/transactions/:hash` fetches the relevant `.xdr.zst` from the public
+  archive, decompresses and parses it, and returns `envelope_xdr`, `result_xdr`,
+  `result_meta_xdr`, `operation_tree`, and decoded events in the response
+- response fields preserve their historical names so the public API surface is
+  unchanged
+- if the Rust parser is updated to expose a new field, no re-ingest is needed —
+  the archive is the canonical source; the next request for a given transaction
+  just picks up the new field
 
-- `envelope_xdr` and `result_xdr` are returned to the frontend for advanced inspection
-- `result_meta_xdr` remains stored for decode/debug and validation use
-- the API may decode stored raw artifacts on demand when advanced sections require it
-
-That contract should remain stable unless the main design document is updated first.
+This contract should remain stable unless the main design document is updated
+first.
 
 ## 7. Error Handling and Compatibility
 
 ### 7.1 Malformed XDR
 
-If `fromXDR()` throws during ingestion:
+If `stellar-xdr` returns an error during ingestion:
 
-- the Ledger Processor logs the error with transaction context
-- raw XDR is still stored verbatim
-- the transaction record is marked with `parse_error`
-- the transaction remains visible with all non-XDR fields that are still available
+- the Ledger Processor logs the error with the transaction hash
+- the typed summary columns that were successfully extracted are still written
+- `transactions.parse_error = true` is set on the affected row
+- the transaction remains visible with all non-failed fields available
 
-This preserves explorer continuity even when a decode step fails.
+At read time, the transaction detail handler reads `transactions.parse_error`
+from the DB and **short-circuits** the archive fetch + re-parse for any row
+where the flag is `true` (task 0190 — `crates/api/src/transactions/handlers.rs`).
+The response carries `heavy: null` + `heavy_fields_status: "unavailable"` so
+the lore-0044 / lore-0046 contract holds: the light slice is always served,
+the heavy block is explicitly unavailable. Skipping the archive call on
+known-degraded rows also avoids a wasted S3 round-trip per request. List
+endpoints are unaffected because they do not call the archive.
+
+The three reachable triggers for `parse_error = true` — `envelope.is_none()`,
+`envelope_xdr.is_empty()`, `result_xdr.is_empty()` — are exercised by
+synthetic-fixture unit tests in
+`crates/xdr-parser/src/transaction.rs::parse_error_tests` (Variant A,
+Variant B, plus a default-limits regression sentinel). End-to-end
+persist coverage lives in `crates/indexer/tests/persist_integration.rs`
+(`parse_error_transaction_persists_and_replays_idempotent`); the API
+overlay contract is locked in
+`crates/api/src/tests_integration.rs::detail_parse_error_tx_returns_unavailable_heavy_without_s3_contact`.
 
 ### 7.2 Unknown Operation Types
 
-New protocol versions may introduce operation types not yet supported by the SDK.
+New protocol versions may introduce operation types not yet supported by the
+pinned `stellar-xdr` crate.
 
 In that case, the documented behavior is:
 
 - render the operation as unknown in explorer responses
-- show raw XDR in the advanced view
-- raise operational visibility through logging/alarming so SDK support can be updated
+- surface the raw XDR (fetched from the archive) in the advanced view
+- raise operational visibility through logging / alarming so the `stellar-xdr`
+  bump can be scheduled
 
 ### 7.3 Protocol Upgrades
 
 When Stellar introduces protocol changes that affect `LedgerCloseMeta` structure, the
-system updates `@stellar/stellar-sdk` XDR types.
+system updates the Rust `stellar-xdr` crate in the Ledger Processor (per ADR 0004).
 
 The parsing design assumes protocol upgrades are:
 
@@ -315,19 +538,27 @@ The parsing design assumes protocol upgrades are:
 
 ### 8.1 Boundary with Other Parts of the System
 
-Responsibility should remain split clearly:
+Responsibility is split along the two-path parsing model:
 
-- ingestion owns canonical decode and materialization
-- the database schema owns persistence of raw and structured decode outputs
-- the backend owns request-time normalization and narrow on-demand decode for advanced cases
-- the frontend consumes pre-decoded data and does not own normal XDR parsing
+- **ingestion** (Rust Ledger Processor) owns decode-at-ingest → typed summary
+  columns + appearance indexes written to PostgreSQL (single parser crate,
+  shared with the API — `crates/xdr-parser`)
+- **the database schema** owns persistence of typed summaries + appearance
+  indexes; it does not hold raw XDR (ADR 0029)
+- **the backend** (axum) owns request-time re-decode for E3 / E14 via
+  `xdr_parser::extract_*` against `.xdr.zst` fetched from the public Stellar
+  ledger archive; list endpoints run no parser
+- **the frontend** consumes the API response and does not own XDR parsing in
+  normal paths
 
 ### 8.2 Current Workspace State
 
-The repository currently documents the target parsing model but does not yet contain the
-final runtime implementation of the Ledger Processor or API-side decode helpers.
+The parsing implementation lives in `crates/xdr-parser/` and is invoked from
+both the ingest Lambda (`crates/indexer`) and the backend API (`crates/api`).
+Per [ADR 0032](../../../lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md)
+this document is kept in sync with the code by requiring ADRs that touch the
+parsing path to update it in the same PR.
 
-That is expected. This document should serve as the detailed reference for future parsing
-implementation planning, while
-[`technical-design-general-overview.md`](../technical-design-general-overview.md) remains
-the primary source of truth.
+[`technical-design-general-overview.md`](../technical-design-general-overview.md)
+remains the primary cross-component source of truth; this file is the detailed
+XDR-parsing reference.

@@ -1,0 +1,158 @@
+# Common config for the db-merge databases. Anchor lives at the top so
+# the 2 services below stay one-line-different from each other.
+x-postgres-base: &postgres-base
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: soroban_block_explorer
+  healthcheck:
+    test: ['CMD-SHELL', 'pg_isready -U postgres']
+    interval: 5s
+    timeout: 3s
+    retries: 5
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: soroban_block_explorer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ClickHouse pilot store (ADR 0044, task 0204). Stands next to Postgres,
+  # not as a replacement. Read-empty for now — populated by a follow-up
+  # ADR/task once the schema stabilises.
+  #
+  # Task 0240 split auth two ways: external clients (Caddy in prod,
+  # curl in dev) present a verified mTLS cert that Caddy maps to a
+  # CH user via `X-ClickHouse-User` header (`<no_password/>` users
+  # restricted to the compose bridge subnet 172.30.0.0/16, pinned
+  # at the bottom of this file); host-side consumers (sidecar,
+  # backup script, operator from SSH→docker exec) connect as
+  # `default` with the password from `CLICKHOUSE_PASSWORD`. Dev
+  # cert holders get `dev_shared` (admin, `<no_password/>`) so a
+  # cert alone is enough for dev convenience without exposing the
+  # password-protected `default` over the bridge.
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3
+    ports:
+      - '${CLICKHOUSE_HTTP_PORT:-8123}:8123'
+      - '${CLICKHOUSE_NATIVE_PORT:-9000}:9000'
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      # XML config overrides for HTTP / socket timeouts. CH 26.x
+      # defaults (30 s `http_receive_timeout`) close the body socket
+      # on the long-lived bulk-ingest INSERTs the writer holds open
+      # per backfill partition; per-query override via
+      # `with_setting` is recorded in `system.query_log.Settings`
+      # but does NOT propagate to the Poco-level socket timeout.
+      # Profile-level XML override is the only path that takes
+      # effect.
+      #
+      # File-level (not directory-level) mounts because the official
+      # entrypoint writes its own files into both `config.d/` and
+      # `users.d/` based on CLICKHOUSE_USER / CLICKHOUSE_PASSWORD env
+      # — mounting the whole dir read-only breaks startup with
+      # "Read-only file system". Single-file mounts leave the rest of
+      # the directory writable for entrypoint while still pinning our
+      # overrides.
+      - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
+      - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
+      # `dict_reader` user definition. Required because init.sql's
+      # `transaction_hash_dict` SOURCE clause references it.
+      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
+      # Per-service RBAC users + profiles + quotas (task 0240).
+      - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
+      - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro
+      - ./crates/db-clickhouse/users.d/services.xml:/etc/clickhouse-server/users.d/services.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8123/ping || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to the
+  # ClickHouse service once it is healthy. Idempotent — every statement
+  # is `CREATE … IF NOT EXISTS`, so re-running is a no-op. Survives
+  # `docker compose down -v` cleanly because the schema is re-applied
+  # on the next `up`.
+  #
+  # Implemented via `clickhouse-client --queries-file` rather than the
+  # Rust `db-clickhouse-init` binary so the sidecar boots in seconds
+  # without a workspace compile. The Rust CLI applies the SAME
+  # `init.sql` and is intended for local-dev iteration outside Docker
+  # (`cargo run -p db-clickhouse --bin db-clickhouse-init`); both paths
+  # share the file via `include_str!`.
+  db-clickhouse-init:
+    image: clickhouse/clickhouse-server:26.3
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
+    entrypoint:
+      - clickhouse-client
+      - --host=clickhouse
+      - --port=9000
+      - --user=default
+      - --password=clickhouse
+      - --multiquery
+      - --queries-file=/init.sql
+    restart: 'no'
+
+  # db-merge runtime infrastructure (task 0186 §Step 1, ADR 0040).
+  # Gated behind the `db-merge` profile so they don't start on
+  # `docker compose up` — opt in via `--profile db-merge` or
+  # `COMPOSE_PROFILES=db-merge`.
+  #
+  # FDW from postgres-merge reaches postgres-snapshot-source by service
+  # name on the default compose network (port 5432, internal). The host
+  # ports below are only for the db-merge CLI / pg_restore.
+
+  postgres-merge:
+    <<: *postgres-base
+    ports: ['5436:5432']
+    volumes: [pgdata-merge:/var/lib/postgresql/data]
+    profiles: [db-merge]
+
+  postgres-snapshot-source:
+    <<: *postgres-base
+    ports: ['5437:5432']
+    volumes: [pgdata-snapshot-source:/var/lib/postgresql/data]
+    profiles: [db-merge]
+
+volumes:
+  pgdata:
+  pgdata-merge:
+  pgdata-snapshot-source:
+  clickhouse-data:
+
+# Pin compose bridge subnet (task 0240). users.d/services.xml's
+# `<networks>` allowlist lists 172.30.0.0/16 explicitly so the
+# `<no_password/>` users in services.xml accept connections from
+# every other container in this compose project. Same pin in
+# docker-compose.prod.yml for parity.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16

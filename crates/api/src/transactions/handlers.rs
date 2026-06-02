@@ -1,0 +1,535 @@
+//! Axum handlers for the transactions endpoints.
+//!
+//! Both endpoints dispatch their DB reads through
+//! `DataSource::for_module(Module::Transactions)` — PG (`sqlx`) or CH
+//! (`clickhouse`) per the `API_DATASOURCE_TRANSACTIONS` flag (task 0243).
+//! The public response shape, the archive XDR enrichment path (ADR 0029),
+//! and the cursor wire format are datasource-agnostic; only the row
+//! fetches differ.
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Response};
+use domain::OperationType;
+
+use crate::common::cache_control;
+use crate::common::cursor::{self, Direction};
+use crate::common::datasource::{DataSource, Module};
+use crate::common::errors;
+use crate::common::extractors::Pagination;
+use crate::common::filters;
+use crate::common::pagination::{finalize_page, into_envelope};
+use crate::common::path;
+use crate::common::strkey::pool_id_hex_to_strkey;
+use crate::openapi::schemas::{ErrorEnvelope, Paginated};
+use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
+use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
+use crate::runtime_enrichment::stellar_archive::merge::merge_e3_response;
+use crate::state::AppState;
+
+use super::dto::{
+    EventAppearanceItem, InvocationAppearanceItem, ListParams, OperationItem,
+    TransactionDetailLight, TransactionListItem, TxListCursor,
+};
+use super::queries::{OpRow, ResolvedListParams, TxDetailRow, TxListRow};
+use super::{queries, queries_ch};
+
+/// Unified per-call fetch error so the handlers can dispatch between the PG
+/// and CH backends without leaking driver types up the call stack. Only the
+/// `Display` impl is observed (forwarded to the canonical `db_error`
+/// envelope + tracing); the variant tags the failing backend for logs.
+#[derive(Debug, thiserror::Error)]
+enum TxFetchError {
+    #[error("pg: {0}")]
+    Pg(sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(clickhouse::error::Error),
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/transactions
+// ---------------------------------------------------------------------------
+
+/// List transactions with optional filters and cursor-based pagination.
+#[utoipa::path(
+    get,
+    path = "/transactions",
+    tag = "transactions",
+    params(
+        ("limit" = Option<u32>, Query,
+         description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query,
+         description = "Opaque pagination cursor from a previous response."),
+        ListParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated transaction list",
+         body = Paginated<TransactionListItem>),
+        (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error",   body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_transactions(
+    State(state): State<AppState>,
+    pagination: Pagination<TxListCursor>,
+    Query(params): Query<ListParams>,
+) -> Response {
+    // Shape-validate filters before touching DB. Without these checks an
+    // invalid StrKey would silently produce an empty result set, and an
+    // unknown operation_type would 404 the SQL bind — both bad UX. Helpers
+    // return the canonical 400 envelope on failure.
+    let op_type: Option<i16> = match filters::parse_enum_opt::<OperationType>(
+        params.filter_operation_type.as_deref(),
+        "operation_type",
+        Some("operation type"),
+    ) {
+        Ok(maybe) => maybe.map(|t| t as i16),
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = filters::strkey_opt(
+        params.filter_source_account.as_deref(),
+        'G',
+        "source_account",
+    ) {
+        return resp;
+    }
+    if let Err(resp) = filters::strkey_opt(params.filter_contract_id.as_deref(), 'C', "contract_id")
+    {
+        return resp;
+    }
+
+    let source = DataSource::for_module(Module::Transactions);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor
+    // replayed after a flag flip to CH). Its keyset values are meaningless
+    // under the active backend, so per ADR 0008 we fail with `invalid_cursor`
+    // instead of silently mis-paginating. A legacy/untagged cursor already
+    // fails to decode upstream in the extractor; this guards the
+    // decodes-but-wrong-intent case.
+    if let Some(cursor) = &pagination.cursor
+        && !cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
+    let resolved = ResolvedListParams {
+        limit: i64::from(pagination.limit),
+        cursor: pagination.cursor,
+        source_account: params.filter_source_account,
+        contract_id: params.filter_contract_id,
+        op_type,
+    };
+
+    // Fetch limit+1 rows — extra peek drives forward-continuation detection.
+    let mut rows: Vec<TxListRow> =
+        match fetch_list_for_source(&state, source, &resolved, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(source = ?source, "DB error in list_transactions: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
+
+    // Trim limit+1 → limit, derive page info with cursor built from the
+    // boundary rows. The cursor payload differs by datasource (PG keys on
+    // `(created_at, id)`; CH on `(ledger_sequence, id)`), but the wire
+    // format stays opaque — see `TxListCursor`.
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&list_cursor_for(source, r), dir),
+    );
+
+    // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
+    // belong on the transaction detail endpoint (E3) inside the E3 heavy
+    // block, not in the list response. Keeping the list path archive-free
+    // matches canonical SQL 02's `Data sources: DB-only` contract and
+    // avoids an N-fan-out fetch per page.
+    let data: Vec<TransactionListItem> = rows
+        .into_iter()
+        .map(|row| TransactionListItem {
+            hash: row.hash,
+            ledger_sequence: row.ledger_sequence,
+            application_order: row.application_order,
+            source_account: row.source_account,
+            fee_charged: row.fee_charged,
+            inner_tx_hash: row.inner_tx_hash,
+            successful: row.successful,
+            operation_count: row.operation_count,
+            has_soroban: row.has_soroban,
+            operation_types: row.operation_types,
+            contract_ids: row.contract_ids,
+            created_at: row.created_at,
+        })
+        .collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
+/// Build the opaque list cursor for a boundary row. PG keys the list scan
+/// on `(created_at, id)`; CH keys on `(ledger_sequence, id)` and carries the
+/// `transactions.id` hash surrogate as the within-ledger tie-break. The
+/// emitted variant is tagged with the active datasource so a later request
+/// can reject a cursor minted for the other backend (see `list_transactions`).
+fn list_cursor_for(source: DataSource, r: &TxListRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.id,
+        },
+    }
+}
+
+/// True when the decoded cursor was minted for the currently-active
+/// datasource. A mismatch (e.g. a PG cursor replayed after an operator flips
+/// `API_DATASOURCE_TRANSACTIONS=ch` mid-pagination) must be rejected with
+/// `invalid_cursor` rather than silently mis-paginating — the PG keyset
+/// values (`transactions.id` BIGSERIAL) are meaningless as a CH
+/// `(ledger_sequence, id)` anchor and vice versa. ADR 0008: a cursor that
+/// decodes but lacks the current intent fails cleanly (HTTP 400).
+fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/transactions/:hash
+// ---------------------------------------------------------------------------
+
+/// Get a single transaction by hash.
+///
+/// Returns the wrapped E3 response from task 0150: the DB-sourced
+/// `TransactionDetailLight` (flattened to the top level) plus a `heavy` block
+/// carrying every XDR-sourced field — memo, result_code, signatures, fee-bump
+/// source, envelope/result XDR, contract + diagnostic events, per-operation
+/// decoded details, and the nested `operation_tree`. `heavy_fields_status` is
+/// `"ok"` when the public-archive fetch succeeded and `"unavailable"` when it
+/// failed (graceful degradation per ADR 0029 — the light slice is always
+/// returned). Per ADR 0033 there is no separate "advanced" view; the wrapper
+/// always carries the full heavy payload when available.
+#[utoipa::path(
+    get,
+    path = "/transactions/{hash}",
+    tag = "transactions",
+    params(
+        ("hash" = String, Path, description = "Transaction hash (64-char hex; uppercase or lowercase accepted, normalised server-side)"),
+    ),
+    responses(
+        (status = 200, description = "Transaction detail (light + heavy block)",
+         body = crate::runtime_enrichment::stellar_archive::dto::E3Response<TransactionDetailLight>),
+        (status = 400, description = "Invalid hash",          body = ErrorEnvelope),
+        (status = 404, description = "Transaction not found", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error", body = ErrorEnvelope),
+    ),
+)]
+pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<String>) -> Response {
+    let hash = match path::parse_hash(&hash) {
+        Ok(h) => h,
+        Err(resp) => return resp,
+    };
+    let hash_bytes = hex::decode(&hash).expect("validated above");
+
+    let source = DataSource::for_module(Module::Transactions);
+
+    // Resolve hash → transaction header. Combines the PG two-step
+    // (hash index → detail keyed by created_at) and the CH two-step
+    // (hash index → detail keyed by ledger_sequence) behind one helper;
+    // either backend's miss at either step surfaces as a 404.
+    let tx = match lookup_detail_for_source(&state, source, &hash, &hash_bytes).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return errors::not_found("transaction not found"),
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error looking up transaction detail: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let op_rows: Vec<OpRow> = match fetch_operations_for_source(&state, source, &tx).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error fetching operations: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    // ADR 0029 read path: fetch the parent ledger from the public Stellar
+    // archive. On upstream failure → graceful degradation: heavy = None,
+    // merge_e3_response sets heavy_fields_status = "unavailable" while still
+    // returning the light slice from DB. Out-of-range BIGINT → u32 also
+    // degrades to heavy = None rather than wrapping silently.
+    //
+    // Task 0190: when `tx.parse_error = true` in the DB, the indexer
+    // already failed to parse the XDR for this transaction. Re-fetching
+    // and re-parsing from the public archive can either (a) succeed and
+    // produce fresh heavy fields, masking the historical DB flag, or
+    // (b) fail again with the same conditions, in which case
+    // `extract_e3_heavy` returns an `E3HeavyFields` struct with mostly
+    // empty values via `filter(!is_empty)` — which serializes as
+    // `heavy_fields_status: "ok"` with NULL XDR fields, violating the
+    // lore-0046 / lore-0044 contract that parse_error transactions
+    // serve `heavy: null` + `heavy_fields_status: "unavailable"`.
+    //
+    // The DB flag is the ground-truth signal of "we know this tx had
+    // an XDR parsing problem"; surfacing it explicitly via the
+    // `unavailable` status preserves that signal end-to-end and saves
+    // the S3 round-trip on degraded rows.
+    let heavy = if tx.parse_error {
+        tracing::debug!(
+            tx_hash = %hash,
+            "skipping archive fetch for parse_error transaction; \
+             surfacing heavy_fields_status = unavailable per lore-0046 contract"
+        );
+        None
+    } else {
+        match u32::try_from(tx.ledger_sequence) {
+            Ok(seq) => match state
+                .runtime_enrichment
+                .stellar_archive
+                .fetch_ledger(seq)
+                .await
+            {
+                Ok(meta) => extract_e3_heavy(&meta, &hash, &state.network_id),
+                Err(e) => {
+                    tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+                    None
+                }
+            },
+            Err(_) => {
+                tracing::warn!(
+                    "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
+                    tx.ledger_sequence
+                );
+                None
+            }
+        }
+    };
+
+    // When the archive is unavailable, fall back to the DB-side appearance
+    // index so the response stays useful. Sub-fetch errors degrade that
+    // one array to `[]` rather than failing the whole detail call.
+    let (participants, soroban_events, soroban_invocations) = if heavy.is_none() {
+        let (p_res, e_res, i_res) = tokio::join!(
+            fetch_participants_for_source(&state, source, &tx),
+            fetch_events_for_source(&state, source, &tx),
+            fetch_invocations_for_source(&state, source, &tx),
+        );
+        let participants = p_res.unwrap_or_else(|e| {
+            tracing::warn!("DB fallback: fetch_participants failed: {e}");
+            Vec::new()
+        });
+        let events = e_res
+            .unwrap_or_else(|e| {
+                tracing::warn!("DB fallback: fetch_event_appearances failed: {e}");
+                Vec::new()
+            })
+            .into_iter()
+            .map(|r| EventAppearanceItem {
+                contract_id: r.contract_id,
+                ledger_sequence: r.ledger_sequence,
+                amount: r.amount,
+                created_at: r.created_at,
+            })
+            .collect();
+        let invocations = i_res
+            .unwrap_or_else(|e| {
+                tracing::warn!("DB fallback: fetch_invocation_appearances failed: {e}");
+                Vec::new()
+            })
+            .into_iter()
+            .map(|r| InvocationAppearanceItem {
+                contract_id: r.contract_id,
+                caller_account: r.caller_account,
+                ledger_sequence: r.ledger_sequence,
+                amount: r.amount,
+                created_at: r.created_at,
+            })
+            .collect();
+        (participants, events, invocations)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+
+    let light = TransactionDetailLight {
+        hash: tx.hash,
+        ledger_sequence: tx.ledger_sequence,
+        application_order: tx.application_order,
+        source_account: tx.source_account,
+        fee_charged: tx.fee_charged,
+        inner_tx_hash: tx.inner_tx_hash,
+        successful: tx.successful,
+        operation_count: tx.operation_count,
+        has_soroban: tx.has_soroban,
+        created_at: tx.created_at,
+        parse_error: tx.parse_error,
+        operations: db_operations(&op_rows),
+        participants,
+        soroban_events,
+        soroban_invocations,
+    };
+
+    // Finalized tx + full heavy overlay → immutable per Stellar consensus.
+    // Degraded response (heavy unavailable) gets short TTL so a retry can
+    // pick up the archive sooner.
+    let body = merge_e3_response(light, heavy);
+    let cache_value = if body.heavy_fields_status == HeavyFieldsStatus::Ok {
+        cache_control::LONG
+    } else {
+        cache_control::SHORT
+    };
+    let mut resp = Json(body).into_response();
+    cache_control::attach(&mut resp, cache_value);
+    resp
+}
+
+fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
+    op_rows
+        .iter()
+        .map(|op| OperationItem {
+            appearance_id: op.appearance_id,
+            type_name: op.type_name.clone(),
+            op_type: op.op_type,
+            source_account: op.source_account.clone(),
+            destination_account: op.destination_account.clone(),
+            contract_id: op.contract_id.clone(),
+            asset_code: op.asset_code.clone(),
+            asset_issuer: op.asset_issuer.clone(),
+            pool_id: op.pool_id.as_deref().map(pool_id_hex_to_strkey),
+            application_order: op.application_order,
+            ledger_sequence: op.ledger_sequence,
+            created_at: op.created_at,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Per-source dispatch helpers
+// ---------------------------------------------------------------------------
+
+async fn fetch_list_for_source(
+    state: &AppState,
+    source: DataSource,
+    params: &ResolvedListParams,
+    direction: Direction,
+) -> Result<Vec<TxListRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_list(&state.db, params, direction)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+/// Resolve a tx hash to its DB header. PG keys the detail read by
+/// `(hash, created_at)` resolved via `transaction_hash_index`; CH keys it by
+/// `(ledger_sequence, hash)` resolved the same way. A miss at either step is
+/// `Ok(None)` → 404.
+async fn lookup_detail_for_source(
+    state: &AppState,
+    source: DataSource,
+    hash_hex: &str,
+    hash_bytes: &[u8],
+) -> Result<Option<TxDetailRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => {
+            let Some(index) = queries::lookup_hash_index(&state.db, hash_bytes)
+                .await
+                .map_err(TxFetchError::Pg)?
+            else {
+                return Ok(None);
+            };
+            queries::fetch_detail(&state.db, hash_bytes, index.created_at)
+                .await
+                .map_err(TxFetchError::Pg)
+        }
+        DataSource::Ch => {
+            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(state.ch(), hash_hex)
+                .await
+                .map_err(TxFetchError::Ch)?
+            else {
+                return Ok(None);
+            };
+            queries_ch::fetch_detail(state.ch(), hash_hex, ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_operations_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<OpRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_operations(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_operations(state.ch(), tx.id, tx.ledger_sequence)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+async fn fetch_participants_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<String>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_participants(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_participants(state.ch(), tx.id, tx.ledger_sequence)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+async fn fetch_events_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<super::queries::EventAppearanceRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_event_appearances(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => {
+            queries_ch::fetch_event_appearances(state.ch(), tx.id, tx.ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_invocations_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<super::queries::InvocationAppearanceRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_invocation_appearances(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => {
+            queries_ch::fetch_invocation_appearances(state.ch(), tx.id, tx.ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
+}

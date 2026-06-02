@@ -1,0 +1,28 @@
+[package]
+name = "db-partition-mgmt"
+version = "0.1.0"
+edition = "2024"
+description = "Partition management Lambda for the Soroban block explorer (CloudFormation custom resource + EventBridge)"
+
+[lib]
+name = "db_partition_mgmt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "db-partition-mgmt"
+path = "src/main.rs"
+
+[dependencies]
+db = { path = "../db", features = ["aws-secrets"] }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+lambda_runtime = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-cloudwatch = { workspace = true }
+# CLI binary at src/bin/cli.rs — local + staging bootstrap.
+clap = { version = "4", features = ["derive", "env"] }

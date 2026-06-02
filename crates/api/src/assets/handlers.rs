@@ -1,0 +1,383 @@
+//! Axum handlers for the assets endpoints. Pure DB — no read-time XDR.
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Response};
+use domain::TokenAssetType;
+
+use crate::common::cache_control;
+use crate::common::cursor;
+use crate::common::cursor::TsIdCursor;
+use crate::common::errors;
+use crate::common::extractors::Pagination;
+use crate::common::filters;
+use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::strkey::is_strkey_shape;
+use crate::openapi::schemas::{ErrorEnvelope, PageInfo, Paginated};
+use crate::runtime_enrichment::sep1::{Sep1Currency, Sep1TomlParsed};
+use crate::state::AppState;
+
+use super::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem, ListParams};
+use super::queries::{
+    AssetIdCursor, AssetIdentity, AssetRow, ResolvedListParams, asset_predicate_present,
+    fetch_by_code_issuer, fetch_by_contract_id, fetch_by_id, fetch_list, fetch_transactions,
+};
+
+fn map_item(row: AssetRow) -> AssetItem {
+    AssetItem {
+        id: row.id,
+        asset_type_name: row.asset_type_name,
+        asset_type: row.asset_type,
+        asset_code: row.asset_code,
+        issuer: row.issuer,
+        contract_id: row.contract_id,
+        name: row.name,
+        total_supply: row.total_supply,
+        holder_count: row.holder_count,
+        icon_url: row.icon_url,
+    }
+}
+
+/// Three forms of `:id`. The first that parses cleanly drives the SQL.
+enum AssetIdRef<'a> {
+    Numeric(i32),
+    Contract(&'a str),
+    CodeIssuer(&'a str, &'a str),
+}
+
+fn parse_asset_id(raw: &str) -> Option<AssetIdRef<'_>> {
+    if let Ok(n) = raw.parse::<i32>() {
+        return Some(AssetIdRef::Numeric(n));
+    }
+    if is_strkey_shape(raw, 'C') {
+        return Some(AssetIdRef::Contract(raw));
+    }
+    // Codes never contain `-`; split on the LAST one and validate the
+    // issuer half as a G-StrKey to disambiguate from C-StrKeys with stray dashes.
+    if let Some(idx) = raw.rfind('-')
+        && idx > 0
+        && idx < raw.len() - 1
+    {
+        let code = &raw[..idx];
+        let issuer = &raw[idx + 1..];
+        if is_strkey_shape(issuer, 'G') {
+            return Some(AssetIdRef::CodeIssuer(code, issuer));
+        }
+    }
+    None
+}
+
+#[utoipa::path(
+    get,
+    path = "/assets",
+    tag = "assets",
+    params(
+        ("limit" = Option<u32>, Query,
+         description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query,
+         description = "Opaque pagination cursor from a previous response."),
+        ListParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated asset list",
+         body = Paginated<AssetItem>),
+        (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error",   body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_assets(
+    State(state): State<AppState>,
+    pagination: Pagination<AssetIdCursor>,
+    Query(params): Query<ListParams>,
+) -> Response {
+    let asset_type: Option<i16> = match filters::parse_enum_opt::<TokenAssetType>(
+        params.filter_type.as_deref(),
+        "type",
+        Some("asset type"),
+    ) {
+        Ok(maybe) => maybe.map(|t| t as i16),
+        Err(resp) => return resp,
+    };
+
+    if let Err(resp) = filters::reject_sql_wildcards_opt(params.filter_code.as_deref(), "code") {
+        return resp;
+    }
+
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
+    let resolved = ResolvedListParams {
+        limit: i64::from(pagination.limit),
+        cursor: pagination.cursor,
+        asset_type,
+        asset_code: params.filter_code,
+    };
+
+    let mut rows: Vec<AssetRow> = match fetch_list(&state.db, &resolved, direction).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error in list_assets: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&AssetIdCursor { id: r.id }, dir),
+    );
+    let data: Vec<AssetItem> = rows.into_iter().map(map_item).collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
+#[utoipa::path(
+    get,
+    path = "/assets/{id}",
+    tag = "assets",
+    params(
+        ("id" = String, Path,
+         description = "Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite."),
+    ),
+    responses(
+        (status = 200, description = "Asset detail", body = AssetDetailResponse),
+        (status = 400, description = "Invalid id format", body = ErrorEnvelope),
+        (status = 404, description = "Asset not found",   body = ErrorEnvelope),
+        (status = 500, description = "Internal server error", body = ErrorEnvelope),
+    ),
+)]
+pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let parsed = match parse_asset_id(&id) {
+        Some(p) => p,
+        None => {
+            return errors::bad_request_with_details(
+                errors::INVALID_ID,
+                "id must be a numeric assets.id, contract StrKey (C…, 56 chars), \
+                 or `code-issuer` composite (e.g. USDC-GA…XYZ)",
+                serde_json::json!({ "received": id }),
+            );
+        }
+    };
+
+    let row = match fetch_with(&state, parsed).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return errors::not_found("asset not found"),
+        Err(e) => {
+            tracing::error!("DB error fetching asset {id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let deployed_at_ledger = row.deployed_at_ledger;
+    let issuer = row.issuer.clone();
+    let asset_code = row.asset_code.clone();
+    let home_domain = row.issuer_home_domain.clone();
+
+    // SEP-1 runtime enrichment (task 0188). `description` ← matched
+    // `CURRENCIES[].desc`; `home_page` ← `DOCUMENTATION.ORG_URL`. Native
+    // XLM / no-issuer Soroban tokens / accounts without `home_domain`
+    // skip the fetch and surface both as `null`. A real fetch failure
+    // also yields `null` (warn-logged) — the API never propagates a 5xx
+    // because of an enrichment failure.
+    let (description, home_page) = match home_domain.as_deref() {
+        Some(domain) if !domain.is_empty() => {
+            match state.runtime_enrichment.sep1.fetch(domain).await {
+                Ok(parsed) => {
+                    extract_sep1_fields(&parsed, asset_code.as_deref(), issuer.as_deref())
+                }
+                Err(e) => {
+                    tracing::warn!("SEP-1 fetch failed for issuer home_domain {domain:?}: {e}");
+                    (None, None)
+                }
+            }
+        }
+        _ => (None, None),
+    };
+
+    let response = AssetDetailResponse {
+        item: map_item(row),
+        deployed_at_ledger,
+        description,
+        home_page,
+    };
+    let mut resp = Json(response).into_response();
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
+    resp
+}
+
+/// Pull the two SEP-1 fields the API exposes: `desc` from the matching
+/// `CURRENCIES[]` row (by `code` + `issuer`) and `ORG_URL` from
+/// `DOCUMENTATION` (used as `home_page` since SEP-1 has no per-currency
+/// homepage field). A missing currency match still yields the org URL —
+/// useful when the issuer publishes their site but doesn't list every
+/// individual token.
+fn extract_sep1_fields(
+    parsed: &Sep1TomlParsed,
+    asset_code: Option<&str>,
+    issuer: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let description = match (asset_code, issuer) {
+        (Some(code), Some(iss)) => {
+            find_currency(&parsed.currencies, code, iss).and_then(|c| c.desc.clone())
+        }
+        _ => None,
+    };
+    let home_page = parsed
+        .documentation
+        .as_ref()
+        .and_then(|d| d.org_url.clone());
+    (description, home_page)
+}
+
+/// Find the `CURRENCIES[]` entry whose `code` and `issuer` match the
+/// queried asset. Returns the first match (SEP-1 does not require codes
+/// to be unique, but in practice they are per issuer).
+fn find_currency<'a>(
+    currencies: &'a [Sep1Currency],
+    asset_code: &str,
+    issuer: &str,
+) -> Option<&'a Sep1Currency> {
+    currencies
+        .iter()
+        .find(|c| c.code.as_deref() == Some(asset_code) && c.issuer.as_deref() == Some(issuer))
+}
+
+async fn fetch_with(
+    state: &AppState,
+    parsed: AssetIdRef<'_>,
+) -> Result<Option<AssetRow>, sqlx::Error> {
+    match parsed {
+        AssetIdRef::Numeric(n) => fetch_by_id(&state.db, n).await,
+        AssetIdRef::Contract(c) => fetch_by_contract_id(&state.db, c).await,
+        AssetIdRef::CodeIssuer(code, issuer) => fetch_by_code_issuer(&state.db, code, issuer).await,
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/assets/{id}/transactions",
+    tag = "assets",
+    params(
+        ("id" = String, Path,
+         description = "Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite."),
+        ("limit" = Option<u32>, Query,
+         description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query,
+         description = "Opaque pagination cursor from a previous response."),
+    ),
+    responses(
+        (status = 200, description = "Paginated transactions involving the asset",
+         body = Paginated<AssetTransactionItem>),
+        (status = 400, description = "Invalid id format / pagination", body = ErrorEnvelope),
+        (status = 404, description = "Asset not found", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error", body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_asset_transactions(
+    State(state): State<AppState>,
+    pagination: Pagination<TsIdCursor>,
+    Path(id): Path<String>,
+) -> Response {
+    let parsed = match parse_asset_id(&id) {
+        Some(p) => p,
+        None => {
+            return errors::bad_request_with_details(
+                errors::INVALID_ID,
+                "id must be a numeric assets.id, contract StrKey (C…, 56 chars), \
+                 or `code-issuer` composite (e.g. USDC-GA…XYZ)",
+                serde_json::json!({ "received": id }),
+            );
+        }
+    };
+
+    let row = match fetch_with(&state, parsed).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return errors::not_found("asset not found"),
+        Err(e) => {
+            tracing::error!("DB error fetching asset {id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    if TokenAssetType::try_from(row.asset_type).is_err() {
+        tracing::error!(
+            "unknown asset_type discriminant {} for asset id={}",
+            row.asset_type,
+            row.id
+        );
+        return errors::internal_error(
+            errors::DB_ERROR,
+            "asset row carries an unknown asset_type discriminant",
+        );
+    }
+
+    let identity = AssetIdentity {
+        asset_code: row.asset_code.as_deref(),
+        issuer: row.issuer.as_deref(),
+        contract_id: row.contract_id.as_deref(),
+    };
+
+    // Native XLM has no DB-side identity referenced by ops — empty page
+    // rather than emit `WHERE ()` SQL.
+    if !asset_predicate_present(&identity) {
+        let empty = into_envelope::<AssetTransactionItem>(
+            Vec::new(),
+            PageInfo {
+                next_cursor: None,
+                prev_cursor: None,
+                limit: pagination.limit,
+            },
+        );
+        let mut resp = Json(empty).into_response();
+        cache_control::attach(&mut resp, cache_control::SHORT);
+        return resp;
+    }
+
+    let mut rows = match fetch_transactions(
+        &state.db,
+        &identity,
+        i64::from(pagination.limit),
+        pagination.cursor.as_ref(),
+        pagination.direction,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("DB error in list_asset_transactions: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let page = finalize_ts_id_page(
+        &mut rows,
+        pagination.limit,
+        pagination.direction,
+        pagination.has_predecessor(),
+        |r| r.created_at,
+        |r| r.id,
+    );
+    let data: Vec<AssetTransactionItem> = rows
+        .into_iter()
+        .map(|r| AssetTransactionItem {
+            hash: r.hash,
+            ledger_sequence: r.ledger_sequence,
+            source_account: r.source_account,
+            successful: r.successful,
+            fee_charged: r.fee_charged,
+            created_at: r.created_at,
+            operation_count: r.operation_count,
+            has_soroban: r.has_soroban,
+            operation_types: r.operation_types,
+        })
+        .collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}

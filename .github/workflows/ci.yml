@@ -10,7 +10,50 @@ permissions:
   contents: read
 
 jobs:
-  main:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      typescript: ${{ steps.filter.outputs.typescript }}
+      api_types_codegen: ${{ steps.filter.outputs.api_types_codegen }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            typescript:
+              - 'apps/**'
+              - 'libs/**'
+              - 'web/**'
+              - 'infra/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'nx.json'
+              - '.github/workflows/ci.yml'
+            api_types_codegen:
+              - 'crates/api/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'libs/api-types/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+
+  typescript:
+    name: TypeScript (lint, build, typecheck)
+    needs: changes
+    if: |
+      needs.changes.outputs.typescript == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,4 +67,62 @@ jobs:
 
       - run: npm ci
       - run: npx nx format:check --all
-      - run: npx nx run-many -t lint build typecheck
+      - run: npx nx run-many -t lint build typecheck test
+
+  api-types-codegen:
+    name: API types freshness
+    needs: changes
+    if: |
+      needs.changes.outputs.api_types_codegen == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npx nx run @rumblefish/api-types:check-generated
+
+  rust:
+    name: Rust (fmt, clippy, test, lambda build)
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04-arm
+    env:
+      SQLX_OFFLINE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      # The api crate ships `swagger-ui` as an opt-in feature (task
+      # 0042). Production Lambda builds stay on default features to
+      # keep the binary lean (~4 MB vs ~15 MB). CI validates both
+      # configurations so neither path bit-rots.
+      - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
+      - run: cargo test -p api --features swagger-ui
+
+      - run: cargo lambda build --release --arm64
+
+      - name: Verify Lambda artifacts
+        shell: bash
+        run: |
+          shopt -s failglob
+          echo "=== Lambda bootstrap binaries ==="
+          for bin in target/lambda/*/bootstrap; do
+            echo "$(sha256sum "$bin") $(stat --format='%s bytes' "$bin")"
+          done

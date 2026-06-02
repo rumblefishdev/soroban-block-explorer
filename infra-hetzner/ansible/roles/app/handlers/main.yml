@@ -1,0 +1,106 @@
+---
+# Three handlers, scoped to minimise blast radius:
+#
+#   - "Reload caddy"            — Caddy only, used for CN allowlist
+#                                  changes that do not affect CH.
+#   - "Restart compose stack"   — full stack, used for changes that
+#                                  affect bind-mounted files on CH
+#                                  (.env, clickhouse-client.xml) or
+#                                  shared compose definitions.
+#   - "Wait for services running" — runs after every restart so a
+#                                    broken deploy surfaces here
+#                                    rather than at first request.
+
+- name: Reload caddy
+  # Restarts ONLY the caddy service. Used when the CN allowlist
+  # snippet changes — bouncing CH for a cert rotation is wasted
+  # work and drops in-flight queries needlessly.
+  #
+  # `tags` mirror the notifying task so `--tags caddy_reload`
+  # actually fires the handler. Ansible 2.5+ filters handlers
+  # by tags; an untagged handler is skipped under tag-scoped runs
+  # even if notified.
+  community.docker.docker_compose_v2:
+    project_src: '{{ app_repo_dest }}'
+    files:
+      - docker-compose.yml
+      - docker-compose.prod.yml
+    services: [caddy]
+    state: restarted
+  listen: Reload caddy
+  tags: [app, caddy_reload]
+  no_log: true
+
+- name: Restart compose stack
+  # Re-creates every service. Used for env-file / mount changes
+  # that require new bind-mount inodes inside containers (single-
+  # file bind mounts preserve the original inode after host-side
+  # atomic replace, so a recreate is the only way the container
+  # sees new content).
+  #
+  # `state: present` + `recreate: always` is `docker compose up
+  # -d --force-recreate`, NOT `docker compose restart`. The
+  # distinction matters: `compose restart` does not respect
+  # `depends_on: condition: service_healthy`, so the
+  # db-clickhouse-init sidecar would race CH's startup and exit
+  # with NETWORK_ERROR before the server's healthcheck flips
+  # green. `compose up` evaluates dependency conditions on every
+  # invocation and serialises the sidecar after CH reports
+  # healthy.
+  #
+  # `wait: false` deliberately. `docker compose up --wait` blocks
+  # until EVERY service is running + healthy — but `db-clickhouse-init`
+  # is a one-shot (`restart: no`) that exits 0 after applying init.sql,
+  # which `--wait` reports as "container ... exited (0)" and fails the
+  # handler. The health guarantee is instead delegated to the
+  # "Wait for services healthy" handler below, which polls only the
+  # long-running services (clickhouse, caddy) and correctly ignores the
+  # one-shot sidecar. (`recreate: always` still re-creates every
+  # service and respects `depends_on: service_healthy` ordering, so the
+  # sidecar is serialised after CH reports healthy regardless of wait.)
+  community.docker.docker_compose_v2:
+    project_src: '{{ app_repo_dest }}'
+    files:
+      - docker-compose.yml
+      - docker-compose.prod.yml
+    state: present
+    recreate: always
+    wait: false
+  listen: Restart compose stack
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Wait for services healthy
+  # Polls each service for "running + (healthy | no-healthcheck)".
+  # The `|none` branch covers a future service that ships without
+  # a healthcheck — without it the handler would loop on the
+  # literal Go template default `<no value>` and time out after
+  # 2 min, masking the real deploy state. Shell rather than the
+  # community.docker module to avoid pulling the Python `docker`
+  # SDK onto the box for one liveness probe.
+  #
+  # Container name is `<project>-<service>-1` per compose v2
+  # naming. Project name is auto-derived from the basename of
+  # `project_src` (`/srv/app` → `app`); we mirror that here so
+  # changing `app_repo_dest` keeps the handler in sync without a
+  # separate var.
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - '--format={% raw %}{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{% endraw %}'
+      - '{{ app_repo_dest | basename }}-{{ item }}-1'
+  register: container_health
+  retries: 24
+  delay: 5
+  until: container_health.stdout in ["running|healthy", "running|none"]
+  changed_when: false
+  loop:
+    - clickhouse
+    - caddy
+  listen:
+    - Reload caddy
+    - Restart compose stack
+  tags: [app, caddy_reload]

@@ -1,0 +1,183 @@
+name: Deploy Staging
+
+on:
+  push:
+    tags:
+      - 'staging-*'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  mirror-image:
+    name: Mirror Galexie image to ECR
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Must match infra/envs/staging.json -> awsRegion (single source of truth).
+          # Region is locked to us-east-1 by ACM cert requirement for CloudFront.
+          aws-region: us-east-1
+
+      - name: Mirror Galexie image
+        run: |
+          REPO_URI=$(aws ssm get-parameter \
+            --name /soroban-explorer/staging/ecr-galexie-repo-uri \
+            --query Parameter.Value --output text)
+
+          # Pin by digest for supply chain safety.
+          # Update GALEXIE_IMAGE_DIGEST in GitHub Environment vars when upgrading.
+          GALEXIE_DIGEST="${{ vars.GALEXIE_IMAGE_DIGEST }}"
+          if [[ ! "$GALEXIE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Invalid GALEXIE_IMAGE_DIGEST format: $GALEXIE_DIGEST"
+            exit 1
+          fi
+
+          # Region must match infra/envs/staging.json -> awsRegion.
+          aws ecr get-login-password --region us-east-1 | \
+            docker login --username AWS --password-stdin \
+            $(echo $REPO_URI | cut -d/ -f1)
+
+          # Skip mirror if this digest is already in ECR (saves ~2 min + Docker Hub rate limit).
+          EXISTING=$(aws ecr batch-get-image --repository-name staging-galexie \
+            --image-ids imageTag=latest --query 'images[0].imageId.imageDigest' \
+            --output text 2>/dev/null || echo "NONE")
+
+          if [ "$EXISTING" = "$GALEXIE_DIGEST" ]; then
+            echo "Image already in ECR, skipping pull. Tagging with git SHA."
+            MANIFEST=$(aws ecr batch-get-image --repository-name staging-galexie \
+              --image-ids imageTag=latest --query 'images[0].imageManifest' --output text)
+            # ImageAlreadyExistsException is expected if this SHA was already tagged.
+            OUTPUT=$(aws ecr put-image --repository-name staging-galexie \
+              --image-tag ${GITHUB_SHA} --image-manifest "$MANIFEST" 2>&1) || {
+              if echo "$OUTPUT" | grep -q "ImageAlreadyExistsException"; then
+                echo "Tag already exists, skipping."
+              else
+                echo "$OUTPUT" >&2
+                exit 1
+              fi
+            }
+          else
+            docker pull stellar/stellar-galexie@${GALEXIE_DIGEST}
+            docker tag stellar/stellar-galexie@${GALEXIE_DIGEST} ${REPO_URI}:${GITHUB_SHA}
+            docker tag stellar/stellar-galexie@${GALEXIE_DIGEST} ${REPO_URI}:latest
+            docker push ${REPO_URI}:${GITHUB_SHA}
+            docker push ${REPO_URI}:latest
+          fi
+
+  deploy:
+    name: CDK deploy
+    needs: mirror-image
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        id: setup-node
+        with:
+          node-version-file: .nvmrc
+          # Keeps ~/.npm download cache warm as fallback when node_modules
+          # cache misses (e.g. after LRU eviction or package-lock change).
+          cache: npm
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-lambda
+        run: pip3 install cargo-lambda
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Must match infra/envs/staging.json -> awsRegion (single source of truth).
+          # Region is locked to us-east-1 by ACM cert requirement for CloudFront.
+          aws-region: us-east-1
+
+      - name: Build SPA
+        run: npx nx build @rumblefish/soroban-block-explorer-web
+
+      - name: Build CDK
+        run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
+
+      - name: CDK deploy
+        run: |
+          cd infra && npx cdk --app "node dist/bin/staging.js" deploy --all \
+            --require-approval never \
+            -c galexieImageTag=${GITHUB_SHA}
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Upload SPA to S3
+        run: |
+          SPA_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name Explorer-staging-Delivery \
+            --query 'Stacks[0].Outputs[?OutputKey==`SpaBucketName`].OutputValue' \
+            --output text)
+          aws s3 sync web/dist/ "s3://${SPA_BUCKET}/" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name Explorer-staging-Delivery \
+            --query 'Stacks[0].Outputs[?OutputKey==`DistributionId`].OutputValue' \
+            --output text)
+          aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths "/*"
+
+      - name: Smoke test — API
+        run: |
+          API_ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name Explorer-staging-ApiGateway \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+            --output text)
+          curl -f --retry 3 --retry-delay 5 ${API_ENDPOINT}/health
+
+      - name: Smoke test — Frontend
+        run: |
+          # Full end-to-end check through CloudFront.
+          # Staging has basic auth enabled (CloudFront Function backed
+          # by a KeyValueStore). STAGING_BASIC_AUTH (user:password) must
+          # match the base64 token stored in the KVS `auth-token` key.
+          # If the KVS is empty (fresh deploy), CF returns 503 — populate
+          # it first (see delivery-stack.ts for instructions).
+          RESPONSE=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' \
+            --retry 3 --retry-delay 5 \
+            -u "${{ secrets.STAGING_BASIC_AUTH }}" \
+            https://staging.sorobanscan.rumblefish.dev/)
+          HTTP_STATUS=$(echo "$RESPONSE" | cut -d' ' -f1)
+          CONTENT_TYPE=$(echo "$RESPONSE" | cut -d' ' -f2-)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::Frontend smoke test failed: expected HTTP 200, got ${HTTP_STATUS}"
+            exit 1
+          fi
+          if [[ "$CONTENT_TYPE" != *"text/html"* ]]; then
+            echo "::error::Frontend smoke test failed: expected text/html, got ${CONTENT_TYPE}"
+            exit 1
+          fi
+          echo "Frontend smoke test passed: HTTP ${HTTP_STATUS}, ${CONTENT_TYPE}"

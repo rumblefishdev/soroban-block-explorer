@@ -1,0 +1,58 @@
+---
+# Hetzner Robot REST API configuration.
+#
+# Runs on the controller (operator's laptop). Reaches the public
+# Robot endpoint at `robot-ws.your-server.de` — no SSH connection
+# to the box is involved. All credentials read from
+# `hcloud_robot_user` / `hcloud_robot_password` group vars
+# (sourced from the operator shell env).
+#
+# Idempotency: every module is state-based. Re-runs with no
+# config drift are no-ops.
+#
+# `no_log: true` on every task — `hcloud_robot_password` is
+# passed as a module parameter. Ansible's default verbose / on-
+# failure behaviour dumps task args; without no_log the password
+# would echo to stdout on any task failure or under `-vvvv`.
+
+- name: Set Robot reverse DNS for the server IPv4
+  community.hrobot.reverse_dns:
+    hetzner_user: '{{ hcloud_robot_user }}'
+    hetzner_password: '{{ hcloud_robot_password }}'
+    ip: '{{ hetzner_server_ipv4 }}'
+    # `value` is the rDNS hostname (the module's parameter name —
+    # `dns_ptr` from older docs is wrong).
+    value: '{{ hetzner_reverse_dns }}'
+  no_log: true
+
+- name: Set Robot server display name
+  # `community.hrobot.server` identifies the target server by
+  # `server_number` (required by the module). Operator supplies it
+  # via the optional HETZNER_SERVER_NUMBER env var — visible in
+  # Robot UI → Server → top-right corner ("#NNNNNNN"). If unset,
+  # we skip this task entirely; the server's display label stays
+  # at whatever Robot UI defaults to (cosmetic, not load-bearing).
+  community.hrobot.server:
+    hetzner_user: '{{ hcloud_robot_user }}'
+    hetzner_password: '{{ hcloud_robot_password }}'
+    server_number: '{{ hetzner_server_number | int }}'
+    server_name: '{{ hetzner_server_name }}'
+  when:
+    - hetzner_server_number is defined
+    - hetzner_server_number | string | trim | length > 0
+  no_log: true
+
+- name: Apply Robot stateless firewall rules
+  community.hrobot.firewall:
+    hetzner_user: '{{ hcloud_robot_user }}'
+    hetzner_password: '{{ hcloud_robot_password }}'
+    server_ip: '{{ hetzner_server_ipv4 }}'
+    state: present
+    # `whitelist_hos` allows traffic from Hetzner-internal hosts
+    # (rescue system, Storage Box, monitoring) regardless of the
+    # explicit rule list below.
+    whitelist_hos: true
+    status: active
+    rules:
+      input: '{{ hetzner_firewall_rules }}'
+  no_log: true

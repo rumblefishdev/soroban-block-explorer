@@ -36,13 +36,14 @@ except where those affect frontend behavior.
 
 The current Nx workspace already reserves the frontend boundary as:
 
-- `apps/web` - application entrypoint for the explorer web app
+- `web` - application entrypoint for the explorer web app
 - `libs/ui` - reusable presentation components and frontend-only view primitives
-- `libs/domain` - shared explorer concepts that may be reused by both frontend and backend
-- `libs/shared` - generic non-domain utilities used across the workspace
+- `libs/api-types` - generated TypeScript types, fetch SDK, and TanStack Query hooks
+  derived from the Rust API's OpenAPI spec (single source of truth for API contracts)
 
-This document describes the intended production architecture for that boundary. It is not
-a description of the current implementation state, which is still skeletal.
+The frontend bootstrap (React 19, Vite, MUI, React Router, TanStack Query) is in place.
+This document describes the intended production architecture for that boundary. Page
+components, routing, theming, and data fetching layers are implemented in dedicated tasks.
 
 If any statement in this file conflicts with
 [`technical-design-general-overview.md`](../technical-design-general-overview.md), the
@@ -82,7 +83,7 @@ The frontend is not responsible for:
 ## 3. Context and Responsibilities
 
 The frontend sits at the edge of the system and communicates exclusively with the custom
-NestJS REST API. It never reads from the blockchain directly.
+REST API (axum). It never reads from the blockchain directly.
 
 Responsibility boundaries:
 
@@ -111,6 +112,10 @@ The intended implementation stack is:
 - **MUI** as the base component library, theming foundation, and accessibility-oriented UI
   primitive layer
 - **React Router** for client-side routing
+- **`@rumblefish/api-types`** generated from the backend OpenAPI 3.1 spec
+  (`@hey-api/openapi-ts`); provides the TypeScript types, fetch SDK, and TanStack Query
+  hooks consumed by the rest of the frontend. The frontend never hand-writes API
+  types — see [Section 4.5](#45-api-types-and-codegen) below.
 
 The frontend is a public, anonymous browser client. It must not embed API keys or other
 shared secrets; API protection belongs at the API Gateway/WAF boundary, not in the bundle.
@@ -118,7 +123,7 @@ shared secrets; API protection belongs at the API Gateway/WAF boundary, not in t
 ```
 ┌────────┐     ┌──────────────────────────────────────────────────┐
 │  User  │────>│  Global Search Bar                               │
-│        │     │  (contracts, transactions, tokens, accounts, …)  │
+│        │     │  (contracts, transactions, assets, accounts, …)  │
 │        │     └──────────────────────────────────────────────────┘
 │        │
 │        │     ┌─────────────────────────────────────────────────────────────┐
@@ -130,8 +135,8 @@ shared secrets; API protection belongs at the API Gateway/WAF boundary, not in t
                │  /ledgers                   ── GET /ledgers ────────────┤   │
                │  /ledgers/:seq              ── GET /ledgers/:seq ───────┤   │
                │  /accounts/:id              ── GET /accounts/:id ───────┤   │
-               │  /tokens                    ── GET /tokens ─────────────┤   │
-               │  /tokens/:id                ── GET /tokens/:id ─────────┤   │
+               │  /assets                    ── GET /assets ─────────────┤   │
+               │  /assets/:id                ── GET /assets/:id ─────────┤   │
                │  /contracts/:id             ── GET /contracts/:id ──────┤   │
                │  /nfts                      ── GET /nfts ───────────────┤   │
                │  /nfts/:id                  ── GET /nfts/:id ───────────┤   │
@@ -184,10 +189,8 @@ The frontend should be structured into four logical layers:
 
 The intended code placement aligns with the workspace:
 
-- `apps/web` should contain app bootstrap, route composition, and page orchestration
+- `web` should contain app bootstrap, route composition, and page orchestration
 - `libs/ui` should hold reusable frontend-oriented components and display models
-- `libs/domain` should hold cross-app explorer concepts such as identifiers, cursor types,
-  filters, and entity enums where those represent shared business concepts
 
 ### 4.4 Rendering Strategy
 
@@ -202,7 +205,29 @@ Expected rendering behavior:
 - polling refreshes should update dynamic regions without causing full-page resets
 - slow or partially unavailable sections should degrade independently where possible
 
-### 4.5 State Strategy
+### 4.5 API Types and Codegen
+
+The frontend imports all API request/response types, the fetch SDK, and TanStack Query
+hooks from `@rumblefish/api-types`. That package is generated end-to-end from the Rust
+API:
+
+1. The `api` crate (Rust) annotates handlers and DTOs with `utoipa` derive macros and
+   exposes them as an OpenAPI 3.1 spec.
+2. A secondary binary `cargo run -p api --bin extract_openapi` prints the spec to
+   stdout; CI / developers redirect it to `libs/api-types/src/openapi.json`.
+3. `@hey-api/openapi-ts` reads that spec and emits types, a typed fetch client, and
+   TanStack Query hooks under `libs/api-types/src/generated/` — committed to the repo
+   so frontend developers do not need a Rust toolchain.
+4. The Nx target `@rumblefish/api-types:check-generated` reruns the pipeline in CI and
+   fails the build if the committed spec or generated files have drifted from the
+   current Rust source. This is the single guard that keeps frontend types in sync
+   with the API.
+
+Authoring rule: changes to API DTOs, request params, or routes must be made in the
+Rust crate; the frontend regenerates and consumes the result. Hand-edited types in
+`libs/api-types/src/generated/` will be overwritten on the next regeneration.
+
+### 4.6 State Strategy
 
 The frontend should keep local state intentionally small:
 
@@ -247,9 +272,9 @@ Navigation rules:
 | `/ledgers`               | Ledgers         | `GET /ledgers`                                                              |
 | `/ledgers/:sequence`     | Ledger          | `GET /ledgers/:sequence`                                                    |
 | `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
-| `/tokens`                | Tokens          | `GET /tokens`                                                               |
-| `/tokens/:id`            | Token           | `GET /tokens/:id`, `GET /tokens/:id/transactions`                           |
-| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
+| `/assets`                | Assets          | `GET /assets`                                                               |
+| `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
+| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id` (+ `/interface`, `/invocations`, `/events`)   |
 | `/nfts`                  | NFTs            | `GET /nfts`                                                                 |
 | `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                             |
 | `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
@@ -268,13 +293,16 @@ Each route should be implemented as a dedicated page module with:
 Entry point and chain overview. Provides at-a-glance state of the Stellar network and
 quick access to exploration.
 
-- Global search bar - accepts transaction hashes, contract IDs, token codes, account IDs,
-  ledger sequences
+- Hero - headline, tagline, and a large global search bar accepting transaction hashes,
+  contract IDs, token codes, account IDs, ledger sequences (submits to `/search`). The
+  global search bar is also always present in the header.
+- Chain overview - current ledger sequence (with a live indicator), transactions per
+  second, total accounts, total contracts
 - Latest transactions table - hash (truncated), source account, operation type, status
-  badge, timestamp
-- Latest ledgers table - sequence, closed_at, transaction count
-- Chain overview - current ledger sequence, transactions per second, total accounts,
-  total contracts
+  badge, relative + absolute timestamp; section header carries a polling indicator and a
+  "View All" link
+- Latest ledgers table - sequence, hash (truncated), closed_at, protocol version,
+  transaction count
 
 Expanded behavior:
 
@@ -375,7 +403,7 @@ Expanded behavior:
 Account detail view for a Stellar account.
 
 - Account summary - account ID (full, copyable), sequence number, first seen ledger, last seen ledger
-- Balances - native XLM balance and trustline/token balances
+- Balances - native XLM balance and credit asset balances
 - Recent transactions - paginated table of transactions involving this account
 
 Expanded behavior:
@@ -386,39 +414,47 @@ Expanded behavior:
 - Balances should be visually separated from transaction history.
 - Linked transactions should reuse the same visual conventions as the global transactions page.
 
-### 6.8 Tokens (`/tokens`)
+### 6.8 Assets (`/assets`)
 
-List of all known tokens (classic Stellar assets and Soroban token contracts).
+List of all known assets (native XLM, classic credit assets, SACs, and Soroban-native assets).
 
-- Token table - asset code, issuer / contract ID, type (classic / SAC / Soroban), total
+- Asset table - asset code, issuer / contract ID, type (native / classic credit / SAC / Soroban), total
   supply, holder count
-- Filters - type (classic, SAC, Soroban), asset code search
+- Filters - type (native, classic_credit, SAC, Soroban), asset code search
 - Cursor-based pagination controls
 
 Expanded behavior:
 
-- Classic assets and Soroban token contracts should be browseable from one surface while
-  still making their type differences explicit.
-- Token identity rendering must be careful because classic assets are defined by code plus
+- All asset types should be browseable from one surface while still making their type
+  differences explicit.
+- Asset identity rendering must be careful because classic assets are defined by code plus
   issuer, while contracts are defined by contract ID.
 - Type badges and display formatting should prevent users from confusing similarly named assets.
 
-### 6.9 Token (`/tokens/:id`)
+### 6.9 Asset (`/assets/:id`)
 
-Single token detail view.
+Single asset detail view.
 
-- Token summary - asset code, issuer or contract ID (copyable), type badge, total supply,
+- Asset summary - asset code, issuer or contract ID (copyable), type badge, total supply,
   holder count, deployed at ledger (if Soroban)
 - Metadata - name, description, icon (if available), domain/home page
-- Latest transactions - paginated table of recent transactions involving this token
+- Latest transactions - paginated table of recent transactions involving this asset
 
 Expanded behavior:
 
-- The header must make it obvious whether the token is a classic asset, SAC, or a custom
-  Soroban token contract.
+- The header must make it obvious whether the asset is native XLM, a classic credit asset,
+  a SAC, or a Soroban-native asset.
 - Metadata should tolerate partial availability because many assets will have incomplete
   or inconsistent descriptive fields.
 - The recent transactions section should be useful as a discovery path into the broader explorer.
+
+Data sourcing for the Metadata section: `name` and `icon` come from the `assets`
+DB row (`name` is shown on list too; `icon` is the list-thumbnail column).
+`description` and `domain/home page` are fetched from per-entity S3 at
+`s3://<bucket>/assets/{id}.json` — detail-only content that is off-chain SEP-1
+enrichment, not derived from XDR. See ADR 0037 / task 0164 for the rationale and
+the S3 layout. Missing S3 object simply renders those two fields as blank,
+consistent with the "tolerate partial availability" expectation above.
 
 ### 6.10 Contract (`/contracts/:contractId`)
 
@@ -427,11 +463,16 @@ Contract details and interface.
 - Contract summary - contract ID (full, copyable), deployer account (link), deployed at
   ledger (link), WASM hash, SAC badge if applicable
 - Contract interface - list of public functions with parameter names and types, allowing
-  users to understand the contract's API without reading source code
-- Invocations tab - recent invocations table (function name, caller account, status,
-  ledger, timestamp)
-- Events tab - recent events table (event type, topics, data, ledger)
-- Stats - total invocations count, unique callers
+  users to understand the contract's API without reading source code. SAC and pre-upload
+  contracts carry no WASM interface metadata and show an empty state
+- Invocations tab - recent invocations table (transaction hash, caller account, status,
+  ledger, timestamp). The appearance index carries no per-call function name — call
+  detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
+- Events tab - recent events table (event type, topics, data, ledger). Only `contract`
+  and `system` events are returned; the diagnostic-events container is dropped
+  server-side (task 0182)
+- Stats - recent invocations and unique callers over a rolling window (`stats_window`,
+  e.g. last 7 days) — the API exposes windowed counts, not full-history totals
 
 Expanded behavior:
 
@@ -477,8 +518,9 @@ Expanded behavior:
 Paginated table of all liquidity pools.
 
 - Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
-  per asset, fee percentage
-- Filters - asset pair, minimum TVL
+  per asset, fee percentage, participant count (active LP positions; task 0246)
+- Filters - asset (`filter[asset_code]`, case-insensitive single-asset; task 0246)
+  or per-leg `(code, issuer)`, minimum TVL (`filter[min_tvl]`)
 - Cursor-based pagination controls
 
 Expanded behavior:
@@ -490,7 +532,7 @@ Expanded behavior:
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
 - Pool summary - pool ID (full, copyable), asset pair, fee percentage, total shares,
-  reserves per asset
+  reserves per asset, participant count (task 0246)
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
 - Recent transactions - deposits, withdrawals, and trades involving this pool
@@ -508,7 +550,7 @@ Generic search across all entity types. For exact matches (transaction hash, con
 account ID), redirects directly to the detail page. Otherwise displays grouped results.
 
 - Search input - pre-filled with current query, allows refinement
-- Results grouped by type - transactions, contracts, tokens, accounts, NFTs, liquidity
+- Results grouped by type - transactions, contracts, assets, accounts, NFTs, liquidity
   pools (with type headers and counts)
 - Each result row - identifier (linked), type badge, brief context
 - Empty state - "No results found" with suggestions
@@ -525,7 +567,7 @@ Expanded behavior:
 Present across all pages:
 
 - **Header** - logo, global search bar, network indicator (mainnet/testnet)
-- **Navigation** - links to home, transactions, ledgers, tokens, contracts, NFTs,
+- **Navigation** - links to home, transactions, ledgers, assets, contracts, NFTs,
   liquidity pools
 - **Linked identifiers** - all hashes, account IDs, contract IDs, token IDs, pool IDs,
   and ledger sequences are clickable links to their respective detail pages
@@ -551,6 +593,34 @@ Recommended shared component categories:
 - identifier display and copy controls
 - empty, loading, and error state components
 - tabs, charts, and graph/tree visualization primitives
+
+### 7.1 `libs/ui` Implementation Layout
+
+The shared UI library is structured by concern, not by alphabetical component
+name. Each subtree exports through a barrel; the top-level `libs/ui/src/index.ts`
+re-exports the public surface.
+
+| Path                                   | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `theme/colors.ts`                      | Raw color scales (base / gray / accent / status / chip pair) + semantic tokens (text, surface, stroke) split into `colorsLight` and `colorsDark`. Tokens sourced verbatim from the Figma design-system JSON.                                                                                                                                                                                                                                                                                    |
+| `theme/typography.ts`                  | 49 typography variants — 24 headings (Mona Sans, h1–h6 × 4 weights), 15 body (Inter, 5 sizes × 3 weights), 10 mono (JetBrains Mono, 5 sizes × 2 weights). Heading sizes responsive at h3–h6.                                                                                                                                                                                                                                                                                                    |
+| `theme/overrides.ts`                   | MUI `Components<Theme>` overrides for Button, Chip, Switch, Checkbox, Radio, Slider, TextField, Outlined/Filled inputs, Select, Menu, Paper, Card, Tabs, Table family, Pagination, Tooltip. Driven entirely by semantic palette tokens so light/dark theming is mode-aware.                                                                                                                                                                                                                     |
+| `theme/theme.ts`                       | `createExplorerTheme(mode)` assembles palette + typography + shape + shadows + overrides via `createTheme`. Module augmentation lives in `theme/types.ts` so custom palette / typography / chip color / size keys are typed everywhere.                                                                                                                                                                                                                                                         |
+| `theme/ThemeProvider.tsx`              | `ExplorerThemeProvider` wraps MUI `ThemeProvider` + `CssBaseline`. Exports `useColorMode()` hook that persists `light`/`dark` to `localStorage` and defaults to `prefers-color-scheme`.                                                                                                                                                                                                                                                                                                         |
+| `components/Chip.tsx`                  | Thin wrapper around MUI `Chip` adding a `dot` shortcut prop. The 8px dot indicator is a private helper inlined in the same file — not part of the public API.                                                                                                                                                                                                                                                                                                                                   |
+| `states/skeletons/`                    | `TableSkeleton` / `CardSkeleton` / `DetailSkeleton` / `SearchSpinner`. Skeletons are parameterised (rows/cols/lines/sections) so page tasks tune them to match their real layouts; SearchSpinner is `CircularProgress` in a centred min-height container to prevent layout shift.                                                                                                                                                                                                               |
+| `states/errors/`                       | `NotFoundState` (entity-typed: transaction / account / contract / ledger / operation / asset / liquidity-pool / generic), `TransientErrorState` (retryable boolean, swaps title + hides retry button when non-retryable), `RateLimitState` (optional auto-retry countdown), `GenericErrorState`.                                                                                                                                                                                                |
+| `states/empty/`                        | Generic `EmptyState` with icon / title / description / action / meta props and three variants (default / warning / error). Entity-specific copy is passed at call sites — no per-entity wrapper components.                                                                                                                                                                                                                                                                                     |
+| `states/SectionErrorBoundary`          | Class component that catches render errors inside a single section and renders `GenericErrorState` inline. Siblings on the same page stay rendered. Accepts `sectionName` for observability and an optional custom `fallback` render function.                                                                                                                                                                                                                                                  |
+| `states/classifyError.ts`              | Pure utility mapping a `Response`-shaped error or `Error` to `'not-found' \| 'rate-limit' \| 'transient' \| 'validation' \| 'unknown'`. Used by TanStack Query error handlers to pick the right state component.                                                                                                                                                                                                                                                                                |
+| Network / status / type badges         | All rendered via `Chip` at call sites — no per-entity wrapper components. Network: `<Chip color="blue" label="Mainnet">` / `<Chip color="warning" label="Testnet">`. Status: `<Chip color="success" dot label="Success">` / `<Chip color="error" dot label="Failed">`. Type: `<Chip color="blue" label="Classic">` / `<Chip color="violet" label="SAC">` / `<Chip color="emerald" label="Soroban">`. The Chip color overrides in `theme/overrides.ts` already match Figma's badge palettes 1:1. |
+| `timestamps/RelativeTimestamp`         | Renders a timestamp as relative time ("2 min ago") with the full ISO shown on hover via tooltip. Re-renders on a shared 30s tick by default (configurable per instance).                                                                                                                                                                                                                                                                                                                        |
+| `timestamps/PollingIndicator`          | "Updated Xs ago" + refresh icon for polling-enabled pages (home, list pages). Default 5s tick; consumer passes `lastUpdated` and `intervalMs` (typically wired to TanStack Query's `dataUpdatedAt` and the page's `refetchInterval`).                                                                                                                                                                                                                                                           |
+| `timestamps/useNow` + `formatRelative` | Shared helpers — `useNow(intervalMs)` returns a `Date` that re-renders every interval; `formatRelative(then, now)` is a pure function returning the short relative string ("just now", "5s ago", "2 min ago", "1 hour ago", "3 days ago").                                                                                                                                                                                                                                                      |
+
+Fonts (Mona Sans, Inter, JetBrains Mono — variable `.ttf`) are self-hosted at
+`web/public/fonts/` and registered via `web/src/styles/fonts.css` with
+`format('truetype-variations')` so the weight axis works.
 
 ## 8. Data Fetching and View-State Model
 
@@ -578,10 +648,43 @@ Expected page-level data patterns:
 - Detail pages: one primary entity query plus one or more related subresource queries
 - Search: query-driven request behavior with debounce to avoid unnecessary churn
 
+### 8.1 Implementation Layout
+
+The data layer lives in `web/src/api/` and is built on top of the `@hey-api/openapi-ts`
+`@tanstack/react-query` plugin output in `libs/api-types`. Page tasks consume hook
+wrappers from this folder — they do not call `fetch` or the generated SDK directly.
+
+| File                            | Role                                                                                                                                                                                                                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config.ts`                     | Reads + validates `VITE_API_BASE_URL` at startup (no API keys are ever read; the frontend is anonymous).                                                                                                                                                                                                           |
+| `client.ts`                     | Configures the generated `@hey-api/client-fetch` instance with the base URL and registers an error interceptor that stamps `status` and wraps non-`Error` throws so downstream code always sees a real `Error` with `.status` / `.body`.                                                                           |
+| `QueryProvider.tsx`             | Constructs the singleton `QueryClient` (60s default `staleTime`, 5min `gcTime`, `refetchOnWindowFocus`, retry once on 5xx/network, never on 4xx) and mounts `ReactQueryDevtools` in dev.                                                                                                                           |
+| `polling.ts`                    | Per-resource cache policies: `homePolicy` (10s stale / 12s refetch), `listPolicy` (60s), `detailPolicy` (5min), `searchPolicy` (no cache).                                                                                                                                                                         |
+| `queryKeys.ts`                  | `invalidateResource(qc, resource)` / `matchResource(resource)` predicates over the codegen `_id`-prefixed keys (resource → list of SDK ids).                                                                                                                                                                       |
+| `hooks/use*.ts`                 | Thin wrappers around generated `*Options` / `*InfiniteOptions` that spread the matching policy and shape the public hook signature.                                                                                                                                                                                |
+| `router/routes.ts`              | Consumer-facing URL helpers (`routes.home`, `routes.transaction(hash)`, `routes.search(q)`, …) and `NAV_LINKS`. `<Link to={routes.X}>` / `navigate(routes.X)` instead of hand-templated strings. Single source of truth for URL shapes — encoding (`encodeURIComponent`) lives here once.                          |
+| `router/index.tsx`              | `createBrowserRouter` with the 14 spec routes hand-listed inside one `children: []` array, hung off the `AppShellStub` layout route. Each element is wrapped via a tiny `page(loader)` helper that returns `<Suspense fallback={<DetailSkeleton />}><LazyPage /></Suspense>`. Home resolves via `{ index: true }`. |
+| `router/AppShellStub.tsx`       | Placeholder layout shell (header + nav + mode toggle + `<Outlet />`) used until the real `AppShell` ships in task 0059.                                                                                                                                                                                            |
+| `router/RouteErrorBoundary.tsx` | Route-level boundary attached as `errorElement` on the layout route. Renders `NotFoundState` on 404 and `GenericErrorState` for any other throw — both inside the shell.                                                                                                                                           |
+| `pages/*.tsx`                   | One stub page per explorer route, lazy-loaded as default exports. Param validation deferred to per-page implementation tasks (0068+) — each real page validates against the API rather than duplicating regex client-side.                                                                                         |
+
+`VITE_API_BASE_URL` is read by Vite at build time from `web/.env.development` for
+local dev. Staging and production builds receive the URL from the deployment
+pipeline (CI/CDK) — no staging/production URL is committed to the repo; if the
+variable is missing, `config.ts` throws a clear error at first page load.
+
 ## 9. Performance and Error Handling
 
 - **Pagination** - all list views use cursor-based pagination backed by the block
-  explorer's own database
+  explorer's own database. The backend response (`PageInfo`) carries two opaque
+  cursors: `next_cursor` (forward) and `prev_cursor` (backward). Both are
+  direction-aware on the wire (`{dir, p}` envelope per ADR 0008 amendment, task
+  0254), so every page is self-describing — Prev / Next work after refresh, deep
+  link, or share without any client-side cursor history. Frontend hooks
+  (`useCursorPagination` + `usePageHandlers` in `libs/ui/src/table/`) bind URL
+  `?cursor=` to React Query keys; presence of `next_cursor` / `prev_cursor` in
+  the response is the canonical "another page exists" signal (no `has_more`
+  field).
 - **Loading states** - skeleton loaders for all data-dependent sections; spinner for search
 - **Error states** - clear error messages for network failures, 404s (unknown
   hash/account), and rate limit responses; retry affordances where appropriate
@@ -630,9 +733,8 @@ UI failures, slow routes, and degraded search or detail views.
 
 ### 10.3 Delivery Notes
 
-This document intentionally specifies the target product design more deeply than the
-current codebase. The workspace currently provides the structural frontend boundary
-(`apps/web`, `libs/ui`) but not the final React implementation yet.
-
-That is expected. This document should be used as the detailed reference for future
-frontend implementation planning.
+This document specifies the target product design more deeply than the current codebase.
+The frontend bootstrap (React 19, Vite, MUI, React Router, TanStack Query) is complete,
+but page components, routing configuration, theming, and data fetching layers are
+implemented in dedicated follow-up tasks. This document should be used as the detailed
+reference for that ongoing frontend implementation work.

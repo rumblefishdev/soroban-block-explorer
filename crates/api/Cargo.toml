@@ -1,0 +1,53 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2024"
+description = "REST API Lambda handler for the Soroban block explorer"
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[features]
+# Swagger UI is a ~12 MB embedded asset bundle. Gated behind the
+# opt-in `swagger-ui` feature so Lambda builds stay lean (~4 MB) by
+# default — the feature is off unless `cargo build --features
+# swagger-ui` is used (locally or in staging). The OpenAPI JSON at
+# /api-docs-json is always available regardless and costs ~310 KB.
+default = []
+swagger-ui = ["dep:utoipa-swagger-ui"]
+
+[dependencies]
+domain = { path = "../domain", features = ["sqlx", "utoipa"] }
+db = { path = "../db", features = ["aws-secrets"] }
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
+clickhouse = { workspace = true }
+enrichment-shared = { path = "../enrichment-shared" }
+sqlx = { workspace = true }
+xdr-parser = { path = "../xdr-parser" }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+lambda_http = { workspace = true }
+tower-http = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+utoipa-swagger-ui = { workspace = true, optional = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+stellar-xdr = { workspace = true }
+stellar-strkey = "0.0.16"
+thiserror = { workspace = true }
+futures = "0.3"
+hex = { workspace = true }
+bytes = "1"
+moka = { version = "0.12", features = ["sync", "future"] }
+
+[dev-dependencies]
+aws-smithy-runtime-api = "=1.11.6"
+tower = "0.5"

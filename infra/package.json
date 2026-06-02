@@ -1,0 +1,33 @@
+{
+  "name": "@rumblefish/soroban-block-explorer-aws-cdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "soroban-block-explorer-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.245.0",
+    "cargo-lambda-cdk": "^0.0.36",
+    "constructs": "^10.6.0",
+    "tslib": "^2.3.0"
+  },
+  "nx": {
+    "tags": [
+      "type:infra",
+      "scope:infra"
+    ]
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.1114.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_comment": "Managed by infra-hetzner/ansible/roles/docker — do not edit by hand.",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m",
+    "max-file": "5"
+  },
+  "live-restore": true,
+  "userland-proxy": false,
+  "default-address-pools": [{ "base": "172.30.0.0/16", "size": 24 }],
+  "no-new-privileges": true
+}

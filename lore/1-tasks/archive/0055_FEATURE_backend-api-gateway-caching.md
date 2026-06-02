@@ -1,0 +1,174 @@
+---
+id: '0055'
+title: 'Backend: API Gateway response caching and cache-control headers'
+type: FEATURE
+status: completed
+related_adr: ['0005']
+related_tasks: ['0023', '0092', '0097']
+tags: [layer-backend, caching, api-gateway, performance]
+milestone: 2
+links: []
+history:
+  - date: 2026-03-24
+    status: backlog
+    who: fmazur
+    note: 'Task created'
+  - date: 2026-03-31
+    status: backlog
+    who: stkrolikiewicz
+    note: 'Updated per ADR 0005: axum → Rust (axum + utoipa + sqlx)'
+  - date: 2026-05-05
+    status: active
+    who: FilipDz
+    note: 'Activated as M2 wrap-up after 0048 merge. Per-endpoint Cache-Control already set across modules; this task wraps up the strategy + immutable-tx detection + error-response no-store + spec doc for CDK task 0097.'
+  - date: 2026-05-07
+    status: completed
+    who: FilipDz
+    note: 'Shipped via PR #163. 14 new integration tests, 200 total passing. Spawned 0198 follow-up for canonical SQL 06 partial-index fix.'
+---
+
+# Backend: API Gateway response caching and cache-control headers
+
+## Summary
+
+Define and implement the per-endpoint Cache-Control header strategy for API Gateway response caching. This includes long TTLs for immutable resources (finalized transactions, closed ledgers), short TTLs for frequently changing data (lists, network stats), medium TTLs for slowly changing data (contract metadata), and no cache for variable-parameter endpoints (search).
+
+> **Stack:** axum 0.8 + utoipa 5.4 + sqlx 0.8 (per ADR 0005). Code in crates/api/.
+
+## Context
+
+Caching at the API Gateway level is the primary response caching mechanism. CloudFront is NOT used for the API in the initial topology. Cache keys must include the full path plus all query parameters so that different filters produce different cache entries.
+
+### API Specification
+
+**Location:** Cache-Control headers set in axum handlers/middleware. API Gateway stage-level caching configuration.
+
+### Per-Endpoint Cache Mapping
+
+#### Long TTL (immutable, 3600s)
+
+| Endpoint                                     | TTL   | Rationale                                                        |
+| -------------------------------------------- | ----- | ---------------------------------------------------------------- |
+| `GET /ledgers/:sequence` (closed/historical) | 3600s | Closed ledgers are immutable; 1h matches stage cache max         |
+| `GET /transactions/:hash` (finalized)        | 3600s | Finalized transactions are immutable; same 1h horizon as ledgers |
+
+#### Short TTL (5-15s)
+
+| Endpoint                                  | TTL   | Rationale                              |
+| ----------------------------------------- | ----- | -------------------------------------- |
+| `GET /network/stats`                      | 5-15s | Near-real-time summary data            |
+| `GET /transactions` (list)                | 5-15s | New transactions appear frequently     |
+| `GET /ledgers` (list)                     | 5-15s | New ledgers close frequently           |
+| `GET /accounts/:account_id`               | 5-15s | Account state updates with new ledgers |
+| `GET /accounts/:account_id/transactions`  | 5-15s | New transactions may appear            |
+| `GET /assets` (list)                      | 5-15s | Token list may update                  |
+| `GET /assets/:id/transactions`            | 5-15s | New transactions                       |
+| `GET /nfts` (list)                        | 5-15s | New NFTs may appear                    |
+| `GET /nfts/:id/transfers`                 | 5-15s | New transfers may appear               |
+| `GET /liquidity-pools` (list)             | 5-15s | Pool state changes frequently          |
+| `GET /liquidity-pools/:id`                | 5-15s | Pool reserves update                   |
+| `GET /liquidity-pools/:id/transactions`   | 5-15s | New pool transactions                  |
+| `GET /contracts/:contract_id/invocations` | 5-15s | New invocations                        |
+| `GET /contracts/:contract_id/events`      | 5-15s | New events                             |
+
+#### Medium TTL (60-120s)
+
+| Endpoint                                | TTL     | Rationale                             |
+| --------------------------------------- | ------- | ------------------------------------- |
+| `GET /contracts/:contract_id`           | 60-120s | Contract metadata rarely changes      |
+| `GET /contracts/:contract_id/interface` | 60-120s | Interface is immutable once deployed  |
+| `GET /assets/:id`                       | 60-120s | Token metadata changes infrequently   |
+| `GET /nfts/:id`                         | 60-120s | NFT metadata changes infrequently     |
+| `GET /liquidity-pools/:id/chart`        | 60-120s | Snapshot data updates less frequently |
+
+#### No Cache
+
+| Endpoint      | Rationale                                      |
+| ------------- | ---------------------------------------------- |
+| `GET /search` | Variable query params make caching impractical |
+
+### Cache-Control Header Format
+
+```
+Cache-Control: public, max-age=300
+```
+
+For no-cache endpoints:
+
+```
+Cache-Control: no-store
+```
+
+### Cache Key Requirements
+
+- Cache keys MUST include full path + all query parameters
+- Different filters produce different cache entries
+- Example: `/transactions?filter[source_account]=GABC` and `/transactions?filter[contract_id]=CCAB` are separate cache entries
+- Cursor values produce unique cache entries (each page is cached independently)
+
+### Response Shape
+
+No separate response for caching. Cache-Control is a response header added to existing endpoint responses.
+
+```
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=300
+Content-Type: application/json
+
+{ ... normal response body ... }
+```
+
+### Behavioral Requirements
+
+- CloudFront NOT used for API in initial topology
+- Caching at API Gateway stage level only
+- Cache keys include full path + all query parameters
+- axum sets appropriate Cache-Control headers per endpoint
+- API Gateway respects Cache-Control headers for its stage cache
+- Immutable resource detection: closed ledgers (not the latest), finalized transactions
+
+### Error Handling
+
+- Error responses (4xx, 5xx) should NOT be cached
+- Cache-Control headers only set on successful (2xx) responses
+
+## Implementation Plan
+
+### Step 1: Cache-Control Interceptor
+
+Create a axum middleware or decorator system that sets Cache-Control headers based on endpoint configuration. Each handler function specifies its cache tier (long, short, medium, none).
+
+### Step 2: Immutable Resource Detection
+
+For `GET /ledgers/:sequence`, determine if the ledger is a closed historical ledger (long TTL) vs the latest/recent ledger (short TTL). For `GET /transactions/:hash`, finalized transactions get long TTL.
+
+### Step 3: Per-Endpoint Configuration
+
+Apply cache tier to each endpoint controller as documented in the cache mapping table.
+
+### Step 4: Error Response Exclusion
+
+Ensure error responses (4xx, 5xx) include `Cache-Control: no-store` or omit caching headers.
+
+### Step 5: API Gateway Configuration Documentation
+
+Document the API Gateway stage-level cache configuration needed to respect the Cache-Control headers set by axum.
+
+## Acceptance Criteria
+
+- [x] Cache-Control headers set correctly per endpoint
+- [x] Long TTL (3600s) for closed ledgers and finalized transactions (`GET /ledgers/:sequence`, `GET /transactions/:hash`)
+- [x] Short TTL (5-15s) for lists, stats, and frequently changing detail
+- [x] Medium TTL (60-120s) for contract/token/NFT metadata
+- [x] No cache for search endpoint
+- [x] Cache keys include full path + all query parameters (documented in `api-gateway-cache-spec.md` — gateway-side, CDK 0097 implements)
+- [x] Error responses not cached (tower middleware `enforce_no_store_on_errors`)
+- [x] CloudFront not used for API (confirmed in `api-gateway-cache-spec.md`)
+- [x] Immutable detection logic for ledgers and transactions
+- [x] API Gateway stage cache configuration documented (`docs/architecture/backend/api-gateway-cache-spec.md`)
+
+## Notes
+
+- The distinction between "latest ledger" (short TTL) and "historical ledger" (long TTL) requires the backend to know the current highest ledger.
+- API Gateway cache configuration is an infrastructure concern but the axum headers drive the behavior.
+- API Gateway infrastructure is defined in CDK task 0097.

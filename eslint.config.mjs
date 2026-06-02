@@ -14,7 +14,7 @@ export default [
     ],
   },
   {
-    files: ['**/*.ts', '**/*.js'],
+    files: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
     rules: {
       '@nx/enforce-module-boundaries': [
         'error',
@@ -39,11 +39,16 @@ export default [
               ],
             },
             {
+              sourceTag: 'scope:database',
+              onlyDependOnLibsWithTags: ['scope:shared', 'scope:domain'],
+            },
+            {
               sourceTag: 'type:app',
               onlyDependOnLibsWithTags: [
                 'scope:shared',
                 'scope:domain',
                 'scope:ui',
+                'scope:database',
               ],
             },
             {
@@ -62,9 +67,11 @@ export default [
   {
     files: [
       '**/*.ts',
+      '**/*.tsx',
       '**/*.cts',
       '**/*.mts',
       '**/*.js',
+      '**/*.jsx',
       '**/*.cjs',
       '**/*.mjs',
     ],

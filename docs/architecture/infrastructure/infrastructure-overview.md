@@ -58,7 +58,6 @@ The infrastructure is expected to host:
 - explorer database storage
 - public REST API delivery
 - public frontend delivery
-- background interpretation jobs
 - operational visibility and alarms
 
 ### 2.2 AWS-Managed Runtime Bias
@@ -67,11 +66,17 @@ The current design favors managed AWS services over self-operated long-running p
 
 That shows up as:
 
-- ECS Fargate for the continuously running Galexie process and one-time backfill tasks
-- AWS Lambda for event-driven processing and API handlers
-- RDS PostgreSQL for relational storage
+- ECS Fargate for the continuously running Galexie process
+- AWS Lambda for event-driven processing (Ledger Processor) and API handlers
+- Hetzner-hosted ClickHouse for the production data plane (cross-cloud,
+  reached over mTLS from AWS — see §5.6)
 - API Gateway and CloudFront for public delivery
-- EventBridge, Secrets Manager, CloudWatch, and X-Ray for operational concerns
+- Secrets Manager, CloudWatch, and X-Ray for operational concerns
+- local `crates/backfill-runner` (production) or `crates/backfill-bench`
+  (benchmark) CLI on a developer workstation for historical
+  backfill per [ADR 0010](../../../lore/2-adrs/0010_local-backfill-over-fargate.md) —
+  **not** a Fargate task; streams from Stellar public archives into the same
+  `process_ledger` pipeline, writes directly to the database
 
 This keeps the runtime model operationally narrow and aligned with the serverless/event-
 driven shape of the product.
@@ -81,10 +86,14 @@ driven shape of the product.
 Infrastructure is designed around an asynchronous ingestion chain:
 
 1. Galexie streams canonical ledger data from Stellar peers
-2. XDR files land in S3
+2. `LedgerCloseMeta` XDR files land in S3
 3. S3 object creation triggers the Ledger Processor Lambda
-4. parsed records are written to PostgreSQL
-5. API and frontend read only from the explorer's own database
+4. typed summary columns + appearance-index rows + derived state are written to
+   PostgreSQL in a single atomic per-ledger transaction
+5. list / partition-pruned API reads serve entirely from the explorer's own
+   database; heavy-field detail endpoints (E3, E14) additionally fetch raw
+   `.xdr.zst` from the public Stellar ledger archive at request time
+   ([ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md))
 
 This separation is a core infrastructure assumption, not an implementation detail.
 
@@ -132,7 +141,7 @@ Public user traffic should follow a simple path:
 - the frontend is served through CloudFront as a static React application
 - the frontend calls the public REST API through API Gateway
 - public browser traffic is anonymous read-only and does not carry API keys
-- API Gateway invokes Lambda-based NestJS handlers
+- API Gateway invokes Lambda-based Rust/axum handlers
 - handlers read from RDS PostgreSQL only
 
 No public client should connect directly to the database or to ingestion components.
@@ -161,32 +170,45 @@ This matters because the infrastructure document assumes:
 - infrastructure lifecycle controlled by the project team
 - ability to redeploy the full stack without coordinating with an external platform owner
 
-### 4.2 Launch Topology
+### 4.2 Deployment Topology
 
-At launch, the system is deployed in a single Availability Zone: `us-east-1a`.
+Production runs in `eu-central-1` in a single Availability Zone
+(`eu-central-1a`). The earlier `us-east-1` footprint was retired by
+task 0249; the greenfield redeploy in eu-central-1 (task 0239)
+applies the minimal-AWS topology described below from day one — no
+incremental migration.
 
-The documented initial deployment model includes:
+Resources by location:
 
-- one VPC
-- public edge entry through CloudFront and API Gateway
-- private subnet runtime for Lambda functions and RDS
-- ECS Fargate Galexie running in the same VPC
-- access to S3 through a VPC endpoint for Galexie
+- **Minimum VPC, public subnet only** — hosts ECS Fargate Galexie. No
+  NAT Gateway, no private subnets, no S3 Gateway endpoint. Galexie
+  tasks get a per-task public IPv4 (`assignPublicIp: ENABLED`),
+  which is the only egress path.
+- **Lambdas out-of-VPC** — API, Ledger Processor, type-1 enrichment
+  worker. Egress goes via the AWS-managed Lambda pool (no NAT GW cost,
+  no IP pinning). (The PG-era migration + partition Lambdas were removed
+  in task 0241 — CH applies its schema box-side and auto-partitions.)
+- **CloudFront + Route 53** — global resources, region-independent.
+- **`us-east-1` retained for two resources only**: the `CDKToolkit`
+  bootstrap stack and the CloudFront viewer-side ACM certificate
+  (CloudFront only accepts viewer certs from us-east-1 — a hard AWS
+  constraint).
 
-The design does not yet assume active-active regional redundancy or a multi-region failover
-plan.
+The design does not assume active-active regional redundancy or a
+multi-region failover plan.
 
-### 4.3 Public and Private Boundaries
+### 4.3 Trust Boundaries
 
-The deployment sketch implies a public/private split:
-
-- public-facing delivery components: CloudFront, API Gateway, Route 53
-- private runtime components: Lambda API handlers, Ledger Processor, Event Interpreter,
-  RDS PostgreSQL, ECS Fargate workloads
-- secret material accessed through Secrets Manager rather than baked into runtime images or
-  application source
-
-That split should remain stable even if the network layout expands later.
+- **Public ingress**: CloudFront (SPA), API Gateway (REST API), Route 53.
+- **Application compute**: Lambdas and the ECS Fargate Galexie task
+  reach the internet directly (no VPC isolation). Cross-cloud identity
+  to the Hetzner-hosted ClickHouse box is asserted by mTLS client
+  certificates from AWS Secrets Manager — VPC walls are replaced with
+  cryptographic identity (see §5.6).
+- **Secrets**: never baked into images or source. Per-service mTLS
+  bundles (`{cert, key, ca}`) live in AWS Secrets Manager and are
+  fetched by Lambdas via the AWS Parameters and Secrets Lambda
+  Extension and by Galexie via native ECS secrets injection.
 
 ## 5. Managed Components
 
@@ -195,15 +217,25 @@ That split should remain stable even if the network layout expands later.
 **Galexie process**
 
 - runs on ECS Fargate as one continuous task for live ingestion
+- placed in a public subnet with `assignPublicIp: ENABLED` — per-task
+  public IPv4 is the only egress path post-task-0239 (no NAT GW).
+  Flipping this flag breaks ECR pull, S3 writes, peer overlay, and
+  Hetzner-CH mTLS simultaneously — there is a CODEOWNERS-flagged
+  inline comment in `infra/src/lib/stacks/ingestion-stack.ts` to
+  catch drive-by reverts
 - connects to Stellar network peers via Captive Core
 - emits one `LedgerCloseMeta` file per ledger close to S3
+- mTLS cert bundle (`{cert, key, ca}` for the `galexie-production` CN)
+  is mounted via ECS native Secrets Manager injection — each field
+  arrives as a separate container env var, materialised to PEM files
+  at startup by the container entrypoint
 
 **Historical backfill task**
 
-- runs on ECS Fargate as a batch/one-time process
+- runs as a **local CLI tool** (`crates/backfill-runner` or `crates/backfill-bench`)
+  on a developer workstation per [ADR 0010](../../../lore/2-adrs/0010_local-backfill-over-fargate.md)
 - reads from Stellar public history archives
-- writes the same XDR artifact format to the same S3 bucket so normal processing can be
-  reused
+- invokes the same `process_ledger` code path used by the Ledger Processor Lambda
 
 ### 5.2 Storage Components
 
@@ -215,34 +247,70 @@ That split should remain stable even if the network layout expands later.
 - is governed by lifecycle retention rules because replay and incident validation depend on
   short-term artifact availability
 
-**RDS PostgreSQL**
+**Production data plane — Hetzner ClickHouse (post-task-0239)**
 
-- hosts the block explorer's owned relational schema
-- stores explorer records and derived state
-- serves as the only read source for the public API
+- The block explorer's owned relational/columnar data plane lives on
+  a Hetzner-hosted ClickHouse box, not in AWS. See §5.6 for the full
+  description (Caddy mTLS termination, per-service RBAC, Borg backups).
+- RDS PostgreSQL was decommissioned by task 0239 — there is no
+  AWS-side database in the production topology.
+
+**Local-dev ClickHouse pilot (parallel store, read-empty)**
+
+- runs as the `clickhouse` service in `docker-compose.yml`
+  (`clickhouse/clickhouse-server:26.3`) alongside the existing `postgres`
+  service, exposing HTTP `8123` and native `9000`
+- holds the schema in `crates/db-clickhouse/schema/init.sql` (17 tables
+  - 1 `Dictionary`); applied idempotently by the `db-clickhouse-init`
+    sidecar service after `clickhouse` reports healthy, and equally by
+    the Rust `db-clickhouse-init` CLI when iterating outside Docker
+- **read-empty in scope:** no indexer write path, no API read path
+  against ClickHouse. The pilot evaluates whether a columnar OLAP store
+  is worth standing up next to RDS for analytical workloads (event
+  scans, dashboard slicing) before committing to any migration
+- documented in
+  [`docs/architecture/database-schema/clickhouse-pilot.md`](../database-schema/clickhouse-pilot.md);
+  decision recorded in
+  [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)
+  and implemented under
+  [task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md)
+- **not part of the AWS-hosted runtime.** Production infrastructure
+  remains Postgres-only; whether ClickHouse moves into the AWS topology
+  is gated on a follow-up ADR with measured PASS/FAIL criteria after
+  dual-write or backfill produces real data
 
 ### 5.3 Processing Components
 
 **Lambda — Ledger Processor**
 
-- is triggered by S3 PutObject events
-- downloads and parses XDR using `@stellar/stellar-sdk`
-- writes explorer records and derived state to RDS
-
-**Lambda — Event Interpreter**
-
-- is triggered by EventBridge every 5 minutes
-- post-processes recent events
-- generates human-readable summaries for known patterns such as swaps, transfers, mint,
-  and burn events
+- is triggered by S3 PutObject events on the Galexie-owned bucket
+- downloads and parses XDR using the Rust `stellar-xdr` crate via
+  `crates/xdr-parser` (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md))
+- writes typed columns to the Hetzner-hosted ClickHouse over mTLS,
+  authenticated as the `lambda-ingestion-production` CN → `ingestion_writer`
+  CH user mapping (see §5.6). Runs OUT-of-VPC; the AWS Parameters
+  and Secrets Lambda Extension fetches the cert bundle from Secrets
+  Manager at cold start (no SDK call on the hot path).
+- the application-layer PG→CH query migration is tracked separately
+  (task 0241) — task 0239 only landed the transport (out-of-VPC +
+  mTLS wiring + cert distribution)
 
 ### 5.4 API and Delivery Components
 
-**Lambda — NestJS API handlers**
+**Lambda — Rust/axum API handlers**
 
 - serve all public REST endpoints
-- read from RDS PostgreSQL only
-- do not perform chain indexing or depend on external chain APIs for core responses
+- read list / partition-pruned endpoints from the Hetzner-hosted
+  ClickHouse over mTLS, authenticated as the `lambda-api-production`
+  CN → `api_reader` CH user mapping (see §5.6). Run OUT-of-VPC;
+  cert bundle delivered via the AWS Parameters and Secrets Lambda
+  Extension as for the Ledger Processor.
+- additionally fetch `.xdr.zst` from the **public Stellar ledger archive** for
+  heavy-field endpoints (E3 `/transactions/:hash`, E14 `/contracts/:id/events`)
+  and re-parse with the shared `crates/xdr-parser` at request time, per
+  [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
+- do not perform chain indexing and do not depend on Horizon, Soroban RPC, or
+  third-party indexers for any response
 
 **API Gateway**
 
@@ -263,20 +331,20 @@ That split should remain stable even if the network layout expands later.
 - caches static assets and documentation assets; API responses are not assumed to traverse
   CloudFront in the initial topology
 
-**S3 bucket `api-docs`**
+**Swagger UI**
 
-- hosts the OpenAPI specification and documentation portal
-- is fronted through CloudFront according to the source design
+- served directly from the API (utoipa-swagger-ui `/api-docs` endpoint)
+- no separate S3 bucket or CloudFront distribution needed
 
 ### 5.5 Operational Components
 
-**EventBridge Scheduler**
-
-- drives scheduled background execution such as the Event Interpreter
-
 **Secrets Manager**
 
-- stores database credentials and non-browser integration secrets
+- stores per-service mTLS client cert bundles (`{cert, key, ca}`) for
+  AWS workloads (Lambda, Galexie) authenticating to the Hetzner-hosted
+  ClickHouse. Secrets live under `${mtlsSecretNamePrefix}/<cn>`
+  (e.g. `soroban/production/mtls/lambda-api-production`).
+- stores any other non-browser integration secrets
 
 **CloudWatch + X-Ray**
 
@@ -287,38 +355,134 @@ That split should remain stable even if the network layout expands later.
 - provide the infrastructure deployment pipeline
 - are the documented mechanism for infrastructure-as-code rollout
 
+### 5.6 Production ClickHouse on Hetzner (task 0216)
+
+The local-development ClickHouse pilot described in §5.2 is graduated
+to a production deployment on a Hetzner-hosted dedicated server.
+Hetzner hosts the data plane only; the application API remains on AWS.
+
+As part of this migration, the AWS-side topology is restructured:
+Lambda functions are moved out of the VPC and the long-running
+ingestion task is moved to a public subnet, eliminating the NAT
+Gateway. Authentication between AWS-side workloads and the Hetzner-
+hosted database is based on cryptographic identity (mutual TLS).
+
+DNS for the Hetzner endpoint is provisioned via AWS Route 53. A
+dedicated CDK stack (`HetznerDnsStack` in `infra/src/lib/stacks/`)
+creates an A record under the `sorobanscan.rumblefish.dev` hosted
+zone that points directly at the dedicated server's public IPv4 —
+a literal value, not an AWS alias, because the target is non-AWS.
+The record TTL is short (5 minutes) so an IP change after a box
+replacement propagates quickly. The same hostname is the target of
+the Let's Encrypt HTTP-01 challenge that Caddy on the box uses to
+obtain its TLS certificate, so this record must exist before the
+Hetzner stack can serve traffic.
+
+High-level decisions are recorded in the
+[task 0216 notes](../../../lore/1-tasks/active/0216_RESEARCH_hetzner-clickhouse-deploy/notes/S-decisions.md).
+
+**Per-service identity and RBAC.** Within the Hetzner stack,
+ClickHouse exposes per-service users (one per Lambda / Galexie /
+dev consumer class) bound to capability-scoped profiles
+(`read_only`, `write_no_ddl`, `migration_full`, …) and quotas
+(task 0240). Caddy verifies the mTLS client cert and maps the
+verified CN to the ClickHouse user it forwards as
+`X-ClickHouse-User`; the cert is the credential, the CH user is
+`<no_password/>` restricted to the compose bridge subnet. The
+host-side admin user (`default`, used by the init sidecar and
+backup script) keeps its password and is reachable only from
+loopback. See
+[`docs/architecture/security/clickhouse-rbac.md`](../security/clickhouse-rbac.md)
+for the per-service user matrix, the CN→user mapping mechanism,
+and known limitations (notably quota enforcement gap on the
+proxy-trust path).
+
+**Cert distribution AWS → Hetzner (task 0239).** Each AWS-side
+workload that talks to Hetzner CH has a dedicated mTLS bundle
+(`{cert, key, ca}` JSON) in AWS Secrets Manager under
+`${mtlsSecretNamePrefix}/<cn>`. CN naming follows
+`<service>-<environment>` (e.g. `lambda-api-production`,
+`galexie-production`). Secrets are issued by
+`infra-hetzner/ca/issue-client-cert.sh` on the operator laptop
+(Linux-only, CA key sourced from the team password manager onto
+`/dev/shm`), then uploaded via `aws secretsmanager put-secret-value`
+and registered on the box by appending the CN to
+`CLICKHOUSE_CN_USER_MAP` in `~/.config/soroban-prod.env` and replaying
+`ansible-playbook --tags caddy_reload`. Lambdas read their bundle via
+the AWS-managed "Parameters and Secrets Lambda Extension" layer
+(in-memory cache at `http://localhost:2773`); Galexie reads it via
+native ECS Secrets Manager injection (per-field env vars
+materialised to PEM files at container startup).
+
+**Relationship to the AWS sections above:** the AWS topology described
+in §§3–5.5 represents the original infrastructure design and is
+preserved verbatim. Post-CH-migration, the AWS-hosted database is
+decommissioned, Lambdas exit their VPC, the ingestion task moves to a
+public subnet, and the NAT Gateway is removed. A separate, future ADR
+records this architectural realignment in which the Hetzner-hosted
+ClickHouse becomes the production data plane.
+
+**Region change.** As part of the same realignment, the AWS-side
+production deployment moves from `us-east-1` to `eu-central-1`
+(task 0239). Task 0249 destroys the entire `us-east-1` footprint
+(staging in full + `Explorer-Cicd`; no production stacks ever
+deployed there) so the new region starts greenfield, avoiding
+cross-region cost overlap on NAT Gateway and RDS. Two AWS resources
+must remain in `us-east-1` regardless of the production region:
+the `CDKToolkit` bootstrap stack and the ACM certificate that backs
+the CloudFront viewer-side TLS (a hard CloudFront requirement —
+viewer certificates must live in `us-east-1`). Route 53 hosted
+zones are global and are unaffected by the region change; only the
+records inside them are recreated as the new stacks come up in
+`eu-central-1`.
+
 ## 6. Networking and Security Boundary
 
 ### 6.1 Network Shape
 
-The infrastructure sketch implies a VPC-centered runtime.
+Post-task-0239 the AWS-side runtime is intentionally stateless and
+minimal. Network shape:
 
-Current expected network shape:
+- **CloudFront, API Gateway, AWS WAF** — public ingress layer
+  (CloudFront viewer cert in `us-east-1`, API Gateway regional cert
+  in `eu-central-1`).
+- **Application Lambdas (API, Ledger Processor, type-1 enrichment
+  worker)** — run OUTSIDE the VPC. Egress via AWS-managed Lambda pool.
+  Identity to Hetzner CH is asserted by mTLS (no IP pinning, no VPC
+  walls).
+- **ECS Fargate Galexie** — public subnet, per-task public IPv4
+  (`assignPublicIp: ENABLED`). Reaches the Stellar peer overlay,
+  the ledger-data S3 bucket, and Hetzner CH directly via the
+  Internet Gateway.
 
-- CloudFront, API Gateway, and AWS WAF form the public ingress layer
-- application Lambdas and RDS live behind the private runtime boundary
-- ECS Fargate Galexie runs inside the same VPC
-- S3 access from Galexie is routed through a VPC endpoint
-
-This keeps the database and ingestion workers out of the public network surface.
+The data plane is intentionally out of AWS — Hetzner-hosted
+ClickHouse is the production source of truth (see §5.6). VPC
+isolation no longer protects "the database" because there is no
+AWS-side database.
 
 ### 6.2 Secret Handling
 
-Credential handling should remain centralized in Secrets Manager.
+Credential handling is centralised in AWS Secrets Manager.
 
-The documented design expects this for at least:
+Stored material:
 
-- database credentials
-- non-browser integration secrets or keys
+- per-service mTLS client cert bundles (`{cert, key, ca}`) for AWS
+  workloads authenticating to the Hetzner-hosted ClickHouse (see §5.6)
+- any other non-browser integration secrets or keys
 
 Browser-delivered frontend bundles do not contain API keys or other shared secrets.
 
-Production transport and storage hardening baselines are also explicit:
+Production transport and storage hardening baselines:
 
 - CloudFront and API Gateway serve public traffic over HTTPS/TLS
-- production RDS storage is encrypted at rest with KMS-backed keys
 - production S3 buckets use server-side encryption with KMS-backed keys
-- application connections to the production database should require TLS
+- AWS → Hetzner ClickHouse connections require mTLS (cert-pinned at
+  the CA from `infra-hetzner/ca/`); Caddy on the box terminates TLS
+  and enforces the CN allowlist before forwarding to ClickHouse over
+  the compose bridge subnet
+- ClickHouse-on-Hetzner storage encryption is handled at the host
+  level (per task 0216 — see Hetzner stack docs); AWS-side storage
+  hardening no longer covers the analytics data plane
 
 The architecture does not imply storing runtime secrets in source control, Lambda code, or
 container images.
@@ -332,7 +496,7 @@ Publicly exposed surfaces are:
 - CloudFront-hosted frontend delivery
 - API Gateway-hosted REST API
 - public DNS routing via Route 53
-- documentation portal hosting through S3 + CloudFront
+- API documentation served from utoipa-swagger-ui `/api-docs` endpoint
 
 Those public surfaces should be protected by AWS WAF and API throttling. API keys, if
 issued, are for trusted automation or partner use cases and are never required by the
@@ -342,31 +506,37 @@ Non-public components should remain directly unreachable to external users.
 
 ### 6.4 External Dependency Boundary
 
-The source design explicitly limits external runtime dependencies to read-only canonical
-Stellar data sources:
+External runtime dependencies are limited to read-only canonical Stellar data sources:
 
-- Stellar network peers for live data
-- Stellar public history archives for one-time backfill
+- Stellar network peers — live data feed for Galexie (ingest-time)
+- Stellar public history archives — one-time backfill feed for the local
+  `backfill-runner` or `backfill-bench` CLI run from a developer workstation per
+  [ADR 0010](../../../lore/2-adrs/0010_local-backfill-over-fargate.md)
+  (no Fargate task in production topology)
+- Stellar public ledger archive — read-time XDR fetch for E3 / E14 at the API
+  layer per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
 
-No other external API is required for core functionality.
+No other external API is required. Horizon, Soroban RPC, and third-party
+indexers are explicitly not in the trust boundary.
 
 ## 7. Environments and Scalability
 
 ### 7.1 Environment Model
 
-The infrastructure design defines three environments:
+Current environments (post-task-0249):
 
-- **Development** using local PostgreSQL for local and CI workflows
-- **Staging** using a separate RDS instance with testnet data
-- **Production** using mainnet data on production RDS
+- **Development** — local PostgreSQL + local ClickHouse via
+  `docker-compose.yml` for developer and CI workflows.
+- **Production** — mainnet data; AWS workloads in `eu-central-1`
+  (Lambdas out-of-VPC, Galexie public-subnet ECS Fargate) reaching
+  the Hetzner-hosted ClickHouse data plane over mTLS.
 
-The staging environment exists to validate infrastructure and runtime behavior before
-production rollout.
-
-Production is the public-service baseline. Staging should mirror topology and integration
-shape, but not necessarily production-sized limits or retention defaults. The staging web
-frontend is expected to be password-protected at the edge layer rather than exposed as a
-fully public site.
+AWS-side staging was retired by task 0249 and is not redeployed in
+`eu-central-1`. Pre-production validation now happens in the dev
+environment (local CH/PG) and via canary / smoke runs against
+production on cert-restricted endpoints; if product re-opens the
+need for a staging tier later, it would be reintroduced as a
+separate task.
 
 ### 7.2 Scaling Model
 
@@ -378,9 +548,9 @@ Current expectations:
 - API Lambda scales on demand, up to the documented concurrency tier
 - Ledger Processor Lambda scales per S3-triggered ledger file
 - CloudFront scales automatically
-- PostgreSQL uses RDS Proxy by default for connection pooling
-- materialized views are part of the default database scale/read strategy
-- a read replica is introduced only when primary CPU passes the documented threshold
+- ClickHouse scaling is vertical for the foreseeable future
+  (single-box Hetzner deploy per task 0216); replication / sharding
+  decisions are deferred to a future ADR if/when query load demands it
 
 ### 7.3 Availability Progression
 
@@ -388,43 +558,34 @@ High availability is staged rather than assumed at launch.
 
 Documented progression:
 
-- start with Single-AZ RDS and a single-AZ deployment footprint
-- add Multi-AZ and broader VPC expansion when SLA exceeds 99.9%
+- AWS side: single AZ in `eu-central-1a` for the Galexie public subnet.
+  Lambdas are AZ-agnostic (out-of-VPC, AWS-managed pool).
+- Data plane: single Hetzner box on RAID 1 + Borg backups to a
+  Storage Box; replication / multi-region HA deferred until SLA
+  requires it.
 
 This is important because the infrastructure doc should not imply higher availability than
 what the source design currently commits to.
 
-### 7.4 Environment-Specific Limits and Protections
+### 7.4 Production Limits and Protections
 
-The source design should be read as defining production baselines unless stated otherwise.
-Staging and production should not share identical operational limits.
+Post-task-0249 there is only a production AWS environment. Profile:
 
-**Staging profile**
-
-- lower API concurrency and throttling ceilings than production
-- smaller API Gateway cache allocation and shorter cache TTLs where cache is enabled
-- lower-cost database/storage sizing suitable for testnet validation rather than public load
-- shorter log, trace, and transient-artifact retention windows; staging replay artifacts
-  in `stellar-ledger-data` should be kept for at least 7 days
-- password protection for the staging web frontend at the CloudFront/edge layer; optional
-  additional controls such as IP allowlists or reduced DNS discoverability when needed
-- alerting tuned to catch regressions quickly without mirroring every production paging rule
-
-**Production profile**
-
-- public-internet availability with WAF and API throttling sized for anonymous browser
-  traffic
-- response caching, Lambda concurrency, and database sizing tuned for real public demand
-- longer operational retention for logs, traces, and replay-relevant artifacts; production
-  replay artifacts in `stellar-ledger-data` should be kept for at least 30 days
-- automated RDS backups, point-in-time recovery, and deletion protection enabled on the
-  production database
-- KMS-backed encryption for production RDS and S3, with TLS enforced on public ingress and
-  production database connections
+- public-internet availability with WAF and API throttling sized for
+  anonymous browser traffic
+- response caching and Lambda concurrency tuned for real public demand
+- longer operational retention for logs, traces, and replay-relevant
+  artifacts; production replay artifacts in `stellar-ledger-data`
+  should be kept for at least 30 days
+- KMS-backed encryption for S3 (ledger bucket) and ECR (Galexie
+  images); CloudFront + API Gateway serve over HTTPS/TLS; AWS →
+  Hetzner CH connections enforce mTLS at the Caddy layer on the box
+- ClickHouse-on-Hetzner: Borg-encrypted backups to BX21 Storage Box,
+  RAID 1 on the box, password rotation policy in
+  `infra-hetzner/README.md`
 - full paging and SLA-oriented alert thresholds
 
-Exact values should live in environment-specific CDK configuration rather than being hard-
-coded into the document, but the separation of profiles is part of the architecture.
+Exact values live in `infra/envs/production.json`.
 
 ## 8. Observability and Operations
 
@@ -438,22 +599,26 @@ CloudWatch dashboards should expose at least:
 - Ledger Processor duration
 - Ledger Processor error rate
 - API latency across p50/p95/p99
-- RDS CPU and connection metrics
 - highest indexed ledger sequence versus network tip
+
+ClickHouse server-side metrics (CPU, memory, query latency, merge
+backpressure) live on the Hetzner box itself via CH's native
+Prometheus endpoint (`127.0.0.1:9363`) and `system.metric_log` —
+they are NOT mirrored to CloudWatch. Pull-side scraping is deferred
+to a follow-up monitoring task per task 0216 future work.
 
 ### 8.2 Alerting Surface
 
-The documented alarms are:
+The documented alarms (production):
 
 - Galexie ingestion lag when S3 file timestamps are more than 60 seconds behind ledger close
 - Ledger Processor error rate above 1% of Lambda invocations
-- RDS CPU above 70% sustained for 5 minutes
-- RDS free storage below 20% remaining
 - API Gateway 5xx rate above 0.5% of requests
+- Type-1 enrichment DLQ depth above 0
 
-These values are the production baseline. Staging should preserve the same alert categories,
-but may use lower-volume thresholds, shorter retention, and non-paging notification rules to
-match its lower traffic and lower cost profile.
+These values are the production baseline. ClickHouse-side alerts
+(query backpressure, partition merge stalls, disk usage) live on
+the Hetzner box, separate from CloudWatch — see `infra-hetzner/`.
 
 ### 8.3 Recovery Assumptions
 
@@ -463,7 +628,9 @@ The source design documents specific operational recovery assumptions:
 - Lambda retries S3-triggered processing automatically
 - failed ledger files remain in S3 and can be replayed by re-triggering the Lambda
 - schema migrations run before new Lambda code deployment in the CI/CD pipeline
-- protocol upgrades are handled by updating XDR type support in `@stellar/stellar-sdk`
+- protocol upgrades are handled by bumping the pinned `stellar-xdr` Rust crate
+  (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)); the frontend consumes
+  typed API responses via OpenAPI-generated TS client (task 0096).
 
 These assumptions connect runtime infrastructure directly to safe ingestion operations.
 
@@ -475,8 +642,8 @@ The documented infrastructure direction is AWS CDK written in TypeScript.
 
 Within the current workspace structure, that boundary maps to:
 
-- `infra/aws-cdk` for infrastructure definitions
-- application packages under `apps/*` as runtime artifacts deployed by the infrastructure
+- `infra` for infrastructure definitions
+- application packages under `crates/*` and `web` as runtime artifacts deployed by the infrastructure
 
 The infrastructure doc should therefore be read as the target design input for the future
 CDK stack, not as a claim that the full stack already exists in the repository.
@@ -514,7 +681,7 @@ The repository should not contain:
 
 Expected secure configuration model:
 
-- non-secret environment config lives in `infra/aws-cdk/config/*`
+- non-secret environment config lives in `infra/config/*`
 - real secret values live in AWS Secrets Manager or SSM Parameter Store SecureString
 - CDK consumes secret references, not hard-coded secret values
 - runtime workloads (Lambda, ECS) read only the specific secrets they need through IAM
@@ -549,7 +716,7 @@ That means the infrastructure design should remain:
 ### 9.6 Current Workspace State
 
 The repository currently documents the intended infrastructure shape and reserves
-`infra/aws-cdk` as the infrastructure boundary, but does not yet contain the final deployed
+`infra` as the infrastructure boundary, but does not yet contain the final deployed
 runtime implementation.
 
 That is expected. This document should serve as the detailed reference for future

@@ -18,6 +18,45 @@ mv <file> .trash/
 
 **Writing code without an active task is FORBIDDEN.**
 
+## API Types Codegen — regenerate before commit
+
+If a PR touches **any of these paths**, the OpenAPI spec changes and the
+TypeScript types in `libs/api-types/src/{openapi.json,generated/}` MUST
+be regenerated before commit (CI gate `API types freshness`):
+
+- `crates/api/**` (handlers, DTOs, openapi schemas, routes)
+- `Cargo.toml` / `Cargo.lock`
+- `libs/api-types/**`
+
+Command:
+
+```bash
+npx nx run @rumblefish/api-types:generate
+```
+
+This runs `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
+followed by `openapi-ts` codegen. Stage the resulting changes (`openapi.json` +
+`generated/*`) in the same commit as the API change.
+
+CI runs `nx run @rumblefish/api-types:check-generated` (a `git diff --exit-code`
+on those paths). Skipping the regen → red `API types freshness` check.
+
+## Evergreen Architecture Docs
+
+Per [ADR 0032](./lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md),
+every PR that changes the shape of the system MUST also update the relevant
+files under `docs/architecture/**` in the same PR. "Shape of the system" means
+anything describable in those docs: schema (column types, tables, partitioning,
+constraints), API endpoints (added/removed/renamed), ingestion pipeline steps,
+infrastructure topology, XDR parsing responsibilities, frontend data contracts.
+
+The ADR template (`lore/2-adrs/_template.md`) and task template
+(`lore/1-tasks/_template.md`) both carry a "Docs updated" checklist — use it.
+Mark each doc file either "updated" or `N/A — reason`; never leave it blank.
+
+Pure policy / process / tooling changes (e.g. CI configuration) that do not
+affect the described architecture are legitimate `N/A` cases.
+
 ## Context
 
 @lore/0-session/current-user.md

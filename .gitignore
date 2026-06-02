@@ -6,6 +6,7 @@ dist
 tmp
 out-tsc
 coverage
+*.tsbuildinfo
 
 # nx
 .nx/installation
@@ -27,6 +28,7 @@ coverage
 !.vscode/extensions.json
 .claude/worktrees
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # logs
 npm-debug.log*
@@ -47,9 +49,27 @@ lore/0-session/current-task.md
 lore/0-session/current-task.json
 lore/0-session/next-tasks.md
 lore/README.md
+lore/BOARD.md
+lore/board.json
 
 .npmrc
 
 
 .temp
 .trash
+
+# CDK
+cdk.out
+# Context cache contains AWS account ID — each deployer generates their own
+cdk.context.json
+
+# Rust build artifacts
+target/
+
+# Local Docker compose overrides (perf tunings, env-specific paths)
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Playwright MCP runtime artefacts (snapshots + console logs from
+# browser-driven manual verification sessions)
+.playwright-mcp/

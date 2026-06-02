@@ -1,0 +1,30 @@
+/* Clash Display — headings. Variable font, covers weights 200-700. */
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/ClashDisplay-Variable.woff2') format('woff2-variations'),
+    url('/fonts/ClashDisplay-Variable.woff2') format('woff2');
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Satoshi — body. Variable font, covers weights 300-900. */
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/Satoshi-Variable.woff2') format('woff2-variations'),
+    url('/fonts/Satoshi-Variable.woff2') format('woff2');
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* JetBrains Mono — monospace identifiers (hashes, addresses, contract IDs,
+   XDR). Variable font, covers weights 100-800. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype-variations'),
+    url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}

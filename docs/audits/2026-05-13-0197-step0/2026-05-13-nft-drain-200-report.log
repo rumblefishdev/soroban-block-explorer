@@ -1,0 +1,75 @@
+    Finished `release` profile [optimized] target(s) in 0.41s
+     Running `target/release/enrich nft-metadata --limit 200 --concurrency 10`
+# backfill-enrichment-runner — nft_token_uri drain report
+
+**Timestamp:** 2026-05-13T07:45:05.795502+00:00
+**Processed:** 200
+**Succeeded (incl. sentinel writes):** 132
+**Unreachable (transient, retry candidate):** 68
+**DB failures:** 0
+**Duration:** 1027 ms
+
+## Sample transient errors (first 10)
+
+| id | error |
+| --- | --- |
+| 1 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:644962
+ |
+| 2 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAESLMGW5LYTIEJI7FJHK6SFSWRELLNVX5Q4WR4UZEALMTRWQDBKDPAG, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAESLMGW5LYTIEJI7FJHK6SFSWRELLNVX5Q4WR4UZEALMTRWQDBKDPAG, token_uri], data:11093558
+ |
+| 3 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAPIOPSODD5QP4SJNIS4ASUWML4LH7ZEKTAPBJYZSMKXCATEKDZFKLHK, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAPIOPSODD5QP4SJNIS4ASUWML4LH7ZEKTAPBJYZSMKXCATEKDZFKLHK, token_uri], data:475419734
+ |
+| 5 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAAV3AE3VKD2P4TY7LWTQMMJHIJ4WOCZ5ANCIJPC3NRSERKVXNHBU2W7, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAAV3AE3VKD2P4TY7LWTQMMJHIJ4WOCZ5ANCIJPC3NRSERKVXNHBU2W7, token_uri], data:147755
+ |
+| 6 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CASV7JOT7C57U3LGC4WKFG3CS2OE4NO5WOIWIGFOG76XRR3FX4L6A56U, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CASV7JOT7C57U3LGC4WKFG3CS2OE4NO5WOIWIGFOG76XRR3FX4L6A56U, token_uri], data:1319858
+ |
+| 7 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA, token_uri], data:646730
+ |
+| 8 | soroban rpc: HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   1: [Diagnostic Event] topics:[fn_call, CAMM5FTDLIBJZL43NO5JYPXEI5VFZ77NSSNVOVWQBB7WRYPANGUOEA7W, token_uri], data:100000
+ |
+| 9 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75, token_uri], data:1885
+ |
+| 10 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CBHIQPUXLFLC5O44ZJVUTCL5LMZFLVGU5DEIGSYKBSAPFMOGTKOQEPFM, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CBHIQPUXLFLC5O44ZJVUTCL5LMZFLVGU5DEIGSYKBSAPFMOGTKOQEPFM, token_uri], data:2670248
+ |
+| 11 | soroban rpc: HostError: Error(Value, InvalidInput)
+
+Event log (newest first):
+   0: [Diagnostic Event] contract:CCWF6SICG6NH2A6HZLLTDJXLSRCZKF2266UC56CKMNFHZXSV6B5Q4TVL, topics:[error, Error(Value, InvalidInput)], data:["symbol not found in slice of strs", token_uri]
+   1: [Diagnostic Event] topics:[fn_call, CCWF6SICG6NH2A6HZLLTDJXLSRCZKF2266UC56CKMNFHZXSV6B5Q4TVL, token_uri], data:431921
+ |

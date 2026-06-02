@@ -1,0 +1,35 @@
+{
+  "name": "rust",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --workspace",
+        "cwd": "."
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --workspace",
+        "cwd": "."
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --workspace -- -D warnings",
+        "cwd": "."
+      }
+    },
+    "fmt-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "."
+      }
+    }
+  }
+}

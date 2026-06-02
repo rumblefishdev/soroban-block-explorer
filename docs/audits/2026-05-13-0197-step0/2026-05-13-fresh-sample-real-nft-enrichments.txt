@@ -1,0 +1,4 @@
+ name | media_url | collection_name 
+------+-----------+-----------------
+(0 rows)
+

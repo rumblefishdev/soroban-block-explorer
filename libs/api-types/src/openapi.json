@@ -1,0 +1,4068 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Soroban Block Explorer API",
+    "description": "REST API exposing ledger, transaction, contract, and NFT data for the Soroban block explorer. All list endpoints use cursor-based pagination (see ADR 0008).",
+    "contact": {
+      "name": "Rumble Fish",
+      "url": "https://rumblefish.dev"
+    },
+    "license": {
+      "name": "Proprietary"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["ops"],
+        "summary": "Liveness probe consumed by AWS Lambda health checks and smoke tests.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "Account detail — header from `accounts` + balances from\n`account_balances_current` (canonical 06 statements A + B).",
+        "operationId": "get_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Stellar account StrKey (G…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account detail with current balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/transactions": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "Paginated transactions involving the account (source or participant).\n404 when the StrKey is unknown — distinct from \"indexed account, no\ntransactions yet\" (matches assets/contracts sub-resource pattern).",
+        "operationId": "list_account_transactions",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Stellar account StrKey (G…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transactions involving the account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_AccountTransactionItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account_id / pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "tags": ["assets"],
+        "operationId": "list_assets",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[type]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[code]",
+            "in": "query",
+            "description": "Substring match against `asset_code`; SQL wraps in `%...%`.\nCaller MUST NOT pass `%` / `_` literals.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated asset list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_AssetItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/assets/{id}": {
+      "get": {
+        "tags": ["assets"],
+        "operationId": "get_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asset detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Asset not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/assets/{id}/transactions": {
+      "get": {
+        "tags": ["assets"],
+        "operationId": "list_asset_transactions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transactions involving the asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_AssetTransactionItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id format / pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Asset not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}": {
+      "get": {
+        "tags": ["contracts"],
+        "operationId": "get_contract",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contract detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}/events": {
+      "get": {
+        "tags": ["contracts"],
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20). Page granularity is per\n`(contract, transaction, ledger)` appearance — a single appearance\ncan expand to multiple per-node items in the response, so the\nreturned `data.len()` may exceed `limit`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated event history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_EventItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id / limit / cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}/interface": {
+      "get": {
+        "tags": ["contracts"],
+        "operationId": "get_interface",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public function signatures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterfaceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}/invocations": {
+      "get": {
+        "tags": ["contracts"],
+        "operationId": "list_invocations",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20). One DB appearance row maps to\none `InvocationItem` (no expansion), so `data.len() <= limit`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated invocation appearance index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_InvocationItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id / limit / cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledgers": {
+      "get": {
+        "tags": ["ledgers"],
+        "summary": "List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor\npagination.",
+        "operationId": "list_ledgers",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated ledger list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_LedgerListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledgers/{sequence}": {
+      "get": {
+        "tags": ["ledgers"],
+        "summary": "Get ledger detail by sequence — header + prev/next navigation +\nembedded paginated transactions.",
+        "description": "Two phases, both DB-only:\n\n1. **DB header.** Resolve `:sequence` against `ledgers` + LATERAL\n   prev/next computed via `sequence` comparisons on the `ledgers`\n   PK (index-only scan, no heap fetch). 404 on miss.\n2. **DB transactions.** Keyset-paginated read of the `transactions`\n   partition with full equality partition prune\n   (`created_at = $closed_at`).\n\nThe detail endpoint reuses the standard `?limit=` / `?cursor=` query\nparameters to drive embedded transactions pagination. Detail itself\nis a single resource, so no naming collision arises — the params\npage the embedded list directly.",
+        "operationId": "get_ledger",
+        "parameters": [
+          {
+            "name": "sequence",
+            "in": "path",
+            "description": "Ledger sequence number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Embedded transactions page size (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Embedded transactions opaque pagination cursor.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ledger detail with embedded transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid sequence format or pagination parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ledger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/liquidity-pools": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "operationId": "list_pools",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[asset_code]",
+            "in": "query",
+            "description": "Single-asset filter — matches either `asset_a_code` or\n`asset_b_code` case-insensitively (input is trimmed + uppercased\nbefore the query). Intended for the Figma list's free-text\n\"Filter by asset pair\" input.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[asset_a_code]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[asset_a_issuer]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[asset_b_code]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[asset_b_issuer]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[min_tvl]",
+            "in": "query",
+            "description": "Minimum TVL threshold as a decimal string (matches the underlying\n`NUMERIC(28,7)` column without an f64 round-trip).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated liquidity-pool list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_PoolItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/liquidity-pools/{pool_id}": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "operationId": "get_pool",
+        "parameters": [
+          {
+            "name": "pool_id",
+            "in": "path",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pool detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pool_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/liquidity-pools/{pool_id}/chart": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "operationId": "get_pool_chart",
+        "parameters": [
+          {
+            "name": "pool_id",
+            "in": "path",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "Bucket width: `1h` | `1d` | `1w`. Validated against an allowlist.\nDefault: `1d`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive lower bound, ISO 8601 / RFC 3339 timestamp.\nDefault: `to` minus the interval-appropriate window (see struct doc).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive upper bound, ISO 8601 / RFC 3339 timestamp.\nDefault: `now()`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time-bucketed pool chart series",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pool_id / interval / from / to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/liquidity-pools/{pool_id}/participants": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "operationId": "list_participants",
+        "parameters": [
+          {
+            "name": "pool_id",
+            "in": "path",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated participants list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_ParticipantItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pool_id, limit, or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/liquidity-pools/{pool_id}/transactions": {
+      "get": {
+        "tags": ["liquidity-pools"],
+        "operationId": "list_pool_transactions",
+        "parameters": [
+          {
+            "name": "pool_id",
+            "in": "path",
+            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated pool transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_PoolTransactionItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pool_id, limit, or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/network/stats": {
+      "get": {
+        "tags": ["network"],
+        "summary": "Get top-level chain overview stats.",
+        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse for 30s in process memory. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N Postgres round-trips.",
+        "operationId": "get_network_stats",
+        "responses": {
+          "200": {
+            "description": "Chain overview stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkStats"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nfts": {
+      "get": {
+        "tags": ["nfts"],
+        "operationId": "list_nfts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[collection]",
+            "in": "query",
+            "description": "Exact match against `nfts.collection_name` (btree\n`idx_nfts_collection`). Trigram support is task 0132.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[contract_id]",
+            "in": "query",
+            "description": "Contract C-StrKey; resolved to `soroban_contracts.id` server-side.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[name]",
+            "in": "query",
+            "description": "Substring match against `nfts.name` via the `idx_nfts_name_trgm`\nGIN index. SQL wraps the value in `%...%`; caller MUST NOT pass\n`%` / `_` literals.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated NFT list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_NftItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nfts/{contract_id}/{token_id}": {
+      "get": {
+        "tags": ["nfts"],
+        "operationId": "get_nft",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract C-StrKey hosting the NFT (CAP-46-6 token contract).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Contract-defined token id (opaque string; ≤128 ASCII chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NFT detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id / token_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NFT not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nfts/{contract_id}/{token_id}/transfers": {
+      "get": {
+        "tags": ["nfts"],
+        "operationId": "list_nft_transfers",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract C-StrKey hosting the NFT.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Contract-defined token id (opaque string; ≤128 ASCII chars).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated NFT transfer history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_NftTransferItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id / token_id / pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NFT not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/search": {
+      "get": {
+        "tags": ["search"],
+        "summary": "Unified search across all entity types.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `surrogate_id`\n  (BIGINT FK or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
+        "operationId": "get_search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query string. Required, non-empty after trim.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "CSV of entity types to include. Allowed: transaction, contract, asset, account, nft, pool.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Per-group result cap. Default 10, max 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 50,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transactions": {
+      "get": {
+        "tags": ["transactions"],
+        "summary": "List transactions with optional filters and cursor-based pagination.",
+        "operationId": "list_transactions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[source_account]",
+            "in": "query",
+            "description": "Filter by source account StrKey (G…).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[contract_id]",
+            "in": "query",
+            "description": "Filter by contract StrKey (C…) — matches root op, nested call, or event emission.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[operation_type]",
+            "in": "query",
+            "description": "Filter by operation type (e.g. `INVOKE_HOST_FUNCTION`).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transaction list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_TransactionListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transactions/{hash}": {
+      "get": {
+        "tags": ["transactions"],
+        "summary": "Get a single transaction by hash.",
+        "description": "Returns the wrapped E3 response from task 0150: the DB-sourced\n`TransactionDetailLight` (flattened to the top level) plus a `heavy` block\ncarrying every XDR-sourced field — memo, result_code, signatures, fee-bump\nsource, envelope/result XDR, contract + diagnostic events, per-operation\ndecoded details, and the nested `operation_tree`. `heavy_fields_status` is\n`\"ok\"` when the public-archive fetch succeeded and `\"unavailable\"` when it\nfailed (graceful degradation per ADR 0029 — the light slice is always\nreturned). Per ADR 0033 there is no separate \"advanced\" view; the wrapper\nalways carries the full heavy payload when available.",
+        "operationId": "get_transaction",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Transaction hash (64-char hex; uppercase or lowercase accepted, normalised server-side)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction detail (light + heavy block)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/E3Response_TransactionDetailLight"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Transaction not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountBalance": {
+        "type": "object",
+        "description": "Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.",
+        "required": ["type", "balance", "last_updated_ledger"],
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"]
+          },
+          "asset_issuer": {
+            "type": ["string", "null"]
+          },
+          "asset_type_name": {
+            "type": ["string", "null"],
+            "description": "`native` | `credit_alphanum4` | `credit_alphanum12`."
+          },
+          "balance": {
+            "type": "string",
+            "description": "`NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros)."
+          },
+          "last_updated_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "type": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raw SMALLINT — stable across label renames."
+          }
+        }
+      },
+      "AccountDetailResponse": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "sequence_number",
+          "balances",
+          "first_seen_ledger",
+          "last_seen_ledger"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountBalance"
+            }
+          },
+          "first_seen_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "home_domain": {
+            "type": ["string", "null"]
+          },
+          "last_seen_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sequence_number": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AccountTransactionItem": {
+        "type": "object",
+        "description": "Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.",
+        "required": [
+          "hash",
+          "ledger_sequence",
+          "application_order",
+          "source_account",
+          "fee_charged",
+          "successful",
+          "operation_count",
+          "has_soroban",
+          "operation_types",
+          "created_at"
+        ],
+        "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based position in ledger."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_charged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stroops."
+          },
+          "has_soroban": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "64-char lowercase hex."
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operation_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_account": {
+            "type": "string"
+          },
+          "successful": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AssetDetailResponse": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+            "required": ["id", "asset_type"],
+            "properties": {
+              "asset_code": {
+                "type": ["string", "null"]
+              },
+              "asset_type": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+              },
+              "asset_type_name": {
+                "type": ["string", "null"],
+                "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+              },
+              "contract_id": {
+                "type": ["string", "null"]
+              },
+              "holder_count": {
+                "type": ["integer", "null"],
+                "format": "int32",
+                "description": "May be `null` / stale until task 0135 ships."
+              },
+              "icon_url": {
+                "type": ["string", "null"]
+              },
+              "id": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "issuer": {
+                "type": ["string", "null"]
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "total_supply": {
+                "type": ["string", "null"]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "deployed_at_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64",
+                "description": "`soroban_contracts.deployed_at_ledger` — `null` for classic / native."
+              },
+              "description": {
+                "type": ["string", "null"]
+              },
+              "home_page": {
+                "type": ["string", "null"]
+              }
+            }
+          }
+        ],
+        "description": "Detail response. `description` is populated from the issuer stellar.toml\n`CURRENCIES[].desc` field; `home_page` is populated from\n`DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —\nthe org URL is the closest semantic match and preserves backward\ncompatibility with the previous DB-sourced column). Both default to\n`null` for native XLM, assets without an issuer, issuers without an\non-chain `home_domain`, fetch failures, and stellar.toml files with\nno matching `[[CURRENCIES]]` entry."
+      },
+      "AssetItem": {
+        "type": "object",
+        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+        "required": ["id", "asset_type"],
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"]
+          },
+          "asset_type": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+          },
+          "asset_type_name": {
+            "type": ["string", "null"],
+            "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+          },
+          "contract_id": {
+            "type": ["string", "null"]
+          },
+          "holder_count": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "May be `null` / stale until task 0135 ships."
+          },
+          "icon_url": {
+            "type": ["string", "null"]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "issuer": {
+            "type": ["string", "null"]
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "total_supply": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "AssetTransactionItem": {
+        "type": "object",
+        "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+        "required": [
+          "hash",
+          "ledger_sequence",
+          "source_account",
+          "successful",
+          "fee_charged",
+          "created_at",
+          "operation_count",
+          "has_soroban",
+          "operation_types"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_charged": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "has_soroban": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operation_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Distinct `op_type_name(...)` labels for every op in the tx, sorted asc."
+          },
+          "source_account": {
+            "type": "string"
+          },
+          "successful": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ChartDataPoint": {
+        "type": "object",
+        "description": "One row from the chart endpoint. Shape pinned to canonical SQL\n`21_get_liquidity_pools_chart.sql`. `tvl` is \"TVL at close of bucket\"\n(last value); `volume` and `fee_revenue` are SUM (cumulative within\nthe bucket).",
+        "required": ["bucket", "samples_in_bucket"],
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_revenue": {
+            "type": ["string", "null"]
+          },
+          "samples_in_bucket": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tvl": {
+            "type": ["string", "null"]
+          },
+          "volume": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "ChartResponse": {
+        "type": "object",
+        "description": "`GET /v1/liquidity-pools/:id/chart` response.",
+        "required": ["pool_id", "interval", "from", "to", "data_points"],
+        "properties": {
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChartDataPoint"
+            }
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string",
+            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ContractDetailResponse": {
+        "type": "object",
+        "required": ["contract_id", "is_sac", "stats"],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "contract_type": {
+            "type": ["integer", "null"],
+            "format": "int32"
+          },
+          "contract_type_name": {
+            "type": ["string", "null"]
+          },
+          "deployed_at_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64"
+          },
+          "deployer": {
+            "type": ["string", "null"]
+          },
+          "is_sac": {
+            "type": "boolean"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/ContractStats"
+          },
+          "wasm_hash": {
+            "type": ["string", "null"]
+          },
+          "wasm_uploaded_at_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64"
+          }
+        }
+      },
+      "ContractStats": {
+        "type": "object",
+        "required": [
+          "recent_invocations",
+          "recent_unique_callers",
+          "stats_window"
+        ],
+        "properties": {
+          "recent_invocations": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recent_unique_callers": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stats_window": {
+            "type": "string",
+            "description": "Echoed window label (e.g. `\"7 days\"`) so the UI can label \"last N days\"."
+          }
+        }
+      },
+      "E3HeavyFields": {
+        "type": "object",
+        "description": "E3 (`GET /transactions/:hash`) — fields sourced from XDR parse.\n\nReturned as the `heavy` block inside `E3Response<TransactionDetailLight>`.\nOn upstream fetch failure the caller substitutes `None` and\n`merge_e3_response` sets `heavy_fields_status = \"unavailable\"`.",
+        "required": [
+          "signatures",
+          "diagnostic_events",
+          "contract_events",
+          "operations"
+        ],
+        "properties": {
+          "contract_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/XdrEventDto"
+            },
+            "description": "Non-diagnostic Soroban events (contract + system) with full topic\narray + decoded data payload."
+          },
+          "diagnostic_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/XdrEventDto"
+            },
+            "description": "Diagnostic events emitted during Soroban invocation."
+          },
+          "envelope_xdr": {
+            "type": ["string", "null"],
+            "description": "Base64-encoded `TransactionEnvelope`."
+          },
+          "fee_bump_source": {
+            "type": ["string", "null"],
+            "description": "Fee-bump envelope `feeSource` StrKey when the outer tx is a fee-bump."
+          },
+          "memo": {
+            "type": ["string", "null"],
+            "description": "Memo payload rendered as string (hex for hash/return, decimal for id)."
+          },
+          "memo_type": {
+            "type": ["string", "null"],
+            "description": "Memo type as ASCII tag (`\"text\"`, `\"id\"`, `\"hash\"`, `\"return\"`, `\"none\"`)."
+          },
+          "operation_tree": {
+            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time (the raw `result_meta_xdr` itself is intentionally\nnot surfaced — see 0046 spec \"result_meta_xdr is NOT returned\")."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/XdrOperationDto"
+            },
+            "description": "Operations with full XDR-decoded details (type-specific JSON)."
+          },
+          "result_code": {
+            "type": ["string", "null"],
+            "description": "Transaction result code (e.g. `\"txSuccess\"`, `\"txFailed\"`).\n`None` only when the transaction had a parse error."
+          },
+          "result_xdr": {
+            "type": ["string", "null"],
+            "description": "Base64-encoded `TransactionResult`."
+          },
+          "signatures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignatureDto"
+            },
+            "description": "Transaction-level signatures (hint + signature bytes hex-encoded)."
+          }
+        }
+      },
+      "E3Response_TransactionDetailLight": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "DB-sourced light slice for the transaction detail endpoint.\n\nComposed with `E3HeavyFields` via `merge_e3_response` (task 0150). All\nXDR-sourced fields (memo, result_code, signatures, events, operation\ndetails, envelope_xdr/result_xdr, operation_tree) live in `heavy`.",
+            "required": [
+              "hash",
+              "ledger_sequence",
+              "application_order",
+              "fee_charged",
+              "successful",
+              "operation_count",
+              "has_soroban",
+              "created_at",
+              "parse_error",
+              "operations",
+              "participants",
+              "soroban_events",
+              "soroban_invocations"
+            ],
+            "properties": {
+              "application_order": {
+                "type": "integer",
+                "format": "int32",
+                "description": "1-based position of this transaction within its ledger."
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "fee_charged": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Fee charged in stroops."
+              },
+              "has_soroban": {
+                "type": "boolean"
+              },
+              "hash": {
+                "type": "string",
+                "description": "Transaction hash (64-char lowercase hex)."
+              },
+              "inner_tx_hash": {
+                "type": ["string", "null"],
+                "description": "Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise."
+              },
+              "ledger_sequence": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "operation_count": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "operations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OperationItem"
+                }
+              },
+              "parse_error": {
+                "type": "boolean",
+                "description": "`true` when the XDR parser encountered an error for this transaction."
+              },
+              "participants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Accounts touched by this transaction. Populated only when\n`heavy_fields_status = \"unavailable\"`; otherwise `[]` and consumers\nshould rely on the heavy block."
+              },
+              "soroban_events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EventAppearanceItem"
+                },
+                "description": "Soroban event appearance index rows. Same fallback semantics as\n`participants`. Full topics + data live in `heavy.contract_events`."
+              },
+              "soroban_invocations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/InvocationAppearanceItem"
+                },
+                "description": "Soroban invocation appearance index rows. Same fallback semantics\nas `participants`. Full call hierarchy lives in `heavy.operation_tree`."
+              },
+              "source_account": {
+                "type": ["string", "null"],
+                "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
+              },
+              "successful": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["heavy_fields_status"],
+            "properties": {
+              "heavy": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/E3HeavyFields"
+                  }
+                ]
+              },
+              "heavy_fields_status": {
+                "$ref": "#/components/schemas/HeavyFieldsStatus"
+              }
+            }
+          }
+        ],
+        "description": "Merged E3 response: DB light fields + optional XDR heavy fields.\n\n`heavy_fields_status` = `Ok` when `heavy` is `Some`, `Unavailable` when\nthe public-archive fetch failed and the caller degraded gracefully."
+      },
+      "EntityType": {
+        "type": "string",
+        "description": "Entity discriminator. Closed allowlist used by the `type=` filter\nand the `entity_type` field on every hit / redirect.",
+        "enum": ["transaction", "account", "asset", "contract", "nft", "pool"]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "Canonical error response body.\n\nIntentionally simpler than RFC 7807 (`problem+json`) — see ADR 0008.\nMachine-readable `code` drives client behaviour; `message` is a\nhuman-friendly description; `details` carries optional structured\ncontext (field-level validation errors, etc.).",
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable error code, e.g. `\"invalid_cursor\"`."
+          },
+          "details": {
+            "description": "Optional structured details. Shape is error-specific."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error description."
+          }
+        }
+      },
+      "EventAppearanceItem": {
+        "type": "object",
+        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "contract_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "EventItem": {
+        "type": "object",
+        "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+        "required": [
+          "transaction_hash",
+          "ledger_sequence",
+          "transaction_id",
+          "successful",
+          "amount",
+          "created_at",
+          "event_type",
+          "topics",
+          "data"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {},
+          "event_type": {
+            "type": "string"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successful": {
+            "type": "boolean"
+          },
+          "topics": {
+            "type": "array",
+            "items": {}
+          },
+          "transaction_hash": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "HeavyFieldsStatus": {
+        "type": "string",
+        "description": "Indicates whether the XDR-sourced fields were loaded successfully.",
+        "enum": ["ok", "unavailable"]
+      },
+      "InterfaceResponse": {
+        "type": "object",
+        "description": "`interface_metadata` is `null` for SAC / pre-upload / stub rows;\nstubs (task 0153) are filtered at the SQL layer so they don't leak.",
+        "required": ["contract_id"],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "interface_metadata": {},
+          "wasm_hash": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "InvocationAppearanceItem": {
+        "type": "object",
+        "required": ["contract_id", "ledger_sequence", "amount", "created_at"],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "caller_account": {
+            "type": ["string", "null"],
+            "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
+          },
+          "contract_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "InvocationItem": {
+        "type": "object",
+        "required": [
+          "transaction_hash",
+          "ledger_sequence",
+          "amount",
+          "created_at",
+          "successful"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Folded invocation-tree node count for this appearance."
+          },
+          "caller_account": {
+            "type": ["string", "null"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "successful": {
+            "type": "boolean"
+          },
+          "transaction_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "LedgerDetailResponse": {
+        "type": "object",
+        "description": "Detail response for `GET /v1/ledgers/:sequence`.\n\nHeader columns are the same shape as `LedgerListItem`. `prev_sequence` /\n`next_sequence` identify the adjacent indexed ledgers in `sequence`\norder (computed via LATERAL on the `ledgers` PK) and double as a\nchain-position signal — when `next_sequence` is null the ledger is the\nchain head, which drives the short-TTL Cache-Control branch in the\nhandler. `transactions` is the embedded paginated list of\n`TransactionListItem` rows, served DB-only (memo and other heavy\nfields belong to the transaction detail endpoint, not list rows).",
+        "required": [
+          "sequence",
+          "hash",
+          "closed_at",
+          "protocol_version",
+          "transaction_count",
+          "base_fee",
+          "transactions"
+        ],
+        "properties": {
+          "base_fee": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "closed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hash": {
+            "type": "string",
+            "description": "Ledger hash (64-char lowercase hex)."
+          },
+          "next_sequence": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Sequence number of the ledger that closed immediately after this\none. `null` at the chain head (this is the most recent ledger we\nhave indexed)."
+          },
+          "prev_sequence": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Sequence number of the ledger that closed immediately before this\none. `null` at the chain tail (no earlier ledger persisted)."
+          },
+          "protocol_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "transaction_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "transactions": {
+            "$ref": "#/components/schemas/Paginated_TransactionListItem",
+            "description": "Paginated linked transactions, DB-only `TransactionListItem` rows."
+          }
+        }
+      },
+      "LedgerListItem": {
+        "type": "object",
+        "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block. Doubles as the `sqlx::FromRow`\ntarget for `fetch_list` — the SQL projection aliases match this\nstruct's field names so no manual mapping is needed.",
+        "required": [
+          "sequence",
+          "hash",
+          "closed_at",
+          "protocol_version",
+          "transaction_count",
+          "base_fee"
+        ],
+        "properties": {
+          "base_fee": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "closed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hash": {
+            "type": "string",
+            "description": "Ledger hash (64-char lowercase hex)."
+          },
+          "protocol_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "transaction_count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "NetworkStats": {
+        "type": "object",
+        "description": "Top-level chain overview returned by `GET /v1/network/stats`.\n\nField naming and semantics match canonical SQL in task 0167\none-for-one. `total_accounts` and `total_contracts` are planner\nestimates from `pg_class.reltuples` (refreshed by autovacuum /\nANALYZE), not exact counts. `latest_ledger_closed_at` is `None`\nonly on a cold-bootstrap cluster where no ledger has been indexed\nyet.\n\n`generated_at` is the wall-clock time the underlying SELECT ran on\nthe DB. Cache hits keep the original value, so frontend can derive\ntwo distinct signals without confusing them with cache age:\n\n* indexer-health lag = `generated_at - latest_ledger_closed_at`\n* data staleness (\"info from N seconds ago\") = `Date.now() - generated_at`",
+        "required": [
+          "tps_60s",
+          "total_accounts",
+          "total_contracts",
+          "latest_ledger_sequence",
+          "generated_at"
+        ],
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Wall-clock time the underlying SELECT ran on the DB (`NOW()` at\nfetch time). Preserved across cache hits — frontend uses this to\ndistinguish indexer-health lag from cache-age staleness."
+          },
+          "latest_ledger_closed_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Close time of the newest ledger in the database. `null` only\nwhen no ledgers are indexed (cold-bootstrap cluster)."
+          },
+          "latest_ledger_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sequence of the newest ledger in the database (ordered by\n`closed_at DESC`). `0` sentinel indicates an empty cluster (no\nledger 0 exists in Stellar)."
+          },
+          "total_accounts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated indexed account count from `pg_class.reltuples` for\n`public.accounts`."
+          },
+          "total_contracts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated indexed Soroban contract count from `pg_class.reltuples`\nfor `public.soroban_contracts`."
+          },
+          "tps_60s": {
+            "type": "number",
+            "format": "double",
+            "description": "Transactions per second over a 60s rolling window. Computed as\n`SUM(ledgers.transaction_count)` divided by the actual span\nbetween MIN/MAX `closed_at` in the window. Stable on partial /\nsingle-ledger windows (NULLIF guards zero-span)."
+          }
+        }
+      },
+      "NftDetailResponse": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
+            "required": ["id", "contract_id", "token_id"],
+            "properties": {
+              "collection_name": {
+                "type": ["string", "null"]
+              },
+              "contract_id": {
+                "type": "string",
+                "description": "Contract C-StrKey resolved via `soroban_contracts` join."
+              },
+              "id": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "last_seen_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64",
+                "description": "Most recent ledger where ownership state changed\n(`nfts.current_owner_ledger`)."
+              },
+              "media_url": {
+                "type": ["string", "null"]
+              },
+              "minted_at_ledger": {
+                "type": ["integer", "null"],
+                "format": "int64"
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "owner_account": {
+                "type": ["string", "null"],
+                "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+              },
+              "token_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["metadata"],
+            "properties": {
+              "metadata": {
+                "type": ["object", "null"],
+                "description": "Off-chain JSON metadata fetched at request time. Always present\non the wire — `null` indicates fetch failure / unsupported\ncontent-type, not field absence."
+              }
+            }
+          }
+        ],
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row, see\n`15_get_nfts_list.sql` for the on-the-wire columns), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
+      },
+      "NftItem": {
+        "type": "object",
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
+        "required": ["id", "contract_id", "token_id"],
+        "properties": {
+          "collection_name": {
+            "type": ["string", "null"]
+          },
+          "contract_id": {
+            "type": "string",
+            "description": "Contract C-StrKey resolved via `soroban_contracts` join."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_seen_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Most recent ledger where ownership state changed\n(`nfts.current_owner_ledger`)."
+          },
+          "media_url": {
+            "type": ["string", "null"]
+          },
+          "minted_at_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "owner_account": {
+            "type": ["string", "null"],
+            "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+          },
+          "token_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NftTransferItem": {
+        "type": "object",
+        "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+        "required": [
+          "transaction_hash",
+          "ledger_sequence",
+          "event_type",
+          "created_at",
+          "event_order"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event_order": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "event_type": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raw NftEventType discriminant (ADR 0031)."
+          },
+          "event_type_name": {
+            "type": ["string", "null"],
+            "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
+          },
+          "from_account": {
+            "type": ["string", "null"],
+            "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to_account": {
+            "type": ["string", "null"],
+            "description": "New owner G-StrKey. `null` on burn."
+          },
+          "transaction_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationItem": {
+        "type": "object",
+        "required": [
+          "appearance_id",
+          "type_name",
+          "type",
+          "ledger_sequence",
+          "created_at"
+        ],
+        "properties": {
+          "appearance_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Global BIGSERIAL `operations_appearances.id`. Internal ordering\nartefact only; not a within-tx index. Use `application_order`\nfor apply-order display and to join against\n`XdrOperationDto.application_order` from the heavy overlay."
+          },
+          "application_order": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "1-based per-tx apply position carrying on-chain operation order\n(task 0192). For folded appearance rows (multiple identical-identity\nenvelope ops collapsed into one row, see task 0163) this is the\nMIN of the folded ops' indices — the position of the row's first\noccurrence in `tx.operations[]`. `None` for pre-task-0192 rows\nwhere the column was not yet populated; clients fall back to\n`appearance_id` order in that case."
+          },
+          "asset_code": {
+            "type": ["string", "null"],
+            "description": "Asset code (≤12 chars) for classic asset operations."
+          },
+          "asset_issuer": {
+            "type": ["string", "null"]
+          },
+          "contract_id": {
+            "type": ["string", "null"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "destination_account": {
+            "type": ["string", "null"]
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pool_id": {
+            "type": ["string", "null"],
+            "description": "Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded\nfrom the DB hex form at the response boundary so cross-entity\nlink targets match the `/v1/liquidity-pools/:id` route shape."
+          },
+          "source_account": {
+            "type": ["string", "null"]
+          },
+          "type": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raw `OperationType` SMALLINT (ADR 0031)."
+          },
+          "type_name": {
+            "type": "string",
+            "description": "Operation type tag in canonical SCREAMING_SNAKE_CASE\n(e.g. `\"INVOKE_HOST_FUNCTION\"`)."
+          }
+        }
+      },
+      "PageInfo": {
+        "type": "object",
+        "description": "Pagination metadata attached to list responses.\n\nCursor-based pagination (not offset) — see ADR 0008. Aligns with\nStellar Horizon conventions and produces stable listings even when\nthe underlying ledger stream advances between requests.\n\nBoth `next_cursor` (forward / next page) and `prev_cursor` (backward\n/ previous page) are **always emitted** as opaque base64-JSON\nstrings or explicit JSON `null`. Wire shape always carries both\nkeys — never omitted — so the OpenAPI `nullable: true` declaration\nmatches the on-wire bytes exactly. `Option<String>` carries the\nentire signal:\n\n- `next_cursor: null` ⇒ last page (no further forward continuation).\n- `next_cursor: \"...\"` ⇒ a further forward page exists.\n- `prev_cursor: null` ⇒ first page (no backward continuation).\n- `prev_cursor: \"...\"` ⇒ a backward page exists.\n\nBoth cursors carry an internal `dir` discriminant (see\n`crates/api/src/common/cursor.rs::Direction`) so the backend can\nbranch SQL between forward (DESC `<`) and backward (ASC `>`,\nreverse for presentation) walks. Clients treat the strings as\nopaque tokens — round-tripping them through `?cursor=` is the only\nexpected use.",
+        "required": ["limit"],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Page size that produced `data`. Echoes the client's requested\nlimit (clamped server-side).",
+            "maximum": 100,
+            "minimum": 1
+          },
+          "next_cursor": {
+            "type": ["string", "null"],
+            "description": "Opaque cursor identifying the next page. `null` when the\nclient has reached the end of the stream."
+          },
+          "prev_cursor": {
+            "type": ["string", "null"],
+            "description": "Opaque cursor identifying the previous page. `null` when the\nresponse is the first page (the client has not paged forward\nyet)."
+          }
+        }
+      },
+      "Paginated_AccountTransactionItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.",
+              "required": [
+                "hash",
+                "ledger_sequence",
+                "application_order",
+                "source_account",
+                "fee_charged",
+                "successful",
+                "operation_count",
+                "has_soroban",
+                "operation_types",
+                "created_at"
+              ],
+              "properties": {
+                "application_order": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "1-based position in ledger."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fee_charged": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Stroops."
+                },
+                "has_soroban": {
+                  "type": "boolean"
+                },
+                "hash": {
+                  "type": "string",
+                  "description": "64-char lowercase hex."
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "operation_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "operation_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "source_account": {
+                  "type": "string"
+                },
+                "successful": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_AssetItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+              "required": ["id", "asset_type"],
+              "properties": {
+                "asset_code": {
+                  "type": ["string", "null"]
+                },
+                "asset_type": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+                },
+                "asset_type_name": {
+                  "type": ["string", "null"],
+                  "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+                },
+                "contract_id": {
+                  "type": ["string", "null"]
+                },
+                "holder_count": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "May be `null` / stale until task 0135 ships."
+                },
+                "icon_url": {
+                  "type": ["string", "null"]
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "issuer": {
+                  "type": ["string", "null"]
+                },
+                "name": {
+                  "type": ["string", "null"]
+                },
+                "total_supply": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_AssetTransactionItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+              "required": [
+                "hash",
+                "ledger_sequence",
+                "source_account",
+                "successful",
+                "fee_charged",
+                "created_at",
+                "operation_count",
+                "has_soroban",
+                "operation_types"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fee_charged": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "has_soroban": {
+                  "type": "boolean"
+                },
+                "hash": {
+                  "type": "string"
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "operation_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "operation_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Distinct `op_type_name(...)` labels for every op in the tx, sorted asc."
+                },
+                "source_account": {
+                  "type": "string"
+                },
+                "successful": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_EventItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row per event — an appearance with `amount > 1` expands to that\nmany rows (per-tx fields repeated, per-event fields unique).",
+              "required": [
+                "transaction_hash",
+                "ledger_sequence",
+                "transaction_id",
+                "successful",
+                "amount",
+                "created_at",
+                "event_type",
+                "topics",
+                "data"
+              ],
+              "properties": {
+                "amount": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "data": {},
+                "event_type": {
+                  "type": "string"
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "successful": {
+                  "type": "boolean"
+                },
+                "topics": {
+                  "type": "array",
+                  "items": {}
+                },
+                "transaction_hash": {
+                  "type": "string"
+                },
+                "transaction_id": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_InvocationItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "transaction_hash",
+                "ledger_sequence",
+                "amount",
+                "created_at",
+                "successful"
+              ],
+              "properties": {
+                "amount": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Folded invocation-tree node count for this appearance."
+                },
+                "caller_account": {
+                  "type": ["string", "null"]
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "successful": {
+                  "type": "boolean"
+                },
+                "transaction_hash": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_LedgerListItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Slim ledger row returned in the list endpoint and reused inside the\ndetail response as the header block. Doubles as the `sqlx::FromRow`\ntarget for `fetch_list` — the SQL projection aliases match this\nstruct's field names so no manual mapping is needed.",
+              "required": [
+                "sequence",
+                "hash",
+                "closed_at",
+                "protocol_version",
+                "transaction_count",
+                "base_fee"
+              ],
+              "properties": {
+                "base_fee": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "closed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "hash": {
+                  "type": "string",
+                  "description": "Ledger hash (64-char lowercase hex)."
+                },
+                "protocol_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "transaction_count": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_NftItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
+              "required": ["id", "contract_id", "token_id"],
+              "properties": {
+                "collection_name": {
+                  "type": ["string", "null"]
+                },
+                "contract_id": {
+                  "type": "string",
+                  "description": "Contract C-StrKey resolved via `soroban_contracts` join."
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "last_seen_ledger": {
+                  "type": ["integer", "null"],
+                  "format": "int64",
+                  "description": "Most recent ledger where ownership state changed\n(`nfts.current_owner_ledger`)."
+                },
+                "media_url": {
+                  "type": ["string", "null"]
+                },
+                "minted_at_ledger": {
+                  "type": ["integer", "null"],
+                  "format": "int64"
+                },
+                "name": {
+                  "type": ["string", "null"]
+                },
+                "owner_account": {
+                  "type": ["string", "null"],
+                  "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+                },
+                "token_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_NftTransferItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+              "required": [
+                "transaction_hash",
+                "ledger_sequence",
+                "event_type",
+                "created_at",
+                "event_order"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "event_order": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "event_type": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Raw NftEventType discriminant (ADR 0031)."
+                },
+                "event_type_name": {
+                  "type": ["string", "null"],
+                  "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
+                },
+                "from_account": {
+                  "type": ["string", "null"],
+                  "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "to_account": {
+                  "type": ["string", "null"],
+                  "description": "New owner G-StrKey. `null` on burn."
+                },
+                "transaction_hash": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_ParticipantItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.",
+              "required": [
+                "account",
+                "shares",
+                "first_deposit_ledger",
+                "last_updated_ledger"
+              ],
+              "properties": {
+                "account": {
+                  "type": "string",
+                  "description": "Participant account StrKey (G...)."
+                },
+                "first_deposit_ledger": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Ledger of the first deposit by this account into this pool."
+                },
+                "last_updated_ledger": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Ledger of the most recent change to this position."
+                },
+                "share_percentage": {
+                  "type": ["string", "null"],
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+                },
+                "shares": {
+                  "type": "string",
+                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_PoolItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+              "required": [
+                "pool_id",
+                "asset_a",
+                "asset_b",
+                "fee_bps",
+                "fee_percent",
+                "created_at_ledger",
+                "participant_count"
+              ],
+              "properties": {
+                "asset_a": {
+                  "$ref": "#/components/schemas/PoolAssetLeg"
+                },
+                "asset_b": {
+                  "$ref": "#/components/schemas/PoolAssetLeg"
+                },
+                "created_at_ledger": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "fee_bps": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "fee_percent": {
+                  "type": "string",
+                  "description": "`fee_bps / 100` as decimal string. Conversion done server-side so\nthe frontend can render directly (frontend §6.13/§6.14)."
+                },
+                "fee_revenue": {
+                  "type": ["string", "null"]
+                },
+                "latest_snapshot_at": {
+                  "type": ["string", "null"],
+                  "format": "date-time"
+                },
+                "latest_snapshot_ledger": {
+                  "type": ["integer", "null"],
+                  "format": "int64"
+                },
+                "participant_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+                },
+                "pool_id": {
+                  "type": "string",
+                  "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+                },
+                "reserve_a": {
+                  "type": ["string", "null"]
+                },
+                "reserve_b": {
+                  "type": ["string", "null"]
+                },
+                "total_shares": {
+                  "type": ["string", "null"]
+                },
+                "tvl": {
+                  "type": ["string", "null"]
+                },
+                "volume": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_PoolTransactionItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row from `/liquidity-pools/:id/transactions`. Shape pinned to\ncanonical SQL `20_get_liquidity_pools_transactions.sql`.",
+              "required": [
+                "hash",
+                "ledger_sequence",
+                "source_account",
+                "fee_charged",
+                "successful",
+                "operation_count",
+                "has_soroban",
+                "operation_types",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fee_charged": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "has_soroban": {
+                  "type": "boolean"
+                },
+                "hash": {
+                  "type": "string"
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "operation_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "operation_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Distinct `op_type_name(...)` labels for every op in the tx, sorted\nasc. Frontend §6.14 categorises trade vs LP-mgmt activity from this\nlist (policy lives client-side, not in SQL)."
+                },
+                "source_account": {
+                  "type": "string"
+                },
+                "successful": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_TransactionListItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Slim transaction row returned in the list endpoint.",
+              "required": [
+                "hash",
+                "ledger_sequence",
+                "application_order",
+                "fee_charged",
+                "successful",
+                "operation_count",
+                "has_soroban",
+                "operation_types",
+                "contract_ids",
+                "created_at"
+              ],
+              "properties": {
+                "application_order": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "1-based position of this transaction within its ledger."
+                },
+                "contract_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "All C-StrKeys touched anywhere in the transaction."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fee_charged": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Fee charged in stroops."
+                },
+                "has_soroban": {
+                  "type": "boolean",
+                  "description": "`true` when the transaction touched at least one Soroban contract\n(root invocation, nested call, or event emission)."
+                },
+                "hash": {
+                  "type": "string",
+                  "description": "Transaction hash (64-char lowercase hex)."
+                },
+                "inner_tx_hash": {
+                  "type": ["string", "null"],
+                  "description": "Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise."
+                },
+                "ledger_sequence": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "operation_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "operation_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "All distinct operation type names in the transaction\n(e.g. `[\"INVOKE_HOST_FUNCTION\", \"PAYMENT\"]`)."
+                },
+                "source_account": {
+                  "type": ["string", "null"],
+                  "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209). Always populated for ordinary\n(successful or failed-but-decoded) transactions."
+                },
+                "successful": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "ParticipantItem": {
+        "type": "object",
+        "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries/23_get_liquidity_pools_participants.sql`.",
+        "required": [
+          "account",
+          "shares",
+          "first_deposit_ledger",
+          "last_updated_ledger"
+        ],
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "Participant account StrKey (G...)."
+          },
+          "first_deposit_ledger": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ledger of the first deposit by this account into this pool."
+          },
+          "last_updated_ledger": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ledger of the most recent change to this position."
+          },
+          "share_percentage": {
+            "type": ["string", "null"],
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+          },
+          "shares": {
+            "type": "string",
+            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+          }
+        }
+      },
+      "PoolAssetLeg": {
+        "type": "object",
+        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain\n    address in classic Stellar protocol; SAC mirror is network-dependent).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit\n    leg (populated when an `assets` row with `asset_type = 2`\n    exists for `(asset_code, issuer)` and carries a\n    `soroban_contracts.contract_id`). `None` for legs without an\n    SAC mirror. Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
+        "required": ["asset_type"],
+        "properties": {
+          "asset_code": {
+            "type": ["string", "null"]
+          },
+          "asset_type": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban)."
+          },
+          "asset_type_name": {
+            "type": ["string", "null"],
+            "description": "`native | classic_credit | sac | soroban`. `null` only on schema drift."
+          },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the SAC mirror, when a matching `assets` row\n(`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for\nnative legs and for classic credit legs without an SAC mirror."
+          },
+          "issuer": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "PoolItem": {
+        "type": "object",
+        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+        "required": [
+          "pool_id",
+          "asset_a",
+          "asset_b",
+          "fee_bps",
+          "fee_percent",
+          "created_at_ledger",
+          "participant_count"
+        ],
+        "properties": {
+          "asset_a": {
+            "$ref": "#/components/schemas/PoolAssetLeg"
+          },
+          "asset_b": {
+            "$ref": "#/components/schemas/PoolAssetLeg"
+          },
+          "created_at_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fee_bps": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "fee_percent": {
+            "type": "string",
+            "description": "`fee_bps / 100` as decimal string. Conversion done server-side so\nthe frontend can render directly (frontend §6.13/§6.14)."
+          },
+          "fee_revenue": {
+            "type": ["string", "null"]
+          },
+          "latest_snapshot_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "latest_snapshot_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64"
+          },
+          "participant_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+          },
+          "pool_id": {
+            "type": "string",
+            "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+          },
+          "reserve_a": {
+            "type": ["string", "null"]
+          },
+          "reserve_b": {
+            "type": ["string", "null"]
+          },
+          "total_shares": {
+            "type": ["string", "null"]
+          },
+          "tvl": {
+            "type": ["string", "null"]
+          },
+          "volume": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "PoolTransactionItem": {
+        "type": "object",
+        "description": "One row from `/liquidity-pools/:id/transactions`. Shape pinned to\ncanonical SQL `20_get_liquidity_pools_transactions.sql`.",
+        "required": [
+          "hash",
+          "ledger_sequence",
+          "source_account",
+          "fee_charged",
+          "successful",
+          "operation_count",
+          "has_soroban",
+          "operation_types",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_charged": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "has_soroban": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operation_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Distinct `op_type_name(...)` labels for every op in the tx, sorted\nasc. Frontend §6.14 categorises trade vs LP-mgmt activity from this\nlist (policy lives client-side, not in SQL)."
+          },
+          "source_account": {
+            "type": "string"
+          },
+          "successful": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SearchGroups": {
+        "type": "object",
+        "description": "Per-entity buckets. Empty buckets are omitted from the JSON output\nvia `skip_serializing_if` — frontend treats absent and empty array\nidentically, and dropping empties keeps the dropdown payload tight\nwhen a typed `?type=` filter narrows results to a single bucket.",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "contracts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "nfts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          }
+        }
+      },
+      "SearchHit": {
+        "type": "object",
+        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions, strkey `L…` for pools, StrKey for accounts /\ncontracts, asset code for assets, name for NFTs). For `asset` it is\nNOT unique — the frontend routes via `surrogate_id`. For `nft` it is\nalso not unique and `surrogate_id` alone is insufficient because NFT\nidentity is the composite `(contract_id, token_id)` per task 0264 /\nADR 0030 — the two fields below carry the composite for routing.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
+        "required": ["entity_type", "identifier", "label"],
+        "properties": {
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "NFT composite routing key. Populated only when\n`entity_type = nft`; `None` for every other bucket."
+          },
+          "entity_type": {
+            "$ref": "#/components/schemas/EntityType"
+          },
+          "identifier": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_activity_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "successful": {
+            "type": ["boolean", "null"]
+          },
+          "surrogate_id": {
+            "type": ["integer", "null"],
+            "format": "int64"
+          },
+          "token_id": {
+            "type": ["string", "null"],
+            "description": "NFT composite routing key. Populated only when\n`entity_type = nft`; `None` for every other bucket."
+          }
+        }
+      },
+      "SearchResults": {
+        "type": "object",
+        "description": "Results payload — six entity-typed buckets, each capped at the\nper-group `limit` chosen by the caller (default 10, ceiling 50).\n\nFE decides \"singleton → navigate directly\" by inspecting\n`groups`: when the total row count across all buckets is exactly\n1 and `routeForHit(singleton)` resolves, the FE navigates to the\ndetail page; otherwise it renders the dropdown / Results page.",
+        "required": ["groups"],
+        "properties": {
+          "groups": {
+            "$ref": "#/components/schemas/SearchGroups"
+          }
+        }
+      },
+      "SignatureDto": {
+        "type": "object",
+        "description": "Single signature on a transaction envelope.",
+        "required": ["hint", "signature"],
+        "properties": {
+          "hint": {
+            "type": "string",
+            "description": "4-byte hint (lowercase hex, 8 chars)."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Signature bytes (lowercase hex)."
+          }
+        }
+      },
+      "TransactionDetailLight": {
+        "type": "object",
+        "description": "DB-sourced light slice for the transaction detail endpoint.\n\nComposed with `E3HeavyFields` via `merge_e3_response` (task 0150). All\nXDR-sourced fields (memo, result_code, signatures, events, operation\ndetails, envelope_xdr/result_xdr, operation_tree) live in `heavy`.",
+        "required": [
+          "hash",
+          "ledger_sequence",
+          "application_order",
+          "fee_charged",
+          "successful",
+          "operation_count",
+          "has_soroban",
+          "created_at",
+          "parse_error",
+          "operations",
+          "participants",
+          "soroban_events",
+          "soroban_invocations"
+        ],
+        "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based position of this transaction within its ledger."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_charged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee charged in stroops."
+          },
+          "has_soroban": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "Transaction hash (64-char lowercase hex)."
+          },
+          "inner_tx_hash": {
+            "type": ["string", "null"],
+            "description": "Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise."
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationItem"
+            }
+          },
+          "parse_error": {
+            "type": "boolean",
+            "description": "`true` when the XDR parser encountered an error for this transaction."
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Accounts touched by this transaction. Populated only when\n`heavy_fields_status = \"unavailable\"`; otherwise `[]` and consumers\nshould rely on the heavy block."
+          },
+          "soroban_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAppearanceItem"
+            },
+            "description": "Soroban event appearance index rows. Same fallback semantics as\n`participants`. Full topics + data live in `heavy.contract_events`."
+          },
+          "soroban_invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvocationAppearanceItem"
+            },
+            "description": "Soroban invocation appearance index rows. Same fallback semantics\nas `participants`. Full call hierarchy lives in `heavy.operation_tree`."
+          },
+          "source_account": {
+            "type": ["string", "null"],
+            "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209)."
+          },
+          "successful": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TransactionListItem": {
+        "type": "object",
+        "description": "Slim transaction row returned in the list endpoint.",
+        "required": [
+          "hash",
+          "ledger_sequence",
+          "application_order",
+          "fee_charged",
+          "successful",
+          "operation_count",
+          "has_soroban",
+          "operation_types",
+          "contract_ids",
+          "created_at"
+        ],
+        "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based position of this transaction within its ledger."
+          },
+          "contract_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All C-StrKeys touched anywhere in the transaction."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fee_charged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fee charged in stroops."
+          },
+          "has_soroban": {
+            "type": "boolean",
+            "description": "`true` when the transaction touched at least one Soroban contract\n(root invocation, nested call, or event emission)."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Transaction hash (64-char lowercase hex)."
+          },
+          "inner_tx_hash": {
+            "type": ["string", "null"],
+            "description": "Inner-transaction hash (64-char hex) for fee-bump envelopes, `null` otherwise."
+          },
+          "ledger_sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operation_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All distinct operation type names in the transaction\n(e.g. `[\"INVOKE_HOST_FUNCTION\", \"PAYMENT\"]`)."
+          },
+          "source_account": {
+            "type": ["string", "null"],
+            "description": "`null` for Variant A `parse_error` transactions whose envelope\ncould not be decoded (lore-0209). Always populated for ordinary\n(successful or failed-but-decoded) transactions."
+          },
+          "successful": {
+            "type": "boolean"
+          }
+        }
+      },
+      "XdrEventDto": {
+        "type": "object",
+        "description": "Common shape for contract events and diagnostic events.",
+        "required": ["event_type", "topics", "data", "event_index"],
+        "properties": {
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "Contract address (StrKey) that emitted the event, if any."
+          },
+          "data": {
+            "description": "Decoded event data payload."
+          },
+          "event_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Event index within the transaction (zero-based)."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "`\"contract\"`, `\"system\"`, or `\"diagnostic\"`."
+          },
+          "topics": {
+            "type": "array",
+            "items": {},
+            "description": "Decoded topic array."
+          }
+        }
+      },
+      "XdrOperationDto": {
+        "type": "object",
+        "description": "Operation raw parameters (XDR-decoded full details).",
+        "required": ["op_type", "application_order", "details"],
+        "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Application order within the transaction (1-based, matches Horizon\n`paging_token` convention)."
+          },
+          "details": {
+            "description": "Full operation details (type-specific JSON)."
+          },
+          "op_type": {
+            "type": "string",
+            "description": "Operation type tag (e.g. `\"payment\"`, `\"invoke_host_function\"`)."
+          }
+        }
+      }
+    }
+  }
+}

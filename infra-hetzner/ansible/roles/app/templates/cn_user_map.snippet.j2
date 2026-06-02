@@ -1,0 +1,45 @@
+{#- Managed by infra-hetzner/ansible/roles/app — do not edit by hand.
+    Re-rendered on every `ansible-playbook --tags app` run from
+    `clickhouse_cn_user_pairs` in group_vars/all.yml.
+
+    Imported into Caddyfile via `import snippets/cn_user_map.snippet`.
+    Replaces the earlier `cn_allowlist.snippet` (task 0240): the map
+    IS the allowlist — any cert whose CN is not in the map gets the
+    `__unmapped__` sentinel (the `default` below), and the site block's
+    `@no_user` matcher returns 403 before any backend hop.
+
+    ## Why we match on full DN, not just CN
+
+    Caddy 2.x does NOT register a `{http.request.tls.client.subject_cn}`
+    placeholder. `subject` returns the full RFC-2253 Distinguished Name
+    string (pkix.Name.String()), e.g. `CN=alice-laptop` for a cert
+    issued by issue-client-cert.sh (which sets Subject to `/CN=<name>`
+    with no other RDNs). We therefore match against the `CN=…` form.
+
+    ## Why CN regex is enforced at preflight, not here
+
+    Caddy's `map` directive does not run an expression against the
+    key, so a CN like `alice"; DROP TABLE x;--` would silently land
+    in the rendered output (causing either a Caddyfile parse error
+    or — worse — quietly widening the matched set if Caddy ever
+    starts honouring escape sequences). The site.yml preflight
+    asserts every CN against `^[a-zA-Z0-9._-]+$` BEFORE Ansible
+    reaches the box; the same regex the issuance script enforces.
+
+    An empty `clickhouse_cn_user_pairs` still emits the `default
+    "__unmapped__"` line, so every request maps to the sentinel and the
+    site block's `@no_user expression {ch_user} == "__unmapped__"`
+    matcher rejects it with 403 — fail-closed. The site.yml preflight
+    refuses the empty case (`length > 0`) so we never reach it anyway.
+
+    NOTE: a bare `== ""` does NOT work — an unset/empty {ch_user} does
+    not compare equal to "" in Caddy's CEL `expression` matcher, so the
+    gate silently never fired. The non-empty `default` sentinel keeps
+    {ch_user} always set, making the comparison reliable (task 0241). -#}
+map {http.request.tls.client.subject} {ch_user} {
+{% for pair in clickhouse_cn_user_pairs %}
+{%   set cn, user = (pair.split(':', 1) | map('trim') | list) %}
+    "CN={{ cn }}"    {{ user }}
+{% endfor %}
+    default "__unmapped__"
+}

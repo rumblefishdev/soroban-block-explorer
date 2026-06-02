@@ -1,0 +1,594 @@
+---
+id: '0204'
+title: 'ClickHouse pilot — db-clickhouse crate, Docker service, mirrored schema'
+type: FEATURE
+status: completed
+related_adr: ['0044']
+related_tasks: []
+tags:
+  [
+    layer-backend,
+    layer-db,
+    layer-infra,
+    clickhouse,
+    schema,
+    docker,
+    pilot,
+    non-invasive,
+    effort-medium,
+    priority-medium,
+  ]
+links:
+  - lore/2-adrs/0044_clickhouse-pilot-parallel-store.md
+  - sources/db-schema-snapshot.md
+history:
+  - date: '2026-05-08'
+    status: backlog
+    who: fmazur
+    note: >
+      Spawned from ADR 0044. Implements the pilot infrastructure:
+      crates/db-clickhouse + docker-compose clickhouse service + ClickHouse
+      schema mirroring the Postgres logical shape, with full-content
+      soroban_events replacing soroban_events_appearances. Read-empty pilot —
+      no indexer dual-write, no API reads from ClickHouse in scope of this
+      task.
+  - date: '2026-05-08'
+    status: backlog
+    who: fmazur
+    note: >
+      ADR 0044 review resolved 6 of 7 open questions. Step 1 (client) and
+      Step 5 (migrations) are no longer choices — official `clickhouse`
+      crate latest stable, single idempotent `init.sql`. Step 3 schema
+      now carries concrete translation rules: engine per "category"
+      (Replacing for fact + state, plain MergeTree for immutable
+      lookup), `PARTITION BY intDiv(ledger_sequence, 500000)`,
+      `created_at` dropped from CH side except `ledgers.closed_at` (PG
+      unchanged), `nfts.metadata` dropped (CH only, PG unchanged),
+      `_sqlx_migrations` not mirrored, `transaction_hash_index` kept
+      and accelerated by a CH `Dictionary` (cache layout). CH net schema:
+      17 tables + 1 Dictionary. ER diagram archived in
+      `notes/G-clickhouse-schema-er.md`.
+  - date: '2026-05-08'
+    status: active
+    who: fmazur
+    note: 'Promoted to active to begin implementation.'
+  - date: '2026-05-10'
+    status: completed
+    who: fmazur
+    note: >
+      Landed on feat/0204_clickhouse-pilot-crate-docker-schema. 14 files,
+      +1792/-16. crates/db-clickhouse with idempotent init.sql (17 tables
+      + transaction_hash_dict), connection layer + Rust CLI, smoke test
+      (1/1 PASS against live CH 26.3, all 17 tables + dictGet verified).
+      docker-compose: clickhouse + db-clickhouse-init sidecar; both apply
+      paths share init.sql via include_str!. Five divergences in place
+      per ADR 0044 §Decision §4. Non-invasive contract upheld (no file
+      under banned crate list touched). Docs: new clickhouse-pilot.md +
+      subsections in database-schema-overview / infrastructure-overview
+      / technical-design-general-overview. Five emerged decisions
+      documented inline; six issues encountered + resolved (see §Issues).
+---
+
+# ClickHouse pilot — db-clickhouse crate, Docker service, mirrored schema
+
+## Summary
+
+Stand up the parallel ClickHouse store described in [ADR
+0044](../../../2-adrs/0044_clickhouse-pilot-parallel-store.md): a new
+`crates/db-clickhouse` crate, a `clickhouse` service in `docker-compose.yml`,
+and a ClickHouse schema that mirrors the current Postgres `public` schema
+(snapshot dated 2026-05-08) with the **five deliberate divergences**
+listed in ADR 0044 §Decision §4 — `soroban_events_appearances` replaced
+by full-content `soroban_events`; `created_at` dropped from every CH
+table except `ledgers`; `nfts.metadata` dropped (CH only); `_sqlx_migrations`
+not mirrored (replaced by `init.sql`); `transaction_hash_index` accessed
+via a CH `Dictionary`. **Postgres is unchanged by all five.**
+
+The pilot is **read-empty** in scope of this task: no indexer dual-write,
+no API reads against ClickHouse. The crate ships the schema, the migration
+mechanism, and the connection layer; populating the store and using it for
+queries are follow-up ADRs/tasks.
+
+## Context
+
+ADR 0044 captures the team's decision to evaluate ClickHouse next to
+Postgres before committing to any migration. The non-invasive contract is
+strict: no file under `crates/{api,indexer,domain,db,db-merge,db-migrate,
+db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,backfill-bench}`
+may be touched by this task's PR. Allowed changes outside `crates/db-clickhouse/`:
+`Cargo.toml` workspace members, `docker-compose.yml` (new service),
+`docs/architecture/**` (per ADR 0032), and lore.
+
+The Postgres schema this task mirrors is captured in
+[`sources/db-schema-snapshot.md`](sources/db-schema-snapshot.md) (taken on
+2026-05-08, 11 regular + 7 partitioned tables, 18 total).
+
+## Implementation Plan
+
+### Step 1 — ClickHouse client crate (decided)
+
+Use the **official `clickhouse` crate from crates.io** (maintained by
+ClickHouse Inc.), pinned to the **latest stable** version at the time
+this task starts. Document the version pin in `crates/db-clickhouse/README.md`
+along with a one-line rationale (vendor-tracked, covers HTTP + native
+protocols, Serde-derive integration). Decision recorded in ADR 0044
+§Decision §5; revisit only if blocked by a specific bug.
+
+### Step 2 — Create `crates/db-clickhouse`
+
+- New library crate, registered in workspace `Cargo.toml`
+- `src/lib.rs` exposes a connection-pool factory + a typed query layer
+  (or a thin wrapper around the chosen client)
+- `src/schema/` holds the SQL DDL (one file per logical table grouping,
+  matching the Postgres grouping convention from `crates/db/migrations/`
+  if helpful)
+- `src/bin/db-clickhouse-init.rs` CLI: applies the schema to a target
+  ClickHouse instance, idempotently. Usable both from `docker compose`
+  startup and from local dev (`cargo run -p db-clickhouse --bin db-clickhouse-init`)
+- `README.md` with: client choice rationale, type-translation table
+  (Postgres → ClickHouse), partitioning strategy, how to apply schema
+  locally, how to drop and recreate
+
+### Step 3 — Author the ClickHouse schema (decisions resolved in ADR 0044)
+
+**All decisions below are CH-side only. Postgres schema is unchanged
+by this task — no migration, no column drop, no engine change on the
+PG side.** Reference: `sources/db-schema-snapshot.md` is the PG state
+to mirror; the divergences in §Decision §4 of ADR 0044 are the **only**
+deltas, and they live exclusively in `crates/db-clickhouse/schema/init.sql`.
+
+#### Translation rules (canonical)
+
+| Postgres                                            | ClickHouse                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `BIGINT` / `bigserial`                              | `Int64`                                                            |
+| `INTEGER` / `serial`                                | `Int32`                                                            |
+| `SMALLINT`                                          | `Int16`                                                            |
+| `BOOLEAN`                                           | `Bool`                                                             |
+| `VARCHAR(N)` / `TEXT` / variable `BYTEA`            | `String`                                                           |
+| 32-byte `BYTEA` (hashes, `pool_id`)                 | `FixedString(32)`                                                  |
+| `NUMERIC(28,7)`                                     | `Decimal128(7)`                                                    |
+| `JSONB` (only `wasm_interface_metadata.metadata`)   | `String`                                                           |
+| `JSONB` (`nfts.metadata`)                           | **OMITTED** (column dropped from CH copy of `nfts`; PG keeps it)   |
+| `TIMESTAMPTZ` (only `ledgers.closed_at`)            | `DateTime64(3, 'UTC')`                                             |
+| `TIMESTAMPTZ created_at` (every other table)        | **OMITTED** (column dropped from CH copy; PG keeps it)             |
+| `tsvector` (only `soroban_contracts.search_vector`) | OMITTED                                                            |
+| `PARTITION BY RANGE (created_at)`                   | `PARTITION BY intDiv(ledger_sequence, 500000)`                     |
+| Postgres `PRIMARY KEY (…)`                          | `ORDER BY (…)` with `ledger_sequence` substituted for `created_at` |
+| FK constraints                                      | OMIT (not enforceable in CH)                                       |
+| CHECK constraints                                   | OMIT for the pilot                                                 |
+| GIN / `pg_trgm` indexes                             | OMIT (no equivalent)                                               |
+| Partial unique indexes                              | OMIT (no enforcement); document in the README                      |
+
+#### Engine choice per table "category" (resolves Q1)
+
+- **Append-only fact tables** (`transactions`, `operations_appearances`,
+  `transaction_participants`, `nft_ownership`, `liquidity_pool_snapshots`,
+  `soroban_events`, `soroban_invocations_appearances`,
+  `transaction_hash_index`) → `ReplacingMergeTree`. Replay safety on
+  re-ingest comes from background dedup-by-`ORDER BY`-key.
+- **State tables** (`accounts`, `assets`, `account_balances_current`,
+  `nfts`, `lp_positions`, `soroban_contracts`) →
+  `ReplacingMergeTree(version_column)` with the version column being
+  the natural "latest update" column already in the schema
+  (`last_updated_ledger`, `last_seen_ledger`, `current_owner_ledger`,
+  `wasm_uploaded_at_ledger`).
+- **Immutable lookup** (`ledgers`, `liquidity_pools`,
+  `wasm_interface_metadata`) → plain `MergeTree`.
+
+#### Partitioning + ordering (resolves Q2)
+
+Every partitioned fact table uses `PARTITION BY intDiv(ledger_sequence,
+500000)`. State and immutable-lookup tables are typically small enough
+that they don't need partitioning — pick per table during implementation
+(default: no partition for tables under ~10M rows projected).
+
+`ORDER BY` substitutes `ledger_sequence` for the dropped `created_at` in
+every fact table. See `notes/G-clickhouse-schema-er.md` for the full
+table-by-table ENGINE / PARTITION BY / ORDER BY matrix.
+
+#### Tables to produce: 17 (CH side) + 1 Dictionary
+
+| #   | CH table                               | PG counterpart                                  | Notes                                                           |
+| --- | -------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
+| 1   | `accounts`                             | `accounts`                                      | state                                                           |
+| 2   | `account_balances_current`             | `account_balances_current`                      | state                                                           |
+| 3   | `assets`                               | `assets`                                        | state                                                           |
+| 4   | `ledgers`                              | `ledgers`                                       | immutable; **only** table with wall-clock `closed_at`           |
+| 5   | `liquidity_pools`                      | `liquidity_pools`                               | immutable post-create                                           |
+| 6   | `liquidity_pool_snapshots`             | `liquidity_pool_snapshots`                      | append-only fact, no `created_at`                               |
+| 7   | `lp_positions`                         | `lp_positions`                                  | state                                                           |
+| 8   | `nfts`                                 | `nfts`                                          | state, **drops `metadata` column**                              |
+| 9   | `nft_ownership`                        | `nft_ownership`                                 | append-only fact, no `created_at`                               |
+| 10  | `operations_appearances`               | `operations_appearances`                        | append-only fact, no `created_at`                               |
+| 11  | `soroban_contracts`                    | `soroban_contracts`                             | state, drops `search_vector`                                    |
+| 12  | `soroban_events`                       | **NEW** (replaces `soroban_events_appearances`) | full-content per-event row                                      |
+| 13  | `soroban_invocations_appearances`      | `soroban_invocations_appearances`               | append-only fact, no `created_at`                               |
+| 14  | `transactions`                         | `transactions`                                  | append-only fact, no `created_at`                               |
+| 15  | `transaction_hash_index`               | `transaction_hash_index`                        | source for the Dictionary, no `created_at`                      |
+| 16  | `transaction_participants`             | `transaction_participants`                      | append-only fact, no `created_at`                               |
+| 17  | `wasm_interface_metadata`              | `wasm_interface_metadata`                       | immutable; `metadata` is `String`                               |
+| —   | ~~`_sqlx_migrations`~~                 | `_sqlx_migrations`                              | **NOT MIRRORED** — pilot uses `init.sql`                        |
+| D1  | `transaction_hash_dict` (`DICTIONARY`) | —                                               | sourced from `transaction_hash_index`, complex_key_cache layout |
+
+#### `soroban_events` canonical DDL
+
+PG reference (this is the v3 spec; **PG itself does not have this table**
+— the spec is the design target for CH only):
+
+```sql
+CREATE TABLE soroban_events (
+    contract_id     BIGINT       NOT NULL REFERENCES soroban_contracts(id),
+    transaction_id  BIGINT       NOT NULL,
+    ledger_sequence BIGINT       NOT NULL,
+    event_index     SMALLINT     NOT NULL,
+    event_type      SMALLINT     NOT NULL,
+    signature       TEXT,
+    topics_xdr      BYTEA        NOT NULL,
+    data_xdr        BYTEA        NOT NULL,
+    created_at      TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (contract_id, created_at, transaction_id, event_index),
+    FOREIGN KEY (transaction_id, created_at)
+        REFERENCES transactions (id, created_at) ON DELETE CASCADE,
+    CONSTRAINT ck_se_v3_type_range CHECK (event_type BETWEEN 0 AND 2),
+    CONSTRAINT ck_se_v3_index_pos  CHECK (event_index >= 0)
+) PARTITION BY RANGE (created_at);
+```
+
+ClickHouse equivalent (this is what the pilot writes to `init.sql`):
+
+```sql
+CREATE TABLE soroban_events (
+    contract_id     Int64,
+    transaction_id  Int64,
+    ledger_sequence Int64,
+    event_index     Int16,
+    event_type      Int16,
+    signature       Nullable(String),
+    topics_xdr      String,
+    data_xdr        String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, transaction_id, event_index);
+```
+
+(`created_at` omitted — recover via JOIN on `ledgers.closed_at` when
+needed; typed columns in CH version reflect the type translation rules
+above.)
+
+#### `transaction_hash_dict` Dictionary DDL (resolves Q7)
+
+```sql
+CREATE DICTIONARY transaction_hash_dict (
+    hash FixedString(32),
+    ledger_sequence Int64
+)
+PRIMARY KEY hash
+SOURCE(CLICKHOUSE(TABLE 'transaction_hash_index' DB 'default'))
+LIFETIME(MIN 300 MAX 360)
+LAYOUT(COMPLEX_KEY_CACHE(SIZE_IN_CELLS 1000000));
+```
+
+API queries use `dictGet('transaction_hash_dict', 'ledger_sequence',
+tuple(toFixedString(?, 32)))` to resolve `hash → ledger_sequence` in
+microseconds. Misses fall back to scanning `transaction_hash_index`
+itself (~5 ms).
+
+### Step 4 — Add `clickhouse` service to `docker-compose.yml`
+
+- Image: `clickhouse/clickhouse-server:24` (pin a recent stable major)
+- Ports: `8123:8123` (HTTP), `9000:9000` (native)
+- Volume: `clickhouse-data:/var/lib/clickhouse`
+- Healthcheck: `wget -qO- http://localhost:8123/ping || exit 1`
+- No compose profile — starts on `docker compose up` like Postgres
+- Default credentials: matches the local-dev posture of the Postgres
+  service (no production secrets in the file)
+
+### Step 5 — Wire schema apply into local dev (decision resolved)
+
+**Schema is applied via a single idempotent `init.sql`** (resolves Q5
+in ADR 0044). No numbered migration ladder for the pilot — the schema
+is read-empty and will iterate; numbered migrations are deferred to
+the dual-write follow-up task.
+
+Mechanism: `db-clickhouse-init` CLI runs from a **sidecar compose
+service** that depends on `clickhouse` healthy and applies
+`init.sql`. Survives `docker compose down -v` cleanly because the CLI
+is idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE DICTIONARY`
+re-applies as no-op).
+
+The dev iteration workflow is documented in
+`crates/db-clickhouse/README.md`:
+
+1. Edit `crates/db-clickhouse/schema/init.sql`
+2. `docker compose down -v` (nukes volume — pilot is read-empty so
+   safe)
+3. `docker compose up`
+4. Sidecar applies the new `init.sql` to fresh ClickHouse
+
+### Step 6 — Documentation
+
+- `crates/db-clickhouse/README.md` — client choice, translation rules,
+  how to apply schema locally, how to query
+- `docs/architecture/database-schema/clickhouse-pilot.md` (new) — pilot
+  scope, schema parity table (Postgres ↔ ClickHouse), divergences
+  (`soroban_events` shape, constraints/indexes that don't translate)
+- `docs/architecture/database-schema/database-schema-overview.md` — add
+  a "ClickHouse pilot" subsection linking to the new doc
+- `docs/architecture/infrastructure/infrastructure-overview.md` — note
+  the new compose service in the local-dev section
+- `docs/architecture/technical-design-general-overview.md` — one-line
+  pointer to the pilot in the data-store section
+- Each touched doc carries a link back to ADR 0044
+
+### Step 7 — Smoke test
+
+A `cargo test -p db-clickhouse` integration test that:
+
+1. Connects to a running ClickHouse at `${CLICKHOUSE_URL:-http://localhost:8123}`
+2. Applies the schema (or asserts it's already applied)
+3. Inserts one row into each of the 17 tables (with FK-shaped data
+   referencing plausible ID values — but not enforced in CH)
+4. Reads each row back
+5. **Verifies the `transaction_hash_dict` Dictionary**: insert a row
+   into `transaction_hash_index`, wait for Dictionary refresh window
+   (or call `SYSTEM RELOAD DICTIONARY transaction_hash_dict`), confirm
+   `dictGet('transaction_hash_dict', 'ledger_sequence', tuple(...))`
+   returns the expected `ledger_sequence`
+6. Drops the test data
+
+Gate the test on `CLICKHOUSE_URL` env so CI without a ClickHouse
+instance skips it cleanly (`#[ignore]` if env unset).
+
+## Acceptance Criteria
+
+- [x] `crates/db-clickhouse/` exists in the workspace, builds with
+      `cargo check -p db-clickhouse` clean, lints with
+      `cargo clippy -p db-clickhouse -- -D warnings` clean
+- [x] `docker compose up` starts both `postgres` and `clickhouse`
+      services healthy without manual flags
+- [x] All **17** CH tables (16 mirrored from PG + new `soroban_events`)
+      apply to a fresh ClickHouse instance without error
+- [x] `transaction_hash_dict` Dictionary applies and answers
+      `dictGet(...)` lookups against rows inserted into
+      `transaction_hash_index` (smoke-test verified)
+- [x] **Postgres schema unchanged** — no migration added under
+      `crates/db/migrations/`, no column dropped from any PG table
+      (verified via `git diff` against `crates/db/`)
+- [x] `db-clickhouse-init` CLI is idempotent (running it twice on the
+      same instance is a no-op) — verified by running the sidecar twice
+      against the same volume (second run = exit 0, no diff)
+- [x] Translation table (Postgres → ClickHouse) lives in
+      `crates/db-clickhouse/README.md` and matches what the schema
+      actually does, including the four CH-side drops
+      (`_sqlx_migrations`, `nfts.metadata`, `created_at` on fact
+      tables, `soroban_contracts.search_vector`)
+- [x] Engine-per-`category` rule applied (append-only fact + state →
+      `ReplacingMergeTree`; immutable lookup → `MergeTree`); each
+      `CREATE TABLE` carries the right ENGINE per ADR 0044 §Decision §5
+- [x] All partitioned tables use
+      `PARTITION BY intDiv(ledger_sequence, 500000)`
+- [x] Smoke test inserts and reads back one row in each of the 17
+      tables (gated on `CLICKHOUSE_URL` env) — 1/1 PASS including
+      `dictGet` resolution after `SYSTEM RELOAD DICTIONARY`
+- [x] No file under `crates/{api,indexer,domain,db,db-merge,db-migrate,
+db-partition-mgmt,xdr-parser,backfill-runner,audit-harness,
+backfill-bench}` is modified by this PR (verified via
+      `git diff --stat`)
+- [x] **Docs updated** — `docs/architecture/database-schema/clickhouse-pilot.md`
+      created; `database-schema-overview.md`,
+      `infrastructure/infrastructure-overview.md`,
+      `technical-design-general-overview.md` updated per ADR 0032; each
+      links back to ADR 0044
+- [x] **API types regenerated** — N/A; pilot does not touch
+      `crates/api/**`, only adds a workspace member to `Cargo.{toml,lock}`,
+      no schema change to `libs/api-types/**`
+
+## Implementation Notes
+
+Landed as one commit on `feat/0204_clickhouse-pilot-crate-docker-schema`
+(14 files, +1792/-16):
+
+- `crates/db-clickhouse/` (new crate, 6 files):
+  - `Cargo.toml` — pins `clickhouse = "=0.15.0"`
+  - `schema/init.sql` — 17 tables + `transaction_hash_dict` Dictionary,
+    every statement `CREATE … IF NOT EXISTS`
+  - `src/lib.rs` — `Config::from_env`, `client(&cfg)`,
+    `apply_init_sql(&client)`, statement splitter, 2 unit tests
+  - `src/bin/db-clickhouse-init.rs` — async CLI (tokio current_thread,
+    tracing-subscriber)
+  - `tests/smoke.rs` — end-to-end gated on `CLICKHOUSE_URL`, inserts +
+    reads sentinel row in each of 17 tables + verifies `dictGet`
+  - `README.md` — Quick start (6 steps), translation table, full-reset
+    recipe (surgical scope, doesn't touch `pgdata`)
+- `Cargo.toml` / `Cargo.lock` — workspace member registration
+- `docker-compose.yml` — `clickhouse` service
+  (`clickhouse/clickhouse-server:26.3`, ports 8123/9000, healthcheck,
+  ulimits) + `db-clickhouse-init` sidecar that runs
+  `clickhouse-client --queries-file /init.sql` against the healthy
+  ClickHouse service
+- `.env.example` — `CLICKHOUSE_HTTP_PORT`, `CLICKHOUSE_NATIVE_PORT`,
+  `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` with
+  defaults; `POSTGRES_PORT=5432` added for compose-anchored parity
+- `docs/architecture/database-schema/clickhouse-pilot.md` — new
+  pilot reference doc (266 lines)
+- `docs/architecture/database-schema/database-schema-overview.md` —
+  added §8.0 subsection pointing to the pilot doc
+- `docs/architecture/infrastructure/infrastructure-overview.md` —
+  added Local-dev ClickHouse pilot block under §5.2 Storage Components
+- `docs/architecture/technical-design-general-overview.md` — one-line
+  pointer next to "RDS PostgreSQL" in §3.3 tech-stack table
+
+Verification at landing:
+
+- `cargo check -p db-clickhouse` clean
+- `cargo clippy -p db-clickhouse --all-targets -- -D warnings` clean
+- 2/2 unit tests pass (`init.sql` parses to 18 statements)
+- 1/1 smoke test PASS against live CH 26.3 on docker-compose
+- Idempotent sidecar: second `docker compose up db-clickhouse-init`
+  exits 0 with no schema drift
+- Pre-push hook (cargo + `nx affected lint typecheck test`) green
+
+## Design Decisions
+
+### From Plan
+
+1. **Schema mirrors PG snapshot 2026-05-08 with five divergences**
+   per ADR 0044 §Decision §4 — full-content `soroban_events` replaces
+   `soroban_events_appearances`; `created_at` dropped from every CH
+   table except `ledgers`; `nfts.metadata` dropped; `_sqlx_migrations`
+   not mirrored; `transaction_hash_index` exposed as Dictionary.
+
+2. **Engine per "category"** per ADR 0044 §Decision §5: append-only
+   fact + state → `ReplacingMergeTree`; immutable lookup →
+   `MergeTree`. State tables use natural NOT NULL ledger column as
+   version where available.
+
+3. **Partition key `intDiv(ledger_sequence, 500000)`** on every fact
+   table — ~29 days at 5 s/ledger, mirrors PG monthly mental model.
+
+4. **Official `clickhouse` crate**, latest stable (`0.15.0`) — pinned
+   exactly per ADR 0044 §Decision §5 Q4.
+
+5. **Single idempotent `init.sql`**, not a numbered ladder — per
+   ADR 0044 §Decision §5 Q5; ladder deferred to dual-write follow-up.
+
+### Emerged
+
+6. **ClickHouse server image `:26.3` LTS, not `:24`**. Task spec
+   illustrated `:24` ("pin a recent stable major"); Docker Hub no
+   longer ships `:24` (current LTS is `26.3`). Picked the current
+   LTS; matches the parenthetical spirit of the spec.
+
+7. **Sidecar uses `clickhouse-client --queries-file`, not the Rust
+   CLI binary**. Both apply the same `init.sql` (shared via
+   `include_str!`), but the sidecar runs on the
+   `clickhouse/clickhouse-server` image already pulled for the CH
+   service — no workspace compile during `docker compose up`. The
+   Rust CLI is the local-dev iteration path (`cargo run -p
+db-clickhouse --bin db-clickhouse-init`). Trade-off documented in
+   `docker-compose.yml` and `README.md`.
+
+8. **`transaction_hash_dict` attribute type `String`, not
+   `FixedString(32)`**. CH 26.x rejects `FixedString` in dictionary
+   attribute slots (`UNKNOWN_TYPE`). The source table
+   `transaction_hash_index` keeps `FixedString(32)`; the dictionary
+   loader coerces. Callers use
+   `dictGet(..., tuple(toString(unhex(hex_str))))`.
+
+9. **`wasm_uploaded_at_ledger` and `current_owner_ledger` declared
+   `Int64 DEFAULT 0`**, not `Nullable(Int64)`. CH rejects `Nullable`
+   columns as the version slot of
+   `ReplacingMergeTree(version_column)`. PG keeps NULL semantics
+   unchanged. Documented inline in `init.sql` comments + README
+   translation-rules section.
+
+10. **Dictionary SOURCE clause carries inline `USER 'default'
+PASSWORD 'clickhouse'`**. CH 26.x requires auth on the internal
+    `CLICKHOUSE` source — same default user the docker-compose
+    service exposes. Coupled to the docker-compose `CLICKHOUSE_PASSWORD`
+    env; README warns "change both together or the dict fails to
+    load". Production deployment should swap for a named collection.
+
+11. **CH service uses deterministic `default`/`clickhouse` credentials,
+    not no-password**. Recent CH image generates a random password if
+    `CLICKHOUSE_PASSWORD` is unset; picked a deterministic local-dev
+    value matching the Postgres posture ("no production secrets in
+    the file"). Coupled to decision §10 above.
+
+12. **Added `.env.example` entries for ClickHouse vars** (minor scope
+    creep beyond the literal task spec, but matches the existing
+    `POSTGRES_PORT` pattern). Docker compose auto-loads `.env`; the
+    smoke test / Rust CLI are documented to `set -a; source .env`.
+
+## Issues Encountered
+
+- **Port conflict with pre-existing `ch-mirror` container**
+  (`clickhouse/clickhouse-server:24.8`, user's prior one-shot mirror
+  work on `8123`/`9000`). First verification ran on `8124`/`9001` via
+  env override. User decided to retire `ch-mirror` entirely; removed
+  the container + volume manually, pilot moved to default ports.
+  Recipe for retiring CH containers without touching Postgres
+  documented in `crates/db-clickhouse/README.md` §6 "Full reset".
+
+- **`FINAL` keyword fails on plain `MergeTree`**. Initial smoke test
+  used `SELECT count() FROM table FINAL` for visibility against
+  background `ReplacingMergeTree` dedup. Plain `MergeTree`
+  (`ledgers`, `liquidity_pools`, `wasm_interface_metadata`) rejects
+  it (`ILLEGAL_FINAL`). Dropped `FINAL` entirely — single-row sentinel
+  inserts don't need it.
+
+- **Dictionary DDL with `FixedString(32)` attribute rejected by CH
+  26.x** (`UNKNOWN_TYPE`). Resolved per emerged decision §8.
+
+- **Dictionary refresh hit `AUTHENTICATION_FAILED`** when calling
+  `SYSTEM RELOAD DICTIONARY transaction_hash_dict`. CH 26.x requires
+  explicit auth on the internal `CLICKHOUSE` source. Resolved per
+  emerged decision §10 by hardcoding USER/PASSWORD literals in the
+  SOURCE clause.
+
+- **First-draft "Full reset" recipe in `README.md` used
+  `docker compose down -v` without scoping**, which would have
+  wiped `pgdata` along with `clickhouse-data`. User caught it
+  during review; recipe rewritten to surgical `docker compose stop +
+rm -f` on only `clickhouse` + `db-clickhouse-init`, plus a named
+  `docker volume rm sorban-block-explorer_clickhouse-data`. Explicit
+  warning added at the top of §6 explaining why `down -v` is wrong
+  here.
+
+- **Pre-push hook + background watcher race**: first `git push`
+  attempt was launched via background tool with a separate watcher
+  process; pre-push hooks (cargo + `nx affected`) ran successfully
+  but the push pipe got SIGPIPE'd (exit 141). Re-pushed in
+  foreground without watcher — clean.
+
+## Future Work (deferred, not spawned)
+
+Out-of-Scope items below stay deferred to follow-up ADRs/tasks rather
+than spawning backlog entries:
+
+- Indexer dual-write to ClickHouse — needs its own ADR (writer
+  topology, drift handling, rollback) before a task. `transaction_participants`
+  is the one tabledenormalizing `ledger_sequence` from `transactions`
+  (PG doesn't have that column) — writer must populate it.
+- API read-path A/B against ClickHouse — separate ADR + task once
+  dual-write produces data to read.
+- Backfill of existing Postgres data into ClickHouse — separate task,
+  gated on dual-write.
+- ADR 0044 Q6 "what kills the pilot" PASS/FAIL success criteria —
+  follow-up ADR after first measurements (pilot is read-empty until
+  dual-write lands).
+
+## Out of Scope
+
+- Indexer dual-write to ClickHouse — separate ADR + task once the pilot
+  schema is stable
+- API read-path A/B against ClickHouse — separate ADR + task
+- Backfilling existing Postgres data into ClickHouse — separate task
+- Any retirement / deprecation of Postgres tables — explicitly deferred
+  to the migrate-or-retire decision after pilot measurements
+- Performance benchmarking — schema-only landing in this task; the
+  follow-up ADR with success criteria comes first
+
+## Notes
+
+- The Postgres schema this task mirrors is captured in
+  [`sources/db-schema-snapshot.md`](sources/db-schema-snapshot.md) (dated
+  2026-05-08). If that snapshot is regenerated and tables move/add/drop
+  before this task lands, sync the ClickHouse schema before merging.
+- ADR 0044 §"Open Questions" originally listed seven open items.
+  After the 2026-05-08 ADR review, six were resolved (Q1 engine choice,
+  Q2 partitioning, Q3 JSONB, Q4 client, Q5 migrations, Q7 lookup
+  tables) and folded into ADR 0044 §Decision §4–§5. A new Q8 (bucket
+  size for `intDiv(ledger_sequence, ?)`) surfaced from Q2 and was
+  closed in the same session at **500 000 ledgers ≈ 29 days**. Only
+  Q6 (pilot success criteria) remains genuinely open — deferred to a
+  follow-up ADR after first measurements. Implementer follows every
+  resolved decision; doesn't relitigate.
+- Full table-by-table ENGINE / PARTITION BY / ORDER BY matrix +
+  Mermaid ER diagram lives in
+  [`notes/G-clickhouse-schema-er.md`](notes/G-clickhouse-schema-er.md).
+- The compose service will increase the local-dev memory footprint by
+  the ClickHouse server's idle baseline (a few hundred MB). Acceptable;
+  flag in the README if it becomes a problem.

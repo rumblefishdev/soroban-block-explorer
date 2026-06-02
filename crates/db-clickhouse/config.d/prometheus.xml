@@ -1,0 +1,57 @@
+<!--
+  Native ClickHouse Prometheus metrics endpoint, production-only.
+
+  Mounted at /etc/clickhouse-server/config.d/prometheus.xml by the
+  production compose overlay. Not mounted in the local-development
+  stack because there is no scrape target locally.
+
+  ## Listener binding — loopback inside the container
+
+  The endpoint binds to 127.0.0.1 inside the container. This is
+  deliberate even though it makes the endpoint unreachable from
+  a host-side port mapping (Docker's iptables DNAT routes to the
+  container's bridge IP, not its loopback — a host port mapping
+  would just hit a non-listening interface).
+
+  The CH Prometheus endpoint accepts **no authentication of any
+  kind**. With `userland-proxy: false` on the Docker daemon, port
+  mapping 127.0.0.1:9363:9363 keeps it off the public network on
+  the host side, but does NOT protect against intra-bridge
+  traffic — any other container on the same default Docker
+  network can reach `clickhouse:9363/metrics` over the bridge IP
+  and pull unauthenticated metrics. Today the prod stack has
+  only Caddy + sidecar on that bridge, but the surface widens
+  with every future service.
+
+  Loopback binding closes that gap entirely: only processes
+  inside the CH container can reach the endpoint. A future
+  Prometheus scraper must therefore run either:
+
+   - On the host directly, scraping via `docker exec
+     clickhouse curl http://127.0.0.1:9363/metrics`, OR
+   - In a dedicated sidecar that shares the CH container's
+     network namespace (`network_mode: "service:clickhouse"`).
+
+  Neither path involves the public network. Neither requires
+  authentication on the CH endpoint.
+
+  ## What is exposed
+
+  All four CH metric families are turned on:
+   - `metrics`: instantaneous counters / gauges
+   - `events`: cumulative event counters since process start
+   - `asynchronous_metrics`: periodically refreshed gauges
+   - `errors`: per-error-code cumulative counters
+-->
+<clickhouse>
+    <prometheus>
+        <port>9363</port>
+        <endpoint>/metrics</endpoint>
+        <listen_host>127.0.0.1</listen_host>
+
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors>true</errors>
+    </prometheus>
+</clickhouse>
