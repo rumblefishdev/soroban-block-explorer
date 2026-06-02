@@ -121,7 +121,8 @@ pub async fn fetch_balances(
              FROM account_balances_current abc FINAL \
              LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
              WHERE abc.account_id = ? \
-             ORDER BY abc.asset_type, abc.asset_code, iss.account_id",
+             ORDER BY abc.asset_type, abc.asset_code, iss.account_id \
+             LIMIT 1 BY (abc.asset_type, abc.asset_code, abc.issuer_id)",
         )
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
@@ -185,22 +186,27 @@ pub async fn fetch_transactions(
     };
     let (op, order) = direction_sql(direction);
 
+    // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
+    // 0.15 bound-parameter path returns an empty result when `None` is bound
+    // into a tuple keyset comparison — the same defect that forced the
+    // transactions B/C statements to inline (a bound first page silently
+    // returned 0 rows). Values are i64 / None→NULL, so no injection surface.
+    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+
     // Step 1: account-scoped driver seek. `account_id` is the leading PK of
     // `transaction_participants`, so this reads only this account's rows.
     let driver_sql = format!(
         "SELECT tp.ledger_sequence AS ledger_sequence, tp.transaction_id AS transaction_id \
          FROM transaction_participants tp FINAL \
          WHERE tp.account_id = ? \
-           AND (? IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} (?, ?)) \
+           AND ({cl} IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} ({cl}, {ct})) \
          ORDER BY tp.ledger_sequence {order}, tp.transaction_id {order} \
          LIMIT ?"
     );
     let key_rows = client
         .query(&driver_sql)
         .bind(account_id)
-        .bind(cursor_ledger)
-        .bind(cursor_ledger)
-        .bind(cursor_tiebreak)
         .bind(limit)
         .fetch_all::<ParticipantKeyRow>()
         .await?;
