@@ -321,6 +321,19 @@ pub async fn fetch_list(
         _ => (None, None),
     };
 
+    // Inline the integer params directly into the filtered-statement SQL rather
+    // than `.bind()`-ing them. The clickhouse 0.15 bound-parameter path
+    // produced empty results for Statements B/C in production — the
+    // literal-equivalent query (validated on prod CH) returns the correct page,
+    // the bound form returned none. All values are `i64` / `i16` / `None`→`NULL`,
+    // so inlining carries no injection surface (same approach as
+    // `common::ch::fetch_tx_list_aggregates`, which already inlines its keys).
+    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let src = source_id.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let lim_over = params.limit * 4;
+    let lim_peek = params.limit + 1;
+
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
@@ -335,13 +348,14 @@ pub async fn fetch_list(
             // `operations_appearances` arm scans the pruned partition
             // (`contract_id` is not its PK prefix — deferred skip-index
             // follow-up, same as op_type).
+            let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
             let arm = |table: &str| {
                 format!(
                     "SELECT ledger_sequence, transaction_id FROM {table} \
-                     WHERE contract_id = ? \
+                     WHERE contract_id = {cid} \
                        AND intDiv(ledger_sequence, 500000) \
-                           = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                       AND (? IS NULL OR (ledger_sequence, transaction_id) {op} (?, ?))"
+                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
             let sql = format!(
@@ -349,51 +363,32 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT ? \
+                    LIMIT {lim_over} \
                  ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE (? IS NULL OR t.source_id = ?) \
-                   AND (? IS NULL OR ( \
+                 WHERE ({src} IS NULL OR t.source_id = {src}) \
+                   AND ({ot} IS NULL OR ( \
                         SELECT count() FROM operations_appearances oa2 \
                         WHERE oa2.transaction_id = t.id \
                           AND oa2.ledger_sequence = t.ledger_sequence \
-                          AND oa2.type = ? \
+                          AND oa2.type = {ot} \
                           AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
                    ) > 0) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT ?",
+                 LIMIT {lim_peek}",
                 arm_ops = arm("operations_appearances"),
                 arm_inv = arm("soroban_invocations_appearances"),
                 arm_evt = arm("soroban_events"),
             );
-
-            let mut q = client.query(&sql).bind(cursor_ledger); // `t` partition prune
-            // Three UNION arms, identical bind tuple each:
-            // (contract_id, cursor_ledger, cursor_ledger, cursor_ledger, tiebreak)
-            for _ in 0..3 {
-                q = q
-                    .bind(cid)
-                    .bind(cursor_ledger)
-                    .bind(cursor_ledger)
-                    .bind(cursor_ledger)
-                    .bind(cursor_tiebreak);
-            }
-            q = q
-                .bind(params.limit * 4) // over-fetch: a tx may hit up to all 3 arms
-                .bind(source_id)
-                .bind(source_id)
-                .bind(op_type_opt)
-                .bind(op_type_opt)
-                .bind(params.limit + 1); // peek row drives next-page detection
-            q.fetch_all::<TxPageChRow>().await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
 
         // --- Statement C: op_type filter only ------------------------------
@@ -417,42 +412,29 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
                     FROM operations_appearances \
-                    WHERE type = ? \
+                    WHERE type = {op_type} \
                       AND intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND (? IS NULL OR (ledger_sequence, transaction_id) {op} (?, ?)) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT ? \
+                    LIMIT {lim_over} \
                  ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE (? IS NULL OR t.source_id = ?) \
+                 WHERE ({src} IS NULL OR t.source_id = {src}) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT ?",
+                 LIMIT {lim_peek}",
             );
             // No outer keyset re-check: the driver subquery already filtered
             // `(ledger_sequence, transaction_id) {op} (cursor)`, and the JOIN
             // binds `t.id = m.transaction_id` / `t.ledger_sequence =
             // m.ledger_sequence`, so every joined row already satisfies it.
-            client
-                .query(&sql)
-                .bind(cursor_ledger) // `t` partition prune
-                .bind(op_type) // driver: type
-                .bind(cursor_ledger) // driver partition prune
-                .bind(cursor_ledger) // driver `? IS NULL` guard
-                .bind(cursor_ledger) // driver keyset tuple .0 (ledger_sequence)
-                .bind(cursor_tiebreak) // driver keyset tuple .1 (transaction_id)
-                .bind(params.limit * 4)
-                .bind(source_id)
-                .bind(source_id)
-                .bind(params.limit + 1) // peek row drives next-page detection
-                .fetch_all::<TxPageChRow>()
-                .await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
 
         // --- Statement A: no contract / op_type filter (default path) ------
@@ -483,27 +465,17 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND (? IS NULL OR (ledger_sequence, toInt64(application_order)) {op} (?, ?)) \
-                      AND (? IS NULL OR source_id = ?) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
+                      AND ({src} IS NULL OR source_id = {src}) \
                     ORDER BY ledger_sequence {order}, application_order {order} \
-                    LIMIT ? \
+                    LIMIT {lim_peek} \
                  ) t \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
                  ORDER BY t.ledger_sequence {order}, t.application_order {order}",
             );
-            client
-                .query(&sql)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_tiebreak)
-                .bind(source_id)
-                .bind(source_id)
-                .bind(params.limit + 1)
-                .fetch_all::<TxPageChRow>()
-                .await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
     };
 
