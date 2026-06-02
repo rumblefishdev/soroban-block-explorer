@@ -4,8 +4,15 @@ import { createBrowserRouter } from 'react-router-dom';
 import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 
 import { PageStub } from '../pages/PageStub.js';
+import { AccountDetailSkeleton } from '../pages/accounts/AccountDetailSkeleton.js';
+import { AssetDetailSkeleton } from '../pages/assets/AssetDetailSkeleton.js';
+import { ContractDetailSkeleton } from '../pages/contracts/ContractDetailSkeleton.js';
 import { ListPageSkeleton } from '../pages/detail/ListPageSkeleton.js';
 import { HomeSkeleton } from '../pages/home/HomeSkeleton.js';
+import { LedgerDetailSkeleton } from '../pages/ledgers/LedgerDetailSkeleton.js';
+import { NftDetailSkeleton } from '../pages/nft-detail/NftDetailSkeleton.js';
+import { PoolDetailSkeleton } from '../pages/pool-detail/PoolDetailSkeleton.js';
+import { TransactionDetailSkeleton } from '../pages/transaction-detail/TransactionDetailSkeleton.js';
 
 import { AppShell } from './AppShell.js';
 import { RouteErrorBoundary } from './RouteErrorBoundary.js';
@@ -42,7 +49,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'transactions/:hash',
-        element: page(() => import('../pages/TransactionDetailPage.js')),
+        element: page(
+          () => import('../pages/TransactionDetailPage.js'),
+          <TransactionDetailSkeleton />
+        ),
       },
 
       {
@@ -54,7 +64,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'ledgers/:sequence',
-        element: page(() => import('../pages/LedgerDetailPage.js')),
+        element: page(
+          () => import('../pages/LedgerDetailPage.js'),
+          <LedgerDetailSkeleton />
+        ),
       },
 
       {
@@ -66,7 +79,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'accounts/:accountId',
-        element: page(() => import('../pages/AccountDetailPage.js')),
+        element: page(
+          () => import('../pages/AccountDetailPage.js'),
+          <AccountDetailSkeleton />
+        ),
       },
 
       {
@@ -78,7 +94,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'assets/:id',
-        element: page(() => import('../pages/AssetDetailPage.js')),
+        element: page(
+          () => import('../pages/AssetDetailPage.js'),
+          <AssetDetailSkeleton />
+        ),
       },
 
       {
@@ -87,7 +106,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'contracts/:contractId',
-        element: page(() => import('../pages/ContractDetailPage.js')),
+        element: page(
+          () => import('../pages/ContractDetailPage.js'),
+          <ContractDetailSkeleton />
+        ),
       },
 
       {
@@ -99,7 +121,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'nfts/:contractId/:tokenId',
-        element: page(() => import('../pages/NftDetailPage.js')),
+        element: page(
+          () => import('../pages/NftDetailPage.js'),
+          <NftDetailSkeleton />
+        ),
       },
 
       {
@@ -111,7 +136,10 @@ export const router = createBrowserRouter([
       },
       {
         path: 'liquidity-pools/:id',
-        element: page(() => import('../pages/LiquidityPoolDetailPage.js')),
+        element: page(
+          () => import('../pages/LiquidityPoolDetailPage.js'),
+          <PoolDetailSkeleton />
+        ),
       },
 
       {

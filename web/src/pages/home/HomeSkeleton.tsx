@@ -8,6 +8,7 @@ import {
 import { KpiCell } from '../detail/KpiCell.js';
 
 import { HomeHero } from './HomeHero.js';
+import { LiveIndicator } from './LiveIndicator.js';
 
 /**
  * Route-level Suspense fallback for the home page (`/`). Mirrors HomePage's
@@ -22,7 +23,10 @@ import { HomeHero } from './HomeHero.js';
  * tables. Kept query-free (no data hooks) so the fallback stays light.
  */
 const KPI = [
-  { label: 'Ledger', caption: 'Current ledger' },
+  // Ledger label is the real LiveIndicator — matches Figma (node 4-2727) and
+  // ChainOverview's own loading state (which also renders the live pip), so the
+  // skeleton ledger cell looks the same as the mounted page.
+  { label: <LiveIndicator />, caption: 'Current ledger' },
   { label: 'TPS', caption: 'Last 60s' },
   { label: 'Accounts', caption: 'Total' },
   { label: 'Contracts', caption: 'Soroban' },
@@ -31,7 +35,7 @@ const KPI = [
 function ChainOverviewSkeleton() {
   const cells = KPI.map((k) => (
     <KpiCell
-      key={k.label}
+      key={k.caption}
       card={false}
       align="center"
       valueVariant="heading4SemiBold"
