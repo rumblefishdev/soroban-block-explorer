@@ -696,7 +696,7 @@ set (task 0167). Each query targets the ADR 0044 schema (`init.sql`), uses
 > `operation_types` / `contract_ids` with **correlated** scalar subqueries in
 > the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
 > 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
-> correlated column …`. The live read path instead fetches the page of tx
+correlated column …`. The live read path instead fetches the page of tx
 > keys, then aggregates per `(ledger_sequence, transaction_id) IN (…)` with
 > `GROUP BY transaction_id` (non-correlated), merged in Rust. The shared
 > implementation is
