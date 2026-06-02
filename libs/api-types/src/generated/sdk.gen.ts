@@ -42,6 +42,9 @@ import type {
   GetTransactionResponses,
   HealthData,
   HealthResponses,
+  ListAccountsData,
+  ListAccountsErrors,
+  ListAccountsResponses,
   ListAccountTransactionsData,
   ListAccountTransactionsErrors,
   ListAccountTransactionsResponses,
@@ -111,6 +114,23 @@ export const health = <ThrowOnError extends boolean = false>(
     url: '/health',
     ...options,
   });
+
+/**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccounts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListAccountsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListAccountsResponses,
+    ListAccountsErrors,
+    ThrowOnError
+  >({ url: '/v1/accounts', ...options });
 
 /**
  * Account detail — header from `accounts` + balances from

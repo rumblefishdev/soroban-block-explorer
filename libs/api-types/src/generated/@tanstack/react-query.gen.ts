@@ -21,6 +21,7 @@ import {
   getSearch,
   getTransaction,
   health,
+  listAccounts,
   listAccountTransactions,
   listAssets,
   listAssetTransactions,
@@ -71,6 +72,9 @@ import type {
   GetTransactionError,
   GetTransactionResponse,
   HealthData,
+  ListAccountsData,
+  ListAccountsError,
+  ListAccountsResponse,
   ListAccountTransactionsData,
   ListAccountTransactionsError,
   ListAccountTransactionsResponse,
@@ -177,6 +181,125 @@ export const healthOptions = (options?: Options<HealthData>) =>
     queryKey: healthQueryKey(options),
   });
 
+export const listAccountsQueryKey = (options?: Options<ListAccountsData>) =>
+  createQueryKey('listAccounts', options);
+
+/**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccountsOptions = (options?: Options<ListAccountsData>) =>
+  queryOptions<
+    ListAccountsResponse,
+    ListAccountsError,
+    ListAccountsResponse,
+    ReturnType<typeof listAccountsQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await listAccounts({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: listAccountsQueryKey(options),
+  });
+
+const createInfiniteParams = <
+  K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>
+>(
+  queryKey: QueryKey<Options>,
+  page: K
+) => {
+  const params = { ...queryKey[0] };
+  if (page.body) {
+    params.body = {
+      ...(queryKey[0].body as any),
+      ...(page.body as any),
+    };
+  }
+  if (page.headers) {
+    params.headers = {
+      ...queryKey[0].headers,
+      ...page.headers,
+    };
+  }
+  if (page.path) {
+    params.path = {
+      ...(queryKey[0].path as any),
+      ...(page.path as any),
+    };
+  }
+  if (page.query) {
+    params.query = {
+      ...(queryKey[0].query as any),
+      ...(page.query as any),
+    };
+  }
+  return params as unknown as typeof page;
+};
+
+export const listAccountsInfiniteQueryKey = (
+  options?: Options<ListAccountsData>
+): QueryKey<Options<ListAccountsData>> =>
+  createQueryKey('listAccounts', options, true);
+
+/**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccountsInfiniteOptions = (
+  options?: Options<ListAccountsData>
+) =>
+  infiniteQueryOptions<
+    ListAccountsResponse,
+    ListAccountsError,
+    InfiniteData<ListAccountsResponse>,
+    QueryKey<Options<ListAccountsData>>,
+    | string
+    | Pick<
+        QueryKey<Options<ListAccountsData>>[0],
+        'body' | 'headers' | 'path' | 'query'
+      >
+  >(
+    // @ts-ignore
+    {
+      queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<
+          QueryKey<Options<ListAccountsData>>[0],
+          'body' | 'headers' | 'path' | 'query'
+        > =
+          typeof pageParam === 'object'
+            ? pageParam
+            : {
+                query: {
+                  cursor: pageParam,
+                },
+              };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await listAccounts({
+          ...options,
+          ...params,
+          signal,
+          throwOnError: true,
+        });
+        return data;
+      },
+      queryKey: listAccountsInfiniteQueryKey(options),
+    }
+  );
+
 export const getAccountQueryKey = (options: Options<GetAccountData>) =>
   createQueryKey('getAccount', options);
 
@@ -232,40 +355,6 @@ export const listAccountTransactionsOptions = (
     },
     queryKey: listAccountTransactionsQueryKey(options),
   });
-
-const createInfiniteParams = <
-  K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>
->(
-  queryKey: QueryKey<Options>,
-  page: K
-) => {
-  const params = { ...queryKey[0] };
-  if (page.body) {
-    params.body = {
-      ...(queryKey[0].body as any),
-      ...(page.body as any),
-    };
-  }
-  if (page.headers) {
-    params.headers = {
-      ...queryKey[0].headers,
-      ...page.headers,
-    };
-  }
-  if (page.path) {
-    params.path = {
-      ...(queryKey[0].path as any),
-      ...(page.path as any),
-    };
-  }
-  if (page.query) {
-    params.query = {
-      ...(queryKey[0].query as any),
-      ...(page.query as any),
-    };
-  }
-  return params as unknown as typeof page;
-};
 
 export const listAccountTransactionsInfiniteQueryKey = (
   options: Options<ListAccountTransactionsData>

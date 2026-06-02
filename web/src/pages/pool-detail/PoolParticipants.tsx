@@ -1,11 +1,12 @@
 import GroupIcon from '@mui/icons-material/GroupOutlined';
-import { Box, Link, Typography } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
   classifyError,
   EmptyState,
   ExplorerTable,
   GenericErrorState,
+  IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
   RateLimitState,
@@ -16,10 +17,8 @@ import {
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { usePoolParticipants } from '../../api/index.js';
-import { routes } from '../../router/routes.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { formatAmount } from '../format.js';
@@ -65,14 +64,10 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     cell: (row) => (
-      <Link
-        component={RouterLink}
-        to={routes.ledger(row.first_deposit_ledger)}
-        variant="bodySmMedium"
-        sx={(theme) => ({ color: theme.palette.text.primary })}
-      >
-        {formatAmount(row.first_deposit_ledger)}
-      </Link>
+      <IdentifierDisplay
+        value={String(row.first_deposit_ledger)}
+        type="ledger"
+      />
     ),
   },
 ];

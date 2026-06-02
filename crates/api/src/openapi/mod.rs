@@ -13,7 +13,9 @@ use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::accounts::dto::{AccountBalance, AccountDetailResponse, AccountTransactionItem};
+use crate::accounts::dto::{
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
+};
 use crate::assets::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem};
 use crate::contracts::dto::{
     ContractDetailResponse, ContractFunctionParam, ContractFunctionSig, ContractInterfaceMetadata,
@@ -82,6 +84,8 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         AssetDetailResponse,
         Paginated<AssetTransactionItem>,
         AssetTransactionItem,
+        Paginated<AccountListItem>,
+        AccountListItem,
         AccountDetailResponse,
         AccountBalance,
         Paginated<AccountTransactionItem>,

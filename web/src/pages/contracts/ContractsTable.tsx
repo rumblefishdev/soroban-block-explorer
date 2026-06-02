@@ -1,4 +1,4 @@
-import { Link, Stack, Typography } from '@mui/material';
+import { Stack, Typography } from '@mui/material';
 import type { ContractListItem } from '@rumblefish/api-types';
 import {
   Chip,
@@ -6,7 +6,6 @@ import {
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { formatAmount } from '../format.js';
@@ -45,18 +44,10 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     align: 'right',
     cell: (row) =>
       row.deployed_at_ledger != null ? (
-        <Link
-          component={RouterLink}
-          to={routes.ledger(row.deployed_at_ledger)}
-          variant="bodySmRegular"
-          sx={{
-            color: 'inherit',
-            textDecoration: 'none',
-            '&:hover': { textDecoration: 'underline' },
-          }}
-        >
-          {row.deployed_at_ledger}
-        </Link>
+        <IdentifierDisplay
+          value={String(row.deployed_at_ledger)}
+          type="ledger"
+        />
       ) : (
         <Dash />
       ),

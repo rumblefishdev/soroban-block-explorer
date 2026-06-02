@@ -35,6 +35,23 @@ export type AccountDetailResponse = {
 };
 
 /**
+ * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
+ * first/last-seen activity window + `home_domain`. Ordered by
+ * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
+ * balance from `account_balances_current`; `null` if no native row exists.
+ */
+export type AccountListItem = {
+  account_id: string;
+  first_seen_ledger: number;
+  home_domain?: string | null;
+  last_seen_ledger: number;
+  /**
+   * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+   */
+  xlm_balance?: string | null;
+};
+
+/**
  * Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
  */
 export type AccountTransactionItem = {
@@ -793,6 +810,29 @@ export type PageInfo = {
    * yet).
    */
   prev_cursor?: string | null;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedAccountListItem = {
+  data: Array<{
+    account_id: string;
+    first_seen_ledger: number;
+    home_domain?: string | null;
+    last_seen_ledger: number;
+    /**
+     * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+     */
+    xlm_balance?: string | null;
+  }>;
+  page: PageInfo;
 };
 
 /**
@@ -1636,6 +1676,51 @@ export type HealthResponses = {
    */
   200: unknown;
 };
+
+export type ListAccountsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Base sort order on `last_seen_ledger`: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
+    'filter[with_domain]'?: boolean | null;
+  };
+  url: '/v1/accounts';
+};
+
+export type ListAccountsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListAccountsError = ListAccountsErrors[keyof ListAccountsErrors];
+
+export type ListAccountsResponses = {
+  /**
+   * Paginated account list
+   */
+  200: PaginatedAccountListItem;
+};
+
+export type ListAccountsResponse =
+  ListAccountsResponses[keyof ListAccountsResponses];
 
 export type GetAccountData = {
   body?: never;

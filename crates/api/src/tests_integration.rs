@@ -5152,3 +5152,267 @@ async fn contracts_list_filter_type_classifies_against_real_db() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// GET /v1/accounts (list) — task 0274 gap #1
+// ---------------------------------------------------------------------------
+
+/// Envelope + item shape. Asserts the documented fields and that the cut
+/// fields (`#` rank, `xlm_supply_percent`) are surfaced by NEITHER. DB-gated.
+#[tokio::test]
+async fn accounts_list_returns_envelope_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping accounts list integration test");
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        eprintln!("DATABASE_URL unreachable — skipping");
+        return;
+    };
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "expected 200: {json}");
+
+    assert!(json["data"].is_array(), "data not array: {json}");
+    assert_eq!(json["page"]["limit"], 100, "page.limit not echoed: {json}");
+
+    for item in json["data"].as_array().cloned().unwrap_or_default() {
+        assert!(item["account_id"].is_string(), "account_id: {item}");
+        assert!(
+            item["last_seen_ledger"].is_number(),
+            "last_seen_ledger: {item}"
+        );
+        assert!(
+            item["first_seen_ledger"].is_number(),
+            "first_seen_ledger: {item}"
+        );
+        let bal = &item["xlm_balance"];
+        assert!(
+            bal.is_string() || bal.is_null(),
+            "xlm_balance string|null: {item}"
+        );
+        let dom = &item["home_domain"];
+        assert!(
+            dom.is_string() || dom.is_null(),
+            "home_domain string|null: {item}"
+        );
+        // Cut fields — must not reappear.
+        assert!(
+            item.get("xlm_supply_percent").is_none(),
+            "supply% must be cut: {item}"
+        );
+        assert!(item.get("rank").is_none(), "rank must be cut: {item}");
+    }
+}
+
+/// Keyset pagination over `(last_seen_ledger, id)` — one cursor page at a
+/// time visits the same accounts, same order, no overlap vs one big page.
+#[tokio::test]
+async fn accounts_list_cursor_pagination_round_trip_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let ids = |json: &serde_json::Value| -> Vec<String> {
+        json["data"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|i| i["account_id"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, full_json) = body_json(resp).await;
+    let full = ids(&full_json);
+    if full.len() < 3 {
+        eprintln!(
+            "only {} accounts seeded — skipping pagination assertions",
+            full.len()
+        );
+        return;
+    }
+
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, p1) = body_json(resp).await;
+    let page1 = ids(&p1);
+    assert_eq!(page1, full[..2], "page 1 must match the first slice");
+    let cursor = p1["page"]["next_cursor"]
+        .as_str()
+        .expect("next_cursor")
+        .to_string();
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/accounts?limit=2&cursor={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, p2) = body_json(resp).await;
+    let page2 = ids(&p2);
+    assert_eq!(
+        page2,
+        full[2..2 + page2.len()],
+        "page 2 must continue exactly"
+    );
+    for id in &page2 {
+        assert!(!page1.contains(id), "cursor page overlap: {id}");
+    }
+}
+
+/// `filter[with_domain]=true` — every returned row has a non-null home_domain.
+#[tokio::test]
+async fn accounts_list_with_domain_filter_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=100&filter%5Bwith_domain%5D=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    for item in json["data"].as_array().cloned().unwrap_or_default() {
+        assert!(
+            item["home_domain"].is_string(),
+            "with_domain leaked a null-domain row: {item}"
+        );
+    }
+}
+
+/// `?order=asc` flips the base sort — `last_seen_ledger` is non-decreasing.
+#[tokio::test]
+async fn accounts_list_order_asc_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=100&order=asc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let seen: Vec<i64> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["last_seen_ledger"].as_i64().unwrap_or_default())
+        .collect();
+    for w in seen.windows(2) {
+        assert!(w[0] <= w[1], "order=asc not ascending: {seen:?}");
+    }
+}
+
+/// Bidirectional keyset: walk forward to page 2 via `next_cursor`, then back
+/// via page 2's `prev_cursor` — the returned page must equal page 1 exactly.
+#[tokio::test]
+async fn accounts_list_prev_cursor_round_trip_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let ids = |json: &serde_json::Value| -> Vec<String> {
+        json["data"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|i| i["account_id"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/accounts?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, p1) = body_json(resp).await;
+    let page1 = ids(&p1);
+    let Some(next) = p1["page"]["next_cursor"].as_str() else {
+        eprintln!("not enough accounts for a second page — skipping prev round-trip");
+        return;
+    };
+
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/accounts?limit=2&cursor={next}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, p2) = body_json(resp).await;
+    let prev = p2["page"]["prev_cursor"]
+        .as_str()
+        .expect("page 2 has a prev_cursor")
+        .to_string();
+
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/accounts?limit=2&cursor={prev}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, back) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert_eq!(ids(&back), page1, "prev_cursor did not return to page 1");
+}
