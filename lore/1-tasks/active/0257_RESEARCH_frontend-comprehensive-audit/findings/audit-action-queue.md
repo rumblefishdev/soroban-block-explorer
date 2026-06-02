@@ -1054,7 +1054,7 @@ later; spec captured so it can be picked up cold.
 - **Effort:** ~2-4h (add per-route skeleton fallbacks)
 - **Severity / Class:** 🟡 C (visual)
 - **Pre-launch:** SHOULD (worst on home = first impression)
-- **STATUS:** TODO — **NEW finding 2026-06-01 (user-reported + code-root-caused this session)**
+- **STATUS:** IN-PROGRESS — LOADSKEL-1 (home) + LOADSKEL-2 (all 6 lists) DONE (lore-0276); LOADSKEL-3 (detail routes) deferred NICE (mild mismatch, low cold-load value). Architectural note: per-route skeletons fix only the cold/first-load flash; the broader UX win (keep prior page on in-app nav) = React Router `lazy` + top progress bar, logged as a separate option. **NEW finding 2026-06-01.**
 
 **Rationale.** User observed the homepage flashes **three** distinct visual phases on refresh: (1) empty/generic skeletons that don't match the real layout, (2) skeletons of the actual components, (3) loaded data. Phases 1↔2 look jarringly inconsistent. **Root cause confirmed (code):** all routes are `React.lazy` + wrapped in a single shared `<Suspense fallback={<DetailSkeleton />}>` (`web/src/router/index.tsx:11-18`). `DetailSkeleton` (`libs/ui/src/states/skeletons/DetailSkeleton.tsx:9-21`) = title stub + 3 stacked `CardSkeleton`s — shown while the lazy JS chunk downloads (**phase 1**). Once `HomePage` mounts, its per-component skeletons render — `ChainOverview` KpiCell `<Skeleton>` + `LatestTransactions`/`LatestLedgers` `<TableSkeleton>` — which DO match the final layout (**phase 2**), then data resolves (**phase 3**). So phase-1 fallback (generic 3-card) is structurally unrelated to phase-2 (hero + 4 KPIs + 2 tables) → the jump.
 
@@ -1064,8 +1064,8 @@ later; spec captured so it can be picked up cold.
 
 **Findings closed (sub-checklist):**
 
-- [ ] **F-W6-LOADSKEL-1** — Home route Suspense fallback (`DetailSkeleton`) does not match home layout → 3-phase flicker (`router/index.tsx:14`). Add `HomeSkeleton`.
-- [ ] **F-W6-LOADSKEL-2** — List routes: generic `DetailSkeleton` fallback ≠ header+table content skeleton (moderate). Add list-shaped fallback.
+- [x] **F-W6-LOADSKEL-1** ✅ DONE (lore-0276) — added `HomeSkeleton` (hero + KPI + 2 tables), wired as index-route Suspense fallback via `page(load, fallback?)`; phase-1 ≈ phase-2, verified live. (`router/index.tsx`, `home/HomeSkeleton.tsx`)
+- [x] **F-W6-LOADSKEL-2** ✅ DONE (lore-0276) — added `ListPageSkeleton` (header + filter-bar + `TableSkeleton` + pagination), wired as Suspense fallback for all 6 list routes via `page(load, fallback?)`. Shares the same `TableSkeleton` that `DataListCard` renders in phase-2 (variant "merge": one shared atom, no drift). Verified live @1280 — phase-1 went 3-card → list shape (1 table/1 card), matches phase-2. (`router/index.tsx`, `pages/detail/ListPageSkeleton.tsx`)
 - [ ] **F-W6-LOADSKEL-3** — Detail routes: mild mismatch (acceptable) — verify `DetailSkeleton` close enough, or per-entity fallback if cheap.
 
 **Notes:** Distinct from card **2.3** (EmptyState/LoadingState primitive consolidation, SKIP — about primitive existence, not fallback shape) and card **7.7 / F-W6-AG-5** (route-_transition_ progress indicator for nav between routes, TODO — different mechanism, doesn't fix the fallback-shape mismatch). Confirmed NOT a duplicate. Live-observable on slow chunk load; localhost too fast to reliably screenshot the sub-second phase-1, but code path is definitive + user observes it directly.
@@ -1647,14 +1647,14 @@ Proposed pre-launch tiers for the rerun + earlier-session findings (F-RR-1..33, 
 - **F-RR-18** ✅ **DONE** (lore-0276) — FeePill: dropped fallback arg, NaN fee → em-dash.
 - **F-RR-21** 🟡 search a11y incomplete (listbox/tablist ARIA) — public launch.
 - **F-RR-14** 🟡 LedgerSummary missing semantic `<h2>` (a11y) [reuse half = NICE].
-- **F-W6-LOADSKEL-1** 🟡 home Suspense fallback shape flicker (first impression) [card 7.10].
+- **F-W6-LOADSKEL-1** ✅ **DONE** (lore-0276) — HomeSkeleton route fallback; phase-1 ≈ phase-2, verified live.
 - **F-0272S-3** 🟡 dead sort arrows (assets supply, ledgers seq) — remove arrows (FE-quick) [backend-sort variant = POST].
 - **F-0272S-4** 🟡 silent no-op search (tx/NFT) — add placeholder/empty-state hints.
 - **F-0272S-2** 🟡 LP exact vs assets partial search — owned 0274 (backend ILIKE).
 
 **NICE (20)** — consistency / reuse / cosmetic
 
-- F-RR-4 casing, F-RR-5 identifier-cell inconsistency, F-RR-8 PAYMENT summary amount, F-RR-9 Account breadcrumb link, F-RR-10 sequence_number separators (verify Figma), F-RR-11 AccountsTable Seen-ledger link/time (mock-gated), F-RR-12 mock polling, F-RR-13 LedgerDetail breadcrumb reuse, F-RR-15 redundant Ledger column, F-RR-16 NftEventBadge theme-coupling (readable in light), F-RR-19 dual fee format, F-RR-20 legHref native-field mismatch, F-RR-22 tab labels plural, F-RR-23 common.black, F-RR-24 NFT invalid-contract-filter hint, F-RR-27 columns useMemo, F-RR-28 misplaced test, F-RR-29 empty-state fragmentation [card 2.3], F-RR-30 section-table dup ×7 [card 2.3], F-RR-31 null-data guard, F-RR-32 singleton fragility (note), F-W6-LOADSKEL-2/3 list/detail fallback [card 7.10], F-0272S-5 tx-type multi-select.
+- F-RR-4 casing, F-RR-5 identifier-cell inconsistency, F-RR-8 PAYMENT summary amount, F-RR-9 Account breadcrumb link, F-RR-10 sequence_number separators (verify Figma), F-RR-11 AccountsTable Seen-ledger link/time (mock-gated), F-RR-12 mock polling, F-RR-13 LedgerDetail breadcrumb reuse, F-RR-15 redundant Ledger column, F-RR-16 NftEventBadge theme-coupling (readable in light), F-RR-19 dual fee format, F-RR-20 legHref native-field mismatch, F-RR-22 tab labels plural, F-RR-23 common.black, F-RR-24 NFT invalid-contract-filter hint, F-RR-27 columns useMemo, F-RR-28 misplaced test, F-RR-29 empty-state fragmentation [card 2.3], F-RR-30 section-table dup ×7 [card 2.3], F-RR-31 null-data guard, F-RR-32 singleton fragility (note), F-W6-LOADSKEL-3 detail-route fallback [card 7.10] (LOADSKEL-2 list done lore-0276), F-0272S-5 tx-type multi-select.
 - **F-0272S-6** (no shared search semantics) — NICE _artifact_, but the **decision** (define a search-semantics contract) is SHOULD-grade and gates several SHOULD fixes above.
 
 **POST / backend-heavy**

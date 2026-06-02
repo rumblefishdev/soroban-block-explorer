@@ -1,17 +1,22 @@
-import { lazy, Suspense, type ComponentType } from 'react';
+import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 
 import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 
 import { PageStub } from '../pages/PageStub.js';
+import { ListPageSkeleton } from '../pages/detail/ListPageSkeleton.js';
+import { HomeSkeleton } from '../pages/home/HomeSkeleton.js';
 
 import { AppShell } from './AppShell.js';
 import { RouteErrorBoundary } from './RouteErrorBoundary.js';
 
-const page = (load: () => Promise<{ default: ComponentType }>) => {
+const page = (
+  load: () => Promise<{ default: ComponentType }>,
+  fallback: ReactNode = <DetailSkeleton />
+) => {
   const C = lazy(load);
   return (
-    <Suspense fallback={<DetailSkeleton />}>
+    <Suspense fallback={fallback}>
       <C />
     </Suspense>
   );
@@ -23,11 +28,17 @@ export const router = createBrowserRouter([
     element: <AppShell />,
     errorElement: <RouteErrorBoundary />,
     children: [
-      { index: true, element: page(() => import('../pages/HomePage.js')) },
+      {
+        index: true,
+        element: page(() => import('../pages/HomePage.js'), <HomeSkeleton />),
+      },
 
       {
         path: 'transactions',
-        element: page(() => import('../pages/TransactionsListPage.js')),
+        element: page(
+          () => import('../pages/TransactionsListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'transactions/:hash',
@@ -36,7 +47,10 @@ export const router = createBrowserRouter([
 
       {
         path: 'ledgers',
-        element: page(() => import('../pages/LedgersListPage.js')),
+        element: page(
+          () => import('../pages/LedgersListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'ledgers/:sequence',
@@ -45,7 +59,10 @@ export const router = createBrowserRouter([
 
       {
         path: 'accounts',
-        element: page(() => import('../pages/AccountsListPage.js')),
+        element: page(
+          () => import('../pages/AccountsListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'accounts/:accountId',
@@ -54,7 +71,10 @@ export const router = createBrowserRouter([
 
       {
         path: 'assets',
-        element: page(() => import('../pages/AssetsListPage.js')),
+        element: page(
+          () => import('../pages/AssetsListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'assets/:id',
@@ -70,7 +90,13 @@ export const router = createBrowserRouter([
         element: page(() => import('../pages/ContractDetailPage.js')),
       },
 
-      { path: 'nfts', element: page(() => import('../pages/NftsListPage.js')) },
+      {
+        path: 'nfts',
+        element: page(
+          () => import('../pages/NftsListPage.js'),
+          <ListPageSkeleton />
+        ),
+      },
       {
         path: 'nfts/:contractId/:tokenId',
         element: page(() => import('../pages/NftDetailPage.js')),
@@ -78,7 +104,10 @@ export const router = createBrowserRouter([
 
       {
         path: 'liquidity-pools',
-        element: page(() => import('../pages/LiquidityPoolsListPage.js')),
+        element: page(
+          () => import('../pages/LiquidityPoolsListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'liquidity-pools/:id',
