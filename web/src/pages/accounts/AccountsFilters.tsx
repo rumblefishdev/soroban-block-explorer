@@ -1,14 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import {
-  Box,
-  Divider,
-  InputAdornment,
-  MenuItem,
-  Select,
-  Stack,
-  TextField,
-} from '@mui/material';
-import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+import { Box, Divider, MenuItem, Select, Stack } from '@mui/material';
+import { Chip, DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 import type { AccountsSort } from '../../api/hooks/useAccountsList.js';
 
@@ -35,8 +26,6 @@ export function AccountsFilters({
   onSortChange,
   onWithDomainChange,
 }: AccountsFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
-
   return (
     <Box
       sx={(theme) => ({
@@ -49,26 +38,12 @@ export function AccountsFilters({
         bgcolor: theme.palette.surface.grayMainAlt,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Search by account address..."
-        aria-label="Search by account address"
-        sx={{ width: { xs: '100%', sm: 360 } }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Search by account address"
+        width={360}
+        onCommit={onSearchChange}
       />
       <Divider
         orientation="vertical"
