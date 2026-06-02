@@ -142,7 +142,7 @@ pub async fn list_transactions(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&list_cursor_for(source, r), dir),
+        |dir, r| cursor::encode(&list_cursor_for(source, &resolved, r), dir),
     );
 
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
@@ -173,12 +173,25 @@ pub async fn list_transactions(
     resp
 }
 
-/// Build the opaque list cursor for a boundary row. PG keys the list scan
-/// on `(created_at, id)`; CH keys on `(ledger_sequence, id)` and carries the
-/// `transactions.id` hash surrogate as the within-ledger tie-break. The
-/// emitted variant is tagged with the active datasource so a later request
+/// Build the opaque list cursor for a boundary row. PG keys the list scan on
+/// `(created_at, id)`. CH keys on `(ledger_sequence, <tie-break>)`, where the
+/// tie-break depends on which list statement served the page — the cursor must
+/// anchor the *same* keyset the next page's query will use:
+///
+/// - **Statement A** (no filter, the polled hot path) reads `transactions` in
+///   primary-key order `(ledger_sequence, application_order)` with FINAL
+///   dropped (the `read_rows` quota fix — see `queries_ch::fetch_list`), so its
+///   tie-break is `application_order`.
+/// - **Statements B/C** (contract / op_type filter) drive off
+///   `operations_appearances` and key on the `transactions.id` surrogate, so
+///   their tie-break is `id`.
+///
+/// The emitted variant is tagged with the active datasource so a later request
 /// can reject a cursor minted for the other backend (see `list_transactions`).
-fn list_cursor_for(source: DataSource, r: &TxListRow) -> TxListCursor {
+/// A cursor is not tagged with its statement: switching filters mid-pagination
+/// resets the page in practice, and per ADR 0008 a stale opaque cursor that
+/// anchors the wrong keyset degrades to a re-aligned page, never a hard error.
+fn list_cursor_for(source: DataSource, params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
     match source {
         DataSource::Pg => TxListCursor::Pg {
             ts: r.created_at,
@@ -186,7 +199,11 @@ fn list_cursor_for(source: DataSource, r: &TxListRow) -> TxListCursor {
         },
         DataSource::Ch => TxListCursor::Ch {
             ledger_sequence: r.ledger_sequence,
-            tiebreak: r.id,
+            tiebreak: if params.contract_id.is_none() && params.op_type.is_none() {
+                i64::from(r.application_order)
+            } else {
+                r.id
+            },
         },
     }
 }
