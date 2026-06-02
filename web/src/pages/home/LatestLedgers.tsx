@@ -25,11 +25,7 @@ export function LatestLedgers() {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />

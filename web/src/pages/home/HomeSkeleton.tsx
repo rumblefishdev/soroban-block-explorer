@@ -86,9 +86,7 @@ function TableCardSkeleton({ title }: { title: string }) {
   return (
     <Card>
       <TableSectionHeader title={title} />
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={5} />
-      </Box>
+      <TableSkeleton rows={10} columns={5} />
       <Box
         sx={{
           px: 2,

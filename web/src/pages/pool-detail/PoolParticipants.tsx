@@ -102,11 +102,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={6} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={6} columns={columns.length} />;
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {

@@ -1,6 +1,7 @@
-import { Box, Link, Skeleton, Stack, Typography } from '@mui/material';
+import { Box, Card, Link, Skeleton, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
+  TableSectionHeader,
   TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Link as RouterLink, useParams } from 'react-router-dom';
@@ -65,9 +66,20 @@ export function NftDetailSkeleton() {
         </Stack>
       </Box>
 
-      <Box>
+      <Card>
+        <TableSectionHeader title="Transfer history" />
         <TableSkeleton rows={10} columns={5} />
-      </Box>
+        <Box
+          sx={{
+            px: 2,
+            py: 1.5,
+            borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+            backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
+          }}
+        >
+          <Skeleton variant="text" width={120} />
+        </Box>
+      </Card>
     </Stack>
   );
 }
