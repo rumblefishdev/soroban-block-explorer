@@ -80,6 +80,7 @@ Implement these from the master action queue (file:line + repro in queue):
 12. [ ] **F-0272S-3** — remove dead sort arrows (assets total-supply, ledgers sequence). FE-quick; backend-sort variant = POST (F-RR-1).
 13. [x] **F-0272S-4** — silent no-op search: add placeholder + empty-state hints (transactions tx-hash gate, NFT exact-match). (✅ DONE via helper text validation warning in `9146d4ee`)
 14. [x] **F-0272S-2** — LP `filter[asset_code]` → ILIKE partial (match assets). (✅ DONE via ILIKE substring matching in `9146d4ee`)
+15. [x] **F-DP-3 (11.3)** — raw zIndex additions → themed zIndex scale. (✅ DONE on theme in this session)
 
 ## Out of scope
 

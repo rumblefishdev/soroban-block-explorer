@@ -1438,7 +1438,7 @@ later; spec captured so it can be picked up cold.
 - **Effort:** ~30min
 - **Severity / Class:** 🟠 C
 - **Pre-launch:** NICE
-- **STATUS:** TODO
+- **STATUS:** DONE (2026-06-02)
 
 **Rationale.** `06ab34cc` added raw `zIndex: 2` in several shell spots (AppShell / TopNav / SecondaryNav / Footer, layering the shell above `PageGridBackdrop`). Adds to the ad-hoc-z-index debt with no defined scale. **Regresses F-AK-2 / F-W6-AK-2.**
 
@@ -1446,10 +1446,10 @@ later; spec captured so it can be picked up cold.
 
 **Findings closed (sub-checklist):**
 
-- [ ] F-DP-3 — Raw `zIndex: 2` additions in shell (move to z-index scale constants)
-- [ ] F-AK-2 / F-W6-AK-2 (cross-cite) — regression folded into the z-index scale work
+- [x] F-DP-3 — Raw `zIndex: 2` additions in shell (move to z-index scale constants) (✅ DONE on theme)
+- [x] F-AK-2 / F-W6-AK-2 (cross-cite) — regression folded into the z-index scale work (✅ DONE on theme)
 
-**Notes:** Introduced by design_parity `06ab34cc`. Coordinate with card 7.1.
+**Notes:** Introduced by design_parity `06ab34cc`. Resolved in this session by declaring a typed custom zIndex scale on createExplorerTheme and migrating all raw literals.
 
 ---
 

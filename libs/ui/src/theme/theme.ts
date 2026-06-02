@@ -18,6 +18,14 @@ export function createExplorerTheme(mode: PaletteMode): Theme {
       borderRadius: radius.md,
       radius,
     },
+    zIndex: {
+      pageGlow: 0,
+      gridBackdrop: 0,
+      contentMain: 1,
+      secondaryNav: 2,
+      footer: 2,
+      topNav: 3,
+    },
     shadows: muiShadows,
     components: overrides,
   });

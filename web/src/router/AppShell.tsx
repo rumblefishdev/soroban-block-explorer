@@ -168,7 +168,7 @@ export function AppShell() {
         {isHome && <HomeHeroGlow />}
         <Box
           component="main"
-          sx={{
+          sx={(theme) => ({
             width: '100%',
             maxWidth: grid.desktop.maxWidth,
             mx: 'auto',
@@ -179,8 +179,8 @@ export function AppShell() {
             },
             py: { xs: 2, md: 4 },
             position: 'relative',
-            zIndex: 1,
-          }}
+            zIndex: theme.zIndex.contentMain,
+          })}
         >
           <Outlet />
         </Box>
