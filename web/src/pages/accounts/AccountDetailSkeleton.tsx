@@ -7,6 +7,7 @@ import {
 import { useParams } from 'react-router-dom';
 
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
 
 /**
  * Loading skeleton for the account detail page — header (breadcrumb + title +
@@ -43,6 +44,7 @@ export function AccountDetailSkeleton() {
       </Box>
       <CardSkeleton />
       <CardSkeleton />
+      <TableSectionSkeleton title="Recent transactions" rows={8} columns={6} />
     </Stack>
   );
 }

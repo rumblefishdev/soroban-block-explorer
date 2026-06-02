@@ -6,6 +6,7 @@ import {
 import { useParams } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
+import { KpiStripSkeleton } from '../detail/KpiStripSkeleton.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
@@ -40,6 +41,9 @@ export function ContractDetailSkeleton() {
           {contractId}
         </Typography>
       </Box>
+      <KpiStripSkeleton
+        cells={[{ label: 'Total invocations' }, { label: 'Unique callers' }]}
+      />
       <CardSkeleton />
     </Stack>
   );

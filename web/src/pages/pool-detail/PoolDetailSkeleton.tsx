@@ -2,10 +2,10 @@ import { Stack } from '@mui/material';
 import { CardSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 import { useParams } from 'react-router-dom';
 
-import { ChartCardSkeleton } from '../detail/ChartCardSkeleton.js';
 import { KpiStripSkeleton } from '../detail/KpiStripSkeleton.js';
 import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
 
+import { ChartCardSkeleton } from './ChartCardSkeleton.js';
 import { PoolDetailHeader } from './PoolDetailHeader.js';
 
 /** KPI strip cells, mirroring `PoolKpiStrip` (asset codes unknown pre-data, so
