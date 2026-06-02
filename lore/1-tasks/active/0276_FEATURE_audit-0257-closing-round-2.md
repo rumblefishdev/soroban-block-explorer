@@ -66,9 +66,9 @@ hex→tokens, debounce, error-state primitives) verified clean.
 
 Implement these from the master action queue (file:line + repro in queue):
 
-1. [ ] **F-RR-17** — PoolCharts: surface `isError` + retry (stop masking fetch error as "no activity"). `pool-detail/PoolCharts.tsx`.
+1. [x] **F-RR-17** — PoolCharts: surface `isError` + retry (stop masking fetch error as "no activity"). `pool-detail/PoolCharts.tsx`. (✅ DONE in `3724e0d3`)
 2. [x] **F-RR-33** — NotFoundState long-strkey overflow @375 → `word-break`/`overflow-wrap`. `libs/ui/src/states/errors/NotFoundState.tsx`. (✅ DONE)
-3. [ ] **F-RR-25** — `/search` error state: route through `QueryErrorState` (add retry, stop swallowing error class). `search/SearchResultsView.tsx` + `useSearchResults` expose error/refetch.
+3. [x] **F-RR-25** — `/search` error state: route through `QueryErrorState` (add retry, stop swallowing error class). `search/SearchResultsView.tsx` + `useSearchResults` expose error/refetch. (✅ DONE in `3724e0d3`)
 4. [ ] **F-RR-2** — remove (or wire) dead "CTRL + K" hint pill. `home/HeroSearch.tsx:100`.
 5. [x] **F-RR-3** — gate home section footer "N latest records" on success branch. `home/LatestTransactions.tsx`, `LatestLedgers.tsx`. (✅ DONE in `3724e0d3`)
 6. [x] **F-RR-6** — "Choose payment" → "Choose operation" (picker lists all op types). `transaction-detail/sections/OperationPicker.tsx:89`. (✅ DONE in `bcc440b5`)
@@ -89,7 +89,7 @@ Implement these from the master action queue (file:line + repro in queue):
 
 ## Acceptance Criteria
 
-- [/] All 14 SHOULD findings DONE or SKIP-with-rationale (6/14 completed); queue STATUS + appendix flipped per finding
+- [/] All 14 SHOULD findings DONE or SKIP-with-rationale (8/14 completed); queue STATUS + appendix flipped per finding
 - [x] Each commit cites the F-ID(s) closed
 - [ ] F-0272S-2 / F-RR-1 backend bits coordinated with 0274 (or split out)
 - [ ] **Docs updated** — `N/A` unless a fix changes system shape (most are FE-local); mark per ADR 0032
