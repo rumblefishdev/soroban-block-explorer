@@ -21,14 +21,23 @@
             </interval>
         </unlimited>
 
+        <!-- read_rows / read_bytes / result_rows raised 1B→10B, 100GiB→1TiB
+             (task 0243). The filtered transaction-list paths (op_type /
+             contract) scan a partition by a non-primary-key column
+             (~2e8 rows / ~3 GB per page) until a skip-index on
+             operations_appearances(type, contract_id) lands, so the old 1B /
+             100GiB caps tripped under normal filter use (CH Code: 201). The
+             partition prune bounds any single query to ~one partition, so this
+             higher cap still backstops an unpruned-scan regression. Lower back
+             toward ~1-2B once the skip-index makes filters seek. -->
         <api_throttle>
             <interval>
                 <duration>3600</duration>
                 <queries>10000</queries>
                 <errors>1000</errors>
-                <result_rows>1000000000</result_rows>
-                <read_rows>1000000000</read_rows>
-                <read_bytes>107374182400</read_bytes>
+                <result_rows>10000000000</result_rows>
+                <read_rows>10000000000</read_rows>
+                <read_bytes>1099511627776</read_bytes>
                 <execution_time>1000</execution_time>
             </interval>
         </api_throttle>
