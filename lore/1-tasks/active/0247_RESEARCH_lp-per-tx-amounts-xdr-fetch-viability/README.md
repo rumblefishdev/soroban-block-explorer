@@ -2,7 +2,7 @@
 id: '0247'
 title: 'RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives'
 type: RESEARCH
-status: backlog
+status: active
 related_adr: ['0011', '0027', '0029', '0037']
 related_tasks: ['0077', '0163', '0169', '0199', '0246']
 tags:
@@ -40,6 +40,15 @@ history:
       0241 → 0246 in the same operation. Original spawn commits
       (cac0215, ddbbb34) retain the `lore-0241` scope tag —
       not amended per no-amend convention.
+  - date: 2026-06-02
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated to begin research. Plan: benchmark Path A first
+      (cheap kill/confirm gate, reuses stellar_archive E3 client),
+      then re-evaluate ADR 0029 "DB size explodes" rationale under
+      the now-merged ClickHouse-primary read path (commits 236/237/243),
+      which may shift the calculus toward Path C (ingest-side extraction).
 ---
 
 # RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives
@@ -58,9 +67,10 @@ list endpoint the latency cost is non-trivial. This research evaluates
 the XDR-fetch baseline against alternatives and produces a
 recommendation with measured numbers.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** Not started. Spawned from 0246 split on 2026-05-20.
+**Current state:** Activated 2026-06-02. Research starting with Path A
+benchmark + ADR 0029 re-evaluation under ClickHouse-primary read path.
 
 ## Open question
 
