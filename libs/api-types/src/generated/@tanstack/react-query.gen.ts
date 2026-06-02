@@ -24,6 +24,7 @@ import {
   listAccountTransactions,
   listAssets,
   listAssetTransactions,
+  listContracts,
   listEvents,
   listInvocations,
   listLedgers,
@@ -79,6 +80,9 @@ import type {
   ListAssetTransactionsData,
   ListAssetTransactionsError,
   ListAssetTransactionsResponse,
+  ListContractsData,
+  ListContractsError,
+  ListContractsResponse,
   ListEventsData,
   ListEventsError,
   ListEventsResponse,
@@ -473,6 +477,85 @@ export const listAssetTransactionsInfiniteOptions = (
         return data;
       },
       queryKey: listAssetTransactionsInfiniteQueryKey(options),
+    }
+  );
+
+export const listContractsQueryKey = (options?: Options<ListContractsData>) =>
+  createQueryKey('listContracts', options);
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContractsOptions = (options?: Options<ListContractsData>) =>
+  queryOptions<
+    ListContractsResponse,
+    ListContractsError,
+    ListContractsResponse,
+    ReturnType<typeof listContractsQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await listContracts({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: listContractsQueryKey(options),
+  });
+
+export const listContractsInfiniteQueryKey = (
+  options?: Options<ListContractsData>
+): QueryKey<Options<ListContractsData>> =>
+  createQueryKey('listContracts', options, true);
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContractsInfiniteOptions = (
+  options?: Options<ListContractsData>
+) =>
+  infiniteQueryOptions<
+    ListContractsResponse,
+    ListContractsError,
+    InfiniteData<ListContractsResponse>,
+    QueryKey<Options<ListContractsData>>,
+    | string
+    | Pick<
+        QueryKey<Options<ListContractsData>>[0],
+        'body' | 'headers' | 'path' | 'query'
+      >
+  >(
+    // @ts-ignore
+    {
+      queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<
+          QueryKey<Options<ListContractsData>>[0],
+          'body' | 'headers' | 'path' | 'query'
+        > =
+          typeof pageParam === 'object'
+            ? pageParam
+            : {
+                query: {
+                  cursor: pageParam,
+                },
+              };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await listContracts({
+          ...options,
+          ...params,
+          signal,
+          throwOnError: true,
+        });
+        return data;
+      },
+      queryKey: listContractsInfiniteQueryKey(options),
     }
   );
 

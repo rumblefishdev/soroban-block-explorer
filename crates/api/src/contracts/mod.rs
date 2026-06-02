@@ -18,6 +18,7 @@ use crate::state::AppState;
 /// Build the contracts sub-router (mounted under `/v1` in `main::app`).
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(handlers::list_contracts))
         .routes(routes!(handlers::get_contract))
         .routes(routes!(handlers::get_interface))
         .routes(routes!(handlers::list_invocations))

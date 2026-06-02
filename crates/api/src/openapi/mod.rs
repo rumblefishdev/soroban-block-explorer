@@ -17,7 +17,7 @@ use crate::accounts::dto::{AccountBalance, AccountDetailResponse, AccountTransac
 use crate::assets::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem};
 use crate::contracts::dto::{
     ContractDetailResponse, ContractFunctionParam, ContractFunctionSig, ContractInterfaceMetadata,
-    ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractListItem, ContractStats, EventItem, InterfaceResponse, InvocationItem,
 };
 use crate::liquidity_pools::dto::{
     ChartDataPoint, ChartResponse, PoolAssetLeg, PoolItem, PoolTransactionItem,
@@ -65,6 +65,8 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         XdrEventDto,
         XdrOperationDto,
         HeavyFieldsStatus,
+        Paginated<ContractListItem>,
+        ContractListItem,
         ContractDetailResponse,
         ContractStats,
         InterfaceResponse,

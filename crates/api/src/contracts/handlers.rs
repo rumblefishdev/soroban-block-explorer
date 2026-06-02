@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
+use domain::ContractType;
 use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
 use xdr_parser::EventSource;
 
@@ -15,22 +16,103 @@ use crate::common::cache_control;
 use crate::common::cursor::{self, TsIdCursor};
 use crate::common::extractors::Pagination;
 use crate::common::pagination::{finalize_page, into_envelope};
-use crate::common::{errors, path};
+use crate::common::{errors, filters, path};
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::runtime_enrichment::stellar_archive::extractors::collect_tx_metas;
 use crate::state::AppState;
 
 use super::dto::{
-    ContractDetailResponse, ContractInterfaceMetadata, ContractStats, EventItem, InterfaceResponse,
-    InvocationItem,
+    ContractDetailResponse, ContractInterfaceMetadata, ContractListItem, ContractStats,
+    ContractsListParams, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
-    EventAppearanceRow, InvocationAppearanceRow, fetch_contract, fetch_contract_stats,
-    fetch_event_appearances, fetch_invocation_appearances, fetch_wasm_interface,
+    ContractIdCursor, ContractListRow, EventAppearanceRow, InvocationAppearanceRow,
+    ResolvedContractsListParams, STATS_WINDOW, fetch_contract, fetch_contract_list,
+    fetch_contract_stats, fetch_event_appearances, fetch_invocation_appearances,
+    fetch_wasm_interface,
 };
 
-/// Default time window for `fetch_contract_stats` (canonical 11 Statement B).
-const STATS_WINDOW: &str = "7 days";
+// ---------------------------------------------------------------------------
+// GET /v1/contracts (list)
+// ---------------------------------------------------------------------------
+
+/// List contracts, newest-ingested first (`id DESC`, the PK order — no
+/// user sort). `filter[type]` narrows by class, `filter[q]` searches
+/// id/name. Cursor-paginated like every other list endpoint.
+#[utoipa::path(
+    get,
+    path = "/contracts",
+    tag = "contracts",
+    params(
+        ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        ContractsListParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated contract list",
+         body = Paginated<ContractListItem>),
+        (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error",   body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_contracts(
+    State(state): State<AppState>,
+    pagination: Pagination<ContractIdCursor>,
+    Query(params): Query<ContractsListParams>,
+) -> Response {
+    let contract_type: Option<i16> = match filters::parse_enum_opt::<ContractType>(
+        params.filter_type.as_deref(),
+        "type",
+        Some("contract type"),
+    ) {
+        Ok(maybe) => maybe.map(|t| t as i16),
+        Err(resp) => return resp,
+    };
+
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
+    let resolved = ResolvedContractsListParams {
+        limit: i64::from(pagination.limit),
+        cursor: pagination.cursor,
+        contract_type,
+        q: params.filter_q,
+    };
+
+    let mut rows: Vec<ContractListRow> =
+        match fetch_contract_list(&state.db, &resolved, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("DB error in list_contracts: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
+
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&ContractIdCursor { id: r.id }, dir),
+    );
+    let data: Vec<ContractListItem> = rows.into_iter().map(map_contract_list_item).collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
+fn map_contract_list_item(r: ContractListRow) -> ContractListItem {
+    ContractListItem {
+        contract_id: r.contract_id,
+        contract_type: r.contract_type,
+        contract_type_name: r.contract_type_name,
+        is_sac: r.is_sac,
+        deployer: r.deployer,
+        deployed_at_ledger: r.deployed_at_ledger,
+        recent_invocations: r.recent_invocations,
+    }
+}
 
 async fn fetch_unique_ledgers(
     state: &AppState,

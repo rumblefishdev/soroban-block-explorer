@@ -225,6 +225,42 @@ export type ContractInterfaceMetadata = {
   wasm_byte_len: number;
 };
 
+/**
+ * One row of `GET /v1/contracts`. Identity + classification + deploy
+ * provenance + a 7-day activity signal. All fields come straight from
+ * `soroban_contracts` (+ a deployer join and a windowed invocation count);
+ * nullable fields are `None` until the contract's deploy is observed.
+ */
+export type ContractListItem = {
+  contract_id: string;
+  /**
+   * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+   * until deployment is observed.
+   */
+  contract_type?: number | null;
+  /**
+   * `token | other | nft | fungible`. `null` only on schema drift / no type.
+   */
+  contract_type_name?: string | null;
+  /**
+   * Ledger the deploy was observed at; `null` until then.
+   */
+  deployed_at_ledger?: number | null;
+  /**
+   * Deployer account G-strkey; `null` until the deploy op is observed.
+   */
+  deployer?: string | null;
+  /**
+   * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+   */
+  is_sac: boolean;
+  /**
+   * Invocation count over the last 7 days (windowed; matches the detail
+   * `ContractStats.recent_invocations` semantics).
+   */
+  recent_invocations: number;
+};
+
 export type ContractStats = {
   /**
    * Sum of `soroban_events_appearances.amount` over the same window
@@ -850,6 +886,48 @@ export type PaginatedAssetTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedContractListItem = {
+  data: Array<{
+    contract_id: string;
+    /**
+     * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+     * until deployment is observed.
+     */
+    contract_type?: number | null;
+    /**
+     * `token | other | nft | fungible`. `null` only on schema drift / no type.
+     */
+    contract_type_name?: string | null;
+    /**
+     * Ledger the deploy was observed at; `null` until then.
+     */
+    deployed_at_ledger?: number | null;
+    /**
+     * Deployer account G-strkey; `null` until the deploy op is observed.
+     */
+    deployer?: string | null;
+    /**
+     * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+     */
+    is_sac: boolean;
+    /**
+     * Invocation count over the last 7 days (windowed; matches the detail
+     * `ContractStats.recent_invocations` semantics).
+     */
+    recent_invocations: number;
   }>;
   page: PageInfo;
 };
@@ -1776,6 +1854,53 @@ export type ListAssetTransactionsResponses = {
 
 export type ListAssetTransactionsResponse =
   ListAssetTransactionsResponses[keyof ListAssetTransactionsResponses];
+
+export type ListContractsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Contract class: `token | other | nft | fungible`.
+     */
+    'filter[type]'?: string | null;
+    /**
+     * Free-text search over contract id + name (`search_vector`).
+     */
+    'filter[q]'?: string | null;
+  };
+  url: '/v1/contracts';
+};
+
+export type ListContractsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListContractsError = ListContractsErrors[keyof ListContractsErrors];
+
+export type ListContractsResponses = {
+  /**
+   * Paginated contract list
+   */
+  200: PaginatedContractListItem;
+};
+
+export type ListContractsResponse =
+  ListContractsResponses[keyof ListContractsResponses];
 
 export type GetContractData = {
   body?: never;

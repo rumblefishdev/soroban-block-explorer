@@ -51,6 +51,9 @@ import type {
   ListAssetTransactionsData,
   ListAssetTransactionsErrors,
   ListAssetTransactionsResponses,
+  ListContractsData,
+  ListContractsErrors,
+  ListContractsResponses,
   ListEventsData,
   ListEventsErrors,
   ListEventsResponses,
@@ -162,6 +165,20 @@ export const listAssetTransactions = <ThrowOnError extends boolean = false>(
     ListAssetTransactionsErrors,
     ThrowOnError
   >({ url: '/v1/assets/{id}/transactions', ...options });
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContracts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListContractsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListContractsResponses,
+    ListContractsErrors,
+    ThrowOnError
+  >({ url: '/v1/contracts', ...options });
 
 export const getContract = <ThrowOnError extends boolean = false>(
   options: Options<GetContractData, ThrowOnError>

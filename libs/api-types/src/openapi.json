@@ -388,6 +388,86 @@
         }
       }
     },
+    "/v1/contracts": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "List contracts, newest-ingested first (`id DESC`, the PK order — no\nuser sort). `filter[type]` narrows by class, `filter[q]` searches\nid/name. Cursor-paginated like every other list endpoint.",
+        "operationId": "list_contracts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[type]",
+            "in": "query",
+            "description": "Contract class: `token | other | nft | fungible`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[q]",
+            "in": "query",
+            "description": "Free-text search over contract id + name (`search_vector`).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated contract list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_ContractListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contracts/{contract_id}": {
       "get": {
         "tags": ["contracts"],
@@ -2166,6 +2246,43 @@
           }
         }
       },
+      "ContractListItem": {
+        "type": "object",
+        "description": "One row of `GET /v1/contracts`. Identity + classification + deploy\nprovenance + a 7-day activity signal. All fields come straight from\n`soroban_contracts` (+ a deployer join and a windowed invocation count);\nnullable fields are `None` until the contract's deploy is observed.",
+        "required": ["contract_id", "is_sac", "recent_invocations"],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "contract_type": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`\nuntil deployment is observed."
+          },
+          "contract_type_name": {
+            "type": ["string", "null"],
+            "description": "`token | other | nft | fungible`. `null` only on schema drift / no type."
+          },
+          "deployed_at_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Ledger the deploy was observed at; `null` until then."
+          },
+          "deployer": {
+            "type": ["string", "null"],
+            "description": "Deployer account G-strkey; `null` until the deploy op is observed."
+          },
+          "is_sac": {
+            "type": "boolean",
+            "description": "Stellar Asset Contract flag (stored, not derived from `contract_type`)."
+          },
+          "recent_invocations": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+          }
+        }
+      },
       "ContractStats": {
         "type": "object",
         "required": [
@@ -3094,6 +3211,56 @@
                 },
                 "successful": {
                   "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_ContractListItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of `GET /v1/contracts`. Identity + classification + deploy\nprovenance + a 7-day activity signal. All fields come straight from\n`soroban_contracts` (+ a deployer join and a windowed invocation count);\nnullable fields are `None` until the contract's deploy is observed.",
+              "required": ["contract_id", "is_sac", "recent_invocations"],
+              "properties": {
+                "contract_id": {
+                  "type": "string"
+                },
+                "contract_type": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`\nuntil deployment is observed."
+                },
+                "contract_type_name": {
+                  "type": ["string", "null"],
+                  "description": "`token | other | nft | fungible`. `null` only on schema drift / no type."
+                },
+                "deployed_at_ledger": {
+                  "type": ["integer", "null"],
+                  "format": "int64",
+                  "description": "Ledger the deploy was observed at; `null` until then."
+                },
+                "deployer": {
+                  "type": ["string", "null"],
+                  "description": "Deployer account G-strkey; `null` until the deploy op is observed."
+                },
+                "is_sac": {
+                  "type": "boolean",
+                  "description": "Stellar Asset Contract flag (stored, not derived from `contract_type`)."
+                },
+                "recent_invocations": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
                 }
               }
             }

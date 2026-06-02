@@ -4782,3 +4782,373 @@ async fn lp_legs_carry_icon_url_against_real_db() {
         );
     }
 }
+
+/// Task 0275 — `GET /v1/contracts` list. Asserts the paginated envelope +
+/// well-formed item shape, and that `filter[type]` is accepted. DB-gated.
+#[tokio::test]
+async fn contracts_list_returns_envelope_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping contracts list integration test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping contracts list test");
+            return;
+        }
+    };
+
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "expected 200: {json}");
+
+    // Envelope shape — regardless of row count.
+    assert!(json["data"].is_array(), "data not array: {json}");
+    let page = &json["page"];
+    assert_eq!(page["limit"], 100, "page.limit not echoed: {json}");
+    assert!(
+        page["next_cursor"].is_string() || page["next_cursor"].is_null(),
+        "next_cursor must be string|null: {json}"
+    );
+
+    // Item shape — every row carries the documented fields.
+    for item in json["data"].as_array().cloned().unwrap_or_default() {
+        assert!(item["contract_id"].is_string(), "contract_id: {item}");
+        assert!(
+            item["recent_invocations"].is_number(),
+            "recent_invocations: {item}"
+        );
+        assert!(item["is_sac"].is_boolean(), "is_sac: {item}");
+        let tn = &item["contract_type_name"];
+        assert!(tn.is_string() || tn.is_null(), "contract_type_name: {item}");
+    }
+
+    // `filter[type]` accepted (valid enum value).
+    let resp2 = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=10&filter%5Btype%5D=token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status2, json2) = body_json(resp2).await;
+    assert_eq!(status2, StatusCode::OK, "filter[type]=token: {json2}");
+    for item in json2["data"].as_array().cloned().unwrap_or_default() {
+        assert_eq!(
+            item["contract_type_name"], "token",
+            "type filter leaked: {item}"
+        );
+    }
+}
+
+/// Task 0275 — list/detail field PARITY. Every field a list item exposes for a
+/// contract must be computed identically by the detail endpoint for that same
+/// contract (detail is a strict superset). Guards against the two endpoints'
+/// SQL drifting apart (e.g. `recent_invocations` window, deployer join,
+/// `contract_type_name` decode, `name`). DB-gated.
+#[tokio::test]
+async fn contract_list_item_matches_detail_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping contract list/detail parity test");
+        return;
+    };
+    let pool = match PgPool::connect(&database_url).await {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("DATABASE_URL unreachable ({err}) — skipping parity test");
+            return;
+        }
+    };
+
+    // Grab the first contract off the list.
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, list_json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "list 200: {list_json}");
+
+    let Some(item) = list_json["data"]
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+    else {
+        eprintln!("no contracts seeded — skipping parity assertions");
+        return;
+    };
+    let contract_id = item["contract_id"]
+        .as_str()
+        .expect("contract_id")
+        .to_string();
+
+    // Fetch the same contract's detail.
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/contracts/{contract_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, detail) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "detail 200: {detail}");
+
+    // Shared scalar fields must be byte-for-byte equal. `name` is deliberately
+    // NOT in this list — it is a search-only column, surfaced by neither
+    // endpoint (asserted separately below).
+    for field in [
+        "contract_id",
+        "contract_type",
+        "contract_type_name",
+        "is_sac",
+        "deployer",
+        "deployed_at_ledger",
+    ] {
+        assert_eq!(
+            item[field], detail[field],
+            "field `{field}` differs between list and detail for {contract_id}\n list={item}\n detail={detail}"
+        );
+    }
+
+    // `recent_invocations` lives top-level on the list item, under `stats` on
+    // the detail — same window (`STATS_WINDOW`), so identical counts.
+    assert_eq!(
+        item["recent_invocations"], detail["stats"]["recent_invocations"],
+        "recent_invocations differs (window drift?) for {contract_id}\n list={item}\n detail={detail}"
+    );
+
+    // `name` is a search-only column — neither endpoint exposes it.
+    assert!(
+        item.get("name").is_none(),
+        "list item must not surface name: {item}"
+    );
+    assert!(
+        detail.get("name").is_none(),
+        "detail must not surface name: {detail}"
+    );
+}
+
+/// Task 0275 — invalid `filter[type]` must 400 in the handler BEFORE any SQL
+/// runs (mirrors `assets_invalid_filter_type_returns_envelope_before_db`).
+/// No DB needed.
+#[tokio::test]
+async fn contracts_invalid_filter_type_returns_400_before_db() {
+    let app = lazy_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?filter%5Btype%5D=NOT_A_TYPE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert_eq!(json["code"], "invalid_filter", "{json}");
+    assert_eq!(json["details"]["filter"], "type", "{json}");
+}
+
+/// Task 0275 — keyset pagination is correct: walking the list one cursor page
+/// at a time visits the SAME contracts, in the SAME order, with no overlap or
+/// gaps versus a single large page. DB-gated.
+#[tokio::test]
+async fn contracts_list_cursor_pagination_round_trip_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping contracts pagination test");
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        eprintln!("DATABASE_URL unreachable — skipping");
+        return;
+    };
+
+    let ids = |json: &serde_json::Value| -> Vec<String> {
+        json["data"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|i| i["contract_id"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    // Ground truth: all contracts in one page.
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, full_json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{full_json}");
+    let full = ids(&full_json);
+    if full.len() < 3 {
+        eprintln!(
+            "only {} contracts seeded — skipping pagination assertions",
+            full.len()
+        );
+        return;
+    }
+
+    // Page 1 (size 2).
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, p1) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{p1}");
+    let page1 = ids(&p1);
+    assert_eq!(page1.len(), 2, "page 1 should be full: {p1}");
+    assert_eq!(
+        page1,
+        full[..2],
+        "page 1 must match the first slice of the full list"
+    );
+    let cursor = p1["page"]["next_cursor"]
+        .as_str()
+        .expect("next_cursor on a full page")
+        .to_string();
+
+    // Page 2, via cursor.
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/contracts?limit=2&cursor={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, p2) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{p2}");
+    let page2 = ids(&p2);
+    assert_eq!(
+        page2,
+        full[2..2 + page2.len()],
+        "page 2 must continue exactly where page 1 stopped"
+    );
+    // No overlap between the two pages.
+    for id in &page2 {
+        assert!(
+            !page1.contains(id),
+            "cursor page overlap: {id} on both pages"
+        );
+    }
+}
+
+/// Task 0275 — `filter[q]` full-text search resolves a contract by its own
+/// contract id (the id is part of `search_vector`). DB-gated.
+#[tokio::test]
+async fn contracts_list_filter_q_finds_by_contract_id_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping contracts search test");
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    // Grab a real contract id off the list.
+    let resp = build_app(pool.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/contracts?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (_, list) = body_json(resp).await;
+    let Some(cid) = list["data"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|i| i["contract_id"].as_str())
+        .map(str::to_string)
+    else {
+        eprintln!("no contracts seeded — skipping search assertions");
+        return;
+    };
+
+    // Search for that exact id.
+    let enc = cid.clone();
+    let resp = build_app(pool)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/contracts?filter%5Bq%5D={enc}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let found: Vec<String> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["contract_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        found.contains(&cid),
+        "search for {cid} did not return it: {json}"
+    );
+}
+
+/// Task 0275 — every valid `filter[type]` is accepted and, when rows come
+/// back, they all carry the requested classification (no leakage). DB-gated.
+#[tokio::test]
+async fn contracts_list_filter_type_classifies_against_real_db() {
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("DATABASE_URL unset — skipping contracts type-filter test");
+        return;
+    };
+    let Ok(pool) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    for ty in ["token", "other", "nft", "fungible"] {
+        let resp = build_app(pool.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/contracts?limit=50&filter%5Btype%5D={ty}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = body_json(resp).await;
+        assert_eq!(status, StatusCode::OK, "filter[type]={ty}: {json}");
+        for item in json["data"].as_array().cloned().unwrap_or_default() {
+            assert_eq!(
+                item["contract_type_name"], ty,
+                "filter[type]={ty} leaked a {} row: {item}",
+                item["contract_type_name"]
+            );
+        }
+    }
+}

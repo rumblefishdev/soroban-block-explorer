@@ -3,8 +3,6 @@ import { createBrowserRouter } from 'react-router-dom';
 
 import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 
-import { PageStub } from '../pages/PageStub.js';
-
 import { AppShell } from './AppShell.js';
 import { RouteErrorBoundary } from './RouteErrorBoundary.js';
 
@@ -63,7 +61,7 @@ export const router = createBrowserRouter([
 
       {
         path: 'contracts',
-        element: <PageStub title="Contracts" path="/contracts" />,
+        element: page(() => import('../pages/ContractsListPage.js')),
       },
       {
         path: 'contracts/:contractId',
