@@ -484,7 +484,11 @@ Browser-delivered frontend bundles do not contain API keys or other shared secre
 Production transport and storage hardening baselines:
 
 - CloudFront and API Gateway serve public traffic over HTTPS/TLS
-- production S3 buckets use server-side encryption with KMS-backed keys
+- production S3 buckets use server-side encryption at rest; the
+  `stellar-ledger-data` ledger bucket uses SSE-S3 (AES256) — its contents are
+  public on-chain XDR, so KMS would only add per-object request cost on the
+  high-volume ingest path (one Put per ledger + one Get per processor run)
+  without buying confidentiality (task 0278)
 - AWS → Hetzner ClickHouse connections require mTLS (cert-pinned at
   the CA from `infra-hetzner/ca/`); Caddy on the box terminates TLS
   and enforces the CN allowlist before forwarding to ClickHouse over
@@ -593,9 +597,11 @@ Post-task-0249 there is only a production AWS environment. Profile:
 - longer operational retention for logs, traces, and replay-relevant
   artifacts; production replay artifacts in `stellar-ledger-data`
   should be kept for at least 30 days
-- KMS-backed encryption for S3 (ledger bucket) and ECR (Galexie
-  images); CloudFront + API Gateway serve over HTTPS/TLS; AWS →
-  Hetzner CH connections enforce mTLS at the Caddy layer on the box
+- SSE-S3 (AES256) encryption for the `stellar-ledger-data` S3 bucket
+  (public XDR — no KMS, to avoid per-object KMS request cost, task 0278);
+  KMS-backed encryption for ECR (Galexie images); CloudFront + API
+  Gateway serve over HTTPS/TLS; AWS → Hetzner CH connections enforce
+  mTLS at the Caddy layer on the box
 - ClickHouse-on-Hetzner: Borg-encrypted backups to BX21 Storage Box,
   RAID 1 on the box, password rotation policy in
   `infra-hetzner/README.md`

@@ -1085,7 +1085,14 @@ export type PaginatedTransactionListItem = {
      */
     application_order: number;
     /**
-     * All C-StrKeys touched anywhere in the transaction.
+     * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+     * On the ClickHouse path this is sourced from `operations_appearances`
+     * only (primary-key seek): a contract reached solely via a nested
+     * sub-invocation or an emitted event — never a root-op `contract_id` — is
+     * NOT listed. For the overwhelming majority of Soroban transactions the
+     * invoked contract IS the root-op `contract_id`, so this matches the PG
+     * path in practice; the full 3-source set was dropped because its scan
+     * blew the read_rows quota (task 0243; see `common::ch`).
      */
     contract_ids: Array<string>;
     created_at: string;
@@ -1408,7 +1415,14 @@ export type TransactionListItem = {
    */
   application_order: number;
   /**
-   * All C-StrKeys touched anywhere in the transaction.
+   * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+   * On the ClickHouse path this is sourced from `operations_appearances`
+   * only (primary-key seek): a contract reached solely via a nested
+   * sub-invocation or an emitted event — never a root-op `contract_id` — is
+   * NOT listed. For the overwhelming majority of Soroban transactions the
+   * invoked contract IS the root-op `contract_id`, so this matches the PG
+   * path in practice; the full 3-source set was dropped because its scan
+   * blew the read_rows quota (task 0243; see `common::ch`).
    */
   contract_ids: Array<string>;
   created_at: string;

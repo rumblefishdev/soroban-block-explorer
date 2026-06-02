@@ -122,10 +122,17 @@ pub async fn fetch_list(
     cursor: Option<&TsIdCursor>,
     direction: Direction,
 ) -> Result<Vec<LedgerListItem>, clickhouse::error::Error> {
-    let cursor_closed_at_ms = cursor.map(|c| c.ts.timestamp_millis());
     let cursor_sequence = cursor.map(|c| c.id);
     let (op, order) = direction_sql(direction);
 
+    // `ledgers` is ORDER BY `sequence`. Paginating by `closed_at` (as the PG
+    // path does) forces a full ~12M-row scan + sort on every page (measured),
+    // and this endpoint is polled, so that scan recurs and eats the
+    // `read_rows` quota. `sequence` is monotonic with `closed_at` (a later
+    // ledger closes later), so ordering + keying on `sequence` alone yields the
+    // identical page in primary-key read-in-order — a handful of rows per page.
+    // `sequence` is unique, so it needs no tie-break. The cursor still carries
+    // `closed_at` for the wire `ts`, but the keyset no longer reads it.
     let sql = format!(
         "SELECT \
             l.sequence, \
@@ -135,16 +142,14 @@ pub async fn fetch_list(
             l.transaction_count, \
             l.base_fee \
         FROM ledgers l \
-        WHERE isNull(?) \
-           OR (l.closed_at, l.sequence) {op} (fromUnixTimestamp64Milli(ifNull(?, 0)), ifNull(?, 0)) \
-        ORDER BY l.closed_at {order}, l.sequence {order} \
+        WHERE ? IS NULL OR l.sequence {op} ? \
+        ORDER BY l.sequence {order} \
         LIMIT ?",
     );
 
     let rows = client
         .query(&sql)
-        .bind(cursor_closed_at_ms)
-        .bind(cursor_closed_at_ms)
+        .bind(cursor_sequence)
         .bind(cursor_sequence)
         .bind(limit)
         .fetch_all::<LedgerListRow>()
