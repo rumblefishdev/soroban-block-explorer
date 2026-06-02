@@ -2,23 +2,42 @@ import { Stack } from '@mui/material';
 import { CardSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 import { useParams } from 'react-router-dom';
 
+import { ChartCardSkeleton } from '../detail/ChartCardSkeleton.js';
+import { KpiStripSkeleton } from '../detail/KpiStripSkeleton.js';
+import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
+
 import { PoolDetailHeader } from './PoolDetailHeader.js';
 
+/** KPI strip cells, mirroring `PoolKpiStrip` (asset codes unknown pre-data, so
+ *  the two reserve cells use a generic 'Reserve' label). */
+const KPI_CELLS = [
+  { label: 'Total shares', caption: 'shares outstanding' },
+  { label: 'Reserve' },
+  { label: 'Reserve' },
+  { label: 'Participants', caption: 'liquidity providers' },
+];
+
 /**
- * Loading skeleton for the liquidity-pool detail page — the real (static)
- * header + KPI/summary card placeholders, matching the loaded layout. Charts
- * /participants/transactions are gated on data, so omitted while loading.
- * Used as BOTH route fallback (phase A) and the page's `isLoading` return
- * (phase B). Reuses the real `PoolDetailHeader` (takes the id as a prop, no
- * fetch) so the header is pixel-exact even in the fallback.
+ * Faithful loading skeleton for the liquidity-pool detail page — mirrors the
+ * full loaded layout (header → KPI strip → summary → charts → participants →
+ * transactions) so neither the lazy-chunk fallback (phase A) nor the page's
+ * own data-loading state (phase B) jumps as sections resolve. Charts and the
+ * two tables are included (not gated) so they reserve their space.
+ *
+ * Used as BOTH the route Suspense fallback and the page's `isLoading` return.
+ * Reuses the real `PoolDetailHeader` (id prop, no fetch) for a pixel-exact
+ * header.
  */
 export function PoolDetailSkeleton() {
   const { id = '' } = useParams<{ id: string }>();
   return (
     <Stack spacing={3}>
       <PoolDetailHeader poolId={id} pool={undefined} />
+      <KpiStripSkeleton cells={KPI_CELLS} />
       <CardSkeleton />
-      <CardSkeleton />
+      <ChartCardSkeleton />
+      <TableSectionSkeleton title="Pool participants" rows={6} columns={4} />
+      <TableSectionSkeleton title="Pool transactions" rows={6} columns={5} />
     </Stack>
   );
 }

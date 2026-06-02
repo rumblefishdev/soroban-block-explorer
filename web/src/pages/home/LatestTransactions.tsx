@@ -50,22 +50,24 @@ export function LatestTransactions() {
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>
-      <Box
-        sx={{
-          px: 2,
-          py: 1.5,
-          borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
-          backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
-        }}
-      >
-        <Typography
-          component="span"
-          variant="bodySmRegular"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      {rows.length > 0 && (
+        <Box
+          sx={{
+            px: 2,
+            py: 1.5,
+            borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+            backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
+          }}
         >
-          {rows.length} latest records
-        </Typography>
-      </Box>
+          <Typography
+            component="span"
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
+            {rows.length} latest records
+          </Typography>
+        </Box>
+      )}
     </Card>
   );
 }
