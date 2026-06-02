@@ -55,11 +55,10 @@ export function DataListCard<T>({
 }: DataListCardProps<T>) {
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={skeletonRows} columns={columnCount} />
-      </Box>
-    );
+    // No padding wrapper — the loaded table (`renderTable`) renders flush, so
+    // wrapping the skeleton in `p:2` shifted the table ~16px down on load.
+    // Match the loaded layout so there's no loading→loaded jump.
+    body = <TableSkeleton rows={skeletonRows} columns={columnCount} />;
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={onRetry} py={8} />;
   } else if (rows.length === 0) {

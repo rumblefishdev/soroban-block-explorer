@@ -47,10 +47,8 @@ export function ListPageSkeleton({ columns = 5 }: { columns?: number }) {
           />
         </Box>
 
-        {/* Table body — same TableSkeleton DataListCard renders in phase B */}
-        <Box sx={{ p: 2 }}>
-          <TableSkeleton rows={10} columns={columns} />
-        </Box>
+        {/* Table body — same flush TableSkeleton DataListCard renders in phase B */}
+        <TableSkeleton rows={10} columns={columns} />
 
         {/* Pagination placeholder */}
         <Box

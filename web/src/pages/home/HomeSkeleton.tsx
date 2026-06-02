@@ -7,14 +7,19 @@ import {
 
 import { KpiCell } from '../detail/KpiCell.js';
 
+import { HomeHero } from './HomeHero.js';
+
 /**
  * Route-level Suspense fallback for the home page (`/`). Mirrors HomePage's
- * shape — hero, the four-stat chain overview, and the two latest-records
- * tables — so the lazy-chunk fallback (phase 1) matches the mounted page's
- * own loading state (phase 2), killing the load-time layout flicker
- * (F-W6-LOADSKEL-1 / card 7.10). Intentionally self-contained: it reuses
- * only eagerly-bundled primitives (no data hooks, no lazy sections) so it
- * stays out of the home chunk.
+ * shape so the lazy-chunk fallback (phase A) matches the mounted page's own
+ * loading state (phase B), killing the load-time layout flicker
+ * (F-W6-LOADSKEL-1 / card 7.10).
+ *
+ * Hero is the REAL component (static, eager) so its block positions
+ * pixel-match phase B (no vertical jump). The chain-overview + tables are
+ * skeletons whose heights match the loaded layout — `KpiCell` loading and
+ * loaded states are the same height, and `TableSkeleton` mirrors the real
+ * tables. Kept query-free (no data hooks) so the fallback stays light.
  */
 const KPI = [
   { label: 'Ledger', caption: 'Current ledger' },
@@ -97,19 +102,7 @@ function TableCardSkeleton({ title }: { title: string }) {
 export function HomeSkeleton() {
   return (
     <>
-      <Box sx={{ pt: { xs: 4, md: 8 }, pb: { xs: 3, md: 5 } }}>
-        <Stack spacing={4} alignItems="center">
-          <Stack spacing={1.5} alignItems="center" sx={{ width: '100%' }}>
-            <Skeleton variant="text" width={280} height={48} />
-            <Skeleton variant="text" width={220} height={48} />
-          </Stack>
-          <Skeleton
-            variant="rounded"
-            height={56}
-            sx={{ width: '100%', maxWidth: 640, borderRadius: '12px' }}
-          />
-        </Stack>
-      </Box>
+      <HomeHero />
       <Stack spacing={{ xs: 5, md: 10 }} sx={{ pb: 4 }}>
         <ChainOverviewSkeleton />
         <TableCardSkeleton title="Latest transactions" />
