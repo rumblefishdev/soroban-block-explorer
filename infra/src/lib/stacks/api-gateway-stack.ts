@@ -4,6 +4,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import type { Construct } from 'constructs';
 
@@ -40,12 +41,37 @@ export class ApiGatewayStack extends cdk.Stack {
     const { config, apiFunction } = props;
 
     // ---------------------
+    // API mTLS truststore (Cloudflare origin lockdown — ADR 0048, Path B)
+    // ---------------------
+    // Phase 1, provisioned independently of the mTLS attachment: the
+    // operator uploads the CA bundle (`truststore.pem` — the CA that signed
+    // Cloudflare's Authenticated-Origin-Pulls client cert) into this bucket
+    // BEFORE flipping `enableApiMtls`, because API Gateway validates the
+    // truststore S3 object at deploy time. Versioned per the archival
+    // guidance and required for CA rotation (mTLS references object versions).
+    const mtlsTruststoreBucket = config.provisionApiMtlsTruststore
+      ? new s3.Bucket(this, 'ApiMtlsTruststore', {
+          bucketName: `${config.envName}-soroban-explorer-api-mtls-truststore`,
+          versioned: true,
+          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+          encryption: config.kmsEncryption
+            ? s3.BucketEncryption.KMS_MANAGED
+            : s3.BucketEncryption.S3_MANAGED,
+          enforceSSL: true,
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        })
+      : undefined;
+
+    // ---------------------
     // REST API
     // ---------------------
     const api = new apigateway.LambdaRestApi(this, 'Api', {
       restApiName: `${config.envName}-soroban-explorer-api`,
       handler: apiFunction,
       proxy: true,
+      // Phase 2: kill the raw execute-api endpoint, which bypasses
+      // custom-domain mTLS. Only flips with enableApiMtls.
+      ...(config.enableApiMtls && { disableExecuteApiEndpoint: true }),
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
@@ -132,6 +158,18 @@ export class ApiGatewayStack extends cdk.Stack {
       domainName: config.apiDomainName,
       certificate,
       endpointType: apigateway.EndpointType.REGIONAL,
+      // Phase 2: attach the mTLS truststore so the REGIONAL custom domain
+      // rejects any client cert not signed by our CA at the handshake.
+      // validateConfig guarantees the bucket exists when enableApiMtls is set;
+      // the extra guard keeps this type-safe.
+      ...(config.enableApiMtls &&
+        mtlsTruststoreBucket && {
+          mtls: {
+            bucket: mtlsTruststoreBucket,
+            key: 'truststore.pem',
+          },
+          securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+        }),
     });
 
     const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
@@ -182,6 +220,11 @@ export class ApiGatewayStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiCustomDomain', {
       value: `https://${config.apiDomainName}`,
     });
+    if (mtlsTruststoreBucket) {
+      new cdk.CfnOutput(this, 'ApiMtlsTruststoreBucket', {
+        value: mtlsTruststoreBucket.bucketName,
+      });
+    }
     if (waf) {
       new cdk.CfnOutput(this, 'ApiWafWebAclArn', {
         value: waf.webAclArn,

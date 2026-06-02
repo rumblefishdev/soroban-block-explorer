@@ -1,0 +1,9 @@
+# Example backend config for `terraform init -backend-config=backend.hcl`.
+# Copy to backend.hcl (gitignored) and fill in. Bootstrap the bucket first
+# (see README.md) — versioned + encrypted + BlockPublicAccess.
+
+bucket       = "REPLACE-soroban-explorer-tfstate"   # versioned, encrypted, private
+key          = "cloudflare/production/terraform.tfstate"
+region       = "eu-central-1"
+encrypt      = true
+use_lockfile = true                                  # native S3 locking (TF >= 1.10)

@@ -3,7 +3,7 @@ id: '0277'
 title: 'FEATURE: Migrate edge protection (WAF/DDoS) to Cloudflare'
 type: FEATURE
 status: active
-related_adr: []
+related_adr: ['0048']
 related_tasks: ['0273']
 tags:
   [
@@ -25,14 +25,14 @@ links:
   - infra/src/lib/stacks/hetzner-dns-stack.ts
   - infra/src/lib/constructs/waf-web-acl.ts
 history:
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
       Spawned after team decision (daily 2026-06-01) to move edge protection
       from AWS WAF to Cloudflare. Rationale + cost/capability comparison in
       docs/waf-vs-cloudflare/README.md.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -43,7 +43,7 @@ history:
       corrected mTLS rationale + CH-IP accepted-risk, secrets handling for a
       PUBLIC repo, mandatory TLS Full(strict), safe step ordering, soak gate,
       observability replacement, a negative-test matrix, and realistic rollback.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -53,7 +53,7 @@ history:
       unmetered DDoS + free Managed Challenge + Transform Rules; API signature-WAF
       coverage retained via the kept REGIONAL AWS WAF. Pre-condition flagged:
       verify Transform Rules fit Free's rule budget (origin lockdown depends on it).
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -65,7 +65,7 @@ history:
       Manager. Remaining to ratify: D3 (WAF header enforcer), D5 (keep API WAF /
       drop only CLOUDFRONT WebACL), D6 (logging). External prerequisite:
       parent rumblefish.dev zone owner sign-off for the NS delegation change.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -79,7 +79,7 @@ history:
       analytics (WAF logs gone). Step 2/7 + AC updated accordingly. Honest limits
       restated: protection layer flat, but API GW + Lambda still scale with real
       traffic; "browser-only" not achievable — only bot/scrape bar-raising.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -91,7 +91,7 @@ history:
       D6 → default (API GW access logs + Lambda + CF analytics). Only non-decision
       items remain: parent rumblefish.dev NS sign-off (external), partner x-api-key
       inventory, staging dry-run. Task is decision-complete & ready to promote.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: active
     who: fmazur
     note: >
@@ -100,6 +100,17 @@ history:
       docs/waf-vs-cloudflare/ (comparison EN/PL + certs & flow). Remaining before
       cutover are non-decision items: parent rumblefish.dev NS sign-off, partner
       x-api-key inventory, staging dry-run.
+  - date: '2026-06-02'
+    status: active
+    who: fmazur
+    note: >
+      Step 1 progress: ADR 0048 (Cloudflare edge over AWS WAF, origins locked to
+      Cloudflare) written as `proposed` and cross-linked (related_adr). Forward-
+      looking ADR-0048 pointers added to docs/architecture/infrastructure/
+      infrastructure-overview.md (§5.4 AWS WAF, §6.1, §6.3) — live WebACL
+      description kept accurate; present-tense topology rewrite deferred to the
+      Step 7 cutover when the ADR flips to `accepted`. Still outstanding in Step 1:
+      external parent-zone NS sign-off.
 ---
 
 # Migrate edge protection (WAF/DDoS) to Cloudflare

@@ -1,0 +1,28 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# NO secret values here — secrets come from Secrets Manager / env var.
+
+aws_region            = "eu-central-1"
+cloudflare_account_id = "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID"
+zone_name             = "sorobanscan.rumblefish.dev"
+
+spa_hostname = "sorobanscan.rumblefish.dev"
+api_hostname = "api.sorobanscan.rumblefish.dev"
+ch_hostname  = "ch.sorobanscan.rumblefish.dev"
+
+# Origin targets — read from CDK outputs (DistributionDomainName, the API
+# Gateway custom-domain regional target) and SSM (ch-ip).
+spa_origin_target = "REPLACE.cloudfront.net"
+api_origin_target = "REPLACE.execute-api.eu-central-1.amazonaws.com"
+ch_origin_ip      = "REPLACE_HETZNER_IPV4"
+
+# Secret reference (NAME, not value):
+origin_secret_secret_id = "soroban/production/cloudflare/origin-secret"
+
+# Keep DNS cutover gated until the AWS-side lockdown is verified.
+create_dns_records = false
+
+# Optional: a verified expression to Managed-Challenge suspicious API traffic.
+# Empty = no challenge rule. cf.threat_score is retired (always 0) and Free has
+# no attack/bot score — use Bot Fight Mode for bots; set this only with an
+# expression that won't challenge the SPA fetch()/XHR or x-api-key partner path.
+# api_managed_challenge_expression = ""

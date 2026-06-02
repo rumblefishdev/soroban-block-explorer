@@ -76,7 +76,7 @@ export function createApp({
     cloudFrontWafArn = cloudFrontWaf.webAclArn;
   }
 
-  new DeliveryStack(app, `${prefix}-Delivery`, {
+  const delivery = new DeliveryStack(app, `${prefix}-Delivery`, {
     env,
     config,
     cloudFrontWafArn,
@@ -101,6 +101,7 @@ export function createApp({
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
     restApi: apiGateway.api,
+    spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });
   cloudWatch.addDependency(apiGateway);
 

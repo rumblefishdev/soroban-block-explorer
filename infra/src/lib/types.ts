@@ -117,6 +117,82 @@ export interface EnvironmentConfig {
    * Production should leave this false.
    */
   readonly enableBasicAuth: boolean;
+
+  // Cloudflare edge migration (task 0277 / ADR 0048) — origin lockdown.
+  // All default false until the Cloudflare zone + certs/secrets exist;
+  // enabling them does NOT move DNS, it provisions the AWS-side locks
+  // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
+
+  /**
+   * Phase 1 of the API mTLS rollout: provision the **versioned** S3
+   * truststore bucket (and only that) so the operator can upload the CA
+   * bundle PEM (`truststore.pem`) BEFORE mTLS is attached.
+   *
+   * Split from `enableApiMtls` deliberately: API Gateway validates the
+   * truststore S3 object at deploy time, so attaching mTLS against an empty
+   * bucket fails. Two-phase rollout: provision bucket → upload PEM →
+   * `enableApiMtls`. Default false.
+   */
+  readonly provisionApiMtlsTruststore: boolean;
+
+  /**
+   * Phase 2 — lock the API Gateway custom domain to Cloudflare via mTLS
+   * (Path B in [ADR 0048]). When true the `ApiGatewayStack`:
+   *  - attaches the S3 **truststore** (the CA bundle that signed
+   *    Cloudflare's uploaded Authenticated-Origin-Pulls client cert) to
+   *    the REGIONAL custom domain, and
+   *  - sets `disableExecuteApiEndpoint=true` so the raw
+   *    `execute-api` URL — which bypasses custom-domain mTLS — stops
+   *    answering.
+   *
+   * REQUIRES `provisionApiMtlsTruststore=true` AND the PEM already uploaded
+   * (enforced in `validateConfig`). The CA bundle is a **non-secret** PEM
+   * uploaded out-of-band; no value is committed. No `crates/api` change
+   * (handshake-level reject).
+   *
+   * ORDERING GOTCHA (task 0277 Step 2): the custom-domain base-path mapping
+   * MUST already be live before `disableExecuteApiEndpoint` flips, otherwise
+   * the edge 403s itself. The custom domain already exists today, so flipping
+   * this on the existing domain is safe — but never enable it before the
+   * custom domain serves.
+   */
+  readonly enableApiMtls: boolean;
+
+  /**
+   * Lock the CloudFront `*.cloudfront.net` distribution to Cloudflare via
+   * a secret header (Decision 4a in [ADR 0048]). When true a
+   * viewer-request CloudFront Function rejects any request whose
+   * `x-origin-secret` header does not match the value held in a CloudFront
+   * KeyValueStore.
+   *
+   * The secret VALUE never lives in git or the CloudFormation template —
+   * it is populated out-of-band into the KVS (mirroring the
+   * `enableBasicAuth` pattern) and set on the Cloudflare side (a Transform
+   * Rule) by Terraform. Canonical source is AWS Secrets Manager
+   * (`soroban/${envName}/cloudflare/origin-secret`), consistent with the
+   * mTLS-bundle precedent (`mtlsSecretNamePrefix`). Closed-by-default: an
+   * empty KVS yields 503, never an open distribution.
+   *
+   * CloudFront allows only ONE viewer-request function per behavior, so
+   * this cannot be combined with `enableBasicAuth` as two separate
+   * functions — see `validateConfig` (the two are mutually exclusive until
+   * a combined guard function lands).
+   */
+  readonly enableOriginSecretLock: boolean;
+
+  /**
+   * Deploy a CloudWatch Synthetics canary that periodically asserts the
+   * direct-origin bypass vectors stay **blocked** (return 403) — the
+   * recurring synthetic check in task 0277 Step 7 acceptance criteria.
+   * It hits the raw `execute-api` URL and the `*.cloudfront.net` domain and
+   * alarms (via the existing SNS→Slack topic) if either starts answering
+   * 2xx, i.e. the origin lockdown regressed.
+   *
+   * Enable only AFTER the locks are live (post-cutover): with the locks off
+   * those origins legitimately return 2xx, so the canary would alarm
+   * continuously (validateConfig warns about this).
+   */
+  readonly enableOriginLockCanary: boolean;
   /** Per-IP request limit over a 5-minute window for the CloudFront WAF. */
   readonly cloudFrontWafRateLimit: number;
   /** Per-IP request limit over a 5-minute window for the API Gateway WAF. */
@@ -330,6 +406,48 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
+  // CloudFront allows exactly ONE viewer-request function per behavior.
+  // basic auth and the origin-secret lock are each their own
+  // viewer-request function, so they cannot both be attached as separate
+  // functions. (A combined guard function is a future option — until then
+  // they are mutually exclusive.)
+  if (config.enableBasicAuth && config.enableOriginSecretLock) {
+    errors.push(
+      `enableBasicAuth and enableOriginSecretLock are mutually exclusive: ` +
+        `CloudFront permits only one viewer-request function per behavior. ` +
+        `Pick one (origin-secret lock is the Cloudflare-cutover lock per ADR 0048; ` +
+        `basic auth is the temporary pre-launch gate from task 0273), or land a ` +
+        `combined guard function first.`
+    );
+  }
+
+  // API mTLS is a two-phase rollout: the truststore bucket must be
+  // provisioned (and the CA PEM uploaded) BEFORE mTLS can be attached —
+  // API Gateway validates the truststore S3 object at deploy time.
+  if (config.enableApiMtls && !config.provisionApiMtlsTruststore) {
+    errors.push(
+      `enableApiMtls=true requires provisionApiMtlsTruststore=true: ` +
+        `provision the truststore bucket and upload truststore.pem first ` +
+        `(API Gateway validates the truststore object at deploy time).`
+    );
+  }
+
+  // The origin-lock canary only probes vectors whose lock is live; with no lock
+  // on it has zero targets and every run fails. Enabling it then is always a
+  // mistake — fail at synth rather than page on every run at runtime.
+  if (
+    config.enableOriginLockCanary &&
+    !config.enableApiMtls &&
+    !config.enableOriginSecretLock
+  ) {
+    errors.push(
+      `enableOriginLockCanary=true requires at least one origin lock ` +
+        `(enableApiMtls and/or enableOriginSecretLock) enabled — otherwise the ` +
+        `canary has no targets and every run fails. Enable it only after a lock ` +
+        `is live (post-cutover).`
+    );
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid EnvironmentConfig for "${config.envName}":\n  - ${errors.join(
@@ -338,14 +456,20 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
-  // Soft sanity check: an environment with neither WAF nor basic auth
-  // exposes an unprotected public CloudFront distribution.
-  if (!config.enableWaf && !config.enableBasicAuth) {
+  // Soft sanity check: an environment with no edge gating at all
+  // (no WAF, no basic auth, no origin-secret lock) exposes an
+  // unprotected public CloudFront distribution.
+  if (
+    !config.enableWaf &&
+    !config.enableBasicAuth &&
+    !config.enableOriginSecretLock
+  ) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[validateConfig] WARNING: ${config.envName} has both enableWaf=false and enableBasicAuth=false. ` +
-        `The CloudFront distribution will be publicly accessible with no gating. ` +
-        `If this is intentional, ignore. Otherwise enable one of them in envs/${config.envName}.json.`
+      `[validateConfig] WARNING: ${config.envName} has enableWaf=false, enableBasicAuth=false ` +
+        `and enableOriginSecretLock=false. The CloudFront distribution will be publicly ` +
+        `accessible with no gating. If this is intentional, ignore. Otherwise enable one of ` +
+        `them in envs/${config.envName}.json.`
     );
   }
 }
