@@ -249,27 +249,35 @@ pub async fn fetch_invocation_appearances(
     let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
 
     // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of
-    // `soroban_invocations_appearances`.
+    // `soroban_invocations_appearances`, so the inner subquery reads only this
+    // contract's rows.
     //
-    // `LIMIT 1 BY (ledger_sequence, transaction_id)` before the page LIMIT: the
-    // `accounts caller` join has no FINAL (a 16M-row FINAL would be ruinous), so
-    // un-merged versions of the caller account fan one invocation appearance
-    // into N identical-key rows. Without this, the page LIMIT fills with those
-    // copies and the page yields fewer distinct (ledger, tx) keys than `limit`,
-    // breaking next-page detection (same class as the transactions B/C fix).
+    // The page LIMIT is applied INSIDE the subquery, BEFORE the `accounts caller`
+    // join. That join has no FINAL (a 16M-row accounts FINAL would be ruinous),
+    // and a hot contract has millions of invocations; joining accounts to ALL of
+    // them before the limit OOMs the JoiningTransform (measured: 14.9M
+    // invocations → 300M join rows → 5.6 GiB limit hit). With the limit inside,
+    // the join sees only ≤limit rows. FINAL is dropped on the seek too — with it
+    // CH merges the contract's rows across every part (~38× read amplification,
+    // measured 574M vs 18.6M rows); the outer `LIMIT 1 BY (ledger_sequence,
+    // transaction_id)` collapses both the caller-account fan-out and any rare
+    // re-ingest duplicate, so FINAL is not needed for correctness here.
     let driver_sql = format!(
         "SELECT \
-            sia.ledger_sequence AS ledger_sequence, \
-            sia.transaction_id AS transaction_id, \
+            m.ledger_sequence AS ledger_sequence, \
+            m.transaction_id AS transaction_id, \
             nullIf(caller.account_id, '') AS caller_account, \
-            sia.amount AS amount \
-         FROM soroban_invocations_appearances sia FINAL \
-         LEFT JOIN accounts caller ON caller.id = sia.caller_id \
-         WHERE sia.contract_id = ? \
-           AND ({cl} IS NULL OR (sia.ledger_sequence, sia.transaction_id) {op} ({cl}, {ct})) \
-         ORDER BY sia.ledger_sequence {order}, sia.transaction_id {order} \
-         LIMIT 1 BY sia.ledger_sequence, sia.transaction_id \
-         LIMIT ?"
+            m.amount AS amount \
+         FROM ( \
+            SELECT ledger_sequence, transaction_id, caller_id, amount \
+            FROM soroban_invocations_appearances \
+            WHERE contract_id = ? \
+              AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
+            ORDER BY ledger_sequence {order}, transaction_id {order} \
+            LIMIT ? \
+         ) m \
+         LEFT JOIN accounts caller ON caller.id = m.caller_id \
+         LIMIT 1 BY m.ledger_sequence, m.transaction_id"
     );
     let key_rows = client
         .query(&driver_sql)
