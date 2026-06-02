@@ -31,7 +31,7 @@ export function HeroSearch({
         height: 56,
         px: 2,
         boxSizing: 'border-box',
-        borderRadius: '8px',
+        borderRadius: `${theme.shape.radius.s}px`,
         border: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMain,
         transition: 'border-color 0.15s ease',
@@ -87,7 +87,7 @@ export function HeroSearch({
           height: 20,
           px: '6px',
           flexShrink: 0,
-          borderRadius: '8px',
+          borderRadius: `${theme.shape.radius.s}px`,
           backgroundColor: theme.palette.surface.grayLight,
         })}
       >

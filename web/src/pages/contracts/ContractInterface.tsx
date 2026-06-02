@@ -123,7 +123,7 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
         <Box
           sx={(theme) => ({
             p: 1,
-            borderRadius: '8px',
+            borderRadius: `${theme.shape.radius.s}px`,
             border: `1px solid ${theme.palette.stroke.default}`,
             // Inset code block uses the darker surface (Figma).
             backgroundColor: theme.palette.surface.grayMainAlt,

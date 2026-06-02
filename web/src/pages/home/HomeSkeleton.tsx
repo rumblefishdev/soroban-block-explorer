@@ -51,7 +51,7 @@ function ChainOverviewSkeleton() {
         sx={(theme) => ({
           width: '100%',
           maxWidth: 1064,
-          borderRadius: '16px',
+          borderRadius: `${theme.shape.radius.lg}px`,
           border: `1px solid ${theme.palette.stroke.default}`,
           backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),
           backdropFilter: 'blur(6px)',

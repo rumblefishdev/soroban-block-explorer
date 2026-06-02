@@ -57,7 +57,10 @@ export function NftDetailSkeleton() {
           variant="rounded"
           width={308}
           height={308}
-          sx={{ borderRadius: '12px', flexShrink: 0 }}
+          sx={(theme) => ({
+            borderRadius: `${theme.shape.radius.md}px`,
+            flexShrink: 0,
+          })}
         />
         <Stack spacing={2} sx={{ flex: 1, minWidth: 320 }}>
           <Skeleton variant="text" width={240} height={32} />

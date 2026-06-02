@@ -37,13 +37,17 @@ export function ListPageSkeleton({ columns = 5 }: { columns?: number }) {
           <Skeleton
             variant="rounded"
             height={40}
-            sx={{ flexGrow: 1, minWidth: 200, borderRadius: '8px' }}
+            sx={(theme) => ({
+              flexGrow: 1,
+              minWidth: 200,
+              borderRadius: `${theme.shape.radius.s}px`,
+            })}
           />
           <Skeleton
             variant="rounded"
             width={150}
             height={40}
-            sx={{ borderRadius: '8px' }}
+            sx={(theme) => ({ borderRadius: `${theme.shape.radius.s}px` })}
           />
         </Box>
 
