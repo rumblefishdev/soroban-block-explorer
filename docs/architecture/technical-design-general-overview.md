@@ -599,8 +599,9 @@ retention, and tighter access controls so pre-production validation does not car
 production cost. The staging web frontend should not be publicly open; it is expected to be
 protected by password-based access at the edge layer. Production durability and security
 baselines explicitly include automated RDS backups with point-in-time recovery, deletion
-protection on the production database, KMS-backed encryption for RDS and S3, and TLS on
-public ingress.
+protection on the production database, KMS-backed encryption for RDS, SSE-S3 (AES256)
+encryption for the public-XDR `stellar-ledger-data` bucket (KMS avoided there to drop
+per-object request cost — task 0278), and TLS on public ingress.
 
 ### 3.6 Scalability
 
@@ -1441,7 +1442,8 @@ report.
 4. Load test report: p95 <200 ms at 1M requests/month equivalent; error rate <0.1%
 5. Security checklist signed off: no wildcard IAM, WAF/throttling active on public
    ingress, RDS has no public endpoint, production RDS backups/PITR/deletion protection
-   enabled, RDS and S3 encrypted with KMS-backed keys, all secrets in Secrets Manager, all
+   enabled, RDS encrypted with KMS-backed keys and the `stellar-ledger-data` bucket with
+   SSE-S3 (AES256), all secrets in Secrets Manager, all
    API inputs validated
 6. 7-day post-launch monitoring report: uptime %, API error rate, p95 latency, Galexie
    ingestion lag per day
