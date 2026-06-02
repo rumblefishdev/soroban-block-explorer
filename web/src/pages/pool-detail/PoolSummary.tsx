@@ -6,7 +6,6 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 import { reserveDotColor } from '../liquidity-pools/assetColor.js';
@@ -87,7 +86,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
               <IdentifierWithCopy
                 value={pool.pool_id}
                 type="pool"
-                href={routes.pool(pool.pool_id)}
+                linked={false}
                 truncate={false}
               />
             ),
