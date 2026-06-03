@@ -174,6 +174,16 @@ pub struct PoolRow {
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
+    /// Ledger value the list keyset orders + paginates on. PG keys on the
+    /// true `created_at_ledger` (pool creation), so `cursor_ledger ==
+    /// created_at_ledger` there. CH dropped `created_at_ledger` from
+    /// `liquidity_pools` (PR #175) and its only in-window creation proxy
+    /// (min snapshot ledger) is clamped to the backfill floor — useless for
+    /// ordering — so the CH list keys on the native `last_updated_ledger`
+    /// ("most recently active") instead, and `cursor_ledger` carries that.
+    /// The wire/`PoolListCursor.created_at_ledger` slot stays opaque (ADR
+    /// 0008); only this field feeds the cursor builder. Unused by detail.
+    pub cursor_ledger: i64,
     /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
     /// Task 0246 — see DTO doc for surfacing rules.
     pub participant_count: i64,
@@ -205,6 +215,9 @@ fn map_pool_row(r: &PgRow) -> PoolRow {
         fee_bps: r.get("fee_bps"),
         fee_percent: r.get("fee_percent"),
         created_at_ledger: r.get("created_at_ledger"),
+        // PG orders the list by `created_at_ledger`, so the cursor sort key
+        // is the same column.
+        cursor_ledger: r.get("created_at_ledger"),
         participant_count: r.get("participant_count"),
         latest_snapshot_ledger: r.get("latest_snapshot_ledger"),
         reserve_a: r.get("reserve_a"),

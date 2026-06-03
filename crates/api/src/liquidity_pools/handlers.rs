@@ -327,7 +327,19 @@ pub async fn list_pools(
         asset_code: normalize_asset_code(params.filter_asset_code),
     };
 
-    let mut rows = match fetch_pool_list(&state.db, &resolved, direction).await {
+    // Per-module datasource dispatch (task 0243 / ADR 0047). The CH list
+    // keys on `last_updated_ledger` (see `queries_ch::fetch_pool_list`); the
+    // sort key travels in `PoolRow::cursor_ledger` regardless of source.
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_list(&state.db, &resolved, direction)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_list(state.ch(), &resolved, direction)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in list_pools: {e}");
@@ -343,7 +355,7 @@ pub async fn list_pools(
         |dir, r| {
             cursor::encode(
                 &PoolListCursor {
-                    created_at_ledger: r.created_at_ledger,
+                    created_at_ledger: r.cursor_ledger,
                     pool_id_hex: r.pool_id_hex.clone(),
                 },
                 dir,
@@ -638,7 +650,16 @@ pub async fn get_pool_chart(
         );
     }
 
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -647,7 +668,17 @@ pub async fn get_pool_chart(
         }
     }
 
-    let data_points = match fetch_pool_chart(&state.db, &pool_id_hex, &interval, from, to).await {
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_chart(&state.db, &pool_id_hex, &interval, from, to)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => {
+            queries_ch::fetch_pool_chart(state.ch(), &pool_id_hex, &interval, from, to)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    };
+    let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
@@ -740,6 +771,7 @@ mod map_pool_item_tests {
             fee_bps: 30,
             fee_percent: "0.30".into(),
             created_at_ledger: 100,
+            cursor_ledger: 100,
             participant_count: 0,
             latest_snapshot_ledger: None,
             reserve_a: None,
