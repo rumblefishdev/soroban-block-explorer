@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 
@@ -87,6 +87,24 @@ export function AppShell() {
   const enterHandlerRef = useRef<() => boolean>(() => false);
 
   const isHome = pathname === routes.home;
+
+  // Global Cmd/Ctrl+K focuses the visible search input (header on most routes,
+  // hero on home) — the shortcut the "CTRL + K" pill advertises (F-RR-2).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const el = document.querySelector<HTMLElement>(
+          'input[placeholder^="Search by TX"]'
+        );
+        if (el) {
+          e.preventDefault();
+          el.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleSearchSubmit = () => {
     if (enterHandlerRef.current()) return;
