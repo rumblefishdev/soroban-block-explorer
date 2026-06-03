@@ -9,9 +9,8 @@ import {
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { reserveDotColor } from '../liquidity-pools/assetColor.js';
 
-import { assetLegLabel, legHref } from './helpers.js';
+import { assetLegLabel, legHref, reserveDotColor } from './helpers.js';
 
 interface AssetReserveCellProps {
   amount: string | null | undefined;

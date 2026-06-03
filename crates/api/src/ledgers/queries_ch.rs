@@ -14,7 +14,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc};
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, direction_sql, keyset_sql};
 
 use super::dto::LedgerListItem;
 use super::queries::{LedgerDetailRow, LedgerTxRow};
@@ -120,10 +120,11 @@ pub async fn fetch_list(
     client: &clickhouse::Client,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<LedgerListItem>, clickhouse::error::Error> {
     let cursor_sequence = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     // `ledgers` is ORDER BY `sequence`. Paginating by `closed_at` (as the PG
     // path does) forces a full ~12M-row scan + sort on every page (measured),

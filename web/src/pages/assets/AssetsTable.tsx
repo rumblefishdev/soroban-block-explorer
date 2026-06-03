@@ -14,7 +14,7 @@ import {
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta, iconKindFor } from './assetType.js';
+import { assetTypeMeta } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -29,11 +29,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <AssetIcon
-            code={row.asset_code}
-            iconUrl={row.icon_url}
-            kind={iconKindFor(row.asset_type_name)}
-          />
+          <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               {row.asset_code ? (
@@ -112,7 +108,8 @@ export const ASSET_COLUMN_COUNT = columns.length;
 interface AssetsTableProps {
   rows: readonly AssetItem[];
   sortDir: SortDirection;
-  onSortChange: (dir: SortDirection) => void;
+  /** `(columnId, direction)` — forwarded straight from the sorted column. */
+  onSortChange: (id: string, dir: SortDirection) => void;
 }
 
 /** The assets list table — token, issuer/contract, supply and holder count. */
@@ -124,7 +121,7 @@ export function AssetsTable({ rows, sortDir, onSortChange }: AssetsTableProps) {
       rowKey={(row) => String(row.id)}
       sortBy="supply"
       sortDir={sortDir}
-      onSortChange={(_id, dir) => onSortChange(dir)}
+      onSortChange={onSortChange}
     />
   );
 }

@@ -30,6 +30,85 @@
         }
       }
     },
+    "/v1/accounts": {
+      "get": {
+        "tags": ["accounts"],
+        "summary": "List accounts ordered by `last_seen_ledger` (the only indexed sort) —\nnewest-active first by default, oldest-first with `?order=asc`. The order\nis sticky across pages; cursor pagination walks within it.\n`filter[with_domain]` keeps only accounts that set a home_domain. No\naddress search — exact lookup is the global search's redirect path. Same\nshape as the other list endpoints.",
+        "operationId": "list_accounts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Base sort order on `last_seen_ledger`: `asc` | `desc` (default).\nSticky — re-send on every page alongside `cursor`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[with_domain]",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["boolean", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated account list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_AccountListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{account_id}": {
       "get": {
         "tags": ["accounts"],
@@ -388,6 +467,86 @@
         }
       }
     },
+    "/v1/contracts": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "List contracts, newest-ingested first (`id DESC`, the PK order — no\nuser sort). `filter[type]` narrows by class, `filter[q]` searches\nid/name. Cursor-paginated like every other list endpoint.",
+        "operationId": "list_contracts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Items per page (1–100, default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter[type]",
+            "in": "query",
+            "description": "Contract class: `token | other | nft | fungible`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          },
+          {
+            "name": "filter[q]",
+            "in": "query",
+            "description": "Free-text search over contract id + name (`search_vector`).",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated contract list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_ContractListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/contracts/{contract_id}": {
       "get": {
         "tags": ["contracts"],
@@ -669,7 +828,7 @@
     "/v1/ledgers": {
       "get": {
         "tags": ["ledgers"],
-        "summary": "List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor\npagination.",
+        "summary": "List ledgers ordered by `(closed_at, sequence)` — newest-first by\ndefault, oldest-first with `?order=asc`. The order is sticky across\npages; cursor pagination walks forward/back within the chosen order.",
         "operationId": "list_ledgers",
         "parameters": [
           {
@@ -688,6 +847,15 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1793,6 +1961,31 @@
           }
         }
       },
+      "AccountListItem": {
+        "type": "object",
+        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+        "required": ["account_id", "last_seen_ledger", "first_seen_ledger"],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "first_seen_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "home_domain": {
+            "type": ["string", "null"]
+          },
+          "last_seen_ledger": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "xlm_balance": {
+            "type": ["string", "null"],
+            "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+          }
+        }
+      },
       "AccountTransactionItem": {
         "type": "object",
         "description": "Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.",
@@ -2099,14 +2292,115 @@
           }
         }
       },
+      "ContractFunctionParam": {
+        "type": "object",
+        "description": "One parameter on a Soroban contract function signature.",
+        "required": ["name", "type_name"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ContractFunctionSig": {
+        "type": "object",
+        "description": "A single public function signature extracted from a Soroban contract's\nWASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is\nthe indexer-side source of the persisted shape.",
+        "required": ["name", "doc", "inputs", "outputs"],
+        "properties": {
+          "doc": {
+            "type": "string",
+            "description": "Documentation string; may be empty."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContractFunctionParam"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output type names; empty array == void return."
+          }
+        }
+      },
+      "ContractInterfaceMetadata": {
+        "type": "object",
+        "description": "Soroban contract interface metadata persisted in\n`wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the\nindexer's `xdr_parser::types::ContractInterface` exactly — the API\nhands the same JSON object to clients that the indexer wrote.",
+        "required": ["functions", "wasm_byte_len"],
+        "properties": {
+          "functions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContractFunctionSig"
+            }
+          },
+          "wasm_byte_len": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Raw WASM byte length (informational)."
+          }
+        }
+      },
+      "ContractListItem": {
+        "type": "object",
+        "description": "One row of `GET /v1/contracts`. Identity + classification + deploy\nprovenance + a 7-day activity signal. All fields come straight from\n`soroban_contracts` (+ a deployer join and a windowed invocation count);\nnullable fields are `None` until the contract's deploy is observed.",
+        "required": ["contract_id", "is_sac", "recent_invocations"],
+        "properties": {
+          "contract_id": {
+            "type": "string"
+          },
+          "contract_type": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`\nuntil deployment is observed."
+          },
+          "contract_type_name": {
+            "type": ["string", "null"],
+            "description": "`token | other | nft | fungible`. `null` only on schema drift / no type."
+          },
+          "deployed_at_ledger": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "Ledger the deploy was observed at; `null` until then."
+          },
+          "deployer": {
+            "type": ["string", "null"],
+            "description": "Deployer account G-strkey; `null` until the deploy op is observed."
+          },
+          "is_sac": {
+            "type": "boolean",
+            "description": "Stellar Asset Contract flag (stored, not derived from `contract_type`)."
+          },
+          "recent_invocations": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
+          }
+        }
+      },
       "ContractStats": {
         "type": "object",
         "required": [
           "recent_invocations",
           "recent_unique_callers",
+          "recent_events",
           "stats_window"
         ],
         "properties": {
+          "recent_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of `soroban_events_appearances.amount` over the same window\nas `recent_invocations`. One appearance row can represent multiple\nactual events (`amount > 1`) so we sum rather than COUNT(*) — the\nfigure matches what `GET /v1/contracts/:id/events` would return\nover the window."
+          },
           "recent_invocations": {
             "type": "integer",
             "format": "int64"
@@ -2408,7 +2702,16 @@
           "contract_id": {
             "type": "string"
           },
-          "interface_metadata": {},
+          "interface_metadata": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContractInterfaceMetadata"
+              }
+            ]
+          },
           "wasm_hash": {
             "type": ["string", "null"]
           }
@@ -2828,6 +3131,48 @@
           }
         }
       },
+      "Paginated_AccountListItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+              "required": [
+                "account_id",
+                "last_seen_ledger",
+                "first_seen_ledger"
+              ],
+              "properties": {
+                "account_id": {
+                  "type": "string"
+                },
+                "first_seen_ledger": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "home_domain": {
+                  "type": ["string", "null"]
+                },
+                "last_seen_ledger": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "xlm_balance": {
+                  "type": ["string", "null"],
+                  "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
       "Paginated_AccountTransactionItem": {
         "type": "object",
         "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
@@ -3012,6 +3357,56 @@
                 },
                 "successful": {
                   "type": "boolean"
+                }
+              }
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Paginated_ContractListItem": {
+        "type": "object",
+        "description": "Canonical envelope for paginated list responses.\n\nGeneric over the item type `T` so every endpoint can reuse a single\nshape. Concrete instantiations (e.g. `Paginated<Transaction>`) are\npicked up automatically by utoipa-axum via the handler return type\nwhen M2 endpoint modules are wired in. Unused in M1 — kept as\ninfrastructure that M2 endpoints will consume.",
+        "required": ["data", "page"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of `GET /v1/contracts`. Identity + classification + deploy\nprovenance + a 7-day activity signal. All fields come straight from\n`soroban_contracts` (+ a deployer join and a windowed invocation count);\nnullable fields are `None` until the contract's deploy is observed.",
+              "required": ["contract_id", "is_sac", "recent_invocations"],
+              "properties": {
+                "contract_id": {
+                  "type": "string"
+                },
+                "contract_type": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`\nuntil deployment is observed."
+                },
+                "contract_type_name": {
+                  "type": ["string", "null"],
+                  "description": "`token | other | nft | fungible`. `null` only on schema drift / no type."
+                },
+                "deployed_at_ledger": {
+                  "type": ["integer", "null"],
+                  "format": "int64",
+                  "description": "Ledger the deploy was observed at; `null` until then."
+                },
+                "deployer": {
+                  "type": ["string", "null"],
+                  "description": "Deployer account G-strkey; `null` until the deploy op is observed."
+                },
+                "is_sac": {
+                  "type": "boolean",
+                  "description": "Stellar Asset Contract flag (stored, not derived from `contract_type`)."
+                },
+                "recent_invocations": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Invocation count over the last 7 days (windowed; matches the detail\n`ContractStats.recent_invocations` semantics)."
                 }
               }
             }
@@ -3623,6 +4018,10 @@
           "contract_id": {
             "type": ["string", "null"],
             "description": "C-strkey of the SAC mirror, when a matching `assets` row\n(`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for\nnative legs and for classic credit legs without an SAC mirror."
+          },
+          "icon_url": {
+            "type": ["string", "null"],
+            "description": "Asset icon URL, mirrored from the leg's `assets.icon_url` row so\npool avatars render the same icon as the assets list. `None` for\nnative legs and assets without an enriched icon — the FE falls back\nto the asset-code initial."
           },
           "issuer": {
             "type": ["string", "null"]
