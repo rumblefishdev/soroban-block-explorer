@@ -32,6 +32,17 @@ export interface UseTableUrlStateResult {
   setCursor: (cursor: string | null) => void;
   setSort: (sortBy: string, sortDir: SortDirection) => void;
   setFilter: (key: string, value: string | null) => void;
+  /**
+   * Drop every `filterKeys` entry (and the cursor) in a SINGLE URL
+   * update. The `sort`/`dir` params are NOT filter keys, so they survive
+   * — which is what "Clear filters" wants (sort does not narrow results).
+   *
+   * Must be one update: calling `setFilter(key, null)` N times in a row
+   * does NOT work — react-router's functional `setSearchParams` hands each
+   * synchronous call the same pre-render params, so the last call clobbers
+   * the earlier ones and only one key actually clears.
+   */
+  clearFilters: () => void;
   resetCursor: () => void;
 }
 
@@ -120,7 +131,15 @@ export function useTableUrlState(
     [update, cursorParam]
   );
 
+  const clearFilters = useCallback(() => {
+    update((next) => {
+      const keys = filterKeysKey ? filterKeysKey.split('|') : [];
+      for (const key of keys) next.delete(key);
+      next.delete(cursorParam);
+    });
+  }, [update, filterKeysKey, cursorParam]);
+
   const resetCursor = useCallback(() => setCursor(null), [setCursor]);
 
-  return { state, setCursor, setSort, setFilter, resetCursor };
+  return { state, setCursor, setSort, setFilter, clearFilters, resetCursor };
 }

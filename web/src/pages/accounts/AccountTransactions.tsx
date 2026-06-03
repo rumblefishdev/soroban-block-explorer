@@ -15,7 +15,7 @@ import {
   usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
@@ -73,20 +73,21 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
  * account summary so a failure here never collapses the rest of the page.
  */
 export function AccountTransactions({ accountId }: { accountId: string }) {
-  const [sortDir, setSortDir] = useState<SortDirection>('desc');
   // Cursors are account-scoped — `resetKey` drops the URL cursor when
   // the user navigates to a different account.
-  const { cursor, goNext, goPrev, reset } = useCursorPagination({
+  const { state, cursor, goNext, goPrev, setSort } = useCursorPagination({
     resetKey: accountId,
   });
+  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
+  // `setSort`, so it survives reload / deep links and stays paired with
+  // the cursor.
+  const sortDir = state.sortDir;
 
   const handleSortChange = useCallback(
-    (_id: string, next: SortDirection) => {
-      setSortDir(next);
-
-      reset();
-    },
-    [reset]
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor.
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
   );
 
   const { data, isLoading, isError, error, refetch } = useAccountTransactions(

@@ -4,8 +4,6 @@ import type { ParticipantItem } from '@rumblefish/api-types';
 import {
   EmptyState,
   ExplorerTable,
-  formatAmount,
-  formatPercent,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
@@ -13,6 +11,8 @@ import {
   TableSkeleton,
   useCursorPagination,
   usePageHandlers,
+  formatAmount,
+  formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';

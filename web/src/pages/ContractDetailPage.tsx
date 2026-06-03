@@ -68,10 +68,7 @@ export default function ContractDetailPage() {
     {
       key: 'events',
       label: 'Events',
-      // Placeholder count — `recent_unique_callers` is a callers metric,
-      // not an events total. Stays until the API exposes a real events
-      // count (tracked in the FE→API gaps doc).
-      count: contract.data?.stats.recent_unique_callers,
+      count: contract.data?.stats.recent_events,
     },
   ];
 

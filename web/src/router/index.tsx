@@ -2,8 +2,6 @@ import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 
 import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
-
-import { PageStub } from '../pages/PageStub.js';
 import { AccountDetailSkeleton } from '../pages/accounts/AccountDetailSkeleton.js';
 import { AssetDetailSkeleton } from '../pages/assets/AssetDetailSkeleton.js';
 import { ContractDetailSkeleton } from '../pages/contracts/ContractDetailSkeleton.js';
@@ -102,7 +100,7 @@ export const router = createBrowserRouter([
 
       {
         path: 'contracts',
-        element: <PageStub title="Contracts" path="/contracts" />,
+        element: page(() => import('../pages/ContractsListPage.js')),
       },
       {
         path: 'contracts/:contractId',

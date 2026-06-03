@@ -252,17 +252,17 @@ These are backend concerns even when their outputs are consumed by frontend page
 
 ### 6.2 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                   |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                         |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                               |
-| Accounts        | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                  |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                       |
-| Contracts       | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events`                |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants` |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                             |
+| Resource        | Endpoint(s)                                                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                      |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                            |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                  |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                    |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                          |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                   |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`    |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                |
 
 ### 6.3 Resource Details
 
@@ -322,6 +322,13 @@ once the ledger is closed and no longer mutable.
 
 #### Accounts
 
+**`GET /accounts`** - Paginated list of indexed accounts ordered by last activity
+(`last_seen_ledger`; `?order=` flips asc/desc — the only sortable, indexed dimension).
+Each row: `account_id`, native `xlm_balance` (nullable), `first_seen_ledger`,
+`last_seen_ledger`, `home_domain`. Filter: `filter[with_domain]` (known/anchor accounts).
+Deliberately omits address search (exact lookup is the global-search redirect) and any
+balance ranking / `xlm_supply_percent` (no index / no XLM-supply source — see task 0274).
+
 **`GET /accounts/:account_id`** - Account detail: current balances, sequence number,
 and first/last seen ledger.
 
@@ -351,6 +358,12 @@ The backend must preserve the distinction between native, classic credit, SAC, a
 Soroban-native assets while still serving all through a unified explorer API.
 
 #### Contracts
+
+**`GET /contracts`** - Paginated list of Soroban contracts, newest-deployed first
+(`id DESC`, no user sort). Each row: `contract_id`, `contract_type` (+ decoded name),
+`is_sac`, `deployer`, `deployed_at_ledger`, and `recent_invocations` (a 7-day count over
+the same window as the contract-detail stats). Filters: `filter[type]` (token | other |
+nft | fungible) and `filter[q]` (full-text over name + contract_id).
 
 **`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), and per-contract activity stats. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped.
 

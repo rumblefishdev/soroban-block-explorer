@@ -5,7 +5,7 @@ import {
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { useAssetsList } from '../api/index.js';
 
@@ -19,14 +19,17 @@ type Filters = NonNullable<ListAssetsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function AssetsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter, reset } =
+  const { state, cursor, goNext, goPrev, setFilter, setSort, clearFilters } =
     useCursorPagination({
       filterKeys: ['code', 'type'],
     });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
-  const [sortDir, setSortDir] = useState<SortDirection>('desc');
+  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
+  // `setSort`, not local state — so it survives reload / deep links and
+  // stays paired with the cursor it was generated under.
+  const sortDir = state.sortDir;
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
@@ -42,11 +45,10 @@ export default function AssetsListPage() {
   );
 
   const handleSortChange = useCallback(
-    (next: SortDirection) => {
-      setSortDir(next);
-      reset();
-    },
-    [reset]
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor (new ordering = page 1).
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
   );
 
   const rows = data?.data ?? [];
@@ -64,10 +66,6 @@ export default function AssetsListPage() {
     (value: string) => setFilter('type', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('code', null);
-    setFilter('type', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -100,7 +98,7 @@ export default function AssetsListPage() {
         hasActiveFilters={hasFilters}
         emptyKind="tokens"
         emptyNoun="assets"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}

@@ -11,10 +11,12 @@ import {
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { AssetIcon, type AssetIconKind } from '../assets/AssetIcon.js';
+import { AssetIcon } from '../assets/AssetIcon.js';
 
 interface BalanceShape {
-  kind: AssetIconKind;
+  /** Native XLM — its subline is prose ("Native asset"); non-native sublines
+   *  are issuer addresses, rendered mono. */
+  isNative: boolean;
   name: string;
   code: string;
   subline: string;
@@ -25,7 +27,7 @@ interface BalanceShape {
 function shape(balance: AccountBalance): BalanceShape {
   if (balance.asset_type_name === 'native') {
     return {
-      kind: 'native',
+      isNative: true,
       name: 'Stellar Lumens',
       code: 'XLM',
       subline: 'Native asset',
@@ -42,7 +44,7 @@ function shape(balance: AccountBalance): BalanceShape {
       ? routes.asset(`${balance.asset_code}-${balance.asset_issuer}`)
       : undefined;
   return {
-    kind: isSac ? 'sac' : 'classic',
+    isNative: false,
     name: code,
     code,
     subline: issuer,
@@ -100,7 +102,7 @@ function BalanceRow({
         alignItems="center"
         sx={{ minWidth: 0, flex: 1 }}
       >
-        <AssetIcon code={s.code} kind={s.kind} size={32} />
+        <AssetIcon code={s.code} size={32} />
         <Box
           sx={{
             display: 'flex',
@@ -120,7 +122,7 @@ function BalanceRow({
               <Typography
                 component="span"
                 sx={(theme) => ({
-                  fontFamily: s.kind === 'native' ? undefined : monoFontFamily,
+                  fontFamily: s.isNative ? undefined : monoFontFamily,
                   fontSize: 12,
                   color: theme.palette.text.tertiary,
                   wordBreak: 'break-all',

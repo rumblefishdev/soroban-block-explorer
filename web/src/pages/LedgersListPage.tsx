@@ -4,7 +4,7 @@ import {
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 
 import { useLedgersList } from '../api/index.js';
 
@@ -13,19 +13,21 @@ import { PageHeader } from './detail/PageHeader.js';
 import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
-  const { cursor, goNext, goPrev, reset } = useCursorPagination();
-  const [sortDir, setSortDir] = useState<SortDirection>('desc');
+  const { state, cursor, goNext, goPrev, setSort } = useCursorPagination();
+  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
+  // `setSort`, so it survives reload / deep links and stays paired with
+  // the cursor.
+  const sortDir = state.sortDir;
   const { data, isLoading, isError, error, refetch } = useLedgersList(
     cursor,
     sortDir
   );
 
   const handleSortChange = useCallback(
-    (next: SortDirection) => {
-      setSortDir(next);
-      reset();
-    },
-    [reset]
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor.
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
   );
 
   const rows = data?.data ?? [];

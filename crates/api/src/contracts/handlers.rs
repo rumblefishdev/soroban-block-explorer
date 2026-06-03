@@ -6,30 +6,126 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
+use domain::ContractType;
 use stellar_xdr::curr::{LedgerCloseMeta, TransactionMeta};
 use xdr_parser::EventSource;
 
 use crate::common::cache_control;
-use crate::common::cursor::{self, TsIdCursor};
+use crate::common::cursor::{self, Direction, TsIdCursor};
+use crate::common::datasource::{DataSource, Module};
 use crate::common::extractors::Pagination;
 use crate::common::pagination::{finalize_page, into_envelope};
-use crate::common::{errors, path};
+use crate::common::{errors, filters, path};
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::runtime_enrichment::stellar_archive::extractors::collect_tx_metas;
 use crate::state::AppState;
+use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
-    ContractDetailResponse, ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractDetailResponse, ContractInterfaceMetadata, ContractListItem, ContractStats,
+    ContractsListParams, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
-    EventAppearanceRow, InvocationAppearanceRow, fetch_contract, fetch_contract_stats,
-    fetch_event_appearances, fetch_invocation_appearances, fetch_wasm_interface,
+    ContractIdCursor, ContractListRow, ContractRow, EventAppearanceRow, InterfaceRow,
+    InvocationAppearanceRow, ResolvedContractsListParams, STATS_WINDOW, fetch_contract,
+    fetch_contract_list, fetch_contract_stats, fetch_event_appearances,
+    fetch_invocation_appearances, fetch_wasm_interface,
 };
+use super::queries_ch;
 
-/// Default time window for `fetch_contract_stats` (canonical 11 Statement B).
-const STATS_WINDOW: &str = "7 days";
+/// Unified per-call fetch error so the handlers dispatch between PG and CH
+/// without leaking driver types. Only `Display` is observed.
+#[derive(Debug, thiserror::Error)]
+enum CtrFetchError {
+    #[error("pg: {0}")]
+    Pg(sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(clickhouse::error::Error),
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/contracts (list)
+// ---------------------------------------------------------------------------
+
+/// List contracts, newest-ingested first (`id DESC`, the PK order — no
+/// user sort). `filter[type]` narrows by class, `filter[q]` searches
+/// id/name. Cursor-paginated like every other list endpoint.
+#[utoipa::path(
+    get,
+    path = "/contracts",
+    tag = "contracts",
+    params(
+        ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        ContractsListParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated contract list",
+         body = Paginated<ContractListItem>),
+        (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error",   body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_contracts(
+    State(state): State<AppState>,
+    pagination: Pagination<ContractIdCursor>,
+    Query(params): Query<ContractsListParams>,
+) -> Response {
+    let contract_type: Option<i16> = match filters::parse_enum_opt::<ContractType>(
+        params.filter_type.as_deref(),
+        "type",
+        Some("contract type"),
+    ) {
+        Ok(maybe) => maybe.map(|t| t as i16),
+        Err(resp) => return resp,
+    };
+
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
+    let resolved = ResolvedContractsListParams {
+        limit: i64::from(pagination.limit),
+        cursor: pagination.cursor,
+        contract_type,
+        q: params.filter_q,
+    };
+
+    let mut rows: Vec<ContractListRow> =
+        match fetch_contract_list(&state.db, &resolved, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("DB error in list_contracts: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
+
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| cursor::encode(&ContractIdCursor { id: r.id }, dir),
+    );
+    let data: Vec<ContractListItem> = rows.into_iter().map(map_contract_list_item).collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
+fn map_contract_list_item(r: ContractListRow) -> ContractListItem {
+    ContractListItem {
+        contract_id: r.contract_id,
+        contract_type: r.contract_type,
+        contract_type_name: r.contract_type_name,
+        is_sac: r.is_sac,
+        deployer: r.deployer,
+        deployed_at_ledger: r.deployed_at_ledger,
+        recent_invocations: r.recent_invocations,
+    }
+}
 
 async fn fetch_unique_ledgers(
     state: &AppState,
@@ -141,20 +237,22 @@ pub async fn get_contract(
         return resp;
     }
 
-    let contract = match fetch_contract(&state.db, &contract_id).await {
+    let source = DataSource::for_module(Module::Contracts);
+
+    let contract = match fetch_contract_for_source(&state, source, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching contract {contract_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let (recent_invocations, recent_unique_callers, stats_window) =
-        match fetch_contract_stats(&state.db, contract.id, STATS_WINDOW).await {
+    let (recent_invocations, recent_unique_callers, recent_events, stats_window) =
+        match fetch_stats_for_source(&state, source, contract.id, STATS_WINDOW).await {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("DB error fetching stats for {contract_id}: {e}");
+                tracing::error!(source = ?source, "DB error fetching stats for {contract_id}: {e}");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -172,6 +270,7 @@ pub async fn get_contract(
         stats: ContractStats {
             recent_invocations,
             recent_unique_callers,
+            recent_events,
             stats_window,
         },
     });
@@ -206,21 +305,44 @@ pub async fn get_interface(
         return resp;
     }
 
+    let source = DataSource::for_module(Module::Contracts);
+
     // 200 + interface_metadata=null for SAC / pre-upload / stub-only;
     // 404 only when the contract row itself is missing.
-    let row = match fetch_wasm_interface(&state.db, &contract_id).await {
+    let row = match fetch_interface_for_source(&state, source, &contract_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching interface for {contract_id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching interface for {contract_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
+    // Decode JSONB into the typed schema. `None` (no `functions` key) is a
+    // legit empty (SAC / stub). Present-but-unparseable is shape drift or a
+    // legacy-shape row — fail LOUD (500) so it is noticed and fixed,
+    // not silently degraded to `interface_metadata: null`.
+    let interface_metadata = match row
+        .interface_metadata
+        .map(serde_json::from_value::<ContractInterfaceMetadata>)
+        .transpose()
+    {
+        Ok(m) => m,
+        Err(err) => {
+            tracing::error!(
+                contract_id = %row.contract_id,
+                "interface_metadata present but failed to decode — shape drift between indexer output and the API DTO, or a legacy-shape row needing re-index: {err}"
+            );
+            return errors::internal_error(
+                errors::INTERFACE_METADATA_CORRUPT,
+                "interface metadata could not be decoded",
+            );
+        }
+    };
     let mut resp = Json(InterfaceResponse {
         contract_id: row.contract_id,
         wasm_hash: row.wasm_hash,
-        interface_metadata: row.interface_metadata,
+        interface_metadata,
     })
     .into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);
@@ -249,26 +371,36 @@ pub async fn get_interface(
 )]
 pub async fn list_invocations(
     State(state): State<AppState>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<TxListCursor>,
     Path(contract_id): Path<String>,
 ) -> Response {
     if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
         return resp;
     }
 
-    let contract = match fetch_contract(&state.db, &contract_id).await {
+    let source = DataSource::for_module(Module::Contracts);
+
+    // Reject a cursor minted for the other datasource (ADR 0008 fail-clean).
+    if let Some(cursor) = &pagination.cursor
+        && !cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
+    let contract = match fetch_contract_for_source(&state, source, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching contract {contract_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
-    let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocation_appearances(
-        &state.db,
+    let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocations_for_source(
+        &state,
+        source,
         contract.id,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
@@ -278,7 +410,7 @@ pub async fn list_invocations(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_invocations: {e}");
+            tracing::error!(source = ?source, "DB error in list_invocations: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -291,7 +423,7 @@ pub async fn list_invocations(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&TsIdCursor::new(r.created_at, r.transaction_id), dir),
+        |dir, r| cursor::encode(&invocation_cursor_for(source, r), dir),
     );
 
     let data: Vec<InvocationItem> = rows
@@ -452,4 +584,125 @@ fn expand_events(
         }
     }
     Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// Per-source dispatch helpers (task 0243)
+//
+// `events` (canonical 14) has no CH path yet (inline-XDR ScVal decode +
+// event_index keyset — see `queries_ch`), so `list_events` stays PG-only and
+// `API_DATASOURCE_CONTRACTS=ch` must remain off until it lands. The detail /
+// interface / invocations endpoints dispatch through these helpers.
+// ---------------------------------------------------------------------------
+
+async fn fetch_contract_for_source(
+    state: &AppState,
+    source: DataSource,
+    contract_id: &str,
+) -> Result<Option<ContractRow>, CtrFetchError> {
+    match source {
+        DataSource::Pg => fetch_contract(&state.db, contract_id)
+            .await
+            .map_err(CtrFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_contract(state.ch(), contract_id)
+            .await
+            .map_err(CtrFetchError::Ch),
+    }
+}
+
+async fn fetch_stats_for_source(
+    state: &AppState,
+    source: DataSource,
+    contract_surrogate_id: i64,
+    window: &str,
+) -> Result<(i64, i64, i64, String), CtrFetchError> {
+    match source {
+        DataSource::Pg => fetch_contract_stats(&state.db, contract_surrogate_id, window)
+            .await
+            .map_err(CtrFetchError::Pg),
+        DataSource::Ch => {
+            queries_ch::fetch_contract_stats(state.ch(), contract_surrogate_id, window)
+                .await
+                .map_err(CtrFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_interface_for_source(
+    state: &AppState,
+    source: DataSource,
+    contract_id: &str,
+) -> Result<Option<InterfaceRow>, CtrFetchError> {
+    match source {
+        DataSource::Pg => fetch_wasm_interface(&state.db, contract_id)
+            .await
+            .map_err(CtrFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_wasm_interface(state.ch(), contract_id)
+            .await
+            .map_err(CtrFetchError::Ch),
+    }
+}
+
+async fn fetch_invocations_for_source(
+    state: &AppState,
+    source: DataSource,
+    contract_surrogate_id: i64,
+    limit: i64,
+    cursor: Option<&TxListCursor>,
+    direction: Direction,
+) -> Result<Vec<InvocationAppearanceRow>, CtrFetchError> {
+    match source {
+        DataSource::Pg => {
+            // PG keys on `(created_at, transaction_id)`; the cross-source guard
+            // guarantees any present cursor is the `Pg` variant.
+            let ts_cursor = cursor.and_then(|c| match c {
+                TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
+                TxListCursor::Ch { .. } => None,
+            });
+            fetch_invocation_appearances(
+                &state.db,
+                contract_surrogate_id,
+                limit,
+                ts_cursor.as_ref(),
+                direction,
+            )
+            .await
+            .map_err(CtrFetchError::Pg)
+        }
+        DataSource::Ch => queries_ch::fetch_invocation_appearances(
+            state.ch(),
+            contract_surrogate_id,
+            limit,
+            cursor,
+            direction,
+        )
+        .await
+        .map_err(CtrFetchError::Ch),
+    }
+}
+
+/// Build the opaque invocations cursor for a boundary row. PG keys on
+/// `(created_at, id)`; CH keys on `(ledger_sequence, id)` (the
+/// `soroban_invocations_appearances` keyset). Tagged with the active datasource
+/// so a later request rejects a cursor minted for the other backend.
+fn invocation_cursor_for(source: DataSource, r: &InvocationAppearanceRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.transaction_id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.transaction_id,
+        },
+    }
+}
+
+/// True when the decoded cursor was minted for the currently-active datasource
+/// (ADR 0008 fail-clean on a cross-datasource replay).
+fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
 }

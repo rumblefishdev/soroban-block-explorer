@@ -17,7 +17,11 @@ export const useLedgersList = (
   cursor: string | null = null,
   order: Order = 'desc'
 ) => {
-  const query: Record<string, string | number> = { order };
+  // Explicit page size — matches the 20/page used by every other list view
+  // (the other pages set it via `PAGE_SIZE`; ledgers has no filters object so
+  // it goes here). Without it the endpoint silently falls back to the backend
+  // default.
+  const query: Record<string, string | number> = { order, limit: 20 };
   if (cursor) query.cursor = cursor;
   return useQuery({
     ...listLedgersOptions({

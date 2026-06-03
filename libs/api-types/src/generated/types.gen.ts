@@ -35,6 +35,23 @@ export type AccountDetailResponse = {
 };
 
 /**
+ * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
+ * first/last-seen activity window + `home_domain`. Ordered by
+ * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
+ * balance from `account_balances_current`; `null` if no native row exists.
+ */
+export type AccountListItem = {
+  account_id: string;
+  first_seen_ledger: number;
+  home_domain?: string | null;
+  last_seen_ledger: number;
+  /**
+   * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+   */
+  xlm_balance?: string | null;
+};
+
+/**
  * Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
  */
 export type AccountTransactionItem = {
@@ -185,7 +202,91 @@ export type ContractDetailResponse = {
   wasm_uploaded_at_ledger?: number | null;
 };
 
+/**
+ * One parameter on a Soroban contract function signature.
+ */
+export type ContractFunctionParam = {
+  name: string;
+  type_name: string;
+};
+
+/**
+ * A single public function signature extracted from a Soroban contract's
+ * WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+ * the indexer-side source of the persisted shape.
+ */
+export type ContractFunctionSig = {
+  /**
+   * Documentation string; may be empty.
+   */
+  doc: string;
+  inputs: Array<ContractFunctionParam>;
+  name: string;
+  /**
+   * Output type names; empty array == void return.
+   */
+  outputs: Array<string>;
+};
+
+/**
+ * Soroban contract interface metadata persisted in
+ * `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+ * indexer's `xdr_parser::types::ContractInterface` exactly — the API
+ * hands the same JSON object to clients that the indexer wrote.
+ */
+export type ContractInterfaceMetadata = {
+  functions: Array<ContractFunctionSig>;
+  /**
+   * Raw WASM byte length (informational).
+   */
+  wasm_byte_len: number;
+};
+
+/**
+ * One row of `GET /v1/contracts`. Identity + classification + deploy
+ * provenance + a 7-day activity signal. All fields come straight from
+ * `soroban_contracts` (+ a deployer join and a windowed invocation count);
+ * nullable fields are `None` until the contract's deploy is observed.
+ */
+export type ContractListItem = {
+  contract_id: string;
+  /**
+   * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+   * until deployment is observed.
+   */
+  contract_type?: number | null;
+  /**
+   * `token | other | nft | fungible`. `null` only on schema drift / no type.
+   */
+  contract_type_name?: string | null;
+  /**
+   * Ledger the deploy was observed at; `null` until then.
+   */
+  deployed_at_ledger?: number | null;
+  /**
+   * Deployer account G-strkey; `null` until the deploy op is observed.
+   */
+  deployer?: string | null;
+  /**
+   * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+   */
+  is_sac: boolean;
+  /**
+   * Invocation count over the last 7 days (windowed; matches the detail
+   * `ContractStats.recent_invocations` semantics).
+   */
+  recent_invocations: number;
+};
+
 export type ContractStats = {
+  /**
+   * Sum of `soroban_events_appearances.amount` over the same window
+   * as `recent_invocations`. One appearance row can represent multiple
+   * actual events (`amount > 1`) so we sum rather than COUNT(*) — the
+   * figure matches what `GET /v1/contracts/:id/events` would return
+   * over the window.
+   */
+  recent_events: number;
   recent_invocations: number;
   recent_unique_callers: number;
   /**
@@ -380,7 +481,7 @@ export type HeavyFieldsStatus = 'ok' | 'unavailable';
  */
 export type InterfaceResponse = {
   contract_id: string;
-  interface_metadata?: unknown;
+  interface_metadata?: null | ContractInterfaceMetadata;
   wasm_hash?: string | null;
 };
 
@@ -720,6 +821,29 @@ export type PageInfo = {
  * when M2 endpoint modules are wired in. Unused in M1 — kept as
  * infrastructure that M2 endpoints will consume.
  */
+export type PaginatedAccountListItem = {
+  data: Array<{
+    account_id: string;
+    first_seen_ledger: number;
+    home_domain?: string | null;
+    last_seen_ledger: number;
+    /**
+     * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+     */
+    xlm_balance?: string | null;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
 export type PaginatedAccountTransactionItem = {
   data: Array<{
     /**
@@ -802,6 +926,48 @@ export type PaginatedAssetTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedContractListItem = {
+  data: Array<{
+    contract_id: string;
+    /**
+     * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+     * until deployment is observed.
+     */
+    contract_type?: number | null;
+    /**
+     * `token | other | nft | fungible`. `null` only on schema drift / no type.
+     */
+    contract_type_name?: string | null;
+    /**
+     * Ledger the deploy was observed at; `null` until then.
+     */
+    deployed_at_ledger?: number | null;
+    /**
+     * Deployer account G-strkey; `null` until the deploy op is observed.
+     */
+    deployer?: string | null;
+    /**
+     * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+     */
+    is_sac: boolean;
+    /**
+     * Invocation count over the last 7 days (windowed; matches the detail
+     * `ContractStats.recent_invocations` semantics).
+     */
+    recent_invocations: number;
   }>;
   page: PageInfo;
 };
@@ -1085,7 +1251,14 @@ export type PaginatedTransactionListItem = {
      */
     application_order: number;
     /**
-     * All C-StrKeys touched anywhere in the transaction.
+     * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+     * On the ClickHouse path this is sourced from `operations_appearances`
+     * only (primary-key seek): a contract reached solely via a nested
+     * sub-invocation or an emitted event — never a root-op `contract_id` — is
+     * NOT listed. For the overwhelming majority of Soroban transactions the
+     * invoked contract IS the root-op `contract_id`, so this matches the PG
+     * path in practice; the full 3-source set was dropped because its scan
+     * blew the read_rows quota (task 0243; see `common::ch`).
      */
     contract_ids: Array<string>;
     created_at: string;
@@ -1197,6 +1370,13 @@ export type PoolAssetLeg = {
    * native legs and for classic credit legs without an SAC mirror.
    */
   contract_id?: string | null;
+  /**
+   * Asset icon URL, mirrored from the leg's `assets.icon_url` row so
+   * pool avatars render the same icon as the assets list. `None` for
+   * native legs and assets without an enriched icon — the FE falls back
+   * to the asset-code initial.
+   */
+  icon_url?: string | null;
   issuer?: string | null;
 };
 
@@ -1408,7 +1588,14 @@ export type TransactionListItem = {
    */
   application_order: number;
   /**
-   * All C-StrKeys touched anywhere in the transaction.
+   * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+   * On the ClickHouse path this is sourced from `operations_appearances`
+   * only (primary-key seek): a contract reached solely via a nested
+   * sub-invocation or an emitted event — never a root-op `contract_id` — is
+   * NOT listed. For the overwhelming majority of Soroban transactions the
+   * invoked contract IS the root-op `contract_id`, so this matches the PG
+   * path in practice; the full 3-source set was dropped because its scan
+   * blew the read_rows quota (task 0243; see `common::ch`).
    */
   contract_ids: Array<string>;
   created_at: string;
@@ -1503,6 +1690,51 @@ export type HealthResponses = {
    */
   200: unknown;
 };
+
+export type ListAccountsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Base sort order on `last_seen_ledger`: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
+    'filter[with_domain]'?: boolean | null;
+  };
+  url: '/v1/accounts';
+};
+
+export type ListAccountsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListAccountsError = ListAccountsErrors[keyof ListAccountsErrors];
+
+export type ListAccountsResponses = {
+  /**
+   * Paginated account list
+   */
+  200: PaginatedAccountListItem;
+};
+
+export type ListAccountsResponse =
+  ListAccountsResponses[keyof ListAccountsResponses];
 
 export type GetAccountData = {
   body?: never;
@@ -1722,6 +1954,53 @@ export type ListAssetTransactionsResponses = {
 export type ListAssetTransactionsResponse =
   ListAssetTransactionsResponses[keyof ListAssetTransactionsResponses];
 
+export type ListContractsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Contract class: `token | other | nft | fungible`.
+     */
+    'filter[type]'?: string | null;
+    /**
+     * Free-text search over contract id + name (`search_vector`).
+     */
+    'filter[q]'?: string | null;
+  };
+  url: '/v1/contracts';
+};
+
+export type ListContractsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListContractsError = ListContractsErrors[keyof ListContractsErrors];
+
+export type ListContractsResponses = {
+  /**
+   * Paginated contract list
+   */
+  200: PaginatedContractListItem;
+};
+
+export type ListContractsResponse =
+  ListContractsResponses[keyof ListContractsResponses];
+
 export type GetContractData = {
   body?: never;
   path: {
@@ -1912,6 +2191,10 @@ export type ListLedgersData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.
+     */
+    order?: string;
   };
   url: '/v1/ledgers';
 };

@@ -82,6 +82,13 @@ pub const DB_ERROR: &str = "db_error";
 /// dependency for endpoints that runtime-fetch ledger XDR.
 pub const ARCHIVE_ERROR: &str = "archive_error";
 
+/// `wasm_interface_metadata.metadata` JSONB was present (passed the
+/// `? 'functions'` SQL gate) but failed to decode into the typed schema —
+/// real shape drift between indexer output and the API DTO, or a
+/// legacy-shape row needing re-index. Surfaces as HTTP 500 so the drift is
+/// caught immediately instead of silently degrading to `interface_metadata: null`.
+pub const INTERFACE_METADATA_CORRUPT: &str = "interface_metadata_corrupt";
+
 /// `q` query parameter on `/v1/search` failed shape validation: missing,
 /// empty after trim, or longer than the per-endpoint byte cap
 /// (`search::handlers::MAX_Q_LEN`, currently 256). Distinct from

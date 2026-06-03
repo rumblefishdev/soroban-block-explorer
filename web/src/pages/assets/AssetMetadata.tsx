@@ -6,7 +6,6 @@ import { SummaryRow, type SummaryCell } from '../detail/SummaryRow.js';
 import { safeHttpUrl } from '../url.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { iconKindFor } from './assetType.js';
 
 /**
  * Asset metadata card — the optional TOML-sourced name, icon, description and
@@ -26,7 +25,6 @@ export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
           <AssetIcon
             code={asset.asset_code}
             iconUrl={asset.icon_url}
-            kind={iconKindFor(asset.asset_type_name)}
             size={32}
           />
         </Box>
