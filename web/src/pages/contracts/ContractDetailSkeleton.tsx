@@ -1,13 +1,11 @@
 import { Box, Stack, Typography } from '@mui/material';
-import {
-  CardSkeleton,
-  truncateMiddle,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { truncateMiddle } from '@rumblefish/soroban-block-explorer-ui';
 import { useParams } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { KpiStripSkeleton } from '../detail/KpiStripSkeleton.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+import { SummarySkeleton } from '../detail/SummarySkeleton.js';
 
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
 
@@ -44,7 +42,7 @@ export function ContractDetailSkeleton() {
       <KpiStripSkeleton
         cells={[{ label: 'Total invocations' }, { label: 'Unique callers' }]}
       />
-      <CardSkeleton />
+      <SummarySkeleton title="Summary" rows={6} />
     </Stack>
   );
 }

@@ -59,7 +59,7 @@ export const router = createBrowserRouter([
         path: 'ledgers',
         element: page(
           () => import('../pages/LedgersListPage.js'),
-          <ListPageSkeleton />
+          <ListPageSkeleton showFilters={false} />
         ),
       },
       {

@@ -1,8 +1,8 @@
 import { Stack } from '@mui/material';
-import { CardSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 import { useParams } from 'react-router-dom';
 
 import { KpiStripSkeleton } from '../detail/KpiStripSkeleton.js';
+import { SummarySkeleton } from '../detail/SummarySkeleton.js';
 import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
 
 import { ChartCardSkeleton } from './ChartCardSkeleton.js';
@@ -34,7 +34,7 @@ export function PoolDetailSkeleton() {
     <Stack spacing={3}>
       <PoolDetailHeader poolId={id} pool={undefined} />
       <KpiStripSkeleton cells={KPI_CELLS} />
-      <CardSkeleton />
+      <SummarySkeleton title="Summary" rows={4} />
       <ChartCardSkeleton />
       <TableSectionSkeleton title="Pool participants" rows={6} columns={4} />
       <TableSectionSkeleton title="Pool transactions" rows={6} columns={5} />

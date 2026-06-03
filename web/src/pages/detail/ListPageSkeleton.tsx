@@ -1,4 +1,4 @@
-import { Box, Card, Skeleton, Stack } from '@mui/material';
+import { Box, Card, Skeleton, Stack, Typography } from '@mui/material';
 import { TableSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
@@ -14,42 +14,55 @@ import { TableSkeleton } from '@rumblefish/soroban-block-explorer-ui';
  * it can be referenced by the router without pulling a page chunk into the
  * main bundle. `columns` is approximate — skeleton bars, not pixel-exact.
  */
-export function ListPageSkeleton({ columns = 5 }: { columns?: number }) {
+export function ListPageSkeleton({
+  columns = 5,
+  showFilters = true,
+}: {
+  columns?: number;
+  showFilters?: boolean;
+}) {
   return (
     <Stack spacing={3}>
-      {/* PageHeader placeholder: title + subtitle */}
+      {/* PageHeader placeholder (title + subtitle bars) */}
       <Stack spacing={1}>
-        <Skeleton variant="text" width={220} height={32} />
-        <Skeleton variant="text" width={340} height={20} />
+        <Typography variant="heading5SemiBold" component="h1">
+          <Skeleton variant="text" width={220} />
+        </Typography>
+        <Typography variant="bodyMedium">
+          <Skeleton variant="text" width={340} />
+        </Typography>
       </Stack>
 
       <Card>
-        {/* Filter-bar placeholder */}
-        <Box
-          sx={{
-            p: 2,
-            display: 'flex',
-            gap: 1.5,
-            flexWrap: 'wrap',
-            alignItems: 'center',
-          }}
-        >
-          <Skeleton
-            variant="rounded"
-            height={40}
-            sx={(theme) => ({
-              flexGrow: 1,
-              minWidth: 200,
-              borderRadius: `${theme.shape.radius.s}px`,
-            })}
-          />
-          <Skeleton
-            variant="rounded"
-            width={150}
-            height={40}
-            sx={(theme) => ({ borderRadius: `${theme.shape.radius.s}px` })}
-          />
-        </Box>
+        {/* Filter-bar placeholder — omitted for lists with no filters (e.g.
+            ledgers) so the table doesn't sit ~72px too low vs loaded. */}
+        {showFilters && (
+          <Box
+            sx={{
+              p: 2,
+              display: 'flex',
+              gap: 1.5,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            <Skeleton
+              variant="rounded"
+              height={40}
+              sx={(theme) => ({
+                flexGrow: 1,
+                minWidth: 200,
+                borderRadius: `${theme.shape.radius.s}px`,
+              })}
+            />
+            <Skeleton
+              variant="rounded"
+              width={150}
+              height={40}
+              sx={(theme) => ({ borderRadius: `${theme.shape.radius.s}px` })}
+            />
+          </Box>
+        )}
 
         {/* Table body — same flush TableSkeleton DataListCard renders in phase B */}
         <TableSkeleton rows={10} columns={columns} />

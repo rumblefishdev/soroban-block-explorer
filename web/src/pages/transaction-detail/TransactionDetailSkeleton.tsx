@@ -1,25 +1,35 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Skeleton, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   getDefaultTruncation,
+  TableSkeleton,
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+import { SectionCard } from '../detail/SectionCard.js';
 
 import { useTxHashParam } from './useTxHashParam.js';
 
+/** Key/value rows placeholder for a summary card body. */
+function RowsSkeleton({ rows }: { rows: number }) {
+  return (
+    <Stack spacing={1.5} sx={{ p: 2 }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <Stack key={i} direction="row" justifyContent="space-between" gap={2}>
+          <Skeleton variant="text" width="30%" />
+          <Skeleton variant="text" width="55%" />
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
 /**
- * Loading skeleton for the transaction detail page. Used in BOTH places so
- * the lazy-chunk fallback (phase A) and the page's own data-loading state
- * (phase B) are byte-identical — no layout jump at the chunk boundary:
- *   - as the route Suspense fallback in `router/index.tsx`
- *   - as the `isLoading` return inside `TransactionDetailPage`
- *
- * Reads the hash from the URL itself (`useTxHashParam` works under the route
- * context, incl. in the fallback) so the breadcrumb shows the real id even
- * before the page chunk loads. Light + self-contained (no heavy sections) so
- * it stays out of the lazy chunk.
+ * Loading skeleton for the transaction detail page. Mirrors the real section
+ * structure (header + ModeToggle, Summary, Operations 2-col, Signatures) via
+ * `SectionCard` so the skeleton looks like the page, not three generic cards.
+ * Used as BOTH the route Suspense fallback (phase A) and the page's
+ * `isLoading` return (phase B). Reads the hash from the URL for the breadcrumb.
  */
 export function TransactionDetailSkeleton() {
   const { hash } = useTxHashParam();
@@ -34,13 +44,64 @@ export function TransactionDetailSkeleton() {
             },
           ]}
         />
-        <Typography variant="heading5SemiBold" component="h1">
-          Transaction Detail
-        </Typography>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          spacing={2}
+          sx={{ flexWrap: 'wrap' }}
+        >
+          <Typography variant="heading5SemiBold" component="h1">
+            Transaction Detail
+          </Typography>
+          {/* ModeToggle (Normal/Advanced) placeholder */}
+          <Skeleton variant="rounded" width={184} height={36} />
+        </Stack>
       </Box>
-      <CardSkeleton />
-      <CardSkeleton />
-      <CardSkeleton />
+
+      {/* Summary — title is "Summary" + status chip, same as loaded */}
+      <SectionCard
+        title={
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <Typography variant="heading5SemiBold" component="h2">
+              Summary
+            </Typography>
+            <Skeleton variant="rounded" width={64} height={22} />
+          </Stack>
+        }
+      >
+        <RowsSkeleton rows={5} />
+      </SectionCard>
+
+      {/* Operations — meta count + 2 equal cols [picker | panel] */}
+      <SectionCard
+        title="Operations"
+        meta={<Skeleton variant="text" width={80} />}
+      >
+        <Box
+          sx={{
+            p: 2,
+            display: { xs: 'block', md: 'grid' },
+            gridTemplateColumns: { md: '1fr 1fr' },
+            gap: 2,
+          }}
+        >
+          <Skeleton variant="rounded" height={320} />
+          <Skeleton
+            variant="rounded"
+            height={320}
+            sx={{ mt: { xs: 2, md: 0 } }}
+          />
+        </Box>
+      </SectionCard>
+
+      {/* Signatures */}
+      <SectionCard
+        title="Signatures"
+        meta={<Skeleton variant="text" width={80} />}
+      >
+        <TableSkeleton rows={3} columns={4} />
+      </SectionCard>
     </Stack>
   );
 }

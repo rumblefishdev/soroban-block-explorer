@@ -5,10 +5,12 @@ import {
   TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { routes } from '../../router/routes.js';
 import { KpiCell } from '../detail/KpiCell.js';
 
 import { HomeHero } from './HomeHero.js';
 import { LiveIndicator } from './LiveIndicator.js';
+import { ViewAllLink } from './ViewAllLink.js';
 
 /**
  * Route-level Suspense fallback for the home page (`/`). Mirrors HomePage's
@@ -82,10 +84,16 @@ function ChainOverviewSkeleton() {
   );
 }
 
-function TableCardSkeleton({ title }: { title: string }) {
+function TableCardSkeleton({ title, to }: { title: string; to: string }) {
   return (
     <Card>
-      <TableSectionHeader title={title} />
+      {/* Same header as the loaded section (LiveIndicator badge + View All
+          link) so the skeleton header isn't missing those vs the real card. */}
+      <TableSectionHeader
+        title={title}
+        badge={<LiveIndicator />}
+        action={<ViewAllLink to={to} />}
+      />
       <TableSkeleton rows={10} columns={5} />
       <Box
         sx={{
@@ -107,8 +115,11 @@ export function HomeSkeleton() {
       <HomeHero />
       <Stack spacing={{ xs: 5, md: 10 }} sx={{ pb: 4 }}>
         <ChainOverviewSkeleton />
-        <TableCardSkeleton title="Latest transactions" />
-        <TableCardSkeleton title="Latest Ledgers" />
+        <TableCardSkeleton
+          title="Latest transactions"
+          to={routes.transactions}
+        />
+        <TableCardSkeleton title="Latest Ledgers" to={routes.ledgers} />
       </Stack>
     </>
   );

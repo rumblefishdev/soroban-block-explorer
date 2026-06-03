@@ -1,13 +1,13 @@
-import { Box, Card, Link, Stack, Typography } from '@mui/material';
+import { Box, Link, Skeleton, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   formatInteger,
   isLedgerSequence,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
+import { SummarySkeleton } from '../detail/SummarySkeleton.js';
+import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
 
 /**
  * Loading skeleton for the ledger detail page — header (Ledger / seq
@@ -48,14 +48,29 @@ export function LedgerDetailSkeleton() {
             {label}
           </Typography>
         </Box>
-        <Typography variant="heading5SemiBold" component="h1">
-          Ledger {label}
-        </Typography>
+        <Stack
+          direction="row"
+          justifyContent="space-between"
+          alignItems="center"
+          gap={2}
+          sx={{ flexWrap: 'wrap' }}
+        >
+          <Typography variant="heading5SemiBold" component="h1">
+            Ledger {label}
+          </Typography>
+          {/* LedgerNav (prev/next) placeholder */}
+          <Stack direction="row" spacing={1}>
+            <Skeleton variant="rounded" width={40} height={36} />
+            <Skeleton variant="rounded" width={40} height={36} />
+          </Stack>
+        </Stack>
       </Box>
-      <CardSkeleton />
-      <Card>
-        <TableSkeleton rows={10} columns={5} />
-      </Card>
+      <SummarySkeleton title="Summary" rows={7} />
+      <TableSectionSkeleton
+        title="Transactions in this ledger"
+        rows={10}
+        columns={5}
+      />
     </Stack>
   );
 }

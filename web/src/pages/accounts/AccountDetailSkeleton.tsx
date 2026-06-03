@@ -1,12 +1,12 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   getDefaultTruncation,
   truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useParams } from 'react-router-dom';
 
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
+import { SummarySkeleton } from '../detail/SummarySkeleton.js';
 import { TableSectionSkeleton } from '../detail/TableSectionSkeleton.js';
 
 /**
@@ -42,8 +42,8 @@ export function AccountDetailSkeleton() {
           {accountId}
         </Typography>
       </Box>
-      <CardSkeleton />
-      <CardSkeleton />
+      <SummarySkeleton title="Summary" rows={4} />
+      <SummarySkeleton title="Balances" rows={4} />
       <TableSectionSkeleton title="Recent transactions" rows={8} columns={6} />
     </Stack>
   );

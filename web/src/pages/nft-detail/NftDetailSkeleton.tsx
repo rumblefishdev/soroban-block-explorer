@@ -1,12 +1,12 @@
 import { Box, Card, Link, Skeleton, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   TableSectionHeader,
   TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
+import { SummarySkeleton } from '../detail/SummarySkeleton.js';
 
 /**
  * Loading skeleton for the NFT detail page — breadcrumb + the 2-col
@@ -63,9 +63,16 @@ export function NftDetailSkeleton() {
           })}
         />
         <Stack spacing={2} sx={{ flex: 1, minWidth: 320 }}>
-          <Skeleton variant="text" width={240} height={32} />
-          <CardSkeleton />
-          <CardSkeleton />
+          {/* Real h1 + collection line so height matches the loaded title
+              block (was a bare text skeleton → first card jumped ~21px). */}
+          <Box>
+            <Typography variant="heading5SemiBold" component="h1">
+              <Skeleton variant="text" width={200} />
+            </Typography>
+            <Skeleton variant="text" width={140} />
+          </Box>
+          <SummarySkeleton title="Details" rows={6} />
+          <SummarySkeleton title="Traits" rows={3} />
         </Stack>
       </Box>
 
