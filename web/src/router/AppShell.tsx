@@ -93,9 +93,7 @@ export function AppShell() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        const el = document.querySelector<HTMLElement>(
-          'input[placeholder^="Search by TX"]'
-        );
+        const el = document.querySelector<HTMLElement>('[data-global-search]');
         if (el) {
           e.preventDefault();
           el.focus();

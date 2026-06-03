@@ -101,6 +101,8 @@ export {
   SearchInput,
   type SearchInputProps,
   type SearchInputSize,
+  isMac,
+  searchShortcutLabel,
   TopNav,
   type TopNavProps,
   type NetworkStats,
