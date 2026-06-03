@@ -26,8 +26,29 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
+use crate::common::cursor::{Direction, direction_sql};
 
-use super::queries::PoolRow;
+use super::dto::SharesCursor;
+use super::queries::{ParticipantRow, PoolRow};
+
+/// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
+/// ~5 s mainnet cadence). The PG path uses `snapshots.created_at >= NOW() - 7d`;
+/// CH `liquidity_pool_snapshots` carries no `created_at`, so the window is
+/// approximated by a `ledger_sequence` floor relative to chain head. Exact
+/// wall-clock parity is a documented tolerance (freshness is a stale/fresh
+/// heuristic, not an exact cutoff).
+const FRESHNESS_WINDOW_LEDGERS: i64 = 7 * 17_280;
+
+/// `true` if `s` is a plain decimal string (digits, at most one `.`, optional
+/// leading `-`). Cursor `shares` is decoded from an opaque payload and inlined
+/// into the keyset SQL (to dodge the clickhouse-rs None-into-tuple bind defect,
+/// same as accounts/contracts); validating it first keeps that inline safe.
+fn is_decimal_str(s: &str) -> bool {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    !body.is_empty()
+        && body.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && body.bytes().filter(|&b| b == b'.').count() <= 1
+}
 
 /// `asset_type` SMALLINT → label, matching the PG `asset_type_name()` SQL
 /// function (migration `20260422000000_enum_label_functions`) — the XDR
@@ -185,6 +206,119 @@ pub async fn fetch_pool_by_id(
     }))
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct CountRow {
+    n: u64,
+}
+
+/// `true` if a real (non-sentinel) pool with this id exists. Gates 404 vs
+/// 200-empty on participants/transactions/chart. CH `liquidity_pools` has no
+/// `created_at_ledger` sentinel column (dropped); a row's presence is the
+/// existence signal. No FINAL needed — existence is unaffected by un-merged
+/// duplicate versions.
+pub async fn pool_exists(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<bool, clickhouse::error::Error> {
+    let row = client
+        .query("SELECT count() AS n FROM liquidity_pools WHERE pool_id = unhex(?)")
+        .bind(pool_id_hex)
+        .fetch_one::<CountRow>()
+        .await?;
+    Ok(row.n > 0)
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct ParticipantChRow {
+    account: String,
+    account_id_surrogate: i64,
+    shares: String,
+    share_percentage: Option<String>,
+    first_deposit_ledger: i64,
+    last_updated_ledger: i64,
+}
+
+/// `GET /v1/liquidity-pools/:id/participants` — active providers ordered by
+/// `(shares DESC, account_id DESC)`. Mirrors the PG `fetch_participants`.
+pub async fn fetch_participants(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    cursor: Option<&SharesCursor>,
+    limit: i64,
+    direction: Direction,
+) -> Result<Vec<ParticipantRow>, clickhouse::error::Error> {
+    let (op, order) = direction_sql(direction);
+
+    // Keyset expanded out of the natural `(shares, account_id) <op> (?, ?)`
+    // tuple form on purpose: a Decimal128 inside a CH tuple comparison is the
+    // documented "Decimal-tuple-compare" trap. The scalar `shares <op>
+    // toDecimal128(...)` is proven safe. The bounds are inlined (not bound) for
+    // the same reason accounts/contracts inline theirs — a `None` bound into a
+    // keyset returns an empty page on clickhouse-rs 0.15. `shares` is validated
+    // as a decimal string before inlining; a tampered cursor degrades to "no
+    // keyset" (first page) rather than injecting.
+    let keyset = match cursor {
+        Some(c) if is_decimal_str(&c.shares) => format!(
+            "AND ((lpp.shares {op} toDecimal128('{s}', 7)) \
+                  OR (lpp.shares = toDecimal128('{s}', 7) AND lpp.account_id {op} {a}))",
+            op = op,
+            s = c.shares,
+            a = c.account_id,
+        ),
+        _ => String::new(),
+    };
+
+    // `snap.ts` = total_shares of the latest snapshot within the freshness
+    // window (NULL → stale pool → share_percentage NULL). The scalar subquery
+    // is scoped to the literal pool (not correlated). CROSS JOIN broadcasts the
+    // single value to every position row (PG `LEFT JOIN latest_snap ON TRUE`).
+    let sql = format!(
+        "SELECT \
+            acc.account_id                       AS account, \
+            lpp.account_id                       AS account_id_surrogate, \
+            toString(lpp.shares)                 AS shares, \
+            if(snap.ts IS NULL OR snap.ts = toDecimal128(0, 7), NULL, \
+               toString(lpp.shares * 100 / snap.ts)) AS share_percentage, \
+            lpp.first_deposit_ledger             AS first_deposit_ledger, \
+            lpp.last_updated_ledger              AS last_updated_ledger \
+         FROM lp_positions lpp FINAL \
+         JOIN accounts acc FINAL ON acc.id = lpp.account_id \
+         CROSS JOIN ( \
+            SELECT (SELECT total_shares FROM liquidity_pool_snapshots \
+                     WHERE pool_id = unhex(?) \
+                       AND ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {fresh} \
+                     ORDER BY ledger_sequence DESC LIMIT 1) AS ts \
+         ) snap \
+         WHERE lpp.pool_id = unhex(?) AND lpp.shares > 0 \
+           {keyset} \
+         ORDER BY lpp.shares {order}, lpp.account_id {order} \
+         LIMIT ?",
+        fresh = FRESHNESS_WINDOW_LEDGERS,
+        keyset = keyset,
+        order = order,
+    );
+
+    let rows = client
+        .query(&sql)
+        .bind(pool_id_hex)
+        .bind(pool_id_hex)
+        .bind(limit)
+        .fetch_all::<ParticipantChRow>()
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ParticipantRow {
+            account: r.account,
+            account_id_surrogate: r.account_id_surrogate,
+            shares: r.shares,
+            share_percentage: r.share_percentage,
+            first_deposit_ledger: r.first_deposit_ledger,
+            last_updated_ledger: r.last_updated_ledger,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +330,18 @@ mod tests {
         assert_eq!(fee_percent_str(100), "1");
         assert_eq!(fee_percent_str(0), "0");
         assert_eq!(fee_percent_str(5), "0.05");
+    }
+
+    #[test]
+    fn decimal_str_validation() {
+        assert!(is_decimal_str("0"));
+        assert!(is_decimal_str("123.4567890"));
+        assert!(is_decimal_str("-5.5"));
+        assert!(!is_decimal_str(""));
+        assert!(!is_decimal_str("1.2.3"));
+        assert!(!is_decimal_str("1e9"));
+        assert!(!is_decimal_str("'; DROP"));
+        assert!(!is_decimal_str("abc"));
     }
 
     #[test]

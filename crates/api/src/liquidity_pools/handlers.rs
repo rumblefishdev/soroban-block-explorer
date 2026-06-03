@@ -64,7 +64,16 @@ pub async fn list_participants(
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -78,15 +87,27 @@ pub async fn list_participants(
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
-    let mut rows = match fetch_participants(
-        &state.db,
-        &pool_id_hex,
-        pagination.cursor.as_ref(),
-        fetch_limit,
-        direction,
-    )
-    .await
-    {
+    let fetched = match source {
+        DataSource::Pg => fetch_participants(
+            &state.db,
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_participants(
+            state.ch(),
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_participants({pool_id}): {e}");
