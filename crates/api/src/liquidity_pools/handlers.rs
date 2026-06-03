@@ -434,7 +434,16 @@ pub async fn list_pool_transactions(
         Err(resp) => return resp,
     };
 
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -443,15 +452,27 @@ pub async fn list_pool_transactions(
         }
     }
 
-    let mut rows = match fetch_pool_transactions(
-        &state.db,
-        &pool_id_hex,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        pagination.direction,
-    )
-    .await
-    {
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_transactions(
+            &state.db,
+            &pool_id_hex,
+            pagination.fetch_limit(),
+            pagination.cursor.as_ref(),
+            pagination.direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_transactions(
+            state.ch(),
+            &pool_id_hex,
+            pagination.fetch_limit(),
+            pagination.cursor.as_ref(),
+            pagination.direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_transactions({pool_id}): {e}");

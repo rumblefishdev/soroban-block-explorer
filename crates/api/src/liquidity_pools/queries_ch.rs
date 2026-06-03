@@ -25,11 +25,11 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::millis_to_utc;
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc};
+use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
 
 use super::dto::SharesCursor;
-use super::queries::{ParticipantRow, PoolRow};
+use super::queries::{ParticipantRow, PoolRow, PoolTxRow};
 
 /// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
 /// ~5 s mainnet cadence). The PG path uses `snapshots.created_at >= NOW() - 7d`;
@@ -315,6 +315,142 @@ pub async fn fetch_participants(
             share_percentage: r.share_percentage,
             first_deposit_ledger: r.first_deposit_ledger,
             last_updated_ledger: r.last_updated_ledger,
+        })
+        .collect())
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PoolTxChRow {
+    id: i64,
+    hash: String,
+    ledger_sequence: i64,
+    source_account: String,
+    fee_charged: i64,
+    successful: bool,
+    operation_count: i16,
+    has_soroban: bool,
+    created_at_ms: i64,
+}
+
+/// `GET /v1/liquidity-pools/:id/transactions`. Mirrors the PG
+/// `fetch_pool_transactions` (canonical SQL 20).
+///
+/// Two cost notes:
+/// - **READ-COST PREREQUISITE — needs a projection before the flag flips.**
+///   `operations_appearances` is ORDER BY `(ledger_sequence, …)`, so the
+///   `pool_id` filter is NOT a key seek. Worse than the global tx-list
+///   contract filter: LP-tagged ops are *sparse*, so the `ORDER BY
+///   ledger_sequence DESC … LIMIT` driver does not fill early and scans the
+///   whole table — box-measured **7.87B rows / 168 GB for a single page**,
+///   ~80% of the hourly read_rows quota. This query is correct and
+///   forward-compatible: a projection `ORDER BY (pool_id, ledger_sequence,
+///   transaction_id)` on `operations_appearances` turns the `pool_id` filter
+///   into a seek and CH auto-routes this exact query through it. Until that
+///   projection is materialized, `API_DATASOURCE_LIQUIDITY_POOLS` MUST stay
+///   off (the other four LP endpoints are pool_id-PK seeks and are cheap).
+/// - The PG cursor keys on `(created_at, transaction_id)`. CH
+///   `operations_appearances` has no `created_at`; since `ledgers.closed_at` is
+///   a bijection with `ledger_sequence`, the cursor's `created_at` is mapped
+///   back to its ledger via `fromUnixTimestamp64Milli` and the keyset runs on
+///   `(ledger_sequence, transaction_id)`. `transaction_id` == `transactions.id`
+///   (the FK), so the cursor `id` carries straight through.
+pub async fn fetch_pool_transactions(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    limit: i64,
+    cursor: Option<&TsIdCursor>,
+    direction: Direction,
+) -> Result<Vec<PoolTxRow>, clickhouse::error::Error> {
+    let (op, order) = direction_sql(direction);
+
+    // Keyset: map the cursor's `created_at` (ms) back to its ledger sequence
+    // (closed_at ↔ ledger_sequence bijection), then compare on
+    // `(ledger_sequence, transaction_id)`. Bounds inlined (i64 ms + i64 id, no
+    // injection) — same rationale as the other CH list paths.
+    let keyset = match cursor {
+        Some(c) => format!(
+            "AND (oa.ledger_sequence {op} \
+                  (SELECT sequence FROM ledgers WHERE closed_at = fromUnixTimestamp64Milli({ms}) LIMIT 1) \
+               OR (oa.ledger_sequence = \
+                   (SELECT sequence FROM ledgers WHERE closed_at = fromUnixTimestamp64Milli({ms}) LIMIT 1) \
+                   AND oa.transaction_id {op} {id}))",
+            op = op,
+            ms = c.ts.timestamp_millis(),
+            id = c.id,
+        ),
+        None => String::new(),
+    };
+
+    // limit*4 driver headroom (PG canonical pattern): a pool tx can touch the
+    // pool via several ops; `LIMIT 1 BY` collapses to one key per transaction
+    // before the page LIMIT.
+    let lim_over = limit * 4;
+
+    let sql = format!(
+        "SELECT \
+            t.id                                 AS id, \
+            lower(hex(t.hash))                   AS hash, \
+            t.ledger_sequence                    AS ledger_sequence, \
+            src.account_id                       AS source_account, \
+            t.fee_charged                        AS fee_charged, \
+            t.successful                         AS successful, \
+            t.operation_count                    AS operation_count, \
+            t.has_soroban                        AS has_soroban, \
+            toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
+         FROM ( \
+            SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
+            FROM operations_appearances oa \
+            WHERE oa.pool_id = unhex(?) {keyset} \
+            ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
+            LIMIT 1 BY oa.ledger_sequence, oa.transaction_id \
+            LIMIT {lim_over} \
+         ) m \
+         INNER JOIN transactions t ON t.id = m.tid AND t.ledger_sequence = m.ls \
+         INNER JOIN accounts src ON src.id = t.source_id \
+         INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+         ORDER BY t.ledger_sequence {order}, t.id {order} \
+         LIMIT 1 BY t.id \
+         LIMIT {limit}",
+        keyset = keyset,
+        order = order,
+        lim_over = lim_over,
+        limit = limit,
+    );
+
+    let page = client
+        .query(&sql)
+        .bind(pool_id_hex)
+        .fetch_all::<PoolTxChRow>()
+        .await?;
+
+    if page.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // operation_types via the shared non-correlated aggregate (ops-only, PK
+    // seek on the page's tx keys).
+    let keys: Vec<(i64, i64)> = page.iter().map(|r| (r.ledger_sequence, r.id)).collect();
+    let aggregates = fetch_tx_list_aggregates(client, &keys).await?;
+
+    Ok(page
+        .into_iter()
+        .map(|r| {
+            let operation_types = aggregates
+                .get(&r.id)
+                .map(|a| a.operation_types.clone())
+                .unwrap_or_default();
+            PoolTxRow {
+                id: r.id,
+                hash: r.hash,
+                ledger_sequence: r.ledger_sequence,
+                source_account: r.source_account,
+                fee_charged: r.fee_charged,
+                successful: r.successful,
+                operation_count: r.operation_count,
+                has_soroban: r.has_soroban,
+                operation_types,
+                created_at: millis_to_utc(r.created_at_ms),
+            }
         })
         .collect())
 }
