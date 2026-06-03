@@ -2,7 +2,7 @@
 id: '0276'
 title: 'Audit 0257 closing round 2 — pre-launch SHOULD batch from full re-run findings'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0032']
 related_tasks: ['0257', '0272', '0274', '0275']
 tags:
@@ -36,6 +36,17 @@ history:
     status: active
     who: karolkow
     note: Promoted backlog → active for implementation (round-2 pre-launch SHOULD batch).
+  - date: '2026-06-03'
+    status: completed
+    who: karolkow
+    note: >
+      Completed the round-2 pre-launch SHOULD batch. Shipped frontend
+      audit closures for route/detail skeleton parity, error/empty-state
+      handling, semantic headings, Cmd/Ctrl+K search focus, operation
+      picker copy, contract-id links, themed z-index/radius tokens, favicon
+      assets, list filter debouncing, keyset ordering cleanup, and LP
+      partial asset search. F-RR-21 stayed explicitly skipped per task
+      scope; parent 0257 action queue reflects the final state.
 ---
 
 # Audit 0257 closing round 2 — pre-launch SHOULD batch
@@ -49,9 +60,13 @@ container (0272) is retired; round 2 picks up the next realistic
 pre-launch quality bar. Master action queue remains the source of truth —
 this task implements its `SHOULD`-tier findings card-by-card.
 
-## Status: Active (In-Progress)
+## Status: Completed
 
-Currently in active development.
+Closed 2026-06-03. The round-2 pre-launch SHOULD batch is complete: all
+accepted findings are marked done in this task and the 0257 master action
+queue, with F-RR-21 left as an explicit skip. Further 0257 work should be
+tracked as follow-up backlog items rather than reopening this elastic
+container.
 
 ## Context
 
