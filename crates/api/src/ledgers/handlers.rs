@@ -75,7 +75,7 @@ pub async fn list_ledgers(
     // with each subsequent page request.
     let sort = match parse_sort_order(order_query.order.as_deref()) {
         Ok(s) => s,
-        Err(resp) => return resp,
+        Err(err) => return err.into_response(),
     };
 
     // Fetch limit+1 rows — the extra peek row drives continuation

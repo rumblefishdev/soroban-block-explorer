@@ -73,7 +73,7 @@ pub async fn list_accounts(
 ) -> Response {
     let sort = match parse_sort_order(params.order.as_deref()) {
         Ok(s) => s,
-        Err(resp) => return resp,
+        Err(err) => return err.into_response(),
     };
 
     let direction = pagination.direction;
@@ -235,7 +235,7 @@ pub async fn list_account_transactions(
 
     let sort = match parse_sort_order(params.order.as_deref()) {
         Ok(s) => s,
-        Err(resp) => return resp,
+        Err(err) => return err.into_response(),
     };
 
     let source = DataSource::for_module(Module::Accounts);
