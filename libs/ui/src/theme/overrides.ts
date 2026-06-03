@@ -240,15 +240,21 @@ export const overrides: Components<Theme> = {
       },
       {
         props: { color: 'blue' },
-        style: { backgroundColor: '#dbeafe', color: '#155dfc' },
+        style: { backgroundColor: scales.blue[100], color: scales.blue[600] },
       },
       {
         props: { color: 'violet' },
-        style: { backgroundColor: '#ede9fe', color: '#7f22fe' },
+        style: {
+          backgroundColor: scales.violet[100],
+          color: scales.violet[600],
+        },
       },
       {
         props: { color: 'emerald' },
-        style: { backgroundColor: '#d0fae5', color: '#009966' },
+        style: {
+          backgroundColor: scales.emerald[100],
+          color: scales.emerald[600],
+        },
       },
       {
         props: { color: 'neutral' },
@@ -269,7 +275,10 @@ export const overrides: Components<Theme> = {
       },
       {
         props: { color: 'brown' },
-        style: { backgroundColor: '#724311', color: '#fffcc2' },
+        style: {
+          backgroundColor: scales.primary[900],
+          color: scales.primary[100],
+        },
       },
       {
         props: { color: 'accent' },
@@ -325,7 +334,7 @@ export const overrides: Components<Theme> = {
         },
       }),
       thumb: {
-        backgroundColor: '#ffffff',
+        backgroundColor: scales.base.white,
         boxShadow: 'none',
       },
       track: ({ theme }) => ({

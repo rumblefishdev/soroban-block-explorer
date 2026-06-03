@@ -1,16 +1,14 @@
 import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  classifyError,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  formatAmount,
+  formatTps,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
 import { KpiCell } from '../detail/KpiCell.js';
-import { formatAmount } from '../format.js';
 
 import { LiveIndicator } from './LiveIndicator.js';
 
@@ -25,72 +23,82 @@ export function ChainOverview() {
 
   let content: ReactNode;
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    content =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={4} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={4} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={4} />
-      );
-  } else {
     content = (
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        alignItems="stretch"
-        divider={
-          <Divider
-            orientation="vertical"
-            flexItem
-            sx={{ display: { xs: 'none', md: 'block' } }}
-          />
-        }
-        sx={{ width: '100%' }}
-      >
-        <KpiCell
-          card={false}
-          align="center"
-          valueVariant="heading4SemiBold"
-          labelVariant="bodyMedium"
-          label={<LiveIndicator />}
-          value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
-          caption="Current ledger"
-          loading={isLoading}
-        />
-        <KpiCell
-          card={false}
-          align="center"
-          valueVariant="heading4SemiBold"
-          labelVariant="bodyMedium"
-          label="TPS"
-          value={data ? data.tps_60s.toFixed(1) : undefined}
-          caption="Last 60s"
-          valueColor={(theme) => theme.palette.text.success}
-          loading={isLoading}
-        />
-        <KpiCell
-          card={false}
-          align="center"
-          valueVariant="heading4SemiBold"
-          labelVariant="bodyMedium"
-          label="Accounts"
-          value={data ? formatAmount(data.total_accounts) : undefined}
-          caption="Total"
-          loading={isLoading}
-        />
-        <KpiCell
-          card={false}
-          align="center"
-          valueVariant="heading4SemiBold"
-          labelVariant="bodyMedium"
-          label="Contracts"
-          value={data ? formatAmount(data.total_contracts) : undefined}
-          caption="Soroban"
-          loading={isLoading}
-        />
-      </Stack>
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
+    );
+  } else {
+    const cells = [
+      <KpiCell
+        key="ledger"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label={<LiveIndicator />}
+        value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
+        caption="Current ledger"
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="tps"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="TPS"
+        value={data ? formatTps(data.tps_60s) : undefined}
+        caption="Last 60s"
+        valueColor={(theme) => theme.palette.text.success}
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="accounts"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="Accounts"
+        value={data ? formatAmount(data.total_accounts) : undefined}
+        caption="Total"
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="contracts"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="Contracts"
+        value={data ? formatAmount(data.total_contracts) : undefined}
+        caption="Soroban"
+        loading={isLoading}
+      />,
+    ];
+    content = (
+      <>
+        {/* Mobile/tablet: 2×2 grid — a 4-tall vertical stack reads as dead
+            space. 1px gap over a stroke-coloured bg paints the divider lines. */}
+        <Box
+          sx={(theme) => ({
+            display: { xs: 'grid', md: 'none' },
+            gridTemplateColumns: '1fr 1fr',
+            gap: '1px',
+            backgroundColor: theme.palette.stroke.default,
+            '& > *': { backgroundColor: theme.palette.surface.grayMainAlt },
+          })}
+        >
+          {cells}
+        </Box>
+        {/* Desktop: single row with vertical dividers. */}
+        <Stack
+          direction="row"
+          alignItems="stretch"
+          divider={<Divider orientation="vertical" flexItem />}
+          sx={{ width: '100%', display: { xs: 'none', md: 'flex' } }}
+        >
+          {cells}
+        </Stack>
+      </>
     );
   }
 

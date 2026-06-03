@@ -1,13 +1,14 @@
 import type { LedgerDetailResponse } from '@rumblefish/api-types';
 import {
   Chip,
+  formatInteger,
   IdentifierWithCopy,
   TableSectionHeader,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Box, Card, Stack, Typography } from '@mui/material';
+import { Box, Card, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
-import { formatFee } from '../transactions/formatters.js';
+import { FeeCell } from '../detail/FeeCell.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LedgerSummaryProps {
@@ -17,25 +18,6 @@ interface LedgerSummaryProps {
 interface SummaryCell {
   label: string;
   value: ReactNode;
-}
-
-function BaseFee({ stroops }: { stroops: number }) {
-  return (
-    <Stack spacing={0.25}>
-      <Typography
-        variant="bodySmBold"
-        sx={(theme) => ({ color: theme.palette.text.primary })}
-      >
-        {formatFee(stroops)}
-      </Typography>
-      <Typography
-        variant="bodyMonoXsRegular"
-        sx={(theme) => ({ color: theme.palette.text.tertiary })}
-      >
-        ({stroops.toLocaleString('en-US')} stroops)
-      </Typography>
-    </Stack>
-  );
 }
 
 function Cell({ label, value }: SummaryCell) {
@@ -96,7 +78,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
             variant="bodySmBold"
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
-            {ledger.sequence.toLocaleString('en-US')}
+            {formatInteger(ledger.sequence)}
           </Typography>
         ),
       },
@@ -131,7 +113,16 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
         label: 'Timestamp',
         value: <TransactionTime createdAt={ledger.closed_at} />,
       },
-      { label: 'Base fee', value: <BaseFee stroops={ledger.base_fee} /> },
+      {
+        label: 'Base fee',
+        value: (
+          <FeeCell
+            stroops={ledger.base_fee}
+            primaryVariant="bodySmBold"
+            secondaryVariant="bodyMonoXsRegular"
+          />
+        ),
+      },
     ],
     [
       {
@@ -141,7 +132,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
             variant="bodySmBold"
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
-            {ledger.transaction_count.toLocaleString('en-US')}
+            {formatInteger(ledger.transaction_count)}
           </Typography>
         ),
       },

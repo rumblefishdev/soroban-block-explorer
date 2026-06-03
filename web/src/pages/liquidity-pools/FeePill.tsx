@@ -1,4 +1,5 @@
 import { Box, Typography } from '@mui/material';
+import { formatPercent } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * Green success pill used for the AMM fee — list-page rows and the
@@ -20,8 +21,7 @@ export function FeePill({
   raw: string;
   prefix?: boolean;
 }) {
-  const n = Number(raw);
-  const text = Number.isFinite(n) ? `${n.toFixed(2)}%` : raw;
+  const text = formatPercent(Number(raw), raw);
   return (
     <Box
       component="span"

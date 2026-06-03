@@ -1,14 +1,11 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
 import {
-  classifyError,
+  DetailErrorState,
   DetailSkeleton,
-  GenericErrorState,
+  formatInteger,
   isLedgerSequence,
-  isMissingResource,
   NotFoundState,
-  RateLimitState,
   SectionErrorBoundary,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -54,21 +51,18 @@ export default function LedgerDetailPage() {
   }
 
   if (isError) {
-    const kind = classifyError(error);
-    if (isMissingResource(kind)) {
-      // Backend returns 400 INVALID_SEQUENCE for i64-overflow values
-      // (e.g. `/ledgers/99999999999`); 404 for in-range sequences with
-      // no record. Both are "this ledger isn't here" from the user's
-      // POV — single NotFound state (task 0251 H8).
-      return <NotFoundState entity="ledger" identifier={rawSequence} />;
-    }
-    const retry = () => void refetch();
-    return kind === 'rate-limit' ? (
-      <RateLimitState onRetry={retry} py={8} />
-    ) : kind === 'transient' ? (
-      <TransientErrorState onRetry={retry} py={8} />
-    ) : (
-      <GenericErrorState onRetry={retry} py={8} />
+    // Backend returns 400 INVALID_SEQUENCE for i64-overflow values
+    // (e.g. `/ledgers/99999999999`); 404 for in-range sequences with no
+    // record. Both fold to NotFound (task 0251 H8); other errors get the
+    // shared rate-limit / transient / generic handling.
+    return (
+      <DetailErrorState
+        error={error}
+        entity="ledger"
+        identifier={rawSequence}
+        onRetry={() => void refetch()}
+        py={8}
+      />
     );
   }
 
@@ -78,7 +72,7 @@ export default function LedgerDetailPage() {
 
   const ledger = data;
   const txRows = ledger.transactions.data;
-  const sequenceLabel = ledger.sequence.toLocaleString('en-US');
+  const sequenceLabel = formatInteger(ledger.sequence);
 
   return (
     <Stack spacing={3}>

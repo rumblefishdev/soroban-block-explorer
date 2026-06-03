@@ -1,11 +1,13 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
   IdentifierWithCopy,
+  StatusChip,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { Dash, OperationCell, StatusCell } from '../transactions/cells.js';
+import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LatestTransactionsTableProps {
@@ -36,7 +38,7 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'time',

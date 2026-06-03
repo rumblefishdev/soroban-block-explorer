@@ -1,9 +1,16 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Box from '@mui/material/Box';
+import Drawer from '@mui/material/Drawer';
+import IconButton from '@mui/material/IconButton';
+import CloseIcon from '@mui/icons-material/Close';
+import MenuIcon from '@mui/icons-material/Menu';
 
 import { grid } from '../theme/grid.js';
 
 import { NavButton } from './NavButton.js';
+
+/** Below this width the inline nav collapses behind a hamburger drawer. */
+const NAV_COLLAPSE_BREAKPOINT = 'md';
 
 export interface NavItem {
   label: string;
@@ -23,6 +30,13 @@ export function SecondaryNav({
   activePage,
   onNavClick,
 }: SecondaryNavProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const handleNav = (item: NavItem) => {
+    setMenuOpen(false);
+    onNavClick?.(item);
+  };
+
   return (
     <Box
       component="nav"
@@ -62,6 +76,7 @@ export function SecondaryNav({
           {logo}
         </Box>
 
+        {/* Inline nav — desktop only (≥md). */}
         <Box
           display="flex"
           alignItems="stretch"
@@ -69,9 +84,7 @@ export function SecondaryNav({
           sx={{
             alignSelf: 'stretch',
             minWidth: 0,
-            overflowX: { xs: 'auto', md: 'visible' },
-            scrollbarWidth: 'none',
-            '&::-webkit-scrollbar': { display: 'none' },
+            display: { xs: 'none', [NAV_COLLAPSE_BREAKPOINT]: 'flex' },
           }}
         >
           {navItems.map((item) => (
@@ -84,7 +97,66 @@ export function SecondaryNav({
             />
           ))}
         </Box>
+
+        {/* Hamburger toggle — mobile/tablet only (<md). */}
+        <IconButton
+          aria-label={
+            menuOpen ? 'Close navigation menu' : 'Open navigation menu'
+          }
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+          sx={(theme) => ({
+            display: { xs: 'inline-flex', [NAV_COLLAPSE_BREAKPOINT]: 'none' },
+            // ≥44px touch target (WCAG 2.5.5 / card 11.6).
+            width: 44,
+            height: 44,
+            color: theme.palette.text.primary,
+          })}
+        >
+          {menuOpen ? <CloseIcon /> : <MenuIcon />}
+        </IconButton>
       </Box>
+
+      {/* Slim right drawer (<md). Backdrop + Escape close it — no separate
+          close button; the same hamburger flips to ✕ while open. */}
+      <Drawer
+        anchor="right"
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        slotProps={{
+          paper: {
+            sx: (theme) => ({
+              width: 'min(72vw, 256px)',
+              pt: 1,
+              backgroundColor: theme.palette.surface.grayMain,
+              backgroundImage: 'none',
+              borderLeft: `1px solid ${theme.palette.stroke.default}`,
+            }),
+          },
+        }}
+      >
+        <Box
+          component="nav"
+          aria-label="Primary"
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            px: 1,
+          }}
+        >
+          {navItems.map((item) => (
+            <NavButton
+              key={item.label}
+              label={item.label}
+              size="lg"
+              active={activePage === item.label}
+              href={item.href}
+              onClick={() => handleNav(item)}
+            />
+          ))}
+        </Box>
+      </Drawer>
     </Box>
   );
 }

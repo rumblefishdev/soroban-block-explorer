@@ -7,9 +7,7 @@ import {
   TextField,
   type SelectChangeEvent,
 } from '@mui/material';
-import { useEffect, useState } from 'react';
-
-const SEARCH_DEBOUNCE_MS = 300;
+import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * TVL preset options (Figma node 267:60674).
@@ -45,20 +43,7 @@ export function PoolsFilterBar({
   onAssetChange,
   onMinTvlChange,
 }: PoolsFilterBarProps) {
-  const [draft, setDraft] = useState(asset);
-
-  // Keep the local draft in sync if the URL value changes externally
-  // (e.g. browser back/forward, programmatic reset).
-  useEffect(() => {
-    setDraft(asset);
-  }, [asset]);
-
-  // Debounce keystrokes; commits to the URL after the user pauses typing.
-  useEffect(() => {
-    if (draft === asset) return;
-    const id = setTimeout(() => onAssetChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, asset, onAssetChange]);
+  const [draft, setDraft] = useDebouncedDraft(asset, onAssetChange);
 
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);

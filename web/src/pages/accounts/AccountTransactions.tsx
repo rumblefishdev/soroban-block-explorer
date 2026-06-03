@@ -1,17 +1,16 @@
 import { Box, Typography } from '@mui/material';
 import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
-  classifyError,
   ExplorerTable,
-  GenericErrorState,
+  formatFee,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   type SortDirection,
+  StatusChip,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -20,8 +19,7 @@ import { useCallback, type ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { OperationCell, StatusCell } from '../transactions/cells.js';
-import { formatFee } from '../transactions/formatters.js';
+import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
@@ -45,7 +43,7 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'fee',
@@ -113,16 +111,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" py={6} />;
   } else {

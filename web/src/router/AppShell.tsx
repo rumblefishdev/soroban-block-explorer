@@ -9,10 +9,10 @@ import {
   PageGridBackdrop,
   grid,
   type NavItem,
-  Network,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useNetworkStats } from '../api/index.js';
+import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
@@ -57,10 +57,11 @@ function HomeLogo({
       onClick={onClick}
       sx={{ display: 'inline-flex', lineHeight: 0 }}
     >
-      <img
+      <Box
+        component="img"
         src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.webp'}
         alt={isSoroban ? 'Soroban' : 'Rumblefish'}
-        style={{ height, width: 'auto', display: 'block' }}
+        sx={{ height, width: 'auto', display: 'block' }}
       />
     </Box>
   );
@@ -82,8 +83,6 @@ export function AppShell() {
   const { data: stats } = useNetworkStats();
   const [searchValue, setSearchValue] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-
-  const [network, setNetwork] = useState<Network>(Network.MAINNET);
 
   const enterHandlerRef = useRef<() => boolean>(() => false);
 
@@ -141,8 +140,6 @@ export function AppShell() {
       {!isHome && (
         <TopNav
           stats={stats}
-          network={network}
-          onNetworkChange={setNetwork}
           searchValue={searchValue}
           onSearchChange={handleSearchChange}
           onSearchSubmit={handleSearchSubmit}
@@ -168,6 +165,7 @@ export function AppShell() {
       />
       <Box sx={{ flex: 1, position: 'relative', width: '100%' }}>
         <PageGridBackdrop />
+        {isHome && <HomeHeroGlow />}
         <Box
           component="main"
           sx={{

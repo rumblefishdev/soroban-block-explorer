@@ -1,5 +1,6 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
+  formatInteger,
   PaginationControls,
   TableEmptyState,
   TableSectionHeader,
@@ -41,7 +42,7 @@ export function LedgerTransactions({
         )}
       </Box>
       <PaginationControls
-        caption={`${totalCount.toLocaleString('en-US')} transactions`}
+        caption={`${formatInteger(totalCount)} transactions`}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={onPrev}

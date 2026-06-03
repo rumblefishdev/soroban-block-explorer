@@ -1,17 +1,15 @@
 import SwapHorizIcon from '@mui/icons-material/SwapHorizOutlined';
-import { Box, Card, Typography } from '@mui/material';
+import { Box, Card } from '@mui/material';
 import type { NftTransferItem } from '@rumblefish/api-types';
 import {
-  classifyError,
+  Dash,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -28,17 +26,6 @@ interface NftTransfersProps {
   contractId: string;
   /** Opaque contract-defined token id (≤128 ASCII). */
   tokenId: string;
-}
-
-function Dash() {
-  return (
-    <Typography
-      component="span"
-      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-    >
-      —
-    </Typography>
-  );
 }
 
 const columns: ExplorerTableColumn<NftTransferItem>[] = [
@@ -116,16 +103,9 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={8} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={8} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={8} />
-      );
+    body = (
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
+    );
   } else if (rows.length === 0) {
     body = (
       <EmptyState

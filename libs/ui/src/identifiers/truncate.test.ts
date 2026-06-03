@@ -23,12 +23,12 @@ describe('truncateMiddle', () => {
           suffix: 4,
         }
       )
-    ).toBe('GDQP...EE36');
+    ).toBe('GDQP…EE36');
   });
 
   it('handles asymmetric prefix/suffix counts', () => {
     expect(truncateMiddle('0123456789ABCDEF', { prefix: 6, suffix: 2 })).toBe(
-      '012345...EF'
+      '012345…EF'
     );
   });
 });

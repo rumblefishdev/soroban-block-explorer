@@ -4,12 +4,12 @@ import {
   Chip,
   ExplorerTable,
   IdentifierDisplay,
+  Dash,
+  formatAmount,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
-import { Dash } from '../transactions/cells.js';
 
 import { contractTypeMeta } from './contractType.js';
 

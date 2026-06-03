@@ -5,12 +5,11 @@ import {
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
+  Dash,
+  formatAmount,
   type ExplorerTableColumn,
   type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
-
-import { formatAmount } from '../format.js';
-import { Dash } from '../transactions/cells.js';
 
 const columns: ExplorerTableColumn<AccountListItem>[] = [
   {

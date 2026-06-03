@@ -3,21 +3,24 @@ import { useMemo } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { monoFontFamily } from '../theme/typography.js';
+import { formatInteger } from '../format/index.js';
+import { monoFontFamily, secondaryFontFamily } from '../theme/typography.js';
 
 import { getIdentifierHref } from './routes.js';
 import { getDefaultTruncation, truncateMiddle } from './truncate.js';
 import type { EntityType, TruncationConfig } from './types.js';
 
-function makeMonoSx(
+function makeIdentifierSx(
   linked: boolean,
   fullWidth: boolean,
-  tone: 'default' | 'inherit'
+  tone: 'default' | 'inherit',
+  fontSize: number | string,
+  mono: boolean
 ): SxProps<Theme> {
   const inheritColor = tone === 'inherit';
   return {
-    fontFamily: monoFontFamily,
-    fontSize: 14,
+    fontFamily: mono ? monoFontFamily : secondaryFontFamily,
+    fontSize,
     fontWeight: 500,
     lineHeight: 1.4,
     color: inheritColor
@@ -64,13 +67,20 @@ export interface IdentifierDisplayProps {
    * 'default' (theme text colour).
    */
   tone?: 'default' | 'inherit';
+  /**
+   * Font size of the rendered identifier. Defaults to 14. Pass `'inherit'`
+   * when rendered inline inside smaller surrounding text (e.g. a reserves
+   * cell) so the identifier matches the adjacent value rather than forcing
+   * its own size.
+   */
+  fontSize?: number | string;
   className?: string;
   'aria-label'?: string;
 }
 
 function formatForDisplay(type: EntityType, value: string): string {
   if (type === 'ledger' && /^\d+$/.test(value)) {
-    return Number(value).toLocaleString('en-US');
+    return formatInteger(Number(value));
   }
   return value;
 }
@@ -83,15 +93,22 @@ export function IdentifierDisplay({
   linked = true,
   href,
   tone = 'default',
+  fontSize = 14,
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
+  // Type-driven font: opaque identifiers (hashes, addresses, contract / tx /
+  // pool ids) read in the mono font where fixed width aids scanning. Asset
+  // "ids" are human ticker codes (USDC, AQUA) and ledger ids are plain
+  // sequence numbers — both read in the body font like the value beside
+  // them (matches Figma). Ledger stays a link, just not mono.
+  const isMono = type !== 'asset' && type !== 'ledger';
   const cfg = truncation ?? getDefaultTruncation(type);
   const formatted = formatForDisplay(type, value);
   const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;
   const sx = useMemo(
-    () => makeMonoSx(linked, !truncate, tone),
-    [linked, truncate, tone]
+    () => makeIdentifierSx(linked, !truncate, tone, fontSize, isMono),
+    [linked, truncate, tone, fontSize, isMono]
   );
 
   // NFT identity is composite `(contract_id, token_id)`; pass `href`

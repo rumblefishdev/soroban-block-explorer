@@ -1,16 +1,15 @@
 import { Box } from '@mui/material';
 import type { PaginatedInvocationItem } from '@rumblefish/api-types';
 import {
-  classifyError,
+  Dash,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
+  StatusChip,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -19,7 +18,6 @@ import type { ReactNode } from 'react';
 
 import { useContractInvocations } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
-import { Dash, StatusCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
@@ -48,7 +46,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'ledger',
@@ -98,16 +96,7 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <TableEmptyState

@@ -9,29 +9,20 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useState } from 'react';
+import {
+  Chip,
+  useCopyToClipboard,
+} from '@rumblefish/soroban-block-explorer-ui';
+import { useState } from 'react';
 
 interface XdrRowProps {
   label: string;
   value: string;
 }
 
-async function writeClipboard(text: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-  }
-}
-
 export function XdrRow({ label, value }: XdrRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const onCopy = useCallback(async () => {
-    await writeClipboard(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [value]);
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <Box
@@ -115,7 +106,7 @@ export function XdrRow({ label, value }: XdrRowProps) {
         </Box>
         <Box sx={{ px: 2, pb: 2 }}>
           <ButtonBase
-            onClick={onCopy}
+            onClick={() => void copy(value)}
             sx={(theme) => ({
               display: 'inline-flex',
               alignItems: 'center',

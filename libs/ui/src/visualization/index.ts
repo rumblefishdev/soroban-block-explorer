@@ -7,10 +7,7 @@ export type {
   UseTabUrlStateResult,
 } from './useTabUrlState.js';
 
-export {
-  TimeSeriesChart,
-  DEFAULT_TIME_SERIES_INTERVALS,
-} from './TimeSeriesChart.js';
+export { TimeSeriesChart } from './TimeSeriesChart.js';
 export type {
   TimeSeriesChartProps,
   TimeSeriesPoint,
@@ -28,7 +25,6 @@ export type {
 export { LazySection } from './LazySection.js';
 export type { LazySectionProps } from './LazySection.js';
 
-export { useIntersectionObserver } from './useIntersectionObserver.js';
 export type {
   UseIntersectionObserverOptions,
   UseIntersectionObserverResult,

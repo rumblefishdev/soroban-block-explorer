@@ -1,6 +1,7 @@
+import { formatFee } from '@rumblefish/soroban-block-explorer-ui';
 import { describe, expect, it } from 'vitest';
 
-import { formatAbsoluteUtc, formatFee } from './formatters.js';
+import { formatAbsoluteUtc } from './formatters.js';
 
 describe('formatFee', () => {
   it('returns em-dash for non-finite input', () => {
@@ -10,6 +11,12 @@ describe('formatFee', () => {
 
   it('treats 0 stroops as "0 XLM"', () => {
     expect(formatFee(0)).toBe('0 XLM');
+  });
+
+  it('returns em-dash for negative input (bad data, not a real fee)', () => {
+    // Guards against BigInt-modulo padded-minus-sign corruption.
+    expect(formatFee(-100)).toBe('—');
+    expect(formatFee(-10_000_000)).toBe('—');
   });
 
   it('converts stroops to XLM and trims trailing zeros', () => {

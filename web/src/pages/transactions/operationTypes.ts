@@ -1,3 +1,5 @@
+import { capitalize } from '../../utils/text.js';
+
 export interface OperationTypeOption {
   /** Raw XDR operation-type enum, sent as `filter[operation_type]`. */
   value: string;
@@ -95,8 +97,6 @@ export function formatOperationType(raw: string): string {
   return raw
     .toLowerCase()
     .split('_')
-    .map((word) =>
-      word.length > 0 ? word[0].toUpperCase() + word.slice(1) : word
-    )
+    .map((word) => capitalize(word))
     .join(' ');
 }

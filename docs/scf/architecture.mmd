@@ -1,0 +1,45 @@
+%%{init: {"flowchart": {"curve": "basis"}}}%%
+flowchart TB
+    SP["Stellar mainnet peers"]
+
+    subgraph AWS["AWS — eu‑central‑1"]
+        direction TB
+        AWS_IAC[" "]
+        GAL["<b>Galexie · Captive Core</b><br/>production‑galexie‑live<br/><i>AWS ECS Fargate · always‑on</i>"]
+        S3["<b>S3 bucket</b><br/>production‑stellar‑ledger‑data<br/><i>one XDR file per ledger</i>"]
+        SQS["<b>SQS queue</b><br/>production‑ledger‑ingest<br/><i>batchSize 1 · ReportBatchItemFailures</i>"]
+        LAM["<b>Ledger Processor · Lambda (Rust)</b><br/>production‑soroban‑explorer‑indexer<br/><i>reservedConcurrentExecutions=1 · 540 s budget</i><br/><i>decode XDR, write typed rows</i>"]
+        DLQ["<b>DLQ</b><br/>production‑ledger‑processor‑dlq<br/><i>persistent failures</i>"]
+    end
+
+    IAC["<b>Infrastructure as code</b><br/><i>AWS CDK + Ansible</i>"]
+
+    subgraph HET[" "]
+        CH[("<b>ClickHouse</b><br/><i>Hetzner · ch‑prod‑01</i><br/>ch.sorobanscan.rumblefish.dev<br/><i>single‑node MergeTree · Caddy mTLS</i>")]
+    end
+
+    SP -->|"streams closed ledgers"| GAL
+    AWS_IAC ~~~ GAL
+    GAL -->|"~1 file every 5–6 s"| S3
+    S3 -->|"S3:ObjectCreated event"| SQS
+    SQS -->|"triggers Lambda"| LAM
+    LAM -.->|"on persistent failure"| DLQ
+    LAM -->|"reconcile from max(sequence)+1<br/>write over mTLS"| CH
+
+    IAC -.-> AWS_IAC
+    IAC -.-> CH
+
+    classDef ingestion fill:#FFE0B2,stroke:#E65100,stroke-width:1.5px,color:#BF360C
+    classDef external  fill:#E3F2FD,stroke:#1565C0,stroke-width:1.5px,color:#0D47A1
+    classDef database  fill:#FFCDD2,stroke:#B71C1C,stroke-width:2px,color:#B71C1C
+    classDef iac       fill:#FAFAFA,stroke:#9E9E9E,stroke-width:1.5px,color:#424242,stroke-dasharray:4 3
+    classDef hidden    fill:transparent,stroke:transparent,color:transparent
+
+    class SP external
+    class GAL,S3,SQS,LAM,DLQ ingestion
+    class CH database
+    class IAC iac
+    class AWS_IAC hidden
+
+    style AWS fill:#FFF8E1,stroke:#FF8F00,stroke-width:2px,color:#E65100
+    style HET fill:#FFEBEE,stroke:#C62828,stroke-width:2px,color:#B71C1C

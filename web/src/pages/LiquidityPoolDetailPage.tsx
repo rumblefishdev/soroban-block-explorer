@@ -1,9 +1,7 @@
 import { Stack } from '@mui/material';
 import {
   CardSkeleton,
-  classifyError,
-  GenericErrorState,
-  isMissingResource,
+  DetailErrorState,
   isPoolId,
   NotFoundState,
   SectionErrorBoundary,
@@ -59,11 +57,14 @@ export default function LiquidityPoolDetailPage() {
     kpiSection = <CardSkeleton />;
     summarySection = <CardSkeleton />;
   } else if (detail.isError) {
-    const kind = classifyError(detail.error);
-    summarySection = isMissingResource(kind) ? (
-      <NotFoundState entity="liquidity-pool" identifier={poolId} py={6} />
-    ) : (
-      <GenericErrorState onRetry={() => void detail.refetch()} />
+    summarySection = (
+      <DetailErrorState
+        error={detail.error}
+        entity="liquidity-pool"
+        identifier={poolId}
+        onRetry={() => void detail.refetch()}
+        py={6}
+      />
     );
   } else if (detail.data) {
     kpiSection = <PoolKpiStrip pool={detail.data} />;
@@ -82,7 +83,10 @@ export default function LiquidityPoolDetailPage() {
       <SectionErrorBoundary sectionName="pool-summary">
         {summarySection}
       </SectionErrorBoundary>
-      {!detail.isError && (
+      {/* Gate the sub-sections on resolved parent data so their queries never
+          fire while the pool is still loading — a parent 404 then produces
+          zero sub-section 404s. */}
+      {detail.data != null && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} />

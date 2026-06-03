@@ -1,23 +1,22 @@
-import { Link, Stack } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import {
+  formatCompactAmount,
+  formatInteger,
+  IdentifierDisplay,
+} from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { KpiCell } from '../detail/KpiCell.js';
 
 import {
   assetLegLabel,
-  formatCompactAmount,
   isPoolStale,
   legHref,
   reserveDotColor,
 } from './helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
-
-/** Module-level formatter — Intl.NumberFormat is expensive to
- *  instantiate on every render. */
-const COUNT_FORMATTER = new Intl.NumberFormat('en-US');
 
 interface PoolKpiStripProps {
   pool: PoolItem;
@@ -37,17 +36,13 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
   if (!href) return code;
   return (
-    <Link
-      component={RouterLink}
-      to={href}
-      sx={{
-        color: 'inherit',
-        textDecoration: 'none',
-        '&:hover': { textDecoration: 'underline' },
-      }}
-    >
-      {code}
-    </Link>
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      fontSize="inherit"
+    />
   );
 }
 
@@ -81,7 +76,7 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       />
       <KpiCell
         label="Participants"
-        value={COUNT_FORMATTER.format(pool.participant_count)}
+        value={formatInteger(pool.participant_count)}
         caption="liquidity providers"
       />
     </Stack>

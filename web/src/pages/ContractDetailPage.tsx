@@ -2,10 +2,8 @@ import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
   Chip,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
   isContractId,
-  isMissingResource,
   NotFoundState,
   SectionErrorBoundary,
   Tabs,
@@ -46,10 +44,13 @@ export default function ContractDetailPage() {
   if (contract.isLoading) {
     summary = <CardSkeleton />;
   } else if (contract.isError) {
-    summary = isMissingResource(classifyError(contract.error)) ? (
-      <NotFoundState entity="contract" identifier={contractId} />
-    ) : (
-      <GenericErrorState onRetry={() => void contract.refetch()} />
+    summary = (
+      <DetailErrorState
+        error={contract.error}
+        entity="contract"
+        identifier={contractId}
+        onRetry={() => void contract.refetch()}
+      />
     );
   } else if (contract.data) {
     summary = <ContractSummary contract={contract.data} />;
@@ -106,7 +107,10 @@ export default function ContractDetailPage() {
         {summary}
       </SectionErrorBoundary>
 
-      {!contract.isError && (
+      {/* Gate the tabbed sub-sections on resolved parent data so their
+          queries never fire while the contract is still loading — a parent
+          404 then produces zero sub-section 404s. */}
+      {contract.data != null && (
         <Card>
           <Box
             sx={(theme) => ({

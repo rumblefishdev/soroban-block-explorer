@@ -185,11 +185,44 @@ export class ComputeStack extends cdk.Stack {
       logGroup: apiLogGroup,
       memorySize: config.apiLambdaMemory,
       timeout: cdk.Duration.seconds(config.apiLambdaTimeout),
+      // Build the `swagger-ui` opt-in feature (task 0243): serves an
+      // interactive OpenAPI explorer at `/api-docs` so the ClickHouse read
+      // paths can be exercised against the live API. Adds ~12 MB of embedded
+      // assets to the binary (cold-start load only; the 256 MB Lambda has
+      // ample headroom). The spec JSON at `/api-docs-json` is always on,
+      // feature or not.
+      bundling: {
+        cargoLambdaFlags: ['--features', 'swagger-ui'],
+      },
       environment: {
         ...sharedEnv,
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
         API_BASE_URL: `https://${config.apiDomainName}`,
         MTLS_SECRET_NAME: apiSecretName,
+        // ClickHouse read-path cutover (task 0243 / ADR 0047). Each
+        // `API_DATASOURCE_<MODULE>=ch` flips that handler module from the
+        // sqlx/PG path to the `clickhouse` path; absence (or any non-`ch`
+        // value) keeps PG. CH host (`CH_DOMAIN`) + the mTLS bundle
+        // (`MTLS_SECRET_NAME`, granted below) are already wired, so a flag
+        // is all it takes to opt a module in. Rollback per module = delete
+        // its line and redeploy.
+        //
+        // Enabled here: modules whose CH read path is merged on `develop` —
+        // Network (pilot, PR #221), Ledgers (PR #226), Transactions
+        // (PR #229). The remaining modules (Accounts, Assets, Contracts,
+        // NFTs, LiquidityPools, Search) have no CH path yet.
+        //
+        // PRECONDITIONS before this deploy goes live (see PR checklist):
+        //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
+        //      otherwise the API serves stale data.
+        //   2. Operator CH smoke passed for the enabled modules. For
+        //      Transactions specifically, smoke the no-filter first-page
+        //      `/transactions` list (full `contract_ids` parity runs
+        //      partition-scanning subqueries — the canonical SQL 02 memory
+        //      caveat) and confirm no CH memory-limit blowup.
+        API_DATASOURCE_NETWORK: 'ch',
+        API_DATASOURCE_LEDGERS: 'ch',
+        API_DATASOURCE_TRANSACTIONS: 'ch',
       },
     });
     this.apiFunction = apiFunction;

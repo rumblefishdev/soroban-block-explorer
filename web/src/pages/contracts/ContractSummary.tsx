@@ -1,6 +1,8 @@
 import { Stack } from '@mui/material';
 import type { ContractDetailResponse } from '@rumblefish/api-types';
 import {
+  Dash,
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -8,8 +10,6 @@ import {
 import { KpiCell } from '../detail/KpiCell.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { formatAmount } from '../format.js';
-import { Dash } from '../transactions/cells.js';
 
 /**
  * Contract summary block — windowed stat tiles plus the metadata card

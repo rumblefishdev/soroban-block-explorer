@@ -1,15 +1,12 @@
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import { Box, Button, Card } from '@mui/material';
 import {
-  classifyError,
   EmptyState,
-  GenericErrorState,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   type TableEmptyKind,
   TableSkeleton,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -64,15 +61,7 @@ export function DataListCard<T>({
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={onRetry} py={8} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={onRetry} py={8} />
-      ) : (
-        <GenericErrorState onRetry={onRetry} py={8} />
-      );
+    body = <QueryErrorState error={error} onRetry={onRetry} py={8} />;
   } else if (rows.length === 0) {
     body = hasActiveFilters ? (
       <EmptyState

@@ -7,6 +7,7 @@ import {
   IdentifierDisplay,
   RelativeTimestamp,
   routeForHit,
+  StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ENTITY_LABEL } from './useSearchResults.js';
@@ -18,18 +19,13 @@ interface SearchResultRowProps {
   onClick?: () => void;
 }
 
-const SUCCESS_CHIP = { color: 'success' as const, label: 'Success' };
-const FAILED_CHIP = { color: 'error' as const, label: 'Failed' };
-
 export function SearchResultRow({
   hit,
   highlighted = false,
   onMouseEnter,
   onClick,
 }: SearchResultRowProps) {
-  const statusChip =
-    hit.successful == null ? null : hit.successful ? SUCCESS_CHIP : FAILED_CHIP;
-  const showRight = statusChip != null || hit.last_activity_at != null;
+  const showRight = hit.successful != null || hit.last_activity_at != null;
 
   return (
     <Box
@@ -96,14 +92,7 @@ export function SearchResultRow({
           alignItems="flex-end"
           sx={{ flexShrink: 0, minWidth: 88 }}
         >
-          {statusChip && (
-            <Chip
-              size="sm"
-              dot
-              color={statusChip.color}
-              label={statusChip.label}
-            />
-          )}
+          {hit.successful != null && <StatusChip successful={hit.successful} />}
           {hit.last_activity_at != null && (
             <RelativeTimestamp
               timestamp={hit.last_activity_at}

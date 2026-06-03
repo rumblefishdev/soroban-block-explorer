@@ -1,13 +1,9 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
-  classifyError,
-  GenericErrorState,
-  PollingIndicator,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -22,12 +18,11 @@ import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
 /**
- * Latest Transactions section — the 10 newest transactions with a polling
+ * Latest Transactions section — the 10 newest transactions with a live
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, dataUpdatedAt, refetch } =
-    useLatestTransactions();
+  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
   const rows = data?.data ?? [];
 
   let body: ReactNode;
@@ -38,16 +33,9 @@ export function LatestTransactions() {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} py={8} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} py={8} />
-      ) : (
-        <GenericErrorState onRetry={retry} py={8} />
-      );
+    body = (
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
+    );
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" />;
   } else {
@@ -59,7 +47,6 @@ export function LatestTransactions() {
       <TableSectionHeader
         title="Latest transactions"
         badge={<LiveIndicator />}
-        description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>

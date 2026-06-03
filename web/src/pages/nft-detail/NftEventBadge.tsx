@@ -1,6 +1,8 @@
 import { Box } from '@mui/material';
 import { colorsDark } from '@rumblefish/soroban-block-explorer-ui';
 
+import { capitalize } from '../../utils/text.js';
+
 interface EventStyle {
   bg: string;
   fg: string;
@@ -28,7 +30,7 @@ interface NftEventBadgeProps {
 export function NftEventBadge({ name }: NftEventBadgeProps) {
   const key = name?.toLowerCase() ?? '';
   const style = EVENT_STYLES[key] ?? FALLBACK_STYLE;
-  const label = key ? key.charAt(0).toUpperCase() + key.slice(1) : 'Event';
+  const label = key ? capitalize(key) : 'Event';
 
   return (
     <Box

@@ -2,9 +2,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
   Chip,
-  classifyError,
-  GenericErrorState,
-  isMissingResource,
+  DetailErrorState,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -44,10 +42,14 @@ export default function AssetDetailPage() {
     summary = <CardSkeleton />;
     metadata = <CardSkeleton />;
   } else if (asset.isError) {
-    summary = isMissingResource(classifyError(asset.error)) ? (
-      <NotFoundState entity="asset" identifier={id} py={6} />
-    ) : (
-      <GenericErrorState onRetry={() => void asset.refetch()} />
+    summary = (
+      <DetailErrorState
+        error={asset.error}
+        entity="asset"
+        identifier={id}
+        onRetry={() => void asset.refetch()}
+        py={6}
+      />
     );
   } else if (data) {
     summary = <AssetSummary asset={data} />;
@@ -122,7 +124,7 @@ export default function AssetDetailPage() {
           on parent error: a 400 / 404 / 5xx on the asset itself means
           the asset doesn't exist (or the API is degraded), in which
           case the embedded list would just surface a duplicate banner
-          below the already-routed NotFoundState / GenericErrorState. */}
+          below the already-routed DetailErrorState. */}
       {!asset.isError && (
         <SectionErrorBoundary sectionName="asset-transactions">
           <AssetTransactions assetId={id} />

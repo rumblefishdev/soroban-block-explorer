@@ -2,18 +2,17 @@ import GroupIcon from '@mui/icons-material/GroupOutlined';
 import { Box, Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
-  classifyError,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
+  formatAmount,
+  formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -21,7 +20,6 @@ import type { ReactNode } from 'react';
 import { usePoolParticipants } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 
 const columns: ExplorerTableColumn<ParticipantItem>[] = [
   {
@@ -54,7 +52,7 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
         {row.share_percentage != null
-          ? `${formatAmount(row.share_percentage, 2)}%`
+          ? formatPercent(Number(row.share_percentage))
           : '—'}
       </Typography>
     ),
@@ -110,16 +108,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
       </Box>
     );
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body =
-      kind === 'rate-limit' ? (
-        <RateLimitState onRetry={retry} />
-      ) : kind === 'transient' ? (
-        <TransientErrorState onRetry={retry} />
-      ) : (
-        <GenericErrorState onRetry={retry} />
-      );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
       <EmptyState

@@ -1,6 +1,7 @@
 import { Typography } from '@mui/material';
 import type { NftItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
   IdentifierDisplay,
   type ExplorerTableColumn,
@@ -10,17 +11,6 @@ import { NftNameCell } from './NftNameCell.js';
 
 interface NftsTableProps {
   rows: readonly NftItem[];
-}
-
-function Dash() {
-  return (
-    <Typography
-      component="span"
-      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-    >
-      —
-    </Typography>
-  );
 }
 
 const columns: ExplorerTableColumn<NftItem>[] = [

@@ -2,6 +2,7 @@ import type { LedgerListItem } from '@rumblefish/api-types';
 import {
   Chip,
   ExplorerTable,
+  formatInteger,
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
@@ -65,7 +66,7 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
       align: 'right',
       cell: (row) => (
         <Typography component="span" variant="bodySmRegular">
-          {row.transaction_count.toLocaleString('en-US')}
+          {formatInteger(row.transaction_count)}
         </Typography>
       ),
     },

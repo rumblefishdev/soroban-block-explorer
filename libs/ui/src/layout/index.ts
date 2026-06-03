@@ -14,6 +14,3 @@ export { Footer } from './Footer.js';
 export type { FooterProps, FooterNavItem } from './Footer.js';
 
 export { PageGridBackdrop } from './PageGridBackdrop.js';
-
-export { NetworkToggle, Network } from './NetworkToggle.js';
-export type { NetworkToggleProps } from './NetworkToggle.js';
