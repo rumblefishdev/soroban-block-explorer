@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, TsIdCursor, keyset_sql_desc};
 
 /// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
 /// and the list's `recent_invocations` column, so both compute the count
@@ -108,7 +108,7 @@ pub async fn fetch_contract_list(
     params: &ResolvedContractsListParams,
     direction: Direction,
 ) -> Result<Vec<ContractListRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(contract_list_select());
     let mut has_where = false;
@@ -274,7 +274,7 @@ pub async fn fetch_invocation_appearances(
     cursor: Option<&TsIdCursor>,
     direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sia.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \
@@ -335,7 +335,7 @@ pub async fn fetch_event_appearances(
     cursor: Option<&TsIdCursor>,
     direction: Direction,
 ) -> Result<Vec<EventAppearanceRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
         "SELECT sea.transaction_id, \
                 encode(t.hash, 'hex')   AS tx_hash, \

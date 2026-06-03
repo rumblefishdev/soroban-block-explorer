@@ -13,7 +13,7 @@
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
 
@@ -61,7 +61,7 @@ pub async fn fetch_list(
     direction: Direction,
 ) -> Result<Vec<NftItem>, sqlx::Error> {
     let cur_id: Option<i32> = params.cursor.as_ref().map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Static query plan per direction. SQL fragments `{op}` and `{order}`
     // are hardcoded literals (`<`/`>`, `DESC`/`ASC`) — no injection risk.
@@ -193,7 +193,7 @@ pub async fn fetch_transfers(
         ),
         None => (None, None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Direction caveat: the LEAD window walks DESC to compute the
     // previous owner (oldest event below the current row). When fetching

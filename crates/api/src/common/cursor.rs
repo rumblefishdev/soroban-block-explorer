@@ -187,7 +187,7 @@ pub fn keyset_sql(sort: SortOrder, direction: Direction) -> (&'static str, &'sta
 
 /// Desc-only keyset helper for the endpoints that expose a single
 /// newest-first order. Equivalent to `keyset_sql(SortOrder::Desc, …)`.
-pub fn direction_sql(direction: Direction) -> (&'static str, &'static str) {
+pub fn keyset_sql_desc(direction: Direction) -> (&'static str, &'static str) {
     keyset_sql(SortOrder::Desc, direction)
 }
 
@@ -390,15 +390,15 @@ mod tests {
     }
 
     #[test]
-    fn direction_sql_is_keyset_sql_desc_slice() {
+    fn keyset_sql_desc_is_keyset_sql_desc_slice() {
         // The legacy desc-only helper MUST stay byte-identical to the DESC
         // slice of the generalised matrix — 9 endpoints still call it.
         assert_eq!(
-            direction_sql(Direction::Next),
+            keyset_sql_desc(Direction::Next),
             keyset_sql(SortOrder::Desc, Direction::Next)
         );
         assert_eq!(
-            direction_sql(Direction::Prev),
+            keyset_sql_desc(Direction::Prev),
             keyset_sql(SortOrder::Desc, Direction::Prev)
         );
     }
