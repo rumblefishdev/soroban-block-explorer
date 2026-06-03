@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::cursor::TsIdCursor;
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
@@ -27,6 +28,7 @@ use super::queries::{
     PoolRow, ResolvedPoolListParams, fetch_participants, fetch_pool_by_id, fetch_pool_chart,
     fetch_pool_list, fetch_pool_transactions, pool_exists,
 };
+use super::queries_ch;
 
 #[utoipa::path(
     get,
@@ -355,7 +357,18 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         Err(resp) => return resp,
     };
 
-    let row = match fetch_pool_by_id(&state.db, &pool_id_hex).await {
+    // Per-module datasource dispatch (task 0243 / ADR 0047). PG and CH return
+    // different error types; unify to a String so the match below is shared.
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_by_id(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_by_id(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    let row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
