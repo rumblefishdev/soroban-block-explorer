@@ -149,7 +149,9 @@ describe('useTableUrlState', () => {
       () => useTableUrlState({ filterKeys: ['q', 'domain'] }),
       {
         wrapper: ({ children }) => (
-          <MemoryRouter initialEntries={['/?q=ABC&domain=1&sort=xlm_desc&dir=asc']}>
+          <MemoryRouter
+            initialEntries={['/?q=ABC&domain=1&sort=xlm_desc&dir=asc']}
+          >
             {children}
             <Probe />
           </MemoryRouter>
