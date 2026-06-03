@@ -191,6 +191,26 @@ pub fn direction_sql(direction: Direction) -> (&'static str, &'static str) {
     keyset_sql(SortOrder::Desc, direction)
 }
 
+/// Parse a `?order=` query-string value into [`SortOrder`], returning a
+/// 400 `INVALID_QUERY` response for unrecognised values.
+///
+/// Accepts `"asc"` / `"desc"` case-insensitively; `None` defaults to
+/// [`SortOrder::Desc`] (newest-first). Every handler that exposes a user-
+/// facing `?order=` param should call this single function so the parsing
+/// rules and error shape stay consistent across the API.
+pub fn parse_sort_order(raw: Option<&str>) -> Result<SortOrder, axum::response::Response> {
+    match raw {
+        None => Ok(SortOrder::Desc),
+        Some(s) if s.eq_ignore_ascii_case("asc") => Ok(SortOrder::Asc),
+        Some(s) if s.eq_ignore_ascii_case("desc") => Ok(SortOrder::Desc),
+        Some(invalid) => Err(crate::common::errors::bad_request_with_details(
+            crate::common::errors::INVALID_QUERY,
+            format!("invalid sort order '{invalid}', expected 'asc' or 'desc'"),
+            serde_json::json!({ "param": "order", "received": invalid }),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
