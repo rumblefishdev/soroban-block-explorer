@@ -118,7 +118,7 @@ pub async fn fetch_contract_stats(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, String), clickhouse::error::Error> {
+) -> Result<(i64, i64, i64, String), clickhouse::error::Error> {
     let days: i64 = window
         .split_whitespace()
         .next()
@@ -147,6 +147,7 @@ pub async fn fetch_contract_stats(
     Ok((
         row.recent_invocations as i64,
         row.recent_unique_callers as i64,
+        0,
         window.to_string(),
     ))
 }

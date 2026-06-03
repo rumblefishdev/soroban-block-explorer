@@ -11,13 +11,11 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
-use crate::common::cursor::{
-    self, SortOrder, {self, Direction, TsIdCursor},
-};
+use crate::common::cursor::{self, Direction, SortOrder, TsIdCursor};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
-use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
@@ -28,10 +26,7 @@ use super::dto::{
     AccountsListParams,
 };
 use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
-use super::queries::{
-    AccountListRow, AccountsListCursor, ResolvedListParams, fetch_account, fetch_balances,
-    fetch_list, fetch_transactions,
-};
+use super::queries::{AccountListRow, AccountsListCursor, ResolvedListParams, fetch_list};
 use super::{queries, queries_ch};
 
 /// Unified per-call fetch error so the handlers dispatch between PG and CH

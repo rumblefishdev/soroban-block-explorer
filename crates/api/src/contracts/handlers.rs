@@ -248,7 +248,7 @@ pub async fn get_contract(
         }
     };
 
-    let (recent_invocations, recent_unique_callers, stats_window) =
+    let (recent_invocations, recent_unique_callers, recent_events, stats_window) =
         match fetch_stats_for_source(&state, source, contract.id, STATS_WINDOW).await {
             Ok(v) => v,
             Err(e) => {
@@ -615,7 +615,7 @@ async fn fetch_stats_for_source(
     source: DataSource,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, String), CtrFetchError> {
+) -> Result<(i64, i64, i64, String), CtrFetchError> {
     match source {
         DataSource::Pg => fetch_contract_stats(&state.db, contract_surrogate_id, window)
             .await
