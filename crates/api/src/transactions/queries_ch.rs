@@ -22,27 +22,37 @@
 //!   CH analogue of the PG `soroban_events_appearances.amount` fold count,
 //!   not a token amount (same non-amount semantic as the PG column).
 //!
-//! ### List pagination + the partition-prune memory guard
+//! ### List pagination + the partition-prune / read-in-order guard
 //!
 //! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
-//! `intDiv(ledger_sequence, 500000)` partition: a global
-//! `transactions FINAL` scan over 20M+ rows otherwise blows the CH memory
-//! limit. We reproduce that here — first page prunes to the latest
-//! partition (`intDiv(max(sequence), 500000)`), subsequent pages prune to
-//! the cursor's partition. The known cost is that backward pagination
-//! across a 500k-ledger partition boundary stops early; this matches the
-//! reference design and is acceptable for an explorer (deep cross-partition
-//! cursor walks do not occur in the UI).
+//! `intDiv(ledger_sequence, 500000)` partition. We reproduce that — first
+//! page prunes to the latest partition (`intDiv(max(sequence), 500000)`),
+//! subsequent pages prune to the cursor's partition. The known cost is that
+//! backward pagination across a 500k-ledger partition boundary stops early;
+//! acceptable for an explorer (deep cross-partition cursor walks do not
+//! occur in the UI).
 //!
-//! `contract_ids` is populated on every statement, including the no-filter
-//! path, for full parity with PG (team decision 2026-05-29). Two of the
-//! three source subqueries (`soroban_invocations_appearances`,
-//! `soroban_events`) are `ORDER BY (contract_id, …)`, so filtering them by
-//! `transaction_id` is a partition scan rather than a PK seek — the exact
-//! pattern canonical SQL 02 flagged as a memory risk. It is bounded here
-//! because the inner `LIMIT` is applied before these correlated subqueries
-//! run (≤ `limit + 1` driver rows), but the no-filter first-page path
-//! still warrants an operator memory smoke before the prod flag flip.
+//! The partition prune alone is NOT enough. A partition is ~1e8 transactions
+//! on mainnet, and `transactions FINAL ... ORDER BY ... LIMIT` reads the
+//! **whole partition** (FINAL must merge it before the limit applies) —
+//! ~118M rows per page, which under frontend polling exhausted the
+//! `api_reader` `read_rows` hourly quota (CH `Code: 201`). The no-filter
+//! **Statement A** therefore drops FINAL and orders by the table's physical
+//! sort key `(ledger_sequence, application_order)`, so CH reads in primary-key
+//! order and stops at the limit (~2e5 rows/page; validated). This is safe
+//! because `transactions` is append-only and effectively unique on that key,
+//! with all projected columns immutable across versions; a Rust-side dedup is
+//! the belt-and-braces. The cursor keys on `application_order` for this path
+//! (also the correct in-ledger order — the old `id`-hash tie-break did not
+//! preserve it). The filtered Statements B/C still key on the
+//! `transactions.id` surrogate (they drive off `operations_appearances`).
+//!
+//! `operation_types` + `contract_ids` come from the shared
+//! [`ch::fetch_tx_list_aggregates`] keyed on the ≤ `limit + 1` page rows.
+//! `contract_ids` is **ops-only** there (sourced from `operations_appearances`
+//! by primary-key seek) — the full 3-source parity scan was itself a per-page
+//! partition read that blew the same quota; see `common::ch` for the parity
+//! caveat.
 
 use clickhouse::Row;
 use serde::Deserialize;
@@ -241,17 +251,26 @@ struct AccountIdRow {
 /// and merged by `id` — CH 26.3 rejects correlated subqueries in SELECT.
 ///
 /// Column order MUST match `TxPageChRow` field order (positional decode).
+///
+/// EVERY column carries an explicit `AS` alias on purpose. The clickhouse
+/// crate validates the result column *names* against the `Row` struct fields.
+/// Statements B/C join this projection's `t` to a driver subquery `m` that
+/// also has a `ledger_sequence` column, so a bare `t.ledger_sequence` comes
+/// back named `t.ledger_sequence` (CH keeps the qualifier to disambiguate) and
+/// fails struct decode with "column t.ledger_sequence not found in the struct".
+/// Statement A has no such join so the bare form happened to work — aliasing
+/// all columns makes the projection robust regardless of the surrounding joins.
 const SLIM_PROJECTION: &str = "\
     lower(hex(t.hash)) AS hash, \
-    t.ledger_sequence, \
-    t.application_order, \
+    t.ledger_sequence AS ledger_sequence, \
+    t.application_order AS application_order, \
     nullIf(src.account_id, '') AS source_account, \
-    t.fee_charged, \
+    t.fee_charged AS fee_charged, \
     lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
-    t.successful, \
-    t.operation_count, \
-    t.has_soroban, \
-    t.id, \
+    t.successful AS successful, \
+    t.operation_count AS operation_count, \
+    t.has_soroban AS has_soroban, \
+    t.id AS id, \
     l.closed_at AS created_at";
 
 // ---------------------------------------------------------------------------
@@ -302,137 +321,186 @@ pub async fn fetch_list(
         _ => (None, None),
     };
 
+    // Inline the integer params directly into the filtered-statement SQL rather
+    // than `.bind()`-ing them. The clickhouse 0.15 bound-parameter path
+    // produced empty results for Statements B/C in production — the
+    // literal-equivalent query (validated on prod CH) returns the correct page,
+    // the bound form returned none. All values are `i64` / `i16` / `None`→`NULL`,
+    // so inlining carries no injection surface (same approach as
+    // `common::ch::fetch_tx_list_aggregates`, which already inlines its keys).
+    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let src = source_id.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let lim_over = params.limit * 4;
+    let lim_peek = params.limit + 1;
+
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
+            // Same partition-bounded restructure as Statement C (see there):
+            // `transactions t` pruned to a single partition + streamed, the
+            // small driver `m` hashed, FINAL dropped (append-only, Rust dedup)
+            // — so the join never merges the whole 3.6B-row table.
+            //
+            // The driver is the 3-arm contract UNION. The
+            // `soroban_invocations_appearances` and `soroban_events` arms seek
+            // by `contract_id` (their primary-key prefix); the
+            // `operations_appearances` arm scans the pruned partition
+            // (`contract_id` is not its PK prefix — deferred skip-index
+            // follow-up, same as op_type).
+            let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
             let arm = |table: &str| {
                 format!(
-                    "SELECT ledger_sequence, transaction_id FROM {table} FINAL \
-                     WHERE contract_id = ? \
+                    "SELECT ledger_sequence, transaction_id FROM {table} \
+                     WHERE contract_id = {cid} \
                        AND intDiv(ledger_sequence, 500000) \
-                           = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                       AND (? IS NULL OR (ledger_sequence, transaction_id) {op} (?, ?))"
+                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                 ) t \
+                 INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT ? \
-                 ) m \
-                 INNER JOIN transactions t FINAL \
-                    ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
+                    LIMIT {lim_over} \
+                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE (? IS NULL OR t.source_id = ?) \
-                   AND (? IS NULL OR ( \
-                        SELECT count() FROM operations_appearances oa2 FINAL \
+                 WHERE ({src} IS NULL OR t.source_id = {src}) \
+                   AND ({ot} IS NULL OR ( \
+                        SELECT count() FROM operations_appearances oa2 \
                         WHERE oa2.transaction_id = t.id \
                           AND oa2.ledger_sequence = t.ledger_sequence \
-                          AND oa2.type = ? \
+                          AND oa2.type = {ot} \
                           AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
                    ) > 0) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT ?",
+                 LIMIT 1 BY t.id \
+                 LIMIT {lim_peek}",
                 arm_ops = arm("operations_appearances"),
                 arm_inv = arm("soroban_invocations_appearances"),
                 arm_evt = arm("soroban_events"),
             );
-
-            let mut q = client.query(&sql);
-            // Three UNION arms, identical bind tuple each:
-            // (contract_id, cursor_ledger, cursor_ledger, cursor_ledger, tiebreak)
-            for _ in 0..3 {
-                q = q
-                    .bind(cid)
-                    .bind(cursor_ledger)
-                    .bind(cursor_ledger)
-                    .bind(cursor_ledger)
-                    .bind(cursor_tiebreak);
-            }
-            q = q
-                .bind(params.limit * 4) // over-fetch: a tx may hit up to all 3 arms
-                .bind(source_id)
-                .bind(source_id)
-                .bind(op_type_opt)
-                .bind(op_type_opt)
-                .bind(params.limit + 1); // peek row drives next-page detection
-            q.fetch_all::<TxPageChRow>().await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
 
         // --- Statement C: op_type filter only ------------------------------
         (None, Some(op_type)) => {
+            // Restructured so NEITHER side of the join is a full-table read:
+            //
+            //  - `transactions t` is pruned to a single partition and is the
+            //    STREAMED (left) side; the ≤ `limit*4`-row driver `m` is the
+            //    hash side. The previous `... INNER JOIN transactions t FINAL`
+            //    had no prune on `t`, so FINAL merged the entire 3.6B-row
+            //    table per request — a single op_type page read billions of
+            //    rows and exhausted the `read_rows` quota (CH Code: 201). FINAL
+            //    is dropped (append-only, immutable columns, Rust-side dedup).
+            //  - `m` (driver) scans the pruned partition by `type`, which is
+            //    NOT an `operations_appearances` primary-key prefix (~8e7 rows;
+            //    bounded, and op_type filtering is user-initiated, not polled).
+            //    Making this a seek needs a skip-index on `type` — deferred
+            //    follow-up.
+            //
+            // `LIMIT 1 BY t.id` before the page `LIMIT`: the `accounts` join has
+            // no FINAL (a 16M-row FINAL would be ruinous), so un-merged
+            // ReplacingMergeTree versions of the source account fan a single
+            // transaction into N identical-`id` rows. Here the page `LIMIT` is
+            // applied AFTER the join, so without the dedup it fills with copies
+            // of the top tx and the page collapses to 1 row (measured rows=4 /
+            // distinct_ids=1). `LIMIT 1 BY t.id` collapses the fan-out in SQL
+            // before the page cut, so the limit counts distinct transactions and
+            // next-page detection stays correct. (Statement A applies its LIMIT
+            // inside the pre-join subquery, so it is unaffected.)
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                 ) t \
+                 INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
-                    FROM operations_appearances FINAL \
-                    WHERE type = ? \
+                    FROM operations_appearances \
+                    WHERE type = {op_type} \
                       AND intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND (? IS NULL OR (ledger_sequence, transaction_id) {op} (?, ?)) \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT ? \
-                 ) m \
-                 INNER JOIN transactions t FINAL \
-                    ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
+                    LIMIT {lim_over} \
+                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE (? IS NULL OR t.source_id = ?) \
+                 WHERE ({src} IS NULL OR t.source_id = {src}) \
                  ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT ?",
+                 LIMIT 1 BY t.id \
+                 LIMIT {lim_peek}",
             );
             // No outer keyset re-check: the driver subquery already filtered
             // `(ledger_sequence, transaction_id) {op} (cursor)`, and the JOIN
             // binds `t.id = m.transaction_id` / `t.ledger_sequence =
             // m.ledger_sequence`, so every joined row already satisfies it.
-            client
-                .query(&sql)
-                .bind(op_type)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_tiebreak)
-                .bind(params.limit * 4)
-                .bind(source_id)
-                .bind(source_id)
-                .bind(params.limit + 1) // peek row drives next-page detection
-                .fetch_all::<TxPageChRow>()
-                .await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
 
         // --- Statement A: no contract / op_type filter (default path) ------
         (None, None) => {
+            // Read-in-order fast path. `transactions` is ORDER BY
+            // `(ledger_sequence, application_order)`, so ordering + keying the
+            // page on that tuple lets CH read in primary-key order and stop at
+            // LIMIT instead of scanning + sorting the whole partition.
+            //
+            // FINAL is dropped here ON PURPOSE. With FINAL, CH must merge the
+            // entire partition before it can apply the limit — measured ~118M
+            // rows read per page on the mainnet head partition; without FINAL
+            // the same page reads ~2e5. This is the load-bearing fix for the
+            // `read_rows` quota blow-up (CH Code: 201) the polled list path
+            // caused. It is safe because `transactions` is append-only and
+            // effectively unique on `(ledger_sequence, application_order)`
+            // (validated: zero net dedup on the live partition), and every
+            // projected column is immutable across ReplacingMergeTree versions,
+            // so a non-FINAL read returns identical values. Any rare duplicate
+            // row is dropped by the `dedup_by_id` pass below.
+            //
+            // The cursor therefore keys on `application_order` (the physical
+            // sort key — also the correct in-ledger apply order, which the old
+            // `id`-hash tie-break did NOT preserve), not the `id` surrogate.
+            // See `handlers::list_cursor_for`.
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
-                    SELECT * FROM transactions FINAL \
+                    SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv(?, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND (? IS NULL OR (ledger_sequence, id) {op} (?, ?)) \
-                      AND (? IS NULL OR source_id = ?) \
-                    ORDER BY ledger_sequence {order}, id {order} \
-                    LIMIT ? \
+                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
+                      AND ({src} IS NULL OR source_id = {src}) \
+                    ORDER BY ledger_sequence {order}, application_order {order} \
+                    LIMIT {lim_peek} \
                  ) t \
                  LEFT JOIN accounts src ON src.id = t.source_id \
                  INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 ORDER BY t.ledger_sequence {order}, t.id {order}",
+                 ORDER BY t.ledger_sequence {order}, t.application_order {order}",
             );
-            client
-                .query(&sql)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_ledger)
-                .bind(cursor_tiebreak)
-                .bind(source_id)
-                .bind(source_id)
-                .bind(params.limit + 1)
-                .fetch_all::<TxPageChRow>()
-                .await?
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
         }
     };
+
+    // Statement A drops FINAL for the read-in-order fast path (see above), so
+    // a re-ingested transaction could in principle surface as two rows with
+    // the same `id`. Drop any such duplicate, keeping the first (the rows are
+    // already in the requested order). A no-op on the FINAL'd B/C paths and on
+    // the live partition (validated zero net dedup), but cheap insurance on
+    // ≤ `limit + 1` rows.
+    let mut rows = rows;
+    let mut seen = std::collections::HashSet::with_capacity(rows.len());
+    rows.retain(|r| seen.insert(r.id));
 
     // Second pass: fetch operation_types + contract_ids for the page's keys
     // (non-correlated derived-table aggregation; CH 26.3 rejects correlated
@@ -483,7 +551,7 @@ pub async fn fetch_detail(
     let row = client
         .query(
             "SELECT \
-                t.id, \
+                t.id AS id, \
                 lower(hex(t.hash)) AS hash, \
                 t.ledger_sequence, \
                 t.application_order, \

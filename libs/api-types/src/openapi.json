@@ -3911,7 +3911,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "All C-StrKeys touched anywhere in the transaction."
+                  "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the PG\npath in practice; the full 3-source set was dropped because its scan\nblew the read_rows quota (task 0243; see `common::ch`)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4368,7 +4368,7 @@
             "items": {
               "type": "string"
             },
-            "description": "All C-StrKeys touched anywhere in the transaction."
+            "description": "C-StrKeys of the contracts invoked as a root-operation `contract_id`.\nOn the ClickHouse path this is sourced from `operations_appearances`\nonly (primary-key seek): a contract reached solely via a nested\nsub-invocation or an emitted event — never a root-op `contract_id` — is\nNOT listed. For the overwhelming majority of Soroban transactions the\ninvoked contract IS the root-op `contract_id`, so this matches the PG\npath in practice; the full 3-source set was dropped because its scan\nblew the read_rows quota (task 0243; see `common::ch`)."
           },
           "created_at": {
             "type": "string",
