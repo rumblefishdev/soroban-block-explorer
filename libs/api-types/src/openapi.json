@@ -204,6 +204,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort order on transaction time: `asc` | `desc` (default).\nSticky — re-send on every page alongside `cursor`.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
           }
         ],
         "responses": {
