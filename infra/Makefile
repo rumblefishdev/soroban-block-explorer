@@ -78,6 +78,15 @@ deploy-production-hetzner-dns: build
 destroy-production-hetzner-dns: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
+# --- Cloudflare edge bootstrap (TF state bucket + origin secret) ---
+# Requires "provisionCloudflareBootstrap": true in envs/production.json.
+
+deploy-production-cloudflare-bootstrap: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudflareBootstrap --require-approval broadening
+
+destroy-production-cloudflare-bootstrap: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudflareBootstrap --force
+
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
 # VITE_API_BASE_URL is baked from apiDomainName in envs/production.json.
