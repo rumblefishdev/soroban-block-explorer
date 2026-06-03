@@ -1,5 +1,5 @@
 ---
-id: '0276'
+id: '0279'
 title: 'LP per-op amounts: wire ?expand=lp_op_details + un-hide Amount column'
 type: FEATURE
 status: backlog

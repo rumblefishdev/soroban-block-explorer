@@ -4,7 +4,7 @@ title: 'Backend: API endpoints + fields surfaced by FE gaps audit'
 type: FEATURE
 status: completed
 related_adr: []
-related_tasks: ['0199', '0226', '0247', '0276']
+related_tasks: ['0199', '0226', '0247', '0279']
 tags:
   [
     priority-medium,
@@ -55,7 +55,7 @@ history:
       (`operations_appearances.amount` = fold count), `xdr_parser` has no
       LP-op extraction, and the LP-tx endpoint is DB-only (no archive
       scaffolding) — a real feature, not a quick add. Path decision →
-      research 0247; implementation → spawned 0276. #4 (pool chart nulls)
+      research 0247; implementation → spawned 0279. #4 (pool chart nulls)
       was never a 0274 AC — owned by 0199 (blocked-on-oracle). Accounts
       response intentionally diverges from the audit's draft shape (see
       Design Decisions § Emerged). 6 backend + 6 FE integration/unit tests
@@ -174,7 +174,7 @@ Pool chart fields (gap #4) are covered by **0199**.
 - [ ] `?expand=lp_op_details` on pool transactions is wired and the
       "Amount" column on the LP tx table is un-hidden FE-side.
       **Deferred** — path decision tracked in research **0247**,
-      implementation spawned as **0276**. (The earlier "0249" cite was
+      implementation spawned as **0279**. (The earlier "0249" cite was
       wrong — 0249 = archived AWS-teardown.)
 - [x] OpenAPI declares the `order` param on `/v1/ledgers`, and asc
       actually returns oldest-first with working forward pagination.
@@ -259,6 +259,6 @@ Pool chart fields (gap #4) are covered by **0199**.
 
 ## Future Work
 
-- **0276** — implement `?expand=lp_op_details` (#2) once 0247 picks the path.
+- **0279** — implement `?expand=lp_op_details` (#2) once 0247 picks the path.
 - **0247** — research: XDR read-time fetch vs ingest-side extraction for LP amounts.
 - **0199** — pool chart `tvl`/`volume`/`fee_revenue` (#4), blocked on price oracle.
