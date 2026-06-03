@@ -69,13 +69,21 @@ pub async fn list_ledgers(
     Query(order_query): Query<LedgersListQuery>,
 ) -> Response {
     let source = DataSource::for_module(Module::Ledgers);
-    // `?order=` is the base sort (sticky), orthogonal to the cursor's
-    // navigation direction. `asc` = oldest-first; anything else = default
-    // newest-first. The client resets to page 1 when toggling order, so a
-    // cursor minted under one order is never replayed under the other.
+    // `?order=` sets the persistent base sort, which `fetch_list` receives.
+    // The cursor only controls navigation direction rather than overriding order.
+    // The client resets to page 1 when toggling order, and re-sends the order param
+    // with each subsequent page request.
     let sort = match order_query.order.as_deref() {
-        Some("asc") => SortOrder::Asc,
-        _ => SortOrder::Desc,
+        None => SortOrder::Desc,
+        Some(s) if s.eq_ignore_ascii_case("asc") => SortOrder::Asc,
+        Some(s) if s.eq_ignore_ascii_case("desc") => SortOrder::Desc,
+        Some(invalid) => {
+            return errors::bad_request_with_details(
+                errors::INVALID_QUERY,
+                format!("invalid sort order '{invalid}', expected 'asc' or 'desc'"),
+                serde_json::json!({ "param": "order", "received": invalid }),
+            );
+        }
     };
 
     // Fetch limit+1 rows — the extra peek row drives continuation

@@ -4760,7 +4760,10 @@ async fn lp_legs_carry_icon_url_against_real_db() {
 
     // Wiring: every leg always serialises an `icon_url` key, string or null.
     for leg in &legs {
-        let icon = &leg["icon_url"];
+        let icon = leg
+            .as_object()
+            .and_then(|o| o.get("icon_url"))
+            .expect("leg must contain icon_url");
         assert!(
             icon.is_string() || icon.is_null(),
             "leg.icon_url must be string|null, got {icon} on {leg}"
@@ -4769,9 +4772,36 @@ async fn lp_legs_carry_icon_url_against_real_db() {
 
     // Data: if any asset in the DB is enriched, at least one leg shows it.
     let any_icon = legs.iter().any(|leg| leg["icon_url"].is_string());
+
+    let mut codes = Vec::new();
+    let mut issuers = Vec::new();
+    let mut contracts = Vec::new();
+    for leg in &legs {
+        if let Some(code) = leg["asset_code"].as_str() {
+            codes.push(code.to_string());
+        }
+        if let Some(issuer) = leg["issuer"].as_str() {
+            issuers.push(issuer.to_string());
+        }
+        if let Some(cid) = leg["contract_id"].as_str() {
+            contracts.push(cid.to_string());
+        }
+    }
+
     let db_has_icons = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM assets WHERE icon_url IS NOT NULL AND asset_type IN (1, 2)",
+        "SELECT count(*) FROM assets a \
+         LEFT JOIN accounts iss ON iss.id = a.issuer_id \
+         LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+         WHERE a.icon_url IS NOT NULL \
+           AND a.asset_type IN (1, 2) \
+           AND ( \
+               (a.asset_code = ANY($1) AND iss.account_id = ANY($2)) \
+               OR (sc.contract_id = ANY($3)) \
+           )",
     )
+    .bind(&codes)
+    .bind(&issuers)
+    .bind(&contracts)
     .fetch_one(&assert_pool)
     .await
     .unwrap_or(0);

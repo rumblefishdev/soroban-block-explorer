@@ -62,7 +62,7 @@ pub async fn list_accounts(
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
-        limit: pagination.fetch_limit() as i64,
+        limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         with_domain: params.filter_with_domain.unwrap_or(false),
     };

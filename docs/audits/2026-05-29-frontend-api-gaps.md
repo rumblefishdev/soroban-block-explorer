@@ -126,8 +126,10 @@ an event count. Need a real `recent_events` (or similar) on
 FE passes `order` today but — correction — the real backend **silently
 ignored** it (only the mock honoured it); Axum dropped the unknown param,
 so the list was never actually re-sorted. Now wired (`LedgersListQuery`)
-and declared in OpenAPI: `order=asc` flips the first-page walk to
-oldest-first; ignored once a cursor is supplied.
+and declared in OpenAPI: `order=asc|desc` sets the base sort for all pages.
+It is sticky and applied on every page and must be re-sent with `cursor` when
+paginating. The `cursor` only controls navigation direction (which page is
+fetched next) rather than overriding the order.
 
 ```ts
 type Query = {
