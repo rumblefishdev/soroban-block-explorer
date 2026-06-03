@@ -18,6 +18,10 @@ ch_origin_ip      = "REPLACE_HETZNER_IPV4"
 # Secret reference (NAME, not value):
 origin_secret_secret_id = "soroban/production/cloudflare/origin-secret"
 
+# Keep the API mTLS leg off until ./certs/cf-client.{pem,key} exist (otherwise
+# Terraform's eager file() eval blocks the initial zone apply).
+enable_api_mtls_aop = false
+
 # Keep DNS cutover gated until the AWS-side lockdown is verified.
 create_dns_records = false
 

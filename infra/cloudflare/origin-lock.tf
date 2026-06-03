@@ -10,18 +10,29 @@
 
 # ── API leg: zone-level Authenticated Origin Pulls (own cert) ──────────
 #
-# The client cert + key are placed by the operator under ./certs/ (gitignored).
+# GATED by var.enable_api_mtls_aop (default false). The client cert + key are
+# placed by the operator under ./certs/ (gitignored) — they do NOT exist when
+# the zone is first stood up. Terraform evaluates file() EAGERLY at plan time
+# for every resource (even under `-target`), so referencing the certs
+# unconditionally would block the initial zone/settings/WAF apply. count=0
+# leaves the file() unevaluated; flip the flag once the certs are generated
+# (task 0277 Step 2 / KROK 5).
+#
 # The PRIVATE KEY is sensitive and ends up in state (resource attribute) —
 # this is why state is private/encrypted. For production prefer sourcing the
 # key from Secrets Manager rather than a file on disk.
 
 resource "cloudflare_authenticated_origin_pulls_certificate" "client" {
+  count = var.enable_api_mtls_aop ? 1 : 0
+
   zone_id     = cloudflare_zone.this.id
   certificate = file("${path.module}/certs/cf-client.pem")
   private_key = file("${path.module}/certs/cf-client.key")
 }
 
 resource "cloudflare_authenticated_origin_pulls" "zone" {
+  count = var.enable_api_mtls_aop ? 1 : 0
+
   zone_id = cloudflare_zone.this.id
 
   # Zone-level (no `hostname` → applies to the whole zone). cert id comes
@@ -33,7 +44,7 @@ resource "cloudflare_authenticated_origin_pulls" "zone" {
   # [{ cert_id, enabled }] with `hostname` omitted, but the doc example
   # only shows the per-hostname form. Confirm before relying on it.
   config = [{
-    cert_id = cloudflare_authenticated_origin_pulls_certificate.client.certificate_id
+    cert_id = cloudflare_authenticated_origin_pulls_certificate.client[0].certificate_id
     enabled = true
   }]
 }

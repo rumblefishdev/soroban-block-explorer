@@ -104,6 +104,18 @@ variable "api_rate_limit_mitigation_timeout" {
 
 # ── Rollout gating ─────────────────────────────────────────────────────
 
+variable "enable_api_mtls_aop" {
+  description = <<-EOT
+    Enable the API mTLS leg: zone-level Authenticated Origin Pulls with our own
+    client cert. Keep FALSE until ./certs/cf-client.{pem,key} exist — Terraform
+    evaluates file() eagerly at plan time (even under -target), so an unconditional
+    reference would block the initial zone/settings/WAF apply. Flip to TRUE once
+    the certs are generated (task 0277 Step 2 / KROK 5).
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "create_dns_records" {
   description = <<-EOT
     Gate the proxied DNS cutover. Keep FALSE for the first applies so the
