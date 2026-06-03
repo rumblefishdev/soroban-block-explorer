@@ -95,7 +95,7 @@ pub async fn fetch_list(
     qb.push(format!(
         " ORDER BY a.last_seen_ledger {order}, a.id {order} LIMIT "
     ));
-    qb.push_bind(params.limit + 1);
+    qb.push_bind(params.limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw.iter().map(map_list_row).collect())

@@ -27,10 +27,11 @@ use super::queries::LedgerTxRow;
 use super::{queries, queries_ch};
 
 /// Base sort order for `GET /v1/ledgers` — a sticky query param the
-/// client re-sends on every page. `asc` = oldest-first, anything else
-/// (omitted / `desc`) = newest-first. Orthogonal to the cursor's
-/// navigation direction: the client resets to the first page when
-/// toggling order, so a stale cursor never mixes the two orders.
+/// client re-sends on every page. `order=asc|desc` sets the base sort for all
+/// pages, and `fetch_list` receives this persistent sort parameter. The
+/// cursor only controls the navigation direction (i.e., which page is fetched
+/// next) rather than overriding order. The client should re-send `order` with
+/// each paginated request alongside the `cursor`.
 #[derive(Debug, Deserialize)]
 pub struct LedgersListQuery {
     #[serde(default)]
