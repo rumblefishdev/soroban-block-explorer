@@ -205,7 +205,7 @@ export class ComputeStack extends cdk.Stack {
         // RDS has been removed (ADR 0047), so without *some* value here
         // `db::secrets::resolve_or_env()` returns MissingEnvVar and boot panics
         // (502 on every route). This keeps boot healthy. The not-yet-migrated
-        // PG modules (Accounts/Assets/Contracts/NFTs/LiquidityPools/Search)
+        // PG modules (Assets/NFTs/LiquidityPools/Search)
         // still error on query until they get a CH path — expected. Removing
         // this hack needs the PG pool made optional at boot (deferred
         // follow-up); until then a `cdk deploy` MUST keep it, or it regresses
@@ -221,8 +221,8 @@ export class ComputeStack extends cdk.Stack {
         //
         // Enabled here: modules whose CH read path is merged on `develop` —
         // Network (pilot, PR #221), Ledgers (PR #226), Transactions
-        // (PR #229). The remaining modules (Accounts, Assets, Contracts,
-        // NFTs, LiquidityPools, Search) have no CH path yet.
+        // (PR #235), Accounts (PR #236), Contracts (PR #237). The remaining
+        // modules (Assets, NFTs, LiquidityPools, Search) have no CH path yet.
         //
         // PRECONDITIONS before this deploy goes live (see PR checklist):
         //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
@@ -238,6 +238,8 @@ export class ComputeStack extends cdk.Stack {
         API_DATASOURCE_NETWORK: 'ch',
         API_DATASOURCE_LEDGERS: 'ch',
         API_DATASOURCE_TRANSACTIONS: 'ch',
+        API_DATASOURCE_ACCOUNTS: 'ch',
+        API_DATASOURCE_CONTRACTS: 'ch',
       },
     });
     this.apiFunction = apiFunction;
