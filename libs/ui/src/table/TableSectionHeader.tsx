@@ -28,7 +28,11 @@ export function TableSectionHeader({
     >
       <Stack spacing={1} alignItems="flex-start">
         <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="heading5SemiBold" color="text.primary">
+          <Typography
+            variant="heading5SemiBold"
+            color="text.primary"
+            component="h2"
+          >
             {title}
           </Typography>
           {badge}

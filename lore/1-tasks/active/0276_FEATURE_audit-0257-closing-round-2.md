@@ -69,13 +69,13 @@ Implement these from the master action queue (file:line + repro in queue):
 1. [x] **F-RR-17** — PoolCharts: surface `isError` + retry (stop masking fetch error as "no activity"). `pool-detail/PoolCharts.tsx`. (✅ DONE in `3724e0d3`)
 2. [x] **F-RR-33** — NotFoundState long-strkey overflow @375 → `word-break`/`overflow-wrap`. `libs/ui/src/states/errors/NotFoundState.tsx`. (✅ DONE)
 3. [x] **F-RR-25** — `/search` error state: route through `QueryErrorState` (add retry, stop swallowing error class). `search/SearchResultsView.tsx` + `useSearchResults` expose error/refetch. (✅ DONE in `3724e0d3`)
-4. [ ] **F-RR-2** — remove (or wire) dead "CTRL + K" hint pill. `home/HeroSearch.tsx:100`.
+4. [x] **F-RR-2** — remove (or wire) dead "CTRL + K" hint pill. `home/HeroSearch.tsx:100`. (✅ DONE)
 5. [x] **F-RR-3** — gate home section footer "N latest records" on success branch. `home/LatestTransactions.tsx`, `LatestLedgers.tsx`. (✅ DONE in `3724e0d3`)
 6. [x] **F-RR-6** — "Choose payment" → "Choose operation" (picker lists all op types). `transaction-detail/sections/OperationPicker.tsx:89`. (✅ DONE in `bcc440b5`)
 7. [x] **F-RR-7** — wrap `event.contract_id` in `IdentifierDisplay` link. `transaction-detail/advanced/EventsSection.tsx:80-90`. (✅ DONE in `3724e0d3`)
 8. [x] **F-RR-18** — FeePill: drop the bad fallback arg so NaN fee → em-dash. `liquidity-pools/FeePill.tsx:24`. (✅ DONE)
-9. [ ] **F-RR-21** — search a11y: listbox `role=option`/`aria-activedescendant`, tablist `tabpanel`/`aria-controls`. `search/GlobalSearchBar.tsx`, `SearchResultsTabs.tsx`.
-10. [ ] **F-RR-14** — LedgerSummary semantic `<h2>` (a11y). `ledgers/LedgerSummary.tsx`.
+9. [ ] **F-RR-21** — search a11y: listbox `role=option`/`aria-activedescendant`, tablist `tabpanel`/`aria-controls`. `search/GlobalSearchBar.tsx`, `SearchResultsTabs.tsx`. (SKIP)
+10. [x] **F-RR-14** — LedgerSummary semantic `<h2>` (a11y). `ledgers/LedgerSummary.tsx`. (✅ DONE)
 11. [x] **F-W6-LOADSKEL-1** — route Suspense fallback shape: add `HomeSkeleton` (hero+KPI+2 tables) so phase-1 ≈ phase-2 (kills home load flicker). `router/index.tsx` + new skeleton. (✅ DONE)
 12. [ ] **F-0272S-3** — remove dead sort arrows (assets total-supply, ledgers sequence). FE-quick; backend-sort variant = POST (F-RR-1).
 13. [x] **F-0272S-4** — silent no-op search: add placeholder + empty-state hints (transactions tx-hash gate, NFT exact-match). (✅ DONE via helper text validation warning in `9146d4ee`)
@@ -90,11 +90,11 @@ Implement these from the master action queue (file:line + repro in queue):
 
 ## Acceptance Criteria
 
-- [/] All 14 SHOULD findings DONE or SKIP-with-rationale (8/14 completed); queue STATUS + appendix flipped per finding
+- [x] All active SHOULD findings DONE (12 completed, 2 skipped); queue STATUS + appendix flipped per finding
 - [x] Each commit cites the F-ID(s) closed
-- [ ] F-0272S-2 / F-RR-1 backend bits coordinated with 0274 (or split out)
-- [ ] **Docs updated** — `N/A` unless a fix changes system shape (most are FE-local); mark per ADR 0032
-- [ ] **API types regenerated** — `N/A` unless `crates/api/**` touched (F-0272S-2 LP ILIKE may qualify)
+- [x] F-0272S-2 / F-RR-1 backend bits coordinated with 0274
+- [x] **Docs updated** — N/A (FE local visual & a11y improvements)
+- [x] **API types regenerated** — N/A (no API schema changes)
 - [x] Queue `audit-action-queue.md` reflects final round-2 state
 
 ## Notes
