@@ -40,14 +40,29 @@ export CLOUDFLARE_API_TOKEN=$(aws secretsmanager get-secret-value \
 ## One-time backend bootstrap
 
 State uses S3 with the **native S3 lockfile** (`use_lockfile`, no DynamoDB;
-Terraform ≥ 1.10). Create the bucket once (versioned + encrypted + private),
-then:
+Terraform ≥ 1.10). The state bucket and the `X-Origin-Secret` are provisioned
+**by CDK** (not by hand) — set `provisionCloudflareBootstrap: true` in
+`infra/envs/production.json` and deploy the `Explorer-<env>-CloudflareBootstrap`
+stack. Then read the bucket name from its output:
 
 ```sh
-cp backend.hcl.example backend.hcl     # fill bucket/key/region
+aws cloudformation describe-stacks \
+  --stack-name Explorer-production-CloudflareBootstrap \
+  --query "Stacks[0].Outputs[?OutputKey=='CloudflareTfStateBucketName'].OutputValue" \
+  --output text --region eu-central-1 --profile soroban-explorer
+
+cp backend.hcl.example backend.hcl             # bucket = the name above
 cp terraform.tfvars.example terraform.tfvars   # fill real values
 terraform init -backend-config=backend.hcl
 ```
+
+Only the **Cloudflare API token** (external) and the **mTLS client cert/key**
+(`openssl`) are created out-of-band; everything else is CDK or Terraform.
+
+> **Do NOT pre-create the `…/cloudflare/origin-secret`** by hand — CDK owns it
+> (auto-generated). If a same-named secret already exists (manual create, or a
+> RETAIN'd secret still inside its 7–30 day deletion window), the stack deploy
+> fails `ResourceExistsException`; delete/restore or `cdk import` it first.
 
 ## Rollout (lock before cutover)
 

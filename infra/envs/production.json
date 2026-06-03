@@ -38,6 +38,7 @@
   "apiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/1b007d15-773a-4603-8bc6-43cebb4a60c7",
   "enableWaf": true,
   "enableBasicAuth": true,
+  "provisionCloudflareBootstrap": false,
   "provisionApiMtlsTruststore": false,
   "enableApiMtls": false,
   "enableOriginSecretLock": false,

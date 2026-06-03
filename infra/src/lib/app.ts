@@ -7,6 +7,7 @@ import { ComputeStack } from './stacks/compute-stack.js';
 import { CloudFrontWafStack } from './stacks/cloudfront-waf-stack.js';
 import { DeliveryStack } from './stacks/delivery-stack.js';
 import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
+import { CloudflareBootstrapStack } from './stacks/cloudflare-bootstrap-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
@@ -104,6 +105,16 @@ export function createApp({
     spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });
   cloudWatch.addDependency(apiGateway);
+
+  // Cloudflare edge bootstrap (task 0277): Terraform state bucket + the
+  // CDK-generated origin secret. Gated — deploy first when starting the
+  // migration so nothing is created by hand.
+  if (config.provisionCloudflareBootstrap) {
+    new CloudflareBootstrapStack(app, `${prefix}-CloudflareBootstrap`, {
+      env,
+      config,
+    });
+  }
 
   // HetznerDnsStack only when the env has a real `chDomainName`.
   if (

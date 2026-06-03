@@ -1,8 +1,9 @@
 # Example backend config for `terraform init -backend-config=backend.hcl`.
-# Copy to backend.hcl (gitignored) and fill in. Bootstrap the bucket first
-# (see README.md) — versioned + encrypted + BlockPublicAccess.
+# Copy to backend.hcl (gitignored) and fill in. The bucket is provisioned BY
+# CDK (CloudflareBootstrapStack) — do NOT create it by hand; read its name from
+# the stack output (see README.md "One-time backend bootstrap").
 
-bucket       = "REPLACE-soroban-explorer-tfstate"   # versioned, encrypted, private
+bucket       = "production-soroban-explorer-cf-tfstate"  # = CDK output CloudflareTfStateBucketName
 key          = "cloudflare/production/terraform.tfstate"
 region       = "eu-central-1"
 encrypt      = true

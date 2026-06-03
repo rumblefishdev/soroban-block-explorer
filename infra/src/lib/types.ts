@@ -124,6 +124,25 @@ export interface EnvironmentConfig {
   // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
 
   /**
+   * Provision the AWS-side bootstrap for the Cloudflare migration via CDK
+   * (so nothing is created by hand): the Terraform remote-state S3 bucket
+   * (versioned, encrypted, private) and the `X-Origin-Secret` in Secrets
+   * Manager with a CDK-generated value. Deploy this FIRST — the Terraform
+   * backend bucket + the origin secret must exist before `terraform apply`
+   * and before the CloudFront secret-header lock is populated. Default false.
+   *
+   * DEPLOY-ONCE / LEAVE TRUE: both resources are `RETAIN` and become the live
+   * Terraform backend + shared secret. Flipping back to false removes the stack
+   * from the app and orphans them from CDK (data survives via RETAIN, but the
+   * backend is then unmanaged) — so set it true once and keep it.
+   *
+   * Out of scope (external credential / crypto — cannot be IaC-generated):
+   * the Cloudflare API token (paste once via `put-secret-value`) and the
+   * mTLS client cert/key (operator `openssl`).
+   */
+  readonly provisionCloudflareBootstrap: boolean;
+
+  /**
    * Phase 1 of the API mTLS rollout: provision the **versioned** S3
    * truststore bucket (and only that) so the operator can upload the CA
    * bundle PEM (`truststore.pem`) BEFORE mTLS is attached.
