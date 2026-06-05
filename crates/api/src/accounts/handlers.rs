@@ -11,7 +11,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
-use crate::common::cursor::{self, Direction, SortOrder, TsIdCursor};
+use crate::common::cursor::{self, Direction, SortOrder, TsIdCursor, parse_sort_order};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -23,7 +23,7 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
-    AccountsListParams,
+    AccountTxListParams, AccountsListParams,
 };
 use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
 use super::queries::{AccountListRow, AccountsListCursor, ResolvedListParams, fetch_list};
@@ -71,9 +71,9 @@ pub async fn list_accounts(
     pagination: Pagination<AccountsListCursor>,
     Query(params): Query<AccountsListParams>,
 ) -> Response {
-    let sort = match params.order.as_deref() {
-        Some("asc") => SortOrder::Asc,
-        _ => SortOrder::Desc,
+    let sort = match parse_sort_order(params.order.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
     };
 
     let direction = pagination.direction;
@@ -214,6 +214,7 @@ pub async fn get_account(
         ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        AccountTxListParams,
     ),
     responses(
         (status = 200, description = "Paginated transactions involving the account",
@@ -227,10 +228,16 @@ pub async fn list_account_transactions(
     State(state): State<AppState>,
     pagination: Pagination<TxListCursor>,
     Path(account_id): Path<String>,
+    Query(params): Query<AccountTxListParams>,
 ) -> Response {
     if let Err(resp) = path::strkey(&account_id, 'G', "account_id") {
         return resp;
     }
+
+    let sort = match parse_sort_order(params.order.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
+    };
 
     let source = DataSource::for_module(Module::Accounts);
 
@@ -263,6 +270,7 @@ pub async fn list_account_transactions(
         header.id,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        sort,
         direction,
     )
     .await
@@ -359,6 +367,7 @@ async fn fetch_account_tx_for_source(
     account_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, AcctFetchError> {
     match source {
@@ -370,12 +379,19 @@ async fn fetch_account_tx_for_source(
                 TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
                 TxListCursor::Ch { .. } => None,
             });
-            queries::fetch_transactions(&state.db, account_id, limit, ts_cursor.as_ref(), direction)
-                .await
-                .map_err(AcctFetchError::Pg)
+            queries::fetch_transactions(
+                &state.db,
+                account_id,
+                limit,
+                ts_cursor.as_ref(),
+                sort,
+                direction,
+            )
+            .await
+            .map_err(AcctFetchError::Pg)
         }
         DataSource::Ch => {
-            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, direction)
+            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, sort, direction)
                 .await
                 .map_err(AcctFetchError::Ch)
         }

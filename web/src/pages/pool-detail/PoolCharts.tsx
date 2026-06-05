@@ -2,6 +2,7 @@ import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   CardSkeleton,
   LazySection,
+  QueryErrorState,
   Tabs,
   TimeSeriesChart,
   type TimeSeriesPoint,
@@ -123,7 +124,10 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
 
-  const { data, isLoading, isError } = usePoolChart(poolId, period);
+  const { data, isLoading, isError, error, refetch } = usePoolChart(
+    poolId,
+    period
+  );
 
   /**
    * Map the API's `(bucket, tvl|volume|fee_revenue)` rows into the
@@ -197,7 +201,13 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
       </Box>
 
       <Box sx={{ p: 2 }}>
-        {showPendingOraclePlaceholder ? (
+        {isError ? (
+          <QueryErrorState
+            error={error}
+            onRetry={() => void refetch()}
+            py={4}
+          />
+        ) : showPendingOraclePlaceholder ? (
           <Stack spacing={0.5} sx={{ py: 4, textAlign: 'center' }}>
             <Typography
               variant="bodyMedium"

@@ -41,6 +41,58 @@ history:
     status: active
     who: karolkow
     note: 'Wave 1 done (6 sub-phases, ~40 findings, 1 CRITICAL + 9 HIGH). Added Triage Gates section to Execution Strategy: Gate A (end Wave 3) + Gate B (end Wave 5). Invalidation taxonomy + cascade compression table + anti-pattern list. Findings classified A-E (baseline-breaker / routing-contract / visual-layout / catalog-only / off-band). Class A+B+C → fix-first at gates; Class D → defer Phase 3; Class E → off-band immediate.'
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      Incoming-merge protocol: merged develop into audit branch (ZERO
+      conflicts) bringing closure task 0272 (PR #230, archived), 0273
+      (CloudFront deploy, archived), 0243 (ClickHouse read paths), and
+      spawned active tasks 0274 (backend API gaps) + 0275 (contracts
+      list). 0272 self-reconciled the master action queue during its own
+      closure — code-verified impact pass found 0 residual finding/card
+      flips needed. Confirmed RESOLVED by 0272: F-DP-1 (NetworkToggle
+      removed e9122732), F-DP-2 (hex→tokens 0139a8a3), cards 2.1/2.4
+      (formatter consolidation), 5.1/5.3 (404 dedup), 7.2 (live
+      indicator), 11.5 (hamburger nav d184457f), and 7.3 share-% NOW
+      genuinely fixed (formatPercent .toFixed(2)) — supersedes the
+      2026-05-29 ILLUSORY verdict. Still TODO: F-DP-3/card 11.3 (z-index
+      scale), F-DP-4/card 11.4 (OperationFlowTree, data-blocked). New:
+      5 list-page findings from 0272 session (accounts=mock-data 404 root
+      cause, LP-vs-assets exact-vs-partial search, dead sort arrows,
+      silent no-op search, tx-type multi-select) → 0274/0275 own items
+      1-2; items 3-5 still need backlog spawn from develop. Queue 0272
+      merge-note block + card 1.3/6.3 cross-refs added.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      FULL RE-RUN on merged HEAD e3fe1968 (user-requested). 5-agent code
+      fan-out (API/type-safety, routes ×2, cross-cutting, Wave-4 state
+      matrix) + deterministic baseline + targeted live (:4201). Results in
+      audit-action-queue.md "Full re-run 2026-06-01" section. Baseline:
+      typecheck GREEN (deps built; stale-libs/ui-dist gives false errors —
+      benign build-order artifact, NOT regression); tests 60/86 local pass,
+      26 fail with React-null-in-QueryClientProvider = local-worktree env
+      artifact (VERIFIED 2026-06-01: main-repo checkout of same 0272 code =
+      86/86 PASS), NOT a regression — develop/CI green. 0272 consolidation
+      (NetworkToggle/formatters/hex/debounce/truncate) + error-state
+      primitives VERIFIED clean. 32 NEW findings F-RR-1..32 (2 🟠:
+      order-param cast drift F-RR-1, PoolCharts error-masking F-RR-17; ~13
+      🟡 incl. search inline error/no-retry F-RR-25, dead Ctrl+K F-RR-2,
+      OperationPicker mislabel F-RR-6, EventsSection unlinked contract
+      F-RR-7, Ledger reuse F-RR-13/14, FeePill/fee-format F-RR-18/19,
+      search a11y F-RR-21, libs/ui barrel tree-shake F-RR-26; rest 🟢
+      consistency/reuse). Earlier-session NEW: card 7.10 loading-skeleton
+      flicker (F-W6-LOADSKEL-1/2/3), card 6.5 list-page F-0272S-1..6. No
+      spawns (per user); all captured in queue. Live Waves 5-6: @375
+      responsive sweep DONE (15 routes clean except account-detail
+      NotFound overflow F-RR-33 + /contracts PageStub h1:0); F-0272S-1
+      live-confirmed (mock account → 404); runtime theme = light
+      (OS-driven, code default dark). 768px + Tier-4 visual + F-RR-17
+      error-inject NOT covered (optional). Test-fail classification
+      RESOLVED-benign: main-repo checkout of same 0272 code = 86/86 PASS,
+      so worktree 26-fail = local env artifact, develop/CI green.
 ---
 
 # Frontend comprehensive audit (pre-launch)

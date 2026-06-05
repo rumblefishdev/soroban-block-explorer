@@ -1,6 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Divider, InputAdornment, Stack, TextField } from '@mui/material';
-import { Chip, useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+import { Box, Divider, Stack } from '@mui/material';
+import { Chip, DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
 
@@ -23,8 +22,6 @@ export function AssetFilters({
   onSearchChange,
   onTypeChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
-
   return (
     <Box
       sx={(theme) => ({
@@ -37,26 +34,12 @@ export function AssetFilters({
         bgcolor: theme.palette.surface.grayMainAlt,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Search by asset code..."
-        aria-label="Search by asset code"
-        sx={{ width: { xs: '100%', sm: 320 } }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Search by asset code"
+        width={320}
+        onCommit={onSearchChange}
       />
       <Divider
         orientation="vertical"

@@ -63,7 +63,7 @@ export function Footer({ logo, navItems }: FooterProps) {
         // Sit above the page grid backdrop on every route so the grid
         // lines never bleed through the footer.
         position: 'relative',
-        zIndex: 2,
+        zIndex: theme.zIndex.footer,
       })}
     >
       <Box

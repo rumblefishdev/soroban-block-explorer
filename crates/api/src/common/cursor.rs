@@ -26,6 +26,7 @@
 //! breaking API change, as long as the previous format fails decode cleanly
 //! and produces an `INVALID_CURSOR` error.
 
+use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -45,6 +46,26 @@ pub enum CursorError {
     InvalidBase64,
     #[error("cursor payload does not match expected schema")]
     InvalidPayload,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SortOrderError {
+    #[error("invalid sort order '{received}', expected 'asc' or 'desc'")]
+    Invalid { received: String },
+}
+
+impl IntoResponse for SortOrderError {
+    fn into_response(self) -> Response {
+        match self {
+            SortOrderError::Invalid { received } => {
+                crate::common::errors::bad_request_with_details(
+                    crate::common::errors::INVALID_QUERY,
+                    format!("invalid sort order '{received}', expected 'asc' or 'desc'"),
+                    serde_json::json!({ "param": "order", "received": received }),
+                )
+            }
+        }
+    }
 }
 
 /// Walk direction encoded inside the cursor envelope.
@@ -187,8 +208,26 @@ pub fn keyset_sql(sort: SortOrder, direction: Direction) -> (&'static str, &'sta
 
 /// Desc-only keyset helper for the endpoints that expose a single
 /// newest-first order. Equivalent to `keyset_sql(SortOrder::Desc, …)`.
-pub fn direction_sql(direction: Direction) -> (&'static str, &'static str) {
+pub fn keyset_sql_desc(direction: Direction) -> (&'static str, &'static str) {
     keyset_sql(SortOrder::Desc, direction)
+}
+
+/// Parse a `?order=` query-string value into [`SortOrder`], returning a
+/// 400 `INVALID_QUERY` response for unrecognised values.
+///
+/// Accepts `"asc"` / `"desc"` case-insensitively; `None` defaults to
+/// [`SortOrder::Desc`] (newest-first). Every handler that exposes a user-
+/// facing `?order=` param should call this single function so the parsing
+/// rules and error shape stay consistent across the API.
+pub fn parse_sort_order(raw: Option<&str>) -> Result<SortOrder, SortOrderError> {
+    match raw {
+        None => Ok(SortOrder::Desc),
+        Some(s) if s.eq_ignore_ascii_case("asc") => Ok(SortOrder::Asc),
+        Some(s) if s.eq_ignore_ascii_case("desc") => Ok(SortOrder::Desc),
+        Some(invalid) => Err(SortOrderError::Invalid {
+            received: invalid.to_owned(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -370,15 +409,15 @@ mod tests {
     }
 
     #[test]
-    fn direction_sql_is_keyset_sql_desc_slice() {
+    fn keyset_sql_desc_is_keyset_sql_desc_slice() {
         // The legacy desc-only helper MUST stay byte-identical to the DESC
         // slice of the generalised matrix — 9 endpoints still call it.
         assert_eq!(
-            direction_sql(Direction::Next),
+            keyset_sql_desc(Direction::Next),
             keyset_sql(SortOrder::Desc, Direction::Next)
         );
         assert_eq!(
-            direction_sql(Direction::Prev),
+            keyset_sql_desc(Direction::Prev),
             keyset_sql(SortOrder::Desc, Direction::Prev)
         );
     }

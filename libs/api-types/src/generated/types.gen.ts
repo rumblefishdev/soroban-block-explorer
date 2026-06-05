@@ -1825,6 +1825,11 @@ export type ListAccountTransactionsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Sort order on transaction time: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
   };
   url: '/v1/accounts/{account_id}/transactions';
 };

@@ -58,7 +58,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc, operation_type_label};
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::TxListCursor;
 use super::queries::{
@@ -303,7 +303,7 @@ pub async fn fetch_list(
         None => None,
     };
 
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
     // Cursor keyset is `(ledger_sequence, id)` (canonical SQL 02). The CH
     // cursor variant carries `ledger_sequence` (partition key + primary sort)
     // and `tiebreak` (the `transactions.id` hash surrogate, within-ledger

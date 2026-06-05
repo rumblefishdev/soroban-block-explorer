@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, SortOrder, TsIdCursor, direction_sql, keyset_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql};
 
 // ---------------------------------------------------------------------------
 // GET /v1/accounts (list)
@@ -222,11 +222,12 @@ pub async fn fetch_transactions(
     account_id: i64,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, sqlx::Error> {
     let cursor_ts = cursor.map(|c| c.ts);
     let cursor_id = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     let sql = format!(
         "SELECT \

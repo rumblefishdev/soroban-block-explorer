@@ -14,7 +14,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc};
-use crate::common::cursor::{Direction, SortOrder, TsIdCursor, direction_sql, keyset_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
 
 use super::dto::LedgerListItem;
 use super::queries::{LedgerDetailRow, LedgerTxRow};
@@ -196,7 +196,7 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<LedgerTxRow>, clickhouse::error::Error> {
     let cursor_ts_ms = cursor.map(|c| c.ts.timestamp_millis());
     let cursor_application_order = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Slim page query — base columns only, no correlated subqueries (CH 26.3
     // rejects those). `t.id` (hash surrogate) is selected as the aggregate

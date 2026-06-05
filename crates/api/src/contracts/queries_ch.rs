@@ -34,7 +34,7 @@ use serde::Deserialize;
 use domain::ContractEventType;
 
 use crate::common::ch::millis_to_utc;
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{EventCursor, EventItem};
@@ -105,7 +105,7 @@ pub async fn fetch_contract_list(
     params: &ResolvedContractsListParams,
     direction: Direction,
 ) -> Result<Vec<ContractListRow>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let cur = params
         .cursor
@@ -400,7 +400,7 @@ pub async fn fetch_invocation_appearances(
         }) => (Some(*ledger_sequence), Some(*tiebreak)),
         _ => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
     // 0.15 bound-parameter path returns an empty result when `None` is bound
@@ -586,7 +586,7 @@ pub async fn fetch_events(
     cursor: Option<&EventCursor>,
     direction: Direction,
 ) -> Result<Vec<ChEvent>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Inline the cursor bounds (i64 / i16 — no injection surface); the clause is
     // omitted entirely on the first page so no NULL is bound into the tuple

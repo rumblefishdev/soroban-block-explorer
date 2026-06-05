@@ -1,6 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   DetailErrorState,
   getDefaultTruncation,
   isAccountId,
@@ -14,6 +13,7 @@ import { useParams } from 'react-router-dom';
 import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
+import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
 import { AccountTransactions } from './accounts/AccountTransactions.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
@@ -33,12 +33,13 @@ export default function AccountDetailPage() {
     return <NotFoundState entity="account" identifier={accountId} />;
   }
 
+  if (account.isLoading) {
+    return <AccountDetailSkeleton />;
+  }
+
   let summary: ReactNode = null;
   let balances: ReactNode = null;
-  if (account.isLoading) {
-    summary = <CardSkeleton />;
-    balances = <CardSkeleton />;
-  } else if (account.isError) {
+  if (account.isError) {
     summary = (
       <DetailErrorState
         error={account.error}

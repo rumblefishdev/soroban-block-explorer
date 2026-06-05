@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, TsIdCursor, keyset_sql_desc};
 
 #[derive(Debug, Clone)]
 pub struct AssetRow {
@@ -128,7 +128,7 @@ pub async fn fetch_list(
     params: &ResolvedListParams,
     direction: Direction,
 ) -> Result<Vec<AssetRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(ASSET_SELECT);
     let mut has_where = false;
@@ -245,7 +245,7 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<AssetTxRow>, sqlx::Error> {
     let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
     let has_contract = identity.contract_id.is_some();
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Defensive: never emit `WHERE ()`. The upstream handler routes through
     // `asset_predicate_present`, but `pub fn` callers in the future could

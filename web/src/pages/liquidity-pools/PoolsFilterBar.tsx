@@ -1,13 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import {
-  Box,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
-  type SelectChangeEvent,
-} from '@mui/material';
-import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+import { Box, MenuItem, Select, type SelectChangeEvent } from '@mui/material';
+import { DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * TVL preset options (Figma node 267:60674).
@@ -43,8 +35,6 @@ export function PoolsFilterBar({
   onAssetChange,
   onMinTvlChange,
 }: PoolsFilterBarProps) {
-  const [draft, setDraft] = useDebouncedDraft(asset, onAssetChange);
-
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);
   };
@@ -61,26 +51,12 @@ export function PoolsFilterBar({
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={asset}
         placeholder="Filter by asset pair..."
-        aria-label="Filter by asset pair"
-        sx={{ width: 400, maxWidth: '100%' }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Filter by asset pair"
+        width={400}
+        onCommit={onAssetChange}
       />
       <Select
         value={minTvl}

@@ -1,6 +1,5 @@
 import { Stack } from '@mui/material';
 import {
-  CardSkeleton,
   DetailErrorState,
   isPoolId,
   NotFoundState,
@@ -13,6 +12,7 @@ import { usePoolDetail } from '../api/index.js';
 
 import { PoolCharts } from './pool-detail/PoolCharts.js';
 import { PoolDetailHeader } from './pool-detail/PoolDetailHeader.js';
+import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
@@ -51,12 +51,13 @@ export default function LiquidityPoolDetailPage() {
     return <NotFoundState entity="liquidity-pool" identifier={poolId} />;
   }
 
+  if (detail.isLoading) {
+    return <PoolDetailSkeleton />;
+  }
+
   let summarySection: ReactNode = null;
   let kpiSection: ReactNode = null;
-  if (detail.isLoading) {
-    kpiSection = <CardSkeleton />;
-    summarySection = <CardSkeleton />;
-  } else if (detail.isError) {
+  if (detail.isError) {
     summarySection = (
       <DetailErrorState
         error={detail.error}

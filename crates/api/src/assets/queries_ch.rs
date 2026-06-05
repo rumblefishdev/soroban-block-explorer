@@ -42,7 +42,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc};
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::queries::{AssetRow, AssetTxRow, ResolvedListParams};
@@ -129,7 +129,7 @@ pub async fn fetch_list(
     params: &ResolvedListParams,
     direction: Direction,
 ) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let type_clause = params
         .asset_type
@@ -275,7 +275,7 @@ pub async fn fetch_transactions(
     if !has_classic && !has_contract {
         return Ok(Vec::new());
     }
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Identity predicate. `asset_issuer_id` / `contract_surrogate_id` are i64
     // surrogates (no injection surface) → interpolated; `asset_code` is a DB
