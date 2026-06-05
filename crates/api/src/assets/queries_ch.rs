@@ -18,8 +18,12 @@
 //!   reads: the identity columns they project (issuer StrKey, contract StrKey,
 //!   write-once `home_domain` / `deployed_at_ledger`) are stable across
 //!   versions, and a 16M-row `accounts FINAL` would be ruinous.
-//! - **`join_use_nulls = 1`** makes a LEFT-JOIN miss decode as `None` (a
-//!   no-issuer / no-contract asset) instead of CH's default `''` / `0`.
+//! - **`nullIf(...)` on the joined columns** (issuer / contract_id /
+//!   home_domain → `nullIf(_, '')`, deployed_at_ledger → `nullIf(_, 0)`) makes a
+//!   LEFT-JOIN miss decode as `None`. We do NOT use `SETTINGS join_use_nulls = 1`
+//!   — the `api_reader` CH user runs under `readonly = 1` (RBAC profile
+//!   `read_only`), which rejects per-query setting overrides. Same convention as
+//!   stkrolikiewicz's CH modules (accounts `fetch_balances`, LP).
 //! - **Cursor** is the composite `AssetKeyCursor`; its keyset clause is only
 //!   present on continuation pages, so the clickhouse 0.15 "None bound into a
 //!   tuple keyset returns 0 rows" defect is sidestepped (the bound values are
@@ -64,17 +68,18 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 /// Shared projection — column order MUST match [`AssetChRow`] (positional decode).
 /// `nullIf(asset_code, '')` collapses the native sentinel to `None`; the joined
 /// `issuer` / `contract_id` / `home_domain` / `deployed_at_ledger` decode to
-/// `None` on a JOIN miss via the `join_use_nulls = 1` each query appends.
+/// `None` on a JOIN miss via the `nullIf(...)` wraps (readonly-safe; no
+/// `SETTINGS join_use_nulls`).
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
-     iss.account_id               AS issuer, \
-     iss.home_domain              AS issuer_home_domain, \
-     sc.contract_id               AS contract_id, \
+     nullIf(iss.account_id, '')   AS issuer, \
+     nullIf(iss.home_domain, '')  AS issuer_home_domain, \
+     nullIf(sc.contract_id, '')   AS contract_id, \
      a.name                       AS name, \
      toString(a.total_supply)     AS total_supply, \
      a.holder_count               AS holder_count, \
-     sc.deployed_at_ledger        AS deployed_at_ledger, \
+     nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      a.icon_url                   AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key \
@@ -150,8 +155,7 @@ pub async fn fetch_list(
          WHERE 1{type_clause}{code_clause}{cursor_clause} \
          ORDER BY a.asset_type {order}, a.asset_code {order}, \
                   a.issuer_id {order}, a.contract_id {order} \
-         LIMIT ? \
-         SETTINGS join_use_nulls = 1"
+         LIMIT ?"
     );
 
     let mut query = client.query(&sql);
@@ -181,8 +185,7 @@ pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql =
-        format!("{ASSET_CH_SELECT} WHERE sc.contract_id = ? LIMIT 1 SETTINGS join_use_nulls = 1");
+    let sql = format!("{ASSET_CH_SELECT} WHERE sc.contract_id = ? LIMIT 1");
     let row = client
         .query(&sql)
         .bind(contract_id)
@@ -198,10 +201,7 @@ pub async fn fetch_by_code_issuer(
     asset_code: &str,
     issuer: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!(
-        "{ASSET_CH_SELECT} WHERE a.asset_code = ? AND iss.account_id = ? \
-         LIMIT 1 SETTINGS join_use_nulls = 1"
-    );
+    let sql = format!("{ASSET_CH_SELECT} WHERE a.asset_code = ? AND iss.account_id = ? LIMIT 1");
     let row = client
         .query(&sql)
         .bind(asset_code)
@@ -217,8 +217,7 @@ pub async fn fetch_by_code_issuer(
 pub async fn fetch_native(
     client: &clickhouse::Client,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql =
-        format!("{ASSET_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1 SETTINGS join_use_nulls = 1");
+    let sql = format!("{ASSET_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
     let row = client.query(&sql).fetch_optional::<AssetChRow>().await?;
     Ok(row.map(map_ch_row))
 }

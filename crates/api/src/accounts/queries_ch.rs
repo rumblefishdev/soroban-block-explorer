@@ -70,9 +70,11 @@ struct AccountListChRow {
 ///   `last_seen_ledger`) collapses re-ingested account versions to the latest;
 ///   the native-balance subquery is `FINAL` for the same reason.
 /// - **Native balance** is the `asset_type = 0` row of
-///   `account_balances_current`, mirroring the PG partial-index join. With
-///   `join_use_nulls = 1` a missing native row decodes as `None` (PG `NULL`)
-///   rather than CH's default `''`.
+///   `account_balances_current`, mirroring the PG partial-index join. A
+///   `1 AS matched` marker in the subquery + `if(abc.matched = 1, …, NULL)`
+///   makes a missing native row decode as `None` (PG `NULL`). We do NOT use
+///   `SETTINGS join_use_nulls = 1` — the `api_reader` CH user runs `readonly = 1`
+///   (RBAC `read_only` profile), which rejects per-query setting overrides.
 /// - **Cursor inlined**, not `.bind()`-ed: the clickhouse 0.15 bound-parameter
 ///   path returns 0 rows when `None` is bound into a tuple keyset comparison
 ///   (the documented defect that forced the transactions list to inline). The
@@ -91,9 +93,16 @@ pub async fn fetch_list(
 ) -> Result<Vec<AccountListRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql(sort, direction);
 
-    let (cur_ledger, cur_id) = match &params.cursor {
-        Some(c) => (c.last_seen_ledger.to_string(), c.id.to_string()),
-        None => ("NULL".to_string(), "NULL".to_string()),
+    // Keyset clause omitted entirely on the first page (no cursor) — the unified
+    // CH-list convention — so the clickhouse 0.15 "None into a tuple keyset → 0
+    // rows" defect can never fire. The i64 cursor values are inlined (no
+    // injection surface).
+    let cursor_clause = match &params.cursor {
+        Some(c) => format!(
+            " AND (a.last_seen_ledger, a.id) {op} ({}, {})",
+            c.last_seen_ledger, c.id
+        ),
+        None => String::new(),
     };
     let domain_filter = if params.with_domain {
         " AND a.home_domain IS NOT NULL"
@@ -108,18 +117,16 @@ pub async fn fetch_list(
             a.last_seen_ledger  AS last_seen_ledger, \
             a.first_seen_ledger AS first_seen_ledger, \
             a.home_domain       AS home_domain, \
-            toString(abc.balance) AS xlm_balance \
+            if(abc.matched = 1, toString(abc.balance), NULL) AS xlm_balance \
          FROM accounts a FINAL \
          LEFT JOIN ( \
-             SELECT account_id, balance \
+             SELECT account_id, balance, 1 AS matched \
              FROM account_balances_current FINAL \
              WHERE asset_type = 0 \
          ) abc ON abc.account_id = a.id \
-         WHERE ({cur_ledger} IS NULL \
-                OR (a.last_seen_ledger, a.id) {op} ({cur_ledger}, {cur_id})){domain_filter} \
+         WHERE 1{cursor_clause}{domain_filter} \
          ORDER BY a.last_seen_ledger {order}, a.id {order} \
-         LIMIT ? \
-         SETTINGS join_use_nulls = 1"
+         LIMIT ?"
     );
 
     let rows = client

@@ -107,10 +107,13 @@ pub async fn fetch_contract_list(
 ) -> Result<Vec<ContractListRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    let cur = params
+    // Keyset clause omitted entirely on the first page (no cursor) — the unified
+    // CH-list convention — so the clickhouse 0.15 "None into a tuple keyset → 0
+    // rows" defect can never fire. The i64 cursor id is inlined (no injection).
+    let cursor_clause = params
         .cursor
         .as_ref()
-        .map_or_else(|| "NULL".to_string(), |c| c.id.to_string());
+        .map_or_else(String::new, |c| format!(" AND sc.id {op} {}", c.id));
     let type_clause = params
         .contract_type
         .map_or_else(String::new, |t| format!(" AND sc.contract_type = {t}"));
@@ -131,7 +134,7 @@ pub async fn fetch_contract_list(
             sc.deployed_at_ledger           AS deployed_at_ledger \
          FROM soroban_contracts sc FINAL \
          LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
-         WHERE ({cur} IS NULL OR sc.id {op} {cur}){type_clause}{q_clause} \
+         WHERE 1{cursor_clause}{type_clause}{q_clause} \
          ORDER BY sc.id {order} \
          LIMIT ?"
     );
