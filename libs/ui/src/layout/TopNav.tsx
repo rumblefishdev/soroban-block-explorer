@@ -95,7 +95,7 @@ export function TopNav({
         // which lives in this header's stacking context — paints over the
         // nav row below instead of being covered by it.
         position: 'relative',
-        zIndex: 3,
+        zIndex: theme.zIndex.topNav,
       })}
     >
       <Box

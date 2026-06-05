@@ -45,6 +45,7 @@ export function ContractSummary({
                 <IdentifierWithCopy
                   value={contract.contract_id}
                   type="contract"
+                  linked={false}
                   truncate={false}
                 />
               ),

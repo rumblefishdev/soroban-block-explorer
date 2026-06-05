@@ -26,7 +26,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::queries::{ContractRow, InterfaceRow, InvocationAppearanceRow};
@@ -240,7 +240,7 @@ pub async fn fetch_invocation_appearances(
         }) => (Some(*ledger_sequence), Some(*tiebreak)),
         _ => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
     // 0.15 bound-parameter path returns an empty result when `None` is bound

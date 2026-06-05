@@ -1,12 +1,9 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
+import { Box, MenuItem, Select } from '@mui/material';
 import {
-  Box,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
-} from '@mui/material';
-import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
+  DebouncedField,
+  isAccountId,
+  isContractId,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { OPERATION_TYPE_OPTIONS } from './operationTypes.js';
 
@@ -32,7 +29,8 @@ export function TransactionFilters({
   onSearchChange,
   onOperationTypeChange,
 }: TransactionFiltersProps) {
-  const [draft, setDraft] = useDebouncedDraft(search, onSearchChange);
+  const isError =
+    search !== '' && !isAccountId(search) && !isContractId(search);
 
   return (
     <Box
@@ -45,26 +43,18 @@ export function TransactionFilters({
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Source account or contract ID..."
-        aria-label="Filter by source account or contract ID"
-        sx={{ width: { xs: '100%', sm: 400 } }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Filter by source account or contract ID"
+        width={400}
+        onCommit={onSearchChange}
+        error={isError}
+        helperText={
+          isError
+            ? 'Requires a full Account (G...) or Contract ID (C...)'
+            : undefined
+        }
       />
       <Select
         value={operationType}

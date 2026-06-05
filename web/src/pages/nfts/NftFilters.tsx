@@ -1,54 +1,8 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, InputAdornment, TextField } from '@mui/material';
-import { useDebouncedDraft } from '@rumblefish/soroban-block-explorer-ui';
-
-interface DebouncedFieldProps {
-  value: string;
-  placeholder: string;
-  ariaLabel: string;
-  /** Fixed input width in pixels (per the Figma filter bar). */
-  width: number;
-  onCommit: (value: string) => void;
-}
-
-/**
- * A search input that commits its value after a short pause, so filtering
- * does not refetch on every keystroke. Re-syncs when the value changes
- * externally (e.g. a "Clear filters" action).
- */
-function DebouncedField({
-  value,
-  placeholder,
-  ariaLabel,
-  width,
-  onCommit,
-}: DebouncedFieldProps) {
-  const [draft, setDraft] = useDebouncedDraft(value, onCommit);
-
-  return (
-    <TextField
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      placeholder={placeholder}
-      aria-label={ariaLabel}
-      sx={{ width: { xs: '100%', sm: width }, maxWidth: '100%' }}
-      slotProps={{
-        input: {
-          startAdornment: (
-            <InputAdornment position="start">
-              <SearchIcon
-                sx={(theme) => ({
-                  fontSize: 18,
-                  color: theme.palette.text.tertiary,
-                })}
-              />
-            </InputAdornment>
-          ),
-        },
-      }}
-    />
-  );
-}
+import { Box } from '@mui/material';
+import {
+  DebouncedField,
+  isContractId,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 interface NftFiltersProps {
   collection: string;
@@ -68,6 +22,8 @@ export function NftFilters({
   onCollectionChange,
   onContractIdChange,
 }: NftFiltersProps) {
+  const isContractError = contractId !== '' && !isContractId(contractId);
+
   return (
     <Box
       sx={(theme) => ({
@@ -92,6 +48,10 @@ export function NftFilters({
         ariaLabel="Filter by contract ID"
         width={280}
         onCommit={onContractIdChange}
+        error={isContractError}
+        helperText={
+          isContractError ? 'Requires a full Contract ID (C...)' : undefined
+        }
       />
     </Box>
   );

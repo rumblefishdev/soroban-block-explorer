@@ -27,6 +27,7 @@ export function AccountSummary({
               <IdentifierWithCopy
                 value={account.account_id}
                 type="account"
+                linked={false}
                 truncate={false}
               />
             ),

@@ -1,6 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 
-import { SearchSpinner } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  QueryErrorState,
+  SearchSpinner,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { SearchResultRow } from './SearchResultRow.js';
 import { SearchResultsTabs } from './SearchResultsTabs.js';
@@ -29,6 +32,8 @@ export function SearchResultsView({
     data,
     isFetching,
     isError,
+    error,
+    refetch,
     counts,
     totalCount,
     activeTab,
@@ -67,25 +72,7 @@ export function SearchResultsView({
         }
       >
         {isFetching && !showResults && <SearchSpinner />}
-        {isError && (
-          <Stack spacing={0.5} alignItems="center" sx={{ p: 3 }}>
-            <Typography
-              variant="bodySmMedium"
-              sx={(theme) => ({ color: theme.palette.text.secondary })}
-            >
-              Search request failed
-            </Typography>
-            <Typography
-              variant="bodyXsRegular"
-              sx={(theme) => ({
-                color: theme.palette.text.tertiary,
-                textAlign: 'center',
-              })}
-            >
-              Try again in a moment, or refine your query.
-            </Typography>
-          </Stack>
-        )}
+        {isError && <QueryErrorState error={error} onRetry={refetch} py={4} />}
         {!isFetching &&
           !isError &&
           effectiveQuery.length > 0 &&

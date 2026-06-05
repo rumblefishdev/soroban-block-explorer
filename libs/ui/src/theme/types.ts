@@ -149,6 +149,15 @@ declare module '@mui/material/styles' {
   interface ShapeOptions {
     radius?: typeof radius;
   }
+
+  interface ZIndex {
+    pageGlow: number;
+    gridBackdrop: number;
+    contentMain: number;
+    secondaryNav: number;
+    footer: number;
+    topNav: number;
+  }
 }
 
 declare module '@mui/material/Switch' {

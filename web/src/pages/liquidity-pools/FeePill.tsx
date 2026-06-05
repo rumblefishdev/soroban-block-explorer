@@ -21,7 +21,7 @@ export function FeePill({
   raw: string;
   prefix?: boolean;
 }) {
-  const text = formatPercent(Number(raw), raw);
+  const text = formatPercent(Number(raw));
   return (
     <Box
       component="span"
@@ -31,7 +31,7 @@ export function FeePill({
         gap: 0.5,
         px: 1,
         py: '2px',
-        borderRadius: '8px',
+        borderRadius: `${theme.shape.radius.s}px`,
         backgroundColor: theme.palette.surface.success,
         color: theme.palette.text.success,
       })}

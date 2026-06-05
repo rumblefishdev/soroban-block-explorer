@@ -67,7 +67,7 @@ export function CopyButton({
             letterSpacing: '-0.02em',
             paddingX: 1,
             paddingY: 0.5,
-            borderRadius: '4px',
+            borderRadius: `${theme.shape.radius.xs}px`,
             margin: 0,
           }),
         },

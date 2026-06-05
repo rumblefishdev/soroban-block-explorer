@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::common::cache_control;
-use crate::common::cursor::{Direction, SortOrder, TsIdCursor};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, parse_sort_order};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -73,17 +73,9 @@ pub async fn list_ledgers(
     // The cursor only controls navigation direction rather than overriding order.
     // The client resets to page 1 when toggling order, and re-sends the order param
     // with each subsequent page request.
-    let sort = match order_query.order.as_deref() {
-        None => SortOrder::Desc,
-        Some(s) if s.eq_ignore_ascii_case("asc") => SortOrder::Asc,
-        Some(s) if s.eq_ignore_ascii_case("desc") => SortOrder::Desc,
-        Some(invalid) => {
-            return errors::bad_request_with_details(
-                errors::INVALID_QUERY,
-                format!("invalid sort order '{invalid}', expected 'asc' or 'desc'"),
-                serde_json::json!({ "param": "order", "received": invalid }),
-            );
-        }
+    let sort = match parse_sort_order(order_query.order.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
     };
 
     // Fetch limit+1 rows — the extra peek row drives continuation

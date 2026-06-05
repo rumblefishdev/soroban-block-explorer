@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{ChartDataPoint, PoolListCursor, SharesCursor};
 
@@ -82,7 +82,7 @@ pub(super) async fn fetch_participants(
         Some(c) => (Some(c.shares.clone()), Some(c.account_id)),
         None => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let sql = format!(
         r#"
@@ -243,7 +243,7 @@ pub async fn fetch_pool_list(
         Some(c) => (Some(c.created_at_ledger), Some(c.pool_id_hex.clone())),
         None => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let sql = format!(
         r#"
@@ -349,8 +349,8 @@ pub async fn fetch_pool_list(
             -- cursor predicate when present, and a full pool-table scan
             -- is bounded (current Stellar pubnet ≈ 10⁴ pools).
             AND ($9::varchar IS NULL
-                 OR UPPER(lp.asset_a_code) = $9
-                 OR UPPER(lp.asset_b_code) = $9)
+                 OR lp.asset_a_code ILIKE '%' || $9 || '%'
+                 OR lp.asset_b_code ILIKE '%' || $9 || '%')
         ORDER BY lp.created_at_ledger {order}, lp.pool_id {order}
         LIMIT $1
         "#
@@ -485,7 +485,7 @@ pub async fn fetch_pool_transactions(
         Some(c) => (Some(c.ts), Some(c.id)),
         None => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let sql = format!(
         r#"

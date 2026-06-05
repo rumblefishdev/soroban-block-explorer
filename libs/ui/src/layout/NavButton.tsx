@@ -31,7 +31,7 @@ const activeSx = {
 const hoverSx = {
   '&:hover': {
     backgroundColor: (theme: Theme) => theme.palette.surface.background,
-    borderRadius: '8px',
+    borderRadius: (theme: Theme) => `${theme.shape.radius.s}px`,
     color: (theme: Theme) => theme.palette.text.secondary,
   },
 };

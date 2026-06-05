@@ -1,7 +1,6 @@
 import { Stack } from '@mui/material';
 import type { ListAssetsData } from '@rumblefish/api-types';
 import {
-  type SortDirection,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -19,17 +18,13 @@ type Filters = NonNullable<ListAssetsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function AssetsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter, setSort, clearFilters } =
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
     useCursorPagination({
       filterKeys: ['code', 'type'],
     });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
-  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
-  // `setSort`, not local state — so it survives reload / deep links and
-  // stays paired with the cursor it was generated under.
-  const sortDir = state.sortDir;
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
@@ -40,15 +35,7 @@ export default function AssetsListPage() {
 
   const { data, isLoading, isError, error, refetch } = useAssetsList(
     cursor,
-    queryFilters,
-    sortDir
-  );
-
-  const handleSortChange = useCallback(
-    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
-    // resets the cursor (new ordering = page 1).
-    (id: string, next: SortDirection) => setSort(id, next),
-    [setSort]
+    queryFilters
   );
 
   const rows = data?.data ?? [];
@@ -88,13 +75,7 @@ export default function AssetsListPage() {
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
-        renderTable={(visibleRows) => (
-          <AssetsTable
-            rows={visibleRows}
-            sortDir={sortDir}
-            onSortChange={handleSortChange}
-          />
-        )}
+        renderTable={(visibleRows) => <AssetsTable rows={visibleRows} />}
         hasActiveFilters={hasFilters}
         emptyKind="tokens"
         emptyNoun="assets"

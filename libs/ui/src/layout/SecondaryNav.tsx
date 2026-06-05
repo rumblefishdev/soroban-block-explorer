@@ -46,7 +46,7 @@ export function SecondaryNav({
         backgroundColor: theme.palette.surface.grayMain,
 
         position: 'relative',
-        zIndex: 2,
+        zIndex: theme.zIndex.secondaryNav,
       })}
     >
       <Box

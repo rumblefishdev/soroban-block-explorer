@@ -20,6 +20,16 @@ pub struct AccountsListParams {
     pub filter_with_domain: Option<bool>,
 }
 
+/// Query params for `GET /v1/accounts/{account_id}/transactions`.
+/// `order` controls the sort direction on `created_at` (PG) /
+/// `ledger_sequence` (CH). Default is `desc` (newest-first).
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AccountTxListParams {
+    /// Sort order on transaction time: `asc` | `desc` (default).
+    /// Sticky — re-send on every page alongside `cursor`.
+    pub order: Option<String>,
+}
+
 /// One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
 /// first/last-seen activity window + `home_domain`. Ordered by
 /// `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native

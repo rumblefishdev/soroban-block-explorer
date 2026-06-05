@@ -4,6 +4,8 @@ export type { NavButtonProps, NavButtonSize } from './NavButton.js';
 export { SearchInput } from './SearchInput.js';
 export type { SearchInputProps, SearchInputSize } from './SearchInput.js';
 
+export { isMac, searchShortcutLabel } from './platform.js';
+
 export { TopNav } from './TopNav.js';
 export type { TopNavProps, NetworkStats } from './TopNav.js';
 
