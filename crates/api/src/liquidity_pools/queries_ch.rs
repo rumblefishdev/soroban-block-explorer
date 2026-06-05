@@ -167,11 +167,13 @@ pub async fn fetch_pool_by_id(
                     ON sac_a_row.asset_code = lp.asset_a_code \
                    AND sac_a_row.issuer_id  = lp.asset_a_issuer_id \
                    AND sac_a_row.asset_type = 2 \
+                   AND lp.asset_a_code != '' \
              LEFT JOIN soroban_contracts sac_a ON sac_a.id = sac_a_row.contract_id \
              LEFT JOIN assets sac_b_row \
                     ON sac_b_row.asset_code = lp.asset_b_code \
                    AND sac_b_row.issuer_id  = lp.asset_b_issuer_id \
                    AND sac_b_row.asset_type = 2 \
+                   AND lp.asset_b_code != '' \
              LEFT JOIN soroban_contracts sac_b ON sac_b.id = sac_b_row.contract_id \
              LEFT JOIN ( \
                  SELECT ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue \
