@@ -133,8 +133,9 @@ pub async fn fetch_contract_list(
         qb.push_bind(cursor.id);
     }
 
+    // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
     qb.push(format!(" ORDER BY sc.id {order} LIMIT "));
-    qb.push_bind(params.limit + 1);
+    qb.push_bind(params.limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw.iter().map(map_contract_list_row).collect())

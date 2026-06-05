@@ -1,13 +1,15 @@
 -- ============================================================================
--- ⚠️  CH STATUS (task 0243) — NOT YET MIGRATED. The CH read path for this
---     endpoint is deferred. CH soroban_events stores topics_xdr / data_xdr
---     inline per event, so the live path must ScVal-decode them in Rust
---     (replacing the PG Archive overlay) and page on a 3-component
---     (ledger_sequence, transaction_id, event_index) keyset (multi-event-tx
---     tie-break). It also diverges from the PG folded-appearance + `amount`
---     fold-count model (per-event vs per-appearance). `list_events` stays
---     PG-only until this is designed + landed, so API_DATASOURCE_CONTRACTS=ch
---     must remain OFF.
+-- ✅ CH STATUS (task 0243) — MIGRATED. `list_events` dispatches PG/CH via
+--    `DataSource::for_module(Module::Contracts)`; CH path =
+--    `contracts/queries_ch::fetch_events`. CH `soroban_events` stores the ScVal
+--    payload pre-decoded to JSON at ingest (column names `topics_xdr`/`data_xdr`
+--    are a misnomer; diagnostic-source events are also dropped at ingest), so
+--    the read path just JSON-deserializes inline — no Archive overlay, no
+--    read-time XDR decode. Keyset is 3-component
+--    `(ledger_sequence, transaction_id, event_index)`. Divergence from PG: CH
+--    pages per EVENT (one row → one item, `data.len() <= limit`) vs PG's folded
+--    appearance (expands to many). `EventItem.amount` (vestigial fold-count, not
+--    FE-surfaced) is `1` on CH.
 -- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/events
 -- Purpose:      Paginated list of recent events emitted by a contract.

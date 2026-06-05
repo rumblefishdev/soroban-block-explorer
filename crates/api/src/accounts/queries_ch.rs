@@ -26,10 +26,12 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc};
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, direction_sql, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
-use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
+use super::queries::{
+    AccountBalanceRow, AccountHeaderRow, AccountListRow, AccountTxRow, ResolvedListParams,
+};
 
 /// `asset_type` SMALLINT → canonical label, matching the PG `asset_type_name`
 /// function (`domain::AssetType`, 4 XDR variants). `None` for an out-of-range
@@ -42,6 +44,101 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
         3 => Some("pool_share".to_string()),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// List — GET /v1/accounts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Row, Deserialize)]
+struct AccountListChRow {
+    id: i64,
+    account_id: String,
+    last_seen_ledger: i64,
+    first_seen_ledger: i64,
+    home_domain: Option<String>,
+    xlm_balance: Option<String>,
+}
+
+/// CH equivalent of the PG `queries::fetch_list` (task 0274). Same response
+/// shape + same opaque cursor (`AccountsListCursor{last_seen_ledger, id}` —
+/// both columns exist on CH `accounts`, so the cursor is datasource-agnostic).
+///
+/// Divergences from PG:
+///
+/// - **`FINAL`** on `accounts` (ReplacingMergeTree, versioned by
+///   `last_seen_ledger`) collapses re-ingested account versions to the latest;
+///   the native-balance subquery is `FINAL` for the same reason.
+/// - **Native balance** is the `asset_type = 0` row of
+///   `account_balances_current`, mirroring the PG partial-index join. With
+///   `join_use_nulls = 1` a missing native row decodes as `None` (PG `NULL`)
+///   rather than CH's default `''`.
+/// - **Cursor inlined**, not `.bind()`-ed: the clickhouse 0.15 bound-parameter
+///   path returns 0 rows when `None` is bound into a tuple keyset comparison
+///   (the documented defect that forced the transactions list to inline). The
+///   values are `i64`, so no injection surface.
+///
+/// **Read-cost caveat:** the sort is `(last_seen_ledger, id)` — NOT the
+/// `accounts` primary key (`account_id`) — so CH scans the whole table to
+/// order it, and the `FINAL` + native-balance join widen that. Needs an
+/// operator read/memory smoke on the first page before the prod flag flip,
+/// same as the transactions no-filter list.
+pub async fn fetch_list(
+    client: &clickhouse::Client,
+    params: &ResolvedListParams,
+    sort: SortOrder,
+    direction: Direction,
+) -> Result<Vec<AccountListRow>, clickhouse::error::Error> {
+    let (op, order) = keyset_sql(sort, direction);
+
+    let (cur_ledger, cur_id) = match &params.cursor {
+        Some(c) => (c.last_seen_ledger.to_string(), c.id.to_string()),
+        None => ("NULL".to_string(), "NULL".to_string()),
+    };
+    let domain_filter = if params.with_domain {
+        " AND a.home_domain IS NOT NULL"
+    } else {
+        ""
+    };
+
+    let sql = format!(
+        "SELECT \
+            a.id                AS id, \
+            a.account_id        AS account_id, \
+            a.last_seen_ledger  AS last_seen_ledger, \
+            a.first_seen_ledger AS first_seen_ledger, \
+            a.home_domain       AS home_domain, \
+            toString(abc.balance) AS xlm_balance \
+         FROM accounts a FINAL \
+         LEFT JOIN ( \
+             SELECT account_id, balance \
+             FROM account_balances_current FINAL \
+             WHERE asset_type = 0 \
+         ) abc ON abc.account_id = a.id \
+         WHERE ({cur_ledger} IS NULL \
+                OR (a.last_seen_ledger, a.id) {op} ({cur_ledger}, {cur_id})){domain_filter} \
+         ORDER BY a.last_seen_ledger {order}, a.id {order} \
+         LIMIT ? \
+         SETTINGS join_use_nulls = 1"
+    );
+
+    let rows = client
+        .query(&sql)
+        .bind(params.limit)
+        .fetch_all::<AccountListChRow>()
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| AccountListRow {
+            id: r.id,
+            account_id: r.account_id,
+            xlm_balance: r.xlm_balance,
+            last_seen_ledger: r.last_seen_ledger,
+            first_seen_ledger: r.first_seen_ledger,
+            home_domain: r.home_domain,
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

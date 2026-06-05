@@ -84,11 +84,12 @@ pub async fn list_accounts(
         with_domain: params.filter_with_domain.unwrap_or(false),
     };
 
+    let source = DataSource::for_module(Module::Accounts);
     let mut rows: Vec<AccountListRow> =
-        match fetch_list(&state.db, &resolved, sort, direction).await {
+        match fetch_list_for_source(&state, source, &resolved, sort, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_accounts: {e}");
+                tracing::error!(source = ?source, "DB error in list_accounts: {e}");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -304,6 +305,23 @@ pub async fn list_account_transactions(
 // ---------------------------------------------------------------------------
 // Per-source dispatch helpers
 // ---------------------------------------------------------------------------
+
+async fn fetch_list_for_source(
+    state: &AppState,
+    source: DataSource,
+    params: &ResolvedListParams,
+    sort: SortOrder,
+    direction: Direction,
+) -> Result<Vec<AccountListRow>, AcctFetchError> {
+    match source {
+        DataSource::Pg => fetch_list(&state.db, params, sort, direction)
+            .await
+            .map_err(AcctFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, sort, direction)
+            .await
+            .map_err(AcctFetchError::Ch),
+    }
+}
 
 async fn fetch_account_for_source(
     state: &AppState,

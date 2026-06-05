@@ -20,7 +20,7 @@ function makeAsset(
   overrides: Partial<AssetDetailResponse> = {}
 ): AssetDetailResponse {
   return {
-    id: 1,
+    id: 'native',
     asset_code: 'XLM',
     asset_type: 0,
     asset_type_name: 'native',
