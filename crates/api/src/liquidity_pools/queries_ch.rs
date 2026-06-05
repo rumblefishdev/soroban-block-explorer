@@ -105,10 +105,12 @@ struct PoolDetailChRow {
     asset_a_code: Option<String>,
     asset_a_issuer: Option<String>,
     asset_a_contract_id: Option<String>,
+    asset_a_icon_url: Option<String>,
     asset_b_type: i16,
     asset_b_code: Option<String>,
     asset_b_issuer: Option<String>,
     asset_b_contract_id: Option<String>,
+    asset_b_icon_url: Option<String>,
     fee_bps: i32,
     created_at_ledger: i64,
     participant_count: i64,
@@ -128,23 +130,51 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 4×: outer WHERE, the latest-snapshot subquery, the
-    // participant-count subquery, and the created_at-ledger subquery. The
-    // subqueries are scoped to the literal pool id (NOT correlated to `lp`),
-    // both because detail is single-pool and because CH dislikes correlated
-    // subqueries. Each `?` consumes one positional bind.
+    // `unhex(?)` appears 6×: the `sac` CTE's two leg sources, the
+    // created_at-ledger subquery, the participant-count subquery, the
+    // latest-snapshot subquery, and the outer WHERE. All scoped to the literal
+    // pool id (NOT correlated to `lp`) since detail is single-pool and CH
+    // dislikes correlated subqueries. Each `?` consumes one positional bind, in
+    // appearance order (CTE first).
+    //
+    // SAC mirror + icon_url (task 0263 + 0274 gap #5): the `sac` CTE resolves
+    // `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
+    // deduped by GROUP BY so a leg cannot fan the result out (the inline-join
+    // form did, masked only by the outer LIMIT 1). `contract_id` comes from the
+    // `asset_type = 2` (SAC) row via `soroban_contracts`; `icon_url` from either
+    // the classic (`asset_type = 1`) or SAC row — hence `asset_type IN (1, 2)`,
+    // matching PG's `uidx_assets_classic_asset` predicate. Native legs
+    // (`asset_code = ''`) are excluded from the join (PG parity: NULL code → no
+    // assets match → NULL contract_id + NULL icon_url).
     let row = client
         .query(
-            "SELECT \
+            "WITH sac AS ( \
+                 SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
+                        max(sc.contract_id) AS contract_id, \
+                        max(a.icon_url)     AS icon_url \
+                 FROM assets a \
+                 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
+                 WHERE a.asset_type IN (1, 2) \
+                   AND (a.asset_code, a.issuer_id) IN ( \
+                       SELECT asset_a_code, asset_a_issuer_id FROM liquidity_pools FINAL \
+                        WHERE pool_id = unhex(?) AND asset_a_code != '' \
+                       UNION ALL \
+                       SELECT asset_b_code, asset_b_issuer_id FROM liquidity_pools FINAL \
+                        WHERE pool_id = unhex(?) AND asset_b_code != '') \
+                 GROUP BY a.asset_code, a.issuer_id \
+             ) \
+             SELECT \
                 lower(hex(lp.pool_id))               AS pool_id_hex, \
                 lp.asset_a_type                      AS asset_a_type, \
                 nullIf(lp.asset_a_code, '')          AS asset_a_code, \
                 nullIf(iss_a.account_id, '')         AS asset_a_issuer, \
                 nullIf(sac_a.contract_id, '')        AS asset_a_contract_id, \
+                sac_a.icon_url                       AS asset_a_icon_url, \
                 lp.asset_b_type                      AS asset_b_type, \
                 nullIf(lp.asset_b_code, '')          AS asset_b_code, \
                 nullIf(iss_b.account_id, '')         AS asset_b_issuer, \
                 nullIf(sac_b.contract_id, '')        AS asset_b_contract_id, \
+                sac_b.icon_url                       AS asset_b_icon_url, \
                 lp.fee_bps                           AS fee_bps, \
                 ifNull( \
                     (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots \
@@ -163,18 +193,12 @@ pub async fn fetch_pool_by_id(
              FROM liquidity_pools lp FINAL \
              LEFT JOIN accounts iss_a FINAL ON iss_a.id = lp.asset_a_issuer_id \
              LEFT JOIN accounts iss_b FINAL ON iss_b.id = lp.asset_b_issuer_id \
-             LEFT JOIN assets sac_a_row \
-                    ON sac_a_row.asset_code = lp.asset_a_code \
-                   AND sac_a_row.issuer_id  = lp.asset_a_issuer_id \
-                   AND sac_a_row.asset_type = 2 \
-                   AND lp.asset_a_code != '' \
-             LEFT JOIN soroban_contracts sac_a ON sac_a.id = sac_a_row.contract_id \
-             LEFT JOIN assets sac_b_row \
-                    ON sac_b_row.asset_code = lp.asset_b_code \
-                   AND sac_b_row.issuer_id  = lp.asset_b_issuer_id \
-                   AND sac_b_row.asset_type = 2 \
-                   AND lp.asset_b_code != '' \
-             LEFT JOIN soroban_contracts sac_b ON sac_b.id = sac_b_row.contract_id \
+             LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
+                                AND sac_a.issuer_id = lp.asset_a_issuer_id \
+                                AND lp.asset_a_code != '' \
+             LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
+                                AND sac_b.issuer_id = lp.asset_b_issuer_id \
+                                AND lp.asset_b_code != '' \
              LEFT JOIN ( \
                  SELECT ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue \
                  FROM liquidity_pool_snapshots FINAL \
@@ -190,6 +214,8 @@ pub async fn fetch_pool_by_id(
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
+        .bind(pool_id_hex)
+        .bind(pool_id_hex)
         .fetch_optional::<PoolDetailChRow>()
         .await?;
 
@@ -200,11 +226,13 @@ pub async fn fetch_pool_by_id(
         asset_a_code: r.asset_a_code,
         asset_a_issuer: r.asset_a_issuer,
         asset_a_contract_id: r.asset_a_contract_id,
+        asset_a_icon_url: r.asset_a_icon_url,
         asset_b_type: r.asset_b_type,
         asset_b_type_name: asset_type_name(r.asset_b_type),
         asset_b_code: r.asset_b_code,
         asset_b_issuer: r.asset_b_issuer,
         asset_b_contract_id: r.asset_b_contract_id,
+        asset_b_icon_url: r.asset_b_icon_url,
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
@@ -570,10 +598,12 @@ struct PoolListChRow {
     asset_a_code: Option<String>,
     asset_a_issuer: Option<String>,
     asset_a_contract_id: Option<String>,
+    asset_a_icon_url: Option<String>,
     asset_b_type: i16,
     asset_b_code: Option<String>,
     asset_b_issuer: Option<String>,
     asset_b_contract_id: Option<String>,
+    asset_b_icon_url: Option<String>,
     fee_bps: i32,
     created_at_ledger: i64,
     /// `last_updated_ledger` — the list sort/cursor key (see fn doc).
@@ -724,9 +754,11 @@ pub async fn fetch_pool_list(
          ), \
          sac AS ( \
              SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
-                    any(sc.contract_id) AS contract_id \
-             FROM assets a JOIN soroban_contracts sc ON sc.id = a.contract_id \
-             WHERE a.asset_type = 2 \
+                    max(sc.contract_id) AS contract_id, \
+                    max(a.icon_url)     AS icon_url \
+             FROM assets a \
+             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
+             WHERE a.asset_type IN (1, 2) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \
@@ -738,10 +770,12 @@ pub async fn fetch_pool_list(
              nullIf(lp.asset_a_code, '')                     AS asset_a_code, \
              nullIf(iss_a.account_id, '')                    AS asset_a_issuer, \
              nullIf(sac_a.contract_id, '')                   AS asset_a_contract_id, \
+             sac_a.icon_url                                  AS asset_a_icon_url, \
              lp.asset_b_type                                 AS asset_b_type, \
              nullIf(lp.asset_b_code, '')                     AS asset_b_code, \
              nullIf(iss_b.account_id, '')                    AS asset_b_issuer, \
              nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
+             sac_b.icon_url                                  AS asset_b_icon_url, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(s.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.last_updated_ledger                          AS cursor_ledger, \
@@ -808,11 +842,13 @@ pub async fn fetch_pool_list(
             asset_a_code: r.asset_a_code,
             asset_a_issuer: r.asset_a_issuer,
             asset_a_contract_id: r.asset_a_contract_id,
+            asset_a_icon_url: r.asset_a_icon_url,
             asset_b_type: r.asset_b_type,
             asset_b_type_name: asset_type_name(r.asset_b_type),
             asset_b_code: r.asset_b_code,
             asset_b_issuer: r.asset_b_issuer,
             asset_b_contract_id: r.asset_b_contract_id,
+            asset_b_icon_url: r.asset_b_icon_url,
             fee_bps: r.fee_bps,
             fee_percent: fee_percent_str(r.fee_bps),
             created_at_ledger: r.created_at_ledger,
