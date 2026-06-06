@@ -27,7 +27,8 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc};
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, direction_sql};
+use crate::transactions::dto::TxListCursor;
 
 use super::dto::{ChartDataPoint, SharesCursor};
 use super::queries::{ParticipantRow, PoolRow, PoolTxRow, ResolvedPoolListParams};
@@ -396,37 +397,42 @@ struct PoolTxChRow {
 ///   into a seek and CH auto-routes this exact query through it. Until that
 ///   projection is materialized, `API_DATASOURCE_LIQUIDITY_POOLS` MUST stay
 ///   off (the other four LP endpoints are pool_id-PK seeks and are cheap).
-/// - The PG cursor keys on `(created_at, transaction_id)`. CH
-///   `operations_appearances` has no `created_at`; since `ledgers.closed_at` is
-///   a bijection with `ledger_sequence`, the cursor's `created_at` is mapped
-///   back to its ledger via `fromUnixTimestamp64Milli` and the keyset runs on
-///   `(ledger_sequence, transaction_id)`. `transaction_id` == `transactions.id`
-///   (the FK), so the cursor `id` carries straight through.
+/// - The cursor is the datasource-tagged [`TxListCursor`] (shared with the
+///   global transactions list). The CH variant carries `ledger_sequence` +
+///   `tiebreak` (= `transaction_id`) directly, so the keyset runs on
+///   `(ledger_sequence, transaction_id)` with NO `closed_at` round-trip. An
+///   earlier revision reconstructed the boundary ledger from the cursor's
+///   `created_at` via `closed_at = fromUnixTimestamp64Milli(...) LIMIT 1`, but
+///   `ledgers.closed_at` is NOT unique (Stellar close times are second-grained,
+///   so same-second ledgers share it) → the `LIMIT 1` picked an arbitrary
+///   ledger and dropped/duplicated a page boundary. Carrying the ledger in the
+///   cursor removes that lossy step entirely. `transaction_id` == `transactions.id`.
 pub async fn fetch_pool_transactions(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     limit: i64,
-    cursor: Option<&TsIdCursor>,
+    cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<PoolTxRow>, clickhouse::error::Error> {
     let (op, order) = direction_sql(direction);
 
-    // Keyset: map the cursor's `created_at` (ms) back to its ledger sequence
-    // (closed_at ↔ ledger_sequence bijection), then compare on
-    // `(ledger_sequence, transaction_id)`. Bounds inlined (i64 ms + i64 id, no
-    // injection) — same rationale as the other CH list paths.
+    // Keyset on `(ledger_sequence, transaction_id)`, expanded to scalar
+    // comparisons. Both bounds are i64 (no injection), inlined like the other CH
+    // list paths. A `Pg`-tagged cursor never reaches here (the handler rejects a
+    // cross-datasource cursor via `cursor_matches_source`); treat it as no
+    // keyset (first page) defensively.
     let keyset = match cursor {
-        Some(c) => format!(
-            "AND (oa.ledger_sequence {op} \
-                  (SELECT sequence FROM ledgers WHERE closed_at = fromUnixTimestamp64Milli({ms}) LIMIT 1) \
-               OR (oa.ledger_sequence = \
-                   (SELECT sequence FROM ledgers WHERE closed_at = fromUnixTimestamp64Milli({ms}) LIMIT 1) \
-                   AND oa.transaction_id {op} {id}))",
+        Some(TxListCursor::Ch {
+            ledger_sequence,
+            tiebreak,
+        }) => format!(
+            "AND (oa.ledger_sequence {op} {ls} \
+               OR (oa.ledger_sequence = {ls} AND oa.transaction_id {op} {tb}))",
             op = op,
-            ms = c.ts.timestamp_millis(),
-            id = c.id,
+            ls = ledger_sequence,
+            tb = tiebreak,
         ),
-        None => String::new(),
+        _ => String::new(),
     };
 
     // limit*4 driver headroom (PG canonical pattern): a pool tx can touch the

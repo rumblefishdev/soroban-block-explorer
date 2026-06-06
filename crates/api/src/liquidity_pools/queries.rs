@@ -491,12 +491,15 @@ pub async fn fetch_pool_transactions(
     pool: &PgPool,
     pool_id_hex: &str,
     limit: i64,
-    cursor: Option<&crate::common::cursor::TsIdCursor>,
+    cursor: Option<&crate::transactions::dto::TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<PoolTxRow>, sqlx::Error> {
+    // PG keys on `(created_at, transaction_id)` — the `Pg` cursor variant. A
+    // `Ch`-tagged cursor never reaches here (the handler rejects a
+    // cross-datasource cursor); treat it as no cursor (first page) defensively.
     let (cur_ts, cur_id): (Option<DateTime<Utc>>, Option<i64>) = match cursor {
-        Some(c) => (Some(c.ts), Some(c.id)),
-        None => (None, None),
+        Some(crate::transactions::dto::TxListCursor::Pg { ts, id }) => (Some(*ts), Some(*id)),
+        _ => (None, None),
     };
     let (op, order) = keyset_sql_desc(direction);
 

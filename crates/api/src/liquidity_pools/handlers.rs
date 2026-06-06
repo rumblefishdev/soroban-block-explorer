@@ -9,24 +9,24 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::cursor;
-use crate::common::cursor::TsIdCursor;
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
-use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
+use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
     PoolListParams, PoolTransactionItem, SharesCursor,
 };
 use super::queries::{
-    PoolRow, ResolvedPoolListParams, fetch_participants, fetch_pool_by_id, fetch_pool_chart,
-    fetch_pool_list, fetch_pool_transactions, pool_exists,
+    PoolRow, PoolTxRow, ResolvedPoolListParams, fetch_participants, fetch_pool_by_id,
+    fetch_pool_chart, fetch_pool_list, fetch_pool_transactions, pool_exists,
 };
 use super::queries_ch;
 
@@ -415,6 +415,32 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     resp
 }
 
+/// `true` when the cursor's datasource tag matches the active backend.
+/// A cross-tagged cursor (e.g. a PG cursor after a flip to CH) carries keyset
+/// values meaningless under the other backend → reject as `invalid_cursor`.
+fn pool_tx_cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
+}
+
+/// Build the next/prev cursor from a boundary row, tagged for the active
+/// datasource: PG keys on `(created_at, id)`, CH on
+/// `(ledger_sequence, transaction_id)` — `transaction_id` == `transactions.id`.
+fn pool_tx_cursor_for(source: DataSource, r: &PoolTxRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.id,
+        },
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/liquidity-pools/{pool_id}/transactions",
@@ -439,7 +465,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
 pub async fn list_pool_transactions(
     State(state): State<AppState>,
     Path(pool_id): Path<String>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<TxListCursor>,
 ) -> Response {
     let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
         Ok(hex) => hex,
@@ -447,6 +473,17 @@ pub async fn list_pool_transactions(
     };
 
     let source = DataSource::for_module(Module::LiquidityPools);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor
+    // replayed after a flag flip to CH): its keyset values are meaningless
+    // under the active backend, so fail with `invalid_cursor` rather than
+    // silently mis-paginating (ADR 0008). Mirrors `transactions::list`.
+    if let Some(cursor) = pagination.cursor.as_ref()
+        && !pool_tx_cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
     let exists = match source {
         DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
             .await
@@ -492,13 +529,14 @@ pub async fn list_pool_transactions(
         }
     };
 
-    let page = finalize_ts_id_page(
+    // Cursor payload differs by datasource (PG keys on `(created_at, id)`;
+    // CH on `(ledger_sequence, transaction_id)`) but stays opaque on the wire.
+    let page = finalize_page(
         &mut rows,
         pagination.limit,
         pagination.direction,
         pagination.has_predecessor(),
-        |r| r.created_at,
-        |r| r.id,
+        |dir, r| cursor::encode(&pool_tx_cursor_for(source, r), dir),
     );
     let data: Vec<PoolTransactionItem> = rows
         .into_iter()
