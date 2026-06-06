@@ -189,7 +189,7 @@ pub async fn fetch_pool_by_id(
                 toString(s.tvl)                      AS tvl, \
                 toString(s.volume)                   AS volume, \
                 toString(s.fee_revenue)              AS fee_revenue, \
-                toUnixTimestamp64Milli(l.closed_at)  AS latest_snapshot_at_ms \
+                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN accounts iss_a FINAL ON iss_a.id = lp.asset_a_issuer_id \
              LEFT JOIN accounts iss_b FINAL ON iss_b.id = lp.asset_b_issuer_id \
@@ -200,7 +200,11 @@ pub async fn fetch_pool_by_id(
                                 AND sac_b.issuer_id = lp.asset_b_issuer_id \
                                 AND lp.asset_b_code != '' \
              LEFT JOIN ( \
-                 SELECT ledger_sequence, reserve_a, reserve_b, total_shares, tvl, volume, fee_revenue \
+                 SELECT toNullable(ledger_sequence) AS ledger_sequence, \
+                        toNullable(reserve_a)       AS reserve_a, \
+                        toNullable(reserve_b)       AS reserve_b, \
+                        toNullable(total_shares)    AS total_shares, \
+                        tvl, volume, fee_revenue \
                  FROM liquidity_pool_snapshots FINAL \
                  WHERE pool_id = unhex(?) \
                  ORDER BY ledger_sequence DESC \
@@ -787,8 +791,7 @@ pub async fn fetch_pool_list(
              toString(s.tvl)                                 AS tvl, \
              toString(s.volume)                              AS volume, \
              toString(s.fee_revenue)                         AS fee_revenue, \
-             if(s.latest_ledger_sequence IS NULL, NULL, \
-                toUnixTimestamp64Milli(l_snap.closed_at))    AS latest_snapshot_at_ms \
+             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
