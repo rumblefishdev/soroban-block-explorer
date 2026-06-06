@@ -300,7 +300,9 @@ pub async fn fetch_invocation_appearances(
     qb.push(format!(
         " ORDER BY sia.created_at {order}, sia.transaction_id {order} LIMIT "
     ));
-    qb.push_bind(limit + 1);
+    // `limit` is the handler's `fetch_limit()` (already the peek `+1`) — bind
+    // raw, same convention as the CH paths + this branch's other lists.
+    qb.push_bind(limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw
@@ -359,7 +361,9 @@ pub async fn fetch_event_appearances(
     qb.push(format!(
         " ORDER BY sea.created_at {order}, sea.transaction_id {order} LIMIT "
     ));
-    qb.push_bind(limit + 1);
+    // `limit` is the handler's `fetch_limit()` (already the peek `+1`) — bind
+    // raw, same convention as the CH paths + this branch's other lists.
+    qb.push_bind(limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw
