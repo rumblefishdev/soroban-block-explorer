@@ -27,7 +27,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{fetch_tx_list_aggregates, millis_to_utc};
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 use super::dto::{ChartDataPoint, SharesCursor};
@@ -296,7 +296,7 @@ pub async fn fetch_participants(
     limit: i64,
     direction: Direction,
 ) -> Result<Vec<ParticipantRow>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Keyset expanded out of the natural `(shares, account_id) <op> (?, ?)`
     // tuple form on purpose: a Decimal128 inside a CH tuple comparison is the
@@ -414,7 +414,7 @@ pub async fn fetch_pool_transactions(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<PoolTxRow>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Keyset on `(ledger_sequence, transaction_id)`, expanded to scalar
     // comparisons. Both bounds are i64 (no injection), inlined like the other CH
@@ -663,7 +663,7 @@ pub async fn fetch_pool_list(
     params: &ResolvedPoolListParams,
     direction: Direction,
 ) -> Result<Vec<PoolRow>, clickhouse::error::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Keyset on `(last_updated_ledger, pool_id)`, expanded to scalar
     // comparisons. The cursor's `created_at_ledger` slot carries
