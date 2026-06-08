@@ -131,12 +131,23 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 6×: the `sac` CTE's two leg sources, the
-    // created_at-ledger subquery, the participant-count subquery, the
-    // latest-snapshot subquery, and the outer WHERE. All scoped to the literal
-    // pool id (NOT correlated to `lp`) since detail is single-pool and CH
-    // dislikes correlated subqueries. Each `?` consumes one positional bind, in
-    // appearance order (CTE first).
+    // `unhex(?)` appears 5×: the `legs` CTE, the created_at-ledger subquery, the
+    // participant-count subquery, the latest-snapshot subquery, and the outer
+    // WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
+    // detail is single-pool and CH dislikes correlated subqueries. Each `?`
+    // consumes one positional bind; all are the same value, so order is moot.
+    //
+    // `legs` resolves the pool's two `(code, issuer_id)` pairs once; `iss` and
+    // `sac` both fan out from it.
+    //
+    // **Issuer resolution is a restricted `iss` CTE, NOT `accounts FINAL`
+    // joins.** `accounts` is `ORDER BY (account_id)`, so the surrogate `id` is a
+    // non-PK reverse lookup; a plain `LEFT JOIN accounts FINAL` builds the whole
+    // 14M-row table into the hash — and detail does it for BOTH legs, blowing
+    // the 3.73 GiB per-query cap (box-confirmed `Code 241`). Restricting to the
+    // pool's ≤2 issuer ids + `GROUP BY id` (no FINAL — account_id is stable
+    // across RMT versions, `any()` is safe) scans the id column but builds a
+    // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
     //
     // SAC mirror + icon_url (task 0263 + 0274 gap #5): the `sac` CTE resolves
     // `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
@@ -149,7 +160,17 @@ pub async fn fetch_pool_by_id(
     // assets match → NULL contract_id + NULL icon_url).
     let row = client
         .query(
-            "WITH sac AS ( \
+            "WITH legs AS ( \
+                 SELECT asset_a_code, asset_a_issuer_id, asset_b_code, asset_b_issuer_id \
+                 FROM liquidity_pools FINAL WHERE pool_id = unhex(?) \
+             ), \
+             iss AS ( \
+                 SELECT id, any(account_id) AS account_id FROM accounts \
+                 WHERE id IN (SELECT asset_a_issuer_id FROM legs WHERE asset_a_issuer_id != 0 \
+                              UNION ALL SELECT asset_b_issuer_id FROM legs WHERE asset_b_issuer_id != 0) \
+                 GROUP BY id \
+             ), \
+             sac AS ( \
                  SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
                         max(sc.contract_id) AS contract_id, \
                         max(a.icon_url)     AS icon_url \
@@ -157,11 +178,9 @@ pub async fn fetch_pool_by_id(
                  LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
                  WHERE a.asset_type IN (1, 2) \
                    AND (a.asset_code, a.issuer_id) IN ( \
-                       SELECT asset_a_code, asset_a_issuer_id FROM liquidity_pools FINAL \
-                        WHERE pool_id = unhex(?) AND asset_a_code != '' \
+                       SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
                        UNION ALL \
-                       SELECT asset_b_code, asset_b_issuer_id FROM liquidity_pools FINAL \
-                        WHERE pool_id = unhex(?) AND asset_b_code != '') \
+                       SELECT asset_b_code, asset_b_issuer_id FROM legs WHERE asset_b_code != '') \
                  GROUP BY a.asset_code, a.issuer_id \
              ) \
              SELECT \
@@ -192,8 +211,8 @@ pub async fn fetch_pool_by_id(
                 toString(s.fee_revenue)              AS fee_revenue, \
                 nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
              FROM liquidity_pools lp FINAL \
-             LEFT JOIN accounts iss_a FINAL ON iss_a.id = lp.asset_a_issuer_id \
-             LEFT JOIN accounts iss_b FINAL ON iss_b.id = lp.asset_b_issuer_id \
+             LEFT JOIN iss iss_a ON iss_a.id = lp.asset_a_issuer_id \
+             LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
              LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
                                 AND sac_a.issuer_id = lp.asset_a_issuer_id \
                                 AND lp.asset_a_code != '' \
@@ -215,7 +234,6 @@ pub async fn fetch_pool_by_id(
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
         )
-        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
