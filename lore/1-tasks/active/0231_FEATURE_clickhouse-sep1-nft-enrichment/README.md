@@ -88,6 +88,12 @@ dedicated branch (`feat/0231_clickhouse-sep1-nft-enrichment`). Fetchers
 (`Sep1Fetcher`, `NftTokenUriFetcher`) reused verbatim; only the CH write path is
 new.
 
+**Approach decided (B): the whole write path was converted PG → CH _in place_,
+not added alongside.** Postgres is being retired (ADR 0047), so there is a single
+CH variant — `enrich_*` writes the side tables, the worker + the batch runner both
+call it. No `ch_*`-suffixed parallel modules, no datasource flag. (This supersedes
+an earlier draft that kept a separate `ch_sep1`/`ch_nft` drain alongside PG.)
+
 **Done (local; not yet committed/pushed — no-commit directive):**
 
 - **Step 1** — `asset_enrichment` / `nft_enrichment` side tables in `init.sql`
@@ -95,12 +101,20 @@ new.
 - **Step 2** — storage layer: `AssetEnrichmentRow` / `NftEnrichmentRow`
   (`db-clickhouse/persist/rows.rs`), `insert_*` helpers (`persist/enrichment.rs`),
   column-order pin tests.
-- **Step 3** — batch CH drain `enrich --datasource clickhouse {sep1-assets |
-nft-metadata | status}` (`backfill-enrichment-runner/src/{ch_sep1,ch_nft}.rs`);
-  reuses the shared resolvers; length caps relaxed for CH (`Sep1Caps`/`NftCaps`).
+- **Step 3** — write path PG → CH in place (see step 3 below): `enrich_*` now
+  take a `clickhouse::Client` + the composite key and INSERT the side tables;
+  caps loosened inline for CH; shared `EnrichmentMessage` wire type.
+- **Step 6 (most of it)** — live wiring: `enrichment-worker` repointed to the
+  mTLS CH client + the shared composite wire; the indexer producer's SQS wire
+  helpers carry the composite key. **Remaining:** un-stub the producer _lookup_
+  (which keys lack a side-table row).
+- **Batch runner** — rewritten CH-only (`enrich {sep1-assets | nft-metadata |
+status}`), keyset candidate stream + semaphore fan-out calling `enrich_*`;
+  functionally exercised on a live local CH.
 
-**Next:** Step 4 (read-path join — integrates with task 0243) → Step 6 (live
-wiring) → Step 8 (drop `assets.icon_url`). Full checklist below.
+**Next:** Step 4 (read-path join — integrates with task 0243) → Step 5 (smoke)
+→ producer lookup un-stub (rest of Step 6) → Step 7 (prod drain) → Step 8 (drop
+dead columns) → Step 9 (`async_insert`). Full checklist below.
 
 ## The core problem (one line)
 
@@ -168,7 +182,7 @@ two writers compose; the clobber is a CH whole-row-replace artefact.)
 | 5   | Enrichment columns already on `assets`/`nfts`                               | **Single owner per value.** The indexer's `assets.{name,icon_url}` + `nfts.{name,media_url,collection_name}` are **always-`None` placeholders** (off-chain data it can't derive) → dropped (step 8). Soroban token name (the one on-chain name) already lives in `soroban_contracts.name`; native name is an API constant; everything else is enrichment-only in the side tables. No column in two tables. |
 | 6   | Add to `init.sql`                                                           | **Migration** (prod CH is live) + `init.sql` mirror.                                                                                                                                                                                                                                                                                                                                                       |
 | 7   | "Does not touch `crates/api`"                                               | **Touches the read path** — `assets/queries_ch.rs` `ASSET_CH_SELECT` gains the enrichment join (task 0243 integration).                                                                                                                                                                                                                                                                                    |
-| 8   | Three `backfill-runner enrichment-*` subcommands as the primary path        | Primary = the **live SQS Lambda**; the batch CLI (`backfill-enrichment-runner` CH mode) is the secondary/operator path.                                                                                                                                                                                                                                                                                    |
+| 8   | Three `backfill-runner enrichment-*` subcommands as the primary path        | Primary = the **live SQS Lambda**; the CH-only batch CLI (`backfill-enrichment-runner`) is the secondary/operator path.                                                                                                                                                                                                                                                                                    |
 
 ## Implementation steps (in order)
 
@@ -180,19 +194,27 @@ two writers compose; the clobber is a CH whole-row-replace artefact.)
    (`persist/rows.rs`) + `insert_asset_enrichment` / `insert_nft_enrichment`
    (`persist/enrichment.rs`, insert-only, `version` = ms) + column-order pin tests
    (`tests_cross.rs`, 21 green). `cargo build -p db-clickhouse` clean.
-3. ✅ **DONE (sep1) — Write path (batch).** `backfill-enrichment-runner
---datasource clickhouse sep1-assets` (`src/ch_sep1.rs`). Candidate =
-   `assets a FINAL LEFT JOIN accounts iss … WHERE asset_type IN (1,2) AND (key)
-NOT IN (SELECT key FROM asset_enrichment)` (`--force-retry` drops the NOT IN),
-   keyset-paginated over the 4-tuple. Per row: fetch (shared `Sep1Fetcher`),
-   `resolve_currency_outcome` / `permanent_fail_outcome` (shared resolver),
-   store the outcome **as-is** (incl. the `''` sentinel), `version = now_ms`,
-   `insert_asset_enrichment`. Verified on live CH (candidate → permanent-fail →
-   `''` sentinel row written; row-existence skips re-processing). **Self-contained
-   CLI — no Lambda/SQS.** `nft-metadata` (`src/ch_nft.rs`, reuses
-   `nft_token_uri::extract_columns`) and CH `status` (coverage counts) also wired
-   - verified. Remaining: concurrency (currently sequential per-row) — optional
-     optimisation.
+3. ✅ **DONE — Write path PG → CH, _in place_.** The shared
+   `enrich_asset_from_sep1` / `enrich_nft_token_uri` (`enrichment-shared`) were
+   edited in place — Postgres is retired (ADR 0047), so no PG variant survives and
+   there are no `ch_*`-suffixed modules. They now take a `clickhouse::Client` + the
+   composite key (no CH surrogate `id`), look up the issuer `home_domain` /
+   contract StrKey on CH, run the shared fetcher + resolver, and INSERT the side
+   table via `insert_*` (`version = now_ms`), storing the outcome **as-is** (incl.
+   the `''` sentinel). `EnrichError::Database` wraps `clickhouse::error`. Both
+   callers go through these:
+
+   - **Batch runner** (`backfill-enrichment-runner`, CH-only): `enrich
+{sep1-assets | nft-metadata | status}`; candidate = `(key) NOT IN (SELECT key
+FROM *_enrichment)` (`--force-retry` drops it), keyset-paginated over the key
+     tuple, `Semaphore` fan-out calling `enrich_*`. The old `ch_sep1.rs`/`ch_nft.rs`
+     parallel drains + the `--datasource` flag are gone. Verified on a live local
+     CH (`status` + `sep1-assets`).
+   - **Live worker** — same `enrich_*`, see step 6.
+
+   Caps were loosened inline for CH (`Nullable(String)` is unbounded), and the
+   shared `EnrichmentMessage` (composite key) is the producer↔worker wire contract.
+
 4. **Read path (task 0243 integration — AFTER the enrichment scope lands).**
    `ASSET_CH_SELECT` (already joins `soroban_contracts sc`): asset **icon** =
    `NULLIF(ae.icon_url,'')`; asset **name** =
@@ -203,12 +225,16 @@ NOT IN (SELECT key FROM asset_enrichment)` (`--force-retry` drops the NOT IN),
    metadata). api-types unchanged.
 5. **Integration smoke** — `#[ignore]` tests via the batch path (USDC TOML + a
    known NFT collection); verify sentinel + priority + clear-on-refresh.
-6. **Wire the LIVE path** (separate step — do **before going live**; NOT needed
-   for the batch path / tests). Un-stub the indexer SQS publish
-   (`indexer/src/handler/enrichment_publish.rs`); repoint the `enrichment-worker`
-   Lambda PG → CH (build the mTLS client like `crates/indexer/src/main.rs`, call
-   the `insert_*` helpers with `version = now_ms` instead of the PG `UPDATE`;
-   reuse the fetchers; keep sentinel + priority).
+6. **Wire the LIVE path.** ✅ **DONE (code):** `enrichment-worker` repointed PG →
+   CH — builds the mTLS client via `db_clickhouse::mtls::client_from_lambda_env`
+   (same as `crates/indexer/src/main.rs`), decodes the shared composite
+   `EnrichmentMessage`, calls the converted `enrich_*` (which INSERT the side
+   tables). The indexer producer's SQS wire helpers
+   (`indexer/src/handler/enrichment_publish.rs`) now carry the composite key.
+   **Remaining (still stubbed):** un-stub the producer _lookup_ — the CH query that
+   selects which freshly-extracted keys lack a `*_enrichment` row, feeding the
+   (already composite-shaped) publish helpers. Plus deploy config: the worker
+   Lambda needs `MTLS_SECRET_NAME` / `CH_DOMAIN` env (CDK).
 7. **Production drain** (prod CH ready — 0228/0241 done) — run live and/or batch
    until coverage stabilises; report SEP-1/NFT NULL ratios + RPC quota;
    **measure the read-join cost on the 1M+ `nfts`** under the read quota
@@ -233,14 +259,32 @@ collection_name}` — off-chain data the indexer can never derive.
    the asset read sources). Best split to its own follow-up task (touches the
    indexer write path, not just enrichment).
 
+9. **Perf — enable `async_insert` on the enrichment clients** (independent
+   optimisation; NOT yet done). `enrich_*` does one INSERT per key (per-SQS-message
+   model), so the live worker + the batch runner emit many tiny inserts → many
+   small CH parts → merge pressure (and, at the extreme, "too many parts"). Set on
+   both clients (worker mTLS client + runner client):
+
+   ```rust
+   client
+       .with_option("async_insert", "1")
+       .with_option("wait_for_async_insert", "1")
+   ```
+
+   CH then buffers the small inserts server-side and flushes them as one larger
+   part. `wait_for_async_insert=1` is **required** for the worker: the SQS ack must
+   happen only after a durable write (with `=0`, ack + buffer-loss-on-crash =
+   dropped enrichment). Only affects INSERTs; the candidate SELECTs are untouched.
+
 ## Acceptance Criteria
 
 - [ ] `asset_enrichment` / `nft_enrichment` created via **migration** (+ init.sql
       mirror); column order pinned in tests.
-- [ ] `ch_enrichment_queue` **NOT** created — SQS is the queue.
-- [ ] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
-- [ ] Live write path wired (indexer SQS publish un-stubbed + worker repointed
-      PG→CH) and/or the batch CH mode.
+- [x] `ch_enrichment_queue` **NOT** created — SQS is the queue.
+- [x] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
+- [~] Live write path wired: worker repointed PG→CH + producer SQS wire is
+  composite-shaped (done); **producer lookup un-stub still pending**. Batch CLI
+  (CH-only) done.
 - [ ] Read: asset name = `COALESCE(NULLIF(ae.name,''), sc.name, native-const)`
       (enrichment / `soroban_contracts` / API const, disjoint by asset_type;
       contract-StrKey fallback); asset icon = `NULLIF(ae.icon_url,'')`; nft meta =
@@ -271,9 +315,29 @@ collection_name}` — off-chain data the indexer can never derive.
   resolver's `''` "tried-nothing" marker (PG parity); the read neutralises it
   with `NULLIF`. Row-existence (`NOT IN`) drives the don't-re-process candidate
   filter, independent of the value.
-- **Length caps relaxed for CH** (decision, karolkow): the shared resolvers are
-  parameterised — `Sep1Caps::PG`/`NftCaps::PG` keep the VARCHAR widths (256/1024)
-  for the live PG worker; `…::CH` are generous (name/collection ~4096, URL ~8192)
-  so a long-but-valid value is stored on CH's unbounded `String`, not sentinel'd.
-  `https://`-only + `javascript:`/`data:` rejection (XSS/mixed-content) is kept
-  for both.
+- **Length caps relaxed for CH** (decision, karolkow): the shared resolvers'
+  length caps were loosened **inline** (name/collection 4096, URL/media 8192) —
+  CH columns are unbounded `Nullable(String)`, so a long-but-valid value is
+  stored, not sentinel'd. (An earlier `Sep1Caps`/`NftCaps` PG/CH preset split was
+  reverted — PG is retiring, a single generous cap suffices.) `https://`-only +
+  `javascript:`/`data:` rejection (XSS/mixed-content) kept.
+- **Write-conflict model = simplest "latest-wins", whole-row atomic** (decision,
+  karolkow). The live worker always enriches + INSERTs on every message (no
+  pre-check); each fetch is atomic (one source → all columns get real/`''`; a
+  transient/timeout fails the WHOLE fetch → no row → retry); `version = now_ms`,
+  newest write wins. **Analysed but DEFERRED to future** (kept simple for now):
+  - _Sentinel/empty re-fetch can wipe a real value_ on `--force-retry` (a
+    transient-disguised-as-permanent 404). Fixes parked: per-column
+    last-non-NULL engine (CoalescingMergeTree) / read-time `argMax` / a
+    version-floor trick. Refresh is rare today → low risk.
+  - _Per-field independent outcomes_ (real + sentinel + NULL-pending from
+    different sources) would need `''` (done-empty) vs `NULL` (pending-retry) +
+    per-field retry, OR a separate table per source. Not needed while all fields
+    come from one atomic fetch.
+  - _Worker has no pre-check + producer lookup stubbed + SQS at-least-once_ →
+    redundant third-party fetches possible; add a refresh-intent flag to the
+    message before going live at scale.
+  - _Sentinels never auto-retry_ (`NOT IN` skips them forever) → a momentarily-
+    broken / late-published source stays empty; a sentinel-TTL re-enroll fixes it.
+  - _`now_ms().unwrap_or(0)` + `DateTime64(3)` version_ — fine under latest-wins;
+    revisit only if a version-priority scheme is ever adopted.
