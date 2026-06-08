@@ -2,7 +2,7 @@
 name = "backfill-enrichment-runner"
 version = "0.1.0"
 edition = "2024"
-description = "Local CLI that drains pre-existing un-enriched DB rows by calling the same enrichment-shared::enrich_and_persist::* functions used by the live SQS-driven enrichment-worker Lambda. Single `enrich` binary with one subcommand per kind (`sep1-assets`/`sep1_assets`, `nft-metadata`, `status`), mirroring backfill-runner's shape."
+description = "Local CLI that drains un-enriched ClickHouse rows into the enrichment side tables (asset_enrichment / nft_enrichment, ADR 0048) by calling the same enrichment-shared::enrich_and_persist::* functions used by the live SQS-driven enrichment-worker Lambda. Single `enrich` binary with one subcommand per kind (`sep1-assets`, `nft-metadata`, `status`)."
 
 [[bin]]
 name = "enrich"
@@ -10,10 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 enrichment-shared = { path = "../enrichment-shared" }
-db = { path = "../db" }
+db-clickhouse = { path = "../db-clickhouse" }
+clickhouse = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal", "time"] }
-sqlx = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-chrono = { workspace = true }

@@ -24,46 +24,16 @@
 use std::sync::Arc;
 
 use aws_lambda_events::event::sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage};
-use enrichment_shared::enrich_and_persist::EnrichError;
 use enrichment_shared::enrich_and_persist::nft_token_uri::enrich_nft_token_uri;
 use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
+use enrichment_shared::enrich_and_persist::{EnrichError, EnrichmentMessage};
 use enrichment_shared::nft_token_uri::NftTokenUriFetcher;
 use enrichment_shared::sep1::Sep1Fetcher;
 use lambda_runtime::{Error, LambdaEvent, service_fn};
-use serde::Deserialize;
-use sqlx::PgPool;
 use tracing::{error, info, instrument};
 
-/// Per-message payload published by the indexer (Galaxy) Lambda.
-///
-/// Internally tagged on `kind` so each variant carries exactly the
-/// fields it needs. Adding a future kind is one variant + one match
-/// arm — the compiler enforces coverage. Unknown / malformed payloads
-/// fail serde deserialisation and are treated as permanent (acked
-/// without retry per [`handle_event`]).
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum EnrichmentMessage {
-    /// SEP-1 issuer TOML kind. Wire `"kind": "sep1_assets"` (snake_case
-    /// of the variant name — serde `rename_all = "snake_case"` does the
-    /// mapping). Historical name was `"icon"` (0191, when the kind only
-    /// wrote `assets.icon_url`); 0195 §2a extended the writeback to
-    /// `assets.name` (ClassicCredit + SAC) and 0196 renamed both the
-    /// Rust identifier and the wire string for clarity. **Breaking
-    /// change**: pre-rename SQS messages with `"kind": "icon"` will not
-    /// deserialise — drain the DLQ before deploy if any are present.
-    Sep1Assets { asset_id: i32 },
-    /// NFT `token_uri()` kind — task 0195 §2d. Insert-hook driven,
-    /// exactly once per `nfts` mint row. Worker fetches `token_uri()`
-    /// via Soroban RPC, resolves the URI through the IPFS gateway,
-    /// and writes `nfts.{name, media_url, collection_name}` from the
-    /// JSON. The `metadata` JSONB column was dropped per ADR 0043 —
-    /// the detail blob is served via runtime type-2 in the api crate.
-    NftTokenUri { nft_id: i32 },
-}
-
 struct WorkerState {
-    pool: PgPool,
+    client: clickhouse::Client,
     sep1: Sep1Fetcher,
     nft_token_uri: NftTokenUriFetcher,
 }
@@ -75,17 +45,19 @@ async fn main() -> Result<(), Error> {
         .json()
         .init();
 
-    info!("enrichment-worker cold start — resolving database credentials");
+    info!("enrichment-worker cold start — building mTLS ClickHouse client");
 
-    let database_url = db::secrets::resolve_or_env()
+    // Same mTLS bundle path as the indexer Lambda (MTLS_SECRET_NAME +
+    // CH_DOMAIN → Secrets extension → rustls client). Writes land in the
+    // enrichment side tables (ADR 0048); the indexer-owned tables are
+    // never touched by this worker.
+    let client = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
         .await
-        .map_err(|e| format!("failed to resolve database URL: {e}"))?;
-
-    let pool = db::pool::create_pool(&database_url)?;
+        .map_err(|e| format!("failed to build mTLS ClickHouse client: {e}"))?;
     let sep1 = Sep1Fetcher::new()?;
     let nft_token_uri = NftTokenUriFetcher::new()?;
     let state = Arc::new(WorkerState {
-        pool,
+        client,
         sep1,
         nft_token_uri,
     });
@@ -173,12 +145,12 @@ fn classify_outcome(
 async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), RecordError> {
     let msg = parse_message(record)?;
     match msg {
-        EnrichmentMessage::Sep1Assets { asset_id } => {
-            enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
+        EnrichmentMessage::Sep1Assets(key) => {
+            enrich_asset_from_sep1(&state.client, key, &state.sep1).await?;
             Ok(())
         }
-        EnrichmentMessage::NftTokenUri { nft_id } => {
-            enrich_nft_token_uri(&state.pool, nft_id, &state.nft_token_uri).await?;
+        EnrichmentMessage::NftTokenUri(key) => {
+            enrich_nft_token_uri(&state.client, key, &state.nft_token_uri).await?;
             Ok(())
         }
     }
@@ -242,22 +214,26 @@ mod tests {
 
     #[test]
     fn enrichment_message_parses_sep1_assets_variant() {
-        let json = r#"{"kind":"sep1_assets","asset_id":42}"#;
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":42,"contract_id":7}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets(key) = msg else {
             panic!("expected Sep1Assets variant, got {msg:?}");
         };
-        assert_eq!(asset_id, 42);
+        assert_eq!(key.asset_type, 1);
+        assert_eq!(key.asset_code, "USDC");
+        assert_eq!(key.issuer_id, 42);
+        assert_eq!(key.contract_id, 7);
     }
 
     #[test]
     fn enrichment_message_parses_nft_token_uri_variant() {
-        let json = r#"{"kind":"nft_token_uri","nft_id":99}"#;
+        let json = r#"{"kind":"nft_token_uri","contract_id":99,"token_id":"3"}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::NftTokenUri { nft_id } = msg else {
+        let EnrichmentMessage::NftTokenUri(key) = msg else {
             panic!("expected NftTokenUri variant, got {msg:?}");
         };
-        assert_eq!(nft_id, 99);
+        assert_eq!(key.contract_id, 99);
+        assert_eq!(key.token_id, "3");
     }
 
     #[test]
@@ -270,20 +246,21 @@ mod tests {
 
     #[test]
     fn enrichment_message_rejects_missing_kind() {
-        let json = r#"{"asset_id":42}"#;
+        let json = r#"{"asset_type":1,"asset_code":"USDC","issuer_id":42,"contract_id":7}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
     #[test]
-    fn enrichment_message_rejects_missing_asset_id() {
-        let json = r#"{"kind":"sep1_assets"}"#;
+    fn enrichment_message_rejects_missing_key_field() {
+        // contract_id absent — a producer that drops a key field is a bug.
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":42}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
     #[test]
-    fn enrichment_message_rejects_wrong_asset_id_type() {
-        // i32 column — float / string asset_id is a producer bug.
-        let json = r#"{"kind":"sep1_assets","asset_id":"42"}"#;
+    fn enrichment_message_rejects_wrong_key_type() {
+        // issuer_id is i64 — a string is a producer bug.
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":"42","contract_id":7}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
@@ -311,12 +288,17 @@ mod tests {
 
     #[test]
     fn parse_message_returns_sep1_assets_on_well_formed_body() {
-        let r = record(Some("m-1"), Some(r#"{"kind":"sep1_assets","asset_id":7}"#));
+        let r = record(
+            Some("m-1"),
+            Some(
+                r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":7,"contract_id":0}"#,
+            ),
+        );
         let msg = parse_message(&r).expect("ok");
-        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets(key) = msg else {
             panic!("expected Sep1Assets variant, got {msg:?}");
         };
-        assert_eq!(asset_id, 7);
+        assert_eq!(key.issuer_id, 7);
     }
 
     // -- classify_outcome --------------------------------------------
@@ -343,10 +325,10 @@ mod tests {
 
     #[test]
     fn classify_outcome_emits_partial_failure_on_database_error() {
-        // sqlx::Error::PoolTimedOut is the cheapest variant to construct;
+        // `Custom` is the cheapest ClickHouse error variant to construct;
         // the bucket assertion is what we care about, not the exact error.
         let outcome = Err(RecordError::Transient(EnrichError::Database(
-            sqlx::Error::PoolTimedOut,
+            clickhouse::error::Error::Custom("pool timed out".to_owned()),
         )));
         let failure = classify_outcome("m-99", outcome).expect("partial failure");
         assert_eq!(failure.item_identifier, "m-99");

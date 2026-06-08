@@ -16,7 +16,10 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 moka = { version = "0.12", features = ["sync", "future"] }
-sqlx = { workspace = true }
+# Enrichment writes land in ClickHouse side tables (asset_enrichment /
+# nft_enrichment, ADR 0048) — the indexer-owned tables stay untouched.
+clickhouse = { workspace = true }
+db-clickhouse = { path = "../db-clickhouse" }
 # Soroban RPC token_uri pipeline (task 0195 §2d Phase E): builds the
 # `InvokeContract` envelope, decodes the ScVal result string. Same
 # version as the rest of the workspace.

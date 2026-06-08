@@ -1,40 +1,33 @@
-//! `assets.{icon_url, name}` enrichment from issuer SEP-1 stellar.toml.
+//! `asset_enrichment` side-table fill from issuer SEP-1 stellar.toml.
 //!
-//! Single fetch yields both `image` and `name` from the matching
-//! `CURRENCIES[]` row; the worker writes them in one UPDATE so SQS
-//! traffic stays at one message per asset.
+//! A single fetch yields both `image` and `name` from the matching
+//! `CURRENCIES[]` row; both land in one `asset_enrichment` row (ADR 0048).
+//! The indexer-owned `assets` table is **never** written here, so the
+//! indexer's continuous whole-row re-inserts cannot clobber the
+//! enrichment.
 //!
-//! `assets.name` is filled only for ClassicCredit (asset_type=1) and
-//! SAC (asset_type=2). Soroban-native (3) is owned by the indexer
-//! (task 0156). Permanent fails write the `''` sentinel so the
-//! producer dedup
-//! `WHERE icon_url IS NULL OR (asset_type IN (1, 2) AND name IS NULL)`
-//! short-circuits. Transient fails return [`EnrichError::Transient`]
-//! and SQS retries.
+//! `name` is filled only for ClassicCredit (asset_type=1) and SAC
+//! (asset_type=2). Native (0) / soroban (3) are not SEP-1 enrichable —
+//! their names come from elsewhere (Option C: soroban from
+//! `soroban_contracts.name`, native from an API constant; task 0231).
+//! Permanent fails write the `''` sentinel; a row **existing** for the key
+//! marks it "tried" so the candidate query (`NOT IN asset_enrichment`)
+//! skips it. Transient fails return [`EnrichError::Transient`] and SQS
+//! retries.
 //!
-//! UPDATE uses `COALESCE(NULLIF($n, ''), col, $n)` per column so the
-//! write ordering is `real > sentinel > NULL`:
-//!
-//! - real beats existing sentinel `''` — a later run that finally
-//!   resolves a column upgrades the row instead of being blocked by
-//!   the previous permanent-fail sentinel.
-//! - real beats existing real — a later TOML edit refreshes the value.
-//! - sentinel does NOT clobber existing real — protects classic-form
-//!   assets re-emitted because the OTHER column was NULL (e.g.
-//!   `icon_url` already real, `name` missing → producer re-emits;
-//!   worker permanent-fails on `image` lookup but real `icon_url`
-//!   stays put).
-//! - sentinel beats NULL — first non-success run records the
-//!   producer-dedup breaker.
-//!
-//! For Soroban-native (asset_type=3) the binding for `name` is `NULL`,
-//! so `COALESCE` is a no-op and indexer-set names (task 0156) are
-//! untouched.
+//! The side table is `ReplacingMergeTree(version)`: every write is an
+//! INSERT with `version = now_ms`, latest-wins. The read path neutralises
+//! the `''` sentinel with `NULLIF` (task 0243). A later run upgrades a
+//! sentinel to a real value — or clears a removed one — simply by
+//! inserting a newer-version row.
 
-use sqlx::{PgPool, Row};
+use clickhouse::{Client, Row};
+use db_clickhouse::persist::enrichment::insert_asset_enrichment;
+use db_clickhouse::persist::rows::AssetEnrichmentRow;
+use serde::Deserialize;
 use tracing::{debug, instrument, warn};
 
-use super::EnrichError;
+use super::{AssetKey, EnrichError};
 use crate::sep1::dto::Sep1Currency;
 use crate::sep1::errors::Sep1Error;
 use crate::sep1::{Sep1Fetcher, Sep1TomlParsed};
@@ -47,79 +40,87 @@ const MAX_ICON_URL_BYTES: usize = 8192;
 /// unbounded `Nullable(String)`).
 const MAX_NAME_BYTES: usize = 4096;
 
-#[instrument(skip(pool, fetcher), fields(asset_id))]
+/// Issuer inputs for SEP-1 resolution, looked up by `issuer_id` on CH.
+/// `nullIf(_, '')` collapses an empty/missing value to `None`.
+#[derive(Row, Deserialize)]
+struct IssuerLookup {
+    issuer_strkey: Option<String>,
+    home_domain: Option<String>,
+}
+
+// The `#[instrument]` span carries the FULL composite key — every event in this
+// fn (incl. the resolver warnings) inherits it, so individual events don't repeat
+// the key.
+#[instrument(
+    skip(client, fetcher),
+    fields(
+        asset_type = key.asset_type,
+        asset_code = %key.asset_code,
+        issuer_id = key.issuer_id,
+        contract_id = key.contract_id,
+    )
+)]
 pub async fn enrich_asset_from_sep1(
-    pool: &PgPool,
-    asset_id: i32,
+    client: &Client,
+    key: AssetKey,
     fetcher: &Sep1Fetcher,
 ) -> Result<(), EnrichError> {
-    let row = sqlx::query(
-        r#"
-        SELECT
-            a.asset_type,
-            a.asset_code,
-            iss.account_id  AS issuer_strkey,
-            iss.home_domain
-        FROM assets a
-        LEFT JOIN accounts iss ON iss.id = a.issuer_id
-        WHERE a.id = $1
-        "#,
-    )
-    .bind(asset_id)
-    .fetch_optional(pool)
-    .await?;
+    // Issuer home_domain + StrKey drive the SEP-1 fetch + currency match.
+    let issuer = client
+        .query(
+            "SELECT nullIf(account_id, '')  AS issuer_strkey, \
+                    nullIf(home_domain, '') AS home_domain \
+             FROM accounts FINAL WHERE id = ? LIMIT 1",
+        )
+        .bind(key.issuer_id)
+        .fetch_optional::<IssuerLookup>()
+        .await?;
 
-    let Some(row) = row else {
-        warn!("asset_id {asset_id} not found; acking SQS message");
-        return Ok(());
+    let Some(issuer) = issuer else {
+        warn!("issuer account not found; writing sentinel");
+        let (icon, name) = permanent_fail_outcome(key.asset_type);
+        return insert_outcome(client, &key, icon, name).await;
     };
 
-    let asset_type: i16 = row.try_get("asset_type")?;
-    let asset_code: Option<String> = row.try_get("asset_code")?;
-    let issuer_strkey: Option<String> = row.try_get("issuer_strkey")?;
-    let home_domain: Option<String> = row.try_get("home_domain")?;
-
-    let Some(home_domain) = home_domain
+    let Some(home_domain) = issuer
+        .home_domain
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
-        let (icon, name) = permanent_fail_outcome(asset_type);
-        write_outcome(pool, asset_id, &icon, name).await?;
-        return Ok(());
+        let (icon, name) = permanent_fail_outcome(key.asset_type);
+        return insert_outcome(client, &key, icon, name).await;
     };
 
     match fetcher.fetch(home_domain).await {
         Ok(parsed) => {
             let (icon, name) = resolve_currency_outcome(
-                asset_type,
-                asset_code.as_deref(),
-                issuer_strkey.as_deref(),
+                key.asset_type,
+                Some(key.asset_code.as_str()),
+                issuer.issuer_strkey.as_deref(),
                 &parsed,
             );
-            write_outcome(pool, asset_id, &icon, name).await?;
-            debug!(asset_id, asset_type, "icon+name UPDATE applied");
+            insert_outcome(client, &key, icon, name).await?;
+            debug!("asset_enrichment row written");
             Ok(())
         }
         Err(arc_err) => {
             if is_transient(&arc_err) {
                 Err(EnrichError::Transient(arc_err.to_string()))
             } else {
-                warn!("permanent SEP-1 fetch failure: {arc_err}; sentinels written");
-                let (icon, name) = permanent_fail_outcome(asset_type);
-                write_outcome(pool, asset_id, &icon, name).await?;
-                Ok(())
+                warn!("permanent SEP-1 fetch failure: {arc_err}; sentinel written");
+                let (icon, name) = permanent_fail_outcome(key.asset_type);
+                insert_outcome(client, &key, icon, name).await
             }
         }
     }
 }
 
-/// Resolve the `(icon_url, name)` write outcome from a fetched SEP-1 TOML.
-/// `pub` so the ClickHouse drain (`backfill-enrichment-runner`) reuses the
-/// security-sensitive icon/name validation (https-only, length caps, sentinel
-/// rules) rather than duplicating it. `""` = the `real > sentinel > NULL`
-/// sentinel; `name = None` for native/soroban (indexer-owned). See module doc.
-pub fn resolve_currency_outcome(
+/// Resolve the `(icon_url, name)` write outcome from a fetched SEP-1 TOML —
+/// the security-sensitive icon/name validation (https-only, length caps,
+/// sentinel rules) in one place. `""` = the "tried, nothing" sentinel;
+/// `name = None` for native/soroban (not SEP-1 enrichable). See module doc.
+fn resolve_currency_outcome(
     asset_type: i16,
     asset_code: Option<&str>,
     issuer_strkey: Option<&str>,
@@ -131,8 +132,8 @@ pub fn resolve_currency_outcome(
 
 /// The outcome to write when the issuer has no usable home_domain or the SEP-1
 /// fetch permanently failed: the `""` icon sentinel + the per-type name
-/// sentinel. Storage-agnostic (same as [`resolve_currency_outcome`]).
-pub fn permanent_fail_outcome(asset_type: i16) -> (String, Option<String>) {
+/// sentinel. Mirrors `nft_token_uri::permanent_fail_outcome`.
+fn permanent_fail_outcome(asset_type: i16) -> (String, Option<String>) {
     (String::new(), sentinel_name(asset_type))
 }
 
@@ -191,24 +192,25 @@ fn resolve_name(asset_type: i16, entry: Option<&Sep1Currency>) -> Option<String>
     Some(name.to_owned())
 }
 
-/// Write priority `real > sentinel > NULL` per column — see module doc.
-async fn write_outcome(
-    pool: &PgPool,
-    asset_id: i32,
-    icon_url: &str,
+/// Build + INSERT one `asset_enrichment` row. `icon`/`name` come straight
+/// from the resolver — the `''` / `Some("")` sentinels are stored as-is; the
+/// read path neutralises them with `NULLIF`.
+async fn insert_outcome(
+    client: &Client,
+    key: &AssetKey,
+    icon_url: String,
     name: Option<String>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE assets \
-         SET icon_url = COALESCE(NULLIF($1, ''), icon_url, $1), \
-             name     = COALESCE(NULLIF($2, ''), name,     $2) \
-         WHERE id = $3",
-    )
-    .bind(icon_url)
-    .bind(name)
-    .bind(asset_id)
-    .execute(pool)
-    .await?;
+) -> Result<(), EnrichError> {
+    let row = AssetEnrichmentRow {
+        asset_type: key.asset_type,
+        asset_code: key.asset_code.clone(),
+        issuer_id: key.issuer_id,
+        contract_id: key.contract_id,
+        icon_url: Some(icon_url),
+        name,
+        version: super::now_ms(),
+    };
+    insert_asset_enrichment(client, std::slice::from_ref(&row)).await?;
     Ok(())
 }
 

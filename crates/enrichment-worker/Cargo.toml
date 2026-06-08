@@ -2,7 +2,7 @@
 name = "enrichment-worker"
 version = "0.1.0"
 edition = "2024"
-description = "Type-1 enrichment worker Lambda — consumes SQS messages emitted by the indexer (Galaxy) Lambda and runs per-kind HTTP fetches that write the enriched columns (icon_url today; LP analytics later) back to Postgres."
+description = "Type-1 enrichment worker Lambda — consumes SQS messages emitted by the indexer (Galaxy) Lambda and runs per-kind HTTP fetches that write the enriched values into the ClickHouse enrichment side tables (asset_enrichment / nft_enrichment, ADR 0048)."
 
 [[bin]]
 name = "enrichment-worker"
@@ -10,13 +10,12 @@ path = "src/main.rs"
 
 [dependencies]
 enrichment-shared = { path = "../enrichment-shared" }
-db = { path = "../db", features = ["aws-secrets"] }
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
+clickhouse = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 lambda_runtime = { workspace = true }
 aws_lambda_events = { version = "0.16", default-features = false, features = ["sqs"] }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-sqlx = { workspace = true }
