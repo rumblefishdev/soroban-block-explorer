@@ -121,6 +121,11 @@ pub struct PoolAssetLeg {
     /// (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
     /// native legs and for classic credit legs without an SAC mirror.
     pub contract_id: Option<String>,
+    /// Asset icon URL, mirrored from the leg's `assets.icon_url` row so
+    /// pool avatars render the same icon as the assets list. `None` for
+    /// native legs and assets without an enriched icon — the FE falls back
+    /// to the asset-code initial.
+    pub icon_url: Option<String>,
 }
 
 /// One pool row returned by the list endpoint. Shape pinned to canonical

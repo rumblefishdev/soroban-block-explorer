@@ -82,6 +82,8 @@ export function EmptyState({
                 color: theme.palette.text.tertiary,
                 fontFamily: monoFontFamily,
                 mt: 0.5,
+                maxWidth: '100%',
+                overflowWrap: 'anywhere',
               })}
             >
               {meta}

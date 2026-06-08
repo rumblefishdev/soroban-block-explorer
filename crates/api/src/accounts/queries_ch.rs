@@ -26,7 +26,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{self, millis_to_utc};
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
 use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
@@ -175,6 +175,7 @@ pub async fn fetch_transactions(
     account_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
     let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
@@ -184,7 +185,7 @@ pub async fn fetch_transactions(
         }) => (Some(*ledger_sequence), Some(*tiebreak)),
         _ => (None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
     // 0.15 bound-parameter path returns an empty result when `None` is bound

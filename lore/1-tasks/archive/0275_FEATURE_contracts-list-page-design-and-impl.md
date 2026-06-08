@@ -2,7 +2,7 @@
 id: '0275'
 title: 'Contracts list page: design + implementation (no Figma source)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0226', '0274']
 tags:
@@ -38,6 +38,21 @@ history:
       Contracts list mirrors the Accounts list pattern). No prior work
       exists on 0275 — still a `PageStub`, no branch. Work continues on
       the shared 0274 branch (renamed to span both).
+  - date: '2026-06-03'
+    status: done
+    who: karolkow
+    note: >
+      Closed. `GET /v1/contracts` + the Contracts list page shipped
+      (`736e271a`), mirroring the Accounts/Assets list pattern. Design
+      decided + recorded inline: 5 columns (Contract id, Type+SAC,
+      Deployed-at-ledger, Deployer, Invocations(7d)), static `id DESC`
+      order (no user sort — no `created_at`), filters `filter[type]`
+      (token|other|nft|fungible) + `filter[q]` (full-text on name +
+      contract_id). PageStub replaced; FE on the real generated hook;
+      empty/error/filtered-empty states wired. Integration tests
+      (envelope, list↔detail parity, invalid-type 400, cursor round-trip,
+      q-search, type classification). api-types regen; docs updated.
+      Figma backfill (optional AC) left undone — no Figma source exists.
 ---
 
 # Contracts list page: design + implementation (no Figma source)
@@ -108,22 +123,34 @@ Update OpenAPI + regenerate `libs/api-types`.
 Once the real endpoint lands, swap the FE hook from the local mock
 to the generated SDK helper.
 
+## Design (decided 2026-06-03)
+
+- **Columns (5):** Contract (id, linked) · Type (`contract_type_name`
+  chip + `SAC` chip when `is_sac`) · Deployed at ledger (linked) ·
+  Deployer (account, linked) · Invocations (7d) (`recent_invocations`).
+- **Sort:** none (static `id DESC` = recently-deployed first;
+  `soroban_contracts` has no `created_at`, BIGSERIAL id ≈ ingestion).
+  No user-facing sort control.
+- **Filters:** `filter[type]` (token | other | nft | fungible) as type
+  chips + `filter[q]` (full-text over `search_vector` = name +
+  contract_id). `name` feeds search only — not a response field.
+
 ## Acceptance Criteria
 
-- [ ] Columns / sort modes / filter set agreed and recorded in
-      this task body.
-- [ ] FE: `/contracts` renders a real list page (no `PageStub`)
-      using the Accounts-list pattern (PageHeader + DataListCard + ExplorerTable + cursor pagination).
-- [ ] BE: `GET /v1/contracts` ships with the agreed query params
+- [x] Columns / sort modes / filter set agreed and recorded in
+      this task body (see Design above).
+- [x] FE: `/contracts` renders a real list page (no `PageStub`)
+      using the Accounts-list pattern (PageHeader + DataListCard + ExplorerTable + cursor pagination). (`736e271a`)
+- [x] BE: `GET /v1/contracts` ships with the agreed query params
       and response shape; OpenAPI updated; `libs/api-types`
-      regenerated.
-- [ ] FE points at the real backend endpoint (no in-memory
+      regenerated. (`736e271a`)
+- [x] FE points at the real backend endpoint (no in-memory
       synthesised rows left).
-- [ ] Empty / error / filtered-empty states wired (mirror
+- [x] Empty / error / filtered-empty states wired (mirror
       AccountsListPage).
 - [ ] (Optional, deferrable) Figma frames for both Accounts and
-      Contracts list pages — backfill the `// Figma:` comments in
-      both FE families.
+      Contracts list pages — **not done** (no Figma source exists for
+      either page; this task is the design-of-record instead).
 
 ## Notes
 

@@ -25,11 +25,7 @@ export function LatestLedgers() {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
@@ -48,22 +44,24 @@ export function LatestLedgers() {
         action={<ViewAllLink to={routes.ledgers} />}
       />
       <Box>{body}</Box>
-      <Box
-        sx={{
-          px: 2,
-          py: 1.5,
-          borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
-          backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
-        }}
-      >
-        <Typography
-          component="span"
-          variant="bodySmRegular"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      {rows.length > 0 && (
+        <Box
+          sx={{
+            px: 2,
+            py: 1.5,
+            borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+            backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
+          }}
         >
-          {rows.length} latest records
-        </Typography>
-      </Box>
+          <Typography
+            component="span"
+            variant="bodySmRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
+            {rows.length} latest records
+          </Typography>
+        </Box>
+      )}
     </Card>
   );
 }

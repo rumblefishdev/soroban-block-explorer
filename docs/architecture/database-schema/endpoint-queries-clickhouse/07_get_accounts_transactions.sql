@@ -97,5 +97,7 @@ JOIN accounts src FINAL ON src.id = t.source_id
 WHERE
     tp.account_id = (SELECT id FROM accounts FINAL WHERE account_id = $1 LIMIT 1)
     AND ($3 IS NULL OR (tp.ledger_sequence, tp.transaction_id) < ($3, $4))
+-- Sort direction driven by `order` query param (`asc` | `desc`, default
+-- `desc`). `order=asc` flips the `<` above to `>` and DESC→ASC in lock-step.
 ORDER BY tp.ledger_sequence DESC, tp.transaction_id DESC
 LIMIT $2;

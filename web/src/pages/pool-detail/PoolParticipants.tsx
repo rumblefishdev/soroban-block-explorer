@@ -4,8 +4,6 @@ import type { ParticipantItem } from '@rumblefish/api-types';
 import {
   EmptyState,
   ExplorerTable,
-  formatAmount,
-  formatPercent,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
@@ -13,6 +11,8 @@ import {
   TableSkeleton,
   useCursorPagination,
   usePageHandlers,
+  formatAmount,
+  formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -102,11 +102,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={6} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={6} columns={columns.length} />;
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {

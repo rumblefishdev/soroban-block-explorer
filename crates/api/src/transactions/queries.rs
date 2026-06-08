@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::TxListCursor;
 
@@ -188,7 +188,7 @@ pub async fn fetch_list(
     direction: Direction,
 ) -> Result<Vec<TxListRow>, sqlx::Error> {
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new("");
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // PG keys on `(created_at, id)`. Extract the `Pg` cursor variant; a
     // non-`Pg` cursor never reaches here (`list_transactions` rejects a

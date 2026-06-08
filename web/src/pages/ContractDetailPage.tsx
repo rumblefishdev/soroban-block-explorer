@@ -1,6 +1,5 @@
 import { Box, Card, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   Chip,
   DetailErrorState,
   isContractId,
@@ -20,6 +19,7 @@ import { routes } from '../router/routes.js';
 import { ContractEvents } from './contracts/ContractEvents.js';
 import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
+import { ContractDetailSkeleton } from './contracts/ContractDetailSkeleton.js';
 import { ContractSummary } from './contracts/ContractSummary.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
@@ -40,10 +40,12 @@ export default function ContractDetailPage() {
     return <NotFoundState entity="contract" identifier={contractId} />;
   }
 
-  let summary: ReactNode = null;
   if (contract.isLoading) {
-    summary = <CardSkeleton />;
-  } else if (contract.isError) {
+    return <ContractDetailSkeleton />;
+  }
+
+  let summary: ReactNode = null;
+  if (contract.isError) {
     summary = (
       <DetailErrorState
         error={contract.error}
@@ -66,10 +68,7 @@ export default function ContractDetailPage() {
     {
       key: 'events',
       label: 'Events',
-      // Placeholder count — `recent_unique_callers` is a callers metric,
-      // not an events total. Stays until the API exposes a real events
-      // count (tracked in the FE→API gaps doc).
-      count: contract.data?.stats.recent_unique_callers,
+      count: contract.data?.stats.recent_events,
     },
   ];
 

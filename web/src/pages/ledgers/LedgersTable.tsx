@@ -16,7 +16,8 @@ interface LedgersTableProps {
   rows: readonly LedgerListItem[];
 
   sortDir?: SortDirection;
-  onSortChange?: (dir: SortDirection) => void;
+  /** `(columnId, direction)` — forwarded straight from the sorted column. */
+  onSortChange?: (id: string, dir: SortDirection) => void;
 }
 
 function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
@@ -95,7 +96,7 @@ export function LedgersTable({
         ? {
             sortBy: 'sequence',
             sortDir,
-            onSortChange: (_id, dir) => onSortChange(dir),
+            onSortChange,
           }
         : {})}
     />

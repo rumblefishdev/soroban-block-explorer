@@ -1,6 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
   Chip,
   DetailErrorState,
   NotFoundState,
@@ -12,11 +11,12 @@ import { useParams } from 'react-router-dom';
 import { useAssetDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
+import { AssetDetailSkeleton } from './assets/AssetDetailSkeleton.js';
 import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta, iconKindFor } from './assets/assetType.js';
+import { assetTypeMeta } from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -32,16 +32,17 @@ export default function AssetDetailPage() {
     return <NotFoundState entity="asset" />;
   }
 
+  if (asset.isLoading) {
+    return <AssetDetailSkeleton />;
+  }
+
   const data = asset.data;
   const code = data?.asset_code ?? 'Asset';
   const meta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;
   let metadata: ReactNode = null;
-  if (asset.isLoading) {
-    summary = <CardSkeleton />;
-    metadata = <CardSkeleton />;
-  } else if (asset.isError) {
+  if (asset.isError) {
     summary = (
       <DetailErrorState
         error={asset.error}
@@ -67,7 +68,6 @@ export default function AssetDetailPage() {
             <AssetIcon
               code={data.asset_code}
               iconUrl={data.icon_url}
-              kind={iconKindFor(data.asset_type_name)}
               size={40}
             />
           )}

@@ -17,11 +17,9 @@ import {
 
 import { useContractInterface } from '../../api/index.js';
 
-import {
-  type ContractFunctionSig,
-  formatReturnType,
-  parseInterfaceMetadata,
-} from './interfaceMetadata.js';
+import type { ContractFunctionSig } from '@rumblefish/api-types';
+
+import { formatReturnType } from './interfaceMetadata.js';
 
 const INT_TYPE = /^[iu](8|16|32|64|128|256)$/;
 
@@ -123,7 +121,7 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
         <Box
           sx={(theme) => ({
             p: 1,
-            borderRadius: '8px',
+            borderRadius: `${theme.shape.radius.s}px`,
             border: `1px solid ${theme.palette.stroke.default}`,
             // Inset code block uses the darker surface (Figma).
             backgroundColor: theme.palette.surface.grayMainAlt,
@@ -201,7 +199,8 @@ export function ContractInterface({ contractId }: { contractId: string }) {
     return <QueryErrorState error={error} onRetry={() => void refetch()} />;
   }
 
-  const parsed = parseInterfaceMetadata(data?.interface_metadata);
+  // `interface_metadata` is `null` for SAC / pre-upload / stub rows.
+  const parsed = data?.interface_metadata ?? null;
   if (parsed == null || parsed.functions.length === 0) {
     return (
       <EmptyState

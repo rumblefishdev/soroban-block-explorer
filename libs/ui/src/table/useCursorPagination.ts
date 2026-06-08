@@ -42,6 +42,13 @@ export interface UseCursorPaginationResult
    * the server.
    */
   setFilter: (key: string, value: string | null) => void;
+  /**
+   * Drop every filter key + the cursor in one URL update. Use for
+   * "Clear filters" instead of multiple `setFilter(key, null)` calls
+   * (which clobber each other — see `useTableUrlState.clearFilters`).
+   * `sort`/`dir` are not filter keys, so they survive.
+   */
+  clearFilters: () => void;
   /** Clear the URL cursor. */
   reset: () => void;
 }
@@ -69,7 +76,13 @@ export function useCursorPagination(
   options?: Options
 ): UseCursorPaginationResult {
   const urlState = useTableUrlState(options);
-  const { state, setCursor, setFilter: setFilterRaw, resetCursor } = urlState;
+  const {
+    state,
+    setCursor,
+    setFilter: setFilterRaw,
+    clearFilters,
+    resetCursor,
+  } = urlState;
 
   const reset = useCallback(() => {
     resetCursor();
@@ -114,6 +127,7 @@ export function useCursorPagination(
     setCursor,
     setSort: urlState.setSort,
     setFilter,
+    clearFilters,
     resetCursor,
     cursor: state.cursor,
     goNext,

@@ -1,7 +1,6 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
 import {
   DetailErrorState,
-  DetailSkeleton,
   isContractId,
   NotFoundState,
   SectionErrorBoundary,
@@ -12,6 +11,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom';
 import { useNftDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
+import { NftDetailSkeleton } from './nft-detail/NftDetailSkeleton.js';
 import { NftMediaPreview } from './nft-detail/NftMediaPreview.js';
 import { NftMetadata } from './nft-detail/NftMetadata.js';
 import { NftSummary } from './nft-detail/NftSummary.js';
@@ -91,7 +91,7 @@ export default function NftDetailPage() {
   }
 
   if (isLoading) {
-    return <DetailSkeleton />;
+    return <NftDetailSkeleton />;
   }
 
   if (isError) {

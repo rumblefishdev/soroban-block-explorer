@@ -8,13 +8,12 @@ import {
   IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
-  type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta, iconKindFor } from './assetType.js';
+import { assetTypeMeta } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -29,11 +28,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <AssetIcon
-            code={row.asset_code}
-            iconUrl={row.icon_url}
-            kind={iconKindFor(row.asset_type_name)}
-          />
+          <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
               {row.asset_code ? (
@@ -77,7 +72,6 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'supply',
     header: 'Total supply',
     align: 'right',
-    sortable: true,
     cell: (row) => (
       <Stack sx={{ alignItems: 'flex-end' }}>
         <Typography variant="bodySmRegular">
@@ -111,20 +105,15 @@ export const ASSET_COLUMN_COUNT = columns.length;
 
 interface AssetsTableProps {
   rows: readonly AssetItem[];
-  sortDir: SortDirection;
-  onSortChange: (dir: SortDirection) => void;
 }
 
 /** The assets list table — token, issuer/contract, supply and holder count. */
-export function AssetsTable({ rows, sortDir, onSortChange }: AssetsTableProps) {
+export function AssetsTable({ rows }: AssetsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
       rowKey={(row) => String(row.id)}
-      sortBy="supply"
-      sortDir={sortDir}
-      onSortChange={(_id, dir) => onSortChange(dir)}
     />
   );
 }

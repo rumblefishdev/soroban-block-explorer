@@ -97,11 +97,7 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={5} columns={COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={5} columns={COLUMN_COUNT} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />

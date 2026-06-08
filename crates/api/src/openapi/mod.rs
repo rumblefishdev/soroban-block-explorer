@@ -13,10 +13,13 @@ use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::accounts::dto::{AccountBalance, AccountDetailResponse, AccountTransactionItem};
+use crate::accounts::dto::{
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
+};
 use crate::assets::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem};
 use crate::contracts::dto::{
-    ContractDetailResponse, ContractStats, EventItem, InterfaceResponse, InvocationItem,
+    ContractDetailResponse, ContractFunctionParam, ContractFunctionSig, ContractInterfaceMetadata,
+    ContractListItem, ContractStats, EventItem, InterfaceResponse, InvocationItem,
 };
 use crate::liquidity_pools::dto::{
     ChartDataPoint, ChartResponse, PoolAssetLeg, PoolItem, PoolTransactionItem,
@@ -64,9 +67,14 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         XdrEventDto,
         XdrOperationDto,
         HeavyFieldsStatus,
+        Paginated<ContractListItem>,
+        ContractListItem,
         ContractDetailResponse,
         ContractStats,
         InterfaceResponse,
+        ContractInterfaceMetadata,
+        ContractFunctionSig,
+        ContractFunctionParam,
         Paginated<InvocationItem>,
         InvocationItem,
         Paginated<EventItem>,
@@ -76,6 +84,8 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         AssetDetailResponse,
         Paginated<AssetTransactionItem>,
         AssetTransactionItem,
+        Paginated<AccountListItem>,
+        AccountListItem,
         AccountDetailResponse,
         AccountBalance,
         Paginated<AccountTransactionItem>,

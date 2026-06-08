@@ -1,7 +1,6 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
 import {
   DetailErrorState,
-  DetailSkeleton,
   formatInteger,
   isLedgerSequence,
   NotFoundState,
@@ -14,6 +13,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom';
 import { useLedgerDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
+import { LedgerDetailSkeleton } from './ledgers/LedgerDetailSkeleton.js';
 import { LedgerNav } from './ledgers/LedgerNav.js';
 import { LedgerSummary } from './ledgers/LedgerSummary.js';
 import { LedgerTransactions } from './ledgers/LedgerTransactions.js';
@@ -47,7 +47,7 @@ export default function LedgerDetailPage() {
   }
 
   if (isLoading) {
-    return <DetailSkeleton />;
+    return <LedgerDetailSkeleton />;
   }
 
   if (isError) {

@@ -1,11 +1,10 @@
 import { Stack } from '@mui/material';
 import type { ListAssetsData } from '@rumblefish/api-types';
 import {
-  type SortDirection,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { useAssetsList } from '../api/index.js';
 
@@ -19,14 +18,13 @@ type Filters = NonNullable<ListAssetsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function AssetsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter, reset } =
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
     useCursorPagination({
       filterKeys: ['code', 'type'],
     });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
   const hasFilters = code !== '' || type !== '';
-  const [sortDir, setSortDir] = useState<SortDirection>('desc');
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
@@ -37,16 +35,7 @@ export default function AssetsListPage() {
 
   const { data, isLoading, isError, error, refetch } = useAssetsList(
     cursor,
-    queryFilters,
-    sortDir
-  );
-
-  const handleSortChange = useCallback(
-    (next: SortDirection) => {
-      setSortDir(next);
-      reset();
-    },
-    [reset]
+    queryFilters
   );
 
   const rows = data?.data ?? [];
@@ -64,10 +53,6 @@ export default function AssetsListPage() {
     (value: string) => setFilter('type', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('code', null);
-    setFilter('type', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -90,17 +75,11 @@ export default function AssetsListPage() {
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
-        renderTable={(visibleRows) => (
-          <AssetsTable
-            rows={visibleRows}
-            sortDir={sortDir}
-            onSortChange={handleSortChange}
-          />
-        )}
+        renderTable={(visibleRows) => <AssetsTable rows={visibleRows} />}
         hasActiveFilters={hasFilters}
         emptyKind="tokens"
         emptyNoun="assets"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}

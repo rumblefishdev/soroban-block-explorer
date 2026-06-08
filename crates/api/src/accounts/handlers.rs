@@ -7,11 +7,11 @@
 //! datasource-agnostic; only the row fetches differ.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
-use crate::common::cursor::{self, Direction, TsIdCursor};
+use crate::common::cursor::{self, Direction, SortOrder, TsIdCursor, parse_sort_order};
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
@@ -21,8 +21,12 @@ use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{AccountBalance, AccountDetailResponse, AccountTransactionItem};
+use super::dto::{
+    AccountBalance, AccountDetailResponse, AccountListItem, AccountTransactionItem,
+    AccountTxListParams, AccountsListParams,
+};
 use super::queries::{AccountBalanceRow, AccountHeaderRow, AccountTxRow};
+use super::queries::{AccountListRow, AccountsListCursor, ResolvedListParams, fetch_list};
 use super::{queries, queries_ch};
 
 /// Unified per-call fetch error so the handlers dispatch between PG and CH
@@ -34,6 +38,91 @@ enum AcctFetchError {
     Pg(sqlx::Error),
     #[error("ch: {0}")]
     Ch(clickhouse::error::Error),
+}
+// ---------------------------------------------------------------------------
+// GET /v1/accounts (list)
+// ---------------------------------------------------------------------------
+
+/// List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+/// newest-active first by default, oldest-first with `?order=asc`. The order
+/// is sticky across pages; cursor pagination walks within it.
+/// `filter[with_domain]` keeps only accounts that set a home_domain. No
+/// address search — exact lookup is the global search's redirect path. Same
+/// shape as the other list endpoints.
+#[utoipa::path(
+    get,
+    path = "/accounts",
+    tag = "accounts",
+    params(
+        ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
+         minimum = 1, maximum = 100),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        AccountsListParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated account list",
+         body = Paginated<AccountListItem>),
+        (status = 400, description = "Invalid query parameter", body = ErrorEnvelope),
+        (status = 500, description = "Internal server error",   body = ErrorEnvelope),
+    ),
+)]
+pub async fn list_accounts(
+    State(state): State<AppState>,
+    pagination: Pagination<AccountsListCursor>,
+    Query(params): Query<AccountsListParams>,
+) -> Response {
+    let sort = match parse_sort_order(params.order.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
+    };
+
+    let direction = pagination.direction;
+    let has_predecessor = pagination.has_predecessor();
+    let resolved = ResolvedListParams {
+        limit: pagination.fetch_limit(),
+        cursor: pagination.cursor,
+        with_domain: params.filter_with_domain.unwrap_or(false),
+    };
+
+    let mut rows: Vec<AccountListRow> =
+        match fetch_list(&state.db, &resolved, sort, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("DB error in list_accounts: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
+
+    let page = finalize_page(
+        &mut rows,
+        pagination.limit,
+        direction,
+        has_predecessor,
+        |dir, r| {
+            cursor::encode(
+                &AccountsListCursor {
+                    last_seen_ledger: r.last_seen_ledger,
+                    id: r.id,
+                },
+                dir,
+            )
+        },
+    );
+    let data: Vec<AccountListItem> = rows.into_iter().map(map_item).collect();
+
+    let mut resp = Json(into_envelope(data, page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
+fn map_item(r: AccountListRow) -> AccountListItem {
+    AccountListItem {
+        account_id: r.account_id,
+        xlm_balance: r.xlm_balance,
+        last_seen_ledger: r.last_seen_ledger,
+        first_seen_ledger: r.first_seen_ledger,
+        home_domain: r.home_domain,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +213,7 @@ pub async fn get_account(
         ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
+        AccountTxListParams,
     ),
     responses(
         (status = 200, description = "Paginated transactions involving the account",
@@ -137,10 +227,16 @@ pub async fn list_account_transactions(
     State(state): State<AppState>,
     pagination: Pagination<TxListCursor>,
     Path(account_id): Path<String>,
+    Query(params): Query<AccountTxListParams>,
 ) -> Response {
     if let Err(resp) = path::strkey(&account_id, 'G', "account_id") {
         return resp;
     }
+
+    let sort = match parse_sort_order(params.order.as_deref()) {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
+    };
 
     let source = DataSource::for_module(Module::Accounts);
 
@@ -173,6 +269,7 @@ pub async fn list_account_transactions(
         header.id,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
+        sort,
         direction,
     )
     .await
@@ -252,6 +349,7 @@ async fn fetch_account_tx_for_source(
     account_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, AcctFetchError> {
     match source {
@@ -263,12 +361,19 @@ async fn fetch_account_tx_for_source(
                 TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
                 TxListCursor::Ch { .. } => None,
             });
-            queries::fetch_transactions(&state.db, account_id, limit, ts_cursor.as_ref(), direction)
-                .await
-                .map_err(AcctFetchError::Pg)
+            queries::fetch_transactions(
+                &state.db,
+                account_id,
+                limit,
+                ts_cursor.as_ref(),
+                sort,
+                direction,
+            )
+            .await
+            .map_err(AcctFetchError::Pg)
         }
         DataSource::Ch => {
-            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, direction)
+            queries_ch::fetch_transactions(state.ch(), account_id, limit, cursor, sort, direction)
                 .await
                 .map_err(AcctFetchError::Ch)
         }

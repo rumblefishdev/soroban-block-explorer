@@ -3,12 +3,54 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
+
+/// Query params for `GET /v1/contracts` (list). Mirrors the assets-list
+/// filter shape: `filter[type]` (contract class) + `filter[q]` (search by
+/// contract id or name, full-text via `search_vector`).
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ContractsListParams {
+    /// Contract class: `token | other | nft | fungible`.
+    #[serde(rename = "filter[type]")]
+    pub filter_type: Option<String>,
+    /// Free-text search over contract id + name (`search_vector`).
+    #[serde(rename = "filter[q]")]
+    pub filter_q: Option<String>,
+}
+
+/// One row of `GET /v1/contracts`. Identity + classification + deploy
+/// provenance + a 7-day activity signal. All fields come straight from
+/// `soroban_contracts` (+ a deployer join and a windowed invocation count);
+/// nullable fields are `None` until the contract's deploy is observed.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractListItem {
+    pub contract_id: String,
+    /// Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+    /// until deployment is observed.
+    pub contract_type: Option<i16>,
+    /// `token | other | nft | fungible`. `null` only on schema drift / no type.
+    pub contract_type_name: Option<String>,
+    /// Stellar Asset Contract flag (stored, not derived from `contract_type`).
+    pub is_sac: bool,
+    /// Deployer account G-strkey; `null` until the deploy op is observed.
+    pub deployer: Option<String>,
+    /// Ledger the deploy was observed at; `null` until then.
+    pub deployed_at_ledger: Option<i64>,
+    /// Invocation count over the last 7 days (windowed; matches the detail
+    /// `ContractStats.recent_invocations` semantics).
+    pub recent_invocations: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ContractStats {
     pub recent_invocations: i64,
     pub recent_unique_callers: i64,
+    /// Sum of `soroban_events_appearances.amount` over the same window
+    /// as `recent_invocations`. One appearance row can represent multiple
+    /// actual events (`amount > 1`) so we sum rather than COUNT(*) — the
+    /// figure matches what `GET /v1/contracts/:id/events` would return
+    /// over the window.
+    pub recent_events: i64,
     /// Echoed window label (e.g. `"7 days"`) so the UI can label "last N days".
     pub stats_window: String,
 }
@@ -22,6 +64,9 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    // `name` (ADR 0042) is intentionally NOT projected — it exists only to
+    // feed `search_vector` (search by name/contract_id); no endpoint
+    // surfaces it as a response field.
     // `metadata` field removed per ADR 0042 / task 0156. The
     // underlying `soroban_contracts.metadata JSONB` was replaced by
     // typed `name VARCHAR(256)`; the field was always `{}` in
@@ -31,13 +76,44 @@ pub struct ContractDetailResponse {
     pub stats: ContractStats,
 }
 
+/// One parameter on a Soroban contract function signature.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// A single public function signature extracted from a Soroban contract's
+/// WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+/// the indexer-side source of the persisted shape.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractFunctionSig {
+    pub name: String,
+    /// Documentation string; may be empty.
+    pub doc: String,
+    pub inputs: Vec<ContractFunctionParam>,
+    /// Output type names; empty array == void return.
+    pub outputs: Vec<String>,
+}
+
+/// Soroban contract interface metadata persisted in
+/// `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+/// indexer's `xdr_parser::types::ContractInterface` exactly — the API
+/// hands the same JSON object to clients that the indexer wrote.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ContractInterfaceMetadata {
+    pub functions: Vec<ContractFunctionSig>,
+    /// Raw WASM byte length (informational).
+    pub wasm_byte_len: i64,
+}
+
 /// `interface_metadata` is `null` for SAC / pre-upload / stub rows;
 /// stubs (task 0153) are filtered at the SQL layer so they don't leak.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct InterfaceResponse {
     pub contract_id: String,
     pub wasm_hash: Option<String>,
-    pub interface_metadata: Option<serde_json::Value>,
+    pub interface_metadata: Option<ContractInterfaceMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

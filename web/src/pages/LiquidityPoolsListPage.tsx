@@ -24,9 +24,10 @@ const PAGE_SIZE = 20;
  * `GET /liquidity-pools` endpoint as extended by task 0246.
  */
 export default function LiquidityPoolsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['asset', 'min_tvl'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['asset', 'min_tvl'],
+    });
   const asset = state.filters.asset ?? '';
   const minTvl = state.filters.min_tvl ?? '';
   const hasFilters = asset !== '' || minTvl !== '';
@@ -58,10 +59,6 @@ export default function LiquidityPoolsListPage() {
     (value: string) => setFilter('min_tvl', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('asset', null);
-    setFilter('min_tvl', null);
-  }, [setFilter]);
 
   return (
     <Stack spacing={3}>
@@ -88,7 +85,7 @@ export default function LiquidityPoolsListPage() {
         hasActiveFilters={hasFilters}
         emptyKind="pools"
         emptyNoun="pools"
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={handlePrev}
