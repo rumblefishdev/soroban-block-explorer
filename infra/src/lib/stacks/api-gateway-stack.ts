@@ -146,63 +146,101 @@ export class ApiGatewayStack extends cdk.Stack {
     usagePlan.addApiKey(apiKey);
 
     // ---------------------
-    // Custom Domain + Route 53
+    // Custom Domains (Cloudflare migration — task 0277 / ADR 0048)
     // ---------------------
-    const certificate = acm.Certificate.fromCertificateArn(
-      this,
-      'ApiCertificate',
-      config.apiCertificateArn
-    );
+    // mTLS attaches to the CLOUDFLARE custom domain only — the legacy domain
+    // stays plain (the SPA hits it directly, with no client cert). validateConfig
+    // guarantees the truststore bucket exists when enableApiMtls is set; the
+    // extra guard keeps this type-safe.
+    const mtlsConfig =
+      config.enableApiMtls && mtlsTruststoreBucket
+        ? {
+            mtls: {
+              bucket: mtlsTruststoreBucket,
+              key: 'truststore.pem',
+            },
+            securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+          }
+        : {};
 
-    const apiDomain = api.addDomainName('ApiDomain', {
-      domainName: config.apiDomainName,
-      certificate,
-      endpointType: apigateway.EndpointType.REGIONAL,
-      // Phase 2: attach the mTLS truststore so the REGIONAL custom domain
-      // rejects any client cert not signed by our CA at the handshake.
-      // validateConfig guarantees the bucket exists when enableApiMtls is set;
-      // the extra guard keeps this type-safe.
-      ...(config.enableApiMtls &&
-        mtlsTruststoreBucket && {
-          mtls: {
-            bucket: mtlsTruststoreBucket,
-            key: 'truststore.pem',
-          },
-          securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
-        }),
-    });
+    // Legacy custom domain (api.sorobanscan.rumblefish.dev) + Route 53 — plain
+    // TLS. Live during the migration so the SPA keeps working; retire with one
+    // deploy via enableLegacyApiDomain=false after the cutover is verified.
+    if (config.enableLegacyApiDomain) {
+      const certificate = acm.Certificate.fromCertificateArn(
+        this,
+        'ApiCertificate',
+        config.apiCertificateArn
+      );
 
-    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
-      this,
-      'HostedZone',
-      {
-        hostedZoneId: config.hostedZoneId,
-        zoneName: config.hostedZoneName,
-      }
-    );
+      const apiDomain = api.addDomainName('ApiDomain', {
+        domainName: config.apiDomainName,
+        certificate,
+        endpointType: apigateway.EndpointType.REGIONAL,
+      });
 
-    // recordName must be RELATIVE to the hosted zone — see
-    // relativeRecordName() in types.ts.
-    const apiRecordName = relativeRecordName(
-      config.apiDomainName,
-      config.hostedZoneName
-    );
+      const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
+        this,
+        'HostedZone',
+        {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.hostedZoneName,
+        }
+      );
 
-    new route53.ARecord(this, 'ApiARecord', {
-      zone: hostedZone,
-      recordName: apiRecordName,
-      target: route53.RecordTarget.fromAlias(
-        new targets.ApiGatewayDomain(apiDomain)
-      ),
-    });
+      // recordName must be RELATIVE to the hosted zone — see
+      // relativeRecordName() in types.ts.
+      const apiRecordName = relativeRecordName(
+        config.apiDomainName,
+        config.hostedZoneName
+      );
 
-    new route53.AaaaRecord(this, 'ApiAaaaRecord', {
-      zone: hostedZone,
-      recordName: apiRecordName,
-      target: route53.RecordTarget.fromAlias(
-        new targets.ApiGatewayDomain(apiDomain)
-      ),
-    });
+      new route53.ARecord(this, 'ApiARecord', {
+        zone: hostedZone,
+        recordName: apiRecordName,
+        target: route53.RecordTarget.fromAlias(
+          new targets.ApiGatewayDomain(apiDomain)
+        ),
+      });
+
+      new route53.AaaaRecord(this, 'ApiAaaaRecord', {
+        zone: hostedZone,
+        recordName: apiRecordName,
+        target: route53.RecordTarget.fromAlias(
+          new targets.ApiGatewayDomain(apiDomain)
+        ),
+      });
+
+      new cdk.CfnOutput(this, 'ApiCustomDomain', {
+        value: `https://${config.apiDomainName}`,
+      });
+    }
+
+    // Cloudflare-fronted custom domain (api.sorobanscan.rumblefishdev.com) — a
+    // SECOND custom domain on the same API, with NO Route 53 record (Cloudflare
+    // is authoritative). mTLS-lockable. Its regional alias target is output so it
+    // can be fed into the Cloudflare module's api_origin_target.
+    if (config.enableCloudflareApiDomain) {
+      const cfCertificate = acm.Certificate.fromCertificateArn(
+        this,
+        'CloudflareApiCertificate',
+        config.cloudflareApiCertificateArn
+      );
+
+      const cfApiDomain = api.addDomainName('CloudflareApiDomain', {
+        domainName: config.cloudflareApiDomainName,
+        certificate: cfCertificate,
+        endpointType: apigateway.EndpointType.REGIONAL,
+        ...mtlsConfig,
+      });
+
+      new cdk.CfnOutput(this, 'CloudflareApiRegionalTarget', {
+        value: cfApiDomain.domainNameAliasDomainName,
+      });
+      new cdk.CfnOutput(this, 'CloudflareApiCustomDomain', {
+        value: `https://${config.cloudflareApiDomainName}`,
+      });
+    }
 
     // ---------------------
     // Tags
@@ -216,9 +254,6 @@ export class ApiGatewayStack extends cdk.Stack {
     // ---------------------
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: api.url,
-    });
-    new cdk.CfnOutput(this, 'ApiCustomDomain', {
-      value: `https://${config.apiDomainName}`,
     });
     if (mtlsTruststoreBucket) {
       new cdk.CfnOutput(this, 'ApiMtlsTruststoreBucket', {

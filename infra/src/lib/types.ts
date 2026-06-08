@@ -177,6 +177,35 @@ export interface EnvironmentConfig {
   readonly enableApiMtls: boolean;
 
   /**
+   * Keep the legacy API custom domain (`apiDomainName`,
+   * api.sorobanscan.rumblefish.dev) + its Route 53 A/AAAA records. Keep TRUE
+   * during the Cloudflare migration so the live SPA path keeps working; flip to
+   * false (one deploy) to RETIRE it after the cutover to the Cloudflare host is
+   * verified. Plain TLS, no mTLS — the SPA hits it directly.
+   */
+  readonly enableLegacyApiDomain: boolean;
+
+  /**
+   * Add the Cloudflare-fronted API custom domain (`cloudflareApiDomainName`,
+   * api.sorobanscan.rumblefishdev.com) on the REGIONAL API — a SECOND custom
+   * domain alongside the legacy one, with **no Route 53 record** (Cloudflare is
+   * authoritative for that zone). Its regional alias target is emitted as the
+   * `CloudflareApiRegionalTarget` output → feed it into the Cloudflare module's
+   * `api_origin_target`. mTLS attaches HERE (not the legacy domain) when
+   * `enableApiMtls`. Default false.
+   */
+  readonly enableCloudflareApiDomain: boolean;
+
+  /** Cloudflare-fronted API custom domain, e.g. "api.sorobanscan.rumblefishdev.com". */
+  readonly cloudflareApiDomainName: string;
+
+  /**
+   * ACM cert ARN for `cloudflareApiDomainName`. Same region as `awsRegion`
+   * (REGIONAL custom domain). DNS-validated via the rumblefishdev.com zone.
+   */
+  readonly cloudflareApiCertificateArn: string;
+
+  /**
    * Lock the CloudFront `*.cloudfront.net` distribution to Cloudflare via
    * a secret header (Decision 4a in [ADR 0048]). When true a
    * viewer-request CloudFront Function rejects any request whose
@@ -447,6 +476,27 @@ export function validateConfig(config: EnvironmentConfig): void {
       `enableApiMtls=true requires provisionApiMtlsTruststore=true: ` +
         `provision the truststore bucket and upload truststore.pem first ` +
         `(API Gateway validates the truststore object at deploy time).`
+    );
+  }
+
+  // mTLS now attaches to the Cloudflare custom domain (not the legacy one), so
+  // it makes no sense without that domain present.
+  if (config.enableApiMtls && !config.enableCloudflareApiDomain) {
+    errors.push(
+      `enableApiMtls=true requires enableCloudflareApiDomain=true: mTLS attaches ` +
+        `to the Cloudflare API custom domain, not the legacy one.`
+    );
+  }
+
+  // The Cloudflare API domain needs a real same-region cert (not the placeholder).
+  if (
+    config.enableCloudflareApiDomain &&
+    (!config.cloudflareApiDomainName ||
+      config.cloudflareApiCertificateArn.includes('REPLACE'))
+  ) {
+    errors.push(
+      `enableCloudflareApiDomain=true requires cloudflareApiDomainName and a real ` +
+        `cloudflareApiCertificateArn (got a placeholder).`
     );
   }
 
