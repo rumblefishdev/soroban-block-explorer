@@ -92,9 +92,9 @@ The LP CH read path filters `operations_appearances.pool_id = unhex(X)`. After
       contract's ops scatter across every granule; bloom skips nothing), only
       materialized on partition 125, waste insert-time work.
       `ALTER TABLE operations_appearances DROP INDEX idx_oa_contract; DROP INDEX
-    idx_oa_type;`
+idx_oa_type;`
 - [ ] **Sync `init.sql`** so fresh CH instances match prod: add `PROJECTION
-    oa_pool_seek` + `SETTINGS deduplicate_merge_projection_mode = 'rebuild'`
+oa_pool_seek` + `SETTINGS deduplicate_merge_projection_mode = 'rebuild'`
       to the `operations_appearances` CREATE TABLE
       (`crates/db-clickhouse/schema/init.sql`). Prod already has the projection
       via ALTER (0243). NOTE: if B (0268) lands, the projection is replaced by
