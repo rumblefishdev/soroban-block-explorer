@@ -4,22 +4,23 @@
 //! dispatch by `kind` to the corresponding `enrich_*` function from the
 //! shared `enrichment-shared` crate.
 //!
-//! Per task 0191:
-//! - Worker writes follow `real > sentinel > NULL` priority per column
-//!   (`COALESCE(NULLIF($n, ''), col, $n)`): a later run that finally
-//!   resolves a value upgrades the row, but a permanent-fail sentinel
-//!   never clobbers an existing real value. Duplicate-message contract
-//!   lives in `enrichment_shared::enrich_and_persist::sep1_assets`.
+//! Per task 0191 (write path ported PG → CH, task 0231):
+//! - Writes are INSERTs into the ClickHouse enrichment side tables
+//!   (`asset_enrichment` / `nft_enrichment`, ADR 0048) with `version =
+//!   now_ms` — `ReplacingMergeTree` keeps the latest write per key
+//!   (latest-wins). The indexer-owned tables are never touched. Per-key
+//!   fetch + sentinel rules live in `enrichment_shared::enrich_and_persist::*`.
 //! - Batch failure model: each record is processed independently. A
 //!   per-record failure is reported via `BatchItemFailures` so SQS
 //!   redelivers only the failed messages, not the whole batch (the
 //!   `ReportBatchItemFailures` response feature on the event source
 //!   mapping).
-//! - Cold start: build a single `Sep1Fetcher` (HTTP client + LRU cache)
-//!   and a single `PgPool`; reuse both across handler invocations.
+//! - Cold start: build the mTLS ClickHouse client (same bundle path as the
+//!   indexer Lambda) + a single `Sep1Fetcher` / `NftTokenUriFetcher`; reuse
+//!   all three across handler invocations.
 //!
-//! Future kinds (`lp_tvl`, NFT metadata) plug in by adding a new arm to
-//! the `match msg.kind` block and exposing the fn from `enrichment-shared`.
+//! Future kinds (e.g. `lp_tvl`) plug in by adding a variant to
+//! `EnrichmentMessage` + a `match` arm + the fn in `enrichment-shared`.
 
 use std::sync::Arc;
 

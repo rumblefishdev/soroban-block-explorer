@@ -67,11 +67,14 @@ history:
 
 ## Summary
 
-Fill the off-chain enrichment columns on ClickHouse — `assets.{icon_url, name}`
-(SEP-1 issuer TOML) and `nfts.{name, media_url, collection_name}` (`token_uri()`
+Populate the off-chain enrichment values on ClickHouse — asset **icon / name**
+(SEP-1 issuer TOML) and NFT **name / media_url / collection_name** (`token_uri()`
 
-- IPFS) — which have sat NULL since the CH pilot. This is the CH successor to the
-  PG enrichment (PG is being retired, ADR 0047).
+- IPFS). Written into dedicated **side tables** (`asset_enrichment` /
+  `nft_enrichment`, ADR 0048) — never the indexer-owned `assets`/`nfts` — and
+  read-composed by the API (Option C: enrichment owns the off-chain values;
+  on-chain soroban names come from `soroban_contracts`). The CH successor to the PG
+  enrichment (PG retiring, ADR 0047).
 
 > **The how was settled by a deep research round (2026-06-08).** Full problem
 > definition (P1–P9), every option + measured decision matrix, simulations, and
@@ -94,7 +97,8 @@ CH variant — `enrich_*` writes the side tables, the worker + the batch runner 
 call it. No `ch_*`-suffixed parallel modules, no datasource flag. (This supersedes
 an earlier draft that kept a separate `ch_sep1`/`ch_nft` drain alongside PG.)
 
-**Done (local; not yet committed/pushed — no-commit directive):**
+**Done (committed locally on `feat/0231_clickhouse-sep1-nft-enrichment`; not
+pushed — GitHub auth blocked):**
 
 - **Step 1** — `asset_enrichment` / `nft_enrichment` side tables in `init.sql`
   (validated end-to-end on CH 26.3).
@@ -128,13 +132,16 @@ two writers compose; the clobber is a CH whole-row-replace artefact.)
 
 - **Side tables in the same CH database:** `asset_enrichment` / `nft_enrichment`
   = `ReplacingMergeTree(version)`, sitting next to `assets`/`nfts`. The indexer
-  **never** writes them → no clobber by construction; the `version` clock makes
-  them order-safe; and the enricher can **clear** a value (e.g. issuer removed
-  their logo) — none of which the in-place engines can do.
+  **never** writes them → no clobber by construction. Writes are plain INSERTs
+  with `version = now_ms`; RMT keeps the latest write per key (**latest-wins**).
+  _(Whether a later sentinel may overwrite a real value — auto-clear vs sticky —
+  is a deferred design decision; see Notes. The shipped model is the simplest
+  latest-wins.)_
 - **Trigger = the existing AWS SQS + Lambda** (NOT a new CH queue). Enrichment
   runs on AWS and writes to CH-on-Hetzner via mTLS, exactly like the indexer
-  Lambda already does. The indexer already publishes the per-row SQS messages
-  (currently stubbed); `enrichment-worker` is already a Lambda (today on PG).
+  Lambda. The indexer publishes **composite-key** SQS messages (the _which-keys_
+  lookup is currently stubbed); `enrichment-worker` is **repointed PG → CH**
+  (task 0231).
 - **Single owner per value — no column lives in two tables** (the read composes
   disjoint sources in `crates/api`, task 0243):
 
