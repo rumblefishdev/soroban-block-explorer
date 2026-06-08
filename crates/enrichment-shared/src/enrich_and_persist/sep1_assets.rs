@@ -39,10 +39,13 @@ use crate::sep1::dto::Sep1Currency;
 use crate::sep1::errors::Sep1Error;
 use crate::sep1::{Sep1Fetcher, Sep1TomlParsed};
 
-/// `assets.icon_url VARCHAR(1024)` — over-long URLs hit sentinel + warn.
-const MAX_ICON_URL_BYTES: usize = 1024;
-/// `assets.name VARCHAR(256)`.
-const MAX_NAME_BYTES: usize = 256;
+/// Generous safety bound on the SEP-1 `image` URL. CH `asset_enrichment.icon_url`
+/// is `Nullable(String)` (unbounded), so this only sentinels pathological
+/// multi-KB blobs — a long-but-valid URL is stored, not dropped.
+const MAX_ICON_URL_BYTES: usize = 8192;
+/// Generous safety bound on the SEP-1 `name` (CH `asset_enrichment.name` is
+/// unbounded `Nullable(String)`).
+const MAX_NAME_BYTES: usize = 4096;
 
 #[instrument(skip(pool, fetcher), fields(asset_id))]
 pub async fn enrich_asset_from_sep1(
@@ -81,15 +84,19 @@ pub async fn enrich_asset_from_sep1(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
-        write_outcome(pool, asset_id, "", sentinel_name(asset_type)).await?;
+        let (icon, name) = permanent_fail_outcome(asset_type);
+        write_outcome(pool, asset_id, &icon, name).await?;
         return Ok(());
     };
 
     match fetcher.fetch(home_domain).await {
         Ok(parsed) => {
-            let entry = find_currency(&parsed, asset_code.as_deref(), issuer_strkey.as_deref());
-            let icon = resolve_icon(entry);
-            let name = resolve_name(asset_type, entry);
+            let (icon, name) = resolve_currency_outcome(
+                asset_type,
+                asset_code.as_deref(),
+                issuer_strkey.as_deref(),
+                &parsed,
+            );
             write_outcome(pool, asset_id, &icon, name).await?;
             debug!(asset_id, asset_type, "icon+name UPDATE applied");
             Ok(())
@@ -99,11 +106,34 @@ pub async fn enrich_asset_from_sep1(
                 Err(EnrichError::Transient(arc_err.to_string()))
             } else {
                 warn!("permanent SEP-1 fetch failure: {arc_err}; sentinels written");
-                write_outcome(pool, asset_id, "", sentinel_name(asset_type)).await?;
+                let (icon, name) = permanent_fail_outcome(asset_type);
+                write_outcome(pool, asset_id, &icon, name).await?;
                 Ok(())
             }
         }
     }
+}
+
+/// Resolve the `(icon_url, name)` write outcome from a fetched SEP-1 TOML.
+/// `pub` so the ClickHouse drain (`backfill-enrichment-runner`) reuses the
+/// security-sensitive icon/name validation (https-only, length caps, sentinel
+/// rules) rather than duplicating it. `""` = the `real > sentinel > NULL`
+/// sentinel; `name = None` for native/soroban (indexer-owned). See module doc.
+pub fn resolve_currency_outcome(
+    asset_type: i16,
+    asset_code: Option<&str>,
+    issuer_strkey: Option<&str>,
+    parsed: &Sep1TomlParsed,
+) -> (String, Option<String>) {
+    let entry = find_currency(parsed, asset_code, issuer_strkey);
+    (resolve_icon(entry), resolve_name(asset_type, entry))
+}
+
+/// The outcome to write when the issuer has no usable home_domain or the SEP-1
+/// fetch permanently failed: the `""` icon sentinel + the per-type name
+/// sentinel. Storage-agnostic (same as [`resolve_currency_outcome`]).
+pub fn permanent_fail_outcome(asset_type: i16) -> (String, Option<String>) {
+    (String::new(), sentinel_name(asset_type))
 }
 
 /// `Some("")` sentinel breaks the producer dedup loop on
@@ -201,8 +231,9 @@ fn find_currency<'a>(
 }
 
 /// Network-layer (no HTTP status) and 5xx retry. 4xx and parse-level
-/// failures are permanent — caller writes the empty sentinel.
-fn is_transient(err: &Sep1Error) -> bool {
+/// failures are permanent — caller writes the empty sentinel. `pub` so the
+/// ClickHouse paths classify fetch errors with the same rule as the PG worker.
+pub fn is_transient(err: &Sep1Error) -> bool {
     match err {
         Sep1Error::Timeout { .. } => true,
         Sep1Error::Http { source, .. } => match source.status() {

@@ -55,13 +55,13 @@ use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
 use crate::nft_token_uri::resolve_ipfs_to_https;
 
-/// `nfts.name VARCHAR(256)` — Postgres VARCHAR limits character count, not bytes.
-const MAX_NAME_CHARS: usize = 256;
-/// `nfts.collection_name VARCHAR(256)`.
-const MAX_COLLECTION_CHARS: usize = 256;
-/// `nfts.media_url` is TEXT (no schema cap); the byte cap here just keeps
-/// pathological URLs out of the row body.
-const MAX_MEDIA_URL_BYTES: usize = 1024;
+/// Generous safety bounds on the `token_uri` JSON fields. The CH
+/// `nft_enrichment.{name,collection_name,media_url}` columns are
+/// `Nullable(String)` (unbounded), so these only sentinel pathological multi-KB
+/// blobs — a long-but-valid metadata value is stored, not dropped.
+const MAX_NAME_CHARS: usize = 4096;
+const MAX_COLLECTION_CHARS: usize = 4096;
+const MAX_MEDIA_URL_BYTES: usize = 8192;
 
 #[instrument(skip(pool, fetcher), fields(nft_id))]
 pub async fn enrich_nft_token_uri(
@@ -135,7 +135,12 @@ pub async fn enrich_nft_token_uri(
 ///    with the empty-string sentinel to avoid mixed-content warnings
 ///    and XSS vectors. Same defence-in-depth pattern as
 ///    `sep1_assets::is_safe_icon_url`.
-fn extract_columns(json: &Value) -> (String, String, String) {
+///
+/// `pub` so the ClickHouse drain (`backfill-enrichment-runner`) resolves
+/// `(name, media_url, collection_name)` with the identical safety rules.
+/// Returns `(name, image, collection)`; `""` is the `real > sentinel > NULL`
+/// sentinel.
+pub fn extract_columns(json: &Value) -> (String, String, String) {
     let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
     let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
     let image_resolved = resolve_ipfs_to_https(&image_raw);
