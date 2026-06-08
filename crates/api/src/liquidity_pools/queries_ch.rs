@@ -200,8 +200,9 @@ pub async fn fetch_pool_by_id(
                     (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots \
                       WHERE pool_id = unhex(?)), \
                     lp.last_updated_ledger)          AS created_at_ledger, \
-                (SELECT count() FROM lp_positions FINAL \
-                  WHERE pool_id = unhex(?) AND shares > 0) AS participant_count, \
+                toInt64(ifNull( \
+                    (SELECT count() FROM lp_positions FINAL \
+                      WHERE pool_id = unhex(?) AND shares > 0), 0)) AS participant_count, \
                 s.ledger_sequence                    AS latest_snapshot_ledger, \
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
@@ -399,22 +400,35 @@ struct PoolTxChRow {
     created_at_ms: i64,
 }
 
+/// Page key (one per pool transaction) from the projection-seek driver.
+#[derive(Debug, Row, Deserialize)]
+struct DriverKeyRow {
+    ls: i64,
+    tid: i64,
+}
+
 /// `GET /v1/liquidity-pools/:id/transactions`. Mirrors the PG
 /// `fetch_pool_transactions` (canonical SQL 20).
 ///
 /// Two cost notes:
-/// - **READ-COST PREREQUISITE — needs a projection before the flag flips.**
-///   `operations_appearances` is ORDER BY `(ledger_sequence, …)`, so the
-///   `pool_id` filter is NOT a key seek. Worse than the global tx-list
-///   contract filter: LP-tagged ops are *sparse*, so the `ORDER BY
-///   ledger_sequence DESC … LIMIT` driver does not fill early and scans the
-///   whole table — box-measured **7.87B rows / 168 GB for a single page**,
-///   ~80% of the hourly read_rows quota. This query is correct and
-///   forward-compatible: a projection `ORDER BY (pool_id, ledger_sequence,
-///   transaction_id)` on `operations_appearances` turns the `pool_id` filter
-///   into a seek and CH auto-routes this exact query through it. Until that
-///   projection is materialized, `API_DATASOURCE_LIQUIDITY_POOLS` MUST stay
-///   off (the other four LP endpoints are pool_id-PK seeks and are cheap).
+/// - **READ-COST — subquery-wrapped seek on the `oa_pool_seek` projection.**
+///   `operations_appearances` is `ORDER BY (ledger_sequence, …)`, so a raw
+///   `pool_id` filter is NOT a base-table key seek — LP-tagged ops are sparse,
+///   so the original `ORDER BY ledger_sequence DESC … LIMIT` page driver scanned
+///   the whole table (box-measured **7.87B rows / 168 GB per page**, ~80% of the
+///   hourly quota). A normal projection `ORDER BY (pool_id, ledger_sequence,
+///   transaction_id)` was materialized so `pool_id` can seek — but CH's
+///   auto-optimizer routes ONLY a *bare* `pool_id` filter through a normal
+///   projection; a top-level `ORDER BY`/`LIMIT`/`LIMIT 1 BY` flips it back to the
+///   base-PK read-in-order (789M–2.2B box-measured), and `force_optimize_projection`
+///   is rejected for the read-only `api_reader` (Code 164, un-hot-fixable). The
+///   driver therefore wraps the bare filter in a subquery and pages in the OUTER
+///   `GROUP BY (ls, tid) ORDER BY … LIMIT`: CH seeks the inner bare filter via
+///   the projection and aggregates the small result, so the read stays a seek
+///   AND the transfer is bounded to ≤ limit keys — box-proven ~378k–385k
+///   rows/page (holds with the keyset range). STEP 2 enriches the ≤limit keys
+///   via the transactions/accounts/ledgers joins.
+///   Transfer is bounded by the pool's op count, not the 6B+ table.
 /// - The cursor is the datasource-tagged [`TxListCursor`] (shared with the
 ///   global transactions list). The CH variant carries `ledger_sequence` +
 ///   `tiebreak` (= `transaction_id`) directly, so the keyset runs on
@@ -453,12 +467,61 @@ pub async fn fetch_pool_transactions(
         _ => String::new(),
     };
 
-    // limit*4 driver headroom (PG canonical pattern): a pool tx can touch the
-    // pool via several ops; `LIMIT 1 BY` collapses to one key per transaction
-    // before the page LIMIT.
-    let lim_over = limit * 4;
+    // STEP 1 — page keys, seeking via the `oa_pool_seek` projection. The seek
+    // only routes through a normal projection for a **bare** `pool_id` filter —
+    // any top-level `ORDER BY`/`LIMIT`/`LIMIT 1 BY` makes CH's auto-optimizer
+    // prefer the base-PK read-in-order and scan billions (789M–2.2B box-measured;
+    // `force_optimize_projection` would fix it but the read-only `api_reader`
+    // can't SET it — Code 164 — and the constraint can't be hot-applied: prod
+    // users.d is a `:ro` bind mount, needing a CH restart that live ingest
+    // forbids). The trick: wrap the bare filter in a subquery and dedupe/order/
+    // limit in the OUTER `GROUP BY … ORDER BY … LIMIT`. CH evaluates the inner
+    // bare filter against the projection (seek) and aggregates the small result,
+    // so the page is BOUNDED (≤ limit keys transferred) AND the read stays a seek
+    // — box-proven ~378k–385k rows/page, holds with the keyset range, vs ~7.87B
+    // for the plain `ORDER BY … LIMIT 1 BY` form. `GROUP BY (ls, tid)` is the
+    // `LIMIT 1 BY (ledger_sequence, transaction_id)` dedupe (ops → one row/tx).
+    let driver_sql = format!(
+        "SELECT ls, tid FROM ( \
+            SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
+            FROM operations_appearances oa \
+            WHERE oa.pool_id = unhex(?) {keyset} \
+         ) \
+         GROUP BY ls, tid \
+         ORDER BY ls {order}, tid {order} \
+         LIMIT {limit}",
+        keyset = keyset,
+        order = order,
+        limit = limit,
+    );
+    let keys = client
+        .query(&driver_sql)
+        .bind(pool_id_hex)
+        .fetch_all::<DriverKeyRow>()
+        .await?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let sql = format!(
+    // STEP 2 — enrich the bounded page keys via the transactions / accounts /
+    // ledgers joins. Keys inlined (i64, no injection) with a partition prune on
+    // `transactions` (PARTITION BY intDiv(ledger_sequence, 500000)) so the
+    // `(ledger_sequence, id) IN (…)` filter is a tight PK seek — same shape as
+    // `common::ch::fetch_tx_list_aggregates`.
+    let in_tuples = keys
+        .iter()
+        .map(|k| format!("({},{})", k.ls, k.tid))
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = keys
+        .iter()
+        .map(|k| k.ls / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let detail_sql = format!(
         "SELECT \
             t.id                                 AS id, \
             lower(hex(t.hash))                   AS hash, \
@@ -469,31 +532,21 @@ pub async fn fetch_pool_transactions(
             t.operation_count                    AS operation_count, \
             t.has_soroban                        AS has_soroban, \
             toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
-         FROM ( \
-            SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
-            FROM operations_appearances oa \
-            WHERE oa.pool_id = unhex(?) {keyset} \
-            ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-            LIMIT 1 BY oa.ledger_sequence, oa.transaction_id \
-            LIMIT {lim_over} \
-         ) m \
-         INNER JOIN transactions t ON t.id = m.tid AND t.ledger_sequence = m.ls \
+         FROM transactions t \
          INNER JOIN accounts src ON src.id = t.source_id \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+           AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
          ORDER BY t.ledger_sequence {order}, t.id {order} \
          LIMIT 1 BY t.id \
          LIMIT {limit}",
-        keyset = keyset,
+        in_tuples = in_tuples,
+        partitions = partitions,
         order = order,
-        lim_over = lim_over,
         limit = limit,
     );
 
-    let page = client
-        .query(&sql)
-        .bind(pool_id_hex)
-        .fetch_all::<PoolTxChRow>()
-        .await?;
+    let page = client.query(&detail_sql).fetch_all::<PoolTxChRow>().await?;
 
     if page.is_empty() {
         return Ok(Vec::new());
@@ -936,5 +989,106 @@ mod tests {
         assert_eq!(asset_type_name(2).as_deref(), Some("credit_alphanum12"));
         assert_eq!(asset_type_name(3).as_deref(), Some("pool_share"));
         assert_eq!(asset_type_name(9), None);
+    }
+}
+
+/// Live-CH **decode** smoke for the LP read path.
+///
+/// The curl `FORMAT TSV/Vertical/JSON` box smokes do NOT exercise the
+/// clickhouse-rs RowBinary decoder, so a wire-type↔struct mismatch — e.g. a
+/// scalar `(SELECT count() …)` typed `Nullable(UInt64)` decoded into an `i64`
+/// field (the detail `participant_count` bug, task 0243) — passes a curl check
+/// yet 500s the live endpoint with `schema mismatch`. A pure-Rust round-trip
+/// can't catch it either (the struct serializes consistently with itself). The
+/// only real guard is decoding rows that an actual CH produced.
+///
+/// This test runs each cheap LP CH fetch fn against a real CH and asserts the
+/// rows decode (no error). It **skips cleanly when `CH_URL` is unset**, so CI
+/// (no CH access) is unaffected. Run it against a reachable CH — a local
+/// replica or an SSH tunnel to the box:
+///
+/// ```text
+/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
+///   cargo test -p api --lib decode_smoke -- --nocapture
+/// ```
+///
+/// `transactions` is intentionally excluded: its driver scans the whole
+/// `operations_appearances` table (~7.87B rows) until the `pool_id` projection
+/// lands, so exercising it here would blow the read quota. Its row struct is all
+/// direct, non-null columns (audited — no Nullable-decode risk).
+#[cfg(test)]
+mod decode_smoke {
+    use super::*;
+    use crate::common::cursor::Direction;
+    use crate::liquidity_pools::queries::ResolvedPoolListParams;
+
+    fn client() -> Option<clickhouse::Client> {
+        let url = std::env::var("CH_URL").ok()?;
+        let mut c = clickhouse::Client::default().with_url(url);
+        if let Ok(u) = std::env::var("CH_USER") {
+            c = c.with_user(u);
+        }
+        if let Ok(p) = std::env::var("CH_PASSWORD") {
+            c = c.with_password(p);
+        }
+        if let Ok(d) = std::env::var("CH_DATABASE") {
+            c = c.with_database(d);
+        }
+        Some(c)
+    }
+
+    /// Every LP CH row struct must decode the rows a real CH emits.
+    #[tokio::test]
+    async fn lp_ch_rows_decode() {
+        let Some(ch) = client() else {
+            eprintln!("CH_URL unset — skipping LP CH decode smoke");
+            return;
+        };
+
+        // `list` returns rows on any populated CH → always exercises the
+        // `PoolListChRow` decode, and bootstraps a guaranteed-real pool id for
+        // the per-pool fetches below (an env-default pool might not exist on the
+        // target CH → detail would return None and skip the decode entirely).
+        let params = ResolvedPoolListParams {
+            limit: 5,
+            cursor: None,
+            asset_a_code: None,
+            asset_a_issuer: None,
+            asset_b_code: None,
+            asset_b_issuer: None,
+            min_tvl: None,
+            asset_code: None,
+        };
+        let pools = fetch_pool_list(&ch, &params, Direction::Next)
+            .await
+            .expect("list rows decode");
+
+        let pool = match std::env::var("CH_TEST_POOL_HEX") {
+            Ok(h) => h,
+            Err(_) => match pools.first() {
+                Some(r) => r.pool_id_hex.clone(),
+                None => {
+                    eprintln!("CH has no liquidity pools — skipping per-pool decode");
+                    return;
+                }
+            },
+        };
+
+        // detail — `PoolDetailChRow`, incl. the Nullable-scalar `participant_count`.
+        fetch_pool_by_id(&ch, &pool)
+            .await
+            .expect("detail row decodes");
+
+        // participants — `ParticipantChRow`.
+        fetch_participants(&ch, &pool, None, 5, Direction::Next)
+            .await
+            .expect("participant rows decode");
+
+        // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
+        let to = chrono::Utc::now();
+        let from = to - chrono::Duration::days(90);
+        fetch_pool_chart(&ch, &pool, "1d", from, to)
+            .await
+            .expect("chart rows decode");
     }
 }
