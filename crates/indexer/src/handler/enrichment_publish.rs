@@ -4,17 +4,22 @@
 //! ## Stub status (task 0241 — hard swap PG → CH)
 //!
 //! After the indexer cut over to ClickHouse, the pre-publish lookups
-//! that select which `assets.id` / `nfts.id` need enrichment can no
-//! longer query Postgres: PG is frozen at the cutover ledger and any
-//! row written by the indexer post-cutover lives in CH only. Worse,
-//! the downstream `enrichment-worker` still writes back via `UPDATE
-//! assets` / `UPDATE nfts` against PG, so even if we re-emitted the
-//! correct ids, the worker would update rows that the new ledgers
-//! never produced.
+//! that select which rows need enrichment can no longer query Postgres:
+//! PG is frozen at the cutover ledger and any row written by the indexer
+//! post-cutover lives in CH only.
 //!
-//! The team decision (see task 0241 stub conversation) is to **stub
-//! both publish paths** until a paired CH-aware rewrite of this
-//! producer plus the enrichment-worker write path lands. Until then:
+//! The paired CH-aware rewrite has now landed for the **write** side
+//! (task 0231): the `enrichment-worker` + the shared `enrich_*` functions
+//! write the ClickHouse side tables (`asset_enrichment` / `nft_enrichment`,
+//! ADR 0048), keyed by the composite identity (no CH surrogate `id`), and
+//! the SQS wire carries that composite key — see
+//! `enrichment_shared::enrich_and_persist::EnrichmentMessage` and the
+//! updated wire helpers below (`(asset_type, asset_code, issuer_id,
+//! contract_id)` for SEP-1, `(contract_id, token_id)` for NFTs).
+//!
+//! What is still **stubbed** is only the producer-side *lookup*: selecting
+//! which keys lack a side-table row (a CH `NOT IN *_enrichment` query over
+//! the freshly-extracted batch). Until that lands:
 //!
 //! * [`Publisher::from_env`] still reads `ENRICHMENT_QUEUE_URL` and
 //!   validates it — Lambda cold start still fails fast on misconfig
@@ -108,24 +113,35 @@ impl Publisher {
 pub(crate) async fn publish_nft_token_uri_messages(
     client: &SqsClient,
     queue_url: &str,
-    nft_ids: &[i32],
+    keys: &[(i64, String)],
 ) {
-    for chunk in nft_ids.chunks(10) {
+    for chunk in keys.chunks(10) {
         let mut entries = Vec::with_capacity(chunk.len());
-        for (idx, id) in chunk.iter().enumerate() {
-            let body = serde_json::json!({ "kind": "nft_token_uri", "nft_id": id }).to_string();
+        for (idx, (contract_id, token_id)) in chunk.iter().enumerate() {
+            let body = serde_json::json!({
+                "kind": "nft_token_uri",
+                "contract_id": contract_id,
+                "token_id": token_id,
+            })
+            .to_string();
             debug!(
                 kind = "nft_token_uri",
-                nft_id = id,
-                "publishing enrichment msg"
+                contract_id, token_id, "publishing enrichment msg"
             );
+            // `idx` guarantees Id uniqueness within the batch; the full key
+            // makes a failed entry (SQS reports failures by Id) traceable.
             let entry = SendMessageBatchRequestEntry::builder()
-                .id(format!("nft-{idx}-{id}"))
+                .id(format!("nft-{idx}-{contract_id}-{token_id}"))
                 .message_body(body)
                 .build();
             match entry {
                 Ok(entry) => entries.push(entry),
-                Err(e) => warn!(error = %e, nft_id = id, "skipping malformed SQS entry"),
+                Err(e) => warn!(
+                    error = %e,
+                    contract_id,
+                    token_id,
+                    "skipping malformed SQS entry"
+                ),
             }
         }
         if entries.is_empty() {
@@ -173,24 +189,42 @@ pub(crate) async fn publish_nft_token_uri_messages(
 pub(crate) async fn publish_sep1_assets_messages(
     client: &SqsClient,
     queue_url: &str,
-    asset_ids: &[i32],
+    keys: &[(i16, String, i64, i64)],
 ) {
-    for chunk in asset_ids.chunks(10) {
+    for chunk in keys.chunks(10) {
         let mut entries = Vec::with_capacity(chunk.len());
-        for (idx, id) in chunk.iter().enumerate() {
-            let body = serde_json::json!({ "kind": "sep1_assets", "asset_id": id }).to_string();
+        for (idx, (asset_type, asset_code, issuer_id, contract_id)) in chunk.iter().enumerate() {
+            let body = serde_json::json!({
+                "kind": "sep1_assets",
+                "asset_type": asset_type,
+                "asset_code": asset_code,
+                "issuer_id": issuer_id,
+                "contract_id": contract_id,
+            })
+            .to_string();
             debug!(
                 kind = "sep1_assets",
-                asset_id = id,
-                "publishing enrichment msg"
+                asset_type, asset_code, issuer_id, contract_id, "publishing enrichment msg"
             );
+            // `idx` guarantees Id uniqueness within the batch; the full
+            // composite key makes a failed entry (SQS reports failures by Id)
+            // traceable to its source row.
             let entry = SendMessageBatchRequestEntry::builder()
-                .id(format!("msg-{idx}-{id}"))
+                .id(format!(
+                    "msg-{idx}-{asset_type}-{asset_code}-{issuer_id}-{contract_id}"
+                ))
                 .message_body(body)
                 .build();
             match entry {
                 Ok(entry) => entries.push(entry),
-                Err(e) => warn!(error = %e, asset_id = id, "skipping malformed SQS entry"),
+                Err(e) => warn!(
+                    error = %e,
+                    asset_type,
+                    asset_code,
+                    issuer_id,
+                    contract_id,
+                    "skipping malformed SQS entry"
+                ),
             }
         }
         if entries.is_empty() {
