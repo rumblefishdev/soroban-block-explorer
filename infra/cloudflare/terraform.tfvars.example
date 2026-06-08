@@ -1,32 +1,15 @@
-# Copy to terraform.tfvars (gitignored) and fill in real values.
-# NO secret values here — secrets come from Secrets Manager / env var.
+# Copy to terraform.tfvars (gitignored) and fill in. No secrets here — the
+# Cloudflare API token comes from CLOUDFLARE_API_TOKEN (see providers.tf), the
+# mTLS cert/key from ./certs/ (see origin-lock.tf).
 
-aws_region            = "eu-central-1"
-cloudflare_account_id = "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID"
-zone_name             = "sorobanscan.rumblefish.dev"
+# Zone id of rumblefishdev.com — from rf-domains' `zone_id` output (D9/D11).
+cloudflare_zone_id = "REPLACE_WITH_RUMBLEFISHDEV_ZONE_ID"
 
-spa_hostname = "sorobanscan.rumblefish.dev"
-api_hostname = "api.sorobanscan.rumblefish.dev"
-ch_hostname  = "ch.sorobanscan.rumblefish.dev"
+api_hostname = "api.sorobanscan.rumblefishdev.com"
 
-# Origin targets — read from CDK outputs (DistributionDomainName, the API
-# Gateway custom-domain regional target) and SSM (ch-ip).
-spa_origin_target = "REPLACE.cloudfront.net"
-api_origin_target = "REPLACE.execute-api.eu-central-1.amazonaws.com"
-ch_origin_ip      = "REPLACE_HETZNER_IPV4"
+# API Gateway REGIONAL custom-domain target (CDK ApiGateway stack output).
+api_origin_target = "REPLACE_WITH_dYYYY.execute-api.eu-central-1.amazonaws.com"
 
-# Secret reference (NAME, not value):
-origin_secret_secret_id = "soroban/production/cloudflare/origin-secret"
-
-# Keep the API mTLS leg off until ./certs/cf-client.{pem,key} exist (otherwise
-# Terraform's eager file() eval blocks the initial zone apply).
+# Rollout gates — keep false until the cutover / cert generation steps.
+create_dns_record   = false
 enable_api_mtls_aop = false
-
-# Keep DNS cutover gated until the AWS-side lockdown is verified.
-create_dns_records = false
-
-# Optional: a verified expression to Managed-Challenge suspicious API traffic.
-# Empty = no challenge rule. cf.threat_score is retired (always 0) and Free has
-# no attack/bot score — use Bot Fight Mode for bots; set this only with an
-# expression that won't challenge the SPA fetch()/XHR or x-api-key partner path.
-# api_managed_challenge_expression = ""

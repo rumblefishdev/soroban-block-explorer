@@ -9,15 +9,11 @@
 #     --secret-id soroban/production/cloudflare/api-token \
 #     --query SecretString --output text)
 #
-# The token MUST be zone-scoped, least-privilege (Zone:Edit, DNS:Edit,
-# Zone Settings:Edit, SSL and Certificates:Edit, Page Rules / Rulesets) —
-# never the Global API Key.
+# The token MUST be zone-scoped to rumblefishdev.com, least-privilege — enough
+# to manage ONE DNS record + AOP: DNS:Edit, SSL and Certificates:Edit. It does
+# NOT need Zone:Edit or Rulesets (those belong to rf-domains). Never the Global
+# API Key.
 
 provider "cloudflare" {
   # api_token intentionally omitted — read from CLOUDFLARE_API_TOKEN.
-}
-
-provider "aws" {
-  region = var.aws_region
-  # Credentials from the operator's AWS profile (same one used for CDK).
 }

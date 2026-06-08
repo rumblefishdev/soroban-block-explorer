@@ -78,7 +78,7 @@ deploy-production-hetzner-dns: build
 destroy-production-hetzner-dns: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
-# --- Cloudflare edge bootstrap (TF state bucket + origin secret) ---
+# --- Cloudflare bootstrap (TF-state bucket for infra/cloudflare/) ---
 # Requires "provisionCloudflareBootstrap": true in envs/production.json.
 
 deploy-production-cloudflare-bootstrap: build

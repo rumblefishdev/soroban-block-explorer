@@ -124,21 +124,20 @@ export interface EnvironmentConfig {
   // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
 
   /**
-   * Provision the AWS-side bootstrap for the Cloudflare migration via CDK
+   * Provision the AWS-side bootstrap for THIS repo's Cloudflare module via CDK
    * (so nothing is created by hand): the Terraform remote-state S3 bucket
-   * (versioned, encrypted, private) and the `X-Origin-Secret` in Secrets
-   * Manager with a CDK-generated value. Deploy this FIRST — the Terraform
-   * backend bucket + the origin secret must exist before `terraform apply`
-   * and before the CloudFront secret-header lock is populated. Default false.
+   * (versioned, encrypted, private) that backs `infra/cloudflare/`. Deploy this
+   * FIRST — the backend bucket must exist before the first `terraform apply`.
    *
-   * DEPLOY-ONCE / LEAVE TRUE: both resources are `RETAIN` and become the live
-   * Terraform backend + shared secret. Flipping back to false removes the stack
-   * from the app and orphans them from CDK (data survives via RETAIN, but the
-   * backend is then unmanaged) — so set it true once and keep it.
+   * DEPLOY-ONCE / LEAVE TRUE: the bucket is `RETAIN` and becomes the live
+   * Terraform backend. Flipping back to false removes the stack from the app and
+   * orphans the bucket from CDK (data survives via RETAIN, but it is then
+   * unmanaged) — so set it true once and keep it.
    *
-   * Out of scope (external credential / crypto — cannot be IaC-generated):
-   * the Cloudflare API token (paste once via `put-secret-value`) and the
-   * mTLS client cert/key (operator `openssl`).
+   * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
+   * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
+   * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
+   * `rf-domains` repo. Default false.
    */
   readonly provisionCloudflareBootstrap: boolean;
 

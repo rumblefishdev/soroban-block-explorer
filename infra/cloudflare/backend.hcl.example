@@ -1,10 +1,12 @@
-# Example backend config for `terraform init -backend-config=backend.hcl`.
-# Copy to backend.hcl (gitignored) and fill in. The bucket is provisioned BY
-# CDK (CloudflareBootstrapStack) — do NOT create it by hand; read its name from
-# the stack output (see README.md "One-time backend bootstrap").
+# Copy to backend.hcl (gitignored) and fill in. Then:
+#   terraform init -backend-config=backend.hcl
+#
+# Bucket = the CDK-provisioned state bucket (CloudflareBootstrapStack output
+# CloudflareTfStateBucketName), e.g. production-soroban-explorer-cf-tfstate.
+# This is THIS repo's own bucket (D11) — separate from rf-domains' bucket.
 
-bucket       = "production-soroban-explorer-cf-tfstate"  # = CDK output CloudflareTfStateBucketName
-key          = "cloudflare/production/terraform.tfstate"
+bucket       = "production-soroban-explorer-cf-tfstate"
+key          = "sorobanscan-api.tfstate"
 region       = "eu-central-1"
 encrypt      = true
-use_lockfile = true                                  # native S3 locking (TF >= 1.10)
+use_lockfile = true

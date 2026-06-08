@@ -1,47 +1,22 @@
-# DNS records. Gated by var.create_dns_records so the rest of the config
-# (zone settings, AOP lock, rulesets) can be applied WITHOUT cutting over
-# traffic. Flip create_dns_records=true only at the actual cutover.
+# The sorobanscan API DNS record — the ONE record this repo owns in the
+# rumblefishdev.com zone (D9). A single cloudflare_dns_record is its own
+# resource, so it never conflicts with the company records owned by rf-domains.
 #
-# Proxy (orange-cloud) the SPA + API so Cloudflare's edge (WAF, DDoS,
-# challenge, rate limit) and the origin locks apply. Keep ch.* DNS-only
-# (grey) — Cloudflare's proxy would terminate TLS and break Caddy's
-# client-cert mTLS, and the box needs a public IP + DNS for ACME HTTP-01.
+# Gated by var.create_dns_record so the AOP origin lock can be provisioned
+# WITHOUT cutting over traffic. Flip create_dns_record=true only at the actual
+# cutover (task 0277 Step 4).
 #
-# proxied=true requires ttl=1 (automatic). v5: resource is
-# cloudflare_dns_record and the value attribute is `content`.
-
-# SPA — apex CNAME to CloudFront (Cloudflare flattens apex CNAMEs), proxied.
-resource "cloudflare_dns_record" "spa" {
-  count = var.create_dns_records ? 1 : 0
-
-  zone_id = cloudflare_zone.this.id
-  name    = var.spa_hostname
-  type    = "CNAME"
-  content = var.spa_origin_target
-  proxied = true
-  ttl     = 1
-}
-
-# API — CNAME to the API Gateway regional custom-domain target, proxied.
+# proxied=true (orange) routes the API through the Cloudflare edge — this is
+# what puts the WAF/DDoS/rate-limit/challenge rules (owned by rf-domains,
+# http.host-scoped to this hostname) in the request path. proxied=true requires
+# ttl=1 (automatic). v5: resource is cloudflare_dns_record, value attr `content`.
 resource "cloudflare_dns_record" "api" {
-  count = var.create_dns_records ? 1 : 0
+  count = var.create_dns_record ? 1 : 0
 
-  zone_id = cloudflare_zone.this.id
+  zone_id = var.cloudflare_zone_id
   name    = var.api_hostname
   type    = "CNAME"
   content = var.api_origin_target
   proxied = true
   ttl     = 1
-}
-
-# ClickHouse — A record to the Hetzner box, DNS-only (grey). NOT proxied.
-resource "cloudflare_dns_record" "ch" {
-  count = var.create_dns_records ? 1 : 0
-
-  zone_id = cloudflare_zone.this.id
-  name    = var.ch_hostname
-  type    = "A"
-  content = var.ch_origin_ip
-  proxied = false
-  ttl     = 300
 }

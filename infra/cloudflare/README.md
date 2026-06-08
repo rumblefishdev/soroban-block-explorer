@@ -1,107 +1,66 @@
-# Cloudflare edge — Terraform
+# `infra/cloudflare/` — sorobanscan slice of the Cloudflare edge
 
-Cloudflare edge (WAF / DDoS / Managed Challenge / rate limit) + origin
-lockdown for the Soroban Block Explorer. Implements the Cloudflare side of
-**[ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md)** /
-**task 0277**. The AWS side (API Gateway mTLS, the `X-Origin-Secret`
-CloudFront Function) lives in the CDK app under `infra/`.
+Terraform for the **sorobanscan-specific** Cloudflare resources only
+(task 0277 / ADR 0048). Part of a deliberate **repo split** (D9):
 
-> Run **locally by an operator** to start (migrate to CI later). Provider
-> pinned to **Cloudflare v5.x** (verified against v5.19.1).
+| Lives here (`soroban-explorer`)                         | Lives in `rf-domains` (private)                             |
+| ------------------------------------------------------- | ----------------------------------------------------------- |
+| `api.sorobanscan.rumblefishdev.com` DNS record (orange) | the `cloudflare_zone` `rumblefishdev.com`                   |
+| API origin lock — per-host **AOP** (mTLS)               | company DNS records + zone settings                         |
+| AWS side of the lock (CDK: API GW mTLS)                 | zone-level **edge rulesets** (WAF / rate-limit / challenge) |
+| own TF-state bucket (`*-cf-tfstate`)                    | its own, separate TF-state bucket                           |
 
-## What this manages
+This module **does not own the zone** — it references it by id
+(`var.cloudflare_zone_id`, from rf-domains' `zone_id` output).
 
-| File               | Resources                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------ |
-| `zone.tf`          | The Cloudflare zone (exposes the NS to delegate).                                          |
-| `dns.tf`           | SPA + API records (proxied), `ch` (DNS-only). Gated by `create_dns_records`.               |
-| `zone-settings.tf` | SSL = **Full (strict)**, Always Use HTTPS, min TLS 1.2.                                    |
-| `origin-lock.tf`   | Zone-level Authenticated Origin Pulls (API mTLS) + `X-Origin-Secret` Transform Rule (SPA). |
-| `security.tf`      | Free Managed WAF ruleset, scoped Managed Challenge, single rate-limit rule on the API.     |
+## Ruleset ownership — model A (D10)
 
-## Secrets — never in git or .tf
+The zone's WAF / rate-limit / Managed Challenge / Transform rulesets are
+**per-(zone, phase) singletons**, so only one Terraform state may own each
+phase. They are owned by **rf-domains** (the zone owner); each rule is
+`http.host`-scoped to `api.sorobanscan.rumblefishdev.com`. Rulesets only act on
+**proxied** traffic and only the API record is orange, so this is conflict-free.
 
-- **Cloudflare API token** → `CLOUDFLARE_API_TOKEN` env var, sourced from
-  Secrets Manager at apply time. Never enters state. Must be **zone-scoped,
-  least-privilege** (never the Global API Key).
-- **Origin secret** (`X-Origin-Secret`) → read from Secrets Manager
-  (`soroban/production/cloudflare/origin-secret`) via a data source. It is a
-  required Transform-Rule attribute, so it lands in **state** — which is why
-  state is private + encrypted + versioned.
-- **mTLS client key** → `./certs/cf-client.key` (gitignored). Also lands in
-  state; prefer Secrets Manager for production.
+Reversible to single-tenant **model C** (rulesets pulled into this repo) via
+`terraform state rm` (rf-domains) + `terraform import` (here) — no destroy /
+recreate, no downtime. Keep the provider version in lockstep so the move plans
+clean.
 
-```sh
+## Prerequisites (ordering)
+
+1. `rf-domains` applied first → the zone `rumblefishdev.com` exists; copy its
+   `zone_id` output into `terraform.tfvars`.
+2. CDK `CloudflareBootstrapStack` deployed → the state bucket exists
+   (`make -C infra deploy-production-cloudflare-bootstrap`).
+3. Zone-scoped, least-privilege `CLOUDFLARE_API_TOKEN` exported (DNS:Edit +
+   SSL and Certificates:Edit on rumblefishdev.com; see `providers.tf`).
+
+## Usage
+
+```bash
+cp backend.hcl.example backend.hcl            # fill bucket/key
+cp terraform.tfvars.example terraform.tfvars  # fill zone id + origin target
 export CLOUDFLARE_API_TOKEN=$(aws secretsmanager get-secret-value \
   --secret-id soroban/production/cloudflare/api-token \
   --query SecretString --output text)
-```
 
-## One-time backend bootstrap
-
-State uses S3 with the **native S3 lockfile** (`use_lockfile`, no DynamoDB;
-Terraform ≥ 1.10). The state bucket and the `X-Origin-Secret` are provisioned
-**by CDK** (not by hand) — set `provisionCloudflareBootstrap: true` in
-`infra/envs/production.json` and deploy the `Explorer-<env>-CloudflareBootstrap`
-stack. Then read the bucket name from its output:
-
-```sh
-aws cloudformation describe-stacks \
-  --stack-name Explorer-production-CloudflareBootstrap \
-  --query "Stacks[0].Outputs[?OutputKey=='CloudflareTfStateBucketName'].OutputValue" \
-  --output text --region eu-central-1 --profile soroban-explorer
-
-cp backend.hcl.example backend.hcl             # bucket = the name above
-cp terraform.tfvars.example terraform.tfvars   # fill real values
 terraform init -backend-config=backend.hcl
+terraform plan      # gates default false → provisions nothing destructive
 ```
 
-Only the **Cloudflare API token** (external) and the **mTLS client cert/key**
-(`openssl`) are created out-of-band; everything else is CDK or Terraform.
+### Rollout gates
 
-> **Do NOT pre-create the `…/cloudflare/origin-secret`** by hand — CDK owns it
-> (auto-generated). If a same-named secret already exists (manual create, or a
-> RETAIN'd secret still inside its 7–30 day deletion window), the stack deploy
-> fails `ResourceExistsException`; delete/restore or `cdk import` it first.
+- `create_dns_record` — flip `true` only at the actual cutover (Step 4), after
+  the AWS-side lock is verified.
+- `enable_api_mtls_aop` — flip `true` once `./certs/cf-client.{pem,key}` exist
+  (operator `openssl`); confirm per-host vs zone-level AOP on Free in the
+  staging dry-run (Step 3).
 
-## Rollout (lock before cutover)
+## Secrets / safety
 
-`create_dns_records=false` by default so you can stand up everything
-**without moving traffic**:
-
-```sh
-# 1. Zone settings + AOP cert/lock + rulesets (no traffic moved):
-terraform apply
-
-# 2. Verify the AWS-side lockdown (CDK: API mTLS + CloudFront secret fn) and
-#    the negative-test matrix (task 0277 Step 7).
-
-# 3. Cut over DNS only when ready:
-terraform apply -var=create_dns_records=true
-```
-
-`terraform output cloudflare_name_servers` prints the NS values to hand to
-the owner of the parent `rumblefish.dev` zone for the delegation
-(task 0277 Step 1 sign-off).
-
-## ⚠️ Verify with `terraform plan` (v5 schema caveats)
-
-Confirm against a real `plan`/`apply`:
-
-1. **Zone-level AOP `config` shape** (`origin-lock.tf`): v5 folds zone-level
-   and per-hostname into one `config` list. We use `[{ cert_id, enabled }]`
-   with `hostname` omitted (verified against the v5 docs as the zone-level
-   form); confirm against your zone.
-2. **Free Managed Ruleset ID** (`security.tf`): `77…` is a Cloudflare
-   account-side constant — confirm it matches your account.
-
-(Rate-limit `characteristics` ships `["ip.src", "cf.colo.id"]` — `cf.colo.id`
-is required by the API for count-by-IP rules, verified; no longer a caveat.)
-
-## Not here (by design)
-
-- DNS authority flip = **NS records in the parent `rumblefish.dev` zone**
-  (owned outside this repo) — a human handoff, not Terraform.
-- AWS-side origin lockdown (API GW mTLS truststore, CloudFront
-  `X-Origin-Secret` Function) — CDK app in `infra/`.
-- `ch.sorobanscan` stays DNS-only (mTLS + ACME) — see ADR 0048 accepted risk.
+- **Never commit** `backend.hcl`, `terraform.tfvars`, `*.tfstate`, `certs/`
+  (see `.gitignore`). State can carry the mTLS private key → bucket stays
+  private + encrypted.
+- API token: zone-scoped, least-privilege, from Secrets Manager — never the
+  Global API Key, never in `.tf` or committed state.
+- SSL/TLS mode (Full strict) is a **zone setting → owned by rf-domains**.

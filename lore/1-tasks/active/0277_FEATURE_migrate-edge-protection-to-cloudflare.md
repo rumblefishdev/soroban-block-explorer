@@ -111,6 +111,28 @@ history:
       description kept accurate; present-tense topology rewrite deferred to the
       Step 7 cutover when the ADR flips to `accepted`. Still outstanding in Step 1:
       external parent-zone NS sign-off.
+  - date: '2026-06-03'
+    status: active
+    who: fmazur
+    note: >
+      MAJOR re-scope after deploy hit Cloudflare error 1116 (Free/Pro cannot proxy
+      a bare subdomain; partial/CNAME = Business $200, subdomain-zone = Enterprise).
+      New plan (daily + senior): move the spare company domain rumblefishdev.com to
+      Cloudflare Free (full zone), API becomes api.sorobanscan.rumblefishdev.com;
+      rumblefish.dev stays on Route53, untouched. Scope narrowed to API only (SPA
+      stays S3/CloudFront + Shield Std). Repo split: company-level (zone + company
+      DNS + zone settings + edge rulesets + TF-state bucket) goes to a NEW private
+      repo `rf-domains`; sorobanscan-specific (api DNS record + AWS-side origin
+      lock) stays here (infra/cloudflare/ + CDK). Ruleset ownership = model A
+      (zone-owner rf-domains owns the per-phase rulesets, each rule http.host-scoped
+      to the API; reversible to single-tenant model C via terraform state rm+import).
+      soroban keeps its OWN TF-state bucket here (the deployed
+      production-soroban-explorer-cf-tfstate via CloudflareBootstrapStack); rf-domains
+      gets a separate bucket. Origin lock under the split prefers mTLS (per-host AOP
+      owned by soroban + API GW mTLS) over secret-header (which would force a
+      cross-repo shared secret + the transform rule into rf-domains). Dead
+      rumblefishdev.com records (do NOT recreate): contact, wag-api-staging,
+      gitlab-test. See full decision block in the body + docs/waf-vs-cloudflare/.
 ---
 
 # Migrate edge protection (WAF/DDoS) to Cloudflare
@@ -126,6 +148,45 @@ cost and a free browser challenge. Rationale + verified cost model: [`docs/waf-v
 
 > The data is public on-chain data served to anonymous browsers, so "browser-only" is **not**
 > achievable (requests are replayable). This raises the bar against bots/floods; it is not access control.
+
+## ⚠️ Decyzje — aktualizacja 2026-06-03 (model A + split na `rf-domains`)
+
+Po uderzeniu w **Cloudflare error 1116** (Free/Pro **nie proxuje gołej poddomeny**;
+partial/CNAME = Business $200, subdomain-zone = Enterprise — 3× zweryfikowane) plan się
+zmienił. Nadrzędne nad starszymi „Decisions 1–6" poniżej tam, gdzie kolidują.
+
+- **D7 — Hostname + strefa.** API ląduje na **`api.sorobanscan.rumblefishdev.com`** za
+  **Cloudflare Free (cała strefa `rumblefishdev.com`)** — zapasowej domeny firmy (dziś tylko
+  redirect → `rumblefish.dev`). **`rumblefish.dev` zostaje na Route53, nietknięta.**
+  SPA (`sorobanscan.rumblefish.dev`) i `ch.` **bez zmian**.
+- **D8 — Scope = tylko API.** SPA jest statyczne (S3/CloudFront + Shield Standard), niska
+  powierzchnia, challenge na froncie user-hostile → **lock SPA odpada**; litera taska (SPA) tu
+  zawężona.
+- **D9 — Split repo.** **Firmowe** (strefa + rekordy `rumblefishdev.com` + zone settings + **rulesety
+  edge** + **bucket na TF-state**) → **NOWE prywatne repo `rf-domains`** (CloudFormation na bucket
+  tam, nie u nas). **Sorobanowe** (rekord `api.sorobanscan` + **AWS-side origin lock**) → **to repo**
+  (`infra/cloudflare/` + CDK). Cel: firmowy DNS nie żyje w repo sorobanscana.
+- **D10 — Własność rulesetów = model A.** Rulesety to **per-(strefa,faza) singletony** → jeden
+  właściciel TF. **Posiada je właściciel strefy (`rf-domains`)**, a każda reguła jest
+  **`http.host`-scoped do `api.sorobanscan.rumblefishdev.com`**. Skaluje się na wiele projektów w
+  jednej strefie; **odwracalne** do single-tenant (model C) przez `terraform state rm` +
+  `terraform import` (bez niszczenia/odtwarzania, bez downtime).
+- **D11 — State.** Sorobanowy Cloudflare TF ma **własny bucket tutaj** (już zdeployowany
+  `production-soroban-explorer-cf-tfstate` przez `CloudflareBootstrapStack`). `rf-domains` ma
+  **osobny** bucket. **Bucketu NIE niszczymy.**
+- **D12 — Origin lock pod splitem → mTLS.** Preferowane **mTLS** (per-host **AOP** posiadane przez
+  soroban + **API GW mTLS** truststore w CDK + `disableExecuteApiEndpoint`), bo jest **samo-zawarte
+  w soroban** (cert + truststore). **Secret-header odpada pod splitem** — wymusiłby (a) Transform
+  Rule jako zone-ruleset → do `rf-domains`, (b) **sekret współdzielony między repo**. Dokładny zakres
+  AOP (zone vs per-host na Free) potwierdzić w **dry-run na staging** (Step 3).
+- **Martwe rekordy `rumblefishdev.com`** (NIE odtwarzać w CF): **contact, wag-api-staging, gitlab-test**.
+- **⚠️ DNS.** Pełne przejście strefy `rumblefishdev.com` → **wszystkie** rekordy odtworzyć w CF
+  przed flipem NS (mechanizm redirectu, MX/SPF/DKIM/DMARC, **CAA musi dopuszczać CF**); pre-obniżyć
+  TTL; potwierdzić, kto zmienia **NS u rejestratora**. Inwentaryzacja z żywej strefy (account
+  firmowy), nie z pamięci.
+
+> Diagram + tabela domen: [`docs/waf-vs-cloudflare/diagram-komunikacji-edge.md`](../../../docs/waf-vs-cloudflare/diagram-komunikacji-edge.md);
+> analiza opcji A–G: [`docs/waf-vs-cloudflare/decyzja-edge-poddomena.md`](../../../docs/waf-vs-cloudflare/decyzja-edge-poddomena.md).
 
 ## Current state (verified against the code)
 
@@ -214,6 +275,14 @@ Resolve the decisions above; write an ADR (`lore/2-adrs/_template.md`) for "Clou
 AWS WAF" and link it. **Identify and get sign-off from the owner of the parent `rumblefish.dev`
 zone** (NS delegation change is theirs). Update `docs/architecture/**` topology.
 
+> **⚠️ SUPERSEDED by D7 (2026-06-03).** The parent-`rumblefish.dev`-zone NS-delegation model
+> below was for the abandoned "proxy `sorobanscan.rumblefish.dev`" plan. Under **D7** we move the
+> **whole spare apex `rumblefishdev.com`** to Cloudflare (full zone), so authority flips via a
+> **registrar NS change on `rumblefishdev.com`** — NOT a parent-zone delegation, and **not** owned
+> by the `rumblefish.dev` zone owner. The Step-1 dependency is therefore: **who controls the
+> `rumblefishdev.com` registrar + its live Route 53 records** (company account). `rumblefish.dev`
+> stays untouched.
+
 ### Step 2 — Build origin lockdown BEFORE any DNS change (no AWS WAF) — Path B (mTLS), chosen
 
 Enforce that the origin accepts **only Cloudflare** at the TLS layer:
@@ -238,6 +307,15 @@ Rehearse the whole flow (zone, proxy, lockdown, challenge) on the **staging** zo
 the negative-test matrix there before touching production.
 
 ### Step 4 — Cloudflare zone + DNS migration (production)
+
+> **⚠️ SUPERSEDED by D7/D8 (2026-06-03).** Scope is now **API-only on a different apex**:
+> create the **`rumblefishdev.com`** full zone (owned by **`rf-domains`**), recreate **ALL** its
+> live records there (mail/SPF/DKIM/DMARC, CAA-for-CF, apex redirect — inventory the company
+> Route 53 zone first), proxy **only** `api.sorobanscan.rumblefishdev.com`, then flip authority via
+> a **registrar NS change on `rumblefishdev.com`** (whole apex → Cloudflare; full setup is the only
+> Free/Pro option). **SPA `sorobanscan.rumblefish.dev` and `ch.` stay on Route 53, untouched** — no
+> parent-`rumblefish.dev` NS change at all. The Route 53 reconciliation below applies only to the
+> **API** record set, not the SPA/CH ones. The original sub-bullets are kept for historical context:
 
 - Pre-lower TTLs on the affected records **days ahead**.
 - Create the Cloudflare zone; recreate records. **Proxy (orange)** `sorobanscan` + `api.sorobanscan`;
@@ -296,6 +374,13 @@ Run the test matrix (below). **Soak** for an agreed window. Only then **`enableW
       is edge/CloudFront-Function config, not app code).
 
 ## Rollback
+
+> **⚠️ SUPERSEDED by D7 (2026-06-03).** Rollback now means reverting the **`rumblefishdev.com`
+> registrar NS** back to its previous provider (keep the old Route 53 records for that apex intact
+> to revert to) — **bounded by the registrar NS/SOA TTL (can be hours), not instant**; this is why
+> TTLs are pre-lowered. **`rumblefish.dev` is never touched, so the SPA/CH need no rollback.**
+> Re-creating any torn-down WebACL is still a **fresh CDK deploy** (logs were `DESTROY`-removed),
+> not a toggle — budget for it. (Original text below kept for context.)
 
 Revert NS records in the parent `rumblefish.dev` zone back to Route 53 — **bounded by parent-zone
 NS/SOA TTL (can be hours), not instant**; this is why TTLs are pre-lowered. Keep the Route 53 zone
