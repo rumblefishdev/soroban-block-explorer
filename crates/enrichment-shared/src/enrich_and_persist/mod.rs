@@ -19,6 +19,19 @@ pub use error::EnrichError;
 pub use key::{AssetKey, NftKey};
 pub use message::EnrichmentMessage;
 
+/// Terminal outcome of a single successful `enrich_*` call. Both variants
+/// INSERT a side-table row (existence = "tried"); the split is what the
+/// backfill **report** and the `status` query distinguish — they must not be
+/// lumped (the report used to fold both into one "succeeded" count).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrichOutcome {
+    /// At least one real value landed.
+    Real,
+    /// Only the `''` "tried, nothing" sentinel was written (permanent fail /
+    /// no match). Read-neutralised with `NULLIF`.
+    Sentinel,
+}
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Wall-clock milliseconds — the `version` for the enrichment side tables'

@@ -27,7 +27,7 @@ use db_clickhouse::persist::rows::AssetEnrichmentRow;
 use serde::Deserialize;
 use tracing::{debug, instrument, warn};
 
-use super::{AssetKey, EnrichError};
+use super::{AssetKey, EnrichError, EnrichOutcome};
 use crate::sep1::dto::Sep1Currency;
 use crate::sep1::errors::Sep1Error;
 use crate::sep1::{Sep1Fetcher, Sep1TomlParsed};
@@ -64,7 +64,7 @@ pub async fn enrich_asset_from_sep1(
     client: &Client,
     key: AssetKey,
     fetcher: &Sep1Fetcher,
-) -> Result<(), EnrichError> {
+) -> Result<EnrichOutcome, EnrichError> {
     // Issuer home_domain + StrKey drive the SEP-1 fetch + currency match.
     let issuer = client
         .query(
@@ -100,9 +100,9 @@ pub async fn enrich_asset_from_sep1(
                 issuer.issuer_strkey.as_deref(),
                 &parsed,
             );
-            insert_outcome(client, &key, icon, name).await?;
+            let outcome = insert_outcome(client, &key, icon, name).await?;
             debug!("asset_enrichment row written");
-            Ok(())
+            Ok(outcome)
         }
         Err(arc_err) => {
             if is_transient(&arc_err) {
@@ -201,7 +201,13 @@ async fn insert_outcome(
     key: &AssetKey,
     icon_url: String,
     name: Option<String>,
-) -> Result<(), EnrichError> {
+) -> Result<EnrichOutcome, EnrichError> {
+    // Real iff a non-sentinel value landed in either column.
+    let outcome = if !icon_url.is_empty() || name.as_deref().is_some_and(|n| !n.is_empty()) {
+        EnrichOutcome::Real
+    } else {
+        EnrichOutcome::Sentinel
+    };
     let row = AssetEnrichmentRow {
         asset_type: key.asset_type,
         asset_code: key.asset_code.clone(),
@@ -212,7 +218,7 @@ async fn insert_outcome(
         version: super::now_ms(),
     };
     insert_asset_enrichment(client, std::slice::from_ref(&row)).await?;
-    Ok(())
+    Ok(outcome)
 }
 
 fn find_currency<'a>(

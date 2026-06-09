@@ -50,7 +50,7 @@ use clap::{Args, Parser, Subcommand};
 use clickhouse::Client;
 use enrichment_shared::enrich_and_persist::nft_token_uri::enrich_nft_token_uri;
 use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
-use enrichment_shared::enrich_and_persist::{AssetKey, EnrichError, NftKey};
+use enrichment_shared::enrich_and_persist::{AssetKey, EnrichError, EnrichOutcome, NftKey};
 use enrichment_shared::nft_token_uri::NftTokenUriFetcher;
 use enrichment_shared::sep1::Sep1Fetcher;
 use tokio::sync::Semaphore;
@@ -411,7 +411,7 @@ fn limit_reached(limit: Option<usize>, processed: usize) -> bool {
 /// single bad key cannot tear the drain down.
 fn collect_join(
     report: &mut BackfillReport,
-    joined: Result<(String, Result<(), EnrichError>), tokio::task::JoinError>,
+    joined: Result<(String, Result<EnrichOutcome, EnrichError>), tokio::task::JoinError>,
 ) {
     match joined {
         Ok((key, res)) => tally(report, &key, res),
@@ -431,10 +431,12 @@ fn collect_join(
 struct BackfillReport {
     kind: &'static str,
     processed: usize,
-    /// A real value landed OR a `''` sentinel was written (permanent-fail
-    /// classification). Both are healthy terminal outcomes; the real/sentinel
-    /// split is the `status` subcommand's job.
-    succeeded: usize,
+    /// A real value landed (`EnrichOutcome::Real`). Split from sentinels so the
+    /// report's vocabulary matches the `status` real/sentinel breakdown.
+    enriched: usize,
+    /// Only a `''` "tried, nothing" sentinel was written (permanent fail / no
+    /// match). Still a healthy terminal outcome — just no usable value.
+    sentinel: usize,
     unreachable: usize,
     db_failed: usize,
     transient_samples: Vec<TransientSample>,
@@ -458,7 +460,8 @@ impl BackfillReport {
         Self {
             kind,
             processed: 0,
-            succeeded: 0,
+            enriched: 0,
+            sentinel: 0,
             unreachable: 0,
             db_failed: 0,
             transient_samples: Vec::new(),
@@ -467,13 +470,14 @@ impl BackfillReport {
     }
 }
 
-/// Fold one `enrich_*` outcome into the report. `Ok` (real OR sentinel write)
-/// = succeeded; `Transient` = unreachable upstream (retry later, sampled);
-/// `Database` = ClickHouse error (logged with the key).
-fn tally(report: &mut BackfillReport, key: &str, res: Result<(), EnrichError>) {
+/// Fold one `enrich_*` outcome into the report. `Real`/`Sentinel` are the two
+/// successful terminal writes (counted separately); `Transient` = unreachable
+/// upstream (retry later, sampled); `Database` = ClickHouse error (logged).
+fn tally(report: &mut BackfillReport, key: &str, res: Result<EnrichOutcome, EnrichError>) {
     report.processed += 1;
     match res {
-        Ok(()) => report.succeeded += 1,
+        Ok(EnrichOutcome::Real) => report.enriched += 1,
+        Ok(EnrichOutcome::Sentinel) => report.sentinel += 1,
         Err(EnrichError::Transient(msg)) => {
             report.unreachable += 1;
             if report.transient_samples.len() < TRANSIENT_SAMPLE_CAP {
@@ -493,7 +497,8 @@ fn tally(report: &mut BackfillReport, key: &str, res: Result<(), EnrichError>) {
 fn print_report(r: &BackfillReport) {
     println!("# enrich {} — drain report\n", r.kind);
     println!("**Processed:** {}", r.processed);
-    println!("**Succeeded (incl. sentinel writes):** {}", r.succeeded);
+    println!("**Real values:** {}", r.enriched);
+    println!("**Sentinels (`''` tried-nothing):** {}", r.sentinel);
     println!(
         "**Unreachable (transient, retry candidate):** {}",
         r.unreachable
@@ -565,18 +570,21 @@ mod tests {
         let r = BackfillReport::new("sep1-assets");
         assert_eq!(r.kind, "sep1-assets");
         assert_eq!(r.processed, 0);
-        assert_eq!(r.succeeded, 0);
+        assert_eq!(r.enriched, 0);
+        assert_eq!(r.sentinel, 0);
         assert_eq!(r.unreachable, 0);
         assert_eq!(r.db_failed, 0);
         assert!(r.transient_samples.is_empty());
     }
 
     #[test]
-    fn tally_ok_increments_succeeded() {
+    fn tally_real_and_sentinel_increment_separately() {
         let mut r = BackfillReport::new("sep1-assets");
-        tally(&mut r, "k", Ok(()));
-        assert_eq!(r.processed, 1);
-        assert_eq!(r.succeeded, 1);
+        tally(&mut r, "k", Ok(EnrichOutcome::Real));
+        tally(&mut r, "k2", Ok(EnrichOutcome::Sentinel));
+        assert_eq!(r.processed, 2);
+        assert_eq!(r.enriched, 1);
+        assert_eq!(r.sentinel, 1);
         assert_eq!(r.unreachable, 0);
         assert_eq!(r.db_failed, 0);
     }
@@ -629,17 +637,18 @@ mod tests {
     #[test]
     fn tally_mixed_outcomes_accumulate_correctly() {
         let mut r = BackfillReport::new("nft-metadata");
-        tally(&mut r, "a", Ok(()));
-        tally(&mut r, "b", Ok(()));
+        tally(&mut r, "a", Ok(EnrichOutcome::Real));
+        tally(&mut r, "b", Ok(EnrichOutcome::Sentinel));
         tally(
             &mut r,
             "c",
             Err(EnrichError::Transient("upstream 502".into())),
         );
         tally(&mut r, "d", Err(db_err()));
-        tally(&mut r, "e", Ok(()));
+        tally(&mut r, "e", Ok(EnrichOutcome::Real));
         assert_eq!(r.processed, 5);
-        assert_eq!(r.succeeded, 3);
+        assert_eq!(r.enriched, 2);
+        assert_eq!(r.sentinel, 1);
         assert_eq!(r.unreachable, 1);
         assert_eq!(r.db_failed, 1);
         assert_eq!(r.transient_samples.len(), 1);

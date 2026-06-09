@@ -37,7 +37,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
-use super::{EnrichError, NftKey};
+use super::{EnrichError, EnrichOutcome, NftKey};
 use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
 use crate::nft_token_uri::resolve_ipfs_to_https;
@@ -64,7 +64,7 @@ pub async fn enrich_nft_token_uri(
     client: &Client,
     key: NftKey,
     fetcher: &NftTokenUriFetcher,
-) -> Result<(), EnrichError> {
+) -> Result<EnrichOutcome, EnrichError> {
     // The fetcher needs the contract StrKey to call `token_uri(token_id)`;
     // `nfts.contract_id` is the `soroban_contracts.id` FK.
     let lookup = client
@@ -109,7 +109,7 @@ pub async fn enrich_nft_token_uri(
             }
         };
 
-    insert_columns(
+    let outcome = insert_columns(
         client,
         key.contract_id,
         &key.token_id,
@@ -119,7 +119,7 @@ pub async fn enrich_nft_token_uri(
     )
     .await?;
     debug!("nft_enrichment row written");
-    Ok(())
+    Ok(outcome)
 }
 
 /// The all-`''` outcome: a permanent fetch fail / missing contract / no JSON.
@@ -216,7 +216,13 @@ async fn insert_columns(
     name: &str,
     media_url: &str,
     collection_name: &str,
-) -> Result<(), EnrichError> {
+) -> Result<EnrichOutcome, EnrichError> {
+    // Real iff any of the three columns landed a non-sentinel value.
+    let outcome = if !name.is_empty() || !media_url.is_empty() || !collection_name.is_empty() {
+        EnrichOutcome::Real
+    } else {
+        EnrichOutcome::Sentinel
+    };
     let row = NftEnrichmentRow {
         contract_id,
         token_id: token_id.to_owned(),
@@ -226,7 +232,7 @@ async fn insert_columns(
         version: super::now_ms(),
     };
     insert_nft_enrichment(client, std::slice::from_ref(&row)).await?;
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]
