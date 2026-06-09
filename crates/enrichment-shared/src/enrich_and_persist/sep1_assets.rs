@@ -376,4 +376,27 @@ mod tests {
         assert_eq!(sentinel_name(2).as_deref(), Some(""));
         assert!(sentinel_name(3).is_none());
     }
+
+    /// Smoke (task 0231 step 5): hit a REAL issuer `stellar.toml` over the
+    /// network and run the actual fetch + resolve path — catches real-world
+    /// TOML quirks the mocked unit tests can't. `#[ignore]` (manual / network,
+    /// not CI). Run:
+    /// `cargo test -p enrichment-shared smoke_real_sep1 -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "network: fetches a live issuer stellar.toml"]
+    async fn smoke_real_sep1_resolves_icon_and_name() {
+        // USDC (Circle) — a stable, well-formed SEP-1 issuer.
+        let home_domain = "centre.io";
+        let code = "USDC";
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let fetcher = Sep1Fetcher::new().expect("build fetcher");
+        let parsed = fetcher.fetch(home_domain).await.expect("fetch USDC toml");
+        let (icon, name) = resolve_currency_outcome(1, Some(code), Some(issuer), &parsed);
+        eprintln!("USDC → icon={icon:?} name={name:?}");
+        assert!(!icon.is_empty(), "expected a real icon URL (got sentinel)");
+        assert!(
+            name.as_deref().is_some_and(|n| !n.is_empty()),
+            "expected a real name (got sentinel/None)"
+        );
+    }
 }
