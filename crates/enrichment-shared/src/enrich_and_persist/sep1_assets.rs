@@ -77,7 +77,7 @@ pub async fn enrich_asset_from_sep1(
         .await?;
 
     let Some(issuer) = issuer else {
-        warn!("issuer account not found; writing sentinel");
+        warn!(key = %key, reason = "issuer_account_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
         return insert_outcome(client, &key, icon, name).await;
     };
@@ -88,6 +88,9 @@ pub async fn enrich_asset_from_sep1(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
+        // Was a silent sentinel write — now logged so a blank asset is
+        // debuggable by key (in the `#[instrument]` span) + reason.
+        debug!(key = %key, reason = "issuer_home_domain_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
         return insert_outcome(client, &key, icon, name).await;
     };
@@ -106,9 +109,12 @@ pub async fn enrich_asset_from_sep1(
         }
         Err(arc_err) => {
             if is_transient(&arc_err) {
+                // Logged at the call site (was only sampled in the report) so
+                // the retried key + cause are visible, not just counted.
+                warn!(key = %key, reason = "transient", error = %arc_err, "retry candidate (no row written)");
                 Err(EnrichError::Transient(arc_err.to_string()))
             } else {
-                warn!("permanent SEP-1 fetch failure: {arc_err}; sentinel written");
+                warn!(key = %key, reason = "sep1_fetch_permanent", error = %arc_err, "sentinel written");
                 let (icon, name) = permanent_fail_outcome(key.asset_type);
                 insert_outcome(client, &key, icon, name).await
             }

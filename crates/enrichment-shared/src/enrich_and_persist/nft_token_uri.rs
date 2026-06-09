@@ -77,7 +77,7 @@ pub async fn enrich_nft_token_uri(
         .await?;
 
     let Some(contract_strkey) = lookup.and_then(|l| l.contract_strkey) else {
-        warn!("soroban contract StrKey not found; writing sentinel");
+        warn!(key = %key, reason = "contract_strkey_not_found", "writing sentinel");
         let (name, media_url, collection_name) = permanent_fail_outcome();
         return insert_columns(
             client,
@@ -90,24 +90,30 @@ pub async fn enrich_nft_token_uri(
         .await;
     };
 
-    let (name, media_url, collection_name) =
-        match fetcher.resolve(&contract_strkey, &key.token_id).await {
-            Ok(Some(json)) => extract_columns(&json),
-            // Fetcher honoured the convention but produced no JSON (reserved
-            // for future variants). Permanent — sentinel write.
-            Ok(None) => permanent_fail_outcome(),
-            // Transient (Http 5xx / connect / timeout, SorobanRpc) → bounce
-            // to SQS retry → DLQ → DepthAlarm.
-            Err(arc_err) if is_transient(&arc_err) => {
-                return Err(EnrichError::Transient(arc_err.to_string()));
-            }
-            // Permanent (4xx, malformed JSON, unsafe scheme, malformed
-            // input, XDR codec, etc.) → sentinel + warn. Operator can grep.
-            Err(arc_err) => {
-                warn!(error = %arc_err, "nft token_uri permanent fail; sentinel write");
-                permanent_fail_outcome()
-            }
-        };
+    let (name, media_url, collection_name) = match fetcher
+        .resolve(&contract_strkey, &key.token_id)
+        .await
+    {
+        Ok(Some(json)) => extract_columns(&json),
+        // Fetcher honoured the convention but produced no JSON (reserved
+        // for future variants). Permanent — sentinel write (was silent).
+        Ok(None) => {
+            debug!(key = %key, reason = "token_uri_no_json", "writing sentinel");
+            permanent_fail_outcome()
+        }
+        // Transient (Http 5xx / connect / timeout, retryable SorobanRpc) →
+        // bounce to SQS retry → DLQ → DepthAlarm.
+        Err(arc_err) if is_transient(&arc_err) => {
+            warn!(key = %key, reason = "transient", error = %arc_err, "retry candidate (no row written)");
+            return Err(EnrichError::Transient(arc_err.to_string()));
+        }
+        // Permanent (4xx, malformed JSON, unsafe scheme, malformed
+        // input, XDR codec, missing/contract-level RPC error) → sentinel.
+        Err(arc_err) => {
+            warn!(key = %key, reason = "token_uri_permanent", error = %arc_err, "sentinel written");
+            permanent_fail_outcome()
+        }
+    };
 
     let outcome = insert_columns(
         client,
@@ -149,7 +155,17 @@ fn permanent_fail_outcome() -> (String, String, String) {
 /// Returns `(name, image, collection)`; `""` is the "tried, nothing" sentinel.
 fn extract_columns(json: &Value) -> (String, String, String) {
     let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
-    let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
+    // `image` is the standard NFT-metadata media field. Fall back to `url` for
+    // contracts that carry the image there instead (e.g. the CDA5FGE4 prototype,
+    // whose token_uri JSON has the image CID under `url`, not `image` — the same
+    // CID its separate `token_image()` entrypoint returns, so no extra RPC call
+    // is needed). `url` is non-standard / ambiguous (could be a website), but
+    // the `resolve_ipfs_to_https` + `is_safe_https_url` guards below still apply,
+    // and a wrong media_url is read-neutralised, not a correctness/security risk.
+    let image_raw = trimmed_string_bytes(
+        json.get("image").or_else(|| json.get("url")),
+        MAX_MEDIA_URL_BYTES,
+    );
     let image_resolved = resolve_ipfs_to_https(&image_raw);
     let image = if image_resolved.is_empty() || super::is_safe_https_url(&image_resolved) {
         image_resolved
