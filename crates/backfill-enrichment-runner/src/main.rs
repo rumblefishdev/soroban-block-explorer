@@ -257,7 +257,7 @@ async fn run_sep1_assets(
         }
     }
 
-    bar.finish_and_clear();
+    bar.finish();
     report.duration_ms = started.elapsed().as_millis();
     Ok(report)
 }
@@ -392,7 +392,7 @@ async fn run_nft_metadata(
         }
     }
 
-    bar.finish_and_clear();
+    bar.finish();
     report.duration_ms = started.elapsed().as_millis();
     Ok(report)
 }
