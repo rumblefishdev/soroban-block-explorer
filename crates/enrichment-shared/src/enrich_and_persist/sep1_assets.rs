@@ -153,7 +153,7 @@ fn resolve_icon(entry: Option<&Sep1Currency>) -> String {
     else {
         return String::new();
     };
-    if !is_safe_icon_url(url) {
+    if !super::is_safe_https_url(url) {
         warn!(
             url_prefix = url.chars().take(20).collect::<String>(),
             "icon URL not https://; sentinel written (potential XSS)",
@@ -213,12 +213,6 @@ async fn insert_outcome(
     };
     insert_asset_enrichment(client, std::slice::from_ref(&row)).await?;
     Ok(())
-}
-
-/// Frontend renders `icon_url` as `<img src>`. Only `https://` passes —
-/// `http://` is mixed-content; `javascript:` / `data:` are XSS vectors.
-fn is_safe_icon_url(url: &str) -> bool {
-    url.trim().to_ascii_lowercase().starts_with("https://")
 }
 
 fn find_currency<'a>(

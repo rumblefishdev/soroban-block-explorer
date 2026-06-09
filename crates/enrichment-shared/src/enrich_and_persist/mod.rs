@@ -31,3 +31,33 @@ pub(crate) fn now_ms() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+/// `true` iff `url` (trimmed, case-insensitive) uses the `https://` scheme.
+/// The guard for user-facing URL columns the frontend renders as `<img src>`:
+/// `http://` is mixed-content; `javascript:` / `data:` are XSS vectors. Shared
+/// by `sep1_assets` (`icon_url`) and `nft_token_uri` (`media_url`).
+pub(crate) fn is_safe_https_url(url: &str) -> bool {
+    url.trim().to_ascii_lowercase().starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_https_url;
+
+    #[test]
+    fn is_safe_https_url_accepts_https() {
+        assert!(is_safe_https_url("https://example.com/x.png"));
+        assert!(is_safe_https_url("HTTPS://example.com/x.png"));
+        assert!(is_safe_https_url("  https://gateway/ipfs/Qm.../x.png  "));
+    }
+
+    #[test]
+    fn is_safe_https_url_rejects_unsafe_schemes() {
+        assert!(!is_safe_https_url("http://example.com/x.png"));
+        assert!(!is_safe_https_url("data:image/png;base64,iVBOR..."));
+        assert!(!is_safe_https_url("javascript:alert(1)"));
+        assert!(!is_safe_https_url("file:///etc/passwd"));
+        assert!(!is_safe_https_url("ipfs://Qm.../x.png"));
+        assert!(!is_safe_https_url(""));
+    }
+}

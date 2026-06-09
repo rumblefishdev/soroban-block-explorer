@@ -15,8 +15,8 @@
 //!   `Ok(None)` write the `''` sentinel, so the row records "fetch
 //!   attempted, no value" and the candidate query (`NOT IN nft_enrichment`)
 //!   skips the key on the next pass;
-//! - `is_safe_media_url` replaces a non-`https://` `image` with the
-//!   sentinel — defence in depth against a smuggled scheme.
+//! - the shared `is_safe_https_url` replaces a non-`https://` `image` with
+//!   the sentinel — defence in depth against a smuggled scheme.
 //!
 //! The side table is `ReplacingMergeTree(version)`: every write is an
 //! INSERT with `version = now_ms`, latest-wins. A later DLQ replay /
@@ -140,19 +140,18 @@ fn permanent_fail_outcome() -> (String, String, String) {
 ///    convention (OpenSea / OpenZeppelin) stores `image` as
 ///    `ipfs://Qm.../1.png`, so without this step `media_url` would be
 ///    the empty sentinel for most real-world collections.
-/// 2. The resolved value is then re-checked through [`is_safe_media_url`]:
-///    the frontend renders it as `<img src>`, so anything other than
-///    `https://` (e.g. `http://`, `data:`, `javascript:`) is replaced
-///    with the empty-string sentinel to avoid mixed-content warnings
-///    and XSS vectors. Same defence-in-depth pattern as
-///    `sep1_assets::is_safe_icon_url`.
+/// 2. The resolved value is then re-checked through the shared
+///    [`super::is_safe_https_url`]: the frontend renders it as `<img src>`, so
+///    anything other than `https://` (e.g. `http://`, `data:`, `javascript:`)
+///    is replaced with the empty-string sentinel to avoid mixed-content
+///    warnings and XSS vectors.
 ///
 /// Returns `(name, image, collection)`; `""` is the "tried, nothing" sentinel.
 fn extract_columns(json: &Value) -> (String, String, String) {
     let name = trimmed_string_chars(json.get("name"), MAX_NAME_CHARS);
     let image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
     let image_resolved = resolve_ipfs_to_https(&image_raw);
-    let image = if image_resolved.is_empty() || is_safe_media_url(&image_resolved) {
+    let image = if image_resolved.is_empty() || super::is_safe_https_url(&image_resolved) {
         image_resolved
     } else {
         warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
@@ -160,12 +159,6 @@ fn extract_columns(json: &Value) -> (String, String, String) {
     };
     let collection = trimmed_string_chars(json.get("collection"), MAX_COLLECTION_CHARS);
     (name, image, collection)
-}
-
-/// Frontend renders `media_url` as `<img src>`. Only `https://` passes —
-/// `http://` is mixed-content; `javascript:` / `data:` are XSS vectors.
-fn is_safe_media_url(url: &str) -> bool {
-    url.trim().to_ascii_lowercase().starts_with("https://")
 }
 
 /// Caps by character count (not byte length) — a generous safety bound only
@@ -309,23 +302,6 @@ mod tests {
         let too_long = "x".repeat(MAX_MEDIA_URL_BYTES + 1);
         let v = Value::String(too_long);
         assert_eq!(trimmed_string_bytes(Some(&v), MAX_MEDIA_URL_BYTES), "");
-    }
-
-    #[test]
-    fn is_safe_media_url_accepts_https() {
-        assert!(is_safe_media_url("https://example.com/x.png"));
-        assert!(is_safe_media_url("HTTPS://example.com/x.png"));
-        assert!(is_safe_media_url("  https://gateway/ipfs/Qm.../x.png  "));
-    }
-
-    #[test]
-    fn is_safe_media_url_rejects_unsafe_schemes() {
-        assert!(!is_safe_media_url("http://example.com/x.png"));
-        assert!(!is_safe_media_url("data:image/png;base64,iVBOR..."));
-        assert!(!is_safe_media_url("javascript:alert(1)"));
-        assert!(!is_safe_media_url("file:///etc/passwd"));
-        assert!(!is_safe_media_url("ipfs://Qm.../x.png")); // expected pre-resolved by fetcher
-        assert!(!is_safe_media_url(""));
     }
 
     #[test]
