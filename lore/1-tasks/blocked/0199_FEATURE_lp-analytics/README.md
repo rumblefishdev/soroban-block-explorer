@@ -3,7 +3,7 @@ id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
 status: blocked
-related_adr: ['0027', '0031', '0043']
+related_adr: ['0027', '0031', '0043', '0048']
 related_tasks: ['0125', '0194', '0195']
 tags:
   [
@@ -57,6 +57,17 @@ history:
       recent history. Follow-up: ADR 0043 amendment (compute-at-read), schema ADD
       gross_volume_a when volume returns, docs/architecture chart contract = TVL
       only for now.
+  - date: '2026-06-09'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Created ADR 0048 (proposed) — "fast-change off-chain values on ClickHouse:
+      compute-at-read via local price join" — codifying the architectural part of
+      this decision (amends ADR 0043's off-chain=rare-change assumption; fourth
+      path in the taxonomy). Updated docs/architecture/technical-design-general-overview.md
+      (§6.11 + §2.3) per ADR 0032 evergreen rule. ADR 0048 is proposed, pending a
+      read-cost measurement of the read-time join + karolkow review. The TVL-only
+      scope cut stays a task-level decision (here), not in the ADR.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
