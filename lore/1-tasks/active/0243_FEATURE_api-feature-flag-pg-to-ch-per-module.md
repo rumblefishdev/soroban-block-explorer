@@ -39,6 +39,17 @@ history:
       ongoing work (commits reference lore-0243; #251 flipped
       API_DATASOURCE_LIQUIDITY_POOLS to ch in IaC). Blockers 0241/0239/0240 are
       resolved (archived); `blocked_by` retained as a historical record.
+  - date: '2026-06-09'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Scope correction: the "PG fallback" premise is void. Per task 0239
+      (completed) and infrastructure-overview.md, RDS PostgreSQL is decommissioned
+      — production has no AWS-side database (CH-only greenfield in eu-central-1).
+      So flag-defaults-to-pg / rollback-to-pg is dead in prod; the effective shape
+      is "port reads to CH and ship CH-only", with the flag + sqlx surviving only
+      for local-dev + deploy ordering. Added a "Scope correction" section to the
+      body; Steps 2 and 4 superseded.
 ---
 
 # API feature flag per module — gradual PG↔CH migration
@@ -50,6 +61,37 @@ history:
 stale data. This task rewrites the API from PG to CH per module behind a
 feature flag (9 flags = 9 modules), enabling a gradual rollout and safe
 rollback per handler.
+
+## Scope correction (2026-06-09): production has no PG — the "PG fallback" premise is void
+
+This task was written (2026-05-20) assuming a transition where PG stays a live
+fallback: the flag **defaults to `pg`**, and "rollback the flag" to PG is the
+safety net. **That premise is stale.** Per task 0239 (completed) and
+[`docs/architecture/infrastructure/infrastructure-overview.md`](../../../docs/architecture/infrastructure/infrastructure-overview.md)
+§"Production data plane": **RDS PostgreSQL is decommissioned — there is no
+AWS-side database in the production topology** (in eu-central-1 PG was never even
+deployed; production is ClickHouse-only greenfield).
+
+Consequences for the plan below:
+
+- **No production PG to default to or roll back to.** The `Pg` branch of the
+  `DataSource` enum is dead code in production; in prod every module must run on
+  CH.
+- **Real rollback = redeploy the previous CH build**, not "flip the flag to pg".
+  The flag's remaining value is (a) **local-dev** — `docker-compose.yml` still
+  runs `postgres` alongside `clickhouse`, so `queries.rs` keeps dev value — and
+  (b) **deploy ordering / canary** during rollout. It is **not** a production
+  fallback.
+- **`sqlx` / `queries.rs` survive only for local-dev**, not for production
+  resilience. Cleanup (0244) can drop them once local-dev also moves to CH (or
+  immediately if local-dev PG parity isn't required).
+
+So the effective shape is **"port each module's reads to CH and ship CH-only"**,
+not "gradual PG↔CH with PG rollback". Below, **Step 2 (`default to Pg`)** and
+**Step 4 (`rollback the flag` as the safety net)** are superseded accordingly;
+the per-module porting (Step 3) and the CH connection/mTLS setup (Step 1) stand
+unchanged. The title still says "PG↔CH" for slug stability — read it as
+"PG→CH, CH-only in prod".
 
 ## Context
 
