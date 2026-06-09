@@ -2,7 +2,7 @@
 id: '0243'
 title: 'FEATURE: API feature flag per module — gradual PG↔CH migration for all 9 handler modules'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0044', '0047']
 related_tasks: ['0207', '0228', '0239', '0240', '0241', '0244']
 blocked_by: ['0241', '0239', '0240']
@@ -31,6 +31,14 @@ history:
       PG→CH pivot. Currently `crates/api/` depends exclusively on sqlx (PG).
       Team decision (2026-05-20): feature flag per module (9 flags, gradual
       rollout, safe rollback per handler).
+  - date: '2026-06-09'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Corrected status backlog → active to match the active/ directory and
+      ongoing work (commits reference lore-0243; #251 flipped
+      API_DATASOURCE_LIQUIDITY_POOLS to ch in IaC). Blockers 0241/0239/0240 are
+      resolved (archived); `blocked_by` retained as a historical record.
 ---
 
 # API feature flag per module — gradual PG↔CH migration

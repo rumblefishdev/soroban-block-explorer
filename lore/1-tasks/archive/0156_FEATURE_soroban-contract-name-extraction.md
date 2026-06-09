@@ -9,7 +9,6 @@ tags: [priority-medium, effort-medium, layer-indexer, layer-db, schema-change]
 milestone: 1
 links:
   - https://github.com/rumblefishdev/soroban-block-explorer/pull/160
-links:
   - crates/xdr-parser/src/state.rs
   - crates/xdr-parser/src/ledger_entry_changes.rs
   - crates/indexer/src/handler/persist/write.rs
@@ -86,6 +85,10 @@ history:
       `search_vector` matching `to_tsquery('simple', 'TEST')`. All four
       CI checks green (Rust, TypeScript, API types freshness, Detect
       changes).
+  - date: '2026-06-09'
+    status: completed
+    who: stkrolikiewicz
+    note: 'Repaired duplicate `links:` mapping key (merged the PR URL and file paths into one list). No content change. Found via lore-framework_validate.'
 ---
 
 # Indexer: extract Soroban token name from ContractData at deploy time
