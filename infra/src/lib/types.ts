@@ -206,6 +206,50 @@ export interface EnvironmentConfig {
   readonly cloudflareApiCertificateArn: string;
 
   /**
+   * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
+   * the CDK-generated `EdgeSecret` in Secrets Manager (and only that). Split from
+   * `enableEdgeSecretLock` so the value can be copied into the Cloudflare
+   * Transform Rule (rf-domains) BEFORE the Lambda starts requiring the header.
+   * Default false.
+   */
+  readonly provisionEdgeSecret: boolean;
+
+  /**
+   * Phase 2 — arm the origin lock. When true the API Lambda gets the
+   * `EDGE_SECRET` env (the provisioned secret's value); the Lambda's `edge_lock`
+   * middleware then rejects any request (except `/health`) lacking a matching
+   * `X-Edge-Secret` — i.e. any request that did not pass through Cloudflare.
+   *
+   * REQUIRES `provisionEdgeSecret=true` AND the Cloudflare Transform Rule
+   * already injecting the matching value (rf-domains `enable_edge_secret`).
+   * Arming before the edge stamps the header would 403 even legitimate
+   * Cloudflare traffic. Default false.
+   */
+  readonly enableEdgeSecretLock: boolean;
+
+  /**
+   * Phase 1 of the paid-API access layer (task 0277; docs/paid-api/
+   * plan-platne-api.md): provision its Secrets Manager secrets — a CDK-generated
+   * `JwtSecret` (HS256 session signing key) plus operator-populated
+   * `TurnstileSecret` (the Cloudflare Turnstile *secret* key) and `ApiKeysSecret`
+   * (comma-separated paid-tier keys). Split from `enableAuthLayer` because the
+   * Lambda env resolves secret values at DEPLOY time, so the operator must
+   * overwrite the Turnstile/API-keys placeholders BEFORE arming. Default false.
+   */
+  readonly provisionAuthSecrets: boolean;
+
+  /**
+   * Phase 2 — arm the access layer. Injects `JWT_SECRET` / `TURNSTILE_SECRET` /
+   * `API_KEYS` into the API Lambda; the `auth` gate then requires a valid paid
+   * `X-API-Key` or a free session JWT (from Turnstile) on data routes (401 else).
+   *
+   * REQUIRES `provisionAuthSecrets=true` AND the Turnstile secret already
+   * populated AND the SPA already sending sessions (Turnstile → Bearer);
+   * arming before the SPA does so would 401 real users. Default false.
+   */
+  readonly enableAuthLayer: boolean;
+
+  /**
    * Lock the CloudFront `*.cloudfront.net` distribution to Cloudflare via
    * a secret header (Decision 4a in [ADR 0048]). When true a
    * viewer-request CloudFront Function rejects any request whose
@@ -479,6 +523,25 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
+  // Edge-secret origin lock is two-phase: the secret must exist before the
+  // Lambda is armed to require it.
+  if (config.enableEdgeSecretLock && !config.provisionEdgeSecret) {
+    errors.push(
+      `enableEdgeSecretLock=true requires provisionEdgeSecret=true: provision ` +
+        `the EdgeSecret and copy its value into the Cloudflare Transform Rule ` +
+        `(rf-domains) before arming the Lambda.`
+    );
+  }
+
+  // Auth layer is two-phase: the secrets (esp. the operator-populated Turnstile
+  // key) must exist before the Lambda env resolves them at deploy.
+  if (config.enableAuthLayer && !config.provisionAuthSecrets) {
+    errors.push(
+      `enableAuthLayer=true requires provisionAuthSecrets=true: provision the ` +
+        `JWT/Turnstile/API-keys secrets and populate the Turnstile secret first.`
+    );
+  }
+
   // mTLS now attaches to the Cloudflare custom domain (not the legacy one), so
   // it makes no sense without that domain present.
   if (config.enableApiMtls && !config.enableCloudflareApiDomain) {
@@ -506,13 +569,14 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (
     config.enableOriginLockCanary &&
     !config.enableApiMtls &&
-    !config.enableOriginSecretLock
+    !config.enableOriginSecretLock &&
+    !config.enableEdgeSecretLock
   ) {
     errors.push(
       `enableOriginLockCanary=true requires at least one origin lock ` +
-        `(enableApiMtls and/or enableOriginSecretLock) enabled — otherwise the ` +
-        `canary has no targets and every run fails. Enable it only after a lock ` +
-        `is live (post-cutover).`
+        `(enableApiMtls, enableOriginSecretLock, and/or enableEdgeSecretLock) ` +
+        `enabled — otherwise the canary has no targets and every run fails. ` +
+        `Enable it only after a lock is live (post-cutover).`
     );
   }
 

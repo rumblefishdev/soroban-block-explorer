@@ -86,8 +86,14 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       defaultCorsPreflightOptions: {
         allowOrigins: [`https://${config.domainName}`],
-        allowMethods: ['GET', 'OPTIONS'],
-        allowHeaders: ['Content-Type', 'Accept'],
+        // POST is needed for the cross-origin `/auth/session` mint (task 0277
+        // paid-API). The SPA on `domainName` calls the API on a different host,
+        // so every non-simple request triggers a browser preflight.
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        // `Authorization` (free-tier session JWT) and `x-api-key` (paid tier)
+        // are non-safelisted request headers — without them the preflight is
+        // rejected and the armed SPA cannot send a Bearer / partner key.
+        allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });

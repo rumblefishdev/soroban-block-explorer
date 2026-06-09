@@ -89,10 +89,11 @@ destroy-production-cloudflare-bootstrap: build
 
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
-# VITE_API_BASE_URL is baked from apiDomainName in envs/production.json.
+# VITE_API_BASE_URL is baked from cloudflareApiDomainName — the SPA calls the API
+# through the Cloudflare-fronted host (task 0277), NOT the legacy apiDomainName.
 
 build-production-web:
-	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.apiDomainName' infra/envs/production.json) \
+	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
 		npx nx build @rumblefish/soroban-block-explorer-web
 
 deploy-production-web: build-production-web

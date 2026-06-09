@@ -5,6 +5,7 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
@@ -177,6 +178,61 @@ export class ComputeStack extends cdk.Stack {
     // API Lambda
     // ---------------------
     const apiSecretName = `${config.mtlsSecretNamePrefix}/lambda-api-${config.envName}`;
+
+    // Origin-lock shared secret (task 0277 / ADR 0048, secret-header variant).
+    // CDK-generated. Two-phase, like the mTLS truststore, so the secret can exist
+    // (to be copied into the Cloudflare Transform Rule) BEFORE the Lambda starts
+    // requiring the header:
+    //   phase 1  provisionEdgeSecret  → create the secret (Lambda NOT yet armed)
+    //   (then)   copy value → rf-domains Transform Rule injects X-Edge-Secret
+    //   phase 2  enableEdgeSecretLock → set EDGE_SECRET env → middleware enforces
+    // RETAIN so rotation is deliberate.
+    const edgeSecret = config.provisionEdgeSecret
+      ? new secretsmanager.Secret(this, 'EdgeSecret', {
+          secretName: `soroban/${config.envName}/cloudflare/edge-secret`,
+          description:
+            'X-Edge-Secret shared by the Cloudflare Transform Rule (rf-domains) and the API Lambda origin-lock middleware (task 0277).',
+          generateSecretString: {
+            passwordLength: 48,
+            excludePunctuation: true,
+          },
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        })
+      : undefined;
+
+    // Paid-API access-layer secrets (task 0277; docs/paid-api/plan-platne-api.md).
+    // Phase 1 (provisionAuthSecrets): create them. JwtSecret is CDK-generated (a
+    // session-signing key, never copied out). TurnstileSecret + ApiKeysSecret are
+    // created with a generated placeholder the operator OVERWRITES with the real
+    // Turnstile secret key / the comma-separated paid keys (the Turnstile
+    // placeholder simply fails siteverify until then; the api-keys placeholder is
+    // one unknown key = no real paid access). RETAIN. Env wired in phase 2 below.
+    const authSecrets = config.provisionAuthSecrets
+      ? {
+          jwt: new secretsmanager.Secret(this, 'JwtSecret', {
+            secretName: `soroban/${config.envName}/auth/jwt-secret`,
+            description:
+              'HS256 signing key for free-tier session JWTs (task 0277 paid-API).',
+            generateSecretString: { passwordLength: 64, excludePunctuation: true },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+          turnstile: new secretsmanager.Secret(this, 'TurnstileSecret', {
+            secretName: `soroban/${config.envName}/auth/turnstile-secret`,
+            description:
+              'Cloudflare Turnstile SECRET key — operator overwrites with the value from the Turnstile widget (task 0277).',
+            generateSecretString: { passwordLength: 40 },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+          apiKeys: new secretsmanager.Secret(this, 'ApiKeysSecret', {
+            secretName: `soroban/${config.envName}/auth/api-keys`,
+            description:
+              'Comma-separated paid-tier API keys — operator overwrites (task 0277).',
+            generateSecretString: { passwordLength: 40, excludePunctuation: true },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+        }
+      : undefined;
+
     const apiFunction = new RustFunction(this, 'ApiFunction', {
       functionName: `${config.envName}-soroban-explorer-api`,
       manifestPath: cargoWorkspacePath,
@@ -199,6 +255,27 @@ export class ComputeStack extends cdk.Stack {
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
         API_BASE_URL: `https://${config.apiDomainName}`,
         MTLS_SECRET_NAME: apiSecretName,
+        // Origin lock (task 0277), phase 2: arm the middleware by injecting the
+        // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
+        // rejects any request (except /health) lacking a matching X-Edge-Secret —
+        // i.e. that did not pass through Cloudflare. Resolved by CloudFormation at
+        // deploy time (dynamic reference). Only when BOTH the secret is
+        // provisioned AND the lock is enabled; otherwise unset = middleware no-op.
+        ...(config.enableEdgeSecretLock &&
+          edgeSecret && {
+            EDGE_SECRET: edgeSecret.secretValue.unsafeUnwrap(),
+          }),
+        // Paid-API access layer (task 0277), phase 2: arm by injecting the
+        // session-signing key, Turnstile secret, and paid-key allowlist. The
+        // `auth` gate enforces only when JWT_SECRET is present. Resolved at
+        // deploy time — flip enableAuthLayer only AFTER the Turnstile secret is
+        // populated AND the SPA sends sessions, else real users get 401.
+        ...(config.enableAuthLayer &&
+          authSecrets && {
+            JWT_SECRET: authSecrets.jwt.secretValue.unsafeUnwrap(),
+            TURNSTILE_SECRET: authSecrets.turnstile.secretValue.unsafeUnwrap(),
+            API_KEYS: authSecrets.apiKeys.secretValue.unsafeUnwrap(),
+          }),
         // Transitional PG placeholder. The API binary still constructs a sqlx
         // PG pool at boot unconditionally (crates/api/src/main.rs); it uses
         // `connect_lazy`, so this URL is NEVER dialed for CH-routed modules.
