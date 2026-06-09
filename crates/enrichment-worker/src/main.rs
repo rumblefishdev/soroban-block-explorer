@@ -191,7 +191,7 @@ mod tests {
     //!   - `require_message_id` rejection of malformed records
     //!
     //! `handle_record` (DB + HTTP) and `handle_event` (full Lambda glue)
-    //! are not covered here — they require a live `PgPool` and `Sep1Fetcher`,
+    //! are not covered here — they require a live `clickhouse::Client` and `Sep1Fetcher`,
     //! which are the responsibility of the per-kind tests in
     //! `enrichment-shared` and a deploy-time smoke test.
     use super::*;

@@ -168,10 +168,11 @@ fn is_safe_media_url(url: &str) -> bool {
     url.trim().to_ascii_lowercase().starts_with("https://")
 }
 
-/// Postgres `VARCHAR(N)` caps character count, not byte length, so the
-/// `name` and `collection_name` columns must measure with `chars().count()`.
-/// Mismatched units would let a 256-char ASCII value pass and a 256-char
-/// multi-byte value fail (or vice versa).
+/// Caps by character count (not byte length) — a generous safety bound only
+/// (the CH `nft_enrichment.{name,collection_name}` columns are unbounded
+/// `Nullable(String)`; this just keeps a pathological multi-KB value out of the
+/// row, it does not enforce a schema width). `chars().count()` so a long
+/// multi-byte string is measured in characters, consistently.
 fn trimmed_string_chars(v: Option<&Value>, max_chars: usize) -> String {
     let Some(s) = v.and_then(Value::as_str) else {
         return String::new();
@@ -185,7 +186,7 @@ fn trimmed_string_chars(v: Option<&Value>, max_chars: usize) -> String {
         warn!(
             chars = count,
             max = max_chars,
-            "value too long for VARCHAR; sentinel written"
+            "value exceeds the char cap; sentinel written"
         );
         return String::new();
     }
@@ -281,9 +282,9 @@ mod tests {
 
     #[test]
     fn trimmed_string_chars_uses_char_count_not_byte_length() {
-        // 256 multi-byte chars (each emoji = 4 bytes) → 1024 bytes but 256 chars.
-        // Char-cap MUST accept this (matches VARCHAR(256) capacity); byte-cap
-        // would have wrongly rejected it.
+        // `MAX_NAME_CHARS` multi-byte chars (each emoji = 4 bytes) → 4× bytes but
+        // exactly the char cap. Char-cap MUST accept this; a byte-cap would have
+        // wrongly rejected it.
         let exactly_max = "🚀".repeat(MAX_NAME_CHARS);
         assert_eq!(exactly_max.chars().count(), MAX_NAME_CHARS);
         assert!(exactly_max.len() > MAX_NAME_CHARS); // confirm bytes > chars

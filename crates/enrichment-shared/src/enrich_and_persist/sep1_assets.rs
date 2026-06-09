@@ -137,9 +137,10 @@ fn permanent_fail_outcome(asset_type: i16) -> (String, Option<String>) {
     (String::new(), sentinel_name(asset_type))
 }
 
-/// `Some("")` sentinel breaks the producer dedup loop on
-/// `asset_type IN (1, 2) AND name IS NULL`; `None` is a no-op via
-/// `COALESCE`, preserving indexer-set Soroban-native names.
+/// `Some("")` is the "tried, nothing" sentinel for classic/SAC — the row's
+/// existence makes the candidate query (`NOT IN asset_enrichment`) skip the key
+/// next pass. `None` for native/soroban (0/3): not SEP-1 enrichable; their names
+/// come from elsewhere (Option C — `soroban_contracts.name` / an API constant).
 fn sentinel_name(asset_type: i16) -> Option<String> {
     matches!(asset_type, 1 | 2).then(String::new)
 }

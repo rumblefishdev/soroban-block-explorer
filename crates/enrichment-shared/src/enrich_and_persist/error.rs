@@ -26,9 +26,10 @@ pub enum EnrichError {
     #[error("database error: {0}")]
     Database(#[from] clickhouse::error::Error),
 
-    /// Transient fetch failure — network-layer (no HTTP status), TCP /
-    /// TLS / DNS errors, or a 5xx response from the issuer. The
-    /// issuer's host may recover; SQS retries.
-    #[error("transient SEP-1 fetch error: {0}")]
+    /// Transient fetch failure (SEP-1 TOML or NFT `token_uri`) — network-layer
+    /// (no HTTP status), TCP / TLS / DNS error, a 5xx, or a transient
+    /// Soroban-RPC error. The host may recover; SQS retries / the batch re-run
+    /// retries.
+    #[error("transient enrichment fetch error: {0}")]
     Transient(String),
 }
