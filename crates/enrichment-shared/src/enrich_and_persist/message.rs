@@ -26,3 +26,49 @@ pub enum EnrichmentMessage {
     /// NFT `token_uri()` metadata enrichment.
     NftTokenUri(NftKey),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::EnrichmentMessage;
+    use crate::enrich_and_persist::{AssetKey, NftKey};
+
+    /// Pin the exact on-wire bytes both sides depend on: the producer
+    /// (`indexer::enrichment_publish`) encodes this type, the worker decodes it.
+    /// A serde change (field rename, tag) that would silently break the queue
+    /// fails here instead.
+    #[test]
+    fn sep1_wire_format_is_flat_and_stable() {
+        let msg = EnrichmentMessage::Sep1Assets(AssetKey {
+            asset_type: 1,
+            asset_code: "USDC".into(),
+            issuer_id: 42,
+            contract_id: 0,
+        });
+        let json = serde_json::to_string(&msg).expect("encode");
+        assert_eq!(
+            json,
+            r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":42,"contract_id":0}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<EnrichmentMessage>(&json).expect("decode"),
+            msg
+        );
+    }
+
+    #[test]
+    fn nft_wire_format_is_flat_and_stable() {
+        let msg = EnrichmentMessage::NftTokenUri(NftKey {
+            contract_id: 7,
+            token_id: "1".into(),
+        });
+        let json = serde_json::to_string(&msg).expect("encode");
+        assert_eq!(
+            json,
+            r#"{"kind":"nft_token_uri","contract_id":7,"token_id":"1"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<EnrichmentMessage>(&json).expect("decode"),
+            msg
+        );
+    }
+}
