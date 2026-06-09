@@ -61,6 +61,24 @@ history:
       off `feat/0243-...`. Local activation only — the standard promote commit +
       push to develop (board deploy) is deferred (no-commit directive + GitHub
       auth blocked).
+  - date: '2026-06-09'
+    status: active
+    who: karolkow
+    note: >
+      Step 6 producer lookup un-stubbed (the headline remaining piece). The
+      indexer producer now runs a per-batch CH anti-join `(key) NOT IN (SELECT
+      key FROM *_enrichment)` and publishes only the misses — assets + NFTs,
+      fail-open, worker unchanged. Mechanism: four/two parallel typed arrays
+      zipped CH-side via `arrayZip` (new `enrich_and_persist::filter`),
+      sidestepping the clickhouse-0.15 None-in-tuple bind defect + asset_code
+      injection; verified on a live local CH via `#[ignore]` anti-join tests.
+      Also landed: Step 4a asset read-join, Step 5 sep1 real-fetch smoke,
+      shared `is_safe_https_url` + `send_one_batch` refactors, stale-comment
+      cleanup. 4 commits (aee77ae2, 5d8280d3, 139b549c, 2d04fa10) local on the
+      branch; enrichment-shared 63 + indexer 20 green, clippy+fmt clean. Open:
+      worker/indexer deploy (CDK env + GitHub auth blocked), prod drain (7),
+      NFT read-join (4b — needs nfts→CH), full smoke (NFT RPC + clear-on-
+      refresh), columns drop (8), async_insert (9).
 ---
 
 # FEATURE: ClickHouse SEP-1 + NFT `token_uri` enrichment
@@ -82,7 +100,7 @@ Populate the off-chain enrichment values on ClickHouse — asset **icon / name**
 > [`notes/R-clickhouse-enrichment-write-strategy.md`](notes/R-clickhouse-enrichment-write-strategy.md).
 > This README is the **plan**; the note is the **evidence**.
 
-## Status: active — implementation in progress
+## Status: active — write path code-complete; deploy + prod drain remain
 
 Unblocked: `blocked_by` 0228 + 0241 are **completed** (parallel-backfill on
 Hetzner + live indexer→CH cutover — prod logged `mTLS ClickHouse client ready`),
@@ -108,17 +126,22 @@ pushed — GitHub auth blocked):**
 - **Step 3** — write path PG → CH in place (see step 3 below): `enrich_*` now
   take a `clickhouse::Client` + the composite key and INSERT the side tables;
   caps loosened inline for CH; shared `EnrichmentMessage` wire type.
-- **Step 6 (most of it)** — live wiring: `enrichment-worker` repointed to the
-  mTLS CH client + the shared composite wire; the indexer producer's SQS wire
-  helpers carry the composite key. **Remaining:** un-stub the producer _lookup_
-  (which keys lack a side-table row).
+- **Step 6 — DONE (code).** Live wiring: `enrichment-worker` repointed to the
+  mTLS CH client + shared composite wire; the indexer producer's lookup is now
+  **un-stubbed** — a per-batch CH anti-join publishes only un-enriched keys
+  (assets + NFTs, fail-open, worker unchanged). New
+  `enrich_and_persist::filter`. Remaining for Step 6 = deploy config (CDK env)
+  - the deploy itself.
+- **Step 4a + Step 5 (sep1) — DONE.** Asset read-join (`ASSET_CH_SELECT`
+  enrichment join, commit 17916d8a) + sep1 real-fetch smoke (`#[ignore]`).
 - **Batch runner** — rewritten CH-only (`enrich {sep1-assets | nft-metadata |
 status}`), keyset candidate stream + semaphore fan-out calling `enrich_*`;
   functionally exercised on a live local CH.
 
-**Next:** Step 4 (read-path join — integrates with task 0243) → Step 5 (smoke)
-→ producer lookup un-stub (rest of Step 6) → Step 7 (prod drain) → Step 8 (drop
-dead columns) → Step 9 (`async_insert`). Full checklist below.
+**Next:** deploy (indexer + worker — blocked on GitHub auth + the worker's CDK
+env) → Step 7 (prod drain) → Step 4b (NFT read-join — needs the nfts API module
+on CH) → full smoke (NFT RPC round-trip + clear-on-refresh) → Step 8 (drop dead
+columns; follow-up) → Step 9 (`async_insert`). Full checklist below.
 
 ## The core problem (one line)
 
@@ -238,10 +261,17 @@ FROM *_enrichment)` (`--force-retry` drops it), keyset-paginated over the key
    `EnrichmentMessage`, calls the converted `enrich_*` (which INSERT the side
    tables). The indexer producer's SQS wire helpers
    (`indexer/src/handler/enrichment_publish.rs`) now carry the composite key.
-   **Remaining (still stubbed):** un-stub the producer _lookup_ — the CH query that
-   selects which freshly-extracted keys lack a `*_enrichment` row, feeding the
-   (already composite-shaped) publish helpers. Plus deploy config: the worker
-   Lambda needs `MTLS_SECRET_NAME` / `CH_DOMAIN` env (CDK).
+   ✅ **DONE (2026-06-09):** producer _lookup_ un-stubbed.
+   `Publisher::publish_for_{extracted_assets,minted_nfts}` derive the batch keys
+   (mirroring `persist::stage` identity), run the per-batch anti-join `(key) NOT
+IN (SELECT key FROM *_enrichment)` via `arrayZip` of parallel typed arrays
+   (new `enrich_and_persist::filter`), and publish only the misses — **fail-open**
+   (a CH error publishes all; the idempotent RMT worker absorbs the over-fetch).
+   Assets pass-all (no first-seen marker); NFTs **mint-gated** at the call site
+   (`token_uri` is set at mint, immutable on transfer; backfill covers non-mint
+   gaps). Verified on a live local CH via `#[ignore]` anti-join tests.
+   **Remaining = deploy only:** the worker Lambda needs `MTLS_SECRET_NAME` /
+   `CH_DOMAIN` env (CDK) + the indexer/worker deploy (GitHub auth blocked).
 7. **Production drain** (prod CH ready — 0228/0241 done) — run live and/or batch
    until coverage stabilises; report SEP-1/NFT NULL ratios + RPC quota;
    **measure the read-join cost on the 1M+ `nfts`** under the read quota
@@ -289,13 +319,14 @@ collection_name}` — off-chain data the indexer can never derive.
       mirror); column order pinned in tests.
 - [x] `ch_enrichment_queue` **NOT** created — SQS is the queue.
 - [x] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
-- [~] Live write path wired: worker repointed PG→CH + producer SQS wire is
-  composite-shaped (done); **producer lookup un-stub still pending**. Batch CLI
-  (CH-only) done.
-- [ ] Read: asset name = `COALESCE(NULLIF(ae.name,''), sc.name, native-const)`
-      (enrichment / `soroban_contracts` / API const, disjoint by asset_type;
-      contract-StrKey fallback); asset icon = `NULLIF(ae.icon_url,'')`; nft meta =
-      `NULLIF(ne.col,'')` directly (no COALESCE — indexer never had it).
+- [x] Live write path wired (code): worker repointed PG→CH; producer lookup
+      **un-stubbed** — per-batch CH anti-join publishes only un-enriched keys
+      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy config/CDK +
+      the deploy itself still pending — GitHub auth blocked.)_
+- [~] Read: asset name/icon join **done** in `ASSET_CH_SELECT` (Step 4a —
+  `COALESCE(NULLIF(ae.name,''), sc.name, native-const)` +
+  `NULLIF(ae.icon_url,'')`). NFT meta read (`NULLIF(ne.col,'')` direct)
+  **pending** — the nfts API module is still PG-only (Step 4b).
 - [ ] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
       re-enriches and can clear removed values.
 - [ ] Live integration test passes (USDC + NFT round-trip).
@@ -348,3 +379,24 @@ collection_name}` — off-chain data the indexer can never derive.
     broken / late-published source stays empty; a sentinel-TTL re-enroll fixes it.
   - _`now_ms().unwrap_or(0)` + `DateTime64(3)` version_ — fine under latest-wins;
     revisit only if a version-priority scheme is ever adopted.
+
+## Future Work (spawn as backlog tasks **on develop**, per project convention)
+
+Surfaced during the 2026-06-09 Step 6 producer un-stub — small, deferred to
+keep this branch focused (not micro-decomposed here):
+
+- **Shared anti-join predicate.** `(key) NOT IN (SELECT key FROM *_enrichment)`
+  now exists twice — the producer `filter` and the backfill `select_*_chunk`
+  (identical subquery, different candidate source: in-memory batch keys via
+  `arrayZip` vs a keyset-paginated `assets`/`nfts FINAL` scan). Hoist the
+  subquery fragment to one shared `const` so a future column change can't drift
+  them apart.
+- **Shared key derivation.** `AssetKey`/`NftKey` from `ExtractedAsset`/`Nft` is
+  duplicated in `persist::stage` (the table row) and the producer
+  `*_candidate_keys` (the key); they MUST stay byte-identical (incl. the
+  `unwrap_or(0)` / `unwrap_or_default()` "absent" sentinels) or the anti-join
+  silently never matches. Extract one `AssetKey::from_extracted` constructor.
+- **CH-mode end-to-end parity smoke.** No test exercises the full
+  SQS→worker→side-table→read round-trip; the `#[ignore]` filter + sep1-fetch
+  tests cover the pieces, not the wire. (Carries over the pre-existing
+  "CH-mode parity tests" gap.)
