@@ -313,6 +313,19 @@ collection_name}` — off-chain data the indexer can never derive.
    happen only after a durable write (with `=0`, ack + buffer-loss-on-crash =
    dropped enrichment). Only affects INSERTs; the candidate SELECTs are untouched.
 
+10. **Full prod smoke — live path** (distinct from the Step 7 _drain_). Step 7
+    fills data in bulk via the batch runner; this verifies the **live worker**
+    machinery end-to-end on prod — the one round-trip no local / `#[ignore]` test
+    exercises: `SQS → worker → side-table → read-join → API`. After deploy +
+    Step 4b, push a few real entities through the producer and verify:
+    (a) the NFT `token_uri` RPC round-trip resolves against mainnet Soroban-RPC
+    and writes `nft_enrichment`; (b) a SEP-1 asset (e.g. USDC) round-trips;
+    (c) **clear-on-refresh** — a newer-`version` re-enrichment is reflected in the
+    read (RMT latest-wins + `NULLIF`); (d) the read-join serves the enriched value
+    to the API. (Drain = data filled; smoke = the live path actually works.) The
+    local runbook (`docs/runbooks/0231_enrichment-backfill-local.md`) covers the
+    batch-runner loop + sep1 fetch locally; this step is the prod-only delta.
+
 ## Acceptance Criteria
 
 - [ ] `asset_enrichment` / `nft_enrichment` created via **migration** (+ init.sql
