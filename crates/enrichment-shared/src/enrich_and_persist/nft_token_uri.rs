@@ -31,12 +31,11 @@
 //!   the fetcher synthesises `{ "image": "<url>" }`.
 
 use clickhouse::{Client, Row};
-use db_clickhouse::persist::enrichment::insert_nft_enrichment;
-use db_clickhouse::persist::rows::NftEnrichmentRow;
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
+use super::persist::insert_nft;
 use super::{EnrichError, EnrichOutcome, NftKey};
 use crate::nft_token_uri::NftTokenUriFetcher;
 use crate::nft_token_uri::errors::is_transient;
@@ -79,15 +78,7 @@ pub async fn enrich_nft_token_uri(
     let Some(contract_strkey) = lookup.and_then(|l| l.contract_strkey) else {
         warn!(key = %key, reason = "contract_strkey_not_found", "writing sentinel");
         let (name, media_url, collection_name) = permanent_fail_outcome();
-        return insert_columns(
-            client,
-            key.contract_id,
-            &key.token_id,
-            &name,
-            &media_url,
-            &collection_name,
-        )
-        .await;
+        return insert_nft(client, &key, name, media_url, collection_name).await;
     };
 
     let (name, media_url, collection_name) = match fetcher
@@ -115,15 +106,7 @@ pub async fn enrich_nft_token_uri(
         }
     };
 
-    let outcome = insert_columns(
-        client,
-        key.contract_id,
-        &key.token_id,
-        &name,
-        &media_url,
-        &collection_name,
-    )
-    .await?;
+    let outcome = insert_nft(client, &key, name, media_url, collection_name).await?;
     debug!("nft_enrichment row written");
     Ok(outcome)
 }
@@ -221,34 +204,6 @@ fn trimmed_string_bytes(v: Option<&Value>, max_bytes: usize) -> String {
         return String::new();
     }
     trimmed.to_owned()
-}
-
-/// Build + INSERT one `nft_enrichment` row. `''` sentinels are stored as-is;
-/// the read path neutralises them with `NULLIF`.
-async fn insert_columns(
-    client: &Client,
-    contract_id: i64,
-    token_id: &str,
-    name: &str,
-    media_url: &str,
-    collection_name: &str,
-) -> Result<EnrichOutcome, EnrichError> {
-    // Real iff any of the three columns landed a non-sentinel value.
-    let outcome = if !name.is_empty() || !media_url.is_empty() || !collection_name.is_empty() {
-        EnrichOutcome::Real
-    } else {
-        EnrichOutcome::Sentinel
-    };
-    let row = NftEnrichmentRow {
-        contract_id,
-        token_id: token_id.to_owned(),
-        name: Some(name.to_owned()),
-        media_url: Some(media_url.to_owned()),
-        collection_name: Some(collection_name.to_owned()),
-        version: super::now_ms(),
-    };
-    insert_nft_enrichment(client, std::slice::from_ref(&row)).await?;
-    Ok(outcome)
 }
 
 #[cfg(test)]

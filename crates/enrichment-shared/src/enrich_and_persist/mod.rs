@@ -13,6 +13,9 @@ pub mod filter;
 pub mod key;
 pub mod message;
 pub mod nft_token_uri;
+/// The single enrichment write surface (`asset_enrichment` / `nft_enrichment`
+/// only). All `enrich_*` paths persist through here — one auditable blast-radius.
+pub(crate) mod persist;
 pub mod sep1_assets;
 
 pub use error::EnrichError;

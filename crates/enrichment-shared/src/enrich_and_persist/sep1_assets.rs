@@ -21,9 +21,8 @@
 //! sentinel to a real value — or clears a removed one — simply by
 //! inserting a newer-version row.
 
+use super::persist::insert_asset;
 use clickhouse::{Client, Row};
-use db_clickhouse::persist::enrichment::insert_asset_enrichment;
-use db_clickhouse::persist::rows::AssetEnrichmentRow;
 use serde::Deserialize;
 use tracing::{debug, instrument, warn};
 
@@ -79,7 +78,7 @@ pub async fn enrich_asset_from_sep1(
     let Some(issuer) = issuer else {
         warn!(key = %key, reason = "issuer_account_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
-        return insert_outcome(client, &key, icon, name).await;
+        return insert_asset(client, &key, icon, name).await;
     };
 
     let Some(home_domain) = issuer
@@ -92,7 +91,7 @@ pub async fn enrich_asset_from_sep1(
         // debuggable by key (in the `#[instrument]` span) + reason.
         debug!(key = %key, reason = "issuer_home_domain_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
-        return insert_outcome(client, &key, icon, name).await;
+        return insert_asset(client, &key, icon, name).await;
     };
 
     match fetcher.fetch(home_domain).await {
@@ -103,7 +102,7 @@ pub async fn enrich_asset_from_sep1(
                 issuer.issuer_strkey.as_deref(),
                 &parsed,
             );
-            let outcome = insert_outcome(client, &key, icon, name).await?;
+            let outcome = insert_asset(client, &key, icon, name).await?;
             debug!("asset_enrichment row written");
             Ok(outcome)
         }
@@ -116,7 +115,7 @@ pub async fn enrich_asset_from_sep1(
             } else {
                 warn!(key = %key, reason = "sep1_fetch_permanent", error = %arc_err, "sentinel written");
                 let (icon, name) = permanent_fail_outcome(key.asset_type);
-                insert_outcome(client, &key, icon, name).await
+                insert_asset(client, &key, icon, name).await
             }
         }
     }
@@ -197,34 +196,6 @@ fn resolve_name(asset_type: i16, entry: Option<&Sep1Currency>) -> Option<String>
         return Some(String::new());
     }
     Some(name.to_owned())
-}
-
-/// Build + INSERT one `asset_enrichment` row. `icon`/`name` come straight
-/// from the resolver — the `''` / `Some("")` sentinels are stored as-is; the
-/// read path neutralises them with `NULLIF`.
-async fn insert_outcome(
-    client: &Client,
-    key: &AssetKey,
-    icon_url: String,
-    name: Option<String>,
-) -> Result<EnrichOutcome, EnrichError> {
-    // Real iff a non-sentinel value landed in either column.
-    let outcome = if !icon_url.is_empty() || name.as_deref().is_some_and(|n| !n.is_empty()) {
-        EnrichOutcome::Real
-    } else {
-        EnrichOutcome::Sentinel
-    };
-    let row = AssetEnrichmentRow {
-        asset_type: key.asset_type,
-        asset_code: key.asset_code.clone(),
-        issuer_id: key.issuer_id,
-        contract_id: key.contract_id,
-        icon_url: Some(icon_url),
-        name,
-        version: super::now_ms(),
-    };
-    insert_asset_enrichment(client, std::slice::from_ref(&row)).await?;
-    Ok(outcome)
 }
 
 fn find_currency<'a>(
