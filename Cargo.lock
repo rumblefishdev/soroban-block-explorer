@@ -2475,6 +2475,7 @@ dependencies = [
  "db",
  "db-clickhouse",
  "domain",
+ "enrichment-shared",
  "hex",
  "lambda_runtime",
  "percent-encoding",

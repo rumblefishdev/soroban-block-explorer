@@ -9,6 +9,7 @@
 //! writes.
 
 pub mod error;
+pub mod filter;
 pub mod key;
 pub mod message;
 pub mod nft_token_uri;

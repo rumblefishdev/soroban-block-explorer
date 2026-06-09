@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// `asset_enrichment` key = the `assets` ORDER BY tuple. Field order MUST match
 /// `ORDER BY (asset_type, asset_code, issuer_id, contract_id)` for the
 /// positional RowBinary decode in the candidate query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Row)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Row)]
 pub struct AssetKey {
     pub asset_type: i16,
     pub asset_code: String,
@@ -41,7 +41,7 @@ impl fmt::Display for AssetKey {
 
 /// `nft_enrichment` key = the `nfts` ORDER BY tuple. `contract_id` is the
 /// `soroban_contracts.id` FK (not the StrKey).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Row)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Row)]
 pub struct NftKey {
     pub contract_id: i64,
     pub token_id: String,
