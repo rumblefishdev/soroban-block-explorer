@@ -17,3 +17,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "si
 clap = { version = "4", features = ["derive", "env"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+indicatif = "0.18"
+tracing-indicatif = "0.3"

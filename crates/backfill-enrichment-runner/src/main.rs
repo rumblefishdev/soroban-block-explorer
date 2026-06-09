@@ -27,6 +27,11 @@
 //! - **`--force-retry`** = drop the filter and walk every key. `enrich_*`
 //!   is idempotent — a later run upgrades a sentinel to a real value (or
 //!   clears a removed one) via a newer-`version` INSERT.
+//! - **`--retry-sentinels`** = re-attempt ONLY existing all-`''` sentinel rows
+//!   (candidate source flips to the side table itself). Real values — incl.
+//!   partials (one real column + one `''`) — are left untouched, so a retry
+//!   cannot clobber a good value with a regressed source. Mutually exclusive
+//!   with `--force-retry`.
 //!
 //! There is no surrogate `id` on ClickHouse (PR #175), so unlike the old
 //! Postgres drain there is no `--id` single-row mode; address a single row
@@ -98,10 +103,41 @@ struct DrainArgs {
     #[arg(long)]
     limit: Option<usize>,
 
-    /// Drop the "no side-table row yet" filter and walk every key.
-    /// Idempotent re-enrich — refreshes stale sentinels / values.
+    /// Drop the "no side-table row yet" filter and walk every key
+    /// (re-enriches real AND sentinel rows alike). Idempotent re-enrich.
     #[arg(long)]
     force_retry: bool,
+
+    /// Re-enrich ONLY existing all-`''` sentinel rows (permanent-fail
+    /// "tried-nothing"); real values are left untouched. Walks the side table,
+    /// not the base table. Mutually exclusive with `--force-retry`.
+    #[arg(long, conflicts_with = "force_retry")]
+    retry_sentinels: bool,
+}
+
+/// Which candidate set a drain walks (resolved from the flags).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DrainMode {
+    /// Only keys with no side-table row yet (`(key) NOT IN *_enrichment`).
+    /// The default (no flag).
+    Untried,
+    /// Only existing all-`''` sentinel rows — re-attempt permanent fails
+    /// without touching real values (no clobber). `--retry-sentinels`.
+    Sentinels,
+    /// Every key, real + sentinel alike. `--force-retry`.
+    All,
+}
+
+impl DrainArgs {
+    fn mode(&self) -> DrainMode {
+        if self.force_retry {
+            DrainMode::All
+        } else if self.retry_sentinels {
+            DrainMode::Sentinels
+        } else {
+            DrainMode::Untried
+        }
+    }
 }
 
 fn parse_positive_usize(s: &str) -> Result<usize, String> {
@@ -131,17 +167,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // `--verbose` → `debug` (per-row activity); default → `warn` + error only.
     // Matches `backfill-runner`'s flag-driven filter (RUST_LOG is not consulted).
     let filter = if cli.verbose { "debug" } else { "warn" };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Shared `MultiProgress` so the tracing writer and the drain's progress bar
+    // share one stderr surface: logs render ABOVE the sticky bar instead of
+    // shredding it. The type annotation is load-bearing (mirrors backfill-runner)
+    // — `IndicatifWriter::new` is generic over `W` and `init()` fails E0283
+    // without it. Bar auto-disables when stderr is not a TTY (piped / CI).
+    let mp = indicatif::MultiProgress::new();
+    let writer: tracing_indicatif::writer::IndicatifWriter<tracing_indicatif::writer::Stderr> =
+        tracing_indicatif::writer::IndicatifWriter::new(mp.clone());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .init();
     let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
 
     let report = match cli.command {
         Command::Sep1Assets(args) => {
             let fetcher = Arc::new(Sep1Fetcher::new()?);
-            run_sep1_assets(&client, fetcher, args).await?
+            run_sep1_assets(&client, fetcher, args, &mp).await?
         }
         Command::NftMetadata(args) => {
             let fetcher = Arc::new(NftTokenUriFetcher::new()?);
-            run_nft_metadata(&client, fetcher, args).await?
+            run_nft_metadata(&client, fetcher, args, &mp).await?
         }
         Command::Status => {
             print_status(&client).await?;
@@ -170,9 +217,15 @@ async fn run_sep1_assets(
     client: &Client,
     fetcher: Arc<Sep1Fetcher>,
     args: DrainArgs,
+    mp: &indicatif::MultiProgress,
 ) -> Result<BackfillReport, clickhouse::error::Error> {
     let started = Instant::now();
     let mut report = BackfillReport::new("sep1-assets");
+    let mode = args.mode();
+    let bar = make_bar(
+        mp,
+        candidate_total(client, sep1_base(mode), args.limit).await?,
+    );
     let sem = Arc::new(Semaphore::new(args.concurrency));
     let mut cursor: Option<AssetKey> = None;
 
@@ -181,7 +234,7 @@ async fn run_sep1_assets(
             break;
         }
         let chunk = effective_chunk(args.chunk_size, args.limit, report.processed);
-        let keys = select_sep1_chunk(client, cursor.as_ref(), chunk, args.force_retry).await?;
+        let keys = select_sep1_chunk(client, cursor.as_ref(), chunk, mode).await?;
         if keys.is_empty() {
             break;
         }
@@ -200,37 +253,84 @@ async fn run_sep1_assets(
             }));
         }
         for h in handles {
-            collect_join(&mut report, h.await);
+            collect_join(&mut report, &bar, h.await);
         }
     }
 
+    bar.finish_and_clear();
     report.duration_ms = started.elapsed().as_millis();
     Ok(report)
+}
+
+/// Candidate `FROM … WHERE …` (no SELECT clause) per drain mode. `Untried` /
+/// `All` scan `assets`; `Sentinels` scans the side table's all-`''` rows so real
+/// values are never re-fetched/clobbered. `FINAL` → latest-wins (no stale
+/// pre-merge duplicate). Shared by `select_sep1_chunk` and the bar total count.
+fn sep1_base(mode: DrainMode) -> &'static str {
+    match mode {
+        DrainMode::Untried => {
+            "FROM assets FINAL WHERE asset_type IN (1, 2) \
+             AND (asset_type, asset_code, issuer_id, contract_id) NOT IN \
+             (SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_enrichment)"
+        }
+        DrainMode::All => "FROM assets FINAL WHERE asset_type IN (1, 2)",
+        DrainMode::Sentinels => "FROM asset_enrichment FINAL WHERE icon_url = '' AND name = ''",
+    }
+}
+
+/// Determinate-bar total = candidate count, clamped to `--limit` (so the bar
+/// reaches 100%). One `count()` per drain over the same predicate the loop walks.
+async fn candidate_total(
+    client: &Client,
+    base: &str,
+    limit: Option<usize>,
+) -> Result<u64, clickhouse::error::Error> {
+    let n = client
+        .query(&format!("SELECT count() {base}"))
+        .fetch_one::<u64>()
+        .await?;
+    Ok(match limit {
+        Some(l) => n.min(l as u64),
+        None => n,
+    })
+}
+
+/// Sticky determinate progress bar on the shared `MultiProgress`. Template
+/// matches `backfill-runner`'s dashboard bar verbatim (bar / pos / len /
+/// percent / elapsed / ETA) for cross-tool consistency, with a trailing `{msg}`
+/// tail carrying the enrichment outcome tally (real · sentinel · transient ·
+/// db) — set per row in `collect_join`. (backfill-runner surfaces its stats via
+/// separate text-line spinners; a single drain warrants one bar.) `steady_tick`
+/// refreshes elapsed/ETA between rows. Auto-hidden off-TTY.
+fn make_bar(mp: &indicatif::MultiProgress, total: u64) -> indicatif::ProgressBar {
+    let bar = mp.add(indicatif::ProgressBar::new(total));
+    bar.set_style(
+        indicatif::ProgressStyle::with_template(
+            "{bar:40} {pos:>6} / {len:>6} ({percent:>3}%) elapsed {elapsed_precise} ETA {eta_precise}  {msg}",
+        )
+        .expect("static template is valid"),
+    );
+    bar.enable_steady_tick(std::time::Duration::from_millis(500));
+    bar
 }
 
 async fn select_sep1_chunk(
     client: &Client,
     cursor: Option<&AssetKey>,
     chunk: i64,
-    force_retry: bool,
+    mode: DrainMode,
 ) -> Result<Vec<AssetKey>, clickhouse::error::Error> {
-    // Candidate = a classic/SAC asset with no `asset_enrichment` row yet.
-    let not_enriched = if force_retry {
-        ""
-    } else {
-        " AND (asset_type, asset_code, issuer_id, contract_id) NOT IN \
-          (SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_enrichment)"
-    };
-    // Keyset pagination over the `assets` ORDER BY 4-tuple. Omitted on
-    // page 1 so no value is bound (clickhouse 0.15 None-in-tuple defect).
+    let base = sep1_base(mode);
+    // Keyset pagination over the shared ORDER BY 4-tuple (identical for `assets`
+    // and `asset_enrichment`). Omitted on page 1 (clickhouse 0.15 None-in-tuple
+    // defect).
     let cursor_clause = if cursor.is_some() {
         " AND (asset_type, asset_code, issuer_id, contract_id) > (?, ?, ?, ?)"
     } else {
         ""
     };
     let sql = format!(
-        "SELECT asset_type, asset_code, issuer_id, contract_id FROM assets FINAL \
-         WHERE asset_type IN (1, 2){not_enriched}{cursor_clause} \
+        "SELECT asset_type, asset_code, issuer_id, contract_id {base}{cursor_clause} \
          ORDER BY asset_type, asset_code, issuer_id, contract_id LIMIT ?"
     );
     let mut q = client.query(&sql);
@@ -252,9 +352,15 @@ async fn run_nft_metadata(
     client: &Client,
     fetcher: Arc<NftTokenUriFetcher>,
     args: DrainArgs,
+    mp: &indicatif::MultiProgress,
 ) -> Result<BackfillReport, clickhouse::error::Error> {
     let started = Instant::now();
     let mut report = BackfillReport::new("nft-metadata");
+    let mode = args.mode();
+    let bar = make_bar(
+        mp,
+        candidate_total(client, nft_base(mode), args.limit).await?,
+    );
     let sem = Arc::new(Semaphore::new(args.concurrency));
     let mut cursor: Option<NftKey> = None;
 
@@ -263,7 +369,7 @@ async fn run_nft_metadata(
             break;
         }
         let chunk = effective_chunk(args.chunk_size, args.limit, report.processed);
-        let keys = select_nft_chunk(client, cursor.as_ref(), chunk, args.force_retry).await?;
+        let keys = select_nft_chunk(client, cursor.as_ref(), chunk, mode).await?;
         if keys.is_empty() {
             break;
         }
@@ -282,36 +388,45 @@ async fn run_nft_metadata(
             }));
         }
         for h in handles {
-            collect_join(&mut report, h.await);
+            collect_join(&mut report, &bar, h.await);
         }
     }
 
+    bar.finish_and_clear();
     report.duration_ms = started.elapsed().as_millis();
     Ok(report)
+}
+
+/// NFT candidate `FROM … WHERE …` per drain mode (see `sep1_base`).
+fn nft_base(mode: DrainMode) -> &'static str {
+    match mode {
+        DrainMode::Untried => {
+            "FROM nfts FINAL WHERE 1 = 1 \
+             AND (contract_id, token_id) NOT IN \
+             (SELECT contract_id, token_id FROM nft_enrichment)"
+        }
+        DrainMode::All => "FROM nfts FINAL WHERE 1 = 1",
+        DrainMode::Sentinels => {
+            "FROM nft_enrichment FINAL \
+             WHERE name = '' AND media_url = '' AND collection_name = ''"
+        }
+    }
 }
 
 async fn select_nft_chunk(
     client: &Client,
     cursor: Option<&NftKey>,
     chunk: i64,
-    force_retry: bool,
+    mode: DrainMode,
 ) -> Result<Vec<NftKey>, clickhouse::error::Error> {
-    let not_enriched = if force_retry {
-        ""
-    } else {
-        " AND (contract_id, token_id) NOT IN \
-          (SELECT contract_id, token_id FROM nft_enrichment)"
-    };
+    let base = nft_base(mode);
     let cursor_clause = if cursor.is_some() {
         " AND (contract_id, token_id) > (?, ?)"
     } else {
         ""
     };
-    // `WHERE 1{not_enriched}` keeps the clause-concatenation uniform with
-    // the keyset clause when both are present.
     let sql = format!(
-        "SELECT contract_id, token_id FROM nfts FINAL \
-         WHERE 1 = 1{not_enriched}{cursor_clause} \
+        "SELECT contract_id, token_id {base}{cursor_clause} \
          ORDER BY contract_id, token_id LIMIT ?"
     );
     let mut q = client.query(&sql);
@@ -350,6 +465,23 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
         .await?;
         Ok((real, sentinel))
     }
+    /// `(all_real, partial, all_sentinel)` per-ROW classification — the
+    /// per-column split can't tell "2 partial rows" from "1 all-real + 1
+    /// all-sentinel" (same column tallies), so count rows directly. `all_real`
+    /// = every column non-empty; `all_sent` = every column `''`/NULL; partial =
+    /// the rest. (NFT `collection_name` is often legitimately empty, so a
+    /// name+media-only NFT lands in `partial`, not `all_real`.)
+    async fn row_class(
+        c: &Client,
+        table: &str,
+        all_real: &str,
+        all_sent: &str,
+    ) -> Result<(u64, u64, u64), clickhouse::error::Error> {
+        let total = cnt(c, &format!("SELECT count() FROM {table} FINAL")).await?;
+        let real = cnt(c, &format!("SELECT countIf({all_real}) FROM {table} FINAL")).await?;
+        let sent = cnt(c, &format!("SELECT countIf({all_sent}) FROM {table} FINAL")).await?;
+        Ok((real, total.saturating_sub(real).saturating_sub(sent), sent))
+    }
 
     let a_cand = cnt(
         client,
@@ -366,6 +498,21 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     let (n_media_r, n_media_s) = col(client, "nft_enrichment", "media_url").await?;
     let (n_coll_r, n_coll_s) = col(client, "nft_enrichment", "collection_name").await?;
 
+    let (a_row_real, a_row_part, a_row_sent) = row_class(
+        client,
+        "asset_enrichment",
+        "coalesce(icon_url, '') != '' AND coalesce(name, '') != ''",
+        "coalesce(icon_url, '') = '' AND coalesce(name, '') = ''",
+    )
+    .await?;
+    let (n_row_real, n_row_part, n_row_sent) = row_class(
+        client,
+        "nft_enrichment",
+        "coalesce(name, '') != '' AND coalesce(media_url, '') != '' AND coalesce(collection_name, '') != ''",
+        "coalesce(name, '') = '' AND coalesce(media_url, '') = '' AND coalesce(collection_name, '') = ''",
+    )
+    .await?;
+
     println!("# enrich — status\n");
 
     println!("## `asset_enrichment` (classic/SAC assets)\n");
@@ -377,6 +524,7 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     println!("| ---------- | ---: | ------------: |");
     println!("| `icon_url` | {a_icon_r:>4} | {a_icon_s:>13} |");
     println!("| `name`     | {a_name_r:>4} | {a_name_s:>13} |");
+    println!("\nrows: {a_row_real} all-real · {a_row_part} partial · {a_row_sent} all-sentinel");
 
     println!("\n## `nft_enrichment`\n");
     println!(
@@ -388,6 +536,7 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     println!("| `name`            | {n_name_r:>4} | {n_name_s:>13} |");
     println!("| `media_url`       | {n_media_r:>4} | {n_media_s:>13} |");
     println!("| `collection_name` | {n_coll_r:>4} | {n_coll_s:>13} |");
+    println!("\nrows: {n_row_real} all-real · {n_row_part} partial · {n_row_sent} all-sentinel");
 
     Ok(())
 }
@@ -411,6 +560,7 @@ fn limit_reached(limit: Option<usize>, processed: usize) -> bool {
 /// single bad key cannot tear the drain down.
 fn collect_join(
     report: &mut BackfillReport,
+    bar: &indicatif::ProgressBar,
     joined: Result<(String, Result<EnrichOutcome, EnrichError>), tokio::task::JoinError>,
 ) {
     match joined {
@@ -421,6 +571,13 @@ fn collect_join(
             tracing::error!(error = %e, "enrich task panicked (join error); counted as db_failed");
         }
     }
+    // Tier-1 advances; Tier-2 tail carries the running outcome tally. Driven
+    // single-threaded from the join-drain — no contention with the fan-out.
+    bar.inc(1);
+    bar.set_message(format!(
+        "real {} · sentinel {} · transient {} · db {}",
+        report.enriched, report.sentinel, report.unreachable, report.db_failed
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -439,21 +596,8 @@ struct BackfillReport {
     sentinel: usize,
     unreachable: usize,
     db_failed: usize,
-    transient_samples: Vec<TransientSample>,
     duration_ms: u128,
 }
-
-/// A bounded sample of transient (retryable) failures — `key` is the composite
-/// key label so an operator sees the exact rows to re-run / investigate.
-#[derive(Debug)]
-struct TransientSample {
-    key: String,
-    message: String,
-}
-
-/// Cap the sample list so a million-key drain against a broken upstream cannot
-/// OOM on diagnostics.
-const TRANSIENT_SAMPLE_CAP: usize = 100;
 
 impl BackfillReport {
     fn new(kind: &'static str) -> Self {
@@ -464,7 +608,6 @@ impl BackfillReport {
             sentinel: 0,
             unreachable: 0,
             db_failed: 0,
-            transient_samples: Vec::new(),
             duration_ms: 0,
         }
     }
@@ -472,21 +615,15 @@ impl BackfillReport {
 
 /// Fold one `enrich_*` outcome into the report. `Real`/`Sentinel` are the two
 /// successful terminal writes (counted separately); `Transient` = unreachable
-/// upstream (retry later, sampled); `Database` = ClickHouse error (logged).
+/// upstream (retry later — `enrich_*` logs it at the call site with the key +
+/// `reason="transient"`, so the report keeps only the count); `Database` =
+/// ClickHouse error (logged).
 fn tally(report: &mut BackfillReport, key: &str, res: Result<EnrichOutcome, EnrichError>) {
     report.processed += 1;
     match res {
         Ok(EnrichOutcome::Real) => report.enriched += 1,
         Ok(EnrichOutcome::Sentinel) => report.sentinel += 1,
-        Err(EnrichError::Transient(msg)) => {
-            report.unreachable += 1;
-            if report.transient_samples.len() < TRANSIENT_SAMPLE_CAP {
-                report.transient_samples.push(TransientSample {
-                    key: key.to_owned(),
-                    message: msg,
-                });
-            }
-        }
+        Err(EnrichError::Transient(_)) => report.unreachable += 1,
         Err(EnrichError::Database(e)) => {
             report.db_failed += 1;
             tracing::error!(key, error = %e, "database error during enrichment");
@@ -508,18 +645,14 @@ fn print_report(r: &BackfillReport) {
 
     if r.unreachable == 0 && r.db_failed == 0 {
         println!("✓ All processed keys reached a terminal outcome.");
-        return;
-    }
-    if !r.transient_samples.is_empty() {
+    } else {
+        // Per-key detail (which key, what, why) is in the run's logs — every
+        // failure logs `reason=…` + the key (in the `#[instrument]` span). The
+        // report keeps only the counts (no redundant bounded sample).
         println!(
-            "## Sample transient errors (first {})\n",
-            r.transient_samples.len()
+            "⚠ {} transient (retry) · {} db-failed — grep the run log by key / `reason=` for detail.",
+            r.unreachable, r.db_failed
         );
-        println!("| key | error |");
-        println!("| --- | --- |");
-        for s in &r.transient_samples {
-            println!("| {} | {} |", s.key, s.message);
-        }
     }
 }
 
@@ -574,7 +707,6 @@ mod tests {
         assert_eq!(r.sentinel, 0);
         assert_eq!(r.unreachable, 0);
         assert_eq!(r.db_failed, 0);
-        assert!(r.transient_samples.is_empty());
     }
 
     #[test]
@@ -590,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn tally_transient_increments_unreachable_and_captures_sample() {
+    fn tally_transient_increments_unreachable() {
         let mut r = BackfillReport::new("sep1-assets");
         tally(
             &mut r,
@@ -599,39 +731,14 @@ mod tests {
         );
         assert_eq!(r.processed, 1);
         assert_eq!(r.unreachable, 1);
-        assert_eq!(r.transient_samples.len(), 1);
-        assert_eq!(r.transient_samples[0].key, "1-USDC-42-7");
-        assert_eq!(r.transient_samples[0].message, "dns fail");
     }
 
     #[test]
-    fn tally_database_error_increments_db_failed_without_sample() {
+    fn tally_database_error_increments_db_failed() {
         let mut r = BackfillReport::new("sep1-assets");
         tally(&mut r, "k", Err(db_err()));
         assert_eq!(r.processed, 1);
         assert_eq!(r.db_failed, 1);
-        assert!(r.transient_samples.is_empty());
-    }
-
-    #[test]
-    fn transient_samples_cap_at_constant() {
-        let mut r = BackfillReport::new("sep1-assets");
-        // Overshoot the cap by a margin so the assertion holds for any CAP value.
-        let n = TRANSIENT_SAMPLE_CAP + 15;
-        for i in 0..n {
-            tally(
-                &mut r,
-                &format!("k{i}"),
-                Err(EnrichError::Transient(format!("err{i}"))),
-            );
-        }
-        assert_eq!(r.processed, n);
-        assert_eq!(r.unreachable, n);
-        assert_eq!(r.transient_samples.len(), TRANSIENT_SAMPLE_CAP);
-        for (i, s) in r.transient_samples.iter().enumerate() {
-            assert_eq!(s.key, format!("k{i}"));
-            assert_eq!(s.message, format!("err{i}"));
-        }
     }
 
     #[test]
@@ -651,7 +758,6 @@ mod tests {
         assert_eq!(r.sentinel, 1);
         assert_eq!(r.unreachable, 1);
         assert_eq!(r.db_failed, 1);
-        assert_eq!(r.transient_samples.len(), 1);
     }
 
     /// CH-backed candidate-query smoke (task 0231 step 5): `select_sep1_chunk`
@@ -684,8 +790,8 @@ mod tests {
             .await
             .expect("seed enrichment");
 
-        // force_retry=false → only AAA (BBB enriched-skip, native type-skip).
-        let got = select_sep1_chunk(&client, None, 100, false)
+        // Standard → only AAA (BBB enriched-skip, native type-skip).
+        let got = select_sep1_chunk(&client, None, 100, DrainMode::Untried)
             .await
             .expect("candidate query");
         assert_eq!(
@@ -698,8 +804,8 @@ mod tests {
             }],
         );
 
-        // force_retry=true → AAA + BBB (NOT-IN dropped), still no native.
-        let forced = select_sep1_chunk(&client, None, 100, true)
+        // Force → AAA + BBB (NOT-IN dropped), still no native.
+        let forced = select_sep1_chunk(&client, None, 100, DrainMode::All)
             .await
             .expect("force-retry query");
         assert_eq!(forced.len(), 2);
@@ -745,7 +851,7 @@ mod tests {
             .await
             .expect("seed nft enrichment");
 
-        let got = select_nft_chunk(&client, None, 100, false)
+        let got = select_nft_chunk(&client, None, 100, DrainMode::Untried)
             .await
             .expect("candidate query");
         assert_eq!(
@@ -756,7 +862,7 @@ mod tests {
             }],
         );
 
-        let forced = select_nft_chunk(&client, None, 100, true)
+        let forced = select_nft_chunk(&client, None, 100, DrainMode::All)
             .await
             .expect("force-retry");
         assert_eq!(forced.len(), 2);
@@ -771,5 +877,45 @@ mod tests {
             .execute()
             .await
             .expect("cleanup enrichment");
+    }
+
+    /// `--retry-sentinels` mode: candidate = existing all-`''` rows only.
+    /// A real row and a PARTIAL (real icon + `''` name) must be excluded —
+    /// proving partials are never re-fetched/clobbered. `#[ignore]`.
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse"]
+    async fn select_sep1_chunk_sentinels_excludes_real_and_partial() {
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        client
+            .query(
+                "INSERT INTO asset_enrichment \
+                 (asset_type, asset_code, issuer_id, contract_id, icon_url, name, version) VALUES \
+                 (1,'REAL',8001,0,'https://i','n',now64(3)), \
+                 (1,'PART',8002,0,'https://i','',now64(3)), \
+                 (1,'SENT',8003,0,'','',now64(3))",
+            )
+            .execute()
+            .await
+            .expect("seed enrichment");
+
+        let got = select_sep1_chunk(&client, None, 100, DrainMode::Sentinels)
+            .await
+            .expect("sentinels query");
+        assert_eq!(
+            got,
+            vec![AssetKey {
+                asset_type: 1,
+                asset_code: "SENT".into(),
+                issuer_id: 8003,
+                contract_id: 0,
+            }],
+            "only the all-'' row — real + partial excluded"
+        );
+
+        client
+            .query("ALTER TABLE asset_enrichment DELETE WHERE asset_code IN ('REAL','PART','SENT')")
+            .execute()
+            .await
+            .expect("cleanup");
     }
 }

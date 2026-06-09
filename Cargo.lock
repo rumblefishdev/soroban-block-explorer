@@ -915,9 +915,11 @@ dependencies = [
  "clickhouse",
  "db-clickhouse",
  "enrichment-shared",
+ "indicatif",
  "serde",
  "tokio",
  "tracing",
+ "tracing-indicatif",
  "tracing-subscriber",
 ]
 
