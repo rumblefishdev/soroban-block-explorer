@@ -644,4 +644,123 @@ mod tests {
         assert_eq!(r.db_failed, 1);
         assert_eq!(r.transient_samples.len(), 1);
     }
+
+    /// CH-backed candidate-query smoke (task 0231 step 5): `select_sep1_chunk`
+    /// returns only classic/SAC assets with no `asset_enrichment` row, skips
+    /// the enriched one, excludes native; `--force-retry` drops the NOT-IN.
+    /// `#[ignore]` (needs live local CH).
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse"]
+    async fn select_sep1_chunk_skips_enriched_and_native() {
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        // 1 classic (un-enriched), 1 SAC (enriched), 1 native (type-excluded).
+        client
+            .query(
+                "INSERT INTO assets \
+                 (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
+                 VALUES (1,'AAA',7001,0,NULL,NULL,NULL,NULL), \
+                        (2,'BBB',7002,7003,NULL,NULL,NULL,NULL), \
+                        (0,'',0,0,NULL,NULL,NULL,NULL)",
+            )
+            .execute()
+            .await
+            .expect("seed assets");
+        client
+            .query(
+                "INSERT INTO asset_enrichment \
+                 (asset_type, asset_code, issuer_id, contract_id, icon_url, name, version) \
+                 VALUES (2,'BBB',7002,7003,'i','n',now64(3))",
+            )
+            .execute()
+            .await
+            .expect("seed enrichment");
+
+        // force_retry=false → only AAA (BBB enriched-skip, native type-skip).
+        let got = select_sep1_chunk(&client, None, 100, false)
+            .await
+            .expect("candidate query");
+        assert_eq!(
+            got,
+            vec![AssetKey {
+                asset_type: 1,
+                asset_code: "AAA".into(),
+                issuer_id: 7001,
+                contract_id: 0,
+            }],
+        );
+
+        // force_retry=true → AAA + BBB (NOT-IN dropped), still no native.
+        let forced = select_sep1_chunk(&client, None, 100, true)
+            .await
+            .expect("force-retry query");
+        assert_eq!(forced.len(), 2);
+        assert!(
+            forced
+                .iter()
+                .all(|k| k.asset_type == 1 || k.asset_type == 2)
+        );
+
+        client
+            .query(
+                "ALTER TABLE assets DELETE WHERE asset_code IN ('AAA','BBB') \
+                 OR (asset_type = 0 AND asset_code = '')",
+            )
+            .execute()
+            .await
+            .expect("cleanup assets");
+        client
+            .query("ALTER TABLE asset_enrichment DELETE WHERE asset_code = 'BBB'")
+            .execute()
+            .await
+            .expect("cleanup enrichment");
+    }
+
+    /// NFT counterpart — `select_nft_chunk` skips the enriched key, returns the
+    /// rest; `--force-retry` returns all. `#[ignore]`.
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse"]
+    async fn select_nft_chunk_skips_enriched() {
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        client
+            .query("INSERT INTO nfts (contract_id, token_id) VALUES (6001,'1'),(6002,'2')")
+            .execute()
+            .await
+            .expect("seed nfts");
+        client
+            .query(
+                "INSERT INTO nft_enrichment \
+                 (contract_id, token_id, name, media_url, collection_name, version) \
+                 VALUES (6001,'1','n','m','c',now64(3))",
+            )
+            .execute()
+            .await
+            .expect("seed nft enrichment");
+
+        let got = select_nft_chunk(&client, None, 100, false)
+            .await
+            .expect("candidate query");
+        assert_eq!(
+            got,
+            vec![NftKey {
+                contract_id: 6002,
+                token_id: "2".into(),
+            }],
+        );
+
+        let forced = select_nft_chunk(&client, None, 100, true)
+            .await
+            .expect("force-retry");
+        assert_eq!(forced.len(), 2);
+
+        client
+            .query("ALTER TABLE nfts DELETE WHERE contract_id IN (6001,6002)")
+            .execute()
+            .await
+            .expect("cleanup nfts");
+        client
+            .query("ALTER TABLE nft_enrichment DELETE WHERE contract_id = 6001")
+            .execute()
+            .await
+            .expect("cleanup enrichment");
+    }
 }

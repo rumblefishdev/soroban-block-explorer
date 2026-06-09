@@ -19,3 +19,6 @@ lambda_runtime = { workspace = true }
 aws_lambda_events = { version = "0.16", default-features = false, features = ["sqs"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }

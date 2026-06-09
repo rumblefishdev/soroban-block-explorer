@@ -331,4 +331,103 @@ mod tests {
         assert_eq!(image, ""); // sentinel — not the malicious scheme
         assert_eq!(collection, "X");
     }
+
+    /// CH-backed end-to-end smoke (task 0231 step 5): the full nft write path
+    /// against a live local ClickHouse — `soroban_contracts` StrKey lookup →
+    /// live `token_uri()` RPC (+ metadata fetch) → INSERT → read back. Covers
+    /// the **real** path (a known mainnet contract) and the **sentinel** path
+    /// (contract absent from `soroban_contracts`). `#[ignore]` (needs CH +
+    /// mainnet Soroban-RPC + reachable token_uri metadata). Run:
+    /// `CLICKHOUSE_URL=http://localhost:8125 CLICKHOUSE_USER=default \
+    ///  CLICKHOUSE_PASSWORD=clickhouse cargo test -p enrichment-shared \
+    ///  smoke_ch_nft -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + mainnet Soroban-RPC + reachable token_uri metadata"]
+    async fn smoke_ch_nft_real_and_sentinel() {
+        #[derive(Row, Deserialize)]
+        struct Readback {
+            name: Option<String>,
+            media_url: Option<String>,
+            collection_name: Option<String>,
+        }
+        async fn read(
+            client: &Client,
+            k: &NftKey,
+        ) -> (Option<String>, Option<String>, Option<String>) {
+            let r = client
+                .query(
+                    "SELECT name, media_url, collection_name FROM nft_enrichment FINAL \
+                     WHERE contract_id = ? AND token_id = ?",
+                )
+                .bind(k.contract_id)
+                .bind(&k.token_id)
+                .fetch_one::<Readback>()
+                .await
+                .expect("read nft_enrichment");
+            (r.name, r.media_url, r.collection_name)
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let fetcher = NftTokenUriFetcher::new().expect("build fetcher");
+
+        // --- REAL: seed a known mainnet NFT contract (0-arg token_uri; the
+        // fetcher's arity fallback handles it) ---
+        let contract = "CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY";
+        let contract_id = db_clickhouse::persist::ids::contract_id(contract);
+        client
+            .query(
+                "INSERT INTO soroban_contracts (id, contract_id, wasm_uploaded_at_ledger, is_sac) \
+                 VALUES (?, ?, 0, false)",
+            )
+            .bind(contract_id)
+            .bind(contract)
+            .execute()
+            .await
+            .expect("seed soroban contract");
+
+        let key = NftKey {
+            contract_id,
+            token_id: "1".into(),
+        };
+        enrich_nft_token_uri(&client, key.clone(), &fetcher)
+            .await
+            .expect("enrich nft");
+        let (name, media, coll) = read(&client, &key).await;
+        eprintln!("REAL NFT -> name={name:?} media={media:?} coll={coll:?}");
+        assert!(
+            [&name, &media, &coll]
+                .iter()
+                .any(|c| c.as_deref().is_some_and(|s| !s.is_empty())),
+            "real path: at least one non-empty metadata field \
+             (depends on the contract's token_uri target staying reachable)"
+        );
+
+        // --- SENTINEL: a contract absent from `soroban_contracts` ---
+        let ghost = NftKey {
+            contract_id: 808_001,
+            token_id: "1".into(),
+        };
+        enrich_nft_token_uri(&client, ghost.clone(), &fetcher)
+            .await
+            .expect("enrich ghost nft");
+        let (gn, gm, gc) = read(&client, &ghost).await;
+        assert_eq!(
+            (gn.as_deref(), gm.as_deref(), gc.as_deref()),
+            (Some(""), Some(""), Some("")),
+            "sentinel: all columns = ''"
+        );
+
+        // --- cleanup (dev CH is otherwise empty) ---
+        client
+            .query("ALTER TABLE soroban_contracts DELETE WHERE id = ?")
+            .bind(contract_id)
+            .execute()
+            .await
+            .expect("cleanup soroban_contracts");
+        client
+            .query("ALTER TABLE nft_enrichment DELETE WHERE token_id = '1'")
+            .execute()
+            .await
+            .expect("cleanup nft_enrichment");
+    }
 }

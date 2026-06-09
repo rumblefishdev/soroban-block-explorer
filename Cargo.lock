@@ -1690,6 +1690,7 @@ dependencies = [
  "db-clickhouse",
  "enrichment-shared",
  "lambda_runtime",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

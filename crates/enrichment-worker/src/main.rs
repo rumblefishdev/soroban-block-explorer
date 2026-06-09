@@ -348,4 +348,135 @@ mod tests {
         let r = record(None, Some(""));
         assert!(require_message_id(&r).is_err());
     }
+
+    /// CH-backed worker smoke (task 0231 step 5): the full per-message path —
+    /// SQS body → `parse_message` → `handle_record` dispatch → `enrich_*` → CH.
+    /// `#[ignore]` (needs live local CH + network). Run:
+    /// `CLICKHOUSE_URL=http://localhost:8125 CLICKHOUSE_USER=default \
+    ///  CLICKHOUSE_PASSWORD=clickhouse cargo test -p enrichment-worker \
+    ///  handle_record_ -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + network (centre.io TOML)"]
+    async fn handle_record_sep1_writes_real_enrichment() {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R {
+            name: Option<String>,
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let state = WorkerState {
+            client: client.clone(),
+            sep1: Sep1Fetcher::new().expect("sep1"),
+            nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        };
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let issuer_id = db_clickhouse::persist::ids::account_id(issuer);
+        client
+            .query(
+                "INSERT INTO accounts \
+                 (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number, home_domain) \
+                 VALUES (?, ?, 0, 0, 0, 'centre.io')",
+            )
+            .bind(issuer_id)
+            .bind(issuer)
+            .execute()
+            .await
+            .expect("seed issuer");
+
+        let body = format!(
+            r#"{{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":{issuer_id},"contract_id":0}}"#
+        );
+        handle_record(&record(Some("m-sep1"), Some(&body)), &state)
+            .await
+            .expect("handle_record");
+
+        let r: R = client
+            .query(
+                "SELECT name FROM asset_enrichment FINAL WHERE asset_code = 'USDC' AND issuer_id = ?",
+            )
+            .bind(issuer_id)
+            .fetch_one()
+            .await
+            .expect("readback");
+        assert!(
+            r.name.as_deref().is_some_and(|s| !s.is_empty()),
+            "worker decode→dispatch→enrich wrote a real USDC name"
+        );
+
+        client
+            .query("ALTER TABLE accounts DELETE WHERE id = ?")
+            .bind(issuer_id)
+            .execute()
+            .await
+            .expect("cleanup acc");
+        client
+            .query("ALTER TABLE asset_enrichment DELETE WHERE asset_code = 'USDC'")
+            .execute()
+            .await
+            .expect("cleanup enr");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + mainnet Soroban-RPC"]
+    async fn handle_record_nft_writes_real_enrichment() {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R {
+            name: Option<String>,
+            media_url: Option<String>,
+            collection_name: Option<String>,
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let state = WorkerState {
+            client: client.clone(),
+            sep1: Sep1Fetcher::new().expect("sep1"),
+            nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        };
+        let contract = "CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY";
+        let contract_id = db_clickhouse::persist::ids::contract_id(contract);
+        client
+            .query(
+                "INSERT INTO soroban_contracts (id, contract_id, wasm_uploaded_at_ledger, is_sac) \
+                 VALUES (?, ?, 0, false)",
+            )
+            .bind(contract_id)
+            .bind(contract)
+            .execute()
+            .await
+            .expect("seed contract");
+
+        let body =
+            format!(r#"{{"kind":"nft_token_uri","contract_id":{contract_id},"token_id":"1"}}"#);
+        handle_record(&record(Some("m-nft"), Some(&body)), &state)
+            .await
+            .expect("handle_record");
+
+        let r: R = client
+            .query(
+                "SELECT name, media_url, collection_name FROM nft_enrichment FINAL \
+                 WHERE contract_id = ? AND token_id = '1'",
+            )
+            .bind(contract_id)
+            .fetch_one()
+            .await
+            .expect("readback");
+        assert!(
+            [&r.name, &r.media_url, &r.collection_name]
+                .iter()
+                .any(|c| c.as_deref().is_some_and(|s| !s.is_empty())),
+            "worker decode→dispatch→enrich wrote a real NFT metadata field"
+        );
+
+        client
+            .query("ALTER TABLE soroban_contracts DELETE WHERE id = ?")
+            .bind(contract_id)
+            .execute()
+            .await
+            .expect("cleanup contract");
+        client
+            .query("ALTER TABLE nft_enrichment DELETE WHERE token_id = '1'")
+            .execute()
+            .await
+            .expect("cleanup enr");
+    }
 }

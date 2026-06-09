@@ -393,4 +393,104 @@ mod tests {
             "expected a real name (got sentinel/None)"
         );
     }
+
+    /// CH-backed end-to-end smoke (task 0231 step 5): the full sep1 write path
+    /// against a live local ClickHouse — issuer `accounts` lookup → live TOML
+    /// fetch → resolve → INSERT → read back. Covers the **real** path (USDC) and
+    /// the **sentinel** path (issuer absent from `accounts`). `#[ignore]` (needs
+    /// CH + network). Run:
+    /// `CLICKHOUSE_URL=http://localhost:8125 CLICKHOUSE_USER=default \
+    ///  CLICKHOUSE_PASSWORD=clickhouse cargo test -p enrichment-shared \
+    ///  smoke_ch_sep1 -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + network (centre.io TOML)"]
+    async fn smoke_ch_sep1_real_and_sentinel() {
+        #[derive(Row, Deserialize)]
+        struct Readback {
+            icon_url: Option<String>,
+            name: Option<String>,
+        }
+        async fn read(client: &Client, k: &AssetKey) -> (Option<String>, Option<String>) {
+            let r = client
+                .query(
+                    "SELECT icon_url, name FROM asset_enrichment FINAL \
+                     WHERE asset_type = ? AND asset_code = ? AND issuer_id = ? AND contract_id = ?",
+                )
+                .bind(k.asset_type)
+                .bind(&k.asset_code)
+                .bind(k.issuer_id)
+                .bind(k.contract_id)
+                .fetch_one::<Readback>()
+                .await
+                .expect("read asset_enrichment");
+            (r.icon_url, r.name)
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let fetcher = Sep1Fetcher::new().expect("build fetcher");
+
+        // --- REAL: seed the USDC issuer account (home_domain → centre.io) ---
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let issuer_id = db_clickhouse::persist::ids::account_id(issuer);
+        client
+            .query(
+                "INSERT INTO accounts \
+                 (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number, home_domain) \
+                 VALUES (?, ?, 0, 0, 0, 'centre.io')",
+            )
+            .bind(issuer_id)
+            .bind(issuer)
+            .execute()
+            .await
+            .expect("seed issuer account");
+
+        let usdc = AssetKey {
+            asset_type: 1,
+            asset_code: "USDC".into(),
+            issuer_id,
+            contract_id: 0,
+        };
+        enrich_asset_from_sep1(&client, usdc.clone(), &fetcher)
+            .await
+            .expect("enrich USDC");
+        let (icon, name) = read(&client, &usdc).await;
+        eprintln!("REAL USDC -> icon={icon:?} name={name:?}");
+        assert!(
+            icon.as_deref().is_some_and(|s| !s.is_empty()),
+            "real path: non-empty icon"
+        );
+        assert!(
+            name.as_deref().is_some_and(|s| !s.is_empty()),
+            "real path: non-empty name"
+        );
+
+        // --- SENTINEL: a classic asset whose issuer is absent from `accounts` ---
+        let ghost = AssetKey {
+            asset_type: 1,
+            asset_code: "GHOST".into(),
+            issuer_id: 909_001,
+            contract_id: 0,
+        };
+        enrich_asset_from_sep1(&client, ghost.clone(), &fetcher)
+            .await
+            .expect("enrich ghost");
+        let (g_icon, g_name) = read(&client, &ghost).await;
+        assert_eq!(g_icon.as_deref(), Some(""), "sentinel: icon = ''");
+        assert_eq!(g_name.as_deref(), Some(""), "sentinel: name = ''");
+
+        // --- cleanup (dev CH is otherwise empty) ---
+        client
+            .query("ALTER TABLE accounts DELETE WHERE id = ?")
+            .bind(issuer_id)
+            .execute()
+            .await
+            .expect("cleanup accounts");
+        client
+            .query(
+                "ALTER TABLE asset_enrichment DELETE WHERE asset_code = 'USDC' OR asset_code = 'GHOST'",
+            )
+            .execute()
+            .await
+            .expect("cleanup asset_enrichment");
+    }
 }
