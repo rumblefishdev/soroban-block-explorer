@@ -4,7 +4,7 @@ title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
 status: blocked
 related_adr: ['0027', '0031', '0043', '0048']
-related_tasks: ['0125', '0194', '0195']
+related_tasks: ['0125', '0194', '0195', '0247', '0261', '0266']
 tags:
   [
     priority-medium,
@@ -68,6 +68,17 @@ history:
       (§6.11 + §2.3) per ADR 0032 evergreen rule. ADR 0048 is proposed, pending a
       read-cost measurement of the read-time join + karolkow review. The TVL-only
       scope cut stays a task-level decision (here), not in the ADR.
+  - date: '2026-06-09'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Cross-link + reframe (see 0261 Decision): gross_volume_a (the on-chain input
+      to volume/fee) shares one claim-atom extractor + one historical re-parse with
+      the pool_id fix (0261/0266). Decision: capture gross_volume_a NOW on that
+      shared re-parse — do not re-parse twice — while USD volume/fee display stays
+      deferred until the Prices API is live (read-time join, ADR 0048). The
+      TVL-only launch cut is unchanged; this only ensures the volume input is not
+      thrown away. Linked 0247/0261/0266.
 ---
 
 # LP analytics: TVL + volume + fee_revenue

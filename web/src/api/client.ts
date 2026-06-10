@@ -35,10 +35,14 @@ client.interceptors.error.use((error, response) => {
     return Object.assign(error, { status });
   }
 
-  const envelopeMessage =
+  // F-AF-4: only adopt the envelope `message` when it is actually a string —
+  // a non-string (object / array) would `String()`-coerce to "[object Object]"
+  // and surface as the user-facing error text.
+  const rawMessage =
     error && typeof error === 'object' && 'message' in error
-      ? String((error as { message: unknown }).message)
+      ? (error as { message: unknown }).message
       : null;
+  const envelopeMessage = typeof rawMessage === 'string' ? rawMessage : null;
   const message =
     envelopeMessage ??
     (typeof error === 'string' && error.length > 0

@@ -383,8 +383,8 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
  * * One SQL path: broad search across the six entity-typed CTEs.
  * * Response is `{ "groups": {…} }` with up to `limit` rows per
  * entity bucket. Rows carry the same columns regardless of
- * bucket: `entity_type`, `identifier`, `label`, `surrogate_id`
- * (BIGINT FK or `null`), plus optional enrichment
+ * bucket: `entity_type`, `identifier`, `label`, `route_token`
+ * (asset routing token or `null`), plus optional enrichment
  * (`successful`, `last_activity_at`) and composite routing
  * (`contract_id`, `token_id`) fields.
  * * FE decides "singleton → direct navigation" by inspecting the

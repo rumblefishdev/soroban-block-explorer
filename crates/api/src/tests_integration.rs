@@ -713,49 +713,37 @@ async fn assets_filter_type_native_returns_singleton_against_real_db() {
     }
 }
 
-/// Resolution by numeric `assets.id`. Skips cleanly if the table is
-/// completely empty.
+/// The numeric surrogate was dropped (PR #175 / composite move). A bare
+/// integer is no longer a valid `:id` form — it parses as neither a C-StrKey
+/// nor a `CODE-ISSUER` composite, so the handler rejects it with a 400 before
+/// touching the DB. No DATABASE_URL needed.
 #[tokio::test]
-async fn assets_detail_by_numeric_id_against_real_db() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        return;
+async fn assets_detail_numeric_id_rejected_with_400() {
+    let pool = match std::env::var("DATABASE_URL") {
+        Ok(url) => match PgPool::connect(&url).await {
+            Ok(p) => p,
+            Err(_) => return,
+        },
+        // The 400 is emitted before any DB access; a lazy pool is fine.
+        Err(_) => return,
     };
-    let Ok(pool) = PgPool::connect(&database_url).await else {
-        return;
-    };
-
-    // Find any existing id (the singleton at id=1 always works after the
-    // migration; guard regardless so the test stays robust).
-    let row: Option<(i32,)> = sqlx::query_as("SELECT id FROM assets ORDER BY id LIMIT 1")
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten();
-    let Some((id,)) = row else {
-        eprintln!("assets table empty — skipping numeric-id resolution test");
-        return;
-    };
-
     let router = build_app(pool);
     let resp = router
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/assets/{id}"))
+                .uri("/v1/assets/12345")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     let (status, json) = body_json(resp).await;
-    assert_eq!(status, StatusCode::OK, "expected 200: {json}");
-    assert_eq!(json["id"], id, "id mismatch: {json}");
-    assert!(
-        json.get("description").is_some(),
-        "detail response must carry the description slot (even if null): {json}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400: {json}");
+    assert_eq!(json["code"], "invalid_id");
 }
 
-/// 404 path for a numeric id that does not exist.
+/// 404 path for a well-formed contract StrKey that does not exist. `CAAA…AAJ`
+/// is shape-valid (56 chars, C prefix, base32) but never minted on mainnet.
 #[tokio::test]
 async fn assets_detail_unknown_id_returns_404_against_real_db() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
@@ -768,9 +756,7 @@ async fn assets_detail_unknown_id_returns_404_against_real_db() {
     let resp = router
         .oneshot(
             Request::builder()
-                // Use a clearly-absent numeric id; SERIAL never reaches i32::MAX
-                // in any realistic backfill.
-                .uri("/v1/assets/2147483647")
+                .uri("/v1/assets/CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -792,8 +778,8 @@ async fn assets_detail_by_contract_strkey_against_real_db() {
         return;
     };
 
-    let row: Option<(i32, String)> = sqlx::query_as(
-        "SELECT a.id, sc.contract_id \
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT sc.contract_id \
          FROM assets a \
          JOIN soroban_contracts sc ON sc.id = a.contract_id \
          LIMIT 1",
@@ -802,7 +788,7 @@ async fn assets_detail_by_contract_strkey_against_real_db() {
     .await
     .ok()
     .flatten();
-    let Some((expected_id, contract_strkey)) = row else {
+    let Some((contract_strkey,)) = row else {
         eprintln!("no asset with contract_id — skipping contract-StrKey resolution test");
         return;
     };
@@ -819,7 +805,8 @@ async fn assets_detail_by_contract_strkey_against_real_db() {
         .unwrap();
     let (status, json) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK, "expected 200: {json}");
-    assert_eq!(json["id"], expected_id, "wrong asset surfaced: {json}");
+    // `id` is now the canonical token = the contract StrKey for SAC/Soroban.
+    assert_eq!(json["id"], contract_strkey, "wrong asset surfaced: {json}");
     assert_eq!(json["contract_id"], contract_strkey);
 }
 
@@ -834,8 +821,8 @@ async fn assets_detail_by_code_issuer_composite_against_real_db() {
         return;
     };
 
-    let row: Option<(i32, String, String)> = sqlx::query_as(
-        "SELECT a.id, a.asset_code, iss.account_id \
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT a.asset_code, iss.account_id \
          FROM assets a \
          JOIN accounts iss ON iss.id = a.issuer_id \
          WHERE a.asset_code IS NOT NULL \
@@ -845,7 +832,7 @@ async fn assets_detail_by_code_issuer_composite_against_real_db() {
     .await
     .ok()
     .flatten();
-    let Some((expected_id, code, issuer)) = row else {
+    let Some((code, issuer)) = row else {
         eprintln!("no classic-identity asset — skipping code-issuer resolution test");
         return;
     };
@@ -862,7 +849,9 @@ async fn assets_detail_by_code_issuer_composite_against_real_db() {
         .unwrap();
     let (status, json) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK, "expected 200: {json}");
-    assert_eq!(json["id"], expected_id);
+    // `id` is now the canonical token = the `CODE-ISSUER` composite for a
+    // classic-credit asset with no contract id.
+    assert_eq!(json["id"], format!("{code}-{issuer}"));
     assert_eq!(json["asset_code"], code);
     assert_eq!(json["issuer"], issuer);
 }
@@ -880,9 +869,11 @@ async fn assets_transactions_returns_at_least_one_row_against_real_db() {
         return;
     };
 
-    // Try classic identity first, fall back to contract identity.
-    let by_classic: Option<(i32,)> = sqlx::query_as(
-        "SELECT a.id FROM assets a \
+    // Try classic identity first, fall back to contract identity. The `:id`
+    // is now the canonical composite token (`CODE-ISSUER` or contract StrKey),
+    // not the dropped numeric surrogate.
+    let by_classic: Option<(String, String)> = sqlx::query_as(
+        "SELECT a.asset_code, iss.account_id FROM assets a \
          JOIN accounts iss ON iss.id = a.issuer_id \
          JOIN operations_appearances oa \
               ON oa.asset_code = a.asset_code AND oa.asset_issuer_id = iss.id \
@@ -892,9 +883,11 @@ async fn assets_transactions_returns_at_least_one_row_against_real_db() {
     .await
     .ok()
     .flatten();
-    let by_contract: Option<(i32,)> = if by_classic.is_none() {
-        sqlx::query_as(
-            "SELECT a.id FROM assets a \
+    let token: Option<String> = if let Some((code, issuer)) = by_classic {
+        Some(format!("{code}-{issuer}"))
+    } else {
+        let by_contract: Option<(String,)> = sqlx::query_as(
+            "SELECT sc.contract_id FROM assets a \
              JOIN soroban_contracts sc ON sc.id = a.contract_id \
              JOIN operations_appearances oa ON oa.contract_id = sc.id \
              LIMIT 1",
@@ -902,11 +895,10 @@ async fn assets_transactions_returns_at_least_one_row_against_real_db() {
         .fetch_optional(&pool)
         .await
         .ok()
-        .flatten()
-    } else {
-        None
+        .flatten();
+        by_contract.map(|(c,)| c)
     };
-    let Some((asset_id,)) = by_classic.or(by_contract) else {
+    let Some(token) = token else {
         eprintln!(
             "no non-native asset references found in operations_appearances — \
              skipping happy-path /transactions assertion"
@@ -918,7 +910,7 @@ async fn assets_transactions_returns_at_least_one_row_against_real_db() {
     let resp = router
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/assets/{asset_id}/transactions?limit=5"))
+                .uri(format!("/v1/assets/{token}/transactions?limit=5"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -929,7 +921,7 @@ async fn assets_transactions_returns_at_least_one_row_against_real_db() {
     let data = json["data"].as_array().unwrap();
     assert!(
         !data.is_empty(),
-        "asset {asset_id} appears in operations_appearances but \
+        "asset {token} appears in operations_appearances but \
          /transactions returned 0 rows: {json}"
     );
     // Lock the canonical-aligned response shape: every row must carry
@@ -958,22 +950,23 @@ async fn assets_native_transactions_returns_empty_page_against_real_db() {
         return;
     };
 
-    // Native singleton is asset_type=0; resolve its id rather than hard-coding.
-    let row: Option<(i32,)> = sqlx::query_as("SELECT id FROM assets WHERE asset_type = 0 LIMIT 1")
+    // Native singleton (asset_type=0) has no composite identity, so it is
+    // addressed by the reserved `native` token, not a StrKey / CODE-ISSUER.
+    let row: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
         .fetch_optional(&pool)
         .await
         .ok()
         .flatten();
-    let Some((native_id,)) = row else {
+    if !matches!(row, Some((n,)) if n > 0) {
         eprintln!("no native asset row — skipping");
         return;
-    };
+    }
 
     let router = build_app(pool);
     let resp = router
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/assets/{native_id}/transactions"))
+                .uri("/v1/assets/native/transactions")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4076,18 +4069,20 @@ async fn assets_detail_cache_control_medium_against_real_db() {
     let Ok(pool) = PgPool::connect(&database_url).await else {
         return;
     };
-    let row: Option<(i32,)> = sqlx::query_as("SELECT id FROM assets LIMIT 1")
+    // Address the native singleton via the reserved `native` token (seeded by
+    // migration 0161; the numeric surrogate is gone).
+    let row: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) FROM assets WHERE asset_type = 0")
         .fetch_optional(&pool)
         .await
         .ok()
         .flatten();
-    let Some((id,)) = row else {
+    if !matches!(row, Some((n,)) if n > 0) {
         return;
-    };
+    }
     let resp = build_app(pool)
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/assets/{id}"))
+                .uri("/v1/assets/native")
                 .body(Body::empty())
                 .unwrap(),
         )

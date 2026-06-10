@@ -192,6 +192,16 @@ The backend serves data from the block explorer's own database, adding:
   [ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md));
   every StrKey in a response comes from a join back to `accounts.account_id`
   or `soroban_contracts.contract_id`. The public API shape is unchanged
+- **Per-module datasource (task 0243)** — read handlers dispatch PG (`sqlx`) or
+  ClickHouse (`clickhouse`) per `DataSource::for_module(Module::X)`
+  (`API_DATASOURCE_<MODULE>` env flag, default PG during the transition;
+  [ADR 0047](../../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)). Each
+  migrated module carries a `queries_ch.rs` whose rows map to the same
+  `domain::*` / DTO types, so the public response shape is datasource-agnostic.
+  The `assets` table on ClickHouse has **no numeric surrogate** — it is keyed on
+  the natural identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`,
+  which is why `/assets/:id` and the list cursor use the composite token /
+  composite keyset rather than the dropped `assets.id`.
 
 ### 4.2 What the Backend Must Not Do
 
@@ -350,9 +360,16 @@ expanding the backend contract beyond what the frontend is expected to show.
 Query params: `limit`, `cursor`, `filter[type]` (native/classic_credit/sac/soroban), `filter[code]`.
 
 **`GET /assets/:id`** - Asset detail: asset code, issuer/contract, type, supply, holder
-count, metadata.
+count, metadata. The numeric surrogate was dropped (PR #175 / the PG→CH composite move),
+so `:id` is a single canonical token in one of three forms: a contract StrKey
+(`C…`, for SAC / Soroban / native XLM-SAC), a `CODE-ISSUER` composite (classic credit,
+e.g. `USDC-GA…`), or the reserved literal `native` (the classic XLM singleton, which
+carries no composite identity). The response `id` field echoes that same canonical token
+(contract StrKey → else `CODE-ISSUER` → else `native`), so a client routes by echoing it
+verbatim. A bare numeric is rejected with `400 invalid_id`.
 
-**`GET /assets/:id/transactions`** - Paginated transactions involving this asset.
+**`GET /assets/:id/transactions`** - Paginated transactions involving this asset
+(addressed by the same `:id` token forms).
 
 The backend must preserve the distinction between native, classic credit, SAC, and
 Soroban-native assets while still serving all through a unified explorer API.
@@ -460,12 +477,18 @@ Behaviour:
   `soroban_contracts`, the response is `{ "type": "redirect", "entity_type", "entity_id" }`
   and the frontend navigates directly to the entity page.
 - otherwise the response is `{ "type": "results", "groups": {...} }` with up to `limit`
-  rows per entity bucket (default 10, hard ceiling 50). Each row carries the same four
-  columns regardless of bucket: `entity_type`, `identifier`, `label`, `surrogate_id`
-  (BIGINT FK or `null` for tx / pool which route by `identifier`). `groups` includes
-  only buckets that have at least one match — empty buckets are omitted from the
-  response (the OpenAPI schema marks them optional); frontend treats absent and empty
-  array identically.
+  rows per entity bucket (default 10, hard ceiling 50). Each row carries the same
+  columns regardless of bucket: `entity_type`, `identifier` (the human-shown id),
+  `label`, and `route_token`. The frontend routes a hit on `route_token ?? identifier`:
+  for transaction / account / contract / pool the display `identifier` IS the routable id
+  (hash / StrKey / `L…`) so `route_token` is `null`; for `asset` the `identifier` is the
+  non-routable asset code, so `route_token` carries the canonical `/assets/:id` token
+  (contract StrKey | `CODE-ISSUER` | `native`, identical to the detail route);
+  `nft` routes on the composite `(contract_id, token_id)` it also projects. The dropped
+  numeric `surrogate_id` was replaced by `route_token` (task 0243) — search hits no longer
+  emit a key the detail routes reject. `groups` includes only buckets that have at least
+  one match — empty buckets are omitted from the response (the OpenAPI schema marks them
+  optional); frontend treats absent and empty array identically.
 
 Authoritative SQL:
 [`22_get_search.sql`](../database-schema/endpoint-queries/22_get_search.sql) — UNION ALL

@@ -2,9 +2,9 @@
 id: '0066'
 title: 'Frontend: TanStack Query setup, API client, polling, env config'
 type: FEATURE
-status: active
-related_adr: []
-related_tasks: []
+status: completed
+related_adr: ['0008']
+related_tasks: ['0063']
 tags: [priority-high, effort-small, layer-frontend-shared]
 milestone: 2
 links: []
@@ -25,6 +25,19 @@ history:
     status: active
     who: FilipDz
     note: 'Env config refined per PR review: only web/.env.development + web/.env.example are committed. Staging/production VITE_API_BASE_URL is passed by the deployment pipeline (CI/CDK) at build time so the URL is owned by infra, not the repo. config.ts already fails fast at runtime when the variable is missing.'
+  - date: 2026-06-08
+    status: completed
+    who: karolkow
+    note: >
+      Completed + archived (audit 0257 card 6.1, closes A2 + Q-4). All 12
+      acceptance criteria are [x] and the feature shipped 2026-05-11 (see
+      that day's notes); the only outstanding issue was a stale-status drift
+      (body `## Status:` said "Backlog / Not started" while frontmatter was
+      `active` and the work was done). User decision 2026-06-08: this is done
+      — flip to `completed` and archive rather than leave a half-state.
+      Cross-refs also filled: related_adr ['0008'] (error-envelope ADR the
+      client.ts interceptor implements), related_tasks ['0063'] (sibling
+      frontend-shared UI task).
 ---
 
 # Frontend: TanStack Query setup, API client, polling, env config
@@ -33,9 +46,10 @@ history:
 
 Set up the TanStack Query provider, typed API client, polling configuration, and environment-based API URL injection in `apps/web/src/api/`. TanStack Query IS the browser cache for all server state -- no Redux, Zustand, or manual global cache layer is permitted.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Not started.
+**Current state:** Implemented 2026-05-11 under `web/src/api/`; archived
+2026-06-08. All acceptance criteria below satisfied.
 
 ## Context
 

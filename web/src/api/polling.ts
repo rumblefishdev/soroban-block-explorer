@@ -6,6 +6,64 @@ export const homePolicy = {
 } as const;
 
 /**
+ * Cadence knob for the poll target (`1.5 × cadence` after the last close).
+ * Observed mainnet close interval is ~5.8s, but this is set deliberately
+ * *below* that (5.5s) to bias each fetch slightly EARLY in the next gap.
+ * The two 1:1 failure modes are asymmetric: firing late catches 2 blocks
+ * in one fetch (breaks 1:1, unrecoverable), while firing early just yields
+ * an empty fetch that the cheap floor retry recovers. Leaning early trades
+ * the costly failure for the cheap one. Not pushed lower than this or
+ * almost every fetch would be a wasted empty+retry (over-fetch).
+ */
+const LEDGER_CADENCE_MS = 5_500;
+/** Floor between polls — also the recheck step when a block runs late. */
+const LIVE_MIN_MS = 4_000;
+/** Cap (= 1.5 × cadence) so a fresh-block / stalled fetch still rechecks. */
+const LIVE_MAX_MS = 8_250;
+
+/**
+ * Policy for the home "latest activity" feeds (ledgers + transactions).
+ * `staleTime` sits at the poll floor so any focus/mount trigger between
+ * ticks also refetches fresh. The cadence itself is the adaptive
+ * `midpointPollDelay` below — set it per hook as `refetchInterval`, since
+ * each feed reads its newest row's timestamp from a different field.
+ * Scoped to the two home tables only; the global `useNetworkStats` poll
+ * (LIVE badge) stays on the cheaper `homePolicy` 12s cadence.
+ */
+export const livePolicy = {
+  staleTime: LIVE_MIN_MS,
+} as const;
+
+/**
+ * Adaptive poll delay that aims each fetch at the MIDPOINT of the next
+ * inter-block gap, given the close timestamp of the newest block seen.
+ *
+ * Target = lastClose + 1.5 × cadence: one cadence to reach the next block,
+ * plus half a cadence to land in the centre of its interval — the point
+ * that maximises the symmetric margin against ledger-close jitter, so it
+ * minimises both empty fetches (0 new blocks) and double catches (2 blocks
+ * in one fetch). Latency is deliberately traded away for that margin.
+ *
+ * `delay = 1.5 × cadence − elapsedSinceClose`, clamped to [MIN, MAX]. The
+ * subtraction self-corrects with no stored state: a late block keeps the
+ * same `closedAt` while wall-clock advances, so `elapsed` grows, the delay
+ * shrinks toward MIN, and the feed rechecks sooner until the block lands
+ * and `closedAt` jumps — re-anchoring the phase on the real ledger clock.
+ * Uses the client clock for "now"; sub-second skew is irrelevant at this
+ * cadence and latency is not a goal. This only *approaches* a clean 1:1 —
+ * with non-zero close jitter some 0/2 fetches are unavoidable (a client
+ * cannot know future arrivals); a true 1:1 needs server push (SSE/WS),
+ * out of scope on the Lambda-only backend.
+ */
+export function midpointPollDelay(closedAt: string | undefined): number {
+  if (!closedAt) return LEDGER_CADENCE_MS;
+  const close = Date.parse(closedAt);
+  if (Number.isNaN(close)) return LEDGER_CADENCE_MS;
+  const delay = 1.5 * LEDGER_CADENCE_MS - (Date.now() - close);
+  return Math.min(LIVE_MAX_MS, Math.max(LIVE_MIN_MS, delay));
+}
+
+/**
  * Default policy for cursor-paginated list queries. `placeholderData:
  * keepPreviousData` keeps the previous page's rows on screen while the
  * next cursor is being fetched, so Next clicks don't flash a spinner

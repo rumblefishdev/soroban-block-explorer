@@ -4,7 +4,8 @@ title: 'OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids 
 type: OPS
 status: backlog
 related_adr: ['0033', '0044', '0045']
-related_tasks: ['0228', '0252', '0261', '0267', '0268']
+related_tasks:
+  ['0199', '0228', '0247', '0252', '0261', '0267', '0268', '0279', '0281']
 tags:
   [priority-medium, effort-large, ops, hetzner, parser, backfill, milestone-2]
 milestone: 2
@@ -36,6 +37,37 @@ history:
       gates the exact shape of the INSERT payload. Default plan is
       Option A first → record multi-hop gap in artifact → run 0268
       schema migration as follow-up.
+  - date: '2026-06-09'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Scope extension (per 0261 Decision): this re-parse holds the path-payment
+      `ClaimLiquidityAtom`s, so it must ALSO compute and INSERT `gross_volume_a`
+      per (pool, ledger) into `liquidity_pool_snapshots`, not just `pool_id` into
+      `operations_appearances`. One parse pass, two write targets. Capturing
+      gross_volume_a here (even though USD volume/fee stay off until the Prices
+      API, ADR 0048) avoids a second full re-parse of the range later. Default
+      Option A (scalar) is superseded toward emitting the full pool list per the
+      claim-atom extractor.
+  - date: '2026-06-10'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Audit pass (0261 plan review). Four deltas: (1) the INSERT payload must
+      be the COMPLETE per-tx fold output for any tx containing a path-payment
+      op — pool_ids refines the 0163 fold identity, so groups can split;
+      emitting only pool-touching rows leaves stale `amount` fold counts
+      behind. (2) Targeted write only (op rows + snapshot rows) — running the
+      full persist pipeline would re-emit nfts_pending and re-leak the 0221
+      SAC rows into drained partitions. (3) Range widens to the full backfill
+      range 50,457,424 → W (W = 0281-window indexer deploy ledger, pinned at
+      kickoff): claim atoms come from result XDR, no retention-state
+      dependency — the old 56.6M floor was an asset-pair-lookup constraint.
+      (4) Preconditions: 0268 ALTERs applied (pool_ids + gross_volume_a),
+      oa_pool_seek projection dropped pre-INSERT, the 0279 per-op-amounts
+      payload decision recorded before kickoff (one-pass rule), fresh
+      snapshot. Transport default flips to direct INSERT; ADR 0045
+      FREEZE/rsync/ATTACH stays as bandwidth fallback.
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
@@ -68,7 +100,7 @@ coverage post-migration) and removes the documented gap in the
 ## Architecture (mirror task 0228)
 
 ```
-Retention window: 56,657,428 → 62,527,999  (~5.87 M ledgers)
+Range: 50,457,424 → W (window deploy ledger; ~12 M+ ledgers)
                   ↓
        Split per-ledger-range (3 partitions)
                   ↓
@@ -90,11 +122,11 @@ xdr-parser    xdr-parser    xdr-parser
 INSERT into   INSERT into   INSERT into
 CH local      CH local      CH local
    ↓              ↓              ↓
-FREEZE +      FREEZE +      FREEZE +
-rsync to      rsync to      rsync to
+INSERT over   INSERT over   INSERT over
+WAN to        WAN to        WAN to
 Hetzner       Hetzner       Hetzner
-ATTACH PART   ATTACH PART   ATTACH PART
-per partition per partition per partition
+(ADR 0045     (ADR 0045     (ADR 0045
+ fallback)     fallback)     fallback)
                   ↓
        merged into operations_appearances
                   ↓
@@ -121,31 +153,57 @@ FINAL` after the INSERT batch.
 
 ## Sequence
 
+Preconditions (2026-06-10 audit):
+
+- 0268 ALTERs applied on Hetzner: `pool_ids` (ADD + MATERIALIZE,
+  online, pre-window) and `liquidity_pool_snapshots.gross_volume_a`.
+- `oa_pool_seek` projection DROPPED before any INSERT (avoids
+  per-part projection rebuild during the backfill; unblocks the
+  eventual `DROP COLUMN pool_id`). Replacement seek lands per 0281 C.
+- 0279 per-op LP amounts payload decision recorded: deposit/withdraw
+  amounts come from `LedgerEntryChanges` (0247 Path B), claim atoms
+  only cover trades — decide whether this run carries the 0279
+  payload BEFORE kickoff; the alternative is a second 12M-ledger
+  pass.
+- Fresh Hetzner snapshot (0272 precedent: RESTORE of 690 GiB = 642 s).
+
 1. **Locked SHA** — 0261 Phase 1 parser fix merged to develop; pin
    the commit SHA for all three machines.
 2. **3-machine prep** — re-spin or reuse the original task 0228
    parallel-backfill hosts. Ensure they have AWS CLI / Rust
    xdr-parser binary built at locked SHA.
 3. **Split ledger range** — assign 3 contiguous ranges covering
-   `56,657,428 → 62,527,999`. Document the partition boundaries
-   in this task's history.
+   `50,457,424 → W` (W = ledger from which the 0281-window indexer
+   redeploy writes `pool_ids` itself; pin W + the partition
+   boundaries in this task's history).
 4. **Per-machine run** (parallel) — for each ledger in the assigned
    range:
    - Download `.xdr.zst` from
      `s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/.../FC…--<ledger>.xdr.zst`
-   - Run `xdr-parser` extracting `operations_appearances` rows
-     **only** for op types 2 / 13 (path_payment) that crossed
-     pools per op_meta.
-   - INSERT to the per-machine CH local instance.
-5. **Transport** (mirror ADR 0045) — `clickhouse-client … FREEZE
-PARTITION …` on the local CH, `rsync` the frozen part directory
-   to Hetzner `/srv/clickhouse-data/store/.../detached/`, then
-   `ALTER TABLE … ATTACH PART …`.
+   - Run `xdr-parser` (claim-atom extractor, locked 0261 SHA). For
+     every tx containing ≥ 1 path-payment op, emit the **complete
+     `operations_appearances` fold output of that tx** — never just
+     the pool-touching rows; `pool_ids` refines the 0163 fold
+     identity, groups can split, and partial emission leaves stale
+     `amount` fold counts (see 2026-06-10 history note). Also emit
+     the `gross_volume_a` rows per `(pool, ledger)` for
+     `liquidity_pool_snapshots`.
+   - **Targeted write only** — do NOT run the full persist pipeline:
+     no events / nfts_pending / participants re-emission (would
+     re-leak 0221 SAC rows into drained partitions).
+   - INSERT to the per-machine CH local instance (or buffer files).
+5. **Transport** — default: direct `INSERT` over WAN into Hetzner CH
+   (payload is a small fraction of full parts; sparse re-parse parts
+   make ATTACH awkward). Fallback if WAN throughput disappoints:
+   ADR 0045 `FREEZE PARTITION` → rsync → `ATTACH PART`.
 6. **Verify gates** (HARD STOP before forcing merge):
    - Row count delta within expected envelope (per the row-growth
      analysis in 0261, +2–5 % total operations_appearances rows).
-   - FK resolve sample (every new `pool_id` is in
-     `liquidity_pools FINAL`).
+   - FK resolve sample: new `pool_id`s resolve in
+     `liquidity_pools FINAL`; pools created + removed entirely
+     before the retention floor may legitimately miss (claim atoms
+     reach further back than retained pool state) — record as
+     tolerance, not failure.
    - Spot-check 50 random `(ledger, tx, app_order)` triples:
      `WHERE pool_id IS NOT NULL` row content matches the freshly
      parsed op-meta.
@@ -157,11 +215,11 @@ PARTITION …` on the local CH, `rsync` the frozen part directory
 
 ## Risk + mitigations
 
-- **Live writes during migration**: 0241 deploy (live mode
-  cutover) ships before this task fires. New rows accumulate in
-  `operations_appearances` during the multi-day migration window.
-  Mitigation: re-parse range is **strictly historical** (≤
-  pre-0241-deploy max ledger); new live rows untouched by INSERTs.
+- **Live writes during migration**: live ingestion is already
+  running (post-0241; the first cutover failed and was rolled back
+  via 0272 — hence the snapshot precondition). Re-parse range is
+  **strictly historical** (≤ W, the window deploy ledger); rows
+  ≥ W are written correctly by the redeployed indexer; no overlap.
 - **Disk space**: re-parse only emits `(ledger, tx, app_order)`
   rows where we previously had `pool_id = NULL` and now have a
   derived `pool_id`. Estimated +2–5 % to the operations_appearances
@@ -173,21 +231,23 @@ PARTITION …` on the local CH, `rsync` the frozen part directory
   rows AFTER the existing NULL rows on the Hetzner timeline. They
   will because the parse + INSERT happens after the backfill that
   produced the NULL rows; no special handling required.
-- **0268 dependency**: if Option B (Array column) is chosen, this
-  task's INSERT payload changes from `pool_id Nullable(FixedString(32))`
-  to `pool_ids Array(FixedString(32))`. Pick A/B before kickoff.
+- **0268 dependency**: settled (2026-06-09/10) — the payload is
+  `pool_ids Array(FixedString(32))` (Flow B; the 0268 ALTERs are a
+  hard precondition). Scalar Option A is dead.
 
 ## Acceptance Criteria
 
 - [ ] 0261 Phase 1 parser fix merged to develop; commit SHA
       pinned in this task's history.
+- [ ] Preconditions met + recorded in history: 0268 ALTERs applied,
+      `oa_pool_seek` dropped, 0279 payload decision, fresh snapshot.
 - [ ] 3-machine split + per-machine ledger ranges documented in
       task history.
 - [ ] Hetzner CH disk headroom verified ≥ 100 GiB before kickoff.
 - [ ] All three machines complete their range; per-machine row
       counts + timing captured.
-- [ ] FREEZE + rsync + ATTACH PART per partition completed on
-      Hetzner; verify-gates pass.
+- [ ] Rows landed on Hetzner (direct INSERT default; ADR 0045
+      transport fallback); verify-gates pass.
 - [ ] `OPTIMIZE TABLE operations_appearances FINAL` completed.
 - [ ] Task 0267 (E20 re-validate) shows hash-set ratio ≥ 99 %
       (or 100 % if 0268 landed).
