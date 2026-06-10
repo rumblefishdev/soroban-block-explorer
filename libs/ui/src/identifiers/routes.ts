@@ -45,9 +45,13 @@ interface HitLike {
  * because the single-arg `routes.nft` throws — NFT identity is
  * composite per ADR 0030 / task 0264 Phase 8a.
  *
- * For non-NFT hits prefers `surrogate_id` (when present) over the
- * human-shown `identifier` because the surrogate is the form the
- * polymorphic `/v1/assets/:id` validator accepts.
+ * `surrogate_id` (internal numeric row id) is used ONLY for the `asset`
+ * route, because the polymorphic `/v1/assets/:id` validator accepts the
+ * numeric form. Every other entity's detail route requires its canonical
+ * `identifier` — account/contract/pool a StrKey (`G…`/`C…`/`L…`), ledger
+ * the sequence, transaction the hash. Sending those the numeric surrogate
+ * makes the detail endpoint reject it (`invalid_account_id`, …) → a valid
+ * search lands on "not found" (F-RR-35). So: surrogate only for assets.
  */
 export function routeForHit(hit: HitLike): string {
   if (hit.entity_type === 'nft') {
@@ -61,6 +65,8 @@ export function routeForHit(hit: HitLike): string {
     return '/nfts';
   }
   const idForUrl =
-    hit.surrogate_id != null ? String(hit.surrogate_id) : hit.identifier;
+    hit.entity_type === 'asset' && hit.surrogate_id != null
+      ? String(hit.surrogate_id)
+      : hit.identifier;
   return getIdentifierHref(hit.entity_type, idForUrl);
 }

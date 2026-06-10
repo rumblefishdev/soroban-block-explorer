@@ -93,6 +93,27 @@ history:
       error-inject NOT covered (optional). Test-fail classification
       RESOLVED-benign: main-repo checkout of same 0272 code = 86/86 PASS,
       so worktree 26-fail = local env artifact, develop/CI green.
+  - date: '2026-06-03'
+    status: active
+    who: karolkow
+    note: >
+      Incoming-merge iteration: merged origin/develop (HEAD afd36e77,
+      FF) bringing the round-2 closure — 0276 (audit-closing round 2, PR
+      #247), 0274 (accounts backend), 0275 (contracts list), 0243 (CH
+      datasource), 0247 (LP research). ZERO conflicts. Impact pass
+      (skeptical, code-verified) = pre-launch batch essentially DONE:
+      MUST F-0272S-1 RESOLVED by 0274 (real /v1/accounts endpoint, mock
+      gone) + 13/14 SHOULD closed (F-RR-2/3/6/7/14/17/18/25/33,
+      F-W6-LOADSKEL-1/2/3 — LOADSKEL-3 exceeded plan: all 7 detail
+      skeletons, F-0272S-2/3/4). Only open SHOULD = F-RR-21 (search a11y,
+      explicit 0276 SKIP). New residual F-RR-34 (contracts-list route uses
+      DetailSkeleton not ListPageSkeleton, cosmetic). Remaining queue =
+      F-RR-21 + ~20 NICE + 3 POST. Queue statuses flipped (card 7.10 DONE,
+      card 6.5 F-0272S-1 DONE, tier-triage roll-up). Note on 0276: this
+      session's spawned round-2 closing task (commit 3a039067) IS the one
+      that landed — promoted + implemented + merged (PR #247), kept number
+      0276. The ID collision was a SEPARATE LP-op-amount task also numbered
+      0276 → renamed to 0279 (`a5d7a441`); audit-closing 0276 unaffected.
 ---
 
 # Frontend comprehensive audit (pre-launch)
