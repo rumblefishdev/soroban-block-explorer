@@ -142,9 +142,12 @@ WHERE transaction_id = (SELECT id FROM transactions FINAL
    and collect every `ClaimAtom::LiquidityPool` →
    `ClaimLiquidityAtom { liquidity_pool_id, asset_sold, amount_sold,
 asset_bought, amount_bought }`:
-   - emit one `operations_appearances` row per crossed pool
-     (`pool_id` = atom's `liquidity_pool_id`); the result holds the
-     full list, so multi-hop is covered (0268 superseded);
+   - emit the full crossed-pool list as `pool_ids` on the op's fold
+     row (Array shape — one row per op identity, NOT one row per
+     pool: the RMT sort key `(ledger, tx, app_order)` + the 0163
+     fold collapse multi-row-per-op; see the 2026-06-10 audit).
+     Schema side = 0268, executed as the prod migration around the
+     0281 window; `init.sql` parity lands with this task;
    - expose `amount_sold` / `amount_bought` per atom so
      `gross_volume_a` per `(pool, ledger)` can be computed downstream
      (consumed by 0247 / 0199; written by the 0266 backfill). The
