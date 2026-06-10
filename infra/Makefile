@@ -94,6 +94,7 @@ destroy-production-cloudflare-bootstrap: build
 
 build-production-web:
 	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
+		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		npx nx build @rumblefish/soroban-block-explorer-web
 
 deploy-production-web: build-production-web

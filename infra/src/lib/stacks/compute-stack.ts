@@ -253,7 +253,16 @@ export class ComputeStack extends cdk.Stack {
       environment: {
         ...sharedEnv,
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
-        API_BASE_URL: `https://${config.apiDomainName}`,
+        // OpenAPI `servers` block (Swagger "Try it out" target). Must be the
+        // Cloudflare-fronted host so Swagger calls are same-origin with the docs
+        // page AND traverse the edge (X-Edge-Secret) instead of hitting the
+        // edge-locked legacy domain (task 0277). Falls back to the legacy domain
+        // for envs without the Cloudflare domain.
+        API_BASE_URL: `https://${config.cloudflareApiDomainName ?? config.apiDomainName}`,
+        // CORS allow-origin for the cross-origin SPA. API Gateway answers only
+        // the OPTIONS preflight; the actual responses come from the Lambda and
+        // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.
+        CORS_ALLOW_ORIGIN: `https://${config.domainName}`,
         MTLS_SECRET_NAME: apiSecretName,
         // Origin lock (task 0277), phase 2: arm the middleware by injecting the
         // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then

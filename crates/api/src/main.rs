@@ -100,14 +100,39 @@ fn app(config: &AppConfig, state: AppState) -> Router {
 
     // Origin lock (task 0277 Step 2, ADR 0048): reject any request that did NOT
     // arrive through the Cloudflare edge — i.e. that carries no matching
-    // `X-Edge-Secret` (injected by Cloudflare toward the origin). Applied LAST so
-    // it is the OUTERMOST layer (runs before the auth gate). No-op when
-    // `EDGE_SECRET` is unset. See `common::edge_lock`.
-    match &config.edge_secret {
+    // `X-Edge-Secret` (injected by Cloudflare toward the origin). Wraps the auth
+    // gate (runs before it). No-op when `EDGE_SECRET` is unset. See
+    // `common::edge_lock`.
+    let router = match &config.edge_secret {
         Some(secret) => router.layer(axum::middleware::from_fn_with_state(
             std::sync::Arc::new(secret.clone()),
             common::edge_lock::require_edge_secret,
         )),
+        None => router,
+    };
+
+    // CORS (OUTERMOST): the cross-origin SPA reads the actual GET/POST responses
+    // from this Lambda. API Gateway's `defaultCorsPreflightOptions` answers only
+    // the OPTIONS preflight (MOCK integration); the real responses are produced
+    // here and must carry `Access-Control-Allow-Origin` themselves or the browser
+    // blocks the read. Outermost so even 401/403 responses get the header.
+    // `None` (CORS_ALLOW_ORIGIN unset) = no CORS layer (same-origin/non-browser).
+    match config
+        .cors_allow_origin
+        .as_deref()
+        .and_then(|o| axum::http::HeaderValue::from_str(o).ok())
+    {
+        Some(origin) => router.layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::ACCEPT,
+                    axum::http::HeaderName::from_static("x-api-key"),
+                ]),
+        ),
         None => router,
     }
 }
@@ -202,6 +227,7 @@ mod tests {
             jwt_secret: None,
             turnstile_secret: None,
             api_keys: Vec::new(),
+            cors_allow_origin: None,
         }
     }
 

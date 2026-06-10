@@ -48,6 +48,12 @@ pub struct AppConfig {
     /// whose `X-API-Key` matches one (constant-time) is the paid tier and skips
     /// the Turnstile/JWT free-tier check. Empty = no paid keys configured.
     pub api_keys: Vec<String>,
+    /// Allowed CORS origin for the cross-origin SPA (from `CORS_ALLOW_ORIGIN`,
+    /// e.g. `https://sorobanscan.rumblefish.dev`). API Gateway answers only the
+    /// OPTIONS preflight; the actual GET/POST responses come from this Lambda
+    /// and need `Access-Control-Allow-Origin` for the browser to read them.
+    /// `None` (env unset/empty) = no CORS layer (same-origin / non-browser use).
+    pub cors_allow_origin: Option<String>,
 }
 
 impl AppConfig {
@@ -77,6 +83,9 @@ impl AppConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            cors_allow_origin: std::env::var("CORS_ALLOW_ORIGIN")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 }
