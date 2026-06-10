@@ -102,7 +102,15 @@ export type AssetDetailResponse = {
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+   * PG→CH composite move): CH keys assets on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
   total_supply?: string | null;
@@ -136,7 +144,15 @@ export type AssetItem = {
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+   * PG→CH composite move): CH keys assets on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
   total_supply?: string | null;
@@ -895,7 +911,15 @@ export type PaginatedAssetItem = {
      */
     holder_count?: number | null;
     icon_url?: string | null;
-    id: number;
+    /**
+     * Canonical identifier — the single token usable as `/assets/{id}`:
+     * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+     * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+     * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+     * PG→CH composite move): CH keys assets on
+     * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+     */
+    id: string;
     issuer?: string | null;
     name?: string | null;
     total_supply?: string | null;
@@ -1462,11 +1486,17 @@ export type SearchGroups = {
  *
  * `identifier` is the canonical human-shown id (hex hash for
  * transactions, strkey `L…` for pools, StrKey for accounts /
- * contracts, asset code for assets, name for NFTs). For `asset` it is
- * NOT unique — the frontend routes via `surrogate_id`. For `nft` it is
- * also not unique and `surrogate_id` alone is insufficient because NFT
- * identity is the composite `(contract_id, token_id)` per task 0264 /
- * ADR 0030 — the two fields below carry the composite for routing.
+ * contracts, asset code for assets, name for NFTs). It is the routing
+ * key too for every type whose display id IS routable (transaction,
+ * account, contract, pool). The two exceptions carry a separate routing
+ * payload because their display id is NOT routable:
+ *
+ * - `asset`: `identifier` is the asset code (not unique / not routable);
+ * `route_token` carries the canonical `/assets/:id` token (contract
+ * StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in
+ * `assets/handlers.rs`.
+ * - `nft`: identity is the composite `(contract_id, token_id)` per task
+ * 0264 / ADR 0030 — the two fields below carry it for routing.
  *
  * `successful` and `last_activity_at` are populated only for
  * `entity_type = transaction` today — joined from the partitioned
@@ -1486,8 +1516,12 @@ export type SearchHit = {
   identifier: string;
   label: string;
   last_activity_at?: string | null;
+  /**
+   * Canonical `/assets/:id` routing token for `asset` hits; `None` for
+   * every other type (they route on `identifier`). See the struct doc.
+   */
+  route_token?: string | null;
   successful?: boolean | null;
-  surrogate_id?: number | null;
   /**
    * NFT composite routing key. Populated only when
    * `entity_type = nft`; `None` for every other bucket.
@@ -1876,7 +1910,7 @@ export type GetAssetData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -1914,7 +1948,7 @@ export type ListAssetTransactionsData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -2055,10 +2089,10 @@ export type ListEventsData = {
   };
   query?: {
     /**
-     * Items per page (1–100, default 20). Page granularity is per
-     * `(contract, transaction, ledger)` appearance — a single appearance
-     * can expand to multiple per-node items in the response, so the
-     * returned `data.len()` may exceed `limit`.
+     * Items per page (1–100, default 20). On the PG datasource the page is per
+     * `(contract, transaction, ledger)` appearance — one appearance can expand to
+     * multiple events, so `data.len()` may exceed `limit`. On the CH datasource the
+     * page is per event (one row → one item), so `data.len() <= limit`.
      */
     limit?: number;
     /**

@@ -25,7 +25,7 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ContractDetailResponse, ContractInterfaceMetadata, ContractListItem, ContractStats,
-    ContractsListParams, EventItem, InterfaceResponse, InvocationItem,
+    ContractsListParams, EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
     ContractIdCursor, ContractListRow, ContractRow, EventAppearanceRow, InterfaceRow,
@@ -86,17 +86,18 @@ pub async fn list_contracts(
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedContractsListParams {
-        limit: i64::from(pagination.limit),
+        limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         contract_type,
         q: params.filter_q,
     };
 
+    let source = DataSource::for_module(Module::Contracts);
     let mut rows: Vec<ContractListRow> =
-        match fetch_contract_list(&state.db, &resolved, direction).await {
+        match fetch_contract_list_for_source(&state, source, &resolved, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_contracts: {e}");
+                tracing::error!(source = ?source, "DB error in list_contracts: {e}");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
@@ -124,6 +125,22 @@ fn map_contract_list_item(r: ContractListRow) -> ContractListItem {
         deployer: r.deployer,
         deployed_at_ledger: r.deployed_at_ledger,
         recent_invocations: r.recent_invocations,
+    }
+}
+
+async fn fetch_contract_list_for_source(
+    state: &AppState,
+    source: DataSource,
+    params: &ResolvedContractsListParams,
+    direction: Direction,
+) -> Result<Vec<ContractListRow>, CtrFetchError> {
+    match source {
+        DataSource::Pg => fetch_contract_list(&state.db, params, direction)
+            .await
+            .map_err(CtrFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_contract_list(state.ch(), params, direction)
+            .await
+            .map_err(CtrFetchError::Ch),
     }
 }
 
@@ -450,7 +467,7 @@ pub async fn list_invocations(
     params(
         ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
         ("limit" = Option<u32>, Query,
-         description = "Items per page (1–100, default 20). Page granularity is per\n`(contract, transaction, ledger)` appearance — a single appearance\ncan expand to multiple per-node items in the response, so the\nreturned `data.len()` may exceed `limit`.",
+         description = "Items per page (1–100, default 20). On the PG datasource the page is per\n`(contract, transaction, ledger)` appearance — one appearance can expand to\nmultiple events, so `data.len()` may exceed `limit`. On the CH datasource the\npage is per event (one row → one item), so `data.len() <= limit`.",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query,
          description = "Opaque pagination cursor from a previous response."),
@@ -465,72 +482,144 @@ pub async fn list_invocations(
 )]
 pub async fn list_events(
     State(state): State<AppState>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<EventCursor>,
     Path(contract_id): Path<String>,
 ) -> Response {
     if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
         return resp;
     }
 
-    let contract = match fetch_contract(&state.db, &contract_id).await {
+    let source = DataSource::for_module(Module::Contracts);
+
+    // Reject a cursor minted for the other datasource (ADR 0008 fail-clean) —
+    // the PG keyset `(created_at, id)` and the CH keyset
+    // `(ledger_sequence, id, event_index)` are not interchangeable.
+    if let Some(cursor) = &pagination.cursor
+        && !event_cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
+    let contract = match fetch_contract_for_source(&state, source, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
         Err(e) => {
-            tracing::error!("DB error fetching contract {contract_id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching contract {contract_id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
-    let mut rows: Vec<EventAppearanceRow> = match fetch_event_appearances(
-        &state.db,
-        contract.id,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        direction,
+
+    match source {
+        // PG: folded appearance index + Archive XDR overlay (ADR 0033 / 0029).
+        // One appearance row expands to many `EventItem`s, so `data.len()` may
+        // exceed `limit`.
+        DataSource::Pg => {
+            let ts_cursor = pagination.cursor.as_ref().and_then(|c| match c {
+                EventCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
+                EventCursor::Ch { .. } => None,
+            });
+            let mut rows: Vec<EventAppearanceRow> = match fetch_event_appearances(
+                &state.db,
+                contract.id,
+                pagination.fetch_limit(),
+                ts_cursor.as_ref(),
+                direction,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("DB error in list_events: {e}");
+                    return errors::internal_error(errors::DB_ERROR, "database error");
+                }
+            };
+            let page = finalize_page(
+                &mut rows,
+                pagination.limit,
+                direction,
+                has_predecessor,
+                |dir, r| {
+                    cursor::encode(
+                        &EventCursor::Pg {
+                            ts: r.created_at,
+                            id: r.transaction_id,
+                        },
+                        dir,
+                    )
+                },
+            );
+            // Archive XDR fetch (runtime, ADR 0029). Hard-fail if any requested
+            // ledger is missing — fail-fast over silently dropping events.
+            let sequences: Vec<i64> = rows.iter().map(|r| r.ledger_sequence).collect();
+            let ledger_map = fetch_unique_ledgers(&state, &sequences).await;
+            let parsed = build_parsed_ledgers(&ledger_map, &state.network_id);
+            let items = match expand_events(&rows, &parsed, &contract_id) {
+                Ok(v) => v,
+                Err(()) => {
+                    tracing::error!("archive XDR expansion failed for contract {contract_id}");
+                    return errors::internal_error(
+                        errors::ARCHIVE_ERROR,
+                        "archive XDR fetch failed",
+                    );
+                }
+            };
+            let mut resp = Json(into_envelope(items, page)).into_response();
+            cache_control::attach(&mut resp, cache_control::SHORT);
+            resp
+        }
+        // CH: full-content `soroban_events` (per-event rows, inline JSON
+        // payload) — one row → one `EventItem`, no Archive overlay. Keyset is
+        // 3-component `(ledger_sequence, id, event_index)`.
+        DataSource::Ch => {
+            let mut rows = match queries_ch::fetch_events(
+                state.ch(),
+                contract.id,
+                pagination.fetch_limit(),
+                pagination.cursor.as_ref(),
+                direction,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("CH error in list_events: {e}");
+                    return errors::internal_error(errors::DB_ERROR, "database error");
+                }
+            };
+            let page = finalize_page(
+                &mut rows,
+                pagination.limit,
+                direction,
+                has_predecessor,
+                |dir, r| {
+                    cursor::encode(
+                        &EventCursor::Ch {
+                            ledger_sequence: r.item.ledger_sequence,
+                            transaction_id: r.item.transaction_id,
+                            event_index: r.event_index,
+                        },
+                        dir,
+                    )
+                },
+            );
+            let items: Vec<EventItem> = rows.into_iter().map(|r| r.item).collect();
+            let mut resp = Json(into_envelope(items, page)).into_response();
+            cache_control::attach(&mut resp, cache_control::SHORT);
+            resp
+        }
+    }
+}
+
+/// True when the decoded events cursor was minted for the currently-active
+/// datasource (ADR 0008 fail-clean on a cross-datasource replay).
+fn event_cursor_matches_source(source: DataSource, cursor: &EventCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, EventCursor::Pg { .. }) | (DataSource::Ch, EventCursor::Ch { .. })
     )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("DB error in list_events: {e}");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    // Cursor matrix (truncate excess + reverse-on-Prev) handled by the
-    // canonical helper. `rows` mutates in place: post-call it carries
-    // exactly the displayed page in DESC presentation order regardless
-    // of fetch direction.
-    let page = finalize_page(
-        &mut rows,
-        pagination.limit,
-        direction,
-        has_predecessor,
-        |dir, r| cursor::encode(&TsIdCursor::new(r.created_at, r.transaction_id), dir),
-    );
-
-    // Archive XDR fetch (runtime, ADR 0029). Hard-fail policy: if any
-    // requested ledger is missing from the response, surface 500 — the
-    // explorer treats archive outages as fail-fast rather than silently
-    // dropping events or stalling cursor. Per project policy: assume S3
-    // doesn't fail; when it does, the client retries.
-    let sequences: Vec<i64> = rows.iter().map(|r| r.ledger_sequence).collect();
-    let ledger_map = fetch_unique_ledgers(&state, &sequences).await;
-    let parsed = build_parsed_ledgers(&ledger_map, &state.network_id);
-
-    let items = match expand_events(&rows, &parsed, &contract_id) {
-        Ok(v) => v,
-        Err(()) => {
-            tracing::error!("archive XDR expansion failed for contract {contract_id}");
-            return errors::internal_error(errors::ARCHIVE_ERROR, "archive XDR fetch failed");
-        }
-    };
-
-    let mut resp = Json(into_envelope(items, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
-    resp
 }
 
 /// Expand appearance rows into wire [`EventItem`]s using the archive
@@ -589,10 +678,10 @@ fn expand_events(
 // ---------------------------------------------------------------------------
 // Per-source dispatch helpers (task 0243)
 //
-// `events` (canonical 14) has no CH path yet (inline-XDR ScVal decode +
-// event_index keyset — see `queries_ch`), so `list_events` stays PG-only and
-// `API_DATASOURCE_CONTRACTS=ch` must remain off until it lands. The detail /
-// interface / invocations endpoints dispatch through these helpers.
+// All five contracts endpoints — detail / interface / invocations / list /
+// events — now dispatch PG or CH per `DataSource::for_module(Module::Contracts)`.
+// Events read CH `soroban_events` directly (full-content, inline JSON payload),
+// dropping the PG Archive overlay; see `queries_ch::fetch_events`.
 // ---------------------------------------------------------------------------
 
 async fn fetch_contract_for_source(
