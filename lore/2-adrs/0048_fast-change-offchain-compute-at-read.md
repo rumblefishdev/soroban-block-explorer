@@ -77,8 +77,8 @@ For fast-change off-chain values on ClickHouse:
    quantity against `prices` (mapping `ledger → closed_at → price candle`), in
    SQL.
 
-This adds a **fourth path** to ADR 0043's taxonomy — *indexer column* /
-*type-1 enrichment column* / *runtime type-2 fetch* / **compute-at-read via local
+This adds a **fourth path** to ADR 0043's taxonomy — _indexer column_ /
+_type-1 enrichment column_ / _runtime type-2 fetch_ / **compute-at-read via local
 price join** — specific to fast-change off-chain values on the CH store. The
 entity table keeps a **single writer** (the indexer, on-chain price-independent
 inputs).
@@ -108,7 +108,7 @@ re-parse over 273M snapshots) is tracked in task 0247.
 
 - **A1 — Materialize via write-back worker (ADR 0043 literal).** REJECTED for CH:
   stale values, `ReplacingMergeTree` read-modify-write race, 273M-row backfill.
-  May be revisited as an *optional* optimization to materialize **historical**
+  May be revisited as an _optional_ optimization to materialize **historical**
   USD once a day's price is final, if the read-time join cost proves too high —
   non-blocking, and it would carry a version column.
 - **A2 — Per-row runtime type-2 fetch (ADR 0043 detail path).** REJECTED: breaks

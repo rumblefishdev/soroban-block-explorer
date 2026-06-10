@@ -4,7 +4,7 @@ title: 'RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternativ
 type: RESEARCH
 status: active
 related_adr: ['0011', '0027', '0029', '0037']
-related_tasks: ['0077', '0163', '0169', '0199', '0246']
+related_tasks: ['0077', '0163', '0169', '0199', '0246', '0261', '0266']
 tags:
   [
     priority-medium,

@@ -56,13 +56,13 @@ single-writer — no race. This applies equally if/when volume/fee return.
 
 Sources: `prices-api-design-after-2nd-review.md` (rumblefishdev/stellar-scf-submissions) + Oskar.
 
-| Need | Answer |
-|------|--------|
-| History depth | 1h/1d candles backfill to **2024-02-20** — covers our whole range |
-| Per-asset pull | `GET /assets/{id}/ohlcv?timeframe=all` (1d) or `start`/`end`; 100 req/s; no cursor paging on OHLCV |
-| Denomination price | per-candle **`vwap`** (or `close`) |
-| Asset identifier | `{code}:{issuer}` / `{contract}` / `native` — matches our keys |
-| No price for asset | returns **`null`** (distinct from 5xx → write NULL vs retry) |
+| Need               | Answer                                                                                             |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| History depth      | 1h/1d candles backfill to **2024-02-20** — covers our whole range                                  |
+| Per-asset pull     | `GET /assets/{id}/ohlcv?timeframe=all` (1d) or `start`/`end`; 100 req/s; no cursor paging on OHLCV |
+| Denomination price | per-candle **`vwap`** (or `close`)                                                                 |
+| Asset identifier   | `{code}:{issuer}` / `{contract}` / `native` — matches our keys                                     |
+| No price for asset | returns **`null`** (distinct from 5xx → write NULL vs retry)                                       |
 
 → For TVL the Prices API covers live + the full 273M-snapshot history. **No second API.**
 
