@@ -141,3 +141,28 @@ pub struct EventItem {
     pub topics: Vec<serde_json::Value>,
     pub data: serde_json::Value,
 }
+
+/// Opaque pagination cursor for `GET /contracts/:id/events`, datasource-tagged
+/// (ADR 0008) so a cursor minted for one backend is rejected after a flag flip;
+/// a legacy/untagged cursor (no `src`) fails to decode → clean 400.
+///
+/// - `Pg` — `(created_at, transaction_id)` keyset over the folded appearance
+///   index `soroban_events_appearances` (payload overlaid from the Archive at
+///   read time).
+/// - `Ch` — `(ledger_sequence, transaction_id, event_index)` keyset over the
+///   full-content `soroban_events` table (per-event rows; `event_index` is the
+///   multi-event-tx tie-break, non-optional so a CH keyset never binds a NULL
+///   tuple element).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "src", rename_all = "snake_case")]
+pub enum EventCursor {
+    Pg {
+        ts: DateTime<Utc>,
+        id: i64,
+    },
+    Ch {
+        ledger_sequence: i64,
+        transaction_id: i64,
+        event_index: i16,
+    },
+}

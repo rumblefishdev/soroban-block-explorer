@@ -34,7 +34,7 @@ export function getIdentifierHref(type: EntityType, id: string): string {
 interface HitLike {
   entity_type: EntityType;
   identifier: string;
-  surrogate_id?: number | null;
+  route_token?: string | null;
   contract_id?: string | null;
   token_id?: string | null;
 }
@@ -45,9 +45,12 @@ interface HitLike {
  * because the single-arg `routes.nft` throws — NFT identity is
  * composite per ADR 0030 / task 0264 Phase 8a.
  *
- * For non-NFT hits prefers `surrogate_id` (when present) over the
- * human-shown `identifier` because the surrogate is the form the
- * polymorphic `/v1/assets/:id` validator accepts.
+ * For every other type the routing key is `route_token` when the
+ * backend supplies one (today only `asset`, whose display `identifier`
+ * is the non-routable asset code — `route_token` carries the canonical
+ * `/assets/:id` token: contract StrKey | `CODE-ISSUER` | `native`).
+ * For transaction / account / contract / pool the display `identifier`
+ * IS the routable id, so `route_token` is absent and we route on it.
  */
 export function routeForHit(hit: HitLike): string {
   if (hit.entity_type === 'nft') {
@@ -60,7 +63,6 @@ export function routeForHit(hit: HitLike): string {
     // would be a contract bug — fall back to the NFT index.
     return '/nfts';
   }
-  const idForUrl =
-    hit.surrogate_id != null ? String(hit.surrogate_id) : hit.identifier;
+  const idForUrl = hit.route_token ?? hit.identifier;
   return getIdentifierHref(hit.entity_type, idForUrl);
 }

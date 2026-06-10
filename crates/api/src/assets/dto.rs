@@ -23,7 +23,13 @@ pub struct ListParams {
 /// SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetItem {
-    pub id: i32,
+    /// Canonical identifier — the single token usable as `/assets/{id}`:
+    /// the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+    /// native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+    /// e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+    /// PG→CH composite move): CH keys assets on
+    /// `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+    pub id: String,
     /// `native | classic_credit | sac | soroban`. `null` only on schema drift.
     pub asset_type_name: Option<String>,
     /// Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).

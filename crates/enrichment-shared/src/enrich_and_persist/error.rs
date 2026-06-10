@@ -4,8 +4,8 @@
 //! the worker handler returns becomes an SQS retry, every `Ok(())`
 //! acks the message. So the boundary is "is it worth retrying":
 //!
-//! - [`EnrichError::Database`] — DB / RDS Proxy / connection issue. SQS
-//!   retries until the DLQ threshold; if the cluster is genuinely down
+//! - [`EnrichError::Database`] — ClickHouse read/insert/connection issue.
+//!   SQS retries until the DLQ threshold; if the cluster is genuinely down
 //!   the messages eventually reach the DLQ and the alarm fires.
 //! - [`EnrichError::Transient`] — network-layer or 5xx fetch failure;
 //!   the issuer's host might come back. SQS retries.
@@ -20,15 +20,16 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EnrichError {
-    /// Database error (write, read, connection). Worth retrying — SQS
-    /// will redeliver per `redrivePolicy.maxReceiveCount` and the DLQ
+    /// Database error (ClickHouse read/insert/connection). Worth retrying —
+    /// SQS will redeliver per `redrivePolicy.maxReceiveCount` and the DLQ
     /// alarm catches sustained outages.
     #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] clickhouse::error::Error),
 
-    /// Transient fetch failure — network-layer (no HTTP status), TCP /
-    /// TLS / DNS errors, or a 5xx response from the issuer. The
-    /// issuer's host may recover; SQS retries.
-    #[error("transient SEP-1 fetch error: {0}")]
+    /// Transient fetch failure (SEP-1 TOML or NFT `token_uri`) — network-layer
+    /// (no HTTP status), TCP / TLS / DNS error, a 5xx, or a transient
+    /// Soroban-RPC error. The host may recover; SQS retries / the batch re-run
+    /// retries.
+    #[error("transient enrichment fetch error: {0}")]
     Transient(String),
 }

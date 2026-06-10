@@ -321,32 +321,36 @@ async fn process_s3_object(
     // per ledger (matches the pre-cutover handler shape; today both
     // publishes are stubbed, see `enrichment_publish.rs`).
     let mut batch_extracted_assets: Vec<xdr_parser::types::ExtractedAsset> = Vec::new();
-    let mut nft_mint_ledgers: Vec<u32> = Vec::new();
+    let mut batch_minted_nfts: Vec<xdr_parser::types::ExtractedNft> = Vec::new();
 
     for ledger_meta in batch.ledger_close_metas.iter() {
         let parsed = process::parse_ledger(ledger_meta);
         let ledger_sequence = parsed.ledger.sequence;
-        let had_nft_mints = parsed.nfts.iter().any(|n| n.minted_at_ledger.is_some());
 
         persist_with_retry(&state.ch_client, &parsed).await?;
         publish_ledger_sequence_metric(&state.cw_client, ledger_sequence).await;
 
-        if had_nft_mints {
-            nft_mint_ledgers.push(ledger_sequence);
-        }
+        // Mint = the token_uri-set event → the enrichment candidate. Non-mint
+        // re-appearances (transfers) are already enriched or backfill's job.
+        batch_minted_nfts.extend(
+            parsed
+                .nfts
+                .into_iter()
+                .filter(|n| n.minted_at_ledger.is_some()),
+        );
         batch_extracted_assets.extend(parsed.assets);
     }
 
-    // Enrichment publish — stub today (no PG, no CH lookup yet). See
-    // `enrichment_publish.rs` for re-enablement plan. Failures here
-    // never abort the batch — the CH writes are already durable.
+    // Enrichment publish — per-batch CH anti-join filter then SQS fan-out (task
+    // 0231). See `enrichment_publish.rs`. Failures here never abort the batch:
+    // the CH writes are already durable and the publish is fail-open.
     state
         .enrichment_publisher
         .publish_for_extracted_assets(&batch_extracted_assets)
         .await;
     state
         .enrichment_publisher
-        .publish_for_minted_nfts(&nft_mint_ledgers)
+        .publish_for_minted_nfts(&batch_minted_nfts)
         .await;
 
     Ok(())
