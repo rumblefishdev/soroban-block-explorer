@@ -102,6 +102,7 @@ describe('AssetDetailPage', () => {
   it('renders the asset name sub-line when present', () => {
     mockOk(
       makeAsset({
+        id: 'USDC-XYZ',
         asset_code: 'USDC',
         asset_type: 1,
         asset_type_name: 'classic_credit',
@@ -110,7 +111,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/2'],
+      initialEntries: ['/assets/USDC-XYZ'],
       routePath: '/assets/:id',
     });
 
@@ -122,6 +123,7 @@ describe('AssetDetailPage', () => {
   it('renders cleanly when TOML metadata fields are null (partial-metadata tolerance)', () => {
     mockOk(
       makeAsset({
+        id: 'EURC-XYZ',
         asset_code: 'EURC',
         asset_type: 1,
         asset_type_name: 'classic_credit',
@@ -134,7 +136,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/3'],
+      initialEntries: ['/assets/EURC-XYZ'],
       routePath: '/assets/:id',
     });
 
@@ -154,7 +156,7 @@ describe('AssetDetailPage', () => {
     });
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/9999'],
+      initialEntries: ['/assets/MISSING-XYZ'],
       routePath: '/assets/:id',
     });
 

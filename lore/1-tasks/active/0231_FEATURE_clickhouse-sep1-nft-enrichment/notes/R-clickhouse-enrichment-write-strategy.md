@@ -469,7 +469,7 @@ ranking was overturned.)_
 - **Local seeding for scale testing:** local PG is seeded (ledgers
   50944000–50967331) but the downloaded partitions are not cached. Seeding local
   CH with real data needs a partition re-download + `backfill-runner
---datasource clickhouse`. The simulation above needed no real data; real data
+--target clickhouse`. The simulation above needed no real data; real data
   is only required to confirm the two scale caveats below.
 - **Scale caveats to confirm on prod-shaped data:** (a) the side-table join read
   is **~400–452k rows / ~110 ms per 50-row list page** on a realistic keyset
