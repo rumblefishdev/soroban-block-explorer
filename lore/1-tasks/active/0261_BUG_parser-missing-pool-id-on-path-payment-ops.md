@@ -141,7 +141,7 @@ WHERE transaction_id = (SELECT id FROM transactions FINAL
    the op's `OperationResult` success branch (`offers: Vec<ClaimAtom>`)
    and collect every `ClaimAtom::LiquidityPool` →
    `ClaimLiquidityAtom { liquidity_pool_id, asset_sold, amount_sold,
-   asset_bought, amount_bought }`:
+asset_bought, amount_bought }`:
    - emit one `operations_appearances` row per crossed pool
      (`pool_id` = atom's `liquidity_pool_id`); the result holds the
      full list, so multi-hop is covered (0268 superseded);
