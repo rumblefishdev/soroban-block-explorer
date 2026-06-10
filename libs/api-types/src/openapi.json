@@ -345,7 +345,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite.",
+            "description": "Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.",
             "required": true,
             "schema": {
               "type": "string"
@@ -404,7 +404,7 @@
           {
             "name": "id",
             "in": "path",
-            "description": "Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite.",
+            "description": "Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.",
             "required": true,
             "schema": {
               "type": "string"
@@ -632,7 +632,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Items per page (1–100, default 20). Page granularity is per\n`(contract, transaction, ledger)` appearance — a single appearance\ncan expand to multiple per-node items in the response, so the\nreturned `data.len()` may exceed `limit`.",
+            "description": "Items per page (1–100, default 20). On the PG datasource the page is per\n`(contract, transaction, ledger)` appearance — one appearance can expand to\nmultiple events, so `data.len()` may exceed `limit`. On the CH datasource the\npage is per event (one row → one item), so `data.len() <= limit`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1683,7 +1683,7 @@
       "get": {
         "tags": ["search"],
         "summary": "Unified search across all entity types.",
-        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `surrogate_id`\n  (BIGINT FK or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.",
         "operationId": "get_search",
         "parameters": [
           {
@@ -2085,8 +2085,8 @@
                 "type": ["string", "null"]
               },
               "id": {
-                "type": "integer",
-                "format": "int32"
+                "type": "string",
+                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
               },
               "issuer": {
                 "type": ["string", "null"]
@@ -2147,8 +2147,8 @@
             "type": ["string", "null"]
           },
           "id": {
-            "type": "integer",
-            "format": "int32"
+            "type": "string",
+            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
           },
           "issuer": {
             "type": ["string", "null"]
@@ -3118,6 +3118,39 @@
           }
         }
       },
+      "OperationType": {
+        "type": "string",
+        "description": "Stellar operation type. Discriminants match the XDR numbering; the\nserde representation is the canonical SCREAMING_SNAKE_CASE label used\nby the Horizon API and historically persisted as VARCHAR.",
+        "enum": [
+          "CREATE_ACCOUNT",
+          "PAYMENT",
+          "PATH_PAYMENT_STRICT_RECEIVE",
+          "MANAGE_SELL_OFFER",
+          "CREATE_PASSIVE_SELL_OFFER",
+          "SET_OPTIONS",
+          "CHANGE_TRUST",
+          "ALLOW_TRUST",
+          "ACCOUNT_MERGE",
+          "INFLATION",
+          "MANAGE_DATA",
+          "BUMP_SEQUENCE",
+          "MANAGE_BUY_OFFER",
+          "PATH_PAYMENT_STRICT_SEND",
+          "CREATE_CLAIMABLE_BALANCE",
+          "CLAIM_CLAIMABLE_BALANCE",
+          "BEGIN_SPONSORING_FUTURE_RESERVES",
+          "END_SPONSORING_FUTURE_RESERVES",
+          "REVOKE_SPONSORSHIP",
+          "CLAWBACK",
+          "CLAWBACK_CLAIMABLE_BALANCE",
+          "SET_TRUST_LINE_FLAGS",
+          "LIQUIDITY_POOL_DEPOSIT",
+          "LIQUIDITY_POOL_WITHDRAW",
+          "INVOKE_HOST_FUNCTION",
+          "EXTEND_FOOTPRINT_TTL",
+          "RESTORE_FOOTPRINT"
+        ]
+      },
       "PageInfo": {
         "type": "object",
         "description": "Pagination metadata attached to list responses.\n\nCursor-based pagination (not offset) — see ADR 0008. Aligns with\nStellar Horizon conventions and produces stable listings even when\nthe underlying ledger stream advances between requests.\n\nBoth `next_cursor` (forward / next page) and `prev_cursor` (backward\n/ previous page) are **always emitted** as opaque base64-JSON\nstrings or explicit JSON `null`. Wire shape always carries both\nkeys — never omitted — so the OpenAPI `nullable: true` declaration\nmatches the on-wire bytes exactly. `Option<String>` carries the\nentire signal:\n\n- `next_cursor: null` ⇒ last page (no further forward continuation).\n- `next_cursor: \"...\"` ⇒ a further forward page exists.\n- `prev_cursor: null` ⇒ first page (no backward continuation).\n- `prev_cursor: \"...\"` ⇒ a backward page exists.\n\nBoth cursors carry an internal `dir` discriminant (see\n`crates/api/src/common/cursor.rs::Direction`) so the backend can\nbranch SQL between forward (DESC `<`) and backward (ASC `>`,\nreverse for presentation) walks. Clients treat the strings as\nopaque tokens — round-tripping them through `?cursor=` is the only\nexpected use.",
@@ -3290,8 +3323,8 @@
                   "type": ["string", "null"]
                 },
                 "id": {
-                  "type": "integer",
-                  "format": "int32"
+                  "type": "string",
+                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
                 },
                 "issuer": {
                   "type": ["string", "null"]
@@ -4201,7 +4234,7 @@
       },
       "SearchHit": {
         "type": "object",
-        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions, strkey `L…` for pools, StrKey for accounts /\ncontracts, asset code for assets, name for NFTs). For `asset` it is\nNOT unique — the frontend routes via `surrogate_id`. For `nft` it is\nalso not unique and `surrogate_id` alone is insufficient because NFT\nidentity is the composite `(contract_id, token_id)` per task 0264 /\nADR 0030 — the two fields below carry the composite for routing.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
+        "description": "Single search row. Same shape across every entity bucket.\n\n`identifier` is the canonical human-shown id (hex hash for\ntransactions, strkey `L…` for pools, StrKey for accounts /\ncontracts, asset code for assets, name for NFTs). It is the routing\nkey too for every type whose display id IS routable (transaction,\naccount, contract, pool). The two exceptions carry a separate routing\npayload because their display id is NOT routable:\n\n- `asset`: `identifier` is the asset code (not unique / not routable);\n  `route_token` carries the canonical `/assets/:id` token (contract\n  StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in\n  `assets/handlers.rs`.\n- `nft`: identity is the composite `(contract_id, token_id)` per task\n  0264 / ADR 0030 — the two fields below carry it for routing.\n\n`successful` and `last_activity_at` are populated only for\n`entity_type = transaction` today — joined from the partitioned\n`transactions` table via `(hash, created_at)` for partition pruning.\nOther entity types pass `None` for both until follow-up enrichment\nadds per-entity last-activity joins. The frontend renders a\nstatus chip + relative timestamp on the right side of the row\nwhenever these fields are present.",
         "required": ["entity_type", "identifier", "label"],
         "properties": {
           "contract_id": {
@@ -4221,12 +4254,12 @@
             "type": ["string", "null"],
             "format": "date-time"
           },
+          "route_token": {
+            "type": ["string", "null"],
+            "description": "Canonical `/assets/:id` routing token for `asset` hits; `None` for\nevery other type (they route on `identifier`). See the struct doc."
+          },
           "successful": {
             "type": ["boolean", "null"]
-          },
-          "surrogate_id": {
-            "type": ["integer", "null"],
-            "format": "int64"
           },
           "token_id": {
             "type": ["string", "null"],

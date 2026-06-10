@@ -9,7 +9,11 @@ import {
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
-import { assetLegLabel, legHref, reserveDotColor } from './helpers.js';
+import {
+  assetLegLabel,
+  legHref,
+  reserveDotColor,
+} from '../pool-shared/helpers.js';
 
 interface AssetReserveCellProps {
   amount: string | null | undefined;

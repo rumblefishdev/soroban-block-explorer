@@ -33,7 +33,7 @@ export default function SearchResultsPage() {
   // Singleton auto-navigation (task 0271): when broad search returns
   // exactly one hit across all entity buckets, treat it as a redirect
   // and navigate straight to the detail page. `routeForHit` already
-  // handles every entity type (asset uses surrogate_id, NFT uses
+  // handles every entity type (asset uses route_token, NFT uses
   // composite contract_id+token_id, others use identifier).
   useEffect(() => {
     if (state.isFetching || state.totalCount !== 1) return;

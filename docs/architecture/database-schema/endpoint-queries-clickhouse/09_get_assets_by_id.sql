@@ -16,17 +16,20 @@
 --                 — natural composite key (PR #175). Direct seek.
 --               accounts, soroban_contracts ORDER BY natural StrKey.
 -- CH Engine:    All three Replacing — FINAL required.
--- CH Pattern:   FINAL'd direct seek on the 4-tuple natural key. API caller
---               supplies the tuple (resolved via PG or re-derived from a
---               synthetic cityHash64 surrogate on the frontend).
--- ADR 0044 §:   §4.5 (Replacing state). **PR #175 amendment:** input shape
---               changes from single `Int32 id` to natural 4-tuple — the
---               surrogate `assets.id` no longer exists.
+-- CH Pattern:   FINAL'd seek. The API resolves the public `:id` TOKEN to the
+--               WHERE predicate at the request boundary — NOT a surrogate:
+--                 • contract StrKey (`C…`) → seek `soroban_contracts.contract_id`
+--                 • `CODE-ISSUER`          → `asset_code` + `accounts.account_id`
+--                 • `native`               → `asset_type = 0`
+--               (task 0243, `assets/queries_ch.rs` + `canonical_id` in
+--               `assets/handlers.rs`). The displayed `AssetItem.id` echoes the
+--               same token, so the FE never reconstructs the tuple.
+-- ADR 0044 §:   §4.5 (Replacing state). **PR #175 amendment:** the surrogate
+--               `assets.id` no longer exists; routing is the composite token.
 -- Notes:
---   • PG E09 keeps single `:id` Int32 surrogate. CH side has no surrogate;
---     the API takes the 4-tuple. Migration paths for the API: (a) PG-backed
---     id→tuple lookup before hitting CH; (b) frontend computes the synthetic
---     cityHash64 surrogate from the tuple as opaque routing key.
+--   • Do NOT manufacture a cityHash64 surrogate as a routing key — `/assets/:id`
+--     rejects it (400). Search hits carry the canonical token in `route_token`
+--     (see `22_get_search.sql`), display `identifier` stays the asset code.
 --   • Sentinels: `issuer_id=0` and `contract_id=0` represent absence;
 --     LEFT JOIN never matches because `accounts.id` / `soroban_contracts.id`
 --     are derived from `cityhash64(strkey)` (0 reserved).

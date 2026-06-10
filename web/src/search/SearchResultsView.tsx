@@ -124,7 +124,7 @@ export function SearchResultsView({
           hitsForActiveTab.map((hit, idx) => (
             <SearchResultRow
               key={`${hit.entity_type}:${
-                hit.surrogate_id ?? hit.identifier
+                hit.route_token ?? hit.identifier
               }:${idx}`}
               hit={hit}
               highlighted={idx === highlightedIndex}

@@ -54,7 +54,7 @@
 --   • `asset_type_name` PG helper unavailable — project raw Int16 in
 --     asset bucket's `label`; API decodes.
 
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- Transactions: dictGet hot path (§5.5). Use $2 (parsed hash bytes)
     -- — the API classifier accepts BOTH hex AND base64 inputs for the
     -- raw query $1, so `unhex($1)` would throw on a base64-shaped q.
@@ -64,19 +64,19 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
         'transaction'                                                                       AS entity_type,
         lower(hex($2))                                                                      AS identifier,
         concat('ledger ', toString(dictGet('transaction_hash_dict', 'ledger_sequence', toString($2)))) AS label,
-        CAST(NULL AS Nullable(Int64))                                                       AS surrogate_id
+        CAST(NULL AS Nullable(String))                                                      AS route_token
     WHERE $5 = true
       AND $2 IS NOT NULL
       AND dictGet('transaction_hash_dict', 'ledger_sequence', toString($2)) > 0
     LIMIT $4
 ) UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- Contracts: StrKey prefix when $3 set, otherwise substring on name
     SELECT
         'contract'                                                                          AS entity_type,
         sc.contract_id                                                                      AS identifier,
         coalesce(sc.name, '')                                                               AS label,
-        CAST(sc.id AS Nullable(Int64))                                                      AS surrogate_id
+        CAST(NULL AS Nullable(String))                                                      AS route_token  -- routes on identifier (contract StrKey)
     FROM soroban_contracts sc FINAL
     WHERE $6 = true
       AND (
@@ -85,17 +85,27 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
           )
     LIMIT $4
 ) UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- Assets: substring on asset_code (CH no pg_trgm — linear scan).
-    -- PR #175 dropped `assets.id` surrogate; project a synthetic
-    -- cityHash64 over the natural 4-tuple as opaque routing key.
+    -- PR #175 dropped `assets.id` surrogate. Do NOT manufacture a
+    -- cityHash64 routing key — `/assets/:id` rejects it. Project the
+    -- canonical routing token (`route_token`, a String): contract StrKey
+    -- if present, else CODE-ISSUER, else `native` — identical to
+    -- `canonical_id` in `assets/handlers.rs` and the PG search asset_hits
+    -- CTE. `identifier` stays the display asset code. Non-asset CTEs
+    -- project NULL for `route_token` and route on `identifier`.
     SELECT
         'asset'                                                                             AS entity_type,
         if(length(a.asset_code) > 0, a.asset_code, 'XLM')                                   AS identifier,
         toString(a.asset_type)                                                              AS label,
-        toInt64(cityHash64(toString(a.asset_type), a.asset_code,
-                           toString(a.issuer_id), toString(a.contract_id)))                 AS surrogate_id
+        coalesce(
+            nullIf(sc.contract_id, ''),
+            if(length(a.asset_code) > 0 AND iss.account_id != '',
+               concat(a.asset_code, '-', iss.account_id), NULL),
+            'native')                                                                       AS route_token
     FROM assets a FINAL
+    LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
+    LEFT JOIN accounts          iss ON iss.id = a.issuer_id
     WHERE $7 = true
       AND (
               (length(a.asset_code) > 0 AND positionCaseInsensitiveUTF8(a.asset_code, $1) > 0)
@@ -103,20 +113,20 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
           )
     LIMIT $4
 ) UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- Accounts: StrKey prefix only
     SELECT
         'account'                                                                           AS entity_type,
         a.account_id                                                                        AS identifier,
         coalesce(a.home_domain, '')                                                         AS label,
-        CAST(a.id AS Nullable(Int64))                                                       AS surrogate_id
+        CAST(NULL AS Nullable(String))                                                      AS route_token  -- routes on identifier (G-StrKey)
     FROM accounts a FINAL
     WHERE $8 = true
       AND $3 IS NOT NULL
       AND startsWith(a.account_id, $3)
     LIMIT $4
 ) UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- NFTs: substring on name (CH no pg_trgm — linear scan).
     -- PR #175 dropped `nfts.id` surrogate; project synthetic
     -- cityHash64(contract_id, token_id) as opaque routing key.
@@ -124,20 +134,20 @@ SELECT entity_type, identifier, label, surrogate_id FROM (
         'nft'                                                                               AS entity_type,
         coalesce(n.name, '')                                                                AS identifier,
         coalesce(n.collection_name, '')                                                     AS label,
-        toInt64(cityHash64(toString(n.contract_id), n.token_id))                            AS surrogate_id
+        CAST(NULL AS Nullable(String))                                                      AS route_token  -- NFT routes on (contract_id, token_id) composite
     FROM nfts n FINAL
     WHERE $9 = true
       AND n.name IS NOT NULL
       AND positionCaseInsensitiveUTF8(n.name, $1) > 0
     LIMIT $4
 ) UNION ALL
-SELECT entity_type, identifier, label, surrogate_id FROM (
+SELECT entity_type, identifier, label, route_token FROM (
     -- Pools: exact-hex match on pool_id (32-byte BYTEA via $2)
     SELECT
         'pool'                                                                              AS entity_type,
         lower(hex(lp.pool_id))                                                              AS identifier,
         concat(coalesce(lp.asset_a_code, 'XLM'), ' / ', coalesce(lp.asset_b_code, 'XLM'))   AS label,
-        CAST(NULL AS Nullable(Int64))                                                       AS surrogate_id
+        CAST(NULL AS Nullable(String))                                                      AS route_token
     FROM liquidity_pools lp
     WHERE $10 = true
       AND $2 IS NOT NULL

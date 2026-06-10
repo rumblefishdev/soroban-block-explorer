@@ -128,6 +128,7 @@ export {
   type EntityType,
   type TruncationConfig,
   isAccountId,
+  isAssetId,
   isContractId,
   isLedgerSequence,
   isPoolId,

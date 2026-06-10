@@ -18,10 +18,10 @@ import {
   assetLegLabel,
   legHref,
   reserveDotColor,
-} from '../pool-detail/helpers.js';
+} from '../pool-shared/helpers.js';
 
-import { PoolAssetPair } from './PoolAssetPair.js';
-import { FeePill } from './FeePill.js';
+import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
+import { FeePill } from '../pool-shared/FeePill.js';
 
 export const POOL_COLUMN_COUNT = 5;
 

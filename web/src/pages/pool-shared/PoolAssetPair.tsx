@@ -2,7 +2,7 @@ import { Box } from '@mui/material';
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { AssetIcon } from '../assets/AssetIcon.js';
-import { assetLegLabel } from '../pool-detail/helpers.js';
+import { assetLegLabel } from './helpers.js';
 
 /**
  * A liquidity pool is two assets. Render each leg with the shared

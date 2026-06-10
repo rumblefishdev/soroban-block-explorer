@@ -2,6 +2,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
+  isAssetId,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -26,10 +27,15 @@ import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
  */
 export default function AssetDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
-  const asset = useAssetDetail(id);
+  // Pre-validate the param like the sibling detail pages (skip the fetch +
+  // render NotFound on a malformed id). Post-0243 the asset id is the
+  // canonical token (`native` | contract StrKey | `CODE-ISSUER`) — surrogate
+  // routing is gone — so `isAssetId` is the correct guard.
+  const valid = isAssetId(id);
+  const asset = useAssetDetail(valid ? id : '');
 
-  if (id === '') {
-    return <NotFoundState entity="asset" />;
+  if (!valid) {
+    return <NotFoundState entity="asset" identifier={id} />;
   }
 
   if (asset.isLoading) {
