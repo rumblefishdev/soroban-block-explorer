@@ -18,7 +18,8 @@ function isReady(value: Date | string | number | undefined): boolean {
 
 export function PollingIndicator({
   lastUpdated,
-  intervalMs = 5_000,
+  // No default → useNow's app-wide LIVE_TICK_MS keeps the label fresh.
+  intervalMs,
 }: PollingIndicatorProps) {
   const now = useNow(intervalMs);
   const ready = isReady(lastUpdated);

@@ -19,7 +19,9 @@ function toIso(value: Date | string | number): string | null {
 
 export function RelativeTimestamp({
   timestamp,
-  intervalMs = 30_000,
+  // No default → useNow's app-wide LIVE_TICK_MS keeps labels fresh. Override
+  // only for genuinely static (non-live) contexts.
+  intervalMs,
   variant = 'bodySmRegular',
 }: RelativeTimestampProps) {
   const now = useNow(intervalMs);
