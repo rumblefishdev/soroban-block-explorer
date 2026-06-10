@@ -4,7 +4,7 @@ title: 'BUG: parser does not tag `operations_appearances.pool_id` for path_payme
 type: BUG
 status: backlog
 related_adr: ['0033', '0044', '0048']
-related_tasks: ['0199', '0247', '0252', '0266']
+related_tasks: ['0199', '0247', '0252', '0266', '0267', '0268']
 tags:
   [
     priority-medium,
@@ -57,6 +57,15 @@ history:
       subsumes 0268). The 0266 historical re-parse captures both in one run;
       gross_volume_a is captured now (USD volume/fee stay off until the Prices API
       per ADR 0048) to avoid re-parsing the range twice. Linked 0199/0247/0266.
+  - date: '2026-06-10'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Realigned Plan + Acceptance Criteria to the claim-atom variant (Decision
+      2026-06-09): extractor parses the OperationResult claim atoms and emits the
+      full crossed-pool list plus per-atom amounts; the asset-pair join backfill
+      migration is dropped — backfill is delegated to the 0266 shared re-parse,
+      E20 verification to 0267. Scope of this task narrows to the parser fix.
 ---
 
 # BUG: parser missing `operations_appearances.pool_id` on path_payment ops
@@ -121,32 +130,43 @@ WHERE transaction_id = (SELECT id FROM transactions FINAL
 1. Identify the parser path that writes `operations_appearances` (CH
    writer is `crates/db-clickhouse/src/persist/...`; the upstream
    `ExtractedOperation` field is set in `crates/xdr-parser/src/operation.rs`).
-2. For `path_payment_strict_send` / `path_payment_strict_receive`
-   ops, walk the path:
-   - For each path entry whose `asset_type == 'pool_share'`, derive
-     the `pool_id` from the trustline (CAP-23 pool-share asset).
-   - For each consecutive (sent → received) asset pair along the
-     path, resolve the matching LP via `liquidity_pools` lookup
-     (constant-product or stable-pool keyed on the asset pair) and
-     emit one `operations_appearances` row per crossed pool.
-3. Backfill migration on Hetzner CH: re-derive `pool_id` for path
-   payment ops in the retention-valid window
-   (`56,657,428 ≤ ledger ≤ 62,527,999`) by joining
-   `operations_appearances` (filtered to `type IN (2, 13)`) against
-   `liquidity_pools` on the asset pair. EXCHANGE TABLES swap shape
-   mirroring task 0255 Phase 2.
-4. Re-run 0252 E20 → expect Type A failures to drop to zero;
-   residual Type B failures (Horizon-hides-failed) stay as
-   documented tolerance.
+2. Claim-atom extractor (per Decision above): for
+   `path_payment_strict_send` / `path_payment_strict_receive`, parse
+   the op's `OperationResult` success branch (`offers: Vec<ClaimAtom>`)
+   and collect every `ClaimAtom::LiquidityPool` →
+   `ClaimLiquidityAtom { liquidity_pool_id, asset_sold, amount_sold,
+   asset_bought, amount_bought }`:
+   - emit one `operations_appearances` row per crossed pool
+     (`pool_id` = atom's `liquidity_pool_id`); the result holds the
+     full list, so multi-hop is covered (0268 superseded);
+   - expose `amount_sold` / `amount_bought` per atom so
+     `gross_volume_a` per `(pool, ledger)` can be computed downstream
+     (consumed by 0247 / 0199; written by the 0266 backfill). The
+     extractor lands here; the volume wiring is tracked there.
+   - failed path payments carry no claim atoms → no pool rows
+     (consistent with result-derived semantics).
+3. Backfill: delegated to the **0266 shared re-parse** (3-machine S3),
+   which runs this same extractor over the historical range and
+   INSERTs `pool_id` + `gross_volume_a` in one run. The asset-pair
+   join / EXCHANGE TABLES migration sketched on 2026-05-25 is
+   dropped. Keep `gross_volume_a` in the 0266 scope (see Decision).
+4. Verification: 0252 E20 re-run is task **0267** (post-0266) →
+   expect Type A failures to drop to zero; residual Type B failures
+   (Horizon-hides-failed) stay as documented tolerance.
 
 ## Acceptance Criteria
 
 - [ ] Parser fix lands on develop with tests covering:
-      single-pool path payment, multi-pool path payment, plain
-      payment (negative — no pool_id).
-- [ ] Backfill migration on Hetzner CH executed; row count delta
-      logged.
-- [ ] 0252 E20 re-run reports `hash_set_equal` fail ≤ 1 %.
+      single-pool path payment, multi-hop path payment (full
+      `pool_id` list from claim atoms), failed path payment
+      (no claim atoms → no pool rows), plain payment (negative —
+      no pool_id).
+- [ ] Extractor exposes per-atom `amount_sold` / `amount_bought`
+      so 0266 / 0247 / 0199 can compute `gross_volume_a` without a
+      second parse pass.
+- [ ] Backfill handed off to 0266 (shared claim-atom re-parse;
+      `gross_volume_a` kept in its scope); 0252 E20 re-run tracked
+      as 0267 with `hash_set_equal` fail ≤ 1 %.
 - [ ] **Docs updated** —
       `docs/architecture/xdr-parsing/xdr-parsing-overview.md`
       records that path-payment ops contribute pool_id to
@@ -159,5 +179,7 @@ WHERE transaction_id = (SELECT id FROM transactions FINAL
   0252 E20 diagnosis) is **not** in scope for this task. Documented
   in [[ch-horizon-semantic-diffs]] as a Horizon-side narrowing of
   the pool-tx list.
-- Same shape as 0255 fix (parser + migration in one task). Keep the
-  pattern.
+- Originally scoped 0255-shape (parser + migration in one task). Per
+  the 2026-06-09 Decision the arc is split instead: parser extractor
+  here, backfill in 0266 (shared with `gross_volume_a`), E20
+  verification in 0267.
