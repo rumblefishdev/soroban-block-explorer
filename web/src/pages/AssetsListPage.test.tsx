@@ -17,7 +17,7 @@ vi.mock('../api/index.js', () => ({
 
 function makeAsset(overrides: Partial<AssetItem> = {}): AssetItem {
   return {
-    id: 1,
+    id: 'native',
     asset_code: 'XLM',
     asset_type: 0,
     asset_type_name: 'native',
@@ -57,9 +57,9 @@ afterEach(() => {
 describe('AssetsListPage', () => {
   it('renders the page header and the rows from a successful query', () => {
     mockOk([
-      makeAsset({ id: 1, asset_code: 'XLM', asset_type_name: 'native' }),
+      makeAsset({ id: 'native', asset_code: 'XLM', asset_type_name: 'native' }),
       makeAsset({
-        id: 2,
+        id: 'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
         asset_code: 'USDC',
         asset_type: 1,
         asset_type_name: 'classic_credit',

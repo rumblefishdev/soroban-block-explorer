@@ -435,6 +435,15 @@ Expanded behavior:
 
 Single asset detail view.
 
+> **Routing (`:id` token, task 0243).** The numeric surrogate was dropped (PR #175);
+> `:id` is a single canonical token — a contract StrKey (`C…`, SAC / Soroban / native
+> XLM-SAC), a `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`), or the reserved
+> `native` literal (the classic XLM singleton). The API returns this same token in
+> `AssetItem.id`, so the frontend never builds the URL from parts — it echoes
+> `AssetItem.id` (e.g. `routeForHit`, the list-table row link, and the LP-leg link all do
+> exactly this). Search asset hits carry the token in `route_token` (the displayed
+> `identifier` stays the asset code).
+
 - Asset summary - asset code, issuer or contract ID (copyable), type badge, total supply,
   holder count, deployed at ledger (if Soroban)
 - Metadata - name, description, icon (if available), domain/home page
