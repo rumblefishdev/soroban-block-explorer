@@ -4,66 +4,37 @@
 //! dispatch by `kind` to the corresponding `enrich_*` function from the
 //! shared `enrichment-shared` crate.
 //!
-//! Per task 0191:
-//! - Worker writes follow `real > sentinel > NULL` priority per column
-//!   (`COALESCE(NULLIF($n, ''), col, $n)`): a later run that finally
-//!   resolves a value upgrades the row, but a permanent-fail sentinel
-//!   never clobbers an existing real value. Duplicate-message contract
-//!   lives in `enrichment_shared::enrich_and_persist::sep1_assets`.
+//! Per task 0191 (write path ported PG → CH, task 0231):
+//! - Writes are INSERTs into the ClickHouse enrichment side tables
+//!   (`asset_enrichment` / `nft_enrichment`, ADR 0048) with `version =
+//!   now_ms` — `ReplacingMergeTree` keeps the latest write per key
+//!   (latest-wins). The indexer-owned tables are never touched. Per-key
+//!   fetch + sentinel rules live in `enrichment_shared::enrich_and_persist::*`.
 //! - Batch failure model: each record is processed independently. A
 //!   per-record failure is reported via `BatchItemFailures` so SQS
 //!   redelivers only the failed messages, not the whole batch (the
 //!   `ReportBatchItemFailures` response feature on the event source
 //!   mapping).
-//! - Cold start: build a single `Sep1Fetcher` (HTTP client + LRU cache)
-//!   and a single `PgPool`; reuse both across handler invocations.
+//! - Cold start: build the mTLS ClickHouse client (same bundle path as the
+//!   indexer Lambda) + a single `Sep1Fetcher` / `NftTokenUriFetcher`; reuse
+//!   all three across handler invocations.
 //!
-//! Future kinds (`lp_tvl`, NFT metadata) plug in by adding a new arm to
-//! the `match msg.kind` block and exposing the fn from `enrichment-shared`.
+//! Future kinds (e.g. `lp_tvl`) plug in by adding a variant to
+//! `EnrichmentMessage` + a `match` arm + the fn in `enrichment-shared`.
 
 use std::sync::Arc;
 
 use aws_lambda_events::event::sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage};
-use enrichment_shared::enrich_and_persist::EnrichError;
 use enrichment_shared::enrich_and_persist::nft_token_uri::enrich_nft_token_uri;
 use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
+use enrichment_shared::enrich_and_persist::{EnrichError, EnrichmentMessage};
 use enrichment_shared::nft_token_uri::NftTokenUriFetcher;
 use enrichment_shared::sep1::Sep1Fetcher;
 use lambda_runtime::{Error, LambdaEvent, service_fn};
-use serde::Deserialize;
-use sqlx::PgPool;
 use tracing::{error, info, instrument};
 
-/// Per-message payload published by the indexer (Galaxy) Lambda.
-///
-/// Internally tagged on `kind` so each variant carries exactly the
-/// fields it needs. Adding a future kind is one variant + one match
-/// arm — the compiler enforces coverage. Unknown / malformed payloads
-/// fail serde deserialisation and are treated as permanent (acked
-/// without retry per [`handle_event`]).
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum EnrichmentMessage {
-    /// SEP-1 issuer TOML kind. Wire `"kind": "sep1_assets"` (snake_case
-    /// of the variant name — serde `rename_all = "snake_case"` does the
-    /// mapping). Historical name was `"icon"` (0191, when the kind only
-    /// wrote `assets.icon_url`); 0195 §2a extended the writeback to
-    /// `assets.name` (ClassicCredit + SAC) and 0196 renamed both the
-    /// Rust identifier and the wire string for clarity. **Breaking
-    /// change**: pre-rename SQS messages with `"kind": "icon"` will not
-    /// deserialise — drain the DLQ before deploy if any are present.
-    Sep1Assets { asset_id: i32 },
-    /// NFT `token_uri()` kind — task 0195 §2d. Insert-hook driven,
-    /// exactly once per `nfts` mint row. Worker fetches `token_uri()`
-    /// via Soroban RPC, resolves the URI through the IPFS gateway,
-    /// and writes `nfts.{name, media_url, collection_name}` from the
-    /// JSON. The `metadata` JSONB column was dropped per ADR 0043 —
-    /// the detail blob is served via runtime type-2 in the api crate.
-    NftTokenUri { nft_id: i32 },
-}
-
 struct WorkerState {
-    pool: PgPool,
+    client: clickhouse::Client,
     sep1: Sep1Fetcher,
     nft_token_uri: NftTokenUriFetcher,
 }
@@ -75,17 +46,19 @@ async fn main() -> Result<(), Error> {
         .json()
         .init();
 
-    info!("enrichment-worker cold start — resolving database credentials");
+    info!("enrichment-worker cold start — building mTLS ClickHouse client");
 
-    let database_url = db::secrets::resolve_or_env()
+    // Same mTLS bundle path as the indexer Lambda (MTLS_SECRET_NAME +
+    // CH_DOMAIN → Secrets extension → rustls client). Writes land in the
+    // enrichment side tables (ADR 0048); the indexer-owned tables are
+    // never touched by this worker.
+    let client = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
         .await
-        .map_err(|e| format!("failed to resolve database URL: {e}"))?;
-
-    let pool = db::pool::create_pool(&database_url)?;
+        .map_err(|e| format!("failed to build mTLS ClickHouse client: {e}"))?;
     let sep1 = Sep1Fetcher::new()?;
     let nft_token_uri = NftTokenUriFetcher::new()?;
     let state = Arc::new(WorkerState {
-        pool,
+        client,
         sep1,
         nft_token_uri,
     });
@@ -173,12 +146,12 @@ fn classify_outcome(
 async fn handle_record(record: &SqsMessage, state: &WorkerState) -> Result<(), RecordError> {
     let msg = parse_message(record)?;
     match msg {
-        EnrichmentMessage::Sep1Assets { asset_id } => {
-            enrich_asset_from_sep1(&state.pool, asset_id, &state.sep1).await?;
+        EnrichmentMessage::Sep1Assets(key) => {
+            enrich_asset_from_sep1(&state.client, key, &state.sep1).await?;
             Ok(())
         }
-        EnrichmentMessage::NftTokenUri { nft_id } => {
-            enrich_nft_token_uri(&state.pool, nft_id, &state.nft_token_uri).await?;
+        EnrichmentMessage::NftTokenUri(key) => {
+            enrich_nft_token_uri(&state.client, key, &state.nft_token_uri).await?;
             Ok(())
         }
     }
@@ -218,7 +191,7 @@ mod tests {
     //!   - `require_message_id` rejection of malformed records
     //!
     //! `handle_record` (DB + HTTP) and `handle_event` (full Lambda glue)
-    //! are not covered here — they require a live `PgPool` and `Sep1Fetcher`,
+    //! are not covered here — they require a live `clickhouse::Client` and `Sep1Fetcher`,
     //! which are the responsibility of the per-kind tests in
     //! `enrichment-shared` and a deploy-time smoke test.
     use super::*;
@@ -242,22 +215,26 @@ mod tests {
 
     #[test]
     fn enrichment_message_parses_sep1_assets_variant() {
-        let json = r#"{"kind":"sep1_assets","asset_id":42}"#;
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":42,"contract_id":7}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets(key) = msg else {
             panic!("expected Sep1Assets variant, got {msg:?}");
         };
-        assert_eq!(asset_id, 42);
+        assert_eq!(key.asset_type, 1);
+        assert_eq!(key.asset_code, "USDC");
+        assert_eq!(key.issuer_id, 42);
+        assert_eq!(key.contract_id, 7);
     }
 
     #[test]
     fn enrichment_message_parses_nft_token_uri_variant() {
-        let json = r#"{"kind":"nft_token_uri","nft_id":99}"#;
+        let json = r#"{"kind":"nft_token_uri","contract_id":99,"token_id":"3"}"#;
         let msg: EnrichmentMessage = serde_json::from_str(json).expect("parse");
-        let EnrichmentMessage::NftTokenUri { nft_id } = msg else {
+        let EnrichmentMessage::NftTokenUri(key) = msg else {
             panic!("expected NftTokenUri variant, got {msg:?}");
         };
-        assert_eq!(nft_id, 99);
+        assert_eq!(key.contract_id, 99);
+        assert_eq!(key.token_id, "3");
     }
 
     #[test]
@@ -270,20 +247,21 @@ mod tests {
 
     #[test]
     fn enrichment_message_rejects_missing_kind() {
-        let json = r#"{"asset_id":42}"#;
+        let json = r#"{"asset_type":1,"asset_code":"USDC","issuer_id":42,"contract_id":7}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
     #[test]
-    fn enrichment_message_rejects_missing_asset_id() {
-        let json = r#"{"kind":"sep1_assets"}"#;
+    fn enrichment_message_rejects_missing_key_field() {
+        // contract_id absent — a producer that drops a key field is a bug.
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":42}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
     #[test]
-    fn enrichment_message_rejects_wrong_asset_id_type() {
-        // i32 column — float / string asset_id is a producer bug.
-        let json = r#"{"kind":"sep1_assets","asset_id":"42"}"#;
+    fn enrichment_message_rejects_wrong_key_type() {
+        // issuer_id is i64 — a string is a producer bug.
+        let json = r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":"42","contract_id":7}"#;
         assert!(serde_json::from_str::<EnrichmentMessage>(json).is_err());
     }
 
@@ -311,12 +289,17 @@ mod tests {
 
     #[test]
     fn parse_message_returns_sep1_assets_on_well_formed_body() {
-        let r = record(Some("m-1"), Some(r#"{"kind":"sep1_assets","asset_id":7}"#));
+        let r = record(
+            Some("m-1"),
+            Some(
+                r#"{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":7,"contract_id":0}"#,
+            ),
+        );
         let msg = parse_message(&r).expect("ok");
-        let EnrichmentMessage::Sep1Assets { asset_id } = msg else {
+        let EnrichmentMessage::Sep1Assets(key) = msg else {
             panic!("expected Sep1Assets variant, got {msg:?}");
         };
-        assert_eq!(asset_id, 7);
+        assert_eq!(key.issuer_id, 7);
     }
 
     // -- classify_outcome --------------------------------------------
@@ -343,10 +326,10 @@ mod tests {
 
     #[test]
     fn classify_outcome_emits_partial_failure_on_database_error() {
-        // sqlx::Error::PoolTimedOut is the cheapest variant to construct;
+        // `Custom` is the cheapest ClickHouse error variant to construct;
         // the bucket assertion is what we care about, not the exact error.
         let outcome = Err(RecordError::Transient(EnrichError::Database(
-            sqlx::Error::PoolTimedOut,
+            clickhouse::error::Error::Custom("pool timed out".to_owned()),
         )));
         let failure = classify_outcome("m-99", outcome).expect("partial failure");
         assert_eq!(failure.item_identifier, "m-99");
@@ -364,5 +347,136 @@ mod tests {
     fn require_message_id_errors_when_missing() {
         let r = record(None, Some(""));
         assert!(require_message_id(&r).is_err());
+    }
+
+    /// CH-backed worker smoke (task 0231 step 5): the full per-message path —
+    /// SQS body → `parse_message` → `handle_record` dispatch → `enrich_*` → CH.
+    /// `#[ignore]` (needs live local CH + network). Run:
+    /// `CLICKHOUSE_URL=http://localhost:8125 CLICKHOUSE_USER=default \
+    ///  CLICKHOUSE_PASSWORD=clickhouse cargo test -p enrichment-worker \
+    ///  handle_record_ -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + network (centre.io TOML)"]
+    async fn handle_record_sep1_writes_real_enrichment() {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R {
+            name: Option<String>,
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let state = WorkerState {
+            client: client.clone(),
+            sep1: Sep1Fetcher::new().expect("sep1"),
+            nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        };
+        let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let issuer_id = db_clickhouse::persist::ids::account_id(issuer);
+        client
+            .query(
+                "INSERT INTO accounts \
+                 (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number, home_domain) \
+                 VALUES (?, ?, 0, 0, 0, 'centre.io')",
+            )
+            .bind(issuer_id)
+            .bind(issuer)
+            .execute()
+            .await
+            .expect("seed issuer");
+
+        let body = format!(
+            r#"{{"kind":"sep1_assets","asset_type":1,"asset_code":"USDC","issuer_id":{issuer_id},"contract_id":0}}"#
+        );
+        handle_record(&record(Some("m-sep1"), Some(&body)), &state)
+            .await
+            .expect("handle_record");
+
+        let r: R = client
+            .query(
+                "SELECT name FROM asset_enrichment FINAL WHERE asset_code = 'USDC' AND issuer_id = ?",
+            )
+            .bind(issuer_id)
+            .fetch_one()
+            .await
+            .expect("readback");
+        assert!(
+            r.name.as_deref().is_some_and(|s| !s.is_empty()),
+            "worker decode→dispatch→enrich wrote a real USDC name"
+        );
+
+        client
+            .query("ALTER TABLE accounts DELETE WHERE id = ?")
+            .bind(issuer_id)
+            .execute()
+            .await
+            .expect("cleanup acc");
+        client
+            .query("ALTER TABLE asset_enrichment DELETE WHERE asset_code = 'USDC'")
+            .execute()
+            .await
+            .expect("cleanup enr");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs live local ClickHouse + mainnet Soroban-RPC"]
+    async fn handle_record_nft_writes_real_enrichment() {
+        #[derive(clickhouse::Row, serde::Deserialize)]
+        struct R {
+            name: Option<String>,
+            media_url: Option<String>,
+            collection_name: Option<String>,
+        }
+
+        let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+        let state = WorkerState {
+            client: client.clone(),
+            sep1: Sep1Fetcher::new().expect("sep1"),
+            nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        };
+        let contract = "CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY";
+        let contract_id = db_clickhouse::persist::ids::contract_id(contract);
+        client
+            .query(
+                "INSERT INTO soroban_contracts (id, contract_id, wasm_uploaded_at_ledger, is_sac) \
+                 VALUES (?, ?, 0, false)",
+            )
+            .bind(contract_id)
+            .bind(contract)
+            .execute()
+            .await
+            .expect("seed contract");
+
+        let body =
+            format!(r#"{{"kind":"nft_token_uri","contract_id":{contract_id},"token_id":"1"}}"#);
+        handle_record(&record(Some("m-nft"), Some(&body)), &state)
+            .await
+            .expect("handle_record");
+
+        let r: R = client
+            .query(
+                "SELECT name, media_url, collection_name FROM nft_enrichment FINAL \
+                 WHERE contract_id = ? AND token_id = '1'",
+            )
+            .bind(contract_id)
+            .fetch_one()
+            .await
+            .expect("readback");
+        assert!(
+            [&r.name, &r.media_url, &r.collection_name]
+                .iter()
+                .any(|c| c.as_deref().is_some_and(|s| !s.is_empty())),
+            "worker decode→dispatch→enrich wrote a real NFT metadata field"
+        );
+
+        client
+            .query("ALTER TABLE soroban_contracts DELETE WHERE id = ?")
+            .bind(contract_id)
+            .execute()
+            .await
+            .expect("cleanup contract");
+        client
+            .query("ALTER TABLE nft_enrichment DELETE WHERE token_id = '1'")
+            .execute()
+            .await
+            .expect("cleanup enr");
     }
 }

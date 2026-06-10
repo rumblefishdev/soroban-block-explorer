@@ -911,13 +911,15 @@ dependencies = [
 name = "backfill-enrichment-runner"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "clap",
- "db",
+ "clickhouse",
+ "db-clickhouse",
  "enrichment-shared",
- "sqlx",
+ "indicatif",
+ "serde",
  "tokio",
  "tracing",
+ "tracing-indicatif",
  "tracing-subscriber",
 ]
 
@@ -1666,11 +1668,12 @@ name = "enrichment-shared"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "clickhouse",
+ "db-clickhouse",
  "moka",
  "reqwest",
  "serde",
  "serde_json",
- "sqlx",
  "stellar-strkey 0.0.16",
  "stellar-xdr",
  "thiserror",
@@ -1685,12 +1688,12 @@ name = "enrichment-worker"
 version = "0.1.0"
 dependencies = [
  "aws_lambda_events 0.16.1",
- "db",
+ "clickhouse",
+ "db-clickhouse",
  "enrichment-shared",
  "lambda_runtime",
  "serde",
  "serde_json",
- "sqlx",
  "thiserror",
  "tokio",
  "tracing",
@@ -2475,6 +2478,7 @@ dependencies = [
  "db",
  "db-clickhouse",
  "domain",
+ "enrichment-shared",
  "hex",
  "lambda_runtime",
  "percent-encoding",

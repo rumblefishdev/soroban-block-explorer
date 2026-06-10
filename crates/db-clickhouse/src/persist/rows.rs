@@ -85,6 +85,22 @@ pub struct AssetRow {
     pub icon_url: Option<String>,
 }
 
+/// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),
+/// RMT(version). Written by the enrichment worker, NOT the indexer; keyed
+/// byte-for-byte like `assets` and joined at read. `version` =
+/// `DateTime64(3, 'UTC')` (ms since epoch); a higher version wins, so the
+/// worker can refresh or CLEAR (re-insert NULL with a newer `version`).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AssetEnrichmentRow {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
+    pub icon_url: Option<String>,
+    pub name: Option<String>,
+    pub version: i64,
+}
+
 /// `account_balances_current` — state, RMT(last_updated_ledger).
 /// Trustline removals emitted as `balance = 0` rows; reads filter
 /// `WHERE balance > 0`.
@@ -146,6 +162,21 @@ pub struct NftPendingRow {
     pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
+}
+
+/// `nft_enrichment` — off-chain `token_uri` enrichment side table (task 0231),
+/// RMT(version). Same rationale as [`AssetEnrichmentRow`]: written by the
+/// enrichment worker (not the indexer), keyed like `nfts`, joined at read;
+/// `version` is the worker's own clock (`DateTime64(3, 'UTC')`, ms),
+/// independent of the `nfts` ownership clock.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct NftEnrichmentRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub collection_name: Option<String>,
+    pub version: i64,
 }
 
 /// `liquidity_pools` — state, RMT(last_updated_ledger). PK = pool_id.

@@ -138,18 +138,15 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 19 CREATE TABLE + 1 CREATE DICTIONARY = 20. Task 0217 added
-        // `nfts_pending` + `nft_ownership_pending` to the 17-table base
-        // as schema-only landing zones. The CH writer
-        // (`crates/db-clickhouse/src/persist/*`) does NOT yet stage or
-        // INSERT into either pending table — that parity work is a
-        // follow-up to PR #180 (different atomicity model required:
-        // no per-row UPDATE on RMT). Row structs + column-order tests
-        // for the pending tables will land alongside the writer work.
+        // 21 CREATE TABLE + 1 CREATE DICTIONARY = 22. 17-table base; task 0217
+        // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
+        // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
+        // to PR #180); task 0231 (ADR 0048) added the `asset_enrichment` +
+        // `nft_enrichment` enrichment side tables.
         assert_eq!(
             stmts.len(),
-            20,
-            "expected 19 tables + 1 dictionary, got {}",
+            22,
+            "expected 21 tables + 1 dictionary, got {}",
             stmts.len()
         );
     }
