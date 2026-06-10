@@ -14,7 +14,7 @@ import {
   isPoolStale,
   legHref,
   reserveDotColor,
-} from './helpers.js';
+} from '../pool-shared/helpers.js';
 
 const STALE_SUBTITLE = 'no recent snapshot';
 

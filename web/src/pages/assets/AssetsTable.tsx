@@ -36,7 +36,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
                   value={row.asset_code}
                   type="asset"
                   truncate={false}
-                  href={routes.asset(String(row.id))}
+                  href={routes.asset(row.id)}
                 />
               ) : (
                 <Dash />

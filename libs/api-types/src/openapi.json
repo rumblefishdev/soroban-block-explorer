@@ -3118,6 +3118,39 @@
           }
         }
       },
+      "OperationType": {
+        "type": "string",
+        "description": "Stellar operation type. Discriminants match the XDR numbering; the\nserde representation is the canonical SCREAMING_SNAKE_CASE label used\nby the Horizon API and historically persisted as VARCHAR.",
+        "enum": [
+          "CREATE_ACCOUNT",
+          "PAYMENT",
+          "PATH_PAYMENT_STRICT_RECEIVE",
+          "MANAGE_SELL_OFFER",
+          "CREATE_PASSIVE_SELL_OFFER",
+          "SET_OPTIONS",
+          "CHANGE_TRUST",
+          "ALLOW_TRUST",
+          "ACCOUNT_MERGE",
+          "INFLATION",
+          "MANAGE_DATA",
+          "BUMP_SEQUENCE",
+          "MANAGE_BUY_OFFER",
+          "PATH_PAYMENT_STRICT_SEND",
+          "CREATE_CLAIMABLE_BALANCE",
+          "CLAIM_CLAIMABLE_BALANCE",
+          "BEGIN_SPONSORING_FUTURE_RESERVES",
+          "END_SPONSORING_FUTURE_RESERVES",
+          "REVOKE_SPONSORSHIP",
+          "CLAWBACK",
+          "CLAWBACK_CLAIMABLE_BALANCE",
+          "SET_TRUST_LINE_FLAGS",
+          "LIQUIDITY_POOL_DEPOSIT",
+          "LIQUIDITY_POOL_WITHDRAW",
+          "INVOKE_HOST_FUNCTION",
+          "EXTEND_FOOTPRINT_TTL",
+          "RESTORE_FOOTPRINT"
+        ]
+      },
       "PageInfo": {
         "type": "object",
         "description": "Pagination metadata attached to list responses.\n\nCursor-based pagination (not offset) — see ADR 0008. Aligns with\nStellar Horizon conventions and produces stable listings even when\nthe underlying ledger stream advances between requests.\n\nBoth `next_cursor` (forward / next page) and `prev_cursor` (backward\n/ previous page) are **always emitted** as opaque base64-JSON\nstrings or explicit JSON `null`. Wire shape always carries both\nkeys — never omitted — so the OpenAPI `nullable: true` declaration\nmatches the on-wire bytes exactly. `Option<String>` carries the\nentire signal:\n\n- `next_cursor: null` ⇒ last page (no further forward continuation).\n- `next_cursor: \"...\"` ⇒ a further forward page exists.\n- `prev_cursor: null` ⇒ first page (no backward continuation).\n- `prev_cursor: \"...\"` ⇒ a backward page exists.\n\nBoth cursors carry an internal `dir` discriminant (see\n`crates/api/src/common/cursor.rs::Direction`) so the backend can\nbranch SQL between forward (DESC `<`) and backward (ASC `>`,\nreverse for presentation) walks. Clients treat the strings as\nopaque tokens — round-tripping them through `?cursor=` is the only\nexpected use.",

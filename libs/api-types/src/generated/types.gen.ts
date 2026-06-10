@@ -784,6 +784,40 @@ export type OperationItem = {
 };
 
 /**
+ * Stellar operation type. Discriminants match the XDR numbering; the
+ * serde representation is the canonical SCREAMING_SNAKE_CASE label used
+ * by the Horizon API and historically persisted as VARCHAR.
+ */
+export type OperationType =
+  | 'CREATE_ACCOUNT'
+  | 'PAYMENT'
+  | 'PATH_PAYMENT_STRICT_RECEIVE'
+  | 'MANAGE_SELL_OFFER'
+  | 'CREATE_PASSIVE_SELL_OFFER'
+  | 'SET_OPTIONS'
+  | 'CHANGE_TRUST'
+  | 'ALLOW_TRUST'
+  | 'ACCOUNT_MERGE'
+  | 'INFLATION'
+  | 'MANAGE_DATA'
+  | 'BUMP_SEQUENCE'
+  | 'MANAGE_BUY_OFFER'
+  | 'PATH_PAYMENT_STRICT_SEND'
+  | 'CREATE_CLAIMABLE_BALANCE'
+  | 'CLAIM_CLAIMABLE_BALANCE'
+  | 'BEGIN_SPONSORING_FUTURE_RESERVES'
+  | 'END_SPONSORING_FUTURE_RESERVES'
+  | 'REVOKE_SPONSORSHIP'
+  | 'CLAWBACK'
+  | 'CLAWBACK_CLAIMABLE_BALANCE'
+  | 'SET_TRUST_LINE_FLAGS'
+  | 'LIQUIDITY_POOL_DEPOSIT'
+  | 'LIQUIDITY_POOL_WITHDRAW'
+  | 'INVOKE_HOST_FUNCTION'
+  | 'EXTEND_FOOTPRINT_TTL'
+  | 'RESTORE_FOOTPRINT';
+
+/**
  * Pagination metadata attached to list responses.
  *
  * Cursor-based pagination (not offset) — see ADR 0008. Aligns with

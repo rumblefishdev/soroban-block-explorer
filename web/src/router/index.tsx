@@ -100,7 +100,10 @@ export const router = createBrowserRouter([
 
       {
         path: 'contracts',
-        element: page(() => import('../pages/ContractsListPage.js')),
+        element: page(
+          () => import('../pages/ContractsListPage.js'),
+          <ListPageSkeleton />
+        ),
       },
       {
         path: 'contracts/:contractId',

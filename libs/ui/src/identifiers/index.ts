@@ -12,6 +12,7 @@ export { getDefaultTruncation, truncateMiddle } from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {
   isAccountId,
+  isAssetId,
   isContractId,
   isLedgerSequence,
   isPoolId,

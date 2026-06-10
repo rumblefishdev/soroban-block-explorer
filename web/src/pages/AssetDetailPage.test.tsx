@@ -6,6 +6,10 @@ import { renderWithProviders } from '../test-utils.js';
 
 import AssetDetailPage from './AssetDetailPage.js';
 
+// A real G-strkey issuer so `/assets/CODE-ISSUER` URLs pass the page's
+// `isAssetId` pre-validation (the route param is canonical post-0243).
+const ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+
 const hookMocks = vi.hoisted(() => ({
   useAssetDetail: vi.fn(),
   useAssetTransactions: vi.fn(),
@@ -87,12 +91,12 @@ describe('AssetDetailPage', () => {
         asset_code: 'USDC',
         asset_type: 1,
         asset_type_name: typeName,
-        issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+        issuer: ISSUER,
       })
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/USDC-XYZ'],
+      initialEntries: [`/assets/USDC-${ISSUER}`],
       routePath: '/assets/:id',
     });
 
@@ -110,7 +114,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/2'],
+      initialEntries: [`/assets/USDC-${ISSUER}`],
       routePath: '/assets/:id',
     });
 
@@ -134,7 +138,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/3'],
+      initialEntries: [`/assets/EURC-${ISSUER}`],
       routePath: '/assets/:id',
     });
 
@@ -154,10 +158,20 @@ describe('AssetDetailPage', () => {
     });
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/9999'],
+      initialEntries: [`/assets/USDC-${ISSUER}`],
       routePath: '/assets/:id',
     });
 
     expect(screen.getByText('Asset not found')).toBeInTheDocument();
+  });
+
+  it('renders NotFoundState for a malformed asset id (and skips the fetch)', () => {
+    renderWithProviders(<AssetDetailPage />, {
+      initialEntries: ['/assets/not-a-valid-id'],
+      routePath: '/assets/:id',
+    });
+    // Pre-validated via `isAssetId`; a non-canonical id is rejected so the
+    // detail query is skipped (called with '').
+    expect(hookMocks.useAssetDetail).toHaveBeenCalledWith('');
   });
 });

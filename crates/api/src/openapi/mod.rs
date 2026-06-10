@@ -9,6 +9,7 @@
 
 pub mod schemas;
 
+use domain::OperationType;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -105,6 +106,13 @@ use schemas::{ErrorEnvelope, PageInfo, Paginated};
         SearchGroups,
         SearchHit,
         EntityType,
+        // Canonical Stellar operation-type enum. Not referenced by a DTO
+        // field (response op-type fields stay wire-`string`), but registered
+        // here so the generated TS client emits a named `OperationType` union
+        // — the single source of truth the frontend keys its op-type label
+        // map against, replacing a hand-maintained 27-entry mirror that
+        // silently drifted from this enum (audit F-Z-2 / lore-0280).
+        OperationType,
     )),
 )]
 pub struct ApiDoc;

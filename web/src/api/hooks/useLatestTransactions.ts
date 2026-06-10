@@ -1,15 +1,18 @@
 import { listTransactionsOptions } from '@rumblefish/api-types';
 import { useQuery } from '@tanstack/react-query';
 
-import { homePolicy } from '../polling.js';
+import { livePolicy, midpointPollDelay } from '../polling.js';
 
 /**
- * Latest 10 transactions for the home page activity table. Polls on the
- * home cadence (10s stale / 12s refetch); no cursor pagination — always the
- * newest rows.
+ * Latest 10 transactions for the home page activity table. Polls
+ * adaptively, aiming each fetch at the midpoint of the next ledger-close
+ * gap (see `midpointPollDelay`), anchored on the newest row's `created_at`.
+ * No cursor pagination — always the newest rows.
  */
 export const useLatestTransactions = () =>
   useQuery({
     ...listTransactionsOptions({ query: { limit: 10 } }),
-    ...homePolicy,
+    ...livePolicy,
+    refetchInterval: (query) =>
+      midpointPollDelay(query.state.data?.data?.[0]?.created_at),
   });
