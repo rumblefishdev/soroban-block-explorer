@@ -4,7 +4,7 @@ title: 'OPS: batched ClickHouse maintenance window — restart-gated + migration
 type: OPS
 status: backlog
 related_adr: ['0044', '0047']
-related_tasks: ['0243', '0268']
+related_tasks: ['0221', '0243', '0261', '0266', '0268']
 tags:
   [
     priority-medium,
@@ -18,13 +18,23 @@ milestone: 2
 links:
   - lore/1-tasks/backlog/0268_SCHEMA_pool-id-array-for-multi-hop-path-payments.md
 history:
-  - date: 2026-06-08
+  - date: '2026-06-08'
     status: backlog
     who: claude
     note: >
       Spawned from 0243. Several CH changes are gated on a CH restart or pair
       with the indexer redeploy; live ledger ingestion forbids ad-hoc restarts.
       Collect them so they ship in ONE window (ingestion paused).
+  - date: '2026-06-10'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      0261 plan-audit deltas folded in: new pre-window gates section (fresh
+      snapshot per the 0272 restore precedent; 0268 Phase 1 ALTERs — incl.
+      the new liquidity_pool_snapshots.gross_volume_a column — pre-run ONLINE
+      so the window only carries the writer switch + projection swap); 0221
+      SAC→nfts_pending routing fix + drain re-run listed as a rider on the
+      indexer redeploy.
 ---
 
 # OPS: batched ClickHouse maintenance window
@@ -43,6 +53,20 @@ Production CH ingests live, so a container restart (the only way to reload the
 column migration) can't be done ad-hoc. These items wait for the window.
 
 ## Batched checklist
+
+### Pre-window gates (ONLINE, before pausing ingestion)
+
+- [ ] **Fresh snapshot** of the CH volume — mandatory gate. 0272
+      precedent: Snapshot B RESTORE of 690 GiB took 642 s; cheap
+      insurance, and a window has already failed once (0241 attempt 1).
+- [ ] **0268 Phase 1 ALTERs pre-run** (both online; the MATERIALIZE
+      mutation runs for hours on 5.8B rows — do NOT spend window time
+      on it): `operations_appearances.pool_ids` ADD + MATERIALIZE,
+      and `liquidity_pool_snapshots.gross_volume_a` ADD (consumed by
+      the 0266 backfill). The old indexer keeps writing meanwhile —
+      INSERTs without the column fill `pool_ids` via the DEFAULT from
+      the scalar.
+- [ ] Disk headroom check (`df -h /srv/clickhouse-data`).
 
 ### A. CH config — needs a restart to take effect
 
@@ -64,9 +88,12 @@ column migration) can't be done ad-hoc. These items wait for the window.
 - [ ] **`operations_appearances.pool_id` (scalar `Nullable(FixedString(32))`)
       → `pool_ids Array(FixedString(32))`** for multi-hop path payments. Heavy
       column migration on a 6B+ row table + indexer write-path change (emit the
-      full crossed-pool list). See 0268 for the migration plan.
-- [ ] **Indexer redeploy** — the path-payment pool-id corrections (0261/0266)
-      and any other staged fixes ride this same window.
+      full crossed-pool list). See 0268 for the migration plan. The heavy
+      ADD + MATERIALIZE part pre-runs ONLINE (pre-window gates above); the
+      window itself carries only the writer switch + projection swap (C).
+- [ ] **Indexer redeploy** — the path-payment pool-id corrections (0261/0266),
+      the 0221 SAC→`nfts_pending` routing fix (+ post-deploy drain runbook
+      re-run), and any other staged fixes ride this same window.
 
 ### C. 0243 read-path rework FORCED by B (do together with 0268)
 
@@ -102,6 +129,8 @@ oa_pool_seek` + `SETTINGS deduplicate_merge_projection_mode = 'rebuild'`
 
 ## Acceptance Criteria
 
+- [ ] Pre-window gates done (snapshot + 0268 Phase 1 ALTERs) before
+      the ingestion pause.
 - [ ] All A/B items applied in a single ingestion-paused window.
 - [ ] C (0243 read-path) updated + box-validated against the post-0268 schema.
 - [ ] D cleanups applied; `init.sql` reflects the final operations_appearances
