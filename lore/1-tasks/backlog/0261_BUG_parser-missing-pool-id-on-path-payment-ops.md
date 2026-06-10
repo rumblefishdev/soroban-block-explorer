@@ -3,8 +3,8 @@ id: '0261'
 title: 'BUG: parser does not tag `operations_appearances.pool_id` for path_payment ops crossing a liquidity pool'
 type: BUG
 status: backlog
-related_adr: ['0033', '0044']
-related_tasks: ['0252']
+related_adr: ['0033', '0044', '0048']
+related_tasks: ['0199', '0247', '0252', '0266']
 tags:
   [
     priority-medium,
@@ -47,6 +47,16 @@ history:
       ops resolve each `path[]` asset whose `asset_type ==
       'pool_share'` (or whose `(send_asset, dest_asset)` pair has
       an active LP) and write the pool_id alongside.
+  - date: '2026-06-09'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Added a Decision section: implement via a shared path-payment OperationResult
+      claim-atom extractor (NOT the asset-pair lookup sketched above), so one parse
+      yields pool_id + gross_volume_a (0247 / 0199) + the full pool list (multi-hop,
+      subsumes 0268). The 0266 historical re-parse captures both in one run;
+      gross_volume_a is captured now (USD volume/fee stay off until the Prices API
+      per ADR 0048) to avoid re-parsing the range twice. Linked 0199/0247/0266.
 ---
 
 # BUG: parser missing `operations_appearances.pool_id` on path_payment ops
@@ -58,6 +68,34 @@ their `pool_id` recorded in `operations_appearances`. CH's
 `/liquidity-pools/:id/transactions` endpoint therefore misses those
 tx; Horizon serves them. Surfaced by 0252 E20 — ~9 % of LP samples
 (12 / 200) hit this gap.
+
+## Decision (2026-06-09): unified claim-atom extractor — pool_id + gross_volume_a in one pass
+
+Implement the fix via a **path-payment `OperationResult` claim-atom extractor**
+(parse each `ClaimLiquidityAtom`), **not** the asset-pair lookup against
+`liquidity_pools` sketched in the 2026-05-25 history note. Rationale:
+
+- A `ClaimLiquidityAtom` carries `liquidityPoolId` **and**
+  `amountSold`/`amountBought`, so one extractor yields **both**
+  `operations_appearances.pool_id` (this task) **and** `gross_volume_a` per
+  `(pool, ledger)` (tasks 0247 / 0199). One parse pass, two outputs.
+- It is **accurate** (records the pools actually crossed, from the result) and
+  yields the **full list** → multi-hop solved for free (supersedes 0268's
+  scalar→Array motivation; emit `pool_ids`).
+- The asset-pair lookup is approximate (cannot distinguish a pool fill from an
+  order-book offer; ambiguous when several pools share an asset pair) and yields
+  no amounts.
+
+**Shared backfill.** The historical re-parse (0266, 3-machine S3) holds the same
+claim atoms, so it backfills `pool_id` **and** `gross_volume_a` in one run.
+Capturing `gross_volume_a` now — even though USD `volume`/`fee_revenue` stay off
+until the Prices API is live (ADR 0048 read-time join) — avoids re-parsing the
+historical range twice. **Do not drop `gross_volume_a` from the re-parse scope.**
+
+Net: 0261 + 0247 + 0266 + 0268 + the on-chain input of 0199 collapse into one
+extractor + one backfill. USD display of volume/fee remains gated on prices (same
+blocker as TVL), independent of this capture. See ADR 0048 and
+[`0199 notes/S-ch-tvl-enrichment-and-decision.md`](../blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md).
 
 ## Repro
 
