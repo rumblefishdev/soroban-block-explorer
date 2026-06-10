@@ -23,9 +23,14 @@ import { ViewAllLink } from './ViewAllLink.js';
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, refetch, dataUpdatedAt } =
-    useLatestTransactions();
+  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
   const rows = data?.data ?? [];
+  // "Updated …" is anchored to the newest transaction's own close time, NOT
+  // react-query's `dataUpdatedAt`. The adaptive live poll refetches every few
+  // seconds and `dataUpdatedAt` bumps on every successful fetch even when the
+  // rows are identical — so it would read "just now" forever and never reveal
+  // a stalled feed. The newest row's `created_at` is the real data freshness.
+  const lastUpdated = rows[0]?.created_at;
 
   let body: ReactNode;
   if (isLoading) {
@@ -45,7 +50,7 @@ export function LatestTransactions() {
       <TableSectionHeader
         title="Latest transactions"
         badge={<LiveIndicator />}
-        description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
+        description={<PollingIndicator lastUpdated={lastUpdated} />}
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>
