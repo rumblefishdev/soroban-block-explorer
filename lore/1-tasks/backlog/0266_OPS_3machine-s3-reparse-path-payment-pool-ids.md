@@ -4,7 +4,7 @@ title: 'OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids 
 type: OPS
 status: backlog
 related_adr: ['0033', '0044', '0045']
-related_tasks: ['0228', '0252', '0261', '0267', '0268']
+related_tasks: ['0199', '0228', '0247', '0252', '0261', '0267', '0268']
 tags:
   [priority-medium, effort-large, ops, hetzner, parser, backfill, milestone-2]
 milestone: 2
@@ -36,6 +36,18 @@ history:
       gates the exact shape of the INSERT payload. Default plan is
       Option A first → record multi-hop gap in artifact → run 0268
       schema migration as follow-up.
+  - date: '2026-06-09'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Scope extension (per 0261 Decision): this re-parse holds the path-payment
+      `ClaimLiquidityAtom`s, so it must ALSO compute and INSERT `gross_volume_a`
+      per (pool, ledger) into `liquidity_pool_snapshots`, not just `pool_id` into
+      `operations_appearances`. One parse pass, two write targets. Capturing
+      gross_volume_a here (even though USD volume/fee stay off until the Prices
+      API, ADR 0048) avoids a second full re-parse of the range later. Default
+      Option A (scalar) is superseded toward emitting the full pool list per the
+      claim-atom extractor.
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
