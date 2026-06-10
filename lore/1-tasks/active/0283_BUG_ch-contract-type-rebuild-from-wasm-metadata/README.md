@@ -2,7 +2,7 @@
 id: '0283'
 title: 'BUG: CH never writes Nft/Fungible verdicts to soroban_contracts — contract-type rebuild from wasm_interface_metadata + prod NFT reclassification'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0046']
 related_tasks: ['0118', '0217', '0220', '0221', '0228', '0231', '0259', '0282']
 blocked_by: []
@@ -37,6 +37,10 @@ history:
       rebuilds verdicts post-hoc — so `backfill-runner nft-reclassify`
       promotes 0 forever (empirically: promoted_nfts=0 in 0228 Phase 5).
       Full evidence chain in notes/S-deep-dive-root-cause.md.
+  - date: 2026-06-10
+    status: active
+    who: karolkow
+    note: 'Activated; work starts in worktree 0283-nft-reclassify.'
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
