@@ -467,25 +467,22 @@ pub async fn fetch_pool_transactions(
         _ => String::new(),
     };
 
-    // STEP 1 — page keys, seeking via the `oa_pool_seek` projection. The seek
-    // only routes through a normal projection for a **bare** `pool_id` filter —
-    // any top-level `ORDER BY`/`LIMIT`/`LIMIT 1 BY` makes CH's auto-optimizer
-    // prefer the base-PK read-in-order and scan billions (789M–2.2B box-measured;
-    // `force_optimize_projection` would fix it but the read-only `api_reader`
-    // can't SET it — Code 164 — and the constraint can't be hot-applied: prod
-    // users.d is a `:ro` bind mount, needing a CH restart that live ingest
-    // forbids). The trick: wrap the bare filter in a subquery and dedupe/order/
-    // limit in the OUTER `GROUP BY … ORDER BY … LIMIT`. CH evaluates the inner
-    // bare filter against the projection (seek) and aggregates the small result,
-    // so the page is BOUNDED (≤ limit keys transferred) AND the read stays a seek
-    // — box-proven ~378k–385k rows/page, holds with the keyset range, vs ~7.87B
-    // for the plain `ORDER BY … LIMIT 1 BY` form. `GROUP BY (ls, tid)` is the
+    // STEP 1 — page keys. HISTORY: the scalar-`pool_id` era seeked via the
+    // `oa_pool_seek` projection with a **bare** filter (the long rationale —
+    // auto-optimizer, Code 164, `:ro` users.d — lives in 0243 / git history).
+    // Task 0261/0268 swapped the column to `pool_ids Array(FixedString(32))`
+    // and the filter to `has(...)` — array membership cannot prefix-seek that
+    // projection, so the seek strategy is being redesigned in the 0281-window
+    // task (skip index / arrayJoin projection / helper table; re-validate the
+    // read cost there). The subquery-wrap shape is kept: it stays correct and
+    // bounded (≤ limit keys transferred) regardless of which seek lands.
+    // `GROUP BY (ls, tid)` is the
     // `LIMIT 1 BY (ledger_sequence, transaction_id)` dedupe (ops → one row/tx).
     let driver_sql = format!(
         "SELECT ls, tid FROM ( \
             SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
             FROM operations_appearances oa \
-            WHERE oa.pool_id = unhex(?) {keyset} \
+            WHERE has(oa.pool_ids, unhex(?)) {keyset} \
          ) \
          GROUP BY ls, tid \
          ORDER BY ls {order}, tid {order} \

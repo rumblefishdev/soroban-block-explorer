@@ -293,7 +293,12 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     contract_id       Nullable(Int64),
     asset_code        LowCardinality(String),
     asset_issuer_id   Nullable(Int64),
-    pool_id           Nullable(FixedString(32)),
+    -- Crossed liquidity pools (task 0261/0268): single-element for LP
+    -- deposit/withdraw, full crossed-pool list (result claim atoms) for
+    -- path payments, [] for no pool involvement (Array cannot be Nullable;
+    -- has([], x) = 0 so empty arrays miss pool filters). Sorted + deduped
+    -- by the stage fold. Filter with has(pool_ids, unhex(...)).
+    pool_ids          Array(FixedString(32)),
     amount            Int64,   -- fold count, see header comment
     ledger_sequence   Int64
 )
@@ -383,7 +388,12 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     total_shares    Decimal128(7),
     tvl             Nullable(Decimal128(7)),
     volume          Nullable(Decimal128(7)),
-    fee_revenue     Nullable(Decimal128(7))
+    fee_revenue     Nullable(Decimal128(7)),
+    -- Gross trade volume in asset-A units per (pool, ledger), computed from
+    -- path-payment claim atoms (task 0261 extractor; written by the 0266
+    -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
+    -- API lands (ADR 0048 read-time join).
+    gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

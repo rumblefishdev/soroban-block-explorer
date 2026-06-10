@@ -634,7 +634,9 @@ pub fn prepare_with_sac_overrides(
         contract_strkey: Option<String>,
         asset_code: String,
         asset_issuer_account: Option<String>,
-        pool_id: Option<[u8; 32]>,
+        /// Sorted + deduped — canonical order makes the fold identity (and
+        /// the emitted row) deterministic across re-parses (task 0261/0266).
+        pool_ids: Vec<[u8; 32]>,
     }
     struct OpAgg {
         count: i64,
@@ -647,10 +649,12 @@ pub fn prepare_with_sac_overrides(
         }
         for op in ops {
             let typed = OpTyped::from_details(op.op_type, &op.details);
-            let pool_id = match &typed.pool_id_hex {
-                Some(h) => Some(decode_hash(h, "op.pool_id")?),
-                None => None,
-            };
+            let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
+            for h in &typed.pool_ids_hex {
+                pool_ids.push(decode_hash(h, "op.pool_id")?);
+            }
+            pool_ids.sort_unstable();
+            pool_ids.dedup();
             let key = OpKey {
                 tx_hash_hex: tx_hash.clone(),
                 op_type: op.op_type as i16,
@@ -659,7 +663,7 @@ pub fn prepare_with_sac_overrides(
                 contract_strkey: typed.contract_id,
                 asset_code: typed.asset_code.unwrap_or_default(),
                 asset_issuer_account: typed.asset_issuer,
-                pool_id,
+                pool_ids,
             };
             op_agg
                 .entry(key)
@@ -688,7 +692,7 @@ pub fn prepare_with_sac_overrides(
             contract_id: k.contract_strkey.as_deref().map(ids::contract_id),
             asset_code: k.asset_code,
             asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
-            pool_id: k.pool_id,
+            pool_ids: k.pool_ids,
             amount: agg.count,
             ledger_sequence: ledger_sequence_i64,
         });
@@ -1335,7 +1339,10 @@ struct OpTyped {
     contract_id: Option<String>,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
-    pool_id_hex: Option<String>,
+    /// Liquidity pools touched by the op. Single-element for LP
+    /// deposit/withdraw; the full crossed-pool list (from result claim
+    /// atoms) for path payments; empty otherwise. Task 0261 / 0268.
+    pool_ids_hex: Vec<String>,
 }
 
 impl OpTyped {
@@ -1345,7 +1352,7 @@ impl OpTyped {
             contract_id: None,
             asset_code: None,
             asset_issuer: None,
-            pool_id_hex: None,
+            pool_ids_hex: Vec::new(),
         };
         match op_type {
             OperationType::CreateAccount => {
@@ -1366,6 +1373,14 @@ impl OpTyped {
                     out.asset_code = c;
                     out.asset_issuer = i;
                 }
+                if let Some(ids) = details.get("poolIds").and_then(Value::as_array) {
+                    out.pool_ids_hex = ids
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                }
             }
             OperationType::AccountMerge => {
                 out.destination = str_field(details, "destination");
@@ -1379,7 +1394,7 @@ impl OpTyped {
                 }
             }
             OperationType::LiquidityPoolDeposit | OperationType::LiquidityPoolWithdraw => {
-                out.pool_id_hex = str_field(details, "liquidityPoolId");
+                out.pool_ids_hex = str_field(details, "liquidityPoolId").into_iter().collect();
             }
             OperationType::InvokeHostFunction => {
                 out.contract_id = str_field(details, "contractId");

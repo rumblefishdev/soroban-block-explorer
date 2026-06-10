@@ -283,6 +283,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let envelopes = xdr_parser::envelope::extract_envelopes(meta, net_id);
     let tx_metas = collect_tx_metas(meta);
+    let tx_results = xdr_parser::collect_tx_results(meta);
 
     let mut all_operations = Vec::new();
     let mut all_events = Vec::new();
@@ -310,9 +311,13 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
         if let Some(env) = envelope {
             let inner = xdr_parser::envelope::inner_transaction(env);
+            let op_results = tx_results
+                .get(tx_index)
+                .and_then(|r| xdr_parser::tx_op_results(r));
             let ops = xdr_parser::extract_operations(
                 &inner,
                 tx_meta,
+                op_results,
                 &ext_tx.hash,
                 ledger_sequence,
                 tx_index,

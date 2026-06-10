@@ -79,14 +79,26 @@ pub fn extract_e3_heavy(
         _ => None,
     };
 
-    // Operations: raw details per op.
+    // Operations: raw details per op. Op results feed the path-payment
+    // pool claims (poolIds / claimedAtoms in details — task 0261).
+    let tx_results = xdr_parser::collect_tx_results(meta);
+    let op_results = tx_results
+        .get(idx)
+        .and_then(|r| xdr_parser::tx_op_results(r));
     let operations = envelope
         .map(|env| {
             let inner = xdr_parser::envelope::inner_transaction(env);
-            xdr_parser::extract_operations(&inner, tx_meta, &ext_tx.hash, ledger_seq, idx)
-                .into_iter()
-                .filter_map(to_operation_dto)
-                .collect()
+            xdr_parser::extract_operations(
+                &inner,
+                tx_meta,
+                op_results,
+                &ext_tx.hash,
+                ledger_seq,
+                idx,
+            )
+            .into_iter()
+            .filter_map(to_operation_dto)
+            .collect()
         })
         .unwrap_or_default();
 

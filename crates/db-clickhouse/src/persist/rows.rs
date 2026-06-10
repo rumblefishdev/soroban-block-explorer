@@ -212,7 +212,10 @@ pub struct OperationAppearanceRow {
     pub contract_id: Option<i64>,
     pub asset_code: String,
     pub asset_issuer_id: Option<i64>,
-    pub pool_id: Option<[u8; 32]>,
+    /// Crossed liquidity pools, sorted + deduped (canonical order — see the
+    /// stage fold). Empty = no pool involvement; `[]` replaces the legacy
+    /// scalar NULL (task 0261/0268).
+    pub pool_ids: Vec<[u8; 32]>,
     pub amount: i64,
     pub ledger_sequence: i64,
 }

@@ -176,9 +176,32 @@ From `OperationMeta` per transaction, the ingest path extracts:
 - `source_id`, `destination_id` surrogate FKs (ADR 0026)
 - `contract_id` surrogate FK
   ([ADR 0030](../../../lore/2-adrs/0030_contracts-surrogate-bigint-id.md))
-- `asset_code`, `asset_issuer_id`, `pool_id` (BYTEA 32)
+- `asset_code`, `asset_issuer_id`, `pool_id` (BYTEA 32; CH: `pool_ids`
+  Array — see below)
 - `ledger_sequence`, `created_at`
 - `amount` aggregate count of physical operations collapsed into this identity
+
+**Liquidity-pool attribution (task 0261).** LP deposit/withdraw ops carry
+their pool id in the operation body. Path payments
+(`path_payment_strict_send` / `path_payment_strict_receive`) do **not** —
+the pools they cross are only visible in the `OperationResult` success
+branch as `ClaimAtom::LiquidityPool` entries. The parser unwraps the
+per-op results (`tx_op_results`, including the fee-bump inner nesting)
+and, for each successful path payment, appends to the op details:
+
+- `poolIds` — deduped list of crossed pools (hex), and
+- `claimedAtoms` — every LP fill with `poolId`, `assetSold`/`amountSold`,
+  `assetBought`/`amountBought`, so per-(pool, ledger) `gross_volume_a`
+  can be computed downstream without a second parse pass (tasks
+  0247/0266/0199).
+
+Failed path payments carry no claim atoms → no pool attribution
+(result-derived semantics). The CH writer folds `poolIds` into
+`operations_appearances.pool_ids Array(FixedString(32))` (sorted +
+deduped; one row per op identity — task 0268); the PG store keeps the
+legacy scalar `pool_id`, where path payments remain NULL pending PG
+retirement. `/liquidity-pools/:id/transactions` on CH therefore surfaces
+path payments that crossed the pool, matching Horizon.
 
 Not stored at ingest (re-derived from XDR at read time per ADR 0029):
 `transfer_amount` (dropped), `application_order` (dropped), per-op JSONB

@@ -766,11 +766,15 @@ export type OperationItem = {
   destination_account?: string | null;
   ledger_sequence: number;
   /**
-   * Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
-   * from the DB hex form at the response boundary so cross-entity
-   * link targets match the `/v1/liquidity-pools/:id` route shape.
+   * Liquidity pools crossed by this operation, as SEP-23 strkeys
+   * (`L...`, 56 chars). Encoded from the DB hex form at the response
+   * boundary so cross-entity link targets match the
+   * `/v1/liquidity-pools/:id` route shape. Single-element for LP
+   * deposit/withdraw; the full crossed-pool list (from path-payment
+   * claim atoms) for path payments; empty when no pool is involved
+   * (task 0261/0268 — replaces the former nullable scalar `pool_id`).
    */
-  pool_id?: string | null;
+  pool_ids: Array<string>;
   source_account?: string | null;
   /**
    * Raw `OperationType` SMALLINT (ADR 0031).
