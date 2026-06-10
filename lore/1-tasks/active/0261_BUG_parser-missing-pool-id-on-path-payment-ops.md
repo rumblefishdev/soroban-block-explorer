@@ -2,7 +2,7 @@
 id: '0261'
 title: 'BUG: parser does not tag `operations_appearances.pool_id` for path_payment ops crossing a liquidity pool'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0033', '0044', '0048']
 related_tasks: ['0199', '0247', '0252', '0266', '0267', '0268']
 tags:
@@ -66,6 +66,12 @@ history:
       full crossed-pool list plus per-atom amounts; the asset-pair join backfill
       migration is dropped — backfill is delegated to the 0266 shared re-parse,
       E20 verification to 0267. Scope of this task narrows to the parser fix.
+  - date: '2026-06-10'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active. Starting implementation of the claim-atom
+      extractor in crates/xdr-parser.
 ---
 
 # BUG: parser missing `operations_appearances.pool_id` on path_payment ops
