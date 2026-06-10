@@ -5,7 +5,6 @@ import { useNow } from './useNow.js';
 
 interface RelativeTimestampProps {
   timestamp: Date | string | number;
-  intervalMs?: number;
   variant?: TypographyProps['variant'];
 }
 
@@ -19,12 +18,9 @@ function toIso(value: Date | string | number): string | null {
 
 export function RelativeTimestamp({
   timestamp,
-  // No default → useNow's app-wide LIVE_TICK_MS keeps labels fresh. Override
-  // only for genuinely static (non-live) contexts.
-  intervalMs,
   variant = 'bodySmRegular',
 }: RelativeTimestampProps) {
-  const now = useNow(intervalMs);
+  const now = useNow();
   const iso = toIso(timestamp);
   const label = iso ? formatRelative(timestamp, now) : FALLBACK;
 

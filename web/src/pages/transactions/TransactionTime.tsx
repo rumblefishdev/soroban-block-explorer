@@ -13,8 +13,7 @@ interface TransactionTimeProps {
  * Matches the Design System table Time column.
  */
 export function TransactionTime({ createdAt }: TransactionTimeProps) {
-  // No interval → app-wide LIVE_TICK_MS (see useNow), so the label keeps pace
-  // with the live feed without a per-component magic number.
+  // app-wide LIVE_TICK_MS (see useNow) keeps this in step with the live feed
   const now = useNow();
   const valid = Number.isFinite(new Date(createdAt).getTime());
 

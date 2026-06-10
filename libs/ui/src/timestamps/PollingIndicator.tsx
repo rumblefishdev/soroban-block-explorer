@@ -6,7 +6,6 @@ import { useNow } from './useNow.js';
 
 interface PollingIndicatorProps {
   lastUpdated?: Date | string | number;
-  intervalMs?: number;
 }
 
 function isReady(value: Date | string | number | undefined): boolean {
@@ -16,12 +15,8 @@ function isReady(value: Date | string | number | undefined): boolean {
   return Number.isFinite(ms) && ms > 0;
 }
 
-export function PollingIndicator({
-  lastUpdated,
-  // No default → useNow's app-wide LIVE_TICK_MS keeps the label fresh.
-  intervalMs,
-}: PollingIndicatorProps) {
-  const now = useNow(intervalMs);
+export function PollingIndicator({ lastUpdated }: PollingIndicatorProps) {
+  const now = useNow();
   const ready = isReady(lastUpdated);
   return (
     <Stack
