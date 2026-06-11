@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 
 const tickers = new Map<
   number,
@@ -54,13 +54,22 @@ export const LIVE_TICK_MS = 10_000;
  * `LiveNowProvider` (see `LiveNow.tsx`); `useNow` reads it transparently,
  * so consumers never branch on where `now` comes from.
  */
+export const LiveNowContext = createContext<Date | null>(null);
 
 export function useNow(intervalMs = LIVE_TICK_MS): Date {
+  const liveNow = useContext(LiveNowContext);
+  const hasLive = liveNow !== null;
   const safe =
     Number.isFinite(intervalMs) && intervalMs >= MIN_INTERVAL_MS
       ? intervalMs
       : MIN_INTERVAL_MS;
   const [now, setNow] = useState(() => tickers.get(safe)?.now ?? new Date());
-  useEffect(() => subscribe(safe, setNow), [safe]);
-  return now;
+  useEffect(() => {
+    // Inside a LiveNowProvider the provider drives `now` — skip the
+    // ticker subscription so the component doesn't re-render on a
+    // wall-clock it never reads.
+    if (hasLive) return undefined;
+    return subscribe(safe, setNow);
+  }, [safe, hasLive]);
+  return liveNow ?? now;
 }
