@@ -22,6 +22,8 @@ coverage
 .env
 .env.local
 .env.*.local
+# per-dev local config (may hold a dev x-api-key for Option-B proxy) — never commit
+.env.development
 
 # editors
 /.idea

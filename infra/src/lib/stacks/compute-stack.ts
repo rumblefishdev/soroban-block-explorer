@@ -253,6 +253,13 @@ export class ComputeStack extends cdk.Stack {
       environment: {
         ...sharedEnv,
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
+        // Secret re-resolution lever (task 0277). The secret env vars below are
+        // CloudFormation `{{resolve:secretsmanager:...}}` dynamic references —
+        // CFN only re-resolves them when the TEMPLATE changes. After rotating a
+        // secret VALUE (api-keys, turnstile, edge, jwt) in Secrets Manager,
+        // BUMP this string and redeploy so the Lambda picks up the new value;
+        // otherwise `cdk deploy` reports "no changes" and keeps the stale env.
+        SECRETS_REVISION: '2',
         // OpenAPI `servers` block (Swagger "Try it out" target). Must be the
         // Cloudflare-fronted host so Swagger calls are same-origin with the docs
         // page AND traverse the edge (X-Edge-Secret) instead of hitting the
