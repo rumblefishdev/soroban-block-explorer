@@ -85,6 +85,11 @@ export function invalidateSession(): void {
 const TURNSTILE_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 
+// Watchdog: if Turnstile never fires a callback (script loads but the widget
+// stalls), solveTurnstile would hang forever and block every API call awaiting
+// ensureSessionToken. Reject + clean up after this long.
+const TURNSTILE_TIMEOUT_MS = 20_000;
+
 interface TurnstileApi {
   render(
     container: HTMLElement,
@@ -151,11 +156,18 @@ async function solveTurnstile(sitekey: string): Promise<string> {
   document.body.appendChild(container);
 
   return new Promise<string>((resolve, reject) => {
-    // `let`, not `const`: `cleanup` (below) reads widgetId before `render`
-    // assigns it — a forward reference prefer-const can't see.
+    // `let`, not `const`: `cleanup` (below) reads widgetId/timer before they are
+    // assigned — a forward reference prefer-const can't see.
     // eslint-disable-next-line prefer-const
     let widgetId: string | undefined;
+    let settled = false;
+    // eslint-disable-next-line prefer-const
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Idempotent teardown: clear the watchdog, remove the widget + container.
     const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
       if (widgetId !== undefined) {
         try {
           turnstile.remove(widgetId);
@@ -165,21 +177,27 @@ async function solveTurnstile(sitekey: string): Promise<string> {
       }
       container.remove();
     };
-    widgetId = turnstile.render(container, {
-      sitekey,
-      appearance: 'interaction-only',
-      callback: (token) => {
-        cleanup();
-        resolve(token);
-      },
-      'error-callback': () => {
-        cleanup();
-        reject(new Error('Turnstile challenge failed'));
-      },
-      'expired-callback': () => {
-        cleanup();
-        reject(new Error('Turnstile token expired before use'));
-      },
-    });
+    const succeed = (token: string) => {
+      cleanup();
+      resolve(token);
+    };
+    const fail = (message: string) => {
+      cleanup();
+      reject(new Error(message));
+    };
+
+    timer = setTimeout(() => fail('Turnstile timed out'), TURNSTILE_TIMEOUT_MS);
+
+    try {
+      widgetId = turnstile.render(container, {
+        sitekey,
+        appearance: 'interaction-only',
+        callback: succeed,
+        'error-callback': () => fail('Turnstile challenge failed'),
+        'expired-callback': () => fail('Turnstile token expired before use'),
+      });
+    } catch (e) {
+      fail(e instanceof Error ? e.message : 'Turnstile render failed');
+    }
   });
 }

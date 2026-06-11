@@ -222,7 +222,7 @@ export class ApiGatewayStack extends cdk.Stack {
       });
     }
 
-    // Cloudflare-fronted custom domain (api.sorobanscan.rumblefishdev.com) — a
+    // Cloudflare-fronted custom domain (api-sorobanscan.rumblefishdev.com) — a
     // SECOND custom domain on the same API, with NO Route 53 record (Cloudflare
     // is authoritative). mTLS-lockable. Its regional alias target is output so it
     // can be fed into the Cloudflare module's api_origin_target.

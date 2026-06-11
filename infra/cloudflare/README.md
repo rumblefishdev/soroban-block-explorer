@@ -5,7 +5,7 @@ Terraform for the **sorobanscan-specific** Cloudflare resources only
 
 | Lives here (`soroban-explorer`)                         | Lives in `rf-domains` (private)                             |
 | ------------------------------------------------------- | ----------------------------------------------------------- |
-| `api.sorobanscan.rumblefishdev.com` DNS record (orange) | the `cloudflare_zone` `rumblefishdev.com`                   |
+| `api-sorobanscan.rumblefishdev.com` DNS record (orange) | the `cloudflare_zone` `rumblefishdev.com`                   |
 | API origin lock — per-host **AOP** (mTLS)               | company DNS records + zone settings                         |
 | AWS side of the lock (CDK: API GW mTLS)                 | zone-level **edge rulesets** (WAF / rate-limit / challenge) |
 | own TF-state bucket (`*-cf-tfstate`)                    | its own, separate TF-state bucket                           |
@@ -18,7 +18,7 @@ This module **does not own the zone** — it references it by id
 The zone's WAF / rate-limit / Managed Challenge / Transform rulesets are
 **per-(zone, phase) singletons**, so only one Terraform state may own each
 phase. They are owned by **rf-domains** (the zone owner); each rule is
-`http.host`-scoped to `api.sorobanscan.rumblefishdev.com`. Rulesets only act on
+`http.host`-scoped to `api-sorobanscan.rumblefishdev.com`. Rulesets only act on
 **proxied** traffic and only the API record is orange, so this is conflict-free.
 
 Reversible to single-tenant **model C** (rulesets pulled into this repo) via

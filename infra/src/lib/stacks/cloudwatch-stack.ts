@@ -393,8 +393,14 @@ export class CloudWatchStack extends cdk.Stack {
           // Only probe a vector whose lock is actually live. With its lock
           // off an origin legitimately returns 2xx, so probing it would make
           // the canary alarm forever during a staged (one-leg-at-a-time)
-          // rollout.
-          ...(config.enableApiMtls && { EXECUTE_API_URL: restApi.url }),
+          // rollout. The raw execute-api URL returns 403 under EITHER API lock:
+          // the app-layer edge-secret check (missing X-Edge-Secret) OR mTLS
+          // (disableExecuteApiEndpoint) — so probe it whenever either is live.
+          // Gating only on enableApiMtls would leave the edge-secret-only prod
+          // config (the current one) with no API target → every run fails.
+          ...((config.enableApiMtls || config.enableEdgeSecretLock) && {
+            EXECUTE_API_URL: restApi.url,
+          }),
           ...(config.enableOriginSecretLock &&
             spaDistributionDomainName && {
               CLOUDFRONT_URL: `https://${spaDistributionDomainName}/`,

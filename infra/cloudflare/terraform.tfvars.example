@@ -5,7 +5,7 @@
 # Zone id of rumblefishdev.com — from rf-domains' `zone_id` output (D9/D11).
 cloudflare_zone_id = "REPLACE_WITH_RUMBLEFISHDEV_ZONE_ID"
 
-api_hostname = "api.sorobanscan.rumblefishdev.com"
+api_hostname = "api-sorobanscan.rumblefishdev.com"
 
 # API Gateway REGIONAL custom-domain target (CDK ApiGateway stack output).
 api_origin_target = "REPLACE_WITH_dYYYY.execute-api.eu-central-1.amazonaws.com"

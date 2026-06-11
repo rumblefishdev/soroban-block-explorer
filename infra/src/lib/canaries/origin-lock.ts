@@ -15,8 +15,9 @@
  * Targets are supplied via environment variables (set by the CDK Canary only
  * for vectors whose lock is live, so nothing is hardcoded and an un-locked
  * origin is never probed):
- *   EXECUTE_API_URL  — raw API Gateway execute-api URL (403 once
- *                      disableExecuteApiEndpoint is set)
+ *   EXECUTE_API_URL  — raw API Gateway execute-api URL (403 under the
+ *                      app-layer edge-secret lock — missing X-Edge-Secret —
+ *                      or once disableExecuteApiEndpoint is set by mTLS)
  *   CLOUDFRONT_URL   — *.cloudfront.net domain (403/503 once the
  *                      viewer-request Function rejects requests lacking
  *                      X-Origin-Secret)

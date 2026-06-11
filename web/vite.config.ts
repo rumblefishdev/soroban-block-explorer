@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
   const devApiKey = env.DEV_API_KEY;
   const proxy = proxyTarget
     ? Object.fromEntries(
-        ['/v1', '/health', '/api-docs'].map((path) => [
+        ['/v1', '/auth/session', '/health', '/api-docs'].map((path) => [
           path,
           {
             target: proxyTarget,
