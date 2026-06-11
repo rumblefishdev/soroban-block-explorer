@@ -49,6 +49,8 @@ fn contract_type_name(contract_type: i16) -> Option<String> {
     match contract_type {
         0 => Some("token".to_string()),
         1 => Some("other".to_string()),
+        2 => Some("nft".to_string()),
+        3 => Some("fungible".to_string()),
         _ => None,
     }
 }
@@ -645,7 +647,9 @@ mod tests {
     fn contract_type_name_matches_pg_function() {
         assert_eq!(contract_type_name(0).as_deref(), Some("token"));
         assert_eq!(contract_type_name(1).as_deref(), Some("other"));
-        assert_eq!(contract_type_name(2), None);
+        assert_eq!(contract_type_name(2).as_deref(), Some("nft"));
+        assert_eq!(contract_type_name(3).as_deref(), Some("fungible"));
+        assert_eq!(contract_type_name(4), None);
     }
 
     fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
