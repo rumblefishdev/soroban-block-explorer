@@ -41,6 +41,62 @@ history:
     status: active
     who: karolkow
     note: 'Activated; work starts in worktree 0283-nft-reclassify.'
+  - date: 2026-06-11
+    status: active
+    who: karolkow
+    note: >
+      Investigation session (Claude). Restored the small tables from the
+      local CH backup snapshot_b_post_0252 into a throwaway container and
+      ran Step 0 queries as a prod proxy (2026-05-21 state). Empirical
+      confirmation + sizing, a SAC/asset-model deep dive, the crate-location
+      decision (NOT backfill-runner → new `ch-maintenance-runner`), and the live-gap
+      latency simulation (option c) all captured in
+      notes/S-snapshot-findings-location-and-live-decisions.md. New Step 6
+      added for the Bachini/i128 event-extraction gap.
+  - date: 2026-06-11
+    status: active
+    who: karolkow
+    note: >
+      Scope consolidated into one task (operator decision): assets-fungible
+      backfill + live fix pulled in (Steps 2, 5). Measured the batch pipeline
+      end-to-end (~9 s full-scale) — the "heavy mutation / 0281 window" worry
+      was over-cautious. Fixed `queries_ch.rs::contract_type_name` (2→nft,
+      3→fungible) + test (DONE). LIVE design changed from inline dict/cache to
+      a 3rd async reclassification Lambda (enrichment-worker pattern, scheduled/
+      coalesced, singleton guard) — removes the 4 s-budget/dict concern. Live
+      analysis + "why lookups are normally cheap" in the findings note.
+  - date: 2026-06-11
+    status: active
+    who: karolkow
+    note: >
+      (pm) Indexer-reads claim verified: the PG path DID do cross-ledger DB
+      reads at persist (reclassify_contracts_from_wasm + assets bridge +
+      promote) — dropped at the 0241 CH cutover; bug #4 is a parity gap, not
+      a design constant. Live decision RE-OPENED: dev-cost comparison favors
+      the inline port (~2-3 d, no infra) over the 3rd Lambda (~4-6+ d);
+      recommendation A, operator to confirm. Crate renamed to
+      ch-maintenance-runner (consistent *-runner family). Classifier stays in
+      xdr-parser (used by indexer at staging.rs:561; "not used in indexer"
+      claim was false). Details in the findings note addendum.
+  - date: 2026-06-11
+    status: active
+    who: karolkow
+    note: >
+      (eve) LIVE DECISION FINAL: inline in the indexer; 3rd-Lambda proposal
+      dropped after CTO review of the research brief (brief delivered, then
+      removed — content folded into Step 5 + the findings note). Fundament audit:
+      quarantine is NOT speculative classification (API never reads pending;
+      hot = WASM-confirmed only) — with inline G1+G9 it degrades to a DLQ;
+      elimination ladder defined (inline → deploy-linkage fix → TRUNCATE/drop).
+      Simulations on the full-scale snapshot killed the cost fears: batched
+      lookup 4–8 ms flat, "peak 59 deploys" = 1 unique wasm hash, routing
+      cache ~9 misses/day, dictionary option built+validated+rejected.
+      CORRECTED: ~99.4% of pending stays after reclassify (no-deploy-link
+      contracts) — NEW follow-up findings: deploy-linkage gap (4,461
+      contracts) and SAC-skeleton exposure in /v1/contracts (294,963 rows).
+      Step 5 rewritten as decided; AC updated. Earlier 2026-06-11 entries
+      mis-attributed to stkrolikiewicz (stale session file) — corrected, the
+      whole session was karolkow.
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
@@ -57,6 +113,16 @@ INPUT already exists in CH (`wasm_interface_metadata`, 3,216 WASMs with
 function lists) — what's missing is one rebuild step joining it back into
 `soroban_contracts.contract_type`. This task adds that step and runs the
 full reclassification on prod.
+
+**Scope broadened (operator decision 2026-06-11): everything in one task.** The
+same same-batch bug also under-populates `assets.asset_type=3` (Soroban
+fungibles) — so the assets backfill + live fix are pulled in (Steps 2, 5).
+**Live fix DECIDED (2026-06-11, after CTO review): inline in the indexer** —
+re-implementation of the cross-ledger bridges the PG path had, in the CH
+writer (~2–3 days, no new infra, fail-open); the 3rd-Lambda alternative was
+evaluated and dropped (option analysis: Step 5 + the findings note).
+New crate `ch-maintenance-runner` hosts the batch logic (one-shot history
+rebuild + by-design-batch ops) — complementary to inline, not an alternative.
 
 ## Root cause (evidence)
 
@@ -92,6 +158,40 @@ full reclassification on prod.
 Full deep-dive (incl. corrections to prior assumptions, prod state
 numbers, verification SQL): [notes/S-deep-dive-root-cause.md](notes/S-deep-dive-root-cause.md).
 
+## Empirical findings (local snapshot proxy, 2026-06-11)
+
+Step 0 queries run on the restored `snapshot_b_post_0252` (2026-05-21 / Phase 6
+state — re-run on live prod for go-live sizing). Full detail incl. asset/SAC
+model, contracts-vs-rows, pending breakdown, location + live decisions:
+[notes/S-snapshot-findings-location-and-live-decisions.md](notes/S-snapshot-findings-location-and-live-decisions.md).
+
+- **Verdict breakdown**: of 26,401 non-SAC contracts, exactly **1** ever got
+  `Nft` (type=2), 2 got `Fungible` (type=3) — confirms root cause empirically.
+- **Would-be-Nft after rebuild: 107 contracts** (vs 1 today); would-be-Fungible
+  **3,937** with the exact classifier predicate (an earlier 4,159 figure used a
+  looser OR-predicate). Decision is per **contract**; promote acts per **row**.
+- **Promote volume**: 107 NFT collections hold **11,023** token rows in
+  `nfts_pending` + **19,451** ownership events (one collection `CBHUX3RS…` =
+  10,056 tokens). Real data exists — `promoted_nfts` will be >0, not 0.
+- **What reclassify does (CORRECTED 2026-06-11 pm)**: promote ~0.02% (Nft),
+  drop SAC+Fungible (~0.5%), and **~99.4% STAYS in pending** — it belongs to
+  4,461 contracts with **no deploy/wasm_hash link at all** (deploy never
+  observed; top offender `CDP5RUMSC7YJ…` alone = 4.86M rows). Unresolvable at
+  write time AND at rebuild time → the TRUNCATE decision (Step 6) governs it,
+  and the **deploy-linkage gap is a new follow-up finding** (earlier claim
+  "~99.97% dropped" was based on a LEFT JOIN mislabel — FixedString non-match
+  fills zero-bytes, not NULL).
+- **Bachini** (`CDA5FGE4…`, the one verified real NFT): sits as `Other`
+  (rebuild fixes it) **but has 0 rows in either pending table** → a separate
+  event-extraction gap, see **Step 6**.
+- **Assets — SAME bug class, second table.** `asset_type` enum is
+  explorer-synthetic (0 Native / 1 ClassicCredit / 2 Sac / 3 Soroban-fungible).
+  `asset_type=3` (Soroban bespoke fungible) has only **2 rows** — the _same_
+  same-batch-coincidence bug: ~3,935 would-be-fungible non-SAC contracts are
+  **missing from `assets`**. The PG persist path has a late-WASM assets bridge
+  (`insert_assets_from_reclassified_contracts`); the **CH path never ported
+  it**. Now IN SCOPE (Steps 2 + 5) per operator decision.
+
 ## Why this gates launch
 
 - E15/E16/E17 (`/nfts*`) serve zero data on prod (0259 documented the gap;
@@ -113,9 +213,19 @@ contracts). These size the promote volume BEFORE building anything and
 confirm the root cause empirically. Requires mTLS cert
 (`infra-hetzner/ca/issue-client-cert.sh`) + `~/.config/soroban-prod.env`.
 
-### Step 1 — `backfill-runner contract-type-rebuild` subcommand
+### Step 1 — `ch-maint contract-type-rebuild` (NEW crate, not backfill-runner)
 
-New module `crates/backfill-runner/src/contract_type_rebuild.rs`, modeled
+**Location decision (2026-06-11):** this does **NOT** belong in
+`backfill-runner` (its charter is S3 historical ingestion, a one-shot job
+complete per task 0228 — the CH-maintenance ops squatting there only because
+that crate already had a CH sink). Create a new crate
+**`crates/ch-maintenance-runner`** (bin `ch-maint`), a CH post-hoc maintenance
+toolbox modeled on the standalone-CLI precedent of `backfill-enrichment-runner`.
+**Relocate** `repair-tier1`, `asset-aggregates`, `nft-reclassify` into it too
+(same family; rebuild → nft-reclassify is one ordered pipeline). Rationale +
+deps in [the findings note](notes/S-snapshot-findings-location-and-live-decisions.md).
+
+New module `crates/ch-maintenance-runner/src/contract_type_rebuild.rs`, modeled
 on `repair_tier1.rs` (staging table + `EXCHANGE TABLES` swap):
 
 - Read `wasm_interface_metadata` (wasm_hash → metadata JSON with
@@ -128,77 +238,190 @@ verdict ∈ {Nft, Fungible}`, else passthrough. SAC rows untouched.
 - `EXCHANGE TABLES`, drop staging. Idempotent, `--dry-run` support
   (counts per verdict transition), same logging shape as `nft_reclassify`.
 
-### Step 2 — run on prod: rebuild → nft-reclassify
+> **`status` command?** backfill-runner's `Status` is S3-ingest progress —
+> untouched by this work, stays as-is. Any status/report for the maintenance
+> ops (verdict breakdown, would-be-Nft, promote/drop volumes) is a NEW
+> `ch-maint` concern (`--dry-run` summaries or a `ch-maint status`).
 
-1. `backfill-runner contract-type-rebuild --dry-run` → compare counts with
-   Step 0 expectations; then real run.
-2. `backfill-runner nft-reclassify --dry-run` → real run. Existing code
-   (`nft_reclassify.rs`) already covers BOTH `nfts_pending` AND
-   `nft_ownership_pending` (promote type=2, drop types 0/2/3, legacy
-   cleanup, OPTIMIZE FINAL) — no new drain code needed.
-3. Record before/after counts in this task (pending totals, promoted,
-   dropped, hot totals).
-4. Schedule within / coordinate with the 0281 maintenance window if the
-   mutations are heavy (ALTER DELETE on ~30M+ rows).
+### Step 2 — `ch-maint assets-fungible-backfill` (NEW — pulled into scope)
 
-### Step 3 — 0217 Part 2 TRUNCATE decision (explicitly OUT of first run)
+The same bug hits a second table: `assets.asset_type=3` (Soroban bespoke
+fungible) is emitted only on the same-batch WASM+deploy coincidence
+(`xdr-parser/src/state.rs:853-871`), so ~3,935 would-be-fungible contracts are
+missing from `assets` (only 2 present). The rebuild (Step 1) makes
+`soroban_contracts.contract_type=3` authoritative, so this is then mechanical:
+
+- One-shot `INSERT INTO assets` of the missing type-3 rows:
+  `SELECT asset_type=3, contract_id=sc.id, name=sc.name, … FROM soroban_contracts
+sc WHERE sc.contract_type=3 AND NOT is_sac AND NOT EXISTS(matching asset row)`.
+- Identity is the 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`;
+  type-3 rows carry `contract_id` only (code/issuer NULL). `--dry-run` + counts.
+- Lives in `ch-maintenance-runner` next to `contract-type-rebuild` (shares the CH
+  client + staging helpers). SAC (type-2) and classic (type-1) untouched.
+
+### Step 3 — run on prod: rebuild → assets-backfill → nft-reclassify
+
+1. `ch-maint contract-type-rebuild --dry-run` → compare with Step 0; real run.
+2. `ch-maint assets-fungible-backfill --dry-run` → real run.
+3. `ch-maint nft-reclassify --dry-run` → real run. Existing code
+   (relocated into `ch-maintenance-runner`) covers BOTH `nfts_pending` AND
+   `nft_ownership_pending` (promote type=2, drop SAC/fungible, OPTIMIZE FINAL).
+4. Record before/after counts (pending totals, promoted, dropped, hot totals,
+   assets type-3 count).
+5. **Runtime measured (local snapshot, full-scale):** whole pipeline ~**9 s**
+   — rebuild 0.43 s + EXCHANGE 0.13 s, promote 0.25 s, `ALTER DELETE` full
+   drain 1.15 s (48.8M) + 6.64 s (112M), OPTIMIZE ~0.2 s. The "coordinate with
+   0281 maintenance window / heavy ALTER DELETE" worry is over-cautious — it's
+   seconds. Still verify on the single remote Hetzner node under live merge
+   load; don't start a second run while a previous one's mutations are still
+   merging (`system.mutations` check).
+
+### Step 4 — API: `contract_type_name` fix (DONE) + verify contracts-list
+
+`GET /v1/contracts` is a pure consumer of `soroban_contracts.contract_type`
+(`queries_ch.rs:103`, reads via `FINAL`; `filter[type]=nft` → `= 2`), so the
+rebuild flips its counts **1 Nft / 2 Fungible → 107 / ~3,937 with NO API code
+change**. **DONE 2026-06-11:** fixed `queries_ch.rs::contract_type_name`
+(2→nft, 3→fungible) + its stale test (was the CH/PG divergence that returned
+`contract_type_name:null` for the new rows). Verify the live counts after the
+prod run.
+
+### Step 5 — LIVE fix: **DECIDED — inline in the indexer** (2026-06-11, after CTO review)
+
+The 3rd-Lambda proposal was evaluated against measurements and dropped; full
+option analysis + devil's advocate per option in the
+[findings note](notes/S-snapshot-findings-location-and-live-decisions.md).
+
+**What it is:** re-implementation, on the CH writer, of the three cross-ledger
+bridges the PG path ran in production (dropped at the 0241 cutover):
+`reclassify_contracts_from_wasm` (`indexer/handler/persist/write.rs:240-325`),
+`insert_assets_from_reclassified_contracts` (`write.rs:543-584`),
+`promote_pending_nfts_to_hot` (`write.rs:337-417`). PG itself is being removed
+from the project — we port the **algorithm**, not the database. The stage
+stays pure (no DB); the post-stage step runs in the writer/handler (both
+already hold a `clickhouse::Client` — `writer.rs:72`, `handler/mod.rs:130`).
+
+**Scope (gap inventory G1–G9, Addendum 2):**
+
+- **G1** verdict at deploy: one batched `wasm_hash IN(...)` lookup, only on
+  deploy-bearing ledgers (**0.18%** of ledgers).
+- **G2** `assets` type-3 row on a Fungible verdict (same trigger).
+- **G3** promote pending→hot on an actual Nft flip (~once per 4 days).
+- **G5** name-write clobber fix (name-only RMT row must not NULL out
+  wasm_hash/deployer — read-merge before re-emit).
+- **G9** verdict at event-routing time: lazy in-memory verdict cache
+  (5,707 distinct emitting contracts; **~9 cache-misses/day**; never cache
+  unknown; Nft/Fungible verdicts are immutable once set). G9 **also closes the
+  0221 write-time SAC leak** (SAC-emitted events get dropped at routing instead
+  of leaking into pending — the leak regrew 8.6M/18.9M rows since Phase 5).
+- G2 also covers the `assets.name` mirror (PG pass-2 behavior never ported).
+- G6 (asset aggregates) + G8 (first_seen watermarks) stay batch **by design**
+  (every-ledger triggers); G4 (SAC) already covered in stage; G7 obsolete.
+
+**Measured (full-scale snapshot):** batched lookup **4–8 ms** flat
+(IN 1…1000); the feared "59-deploy ledger" = 59 instances of ONE wasm hash →
+1 query; per-contract promote (10k rows) **5–8 ms**; option-(d) dictionary
+built and validated end-to-end (load 110 ms, 508 KiB, dictGet 3–7 ms) —
+works but adds nothing at these frequencies, rejected. Net cost: **0 ms on
+~99% of ledgers, 4–8 ms otherwise** vs the ~4 s budget. Only unmeasured
+variable: Lambda→Hetzner RTT (assumed 30 ms — confirm with one probe).
+
+**Fail-open ladder (zero correctness risk):** cache hit → route (0 ms); miss →
+one batched SELECT (4–8 ms); DB doesn't know / query fails → behave exactly
+as today (`Other` + quarantine) → batch backstop drains later. The new code
+can only degrade to current behavior, never below it.
+
+**Endgame:** with G1+G9 live, pending degrades from a pipeline stage to a
+**DLQ** (inflow = only unknown-deploy contracts = the deploy-linkage bug).
+Elimination ladder: inline fix → fix deploy-linkage gap (follow-up) →
+TRUNCATE / drop the pending tables entirely ("classify once, correctly").
+
+### Step 6 — 0217 Part 2 TRUNCATE decision (explicitly OUT of first run)
 
 Do NOT truncate pending in the same pass. After rebuild+reclassify, what
-remains in pending is contracts with no WASM interface observed or genuine
-`Other`. Decide TRUNCATE separately (0217 §Part 2 sanity probe first),
-once live-gap strategy (Step 4) is settled — otherwise truncated rows for
-late-classified contracts are unrecoverable.
+remains (~99.4%) belongs to the 4,461 no-deploy-link contracts (the
+deploy-linkage bug) plus genuine `Other`. TRUNCATE only AFTER the elimination
+ladder's step 2 (deploy-linkage fix) — truncating earlier silently destroys
+data that may include real NFTs (the exact Patch-C mistake ADR 0046 rejected).
 
-### Step 4 — live-gap strategy (spawn follow-up, decide, don't build here)
+### Step 7 — Bachini / i128 token_id event-extraction gap
 
-One-shot rebuild fixes the backfill snapshot, but live ingest keeps
-writing `Other` (gap #4 above). Options: (a) periodic
-`contract-type-rebuild + nft-reclassify` (cron/EventBridge), (b) DB-lookup
-in CH stage (0221 Option A — breaks stage purity), (c) verdict cache
-bootstrap at indexer cold start. Spawn a follow-up task with the decision;
-this task only documents the trade-off.
+Step 0 found Bachini (`CDA5FGE4…`, the only verified real mainnet NFT) has
+**0 rows in both pending tables** — so even a correct rebuild + reclassify
+surfaces nothing for it. Its events were never extracted; deep-dive flags it
+as SEP-39 with **i128 token_id**, a shape the event parser likely doesn't
+capture. This is a **different subsystem** (XDR event extraction, not
+classification) — keep as a tracked step here, but it may graduate to its own
+task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
 
-### Step 5 — docs
+### Step 8 — docs
 
 - **ADR 0046 correction**: the CH "re-emission on next observation"
   promotion path is documented but not implemented; amend with the actual
-  mechanism (rebuild + reclassify pass) and link this task.
+  mechanism (rebuild + reclassify, live worker) and link this task.
 - Update `docs/runbooks/0217_nfts_pending_migration_and_drain.md` §Part 2
-  CH section: prepend the contract-type-rebuild step (without it the
-  promote SELECT matches nothing).
-- Mark 0221 manual drain runbook as subsumed by `nft-reclassify` (keep for
-  reference).
+  CH section: prepend the contract-type-rebuild step; commands `ch-maint …`.
+- Mark 0221 manual drain runbook as subsumed by `nft-reclassify`.
+- `docs/architecture/database-schema/clickhouse-pilot.md` §quarantine: add the
+  rebuild step to the promotion lifecycle.
 
 ## Acceptance Criteria
 
 - [ ] Step 0 verification queries run on prod; results recorded in task
       notes (verdict breakdown, would-be-Nft contract count, pending
       volume under those contracts).
-- [ ] `backfill-runner contract-type-rebuild` subcommand implemented
-      (staging+EXCHANGE pattern, Rust-side classifier reuse, `--dry-run`,
-      idempotent re-run).
+- [ ] New crate `crates/ch-maintenance-runner` (bin `ch-maint`) created; `repair-tier1`,
+      `asset-aggregates`, `nft-reclassify` relocated out of backfill-runner into it.
+- [ ] `ch-maint contract-type-rebuild` implemented (staging+EXCHANGE, Rust-side
+      classifier reuse, `--dry-run`, idempotent).
+- [ ] `ch-maint assets-fungible-backfill` implemented (Step 2 — insert missing
+      type-3 Soroban-fungible `assets` rows from `contract_type=3`).
 - [ ] Unit/integration test: contract with `Other` verdict + matching
       `wasm_interface_metadata` carrying `owner_of` flips to `Nft`;
       SAC row untouched; contract without metadata untouched.
-- [ ] Prod run executed: rebuild → `nft-reclassify`; before/after counts
-      recorded (hot `nfts`/`nft_ownership` non-zero iff would-be-Nft
-      count > 0; SAC/fungible pending rows dropped).
-- [ ] E15/E16/E17 smoke against prod after the run (links 0259; full
-      validation stays in 0259).
-- [ ] Follow-up task spawned for the live-ingest gap strategy (Step 4).
-- [ ] ADR 0046 amended (re-emission correction) + runbook 0217 updated.
-- [ ] **Docs updated** — `docs/architecture/database-schema/clickhouse-pilot.md`
-      §quarantine: add the rebuild step to the promotion lifecycle;
-      other architecture docs N/A (no API/schema/infra shape change).
-- [ ] **API types regenerated** — N/A unless `crates/api/**` or
-      `Cargo.{toml,lock}` touched; expected N/A (backfill-runner only —
-      but `Cargo.lock` WILL change if deps are added → regen then).
+- [ ] Prod run executed: rebuild → assets-backfill → `nft-reclassify`;
+      before/after counts recorded (hot `nfts`/`nft_ownership` non-zero —
+      local proxy ~11,023 / 19,451 promote; SAC/fungible pending dropped;
+      assets type-3 grows ~2 → ~3,937).
+- [ ] E15/E16/E17 smoke against prod after the run (links 0259).
+- [x] **`queries_ch.rs::contract_type_name` fixed** (2→nft, 3→fungible) + test
+      updated — DONE 2026-06-11. Verify `GET /v1/contracts` counts post-run.
+- [ ] **LIVE fix DECIDED — inline in the indexer** (Step 5): G1 verdict at
+      deploy + G2 assets row + G3 promote-at-flip + G5 name-clobber fix +
+      G9 routing cache — fail-open, batched, gated to rare ledgers
+      (measured: 0 ms on ~99% of ledgers, 4–8 ms otherwise). 3rd-Lambda
+      alternative evaluated and dropped after CTO review.
+- [ ] RTT Lambda→Hetzner measured (one probe via mTLS) — confirms the last
+      assumption (30 ms) behind the live numbers.
+- [ ] Follow-up task spawned: **deploy-linkage gap** — 4,461 contracts emit
+      events but have no deploy/wasm_hash ever (99.4% of pending; top
+      `CDP5RUMSC7YJ…` = 4.86M rows); blocks the TRUNCATE endgame.
+- [ ] Follow-up task spawned: **SAC skeleton exposure** — 294,963 derived
+      skeleton rows (92% of `soroban_contracts`) visible in `/v1/contracts`
+      with no filter (real violation of "no speculative user-facing rows").
+- [ ] Bachini/i128 SEP-39 event-extraction gap (Step 7) — investigated;
+      tracked here or graduated to its own task.
+- [ ] ADR 0046 amended (re-emission correction → actual mechanism: inline
+      bridges + batch backstop) + runbook 0217/0221 updated; command strings
+      `backfill-runner …` → `ch-maint …`.
+- [ ] **Docs updated** — `clickhouse-pilot.md` §quarantine (rebuild step +
+      pending-as-DLQ); ingestion-pipeline docs for the new inline writer step;
+      infra topology N/A (no new Lambda).
+- [ ] **API types regenerated** — `crates/api/**` touched (contract_type_name) + new `Cargo.lock` → run `nx run @rumblefish/api-types:generate` before
+      commit (label change likely no-op on the spec, but the gate checks it).
 
 ## Notes
 
-- TRUNCATE of pending is deliberately deferred (Step 3) — destructive,
-  and the live-gap decision changes what "safe to truncate" means.
-- Expected scale: 96% of 321k contracts are SAC; would-be-Nft population
-  likely tiny (possibly only Bachini `CDA5FGE4…` and a handful). Empty-ish
-  hot tables after a CORRECT run are a product reality, not a bug —
-  Step 0 gives the hard number first.
+- TRUNCATE of pending is deliberately deferred (Step 6) — destructive; safe
+  only after the deploy-linkage fix (elimination ladder step 2).
+- **Quarantine is NOT speculative classification** — it's the opposite: the
+  API never reads `*_pending`; hot tables receive only WASM-confirmed rows
+  (pre-quarantine design measured 99.4% garbage in `/v1/nfts*`). With the
+  inline fix it degrades to a DLQ; rows arriving there = bug signal.
+- Expected scale (measured on the snapshot proxy): 294,963/321,364 contracts
+  are SAC (~92%); would-be-Nft is **107 contracts → ~11,023 token rows**.
+  Empty-ish hot tables after a CORRECT run are a product reality, not a bug —
+  re-confirm on live prod (Step 0).
+- Investigation env still running locally: container `ch-snap` (restored
+  small tables from `~/snapshots/snapshot_b_post_0252`, port 8123) + `ch-ui`
+  (port 3488). Originals/backup untouched; benches ran on copies.
