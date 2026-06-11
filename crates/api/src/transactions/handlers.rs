@@ -423,7 +423,11 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
             contract_id: op.contract_id.clone(),
             asset_code: op.asset_code.clone(),
             asset_issuer: op.asset_issuer.clone(),
-            pool_id: op.pool_id.as_deref().map(pool_id_hex_to_strkey),
+            pool_ids: op
+                .pool_ids
+                .iter()
+                .map(|h| pool_id_hex_to_strkey(h))
+                .collect(),
             application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,

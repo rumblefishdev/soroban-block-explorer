@@ -79,26 +79,26 @@ primary keys on the other 12 tables where StrKey-hash composites are
 already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
 
-| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                         |
-| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                     |
-| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                   |
-| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                    |
-| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                  |
-| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                      |
-| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                            |
-| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                 |
-| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                              |
-| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                  |
-| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64                         |
-| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`             |
-| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                      |
-| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                         |
-| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash` |
-| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                              |
-| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                |
-| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                             |
-| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                             |
+| Postgres counterpart                                  | ClickHouse copy                       | Category                | Notes                                                                                               |
+| ----------------------------------------------------- | ------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------- |
+| `accounts`                                            | `accounts`                            | state                   | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                           |
+| `assets`                                              | `assets`                              | state                   | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                         |
+| `account_balances_current`                            | `account_balances_current`            | state                   | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                          |
+| `ledgers`                                             | `ledgers`                             | immutable lookup        | only CH table that retains a wall-clock column (`closed_at`)                                        |
+| `liquidity_pools`                                     | `liquidity_pools`                     | state                   | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                            |
+| `liquidity_pool_snapshots`                            | `liquidity_pool_snapshots`            | append-only fact        | PK = `(pool_id, ledger_sequence)`; no surrogate id                                                  |
+| `lp_positions`                                        | `lp_positions`                        | state                   | PK = `(pool_id, account_id)`; version = `last_updated_ledger`                                       |
+| `nfts`                                                | `nfts`                                | state                   | PK = `(contract_id, token_id)`; drops `metadata`                                                    |
+| `nft_ownership`                                       | `nft_ownership`                       | append-only fact        | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                        |
+| `operations_appearances`                              | `operations_appearances`              | append-only fact        | PK = `(ledger_sequence, transaction_id, application_order)`; FK Int64; `pool_ids` Array (0261/0268) |
+| `soroban_contracts`                                   | `soroban_contracts`                   | state                   | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                   |
+| `soroban_events_appearances` (folded ADR 0033 design) | `soroban_events` **(NEW)**            | append-only fact        | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                            |
+| `soroban_invocations_appearances`                     | `soroban_invocations_appearances`     | append-only fact        | PK = `(contract_id, ledger_sequence, transaction_id)`                                               |
+| `transactions`                                        | `transactions`                        | append-only fact        | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash`       |
+| `transaction_hash_index`                              | `transaction_hash_index` + Dictionary | append-only fact + dict | RAM-bounded `complex_key_cache` for hot `hash → ledger_sequence`                                    |
+| `transaction_participants`                            | `transaction_participants`            | append-only fact        | PK = `(account_id, ledger_sequence, transaction_id)`; FK Int64                                      |
+| `wasm_interface_metadata`                             | `wasm_interface_metadata`             | immutable lookup        | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                   |
+| `_sqlx_migrations`                                    | **NOT MIRRORED**                      | —                       | replaced by idempotent `init.sql`                                                                   |
 
 CH net schema: **17 tables + 1 `Dictionary`** (PG had 18; `_sqlx_migrations` dropped).
 
@@ -315,6 +315,17 @@ Highlights:
 
 - 32-byte `BYTEA` columns (hashes, `pool_id`, `wasm_hash`) become
   `FixedString(32)` in CH
+- `operations_appearances.pool_id` (PG scalar `BYTEA`, nullable) becomes
+  `pool_ids Array(FixedString(32))` (task 0261/0268): path payments
+  contribute every pool crossed by their result claim atoms, LP
+  deposit/withdraw a single element, `[]` = no pool involvement. Filter
+  with `has(pool_ids, unhex(...))`; PG keeps the legacy scalar (path
+  payments stay NULL there) pending retirement
+- `liquidity_pool_snapshots` carries the CH-only `gross_volume_a
+Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
+  units from path-payment claim atoms (written by the 0266 backfill /
+  0247 wiring; USD `volume`/`fee_revenue` stay NULL until the Prices API,
+  ADR 0048)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`

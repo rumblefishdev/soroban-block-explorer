@@ -368,7 +368,6 @@ async fn detail_endpoint_projects_full_operation_columns_against_real_db() {
         "contract_id",
         "asset_code",
         "asset_issuer",
-        "pool_id",
     ] {
         assert!(
             op.get(field).is_some(),
@@ -379,6 +378,12 @@ async fn detail_endpoint_projects_full_operation_columns_against_real_db() {
             "operations[0].{field} bad type: {op}"
         );
     }
+    // pool_ids replaced the scalar pool_id (task 0261/0268): always present,
+    // always an array (empty when no pool crossed).
+    assert!(
+        op.get("pool_ids").is_some_and(Value::is_array),
+        "operations[0].pool_ids missing or not array: {op}"
+    );
     assert!(
         op["ledger_sequence"].is_number(),
         "operations[0].ledger_sequence not number: {op}"

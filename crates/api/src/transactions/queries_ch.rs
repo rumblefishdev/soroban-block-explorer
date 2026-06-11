@@ -153,7 +153,7 @@ struct OpChRow {
     contract_id: Option<String>,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
-    pool_id: Option<String>,
+    pool_ids: Vec<String>,
     application_order: i16,
     ledger_sequence: i64,
     created_at: i64,
@@ -176,7 +176,7 @@ impl From<OpChRow> for OpRow {
             contract_id: row.contract_id.filter(|s| !s.is_empty()),
             asset_code: row.asset_code.filter(|s| !s.is_empty()),
             asset_issuer: row.asset_issuer.filter(|s| !s.is_empty()),
-            pool_id: row.pool_id.filter(|s| !s.is_empty()),
+            pool_ids: row.pool_ids,
             application_order: Some(row.application_order),
             ledger_sequence: row.ledger_sequence,
             created_at: millis_to_utc(row.created_at),
@@ -589,7 +589,7 @@ pub async fn fetch_operations(
                 nullIf(sc.contract_id, '') AS contract_id, \
                 nullIf(oa.asset_code, '') AS asset_code, \
                 nullIf(iss.account_id, '') AS asset_issuer, \
-                lower(hex(oa.pool_id)) AS pool_id, \
+                arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids, \
                 oa.application_order, \
                 oa.ledger_sequence, \
                 l.closed_at AS created_at \
@@ -781,7 +781,7 @@ mod tests {
             contract_id: None,
             asset_code: Some(String::new()),
             asset_issuer: None,
-            pool_id: None,
+            pool_ids: Vec::new(),
             application_order: 3,
             ledger_sequence: 100,
             created_at: 1_700_000_000_000,

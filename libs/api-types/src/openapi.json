@@ -3065,6 +3065,7 @@
           "appearance_id",
           "type_name",
           "type",
+          "pool_ids",
           "ledger_sequence",
           "created_at"
         ],
@@ -3100,9 +3101,12 @@
             "type": "integer",
             "format": "int64"
           },
-          "pool_id": {
-            "type": ["string", "null"],
-            "description": "Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded\nfrom the DB hex form at the response boundary so cross-entity\nlink targets match the `/v1/liquidity-pools/:id` route shape."
+          "pool_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Liquidity pools crossed by this operation, as SEP-23 strkeys\n(`L...`, 56 chars). Encoded from the DB hex form at the response\nboundary so cross-entity link targets match the\n`/v1/liquidity-pools/:id` route shape. Single-element for LP\ndeposit/withdraw; the full crossed-pool list for path payments and\noffers that filled against a pool (task 0261/0268 — replaces the\nformer nullable scalar `pool_id`).\n\n**Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means \"no\npool\" **only** for ClickHouse-served responses. The Postgres backend\n(default until each module flips to CH, per task 0243) never received\nthe claim-atom extraction, so it returns `[]` for *every* path-payment\nand offer op regardless of whether a pool was crossed — only LP\ndeposit/withdraw carry a pool there. Treat `[]` as authoritative for\npool absence only once the module reads from CH."
           },
           "source_account": {
             "type": ["string", "null"]

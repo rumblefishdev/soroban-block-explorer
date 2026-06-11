@@ -221,7 +221,7 @@ fn column_order_operations_appearances() {
             "contract_id",
             "asset_code",
             "asset_issuer_id",
-            "pool_id",
+            "pool_ids",
             "amount",
             "ledger_sequence",
         ],
@@ -316,6 +316,7 @@ fn column_order_liquidity_pool_snapshots() {
             "tvl",
             "volume",
             "fee_revenue",
+            "gross_volume_a",
         ],
     );
 }
@@ -605,6 +606,147 @@ fn prepare_folds_identical_operations() {
     assert_eq!(op_row.application_order, 1);
     assert_eq!(op_row.op_type, OperationType::Payment as i16);
     assert_eq!(op_row.destination_id, Some(ids::account_id(&dest)));
+}
+
+#[test]
+fn prepare_path_payment_pool_ids_split_fold_and_sort() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x31);
+    let dest = "G".to_string() + &"E".repeat(55);
+    let pool_a = "11".repeat(32);
+    let pool_b = "22".repeat(32);
+    let make_op = |idx: u32, pools: Vec<&str>| ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: idx,
+        op_type: OperationType::PathPaymentStrictSend,
+        source_account: None,
+        details: serde_json::json!({
+            "destination": dest,
+            "destAsset": "native",
+            "poolIds": pools,
+        }),
+    };
+    // op1 crosses B then A (deliberately unsorted), op2 crosses only A —
+    // different pool sets refine the fold identity → two rows, not one.
+    let ops = vec![(
+        tx.hash.clone(),
+        vec![
+            make_op(1, vec![&pool_b, &pool_a]),
+            make_op(2, vec![&pool_a]),
+        ],
+    )];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_rows.len(), 2, "distinct pool sets must not fold");
+    let mut rows = staged.op_rows.clone();
+    rows.sort_by_key(|r| r.application_order);
+    assert_eq!(rows[0].application_order, 1);
+    assert_eq!(rows[0].amount, 1);
+    assert_eq!(
+        rows[0].pool_ids,
+        vec![[0x11u8; 32], [0x22u8; 32]],
+        "canonical sorted order regardless of crossing order"
+    );
+    assert_eq!(rows[1].application_order, 2);
+    assert_eq!(rows[1].pool_ids, vec![[0x11u8; 32]]);
+}
+
+#[test]
+fn prepare_lp_deposit_single_element_pool_ids() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x32);
+    let pool = "ab".repeat(32);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::LiquidityPoolDeposit,
+        source_account: None,
+        details: serde_json::json!({ "liquidityPoolId": pool }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_rows.len(), 1);
+    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
+}
+
+#[test]
+fn prepare_offer_op_pool_ids_from_details() {
+    // An offer op crossing an LP carries poolIds in details (parser reads the
+    // ManageOfferSuccessResult claim atoms — task 0261/0266 generic extractor);
+    // the CH fold must tag pool_ids for it, not just path payments.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x33);
+    let pool = "cd".repeat(32);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageBuyOffer,
+        source_account: None,
+        details: serde_json::json!({
+            "offerId": 0,
+            "poolIds": [pool],
+        }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_rows.len(), 1);
+    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
 }
 
 #[test]
