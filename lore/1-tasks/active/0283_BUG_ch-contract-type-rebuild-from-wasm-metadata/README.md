@@ -261,6 +261,10 @@ sc WHERE sc.contract_type=3 AND NOT is_sac AND NOT EXISTS(matching asset row)`.
 
 ### Step 3 — run on prod: rebuild → assets-backfill → nft-reclassify
 
+0. **Rehearsal (before touching prod):** run the real implemented binaries
+   against the full-scale local snapshot (`ch-snap` machine) — same data
+   shape, zero risk; expected results are all measured (107/3,937 flips,
+   11,023/19,451 promote, ~9 s).
 1. `ch-maint contract-type-rebuild --dry-run` → compare with Step 0; real run.
 2. `ch-maint assets-fungible-backfill --dry-run` → real run.
 3. `ch-maint nft-reclassify --dry-run` → real run. Existing code
@@ -330,6 +334,13 @@ variable: Lambda→Hetzner RTT (assumed 30 ms — confirm with one probe).
 one batched SELECT (4–8 ms); DB doesn't know / query fails → behave exactly
 as today (`Other` + quarantine) → batch backstop drains later. The new code
 can only degrade to current behavior, never below it.
+
+**Guardrails (devil's-advocate verified, Addendum 4):** the live flip path
+does promote-INSERT only — pending cleanup stays **async/deferred to the
+batch backstop** (never `mutations_sync=1` inline); lookup cost under part
+fragmentation is 10–18 ms (not 4–8) — verify on prod in Step 0; recent
+deploy-rate is ~0.4% of ledgers (2× the historical mean) — still ~0.008% of
+budget. Lambda region confirmed **eu-central-1** (RTT assumption conservative).
 
 **Endgame:** with G1+G9 live, pending degrades from a pipeline stage to a
 **DLQ** (inflow = only unknown-deploy contracts = the deploy-linkage bug).
@@ -405,6 +416,11 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
 - [ ] Follow-up task spawned: **SAC skeleton exposure** — 294,963 derived
       skeleton rows (92% of `soroban_contracts`) visible in `/v1/contracts`
       with no filter (real violation of "no speculative user-facing rows").
+- [ ] Follow-up task spawned: **WASM upgrades never re-classified** — the
+      parser drops contract-instance `updated` entries (`state.rs:59`,
+      created-only), so an upgraded contract keeps its deploy-time
+      wasm_hash/verdict forever on BOTH paths (pre-existing, PG parity;
+      found by devil's-advocate audit, Addendum 4).
 - [ ] Bachini/i128 SEP-39 event-extraction gap (Step 7) — investigated;
       tracked here or graduated to its own task.
 - [ ] ADR 0046 amended (re-emission correction → actual mechanism: inline
