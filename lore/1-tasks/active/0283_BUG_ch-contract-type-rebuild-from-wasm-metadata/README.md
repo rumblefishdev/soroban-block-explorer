@@ -393,6 +393,12 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       alternative evaluated and dropped after CTO review.
 - [ ] RTT Lambda→Hetzner measured (one probe via mTLS) — confirms the last
       assumption (30 ms) behind the live numbers.
+- [ ] **Inline step instrumented + verified on prod**: emit per-ledger timing
+      of the new step, cache hit/miss counters, and a fail-open counter
+      (lookup skipped due to error). After deploy, compare a week of prod
+      metrics against the simulated numbers (~0 ms typical / 10–40 ms on
+      deploy-WASM-miss ledgers / fail-open ≈ 0) — closes the "if it's real"
+      question with production data.
 - [ ] Follow-up task spawned: **deploy-linkage gap** — 4,461 contracts emit
       events but have no deploy/wasm_hash ever (99.4% of pending; top
       `CDP5RUMSC7YJ…` = 4.86M rows); blocks the TRUNCATE endgame.
