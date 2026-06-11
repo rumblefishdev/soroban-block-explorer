@@ -10,11 +10,11 @@ links: []
 history:
   - date: '2026-06-10'
     status: backlog
-    who: claude
+    who: fmazur
     note: 'Spawned from 0277 future work.'
   - date: '2026-06-11'
     status: done
-    who: claude
+    who: fmazur
     note: >
       Folded back into 0277's PR (Copilot review #2) rather than deferred.
       cloudwatch-stack.ts now sets EXECUTE_API_URL when enableApiMtls OR

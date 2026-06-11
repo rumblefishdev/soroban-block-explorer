@@ -10,7 +10,7 @@ links: []
 history:
   - date: '2026-06-10'
     status: backlog
-    who: claude
+    who: fmazur
     note: 'Spawned from 0277 future work.'
 ---
 
