@@ -213,7 +213,10 @@ export class ComputeStack extends cdk.Stack {
             secretName: `soroban/${config.envName}/auth/jwt-secret`,
             description:
               'HS256 signing key for free-tier session JWTs (task 0277 paid-API).',
-            generateSecretString: { passwordLength: 64, excludePunctuation: true },
+            generateSecretString: {
+              passwordLength: 64,
+              excludePunctuation: true,
+            },
             removalPolicy: cdk.RemovalPolicy.RETAIN,
           }),
           turnstile: new secretsmanager.Secret(this, 'TurnstileSecret', {
@@ -227,7 +230,10 @@ export class ComputeStack extends cdk.Stack {
             secretName: `soroban/${config.envName}/auth/api-keys`,
             description:
               'Comma-separated paid-tier API keys — operator overwrites (task 0277).',
-            generateSecretString: { passwordLength: 40, excludePunctuation: true },
+            generateSecretString: {
+              passwordLength: 40,
+              excludePunctuation: true,
+            },
             removalPolicy: cdk.RemovalPolicy.RETAIN,
           }),
         }
@@ -265,7 +271,9 @@ export class ComputeStack extends cdk.Stack {
         // page AND traverse the edge (X-Edge-Secret) instead of hitting the
         // edge-locked legacy domain (task 0277). Falls back to the legacy domain
         // for envs without the Cloudflare domain.
-        API_BASE_URL: `https://${config.cloudflareApiDomainName ?? config.apiDomainName}`,
+        API_BASE_URL: `https://${
+          config.cloudflareApiDomainName ?? config.apiDomainName
+        }`,
         // CORS allow-origin for the cross-origin SPA. API Gateway answers only
         // the OPTIONS preflight; the actual responses come from the Lambda and
         // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.

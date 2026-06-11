@@ -377,10 +377,10 @@ Run the test matrix (below). **Soak** for an agreed window. Only then **`enableW
       account-scoped; **verified by multi-agent audits** — no secret in git, never logged.
 - [x] Cloudflare **SSL/TLS = Full (strict)** (`zone-settings.tf`).
 - [~] **API locked — but via X-Edge-Secret (secret-header), NOT mTLS** (Emerged #1). Cloudflare
-      Transform Rule stamps `X-Edge-Secret`; the axum `edge_lock` middleware 403s anything without
-      it. **No AWS WAF teardown yet** (deferred → 0283). `disableExecuteApiEndpoint` **NOT** set
-      (still edge-locked at 403; killing the raw endpoint deferred → 0285). **SPA stays on
-      CloudFront + basic-auth** (D8 — not locked to CF; out of this task's scope).
+  Transform Rule stamps `X-Edge-Secret`; the axum `edge_lock` middleware 403s anything without
+  it. **No AWS WAF teardown yet** (deferred → 0283). `disableExecuteApiEndpoint` **NOT** set
+  (still edge-locked at 403; killing the raw endpoint deferred → 0285). **SPA stays on
+  CloudFront + basic-auth** (D8 — not locked to CF; out of this task's scope).
 - [x] **Negative-test matrix passes:**
   - [x] direct `execute-api` URL → **403**
   - [x] direct REGIONAL/legacy custom-domain → **403** then **dead** (domain retired, Emerged #4)
@@ -391,8 +391,8 @@ Run the test matrix (below). **Soak** for an agreed window. Only then **`enableW
 - [N/A] Caddy cert renewal — `ch.sorobanscan` out of scope under D8.
 - [x] CDK Route 53 records reconciled — legacy API custom domain + its A/AAAA records **removed**.
 - [~] Observability: API GW + Lambda logs in CloudWatch + existing alarms. **Recurring synthetic
-      direct-origin canary deferred** (validateConfig now recognises `enableEdgeSecretLock` but the
-      canary isn't enabled) → 0284.
+  direct-origin canary deferred** (validateConfig now recognises `enableEdgeSecretLock` but the
+  canary isn't enabled) → 0284.
 - [ ] Rollback rehearsed — **deferred** (path documented; not exercised).
 - [x] **Docs updated** — `docs/architecture/.../infrastructure-overview.md` + ADR 0048.
 - [x] **API types regenerated — N/A confirmed** (CorsLayer + config are middleware, not utoipa;
@@ -429,11 +429,13 @@ Every commit leak-audited by parallel subagents (credentials / logs / bugs) → 
 ## Design Decisions
 
 ### From Plan
+
 1. **Start on Cloudflare Free**, flat-cost, no AWS WAF as the edge (D1/D5).
 2. **Terraform** for Cloudflare, state in S3 (D2); **repo split, model A** (D9/D10).
 3. **API-only scope on `rumblefishdev.com` full zone** after error 1116 (D7/D8).
 
 ### Emerged
+
 4. **Secret-header (X-Edge-Secret) origin lock, NOT mTLS (Path B).** The repo split made a shared
    secret self-contained (one Transform Rule + one Secrets Manager value) vs cross-repo mTLS cert
    plumbing. Reversible.
@@ -454,6 +456,7 @@ Every commit leak-audited by parallel subagents (credentials / logs / bugs) → 
     dedicated dev `x-api-key` server-side; never broadens prod CORS / Turnstile domains.
 
 ## Issues Encountered
+
 - **Cloudflare error 1116** (can't proxy a bare 2-level subdomain on Free/Pro) → re-scope to the
   full `rumblefishdev.com` zone; then Universal-SSL 2-level limit → **flattened** host
   `api.sorobanscan` → `api-sorobanscan` (single label). Intentional, pre-cutover.
@@ -463,12 +466,14 @@ Every commit leak-audited by parallel subagents (credentials / logs / bugs) → 
   `cdk deploy` said "no changes". Fixed with the `SECRETS_REVISION` lever (Emerged #9).
 - **CORS "Failed to fetch"** in the SPA/Swagger — pre-existing missing-Allow-Origin (Emerged #6).
 - **Production incident mid-task (UNRELATED): Galexie disk-full** — captive-core `No space left on
-  device` → crash-loop → indexer starved. Recovered on its own (fresh-disk catch-up), backfilled
+device` → crash-loop → indexer starved. Recovered on its own (fresh-disk catch-up), backfilled
   the gap contiguously, **zero ledger loss**. 30 GB is structurally tight (15 GB state) → will
   recur → fix spawned as 0290.
 
 ## Future Work
+
 Spawned as backlog tasks (do not re-derive here):
+
 - **0283** — Drop AWS WAF after soak (`enableWaf:false`, both WebACLs).
 - **0284** — Enable origin-lock synthetic canary for the edge-secret path.
 - **0285** — `disableExecuteApiEndpoint=true` (decouple from `enableApiMtls`) to kill the raw endpoint.

@@ -70,14 +70,17 @@ fn app(config: &AppConfig, state: AppState) -> Router {
     // free tier via Turnstile → session JWT, paid tier via X-API-Key. Built only
     // when ARMED (jwt_secret set) so it deploys "dark"; sits INSIDE the edge-secret
     // lock (which runs first), so only Cloudflare traffic reaches the auth gate.
-    let auth_config = config.jwt_secret.as_ref().map(|jwt_secret| auth::AuthConfig {
-        jwt_secret: std::sync::Arc::new(jwt_secret.clone()),
-        turnstile_secret: config
-            .turnstile_secret
-            .as_ref()
-            .map(|s| std::sync::Arc::new(s.clone())),
-        api_keys: std::sync::Arc::new(config.api_keys.clone()),
-    });
+    let auth_config = config
+        .jwt_secret
+        .as_ref()
+        .map(|jwt_secret| auth::AuthConfig {
+            jwt_secret: std::sync::Arc::new(jwt_secret.clone()),
+            turnstile_secret: config
+                .turnstile_secret
+                .as_ref()
+                .map(|s| std::sync::Arc::new(s.clone())),
+            api_keys: std::sync::Arc::new(config.api_keys.clone()),
+        });
 
     // `/auth/session` — verify a Turnstile token, mint a free-tier session JWT.
     // Exempt from the gate (it is called precisely to OBTAIN a session).

@@ -17,17 +17,21 @@ history:
 # Kill raw execute-api endpoint
 
 ## Summary
+
 Defense-in-depth: set `disableExecuteApiEndpoint=true` so the raw `execute-api` URL stops answering
 entirely (today it is edge-locked → 403, but still reachable).
 
 ## Context
+
 In 0277 the flag is coupled to `enableApiMtls` (unused). The edge-secret lock 403s the raw endpoint
 but doesn't remove it. The canary (0284) probes execute-api, so coordinate.
 
 ## Implementation
+
 - Decouple `disableExecuteApiEndpoint` from `enableApiMtls`; ensure the CF custom-domain base-path
   mapping is live first (else 403 your own edge).
 - Coordinate with 0284 (canary target).
 
 ## Acceptance Criteria
+
 - [ ] Raw execute-api no longer resolves/answers; CF path unaffected

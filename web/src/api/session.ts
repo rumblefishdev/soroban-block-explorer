@@ -121,7 +121,10 @@ function loadTurnstileScript(): Promise<TurnstileApi> {
     script.defer = true;
     script.onload = () => {
       if (window.turnstile) resolve(window.turnstile);
-      else reject(new Error('Turnstile script loaded but window.turnstile is absent'));
+      else
+        reject(
+          new Error('Turnstile script loaded but window.turnstile is absent')
+        );
     };
     script.onerror = () => {
       scriptPromise = null; // allow a later retry
@@ -148,6 +151,9 @@ async function solveTurnstile(sitekey: string): Promise<string> {
   document.body.appendChild(container);
 
   return new Promise<string>((resolve, reject) => {
+    // `let`, not `const`: `cleanup` (below) reads widgetId before `render`
+    // assigns it — a forward reference prefer-const can't see.
+    // eslint-disable-next-line prefer-const
     let widgetId: string | undefined;
     const cleanup = () => {
       if (widgetId !== undefined) {

@@ -141,7 +141,9 @@ pub async fn require_auth(State(auth): State<AuthConfig>, req: Request, next: Ne
     }
 
     let mut resp = (StatusCode::UNAUTHORIZED, "authentication required").into_response();
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
     resp
 }
