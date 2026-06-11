@@ -324,6 +324,12 @@ multi-region failover plan.
 - protects the public ingress layer attached to API Gateway and CloudFront
 - applies managed rule sets, IP reputation filtering, and basic abuse controls
 - provides browser-facing protection without relying on secrets in the SPA bundle
+- **Planned change ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+  task 0277):** both WebACLs are slated to be dropped (`enableWaf:false`) and the
+  edge moved to **Cloudflare** (WAF + unmetered DDoS + Managed Challenge), with the
+  AWS origins locked to Cloudflare (API via mTLS, CloudFront via a secret-header
+  viewer-request Function). The WebACLs remain live until the Step 7 cutover + soak;
+  this section is rewritten to present tense when that ADR flips to `accepted`.
 
 **CloudFront CDN**
 
@@ -445,7 +451,10 @@ minimal. Network shape:
 
 - **CloudFront, API Gateway, AWS WAF** — public ingress layer
   (CloudFront viewer cert in `us-east-1`, API Gateway regional cert
-  in `eu-central-1`).
+  in `eu-central-1`). _Planned: a Cloudflare edge replaces the AWS WAF
+  layer and the origins are locked to Cloudflare —
+  [ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+  task 0277._
 - **Application Lambdas (API, Ledger Processor, type-1 enrichment
   worker)** — run OUTSIDE the VPC. Egress via AWS-managed Lambda pool.
   Identity to Hetzner CH is asserted by mTLS (no IP pinning, no VPC
@@ -505,6 +514,13 @@ Publicly exposed surfaces are:
 Those public surfaces should be protected by AWS WAF and API throttling. API keys, if
 issued, are for trusted automation or partner use cases and are never required by the
 browser application.
+
+> **Planned ([ADR 0048](../../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
+> task 0277):** edge protection moves to **Cloudflare** and the AWS origins are
+> locked to accept Cloudflare-only traffic — the API via API Gateway **mTLS**
+> (`disableExecuteApiEndpoint:true`), CloudFront via a **secret-header**
+> viewer-request Function. Partner `x-api-key` callers must then egress through the
+> proxied hostname. `ch.sorobanscan` stays DNS-only (mTLS + ACME).
 
 Non-public components should remain directly unreachable to external users.
 

@@ -13,3 +13,13 @@ try {
 }
 
 export const apiBaseUrl = raw.replace(/\/$/, '');
+
+/**
+ * Cloudflare Turnstile site key for the paid-API free-tier session (task 0277,
+ * docs/paid-api/plan-platne-api.md). OPTIONAL: when unset the session layer is a
+ * no-op — no widget renders and no `Authorization` header is attached, so the
+ * SPA runs against an un-armed backend. Set `VITE_TURNSTILE_SITE_KEY` (the
+ * widget's PUBLIC site key) to arm, in lockstep with the backend `enableAuthLayer`.
+ */
+export const turnstileSiteKey: string | undefined =
+  import.meta.env.VITE_TURNSTILE_SITE_KEY || undefined;

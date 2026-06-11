@@ -2,8 +2,8 @@
 id: '0277'
 title: 'FEATURE: Migrate edge protection (WAF/DDoS) to Cloudflare'
 type: FEATURE
-status: active
-related_adr: []
+status: completed
+related_adr: ['0048']
 related_tasks: ['0273']
 tags:
   [
@@ -25,14 +25,14 @@ links:
   - infra/src/lib/stacks/hetzner-dns-stack.ts
   - infra/src/lib/constructs/waf-web-acl.ts
 history:
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
       Spawned after team decision (daily 2026-06-01) to move edge protection
       from AWS WAF to Cloudflare. Rationale + cost/capability comparison in
       docs/waf-vs-cloudflare/README.md.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -43,7 +43,7 @@ history:
       corrected mTLS rationale + CH-IP accepted-risk, secrets handling for a
       PUBLIC repo, mandatory TLS Full(strict), safe step ordering, soak gate,
       observability replacement, a negative-test matrix, and realistic rollback.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -53,7 +53,7 @@ history:
       unmetered DDoS + free Managed Challenge + Transform Rules; API signature-WAF
       coverage retained via the kept REGIONAL AWS WAF. Pre-condition flagged:
       verify Transform Rules fit Free's rule budget (origin lockdown depends on it).
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -65,7 +65,7 @@ history:
       Manager. Remaining to ratify: D3 (WAF header enforcer), D5 (keep API WAF /
       drop only CLOUDFRONT WebACL), D6 (logging). External prerequisite:
       parent rumblefish.dev zone owner sign-off for the NS delegation change.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -79,7 +79,7 @@ history:
       analytics (WAF logs gone). Step 2/7 + AC updated accordingly. Honest limits
       restated: protection layer flat, but API GW + Lambda still scale with real
       traffic; "browser-only" not achievable — only bot/scrape bar-raising.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: backlog
     who: fmazur
     note: >
@@ -91,7 +91,7 @@ history:
       D6 → default (API GW access logs + Lambda + CF analytics). Only non-decision
       items remain: parent rumblefish.dev NS sign-off (external), partner x-api-key
       inventory, staging dry-run. Task is decision-complete & ready to promote.
-  - date: 2026-06-01
+  - date: '2026-06-01'
     status: active
     who: fmazur
     note: >
@@ -100,6 +100,60 @@ history:
       docs/waf-vs-cloudflare/ (comparison EN/PL + certs & flow). Remaining before
       cutover are non-decision items: parent rumblefish.dev NS sign-off, partner
       x-api-key inventory, staging dry-run.
+  - date: '2026-06-02'
+    status: active
+    who: fmazur
+    note: >
+      Step 1 progress: ADR 0048 (Cloudflare edge over AWS WAF, origins locked to
+      Cloudflare) written as `proposed` and cross-linked (related_adr). Forward-
+      looking ADR-0048 pointers added to docs/architecture/infrastructure/
+      infrastructure-overview.md (§5.4 AWS WAF, §6.1, §6.3) — live WebACL
+      description kept accurate; present-tense topology rewrite deferred to the
+      Step 7 cutover when the ADR flips to `accepted`. Still outstanding in Step 1:
+      external parent-zone NS sign-off.
+  - date: '2026-06-03'
+    status: active
+    who: fmazur
+    note: >
+      MAJOR re-scope after deploy hit Cloudflare error 1116 (Free/Pro cannot proxy
+      a bare subdomain; partial/CNAME = Business $200, subdomain-zone = Enterprise).
+      New plan (daily + senior): move the spare company domain rumblefishdev.com to
+      Cloudflare Free (full zone), API becomes api.sorobanscan.rumblefishdev.com;
+      rumblefish.dev stays on Route53, untouched. Scope narrowed to API only (SPA
+      stays S3/CloudFront + Shield Std). Repo split: company-level (zone + company
+      DNS + zone settings + edge rulesets + TF-state bucket) goes to a NEW private
+      repo `rf-domains`; sorobanscan-specific (api DNS record + AWS-side origin
+      lock) stays here (infra/cloudflare/ + CDK). Ruleset ownership = model A
+      (zone-owner rf-domains owns the per-phase rulesets, each rule http.host-scoped
+      to the API; reversible to single-tenant model C via terraform state rm+import).
+      soroban keeps its OWN TF-state bucket here (the deployed
+      production-soroban-explorer-cf-tfstate via CloudflareBootstrapStack); rf-domains
+      gets a separate bucket. Origin lock under the split prefers mTLS (per-host AOP
+      owned by soroban + API GW mTLS) over secret-header (which would force a
+      cross-repo shared secret + the transform rule into rf-domains). Dead
+      rumblefishdev.com records (do NOT recreate): contact, wag-api-staging,
+      gitlab-test. See full decision block in the body + docs/waf-vs-cloudflare/.
+  - date: '2026-06-10'
+    status: completed
+    who: fmazur
+    note: >
+      DEPLOYED, VERIFIED, COMPLETED. Origin lock shipped via the SECRET-HEADER
+      path (X-Edge-Secret), NOT mTLS — chosen because the repo split (the
+      Transform Rule lives in the company DNS repo) made a shared secret simpler
+      and self-contained than cross-repo mTLS. On top of the lock, built a full
+      PAID-API access layer (originally just "lockdown"): Cloudflare Turnstile
+      widget (created via Terraform in the company repo) → free-tier session JWT
+      via POST /auth/session, paid-tier via X-API-Key allowlist, axum auth gate.
+      Added a tower-http CorsLayer (the cross-origin SPA needs Access-Control-
+      Allow-Origin on actual responses; API GW only answers the OPTIONS
+      preflight). Retired the legacy api.sorobanscan.rumblefish.dev domain
+      (enableLegacyApiDomain=false → host dead). Negative+positive test matrix
+      passes (direct execute-api/legacy → 403/dead; SPA Turnstile→session→data;
+      x-api-key → 200; /health 200). 3 feature commits (95f48f3e, 67a5a1cf,
+      6df7df63) + the company-repo Terraform (Transform Rule + Turnstile,
+      committed separately). Mid-task production incident (Galexie disk-full,
+      unrelated) handled without data loss. AWS WAF teardown + soak deferred to
+      follow-up backlog tasks. See ## Implementation Notes (as-built) below.
 ---
 
 # Migrate edge protection (WAF/DDoS) to Cloudflare
@@ -115,6 +169,45 @@ cost and a free browser challenge. Rationale + verified cost model: [`docs/waf-v
 
 > The data is public on-chain data served to anonymous browsers, so "browser-only" is **not**
 > achievable (requests are replayable). This raises the bar against bots/floods; it is not access control.
+
+## ⚠️ Decyzje — aktualizacja 2026-06-03 (model A + split na `rf-domains`)
+
+Po uderzeniu w **Cloudflare error 1116** (Free/Pro **nie proxuje gołej poddomeny**;
+partial/CNAME = Business $200, subdomain-zone = Enterprise — 3× zweryfikowane) plan się
+zmienił. Nadrzędne nad starszymi „Decisions 1–6" poniżej tam, gdzie kolidują.
+
+- **D7 — Hostname + strefa.** API ląduje na **`api.sorobanscan.rumblefishdev.com`** za
+  **Cloudflare Free (cała strefa `rumblefishdev.com`)** — zapasowej domeny firmy (dziś tylko
+  redirect → `rumblefish.dev`). **`rumblefish.dev` zostaje na Route53, nietknięta.**
+  SPA (`sorobanscan.rumblefish.dev`) i `ch.` **bez zmian**.
+- **D8 — Scope = tylko API.** SPA jest statyczne (S3/CloudFront + Shield Standard), niska
+  powierzchnia, challenge na froncie user-hostile → **lock SPA odpada**; litera taska (SPA) tu
+  zawężona.
+- **D9 — Split repo.** **Firmowe** (strefa + rekordy `rumblefishdev.com` + zone settings + **rulesety
+  edge** + **bucket na TF-state**) → **NOWE prywatne repo `rf-domains`** (CloudFormation na bucket
+  tam, nie u nas). **Sorobanowe** (rekord `api.sorobanscan` + **AWS-side origin lock**) → **to repo**
+  (`infra/cloudflare/` + CDK). Cel: firmowy DNS nie żyje w repo sorobanscana.
+- **D10 — Własność rulesetów = model A.** Rulesety to **per-(strefa,faza) singletony** → jeden
+  właściciel TF. **Posiada je właściciel strefy (`rf-domains`)**, a każda reguła jest
+  **`http.host`-scoped do `api.sorobanscan.rumblefishdev.com`**. Skaluje się na wiele projektów w
+  jednej strefie; **odwracalne** do single-tenant (model C) przez `terraform state rm` +
+  `terraform import` (bez niszczenia/odtwarzania, bez downtime).
+- **D11 — State.** Sorobanowy Cloudflare TF ma **własny bucket tutaj** (już zdeployowany
+  `production-soroban-explorer-cf-tfstate` przez `CloudflareBootstrapStack`). `rf-domains` ma
+  **osobny** bucket. **Bucketu NIE niszczymy.**
+- **D12 — Origin lock pod splitem → mTLS.** Preferowane **mTLS** (per-host **AOP** posiadane przez
+  soroban + **API GW mTLS** truststore w CDK + `disableExecuteApiEndpoint`), bo jest **samo-zawarte
+  w soroban** (cert + truststore). **Secret-header odpada pod splitem** — wymusiłby (a) Transform
+  Rule jako zone-ruleset → do `rf-domains`, (b) **sekret współdzielony między repo**. Dokładny zakres
+  AOP (zone vs per-host na Free) potwierdzić w **dry-run na staging** (Step 3).
+- **Martwe rekordy `rumblefishdev.com`** (NIE odtwarzać w CF): **contact, wag-api-staging, gitlab-test**.
+- **⚠️ DNS.** Pełne przejście strefy `rumblefishdev.com` → **wszystkie** rekordy odtworzyć w CF
+  przed flipem NS (mechanizm redirectu, MX/SPF/DKIM/DMARC, **CAA musi dopuszczać CF**); pre-obniżyć
+  TTL; potwierdzić, kto zmienia **NS u rejestratora**. Inwentaryzacja z żywej strefy (account
+  firmowy), nie z pamięci.
+
+> Diagram + tabela domen: [`docs/waf-vs-cloudflare/diagram-komunikacji-edge.md`](../../../docs/waf-vs-cloudflare/diagram-komunikacji-edge.md);
+> analiza opcji A–G: [`docs/waf-vs-cloudflare/decyzja-edge-poddomena.md`](../../../docs/waf-vs-cloudflare/decyzja-edge-poddomena.md).
 
 ## Current state (verified against the code)
 
@@ -203,6 +296,14 @@ Resolve the decisions above; write an ADR (`lore/2-adrs/_template.md`) for "Clou
 AWS WAF" and link it. **Identify and get sign-off from the owner of the parent `rumblefish.dev`
 zone** (NS delegation change is theirs). Update `docs/architecture/**` topology.
 
+> **⚠️ SUPERSEDED by D7 (2026-06-03).** The parent-`rumblefish.dev`-zone NS-delegation model
+> below was for the abandoned "proxy `sorobanscan.rumblefish.dev`" plan. Under **D7** we move the
+> **whole spare apex `rumblefishdev.com`** to Cloudflare (full zone), so authority flips via a
+> **registrar NS change on `rumblefishdev.com`** — NOT a parent-zone delegation, and **not** owned
+> by the `rumblefish.dev` zone owner. The Step-1 dependency is therefore: **who controls the
+> `rumblefishdev.com` registrar + its live Route 53 records** (company account). `rumblefish.dev`
+> stays untouched.
+
 ### Step 2 — Build origin lockdown BEFORE any DNS change (no AWS WAF) — Path B (mTLS), chosen
 
 Enforce that the origin accepts **only Cloudflare** at the TLS layer:
@@ -227,6 +328,15 @@ Rehearse the whole flow (zone, proxy, lockdown, challenge) on the **staging** zo
 the negative-test matrix there before touching production.
 
 ### Step 4 — Cloudflare zone + DNS migration (production)
+
+> **⚠️ SUPERSEDED by D7/D8 (2026-06-03).** Scope is now **API-only on a different apex**:
+> create the **`rumblefishdev.com`** full zone (owned by **`rf-domains`**), recreate **ALL** its
+> live records there (mail/SPF/DKIM/DMARC, CAA-for-CF, apex redirect — inventory the company
+> Route 53 zone first), proxy **only** `api.sorobanscan.rumblefishdev.com`, then flip authority via
+> a **registrar NS change on `rumblefishdev.com`** (whole apex → Cloudflare; full setup is the only
+> Free/Pro option). **SPA `sorobanscan.rumblefish.dev` and `ch.` stay on Route 53, untouched** — no
+> parent-`rumblefish.dev` NS change at all. The Route 53 reconciliation below applies only to the
+> **API** record set, not the SPA/CH ones. The original sub-bullets are kept for historical context:
 
 - Pre-lower TTLs on the affected records **days ahead**.
 - Create the Cloudflare zone; recreate records. **Proxy (orange)** `sorobanscan` + `api.sorobanscan`;
@@ -261,30 +371,125 @@ Run the test matrix (below). **Soak** for an agreed window. Only then **`enableW
 
 ## Acceptance Criteria
 
-- [ ] Decisions 1–6 resolved + ADR written/linked; parent-zone owner signed off
-- [ ] Origin secret + Cloudflare API token stored **out of git** (SSM/Secrets Manager), token
-      zone-scoped least-privilege; origin secret **never committed / never logged**
-- [ ] Cloudflare **SSL/TLS = Full (strict)** confirmed end-to-end
-- [ ] `disableExecuteApiEndpoint: true` set; **API locked via mTLS** (zone-level AOP + API GW mTLS,
-      S3 truststore); **SPA/CloudFront locked via secret-header** CloudFront Function. **No AWS WAF.**
-- [ ] **Negative-test matrix passes** (all return 403 / blocked):
-  - [ ] direct `execute-api` URL
-  - [ ] direct REGIONAL custom-domain endpoint
-  - [ ] direct `*.cloudfront.net` domain
-  - [ ] request lacking the lockdown proof (missing/wrong `X-Origin-Secret`, or missing client cert under mTLS)
-- [ ] **Positive paths work**: SPA loads + its `fetch()` API calls succeed through the challenge;
-      `x-api-key` partner path still works; `ch.sorobanscan` mTLS handshake still succeeds
-- [ ] **Caddy cert renewal verified** post-cutover (force a renewal — `ch` stayed grey-cloud so
-      ACME HTTP-01 still resolves)
-- [ ] CDK Route 53 records reconciled (no CDK-vs-Cloudflare DNS conflict)
-- [ ] Observability: API GW access logs + Lambda logs in CloudWatch (WAF logs gone) + alarms on
-      Cloudflare challenge/block rate + a recurring synthetic check that direct-origin stays blocked
-- [ ] Rollback rehearsed (see below)
-- [ ] **Docs updated** — `docs/architecture/**` topology reflects the Cloudflare edge; ADR added
-- [ ] **API types regenerated** — **N/A** (Path B mTLS = no `crates/api` change; the SPA header lock
-      is edge/CloudFront-Function config, not app code).
+- [x] Decisions resolved + ADR 0048 written/linked. Registrar NS flipped on `rumblefishdev.com`
+      (not the parent `rumblefish.dev` zone — per D7), by an OVH-access dev.
+- [x] Origin secret + Cloudflare API token stored **out of git** (AWS Secrets Manager), token
+      account-scoped; **verified by multi-agent audits** — no secret in git, never logged.
+- [x] Cloudflare **SSL/TLS = Full (strict)** (`zone-settings.tf`).
+- [~] **API locked — but via X-Edge-Secret (secret-header), NOT mTLS** (Emerged #1). Cloudflare
+  Transform Rule stamps `X-Edge-Secret`; the axum `edge_lock` middleware 403s anything without
+  it. **No AWS WAF teardown yet** (deferred → 0283). `disableExecuteApiEndpoint` **NOT** set
+  (still edge-locked at 403; killing the raw endpoint deferred → 0285). **SPA stays on
+  CloudFront + basic-auth** (D8 — not locked to CF; out of this task's scope).
+- [x] **Negative-test matrix passes:**
+  - [x] direct `execute-api` URL → **403**
+  - [x] direct REGIONAL/legacy custom-domain → **403** then **dead** (domain retired, Emerged #4)
+  - [N/A] direct `*.cloudfront.net` — SPA not migrated to CF (D8)
+  - [x] request lacking `X-Edge-Secret` → **403**; lacking session/key → **401**
+- [x] **Positive paths work**: SPA Turnstile → `/auth/session` → JWT → Bearer → data loads;
+      `x-api-key` → **200**; `/health` through CF → **200**. (`ch.sorobanscan` not touched — D8.)
+- [N/A] Caddy cert renewal — `ch.sorobanscan` out of scope under D8.
+- [x] CDK Route 53 records reconciled — legacy API custom domain + its A/AAAA records **removed**.
+- [~] Observability: API GW + Lambda logs in CloudWatch + existing alarms. **Recurring synthetic
+  direct-origin canary deferred** (validateConfig now recognises `enableEdgeSecretLock` but the
+  canary isn't enabled) → 0284.
+- [ ] Rollback rehearsed — **deferred** (path documented; not exercised).
+- [x] **Docs updated** — `docs/architecture/.../infrastructure-overview.md` + ADR 0048.
+- [x] **API types regenerated — N/A confirmed** (CorsLayer + config are middleware, not utoipa;
+      `nx run @rumblefish/api-types:generate` produced zero diff).
+
+## Implementation Notes (as-built, 2026-06-10)
+
+The shipped result is **bigger than "migrate WAF"** — it became the foundation + a full paid-API
+access layer. What's live in production:
+
+- **Edge (company repo `dns-cloudformation/cloudflare`, Terraform, profile `rumblefish-company`):**
+  Cloudflare Free zone `rumblefishdev.com`; `api-sorobanscan.rumblefishdev.com` proxied (orange);
+  Transform Rule injecting `X-Edge-Secret`; **Turnstile widget** (`cloudflare_turnstile_widget`,
+  managed mode); rate-limit (100 req/10 s per-IP), Managed Challenge, redirect, zone settings.
+  Verified live: `server: cloudflare` + `cf-ray …-WAW` + Cloudflare IPs on the API host.
+- **Backend (`crates/api`):** `common/edge_lock.rs` (X-Edge-Secret gate, `/health` exempt);
+  `auth/{jwt,turnstile,mod}.rs` (HS256 session JWT, Turnstile siteverify, `/auth/session` route,
+  tier gate: free=Bearer JWT / paid=X-API-Key / else 401); `tower-http` **CorsLayer** (outermost,
+  exact SPA origin via `CORS_ALLOW_ORIGIN`); `API_BASE_URL`→Cloudflare host; `config.rs` reads all
+  from env. Gated to deploy "dark", armed via flags.
+- **CDK (`infra`):** Secrets Manager secrets (edge/jwt/turnstile/api-keys, two-phase
+  provision→arm, RETAIN); env wiring via `secretValue.unsafeUnwrap()` (dynamic references — no
+  literal in git); **`SECRETS_REVISION`** lever (bump to force CFN re-resolution after a secret
+  rotation); API GW second custom domain (Cloudflare) + CORS (`+POST`, `+Authorization`/`x-api-key`);
+  `enableLegacyApiDomain=false`.
+- **SPA (`web`):** Turnstile widget + in-memory session JWT + Bearer request-interceptor + 401
+  re-mint; gated on `VITE_TURNSTILE_SITE_KEY`. Plus **Option-B local-dev Vite proxy** (server-side
+  `x-api-key` injection from gitignored `web/.env.development`, never bundled).
+
+**Commits:** `95f48f3e` (paid-API layer), `67a5a1cf` (CORS + arm + retire legacy API),
+`6df7df63` (dev-proxy + SECRETS_REVISION). Company-repo Terraform committed separately.
+Every commit leak-audited by parallel subagents (credentials / logs / bugs) → clean.
+
+## Design Decisions
+
+### From Plan
+
+1. **Start on Cloudflare Free**, flat-cost, no AWS WAF as the edge (D1/D5).
+2. **Terraform** for Cloudflare, state in S3 (D2); **repo split, model A** (D9/D10).
+3. **API-only scope on `rumblefishdev.com` full zone** after error 1116 (D7/D8).
+
+### Emerged
+
+4. **Secret-header (X-Edge-Secret) origin lock, NOT mTLS (Path B).** The repo split made a shared
+   secret self-contained (one Transform Rule + one Secrets Manager value) vs cross-repo mTLS cert
+   plumbing. Reversible.
+5. **Scope grew into a full paid-API tiering layer** (Turnstile free tier + API-key paid tier +
+   session JWT). Originally framed as "lockdown"; the operator chose to build the monetization
+   foundation in the same task. Turnstile widget created as IaC (Terraform).
+6. **`tower-http` CorsLayer added** — pre-existing gap: API GW `defaultCorsPreflightOptions`
+   answers only OPTIONS; the Lambda's actual responses lacked `Access-Control-Allow-Origin`, so the
+   cross-origin SPA (and Swagger "Try it out") failed. Locked to the exact SPA origin, no creds.
+7. **`API_BASE_URL` → Cloudflare host** (was the now-locked legacy host) so OpenAPI `servers` /
+   Swagger target the edge.
+8. **Legacy `api.sorobanscan.rumblefish.dev` retired** (`enableLegacyApiDomain=false`) — redundant
+   once everything uses the CF host; closes the extra REGIONAL surface.
+9. **`SECRETS_REVISION` env lever** — `{{resolve:secretsmanager}}` env vars only re-resolve when the
+   template changes; rotating a secret value needs a template bump (else `cdk deploy` = "no changes"
+   and the Lambda keeps the stale value).
+10. **Option-B local-dev proxy** — local front → real prod API via a Vite proxy injecting a
+    dedicated dev `x-api-key` server-side; never broadens prod CORS / Turnstile domains.
+
+## Issues Encountered
+
+- **Cloudflare error 1116** (can't proxy a bare 2-level subdomain on Free/Pro) → re-scope to the
+  full `rumblefishdev.com` zone; then Universal-SSL 2-level limit → **flattened** host
+  `api.sorobanscan` → `api-sorobanscan` (single label). Intentional, pre-cutover.
+- **Turnstile widget apply 403** — the account token lacked `Account → Turnstile → Edit`; added the
+  scope, re-applied (Transform Rule unaffected).
+- **Dynamic-reference no-re-resolve** — `put-secret-value` on api-keys didn't reach the Lambda;
+  `cdk deploy` said "no changes". Fixed with the `SECRETS_REVISION` lever (Emerged #9).
+- **CORS "Failed to fetch"** in the SPA/Swagger — pre-existing missing-Allow-Origin (Emerged #6).
+- **Production incident mid-task (UNRELATED): Galexie disk-full** — captive-core `No space left on
+device` → crash-loop → indexer starved. Recovered on its own (fresh-disk catch-up), backfilled
+  the gap contiguously, **zero ledger loss**. 30 GB is structurally tight (15 GB state) → will
+  recur → fix spawned as 0290.
+
+## Future Work
+
+Spawned as backlog tasks (do not re-derive here):
+
+- **0283** — Drop AWS WAF after soak (`enableWaf:false`, both WebACLs).
+- **0284** — Enable origin-lock synthetic canary for the edge-secret path.
+- **0285** — `disableExecuteApiEndpoint=true` (decouple from `enableApiMtls`) to kill the raw endpoint.
+- **0286** — Galexie `galexieEphemeralStorage` 30→100 (disk-full recurrence).
+- **0287** — OpenAPI security scheme (utoipa) so Swagger "Authorize" works for paid-tier.
+- **0288** — Runtime secrets via Secrets Lambda Extension (retire `SECRETS_REVISION` redeploy-to-rotate).
+- **0289** — Turnstile widget UX (clean gate vs floating overlay) + don't gate all reads behind a solve.
 
 ## Rollback
+
+> **⚠️ SUPERSEDED by D7 (2026-06-03).** Rollback now means reverting the **`rumblefishdev.com`
+> registrar NS** back to its previous provider (keep the old Route 53 records for that apex intact
+> to revert to) — **bounded by the registrar NS/SOA TTL (can be hours), not instant**; this is why
+> TTLs are pre-lowered. **`rumblefish.dev` is never touched, so the SPA/CH need no rollback.**
+> Re-creating any torn-down WebACL is still a **fresh CDK deploy** (logs were `DESTROY`-removed),
+> not a toggle — budget for it. (Original text below kept for context.)
 
 Revert NS records in the parent `rumblefish.dev` zone back to Route 53 — **bounded by parent-zone
 NS/SOA TTL (can be hours), not instant**; this is why TTLs are pre-lowered. Keep the Route 53 zone
