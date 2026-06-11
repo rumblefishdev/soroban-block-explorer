@@ -1,11 +1,18 @@
-//! Pool-ids backfill worker — task 0266, **Phase 1 (pool_ids only)**.
+//! Pool-ids + gross-volume backfill worker — task 0266.
 //!
 //! Re-parses historical ledgers from local `.xdr.zst` files (synced from the
-//! public S3 archive, same layout as `backfill-runner`'s sync) and INSERTs
-//! **only** the corrected `operations_appearances` rows — those of
-//! transactions whose path-payment / offer ops crossed a liquidity pool, now
-//! carrying `pool_ids` (task 0261). Everything else the parse produces
-//! (events, nfts_pending, participants, …) is **discarded**, so:
+//! public S3 archive, same layout as `backfill-runner`'s sync) and INSERTs the
+//! two corrected row sets in one pass:
+//!
+//! * **`operations_appearances`** — the full fold of every tx whose
+//!   path-payment / offer ops crossed a liquidity pool, now carrying
+//!   `pool_ids` (task 0261); and
+//! * **`liquidity_pool_snapshots`** — the snapshot of every pool that was
+//!   *traded* this ledger, stamped with `gross_volume_a` (asset-A-side trade
+//!   volume summed from the result claim atoms — task 0266 Phase 2 / 0279).
+//!
+//! Everything else the parse produces (events, nfts_pending, participants, …)
+//! is **discarded** (targeted write), so:
 //!
 //! * the 0221 SAC leak is never re-emitted into drained partitions, and
 //! * live ingest is untouched — backfilling OLD ledgers is RMT-key-disjoint
@@ -17,10 +24,10 @@
 //! to the fold identity only ever *splits* groups, so the new fold's key set
 //! is a superset of the old one for an affected tx — re-inserting the tx's
 //! **full** fold replaces every old key (RMT, same sort key) and adds the new
-//! ones; no orphan rows are left behind.
-//!
-//! `gross_volume_a` is **out of scope here** (Phase 2 — gated on the 0279
-//! asset-A attribution decision).
+//! ones; no orphan rows are left behind. Snapshots are written **whole**
+//! (reserves + total_shares + gross_volume_a; `tvl`/`volume`/`fee_revenue`
+//! stay NULL, matching live ingest) so the version-less-RMT replace on
+//! `(pool_id, ledger_sequence)` does not clobber reserves.
 //!
 //! ## Preconditions
 //! - Ledger files already synced to `--local-dir` (run `backfill-runner`'s
@@ -47,17 +54,20 @@
 //!
 //! Validated end-to-end (2026-06-11) against ledger 62073209 (the 0261 repro
 //! ledger) on a throwaway CH 26.3: 12 path-payment crossings written
-//! (multi-hop included), targeted write confirmed (only operations_appearances
-//! touched), full per-tx fold preserved.
+//! (multi-hop included) + 20 traded-pool snapshots stamped with
+//! gross_volume_a (reserves intact, no clobber); targeted write confirmed
+//! (only operations_appearances + liquidity_pool_snapshots touched); full
+//! per-tx fold preserved.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use db_clickhouse::persist::PartitionWriter;
-use db_clickhouse::persist::rows::OperationAppearanceRow;
+use db_clickhouse::persist::rows::{LiquidityPoolSnapshotRow, OperationAppearanceRow};
 use db_clickhouse::persist::stage::{self, StagedLedger};
+use serde_json::Value;
 use tracing::{error, info, warn};
 
 /// Public-archive S3 partition size (folder granularity). Independent of the
@@ -72,7 +82,7 @@ const ATOM_OP_TYPES: [i16; 5] = [2, 13, 3, 4, 12];
 
 #[derive(Parser, Debug)]
 #[command(
-    about = "Task 0266 Phase 1 — backfill operations_appearances.pool_ids from re-parsed XDR"
+    about = "Task 0266 — backfill operations_appearances.pool_ids + liquidity_pool_snapshots.gross_volume_a from re-parsed XDR"
 )]
 struct Args {
     /// First ledger (inclusive).
@@ -107,11 +117,17 @@ fn local_ledger_path(local_dir: &Path, seq: u32) -> PathBuf {
         .join(format!("{file_hex}--{seq}.xdr.zst"))
 }
 
+/// The two row sets this worker writes for one ledger.
+#[derive(Default)]
+struct LedgerWrite {
+    op_rows: Vec<OperationAppearanceRow>,
+    snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
+}
+
 /// Keep only the op rows belonging to a tx that crossed a pool via a
 /// path-payment / offer op. Returns the **full fold** of each affected tx.
-fn affected_op_rows(staged: StagedLedger) -> Vec<OperationAppearanceRow> {
-    let crossed: HashSet<i64> = staged
-        .op_rows
+fn affected_op_rows(op_rows: Vec<OperationAppearanceRow>) -> Vec<OperationAppearanceRow> {
+    let crossed: HashSet<i64> = op_rows
         .iter()
         .filter(|r| ATOM_OP_TYPES.contains(&r.op_type) && !r.pool_ids.is_empty())
         .map(|r| r.transaction_id)
@@ -119,17 +135,81 @@ fn affected_op_rows(staged: StagedLedger) -> Vec<OperationAppearanceRow> {
     if crossed.is_empty() {
         return Vec::new();
     }
-    staged
-        .op_rows
+    op_rows
         .into_iter()
         .filter(|r| crossed.contains(&r.transaction_id))
         .collect()
 }
 
-/// Read one ledger file → parse → stage → filter to affected op rows.
-async fn affected_rows_for_file(
-    path: &Path,
-) -> Result<Vec<OperationAppearanceRow>, Box<dyn std::error::Error>> {
+/// Sum `gross_volume_a` (asset-A-side trade volume, stroops) per pool from the
+/// `claimedAtoms` the parser attached to crossing ops (task 0266 Phase 2 /
+/// 0279). Keyed by raw 32-byte pool id to match `LiquidityPoolSnapshotRow`.
+fn gross_volume_a_by_pool(
+    operations: &[(String, Vec<xdr_parser::types::ExtractedOperation>)],
+) -> HashMap<[u8; 32], i128> {
+    let mut gross: HashMap<[u8; 32], i128> = HashMap::new();
+    for (_tx, ops) in operations {
+        for op in ops {
+            let Some(atoms) = op.details.get("claimedAtoms").and_then(Value::as_array) else {
+                continue;
+            };
+            for atom in atoms {
+                let (Some(pool_hex), Some(amount_a)) = (
+                    atom.get("poolId").and_then(Value::as_str),
+                    atom.get("amountA").and_then(Value::as_i64),
+                ) else {
+                    continue;
+                };
+                let Ok(bytes) = hex::decode(pool_hex) else {
+                    continue;
+                };
+                let Ok(pool_id) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+                    continue;
+                };
+                *gross.entry(pool_id).or_insert(0) += i128::from(amount_a);
+            }
+        }
+    }
+    gross
+}
+
+/// Take prepare's snapshot rows, keep only the pools that were **traded**
+/// this ledger, and stamp their `gross_volume_a`. The row is written whole
+/// (reserves + total_shares + gross_volume_a); `tvl`/`volume`/`fee_revenue`
+/// stay NULL — matching the live-ingest row, so the version-less-RMT replace
+/// does not clobber anything (see task 0266 "full-row replace" note). A
+/// traded pool with no snapshot row is logged: a trade always mutates
+/// reserves, so this should not happen.
+fn augment_snapshots(
+    snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
+    gross: &HashMap<[u8; 32], i128>,
+    seq: u32,
+) -> Vec<LiquidityPoolSnapshotRow> {
+    let mut seen: HashSet<[u8; 32]> = HashSet::new();
+    let out: Vec<LiquidityPoolSnapshotRow> = snapshot_rows
+        .into_iter()
+        .filter_map(|mut s| {
+            let g = gross.get(&s.pool_id)?;
+            seen.insert(s.pool_id);
+            s.gross_volume_a = Some(*g);
+            Some(s)
+        })
+        .collect();
+    for pool in gross.keys() {
+        if !seen.contains(pool) {
+            warn!(
+                ledger = seq,
+                pool = %hex::encode(pool),
+                "traded pool has no snapshot row this ledger — gross_volume_a dropped"
+            );
+        }
+    }
+    out
+}
+
+/// Read one ledger file → parse → stage → filter to the op + snapshot rows we
+/// write (pool_ids on operations, gross_volume_a on snapshots).
+async fn rows_for_file(path: &Path, seq: u32) -> Result<LedgerWrite, Box<dyn std::error::Error>> {
     let compressed = tokio::fs::read(path).await?;
     let xdr = xdr_parser::decompress_zstd(&compressed)?;
     let batch = xdr_parser::deserialize_batch(&xdr)?;
@@ -159,7 +239,16 @@ async fn affected_rows_for_file(
         &parsed.lp_positions,
         &parsed.contract_name_writes,
     )?;
-    Ok(affected_op_rows(staged))
+    let StagedLedger {
+        op_rows,
+        snapshot_rows,
+        ..
+    } = staged;
+    let gross = gross_volume_a_by_pool(&parsed.operations);
+    Ok(LedgerWrite {
+        op_rows: affected_op_rows(op_rows),
+        snapshot_rows: augment_snapshots(snapshot_rows, &gross, seq),
+    })
 }
 
 fn read_watermark(path: &Option<PathBuf>) -> Option<u32> {
@@ -196,7 +285,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
 
     let mut pstart = args.start - (args.start % PARTITION_SIZE);
-    let mut total_rows = 0usize;
+    let mut total_op_rows = 0usize;
+    let mut total_snap_rows = 0usize;
     while pstart <= args.end {
         let pend = (pstart + PARTITION_SIZE - 1).min(args.end);
         let lo = pstart.max(args.start);
@@ -209,7 +299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let t = Instant::now();
         let mut writer = PartitionWriter::open(client.clone());
-        let mut rows_in_part = 0usize;
+        let mut op_rows_in_part = 0usize;
+        let mut snap_rows_in_part = 0usize;
         let mut failed: Option<Box<dyn std::error::Error>> = None;
 
         for seq in lo..=pend {
@@ -217,13 +308,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             let path = local_ledger_path(&args.local_dir, seq);
-            match affected_rows_for_file(&path).await {
-                Ok(rows) => {
-                    rows_in_part += rows.len();
-                    if !args.dry_run && !rows.is_empty() {
+            match rows_for_file(&path, seq).await {
+                Ok(w) => {
+                    op_rows_in_part += w.op_rows.len();
+                    snap_rows_in_part += w.snapshot_rows.len();
+                    let has_rows = !w.op_rows.is_empty() || !w.snapshot_rows.is_empty();
+                    if !args.dry_run && has_rows {
                         let staged = StagedLedger {
                             ledger_sequence: i64::from(seq),
-                            op_rows: rows,
+                            op_rows: w.op_rows,
+                            snapshot_rows: w.snapshot_rows,
                             ..Default::default()
                         };
                         if let Err(e) = writer.write_ledger(staged).await {
@@ -253,12 +347,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         done_through = Some(pend);
         write_watermark(&args.watermark, pend);
-        total_rows += rows_in_part;
+        total_op_rows += op_rows_in_part;
+        total_snap_rows += snap_rows_in_part;
         info!(
             partition = pstart,
             first = lo,
             last = pend,
-            rows = rows_in_part,
+            op_rows = op_rows_in_part,
+            snapshot_rows = snap_rows_in_part,
             ms = t.elapsed().as_millis(),
             dry_run = args.dry_run,
             "partition done"
@@ -271,7 +367,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!(
-        total_rows,
+        total_op_rows,
+        total_snap_rows,
         start = args.start,
         end = args.end,
         dry_run = args.dry_run,
@@ -300,14 +397,6 @@ mod tests {
         }
     }
 
-    fn staged(rows: Vec<OperationAppearanceRow>) -> StagedLedger {
-        StagedLedger {
-            ledger_sequence: 100,
-            op_rows: rows,
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn keeps_full_fold_of_path_payment_crossing_tx() {
         // tx 1: path payment crossing pool A (app_order 1) + a sibling payment
@@ -316,7 +405,7 @@ mod tests {
             op(1, 1, 13, &[[0xAA; 32]]), // PathPaymentStrictSend, crossed pool
             op(1, 2, 1, &[]),            // sibling Payment in the same tx
         ];
-        let kept = affected_op_rows(staged(rows));
+        let kept = affected_op_rows(rows);
         assert_eq!(kept.len(), 2, "full fold of the affected tx is re-written");
     }
 
@@ -324,8 +413,7 @@ mod tests {
     fn excludes_lp_deposit_only_tx() {
         // tx 2: only an LP deposit (op_type 22) — carries pool_ids from the op
         // body, already correct in CH, must NOT trigger a re-write.
-        let rows = vec![op(2, 1, 22, &[[0xBB; 32]])];
-        let kept = affected_op_rows(staged(rows));
+        let kept = affected_op_rows(vec![op(2, 1, 22, &[[0xBB; 32]])]);
         assert!(
             kept.is_empty(),
             "LP deposit alone is not an atom-op crossing"
@@ -335,8 +423,7 @@ mod tests {
     #[test]
     fn excludes_order_book_only_path_payment() {
         // tx 3: path payment that filled only against the order book → no pool.
-        let rows = vec![op(3, 1, 2, &[])];
-        let kept = affected_op_rows(staged(rows));
+        let kept = affected_op_rows(vec![op(3, 1, 2, &[])]);
         assert!(kept.is_empty());
     }
 
@@ -348,9 +435,71 @@ mod tests {
             op(2, 1, 22, &[[0xBB; 32]]), // tx2 LP deposit only → drop
             op(3, 1, 2, &[]),            // tx3 order-book path payment → drop
         ];
-        let kept = affected_op_rows(staged(rows));
+        let kept = affected_op_rows(rows);
         let tx_ids: HashSet<i64> = kept.iter().map(|r| r.transaction_id).collect();
         assert_eq!(tx_ids, HashSet::from([1]));
         assert_eq!(kept.len(), 2);
+    }
+
+    // --- gross_volume_a (Phase 2) ---
+
+    fn ext_op(claimed: serde_json::Value) -> xdr_parser::types::ExtractedOperation {
+        xdr_parser::types::ExtractedOperation {
+            transaction_hash: "tx".to_string(),
+            operation_index: 1,
+            op_type: domain::OperationType::PathPaymentStrictSend,
+            source_account: None,
+            details: serde_json::json!({ "claimedAtoms": claimed }),
+        }
+    }
+
+    #[test]
+    fn gross_volume_sums_amount_a_per_pool() {
+        let pa = hex::encode([0x11u8; 32]);
+        let pb = hex::encode([0x22u8; 32]);
+        // pool A hit twice (700 + 100), pool B once (900), across two ops.
+        let ops = vec![(
+            "tx".to_string(),
+            vec![
+                ext_op(serde_json::json!([
+                    { "poolId": pa, "amountA": 700 },
+                    { "poolId": pb, "amountA": 900 },
+                ])),
+                ext_op(serde_json::json!([
+                    { "poolId": pa, "amountA": 100 },
+                ])),
+            ],
+        )];
+        let gross = gross_volume_a_by_pool(&ops);
+        assert_eq!(gross.get(&[0x11u8; 32]), Some(&800i128));
+        assert_eq!(gross.get(&[0x22u8; 32]), Some(&900i128));
+    }
+
+    fn snap(pool: [u8; 32]) -> LiquidityPoolSnapshotRow {
+        LiquidityPoolSnapshotRow {
+            pool_id: pool,
+            ledger_sequence: 100,
+            reserve_a: 1_000,
+            reserve_b: 2_000,
+            total_shares: 1_414,
+            tvl: None,
+            volume: None,
+            fee_revenue: None,
+            gross_volume_a: None,
+        }
+    }
+
+    #[test]
+    fn augment_stamps_only_traded_pools_and_preserves_reserves() {
+        let traded = [0x11u8; 32];
+        let untouched = [0x99u8; 32];
+        let gross = HashMap::from([(traded, 800i128)]);
+        let out = augment_snapshots(vec![snap(traded), snap(untouched)], &gross, 100);
+        // only the traded pool's snapshot is kept + stamped; reserves intact.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pool_id, traded);
+        assert_eq!(out[0].gross_volume_a, Some(800));
+        assert_eq!(out[0].reserve_a, 1_000);
+        assert_eq!(out[0].reserve_b, 2_000);
     }
 }
