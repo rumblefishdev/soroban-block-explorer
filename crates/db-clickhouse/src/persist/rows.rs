@@ -294,4 +294,8 @@ pub struct LiquidityPoolSnapshotRow {
     pub tvl: Option<i128>,
     pub volume: Option<i128>,
     pub fee_revenue: Option<i128>,
+    /// Gross trade volume in asset-A units per (pool, ledger), from
+    /// path-payment/offer claim atoms. NULL until the 0266 backfill / 0247
+    /// wiring writes it (live ingest leaves it NULL today). Task 0261/0268.
+    pub gross_volume_a: Option<i128>,
 }

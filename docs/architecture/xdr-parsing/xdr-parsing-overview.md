@@ -183,11 +183,14 @@ From `OperationMeta` per transaction, the ingest path extracts:
 
 **Liquidity-pool attribution (task 0261).** LP deposit/withdraw ops carry
 their pool id in the operation body. Path payments
-(`path_payment_strict_send` / `path_payment_strict_receive`) do **not** —
-the pools they cross are only visible in the `OperationResult` success
-branch as `ClaimAtom::LiquidityPool` entries. The parser unwraps the
-per-op results (`tx_op_results`, including the fee-bump inner nesting)
-and, for each successful path payment, appends to the op details:
+(`path_payment_strict_send` / `path_payment_strict_receive`) and offer ops
+(`manage_sell_offer` / `manage_buy_offer` / `create_passive_sell_offer`) do
+**not** — the pools they cross are only visible in the `OperationResult`
+success branch as `ClaimAtom::LiquidityPool` entries (path payments expose
+`offers`, offers expose `ManageOfferSuccessResult.offers_claimed`; a single
+op can fill against both the order book and an AMM, CAP-38). The parser
+unwraps the per-op results (`tx_op_results`, including the fee-bump inner
+nesting) and, for each such successful op, appends to the op details:
 
 - `poolIds` — deduped list of crossed pools (hex), and
 - `claimedAtoms` — every LP fill with `poolId`, `assetSold`/`amountSold`,
@@ -195,13 +198,17 @@ and, for each successful path payment, appends to the op details:
   can be computed downstream without a second parse pass (tasks
   0247/0266/0199).
 
-Failed path payments carry no claim atoms → no pool attribution
-(result-derived semantics). The CH writer folds `poolIds` into
-`operations_appearances.pool_ids Array(FixedString(32))` (sorted +
-deduped; one row per op identity — task 0268); the PG store keeps the
-legacy scalar `pool_id`, where path payments remain NULL pending PG
-retirement. `/liquidity-pools/:id/transactions` on CH therefore surfaces
-path payments that crossed the pool, matching Horizon.
+`tx_op_results` returns op results only for **successful** transactions: a
+failed transaction rolls every op back, yet an op that executed before the
+failing one still shows op-level `Success` with claim atoms — gating on tx
+success keeps those phantom crossings out of `pool_ids` and
+`gross_volume_a`. Failed (or order-book-only) ops therefore contribute no
+pool attribution. The CH writer folds `poolIds` into
+`operations_appearances.pool_ids Array(FixedString(32))` (sorted + deduped;
+one row per op identity — task 0268); the PG store keeps the legacy scalar
+`pool_id`, where these ops remain NULL pending PG retirement.
+`/liquidity-pools/:id/transactions` on CH therefore surfaces path payments
+and offers that crossed the pool, matching Horizon.
 
 Not stored at ingest (re-derived from XDR at read time per ADR 0029):
 `transfer_amount` (dropped), `application_order` (dropped), per-op JSONB

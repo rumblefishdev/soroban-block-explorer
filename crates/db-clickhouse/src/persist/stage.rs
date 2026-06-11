@@ -584,6 +584,10 @@ pub fn prepare_with_sac_overrides(
                 .as_deref()
                 .map(decimal7_string_to_i128)
                 .transpose()?,
+            // Live ingest does not derive gross_volume_a (no claim-atom
+            // aggregation here yet); the 0266 backfill / 0247 wiring populate
+            // it. Task 0261/0268.
+            gross_volume_a: None,
         });
     }
 
@@ -651,7 +655,7 @@ pub fn prepare_with_sac_overrides(
             let typed = OpTyped::from_details(op.op_type, &op.details);
             let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
             for h in &typed.pool_ids_hex {
-                pool_ids.push(decode_hash(h, "op.pool_id")?);
+                pool_ids.push(decode_hash(h, "op.pool_ids")?);
             }
             pool_ids.sort_unstable();
             pool_ids.dedup();
@@ -1373,14 +1377,6 @@ impl OpTyped {
                     out.asset_code = c;
                     out.asset_issuer = i;
                 }
-                if let Some(ids) = details.get("poolIds").and_then(Value::as_array) {
-                    out.pool_ids_hex = ids
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .collect();
-                }
             }
             OperationType::AccountMerge => {
                 out.destination = str_field(details, "destination");
@@ -1426,6 +1422,20 @@ impl OpTyped {
                 out.destination = str_field(details, "sponsoredId");
             }
             _ => {}
+        }
+        // `poolIds` (path payments + offers crossing an LP — task 0261) is
+        // present on any op whose result carried claim atoms, regardless of op
+        // type. LP deposit/withdraw already set `pool_ids_hex` from
+        // `liquidityPoolId` above, so the guard skips them.
+        if out.pool_ids_hex.is_empty()
+            && let Some(ids) = details.get("poolIds").and_then(Value::as_array)
+        {
+            out.pool_ids_hex = ids
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
         }
         out
     }

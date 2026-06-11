@@ -66,85 +66,92 @@ pub fn extract_operations(
         .collect()
 }
 
-/// Per-operation results of a transaction, if the result code is op-bearing.
+/// Per-operation results of a **successful** transaction.
 ///
-/// Unwraps the fee-bump nesting: `TxFeeBumpInnerSuccess` / `TxFeeBumpInnerFailed`
-/// carry the inner transaction's per-op results one level down. Failed
-/// transactions DO carry per-op results (`TxFailed`); claim atoms only exist
-/// on per-op success branches, so a failed path payment yields no pool data
-/// either way (task 0261). Validation-stage codes (`TxTooLate`, `TxBadSeq`, …)
-/// carry no op results → `None`.
+/// Unwraps the fee-bump nesting (`TxFeeBumpInnerSuccess` carries the inner
+/// transaction's per-op results one level down). Returns `None` for any failed
+/// transaction: when a transaction fails, every operation is rolled back, yet
+/// the op-level result of an operation that executed before the failing one
+/// still shows `Success` (with claim atoms) for crossings that never
+/// committed. Gating on tx success here keeps those phantom crossings out of
+/// `pool_ids` and the downstream `gross_volume_a` (task 0261). Claim atoms are
+/// the sole consumer of this accessor, so success-only is the correct scope.
 pub fn tx_op_results(result: &TransactionResult) -> Option<&[OperationResult]> {
     match &result.result {
-        TransactionResultResult::TxSuccess(ops) | TransactionResultResult::TxFailed(ops) => {
-            Some(ops.as_slice())
-        }
-        TransactionResultResult::TxFeeBumpInnerSuccess(pair)
-        | TransactionResultResult::TxFeeBumpInnerFailed(pair) => match &pair.result.result {
-            InnerTransactionResultResult::TxSuccess(ops)
-            | InnerTransactionResultResult::TxFailed(ops) => Some(ops.as_slice()),
+        TransactionResultResult::TxSuccess(ops) => Some(ops.as_slice()),
+        TransactionResultResult::TxFeeBumpInnerSuccess(pair) => match &pair.result.result {
+            InnerTransactionResultResult::TxSuccess(ops) => Some(ops.as_slice()),
             _ => None,
         },
         _ => None,
     }
 }
 
-/// Liquidity-pool claim atoms crossed by a successful path-payment op result.
-/// Empty for failed path payments (no claim atoms on failure branches), for
-/// order-book-only fills, and for any non-path-payment result.
-fn path_payment_lp_atoms(op_result: &OperationResult) -> Vec<&ClaimLiquidityAtom> {
-    let offers = match op_result {
-        OperationResult::OpInner(OperationResultTr::PathPaymentStrictSend(
-            PathPaymentStrictSendResult::Success(s),
-        )) => s.offers.as_slice(),
-        OperationResult::OpInner(OperationResultTr::PathPaymentStrictReceive(
+/// Liquidity-pool claim atoms crossed by a successful op result.
+///
+/// Covers every atom-bearing op kind: both path-payment variants (`offers`)
+/// and all three offer ops — `ManageSellOffer` / `ManageBuyOffer` /
+/// `CreatePassiveSellOffer` (`ManageOfferSuccessResult.offers_claimed`), which
+/// can fill against an AMM (CAP-38 unified order-book + pool exchange). Empty
+/// for any non-success branch, order-book-only fills, and non-atom-bearing
+/// ops. This is the "unified claim-atom extractor" of the 0261 decision —
+/// keeping it generic means the 0266 single-pass re-parse captures offer-
+/// crossed pools too, with no second historical pass.
+fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiquidityAtom> {
+    use OperationResultTr::*;
+    let offers: &[ClaimAtom] = match op_result {
+        OperationResult::OpInner(PathPaymentStrictSend(PathPaymentStrictSendResult::Success(
+            s,
+        ))) => s.offers.as_slice(),
+        OperationResult::OpInner(PathPaymentStrictReceive(
             PathPaymentStrictReceiveResult::Success(s),
         )) => s.offers.as_slice(),
-        _ => return Vec::new(),
+        OperationResult::OpInner(
+            ManageSellOffer(ManageSellOfferResult::Success(m))
+            | CreatePassiveSellOffer(ManageSellOfferResult::Success(m)),
+        ) => m.offers_claimed.as_slice(),
+        OperationResult::OpInner(ManageBuyOffer(ManageBuyOfferResult::Success(m))) => {
+            m.offers_claimed.as_slice()
+        }
+        _ => &[],
     };
-    offers
-        .iter()
-        .filter_map(|a| match a {
-            ClaimAtom::LiquidityPool(lp) => Some(lp),
-            _ => None,
-        })
-        .collect()
+    offers.iter().filter_map(|a| match a {
+        ClaimAtom::LiquidityPool(lp) => Some(lp),
+        _ => None,
+    })
 }
 
-/// Append `poolIds` + `claimedAtoms` to a path-payment details object when
-/// the op result shows liquidity-pool crossings. `poolIds` is the deduped
-/// crossed-pool list (order of first crossing); `claimedAtoms` keeps every
-/// LP fill with its amounts so `gross_volume_a` per (pool, ledger) can be
-/// computed downstream without a second parse pass (tasks 0247/0266/0199).
+/// Append `poolIds` + `claimedAtoms` to an op's details when its result shows
+/// liquidity-pool crossings (path payments and offers; see [`claim_lp_atoms`]).
+/// `poolIds` is the deduped crossed-pool list (first-crossing order);
+/// `claimedAtoms` keeps every LP fill with its amounts so `gross_volume_a` per
+/// (pool, ledger) can be computed downstream without a second parse pass
+/// (tasks 0247/0266/0199). No-op for ops with no LP atoms, so it is safe to
+/// call unconditionally for every op.
 fn append_pool_claims(details: &mut Value, op_result: Option<&OperationResult>) {
     let Some(op_result) = op_result else { return };
-    let atoms = path_payment_lp_atoms(op_result);
-    if atoms.is_empty() {
-        return;
-    }
-    let mut pool_ids: Vec<String> = Vec::with_capacity(atoms.len());
-    for a in &atoms {
-        let id = hex::encode(a.liquidity_pool_id.0.as_slice());
+    let Value::Object(map) = details else { return };
+
+    let mut pool_ids: Vec<String> = Vec::new();
+    let mut claimed: Vec<Value> = Vec::new();
+    for atom in claim_lp_atoms(op_result) {
+        let id = hex::encode(atom.liquidity_pool_id.0.as_slice());
+        claimed.push(json!({
+            "poolId": &id,
+            "assetSold": format_asset(&atom.asset_sold),
+            "amountSold": atom.amount_sold,
+            "assetBought": format_asset(&atom.asset_bought),
+            "amountBought": atom.amount_bought,
+        }));
         if !pool_ids.contains(&id) {
             pool_ids.push(id);
         }
     }
-    let claimed: Vec<Value> = atoms
-        .iter()
-        .map(|a| {
-            json!({
-                "poolId": hex::encode(a.liquidity_pool_id.0.as_slice()),
-                "assetSold": format_asset(&a.asset_sold),
-                "amountSold": a.amount_sold,
-                "assetBought": format_asset(&a.asset_bought),
-                "amountBought": a.amount_bought,
-            })
-        })
-        .collect();
-    if let Value::Object(map) = details {
-        map.insert("poolIds".into(), json!(pool_ids));
-        map.insert("claimedAtoms".into(), json!(claimed));
+    if claimed.is_empty() {
+        return;
     }
+    map.insert("poolIds".into(), Value::from(pool_ids));
+    map.insert("claimedAtoms".into(), Value::from(claimed));
 }
 
 /// Extract the Soroban return value from TransactionMeta, if present.
@@ -170,7 +177,11 @@ fn extract_op_details(
     _tx_index: usize,
     _op_index: usize,
 ) -> (OperationType, Value) {
-    match body {
+    // Per-op body → (type, details). `append_pool_claims` runs once after the
+    // match: it no-ops unless the op result carries LP claim atoms, so path
+    // payments AND offers crossing a pool (task 0261) get `poolIds`/
+    // `claimedAtoms` without per-arm plumbing.
+    let (op_type, mut details) = match body {
         OperationBody::CreateAccount(op) => (
             OperationType::CreateAccount,
             json!({
@@ -186,30 +197,28 @@ fn extract_op_details(
                 "amount": op.amount,
             }),
         ),
-        OperationBody::PathPaymentStrictReceive(op) => {
-            let mut details = json!({
+        OperationBody::PathPaymentStrictReceive(op) => (
+            OperationType::PathPaymentStrictReceive,
+            json!({
                 "sendAsset": format_asset(&op.send_asset),
                 "sendMax": op.send_max,
                 "destination": muxed_to_g_strkey(&op.destination),
                 "destAsset": format_asset(&op.dest_asset),
                 "destAmount": op.dest_amount,
                 "path": op.path.iter().map(format_asset).collect::<Vec<_>>(),
-            });
-            append_pool_claims(&mut details, op_result);
-            (OperationType::PathPaymentStrictReceive, details)
-        }
-        OperationBody::PathPaymentStrictSend(op) => {
-            let mut details = json!({
+            }),
+        ),
+        OperationBody::PathPaymentStrictSend(op) => (
+            OperationType::PathPaymentStrictSend,
+            json!({
                 "sendAsset": format_asset(&op.send_asset),
                 "sendAmount": op.send_amount,
                 "destination": muxed_to_g_strkey(&op.destination),
                 "destAsset": format_asset(&op.dest_asset),
                 "destMin": op.dest_min,
                 "path": op.path.iter().map(format_asset).collect::<Vec<_>>(),
-            });
-            append_pool_claims(&mut details, op_result);
-            (OperationType::PathPaymentStrictSend, details)
-        }
+            }),
+        ),
         OperationBody::ManageSellOffer(op) => (
             OperationType::ManageSellOffer,
             json!({
@@ -403,7 +412,9 @@ fn extract_op_details(
             }),
         ),
         OperationBody::RestoreFootprint(_) => (OperationType::RestoreFootprint, json!({})),
-    }
+    };
+    append_pool_claims(&mut details, op_result);
+    (op_type, details)
 }
 
 /// Extract enriched details for INVOKE_HOST_FUNCTION operations.
@@ -918,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn tx_op_results_unwraps_plain_and_fee_bump() {
+    fn tx_op_results_success_only_and_unwraps_fee_bump() {
         let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
             OperationResultTr::Payment(PaymentResult::Success),
         )]
@@ -928,26 +939,99 @@ mod tests {
         let plain = build_tx_result(TransactionResultResult::TxSuccess(ops.clone()));
         assert_eq!(tx_op_results(&plain).unwrap().len(), 1);
 
+        // TxFailed rolls every op back; op-level Success results in it must NOT
+        // yield pool data (task 0261 — phantom-crossing guard).
         let failed = build_tx_result(TransactionResultResult::TxFailed(ops.clone()));
-        assert_eq!(tx_op_results(&failed).unwrap().len(), 1);
+        assert!(tx_op_results(&failed).is_none());
 
-        let inner = InnerTransactionResultPair {
+        let inner_ok = InnerTransactionResultPair {
             transaction_hash: Hash([0xEE; 32]),
             result: InnerTransactionResult {
                 fee_charged: 100,
-                result: InnerTransactionResultResult::TxSuccess(ops),
+                result: InnerTransactionResultResult::TxSuccess(ops.clone()),
                 ext: InnerTransactionResultExt::V0,
             },
         };
-        let fee_bump = build_tx_result(TransactionResultResult::TxFeeBumpInnerSuccess(inner));
+        let fee_bump = build_tx_result(TransactionResultResult::TxFeeBumpInnerSuccess(inner_ok));
         assert_eq!(
             tx_op_results(&fee_bump).unwrap().len(),
             1,
             "fee-bump nesting unwrapped"
         );
 
+        // Fee-bump wrapping a FAILED inner tx → no op results.
+        let inner_fail = InnerTransactionResultPair {
+            transaction_hash: Hash([0xEE; 32]),
+            result: InnerTransactionResult {
+                fee_charged: 100,
+                result: InnerTransactionResultResult::TxFailed(ops),
+                ext: InnerTransactionResultExt::V0,
+            },
+        };
+        let fee_bump_fail =
+            build_tx_result(TransactionResultResult::TxFeeBumpInnerFailed(inner_fail));
+        assert!(tx_op_results(&fee_bump_fail).is_none());
+
         let validation_failed = build_tx_result(TransactionResultResult::TxBadSeq);
         assert!(tx_op_results(&validation_failed).is_none());
+    }
+
+    #[test]
+    fn failed_tx_drops_pool_claims_for_op_level_success() {
+        // op0 = path payment that crossed pool P at the op level, but the whole
+        // tx failed (a later op failed). tx_op_results returns None for the
+        // failed tx → no poolIds, so rolled-back crossings stay out of the DB
+        // and out of gross_volume_a.
+        let op = build_path_payment_send_op();
+        let tx = build_v1_tx(vec![op]);
+        let inner = InnerTxRef::V1(&tx);
+        let ops: VecM<OperationResult> = vec![path_payment_send_result(vec![lp_atom(
+            [0x11; 32], 500, 200,
+        )])]
+        .try_into()
+        .unwrap();
+        let tx_result = build_tx_result(TransactionResultResult::TxFailed(ops));
+
+        let op_results = tx_op_results(&tx_result);
+        assert!(op_results.is_none(), "failed tx exposes no op results");
+
+        let result = extract_operations(&inner, None, op_results, "abcd1234", 100, 0);
+        assert!(result[0].details.get("poolIds").is_none());
+        assert!(result[0].details.get("claimedAtoms").is_none());
+    }
+
+    #[test]
+    fn manage_buy_offer_crossing_pool_tags_pool_ids() {
+        // An offer that fills against an AMM carries LP claim atoms in its
+        // result (ManageOfferSuccessResult.offers_claimed) — the unified
+        // extractor must surface them too (task 0261 / 0266 single-run scope).
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::ManageBuyOffer(ManageBuyOfferOp {
+                selling: Asset::Native,
+                buying: Asset::Native,
+                buy_amount: 500,
+                price: Price { n: 1, d: 2 },
+                offer_id: 0,
+            }),
+        };
+        let tx = build_v1_tx(vec![op]);
+        let inner = InnerTxRef::V1(&tx);
+        let results = vec![manage_buy_offer_result(vec![
+            order_book_atom(),
+            lp_atom([0x33; 32], 700, 350),
+        ])];
+
+        let result = extract_operations(&inner, None, Some(&results), "abcd1234", 100, 0);
+
+        assert_eq!(result[0].op_type, OperationType::ManageBuyOffer);
+        let details = &result[0].details;
+        let pool_ids = details["poolIds"].as_array().unwrap();
+        assert_eq!(pool_ids.len(), 1);
+        assert_eq!(pool_ids[0], hex::encode([0x33; 32]));
+        assert_eq!(details["claimedAtoms"].as_array().unwrap().len(), 1);
+        // Plain (non-LP) offer fields are preserved alongside the claims.
+        assert_eq!(details["offerId"], 0);
     }
 
     // --- test helpers ---
@@ -1009,6 +1093,15 @@ mod tests {
             PathPaymentStrictReceiveResult::Success(PathPaymentStrictReceiveResultSuccess {
                 offers: offers.try_into().unwrap(),
                 last: simple_payment_result(),
+            }),
+        ))
+    }
+
+    fn manage_buy_offer_result(claimed: Vec<ClaimAtom>) -> OperationResult {
+        OperationResult::OpInner(OperationResultTr::ManageBuyOffer(
+            ManageBuyOfferResult::Success(ManageOfferSuccessResult {
+                offers_claimed: claimed.try_into().unwrap(),
+                offer: ManageOfferSuccessResultOffer::Deleted,
             }),
         ))
     }

@@ -316,6 +316,7 @@ fn column_order_liquidity_pool_snapshots() {
             "tvl",
             "volume",
             "fee_revenue",
+            "gross_volume_a",
         ],
     );
 }
@@ -703,6 +704,49 @@ fn prepare_lp_deposit_single_element_pool_ids() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
+}
+
+#[test]
+fn prepare_offer_op_pool_ids_from_details() {
+    // An offer op crossing an LP carries poolIds in details (parser reads the
+    // ManageOfferSuccessResult claim atoms — task 0261/0266 generic extractor);
+    // the CH fold must tag pool_ids for it, not just path payments.
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x33);
+    let pool = "cd".repeat(32);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::ManageBuyOffer,
+        source_account: None,
+        details: serde_json::json!({
+            "offerId": 0,
+            "poolIds": [pool],
+        }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    assert_eq!(staged.op_rows.len(), 1);
+    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
 }
 
 #[test]
