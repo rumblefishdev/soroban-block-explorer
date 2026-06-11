@@ -22,5 +22,3 @@
 
 
 <!-- nx configuration end-->
-
-## Imported Claude Cowork project instructions
