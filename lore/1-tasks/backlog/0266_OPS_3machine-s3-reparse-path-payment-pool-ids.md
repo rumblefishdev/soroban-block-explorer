@@ -68,6 +68,21 @@ history:
       payload decision recorded before kickoff (one-pass rule), fresh
       snapshot. Transport default flips to direct INSERT; ADR 0045
       FREEZE/rsync/ATTACH stays as bandwidth fallback.
+  - date: '2026-06-11'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Added an "Alternative: live incremental pipeline (hybrid)" section.
+      Key insight: backfill (old ledgers) and live ingest (new ledgers) are
+      RMT-key-disjoint, so the data fill needs NO ingestion pause — the
+      window shrinks to just the indexer redeploy + projection swap. Hybrid
+      = parse off-box (as 0228) but stream throttled partition-batched
+      INSERTs into live CH with a resumable watermark, instead of
+      FREEZE/rsync/ATTACH. The 0228 pattern was a cold-build design; this is
+      incremental-on-live, a different shape. Decision (batch vs pipeline)
+      open, pick at kickoff. Also: weight the 3-way split by atom-bearing op
+      count per 500k partition (query added), not ledger count, since ledger
+      density is non-uniform.
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
@@ -169,6 +184,68 @@ post-merge that `countIf(gross_volume_a IS NOT NULL)` matches the expected
 pool-touching-ledger count and that reserves are unchanged vs a pre-backfill
 sample.
 
+## Alternative: live incremental pipeline (hybrid) — recommended to evaluate
+
+The batch design above mirrors task 0228, which was built for a **cold
+build** (no live ingest — the whole DB was being constructed; FREEZE +
+rsync + ATTACH PART is optimal there). This task is the opposite shape:
+an **incremental backfill onto a LIVE, ingesting system**. A live
+pipeline fits that shape better and may supersede the big-bang batch.
+
+**Core insight — backfill and live ingest are key-disjoint.** Live ingest
+writes ledgers `≥ L_tip`; the backfill writes `50.4M … L_tip-1`. The RMT
+sort key is `(ledger_sequence, transaction_id, application_order)`, so the
+two never produce the **same** key — RMT never has to merge a backfill row
+against a live row. No lock, no race, **no ingestion pause for the data
+fill**. The maintenance window then shrinks to just the indexer redeploy +
+projection/seek swap (seconds–minutes), not the multi-day fill.
+
+This holds because the schema step is already online: `ADD COLUMN pool_ids
+… + MATERIALIZE` and `ADD COLUMN gross_volume_a` (0268 Phase 1) run without
+a pause.
+
+**Hybrid shape (best of both):**
+
+- Keep the **parse OFF-box** (the 3 machines, or fewer — heavy
+  download/zstd/parse must not compete with live ingest on the prod box).
+- Replace FREEZE/rsync/ATTACH with **throttled, partition-batched direct
+  INSERTs into the live CH**, oldest partition → newest.
+- Track a **watermark** (last fully-backfilled 500k partition) for
+  resumability; RMT makes re-INSERT idempotent (same key replaces), so a
+  crash just resumes from the watermark — a real advantage over batch.
+
+**What it does NOT change:** the S3 re-parse is still mandatory (atoms are
+not in CH, ADR 0029); the version-less-RMT full-row snapshot hazard is
+identical; `oa_pool_seek` should still be dropped before bulk INSERT.
+
+**What it must handle:**
+
+- **Merge pressure** — batch INSERTs into large blocks (partition-at-a-
+  time) and let merges settle between partitions; a swarm of tiny parts
+  would starve ingest merges.
+- **Throttling** — if INSERT/merge starves live ingest (CPU/IO/mem),
+  rate-limit insertion (pauses between partitions, background-pool
+  priorities).
+- **The `[L_tip_at_start, W]` band** — the pre-redeploy indexer writes it
+  with `pool_ids = []`; the pipeline does the bulk `< L_tip_at_start` live,
+  then mops up that narrow recent band after the redeploy (W = redeploy
+  ledger). Bulk is done with zero downtime; only the thin band waits.
+
+**Trade-off vs the 3-machine batch:**
+
+|               | Batch (0228 pattern)          | Live pipeline (hybrid)                |
+| ------------- | ----------------------------- | ------------------------------------- |
+| Wall-clock    | faster (~24h, 3× parallel)    | slower (throttled stream, days)       |
+| Downtime      | window framed around `W`      | none for the fill                     |
+| Write path    | FREEZE+rsync+ATTACH           | direct INSERT                         |
+| Resumability  | per-ledger, manual            | watermark, automatic                  |
+| Orchestration | heavier (3-host coordination) | lighter, self-monitoring (% coverage) |
+
+Decision is open: batch wins on wall-clock, the live pipeline wins on
+operational safety (no pause, resumable). For an already-live prod CH the
+pipeline's zero-downtime + resumability likely outweighs the slower
+wall-clock — nobody is waiting on it. Pick at kickoff.
+
 ## Sequence
 
 Preconditions (2026-06-10 audit):
@@ -193,7 +270,35 @@ Preconditions (2026-06-10 audit):
 3. **Split ledger range** — assign 3 contiguous ranges covering
    `50,457,424 → W` (W = ledger from which the 0281-window indexer
    redeploy writes `pool_ids` itself; pin W + the partition
-   boundaries in this task's history).
+   boundaries in this task's history). Splits MUST fall on 500k
+   partition boundaries (`PARTITION BY intDiv(ledger_sequence,
+500000)`) so transport/INSERT is partition-aligned.
+
+   **Weight the split by atom-bearing op count, not ledger count** —
+   ledger density is non-uniform (post-Soroban-launch ledgers are
+   heavier). Run this on CH to get the per-partition work profile,
+   then cut the 3 ranges at equal cumulative `atom_ops`:
+
+   ```sql
+   -- atom-bearing ops = path payments (2,13) + offers (3,4,12);
+   -- these are the only ops the extractor can tag with a pool.
+   SELECT
+       intDiv(ledger_sequence, 500000)              AS part,
+       min(ledger_sequence)                         AS first_ledger,
+       max(ledger_sequence)                         AS last_ledger,
+       countIf(type IN (2, 13, 3, 4, 12))           AS atom_ops,
+       count()                                      AS total_ops
+   FROM operations_appearances
+   WHERE ledger_sequence BETWEEN 50457424 AND {W}
+   GROUP BY part
+   ORDER BY part;
+   ```
+
+   Baseline split (by ledger count, partitions 100–125, refine with
+   the query above): M1 = P100–P108 (50,457,424→54,499,999), M2 =
+   P109–P117 (54,500,000→58,999,999), M3 = P118–P125
+   (59,000,000→62,527,999).
+
 4. **Per-machine run** (parallel) — for each ledger in the assigned
    range:
    - Download `.xdr.zst` from
