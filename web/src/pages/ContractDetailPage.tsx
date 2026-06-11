@@ -2,6 +2,7 @@ import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
+  IdentifierWithCopy,
   isContractId,
   NotFoundState,
   SectionErrorBoundary,
@@ -94,15 +95,10 @@ export default function ContractDetailPage() {
             <Chip size="md" color="accent" label="Stellar Asset Contract" />
           )}
         </Stack>
-        <Typography
-          variant="bodyMedium"
-          sx={(theme) => ({
-            color: theme.palette.text.secondary,
-            wordBreak: 'break-all',
-          })}
-        >
-          {contractId}
-        </Typography>
+        {/* Truncated under-title identity (full id stays in the summary
+            card below); the special identifier component carries the copy
+            affordance. */}
+        <IdentifierWithCopy value={contractId} type="contract" linked={false} />
       </Box>
 
       <SectionErrorBoundary sectionName="contract-summary">
