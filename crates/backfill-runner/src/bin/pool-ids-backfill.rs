@@ -27,15 +27,28 @@
 //!   `aws s3 sync`, or the partition sync, out of band).
 //! - `0268` schema applied on the target CH (`pool_ids Array(FixedString(32))`).
 //! - `oa_pool_seek` projection dropped on the target (avoids per-part rebuild).
+//! - `STELLAR_NETWORK_PASSPHRASE` set — `parse_ledger` derives the network id
+//!   from it (mainnet: `Public Global Stellar Network ; September 2015`).
+//!
+//! ## Env
+//! - `STELLAR_NETWORK_PASSPHRASE` (required, see above)
+//! - `CLICKHOUSE_URL` / `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
+//!   `CLICKHOUSE_DATABASE` (`db_clickhouse::Config::from_env`)
 //!
 //! ## Usage
 //! ```text
+//! STELLAR_NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015" \
 //! CLICKHOUSE_URL=... pool-ids-backfill \
 //!     --start 50457424 --end 55499999 \
 //!     --local-dir /var/tmp/backfill \
 //!     --watermark /var/tmp/pool-ids.watermark \
 //!     --throttle-ms 200
 //! ```
+//!
+//! Validated end-to-end (2026-06-11) against ledger 62073209 (the 0261 repro
+//! ledger) on a throwaway CH 26.3: 12 path-payment crossings written
+//! (multi-hop included), targeted write confirmed (only operations_appearances
+//! touched), full per-tx fold preserved.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
