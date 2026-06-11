@@ -151,6 +151,24 @@ app_order)` triple with the correct `pool_id` set:
   return until merges complete; force with `OPTIMIZE TABLE …
 FINAL` after the INSERT batch.
 
+### `liquidity_pool_snapshots` — FULL-ROW replace, not column patch
+
+`liquidity_pool_snapshots` is **also** a version-less `ReplacingMergeTree`
+(`ORDER BY (pool_id, ledger_sequence)`). RMT replaces the **entire** row for a
+key at merge time — there is no per-column UPDATE. Live ingest already wrote
+`(pool, ledger)` rows with `gross_volume_a = NULL` and the correct
+`reserve_a/reserve_b/total_shares/tvl`. The backfill INSERT for the same key
+must therefore carry the **complete, correct row** (re-derived reserves + the
+new `gross_volume_a`), NOT a sparse row with only `gross_volume_a` set —
+otherwise the merge silently nulls/zeroes the reserves. Symmetric hazard: any
+live re-ingest of that key _after_ the backfill, writing `gross_volume_a =
+NULL`, reverts the backfilled value. Mitigations: (a) restrict the backfill
+range to `≤ W` (the window deploy ledger) so live never re-touches a
+backfilled key (already the plan); (b) emit full snapshot rows; (c) verify
+post-merge that `countIf(gross_volume_a IS NOT NULL)` matches the expected
+pool-touching-ledger count and that reserves are unchanged vs a pre-backfill
+sample.
+
 ## Sequence
 
 Preconditions (2026-06-10 audit):

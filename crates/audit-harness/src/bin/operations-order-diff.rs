@@ -509,18 +509,13 @@ fn extract_xdr_order(
         .ok_or("envelope unaligned for tx idx")?;
     let tx_meta = metas.get(idx).copied();
     let inner = xdr_parser::envelope::inner_transaction(envelope);
-    let tx_results = xdr_parser::collect_tx_results(meta);
-    let op_results = tx_results
-        .get(idx)
-        .and_then(|r| xdr_parser::tx_op_results(r));
-    let ops = xdr_parser::extract_operations(
-        &inner,
-        tx_meta,
-        op_results,
-        target_hash_hex,
-        ledger_seq,
-        idx,
-    );
+    // `op_results = None` on purpose: this bin audits PG op ORDER (task 0192),
+    // and `OpTypedAudit` keys identity on `liquidityPoolId` only — it ignores
+    // the result-derived `poolIds`/`claimedAtoms` (task 0261), matching the PG
+    // scalar `pool_id` it compares against (NULL for path payments/offers).
+    // Passing the op results would change nothing here, so we skip the work.
+    let ops =
+        xdr_parser::extract_operations(&inner, tx_meta, None, target_hash_hex, ledger_seq, idx);
 
     let mut seen: HashMap<OpIdentity, ()> = HashMap::with_capacity(ops.len());
     let mut order = Vec::with_capacity(ops.len());

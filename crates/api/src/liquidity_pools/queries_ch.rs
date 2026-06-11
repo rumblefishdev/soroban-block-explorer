@@ -478,11 +478,16 @@ pub async fn fetch_pool_transactions(
     // bounded (≤ limit keys transferred) regardless of which seek lands.
     // `GROUP BY (ls, tid)` is the
     // `LIMIT 1 BY (ledger_sequence, transaction_id)` dedupe (ops → one row/tx).
+    //
+    // `toFixedString(unhex(?), 32)`: `pool_ids` is `Array(FixedString(32))` and
+    // `unhex` yields `String`; the explicit cast makes the needle's type match
+    // the element type so `has` compares as fixed bytes (the input is a
+    // validated 64-char hex → exactly 32 bytes, so the cast never pads/truncates).
     let driver_sql = format!(
         "SELECT ls, tid FROM ( \
             SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
             FROM operations_appearances oa \
-            WHERE has(oa.pool_ids, unhex(?)) {keyset} \
+            WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) {keyset} \
          ) \
          GROUP BY ls, tid \
          ORDER BY ls {order}, tid {order} \
