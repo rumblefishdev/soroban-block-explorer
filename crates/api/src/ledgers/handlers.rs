@@ -111,7 +111,10 @@ pub async fn list_ledgers(
     );
 
     let mut resp = Json(into_envelope(rows, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
+    // LIVE (max-age=0): the home feed polls this list once per ledger; any
+    // browser-cache TTL ≥ the ~5.8s cadence would batch 2-3 ledgers per
+    // visible update (see common::cache_control).
+    cache_control::attach(&mut resp, cache_control::LIVE);
     resp
 }
 

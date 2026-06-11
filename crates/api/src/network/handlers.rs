@@ -33,7 +33,8 @@ enum FetchStatsError {
 /// Reads the canonical single-statement network-stats query (latest
 /// ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
 /// estimates for accounts / contracts) and caches the assembled
-/// response for 30s in process memory. See the task 0045 spec and
+/// response for 4s in process memory (below the ledger cadence — see
+/// `network/cache.rs`). See the task 0045 spec and
 /// `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
 /// for the full data-source mapping.
 ///
@@ -84,7 +85,7 @@ pub async fn get_network_stats(State(state): State<AppState>) -> Response {
 
 fn ok_response(stats: Arc<NetworkStats>) -> Response {
     let mut resp = Json(stats).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
+    cache_control::attach(&mut resp, cache_control::LIVE);
     resp
 }
 
@@ -173,7 +174,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "expected 200, got {status}: {json}");
         assert_eq!(
             cc.as_deref(),
-            Some("public, max-age=10"),
+            Some("public, max-age=0, must-revalidate"),
             "Cache-Control header missing or wrong: {cc:?}"
         );
 

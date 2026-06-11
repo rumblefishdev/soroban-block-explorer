@@ -12,23 +12,27 @@
 //! reintroducing the "lock held across `.await`" footgun the previous
 //! impl had to guard against.
 //!
-//! Per `docs/architecture/backend/backend-overview.md` §8.1 backend
-//! in-memory caching has a 30–60 s TTL — we settle on 30 s. Two cache
-//! layers stack: the API Gateway sits in front (5–15 s mutable TTL,
-//! disabled today per `infra/envs/*.json`) and this Lambda layer behind
-//! it. Worst-case user-perceived staleness is **additive** across the
-//! two layers (~30 s + ~10 s = ~40 s today) — see `network/handlers.rs`
-//! for the matching `Cache-Control` header.
+//! Per `docs/architecture/backend/backend-overview.md` §8.1 the TTL must
+//! stay *below* the mainnet ledger cadence (~5.8 s): the frontend polls
+//! this endpoint once per ledger (adaptive `midpointPollDelay`), and a
+//! TTL ≥ cadence would hand consecutive polls the same conserved payload
+//! — the "current ledger" KPI then jumps several sequences at once
+//! instead of stepping +1. The cache's job is purely to collapse the
+//! per-ledger client fan-out into ≤1 ClickHouse query per TTL window
+//! (stampede protection), not to extend data lifetime. Worst-case
+//! user-perceived staleness is additive with the HTTP layer; the
+//! response ships `Cache-Control: max-age=0` (`cache_control::LIVE`) so
+//! this in-process layer is the only one.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::dto::NetworkStats;
 
-/// 30-second TTL — within the documented `30-60s` window. Shorter values
-/// defeat the purpose; longer ones let the response drift past the API
-/// Gateway TTL ceiling on consecutive requests.
-const TTL: Duration = Duration::from_secs(30);
+/// 4-second TTL — below the ~5.8 s ledger cadence so each per-ledger poll
+/// can observe the new head, while concurrent clients within the window
+/// still collapse to a single DB query.
+const TTL: Duration = Duration::from_secs(4);
 
 /// Single-key cache (the network stats endpoint is a singleton).
 const MAX_ENTRIES: u64 = 1;
