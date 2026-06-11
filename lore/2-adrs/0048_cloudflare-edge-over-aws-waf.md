@@ -1,7 +1,7 @@
 ---
 id: '0048'
 title: 'Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare'
-status: proposed # proposed | accepted | deprecated | superseded
+status: accepted # proposed | accepted | deprecated | superseded
 deciders: [fmazur, team]
 related_tasks: ['0277', '0273']
 related_adrs: ['0001', '0047']
@@ -18,6 +18,19 @@ history:
       2026-06-01 daily; status stays `proposed` until the Step 7 cutover + soak
       land, then flips to `accepted`. External prerequisite outstanding:
       parent rumblefish.dev zone owner sign-off for the NS delegation change.
+  - date: '2026-06-10'
+    status: accepted
+    who: fmazur
+    note: >
+      ACCEPTED — deployed and verified in production (task 0277). As-built
+      diverged from the ADR's Path-B mTLS: the origin lock ships via the
+      SECRET-HEADER variant (Cloudflare Transform Rule stamps `X-Edge-Secret`;
+      axum `edge_lock` 403s anything without it), chosen because the repo split
+      made a shared secret self-contained vs cross-repo mTLS. Scope also grew
+      from "lockdown" into a full paid-API access layer (Cloudflare Turnstile
+      widget → session JWT free tier + X-API-Key paid tier) + a CORS layer.
+      AWS WAF teardown + soak deferred (backlog 0283). NS flipped on the
+      `rumblefishdev.com` registrar (OVH), not the parent rumblefish.dev zone.
 ---
 
 # ADR 0048: Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare

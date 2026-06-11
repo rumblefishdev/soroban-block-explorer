@@ -2,7 +2,7 @@
 id: '0277'
 title: 'FEATURE: Migrate edge protection (WAF/DDoS) to Cloudflare'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0048']
 related_tasks: ['0273']
 tags:
@@ -133,6 +133,27 @@ history:
       cross-repo shared secret + the transform rule into rf-domains). Dead
       rumblefishdev.com records (do NOT recreate): contact, wag-api-staging,
       gitlab-test. See full decision block in the body + docs/waf-vs-cloudflare/.
+  - date: '2026-06-10'
+    status: completed
+    who: fmazur
+    note: >
+      DEPLOYED, VERIFIED, COMPLETED. Origin lock shipped via the SECRET-HEADER
+      path (X-Edge-Secret), NOT mTLS — chosen because the repo split (the
+      Transform Rule lives in the company DNS repo) made a shared secret simpler
+      and self-contained than cross-repo mTLS. On top of the lock, built a full
+      PAID-API access layer (originally just "lockdown"): Cloudflare Turnstile
+      widget (created via Terraform in the company repo) → free-tier session JWT
+      via POST /auth/session, paid-tier via X-API-Key allowlist, axum auth gate.
+      Added a tower-http CorsLayer (the cross-origin SPA needs Access-Control-
+      Allow-Origin on actual responses; API GW only answers the OPTIONS
+      preflight). Retired the legacy api.sorobanscan.rumblefish.dev domain
+      (enableLegacyApiDomain=false → host dead). Negative+positive test matrix
+      passes (direct execute-api/legacy → 403/dead; SPA Turnstile→session→data;
+      x-api-key → 200; /health 200). 3 feature commits (95f48f3e, 67a5a1cf,
+      6df7df63) + the company-repo Terraform (Transform Rule + Turnstile,
+      committed separately). Mid-task production incident (Galexie disk-full,
+      unrelated) handled without data loss. AWS WAF teardown + soak deferred to
+      follow-up backlog tasks. See ## Implementation Notes (as-built) below.
 ---
 
 # Migrate edge protection (WAF/DDoS) to Cloudflare
@@ -350,28 +371,111 @@ Run the test matrix (below). **Soak** for an agreed window. Only then **`enableW
 
 ## Acceptance Criteria
 
-- [ ] Decisions 1–6 resolved + ADR written/linked; parent-zone owner signed off
-- [ ] Origin secret + Cloudflare API token stored **out of git** (SSM/Secrets Manager), token
-      zone-scoped least-privilege; origin secret **never committed / never logged**
-- [ ] Cloudflare **SSL/TLS = Full (strict)** confirmed end-to-end
-- [ ] `disableExecuteApiEndpoint: true` set; **API locked via mTLS** (zone-level AOP + API GW mTLS,
-      S3 truststore); **SPA/CloudFront locked via secret-header** CloudFront Function. **No AWS WAF.**
-- [ ] **Negative-test matrix passes** (all return 403 / blocked):
-  - [ ] direct `execute-api` URL
-  - [ ] direct REGIONAL custom-domain endpoint
-  - [ ] direct `*.cloudfront.net` domain
-  - [ ] request lacking the lockdown proof (missing/wrong `X-Origin-Secret`, or missing client cert under mTLS)
-- [ ] **Positive paths work**: SPA loads + its `fetch()` API calls succeed through the challenge;
-      `x-api-key` partner path still works; `ch.sorobanscan` mTLS handshake still succeeds
-- [ ] **Caddy cert renewal verified** post-cutover (force a renewal — `ch` stayed grey-cloud so
-      ACME HTTP-01 still resolves)
-- [ ] CDK Route 53 records reconciled (no CDK-vs-Cloudflare DNS conflict)
-- [ ] Observability: API GW access logs + Lambda logs in CloudWatch (WAF logs gone) + alarms on
-      Cloudflare challenge/block rate + a recurring synthetic check that direct-origin stays blocked
-- [ ] Rollback rehearsed (see below)
-- [ ] **Docs updated** — `docs/architecture/**` topology reflects the Cloudflare edge; ADR added
-- [ ] **API types regenerated** — **N/A** (Path B mTLS = no `crates/api` change; the SPA header lock
-      is edge/CloudFront-Function config, not app code).
+- [x] Decisions resolved + ADR 0048 written/linked. Registrar NS flipped on `rumblefishdev.com`
+      (not the parent `rumblefish.dev` zone — per D7), by an OVH-access dev.
+- [x] Origin secret + Cloudflare API token stored **out of git** (AWS Secrets Manager), token
+      account-scoped; **verified by multi-agent audits** — no secret in git, never logged.
+- [x] Cloudflare **SSL/TLS = Full (strict)** (`zone-settings.tf`).
+- [~] **API locked — but via X-Edge-Secret (secret-header), NOT mTLS** (Emerged #1). Cloudflare
+      Transform Rule stamps `X-Edge-Secret`; the axum `edge_lock` middleware 403s anything without
+      it. **No AWS WAF teardown yet** (deferred → 0283). `disableExecuteApiEndpoint` **NOT** set
+      (still edge-locked at 403; killing the raw endpoint deferred → 0285). **SPA stays on
+      CloudFront + basic-auth** (D8 — not locked to CF; out of this task's scope).
+- [x] **Negative-test matrix passes:**
+  - [x] direct `execute-api` URL → **403**
+  - [x] direct REGIONAL/legacy custom-domain → **403** then **dead** (domain retired, Emerged #4)
+  - [N/A] direct `*.cloudfront.net` — SPA not migrated to CF (D8)
+  - [x] request lacking `X-Edge-Secret` → **403**; lacking session/key → **401**
+- [x] **Positive paths work**: SPA Turnstile → `/auth/session` → JWT → Bearer → data loads;
+      `x-api-key` → **200**; `/health` through CF → **200**. (`ch.sorobanscan` not touched — D8.)
+- [N/A] Caddy cert renewal — `ch.sorobanscan` out of scope under D8.
+- [x] CDK Route 53 records reconciled — legacy API custom domain + its A/AAAA records **removed**.
+- [~] Observability: API GW + Lambda logs in CloudWatch + existing alarms. **Recurring synthetic
+      direct-origin canary deferred** (validateConfig now recognises `enableEdgeSecretLock` but the
+      canary isn't enabled) → 0284.
+- [ ] Rollback rehearsed — **deferred** (path documented; not exercised).
+- [x] **Docs updated** — `docs/architecture/.../infrastructure-overview.md` + ADR 0048.
+- [x] **API types regenerated — N/A confirmed** (CorsLayer + config are middleware, not utoipa;
+      `nx run @rumblefish/api-types:generate` produced zero diff).
+
+## Implementation Notes (as-built, 2026-06-10)
+
+The shipped result is **bigger than "migrate WAF"** — it became the foundation + a full paid-API
+access layer. What's live in production:
+
+- **Edge (company repo `dns-cloudformation/cloudflare`, Terraform, profile `rumblefish-company`):**
+  Cloudflare Free zone `rumblefishdev.com`; `api-sorobanscan.rumblefishdev.com` proxied (orange);
+  Transform Rule injecting `X-Edge-Secret`; **Turnstile widget** (`cloudflare_turnstile_widget`,
+  managed mode); rate-limit (100 req/10 s per-IP), Managed Challenge, redirect, zone settings.
+  Verified live: `server: cloudflare` + `cf-ray …-WAW` + Cloudflare IPs on the API host.
+- **Backend (`crates/api`):** `common/edge_lock.rs` (X-Edge-Secret gate, `/health` exempt);
+  `auth/{jwt,turnstile,mod}.rs` (HS256 session JWT, Turnstile siteverify, `/auth/session` route,
+  tier gate: free=Bearer JWT / paid=X-API-Key / else 401); `tower-http` **CorsLayer** (outermost,
+  exact SPA origin via `CORS_ALLOW_ORIGIN`); `API_BASE_URL`→Cloudflare host; `config.rs` reads all
+  from env. Gated to deploy "dark", armed via flags.
+- **CDK (`infra`):** Secrets Manager secrets (edge/jwt/turnstile/api-keys, two-phase
+  provision→arm, RETAIN); env wiring via `secretValue.unsafeUnwrap()` (dynamic references — no
+  literal in git); **`SECRETS_REVISION`** lever (bump to force CFN re-resolution after a secret
+  rotation); API GW second custom domain (Cloudflare) + CORS (`+POST`, `+Authorization`/`x-api-key`);
+  `enableLegacyApiDomain=false`.
+- **SPA (`web`):** Turnstile widget + in-memory session JWT + Bearer request-interceptor + 401
+  re-mint; gated on `VITE_TURNSTILE_SITE_KEY`. Plus **Option-B local-dev Vite proxy** (server-side
+  `x-api-key` injection from gitignored `web/.env.development`, never bundled).
+
+**Commits:** `95f48f3e` (paid-API layer), `67a5a1cf` (CORS + arm + retire legacy API),
+`6df7df63` (dev-proxy + SECRETS_REVISION). Company-repo Terraform committed separately.
+Every commit leak-audited by parallel subagents (credentials / logs / bugs) → clean.
+
+## Design Decisions
+
+### From Plan
+1. **Start on Cloudflare Free**, flat-cost, no AWS WAF as the edge (D1/D5).
+2. **Terraform** for Cloudflare, state in S3 (D2); **repo split, model A** (D9/D10).
+3. **API-only scope on `rumblefishdev.com` full zone** after error 1116 (D7/D8).
+
+### Emerged
+4. **Secret-header (X-Edge-Secret) origin lock, NOT mTLS (Path B).** The repo split made a shared
+   secret self-contained (one Transform Rule + one Secrets Manager value) vs cross-repo mTLS cert
+   plumbing. Reversible.
+5. **Scope grew into a full paid-API tiering layer** (Turnstile free tier + API-key paid tier +
+   session JWT). Originally framed as "lockdown"; the operator chose to build the monetization
+   foundation in the same task. Turnstile widget created as IaC (Terraform).
+6. **`tower-http` CorsLayer added** — pre-existing gap: API GW `defaultCorsPreflightOptions`
+   answers only OPTIONS; the Lambda's actual responses lacked `Access-Control-Allow-Origin`, so the
+   cross-origin SPA (and Swagger "Try it out") failed. Locked to the exact SPA origin, no creds.
+7. **`API_BASE_URL` → Cloudflare host** (was the now-locked legacy host) so OpenAPI `servers` /
+   Swagger target the edge.
+8. **Legacy `api.sorobanscan.rumblefish.dev` retired** (`enableLegacyApiDomain=false`) — redundant
+   once everything uses the CF host; closes the extra REGIONAL surface.
+9. **`SECRETS_REVISION` env lever** — `{{resolve:secretsmanager}}` env vars only re-resolve when the
+   template changes; rotating a secret value needs a template bump (else `cdk deploy` = "no changes"
+   and the Lambda keeps the stale value).
+10. **Option-B local-dev proxy** — local front → real prod API via a Vite proxy injecting a
+    dedicated dev `x-api-key` server-side; never broadens prod CORS / Turnstile domains.
+
+## Issues Encountered
+- **Cloudflare error 1116** (can't proxy a bare 2-level subdomain on Free/Pro) → re-scope to the
+  full `rumblefishdev.com` zone; then Universal-SSL 2-level limit → **flattened** host
+  `api.sorobanscan` → `api-sorobanscan` (single label). Intentional, pre-cutover.
+- **Turnstile widget apply 403** — the account token lacked `Account → Turnstile → Edit`; added the
+  scope, re-applied (Transform Rule unaffected).
+- **Dynamic-reference no-re-resolve** — `put-secret-value` on api-keys didn't reach the Lambda;
+  `cdk deploy` said "no changes". Fixed with the `SECRETS_REVISION` lever (Emerged #9).
+- **CORS "Failed to fetch"** in the SPA/Swagger — pre-existing missing-Allow-Origin (Emerged #6).
+- **Production incident mid-task (UNRELATED): Galexie disk-full** — captive-core `No space left on
+  device` → crash-loop → indexer starved. Recovered on its own (fresh-disk catch-up), backfilled
+  the gap contiguously, **zero ledger loss**. 30 GB is structurally tight (15 GB state) → will
+  recur → fix spawned as 0290.
+
+## Future Work
+Spawned as backlog tasks (do not re-derive here):
+- **0283** — Drop AWS WAF after soak (`enableWaf:false`, both WebACLs).
+- **0284** — Enable origin-lock synthetic canary for the edge-secret path.
+- **0285** — `disableExecuteApiEndpoint=true` (decouple from `enableApiMtls`) to kill the raw endpoint.
+- **0286** — Galexie `galexieEphemeralStorage` 30→100 (disk-full recurrence).
+- **0287** — OpenAPI security scheme (utoipa) so Swagger "Authorize" works for paid-tier.
+- **0288** — Runtime secrets via Secrets Lambda Extension (retire `SECRETS_REVISION` redeploy-to-rotate).
+- **0289** — Turnstile widget UX (clean gate vs floating overlay) + don't gate all reads behind a solve.
 
 ## Rollback
 
