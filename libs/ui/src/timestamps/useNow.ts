@@ -39,14 +39,21 @@ function subscribe(intervalMs: number, cb: (d: Date) => void): () => void {
 const MIN_INTERVAL_MS = 500;
 
 /**
- * App-wide refresh cadence for relative-time labels ("5s ago"). This is the
- * single source of truth — `useNow` defaults to it, so every relative-time
- * renderer stays fresh without a per-component interval. It MUST stay small
- * enough to keep pace with the live-polled feeds (~5s); a stale `now` lags
- * fresh rows and (absent `formatRelative`'s clamp) renders them "in the
- * future". Do NOT pass a large interval for event-relative timestamps.
+ * App-wide refresh cadence for relative-time labels: 10s. Labels render
+ * exact seconds ("12s ago") but update in 10s steps — the deliberate
+ * trade: calm pages over per-second churn in every row. Live-polled
+ * tables refine this through `LiveNowProvider`, which overrides the tick
+ * with a refetch-synced `now` (update per poll + the same 10s value as
+ * the stall fallback). A row fresher than the last tick is safe:
+ * `formatRelative` clamps negative deltas to "just now".
  */
-export const LIVE_TICK_MS = 1_000;
+export const LIVE_TICK_MS = 10_000;
+
+/**
+ * Refetch-synced `now` override for live-polled tables. Populated by
+ * `LiveNowProvider` (see `LiveNow.tsx`); `useNow` reads it transparently,
+ * so consumers never branch on where `now` comes from.
+ */
 
 export function useNow(intervalMs = LIVE_TICK_MS): Date {
   const safe =

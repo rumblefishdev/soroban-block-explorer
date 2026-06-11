@@ -1,8 +1,7 @@
 import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  formatAmount,
-  formatTps,
+  AnimatedNumber,
   QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -21,8 +20,11 @@ import { LiveIndicator } from './LiveIndicator.js';
 export function ChainOverview() {
   const { data, isLoading, isError, error, refetch } = useNetworkStats();
 
+  // Error state only when there is nothing to show — a transient failed
+  // poll keeps the last good stats on screen instead of collapsing the
+  // panel (the LiveIndicator flips to OFFLINE to signal the condition).
   let content: ReactNode;
-  if (isError) {
+  if (isError && !data) {
     content = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
     );

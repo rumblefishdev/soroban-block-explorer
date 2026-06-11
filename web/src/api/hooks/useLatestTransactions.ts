@@ -1,5 +1,6 @@
 import { listTransactionsOptions } from '@rumblefish/api-types';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 
 import { livePolicy, midpointPollDelay } from '../polling.js';
 
@@ -16,3 +17,4 @@ export const useLatestTransactions = () =>
     refetchInterval: (query) =>
       midpointPollDelay(query.state.data?.data?.[0]?.created_at),
   });
+};

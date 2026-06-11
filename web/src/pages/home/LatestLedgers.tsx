@@ -1,5 +1,6 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
@@ -23,6 +24,9 @@ export function LatestLedgers() {
   const { data, isLoading, isError, error, refetch } = useLatestLedgers();
   const rows = data?.data ?? [];
 
+  // Rows first: a transient failed poll must not blank a populated table —
+  // keep showing the last good rows; the full-size error state is reserved
+  // for "no data at all".
   let body: ReactNode;
   if (isLoading) {
     body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
@@ -30,10 +34,8 @@ export function LatestLedgers() {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
-  } else if (rows.length === 0) {
-    body = <TableEmptyState kind="ledgers" />;
   } else {
-    body = <LedgersTable rows={rows} />;
+    body = <TableEmptyState kind="ledgers" />;
   }
 
   return (

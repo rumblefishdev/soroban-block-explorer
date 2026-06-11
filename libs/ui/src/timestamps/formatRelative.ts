@@ -14,8 +14,9 @@ export function formatRelative(
   if (!Number.isFinite(thenMs) || thenMs <= 0) return FALLBACK;
 
   // Every caller renders a recorded on-chain event (ledger close, tx created) —
-  // always in the past. A negative delta is client/chain clock skew, not a real
-  // future timestamp, so clamp to 0 ("just now") instead of rendering "in 12s".
+  // always in the past. A negative delta is client/chain clock skew OR a row
+  // fresher than the last 10s `useNow` tick, so clamp to 0 ("just now")
+  // instead of rendering "in 12s".
   const sec = Math.max(0, Math.floor((now.getTime() - thenMs) / 1000));
   if (sec < 5) return 'just now';
   if (sec < 60) return `${sec}s ago`;

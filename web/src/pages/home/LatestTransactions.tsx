@@ -1,5 +1,6 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
   PollingIndicator,
   QueryErrorState,
   TableEmptyState,
@@ -39,10 +40,8 @@ export function LatestTransactions() {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
-  } else if (rows.length === 0) {
-    body = <TableEmptyState kind="transactions" />;
   } else {
-    body = <LatestTransactionsTable rows={rows} />;
+    body = <TableEmptyState kind="transactions" />;
   }
 
   return (
