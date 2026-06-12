@@ -59,6 +59,11 @@ export function LatestTransactionsTable({
   rows,
 }: LatestTransactionsTableProps) {
   return (
-    <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />
+    <ExplorerTable
+      columns={columns}
+      rows={rows}
+      rowKey={(row) => row.hash}
+      highlightNewRows
+    />
   );
 }

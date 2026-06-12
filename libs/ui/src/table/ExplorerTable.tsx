@@ -9,7 +9,8 @@ import {
   TableHead,
   TableRow,
 } from '@mui/material';
-import type { ReactNode } from 'react';
+import { alpha } from '@mui/material/styles';
+import { useEffect, useRef, type ReactNode } from 'react';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -30,6 +31,14 @@ export interface ExplorerTableProps<T> {
   sortDir?: SortDirection;
   onSortChange?: (id: string, dir: SortDirection) => void;
   emptyState?: ReactNode;
+  /**
+   * Live-feed mode: rows whose key was absent on the previous render get a
+   * brief background flash, so an appended row reads as "new entry" rather
+   * than the whole table silently swapping. The initial mount never
+   * flashes. Leave off for paginated tables — a page change replaces every
+   * key and would flash the entire page.
+   */
+  highlightNewRows?: boolean;
 }
 
 interface SortableHeaderProps {
@@ -108,8 +117,25 @@ export function ExplorerTable<T>({
   sortDir = 'desc',
   onSortChange,
   emptyState,
+  highlightNewRows = false,
 }: ExplorerTableProps<T>) {
   const isEmpty = rows.length === 0;
+
+  // Keys visible on the previous render — `null` until the first commit so
+  // the initial payload doesn't flash. Replaced (not unioned) each render:
+  // in an append-feed a key absent from the previous render is, exactly, a
+  // new row.
+  const prevKeys = useRef<Set<string> | null>(null);
+  const keys = rows.map((row, idx) => rowKey(row, idx));
+  const prev = prevKeys.current;
+  const freshKeys =
+    highlightNewRows && prev !== null
+      ? new Set(keys.filter((k) => !prev.has(k)))
+      : null;
+  useEffect(() => {
+    if (highlightNewRows) prevKeys.current = new Set(keys);
+  });
+
   return (
     <TableContainer
       sx={{
@@ -184,6 +210,19 @@ export function ExplorerTable<T>({
                         : theme.palette.surface.grayMain,
 
                     height: 44,
+                    ...(freshKeys?.has(keys[idx]) && {
+                      '@media (prefers-reduced-motion: no-preference)': {
+                        animation: 'explorerRowEnter 1.5s ease-out',
+                      },
+                      '@keyframes explorerRowEnter': {
+                        from: {
+                          backgroundColor: alpha(
+                            theme.palette.surface.primaryMain,
+                            0.16
+                          ),
+                        },
+                      },
+                    }),
                   })}
                 >
                   {columns.map((col) => (

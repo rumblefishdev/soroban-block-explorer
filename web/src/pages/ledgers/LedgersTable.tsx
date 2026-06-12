@@ -18,6 +18,9 @@ interface LedgersTableProps {
   sortDir?: SortDirection;
   /** `(columnId, direction)` — forwarded straight from the sorted column. */
   onSortChange?: (id: string, dir: SortDirection) => void;
+  /** Flash newly-appended rows — for the live home feed only; paginated
+   *  pages replace every key and would flash the whole page. */
+  highlightNewRows?: boolean;
 }
 
 function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
@@ -84,6 +87,7 @@ export function LedgersTable({
   rows,
   sortDir,
   onSortChange,
+  highlightNewRows = false,
 }: LedgersTableProps) {
   const sortable = sortDir != null && onSortChange != null;
   const columns = makeColumns(sortable);
@@ -92,6 +96,7 @@ export function LedgersTable({
       columns={columns}
       rows={rows}
       rowKey={(row) => String(row.sequence)}
+      highlightNewRows={highlightNewRows}
       {...(sortable
         ? {
             sortBy: 'sequence',
