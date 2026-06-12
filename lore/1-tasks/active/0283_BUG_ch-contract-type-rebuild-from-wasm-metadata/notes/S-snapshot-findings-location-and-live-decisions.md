@@ -29,6 +29,11 @@ larger: 59.7M / 138.5M, with SAC-leak regrown).
 
 ## Step 0 results (run locally as proxy)
 
+> Re-verified 2026-06-12: after a machine restart both containers were down;
+> restarted `ch-snap` + `ch-ui`, all 10 restored tables intact (row counts
+> match), Q1–Q4 reproduce the numbers below 1:1. These stand as the reference
+> results until the prod re-run (README Step 0b).
+
 **Q1 — verdict breakdown (`soroban_contracts FINAL`, contract_type):**
 
 | contract_type | count   | meaning                         |

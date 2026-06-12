@@ -97,6 +97,15 @@ history:
       Step 5 rewritten as decided; AC updated. Earlier 2026-06-11 entries
       mis-attributed to stkrolikiewicz (stale session file) — corrected, the
       whole session was karolkow.
+  - date: 2026-06-12
+    status: active
+    who: karolkow
+    note: >
+      Snapshot env re-verified after machine restart (ch-snap/ch-ui
+      restarted, all 10 restored tables intact, Q1-Q4 reproduce 1:1).
+      Step 0 split into 0a (snapshot proxy - DONE, results recorded in
+      README as standing reference) and 0b (prod re-run - OPEN, mTLS);
+      AC updated accordingly. Pausing here for now.
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
@@ -203,14 +212,32 @@ model, contracts-vs-rows, pending breakdown, location + live decisions:
 
 ## Implementation Plan
 
-### Step 0 — verification queries on prod CH (no code)
+### Step 0a — verification queries on the snapshot proxy (DONE 2026-06-11, re-verified 2026-06-12)
 
-Run the four queries from
+The four queries from
 [notes/S-deep-dive-root-cause.md §Verification queries](notes/S-deep-dive-root-cause.md)
-(verdict breakdown; would-be-Nft count via `wasm_interface_metadata` join;
-Bachini `CDA5FGE4…` sanity row; pending volume under would-be-Nft
-contracts). These size the promote volume BEFORE building anything and
-confirm the root cause empirically. Requires mTLS cert
+run against the local `ch-snap` restore of `snapshot_b_post_0252_20260526`
+(2026-05-21 / Phase 6 state — the closest available proxy for prod until the
+mTLS run happens). Results — recorded here as the standing reference numbers:
+
+| Query                                            | Result                                                                                  |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Q1 verdict breakdown (`soroban_contracts FINAL`) | SAC(0) 294,963 / Other(1) 21,523 / **Nft(2) 1** / Fungible(3) 2 / NULL 4,875            |
+| Q2 would-be-Nft contracts after rebuild          | **107** (would-be-Fungible: 3,937 exact-predicate)                                      |
+| Q3 Bachini `CDA5FGE4…` sanity                    | `contract_type=1` (Other), `is_sac=false`, has wasm — bug confirmed on a known-real NFT |
+| Q4 promote volume in pending                     | **11,023** `nfts_pending` tokens / **19,451** `nft_ownership_pending` events            |
+
+Re-verified 2026-06-12 after a machine restart (containers restarted, all 10
+restored tables intact, all four queries reproduce 1:1). Full detail in the
+[findings note](notes/S-snapshot-findings-location-and-live-decisions.md).
+
+### Step 0b — re-run on prod CH (OPEN, required before go-live)
+
+Same four queries against the live Hetzner CH — the snapshot numbers above are
+the 2026-05-21 state; live 2026-06-10 pending was already larger (59.7M /
+138.5M) with the SAC-leak regrown (8.6M / 18.9M), so prod counts WILL differ
+in the drop buckets (promote volume should stay in the same ballpark). This
+re-sizes the run and confirms nothing drifted. Requires mTLS cert
 (`infra-hetzner/ca/issue-client-cert.sh`) + `~/.config/soroban-prod.env`.
 
 ### Step 1 — `ch-maint contract-type-rebuild` (NEW crate, not backfill-runner)
@@ -378,9 +405,12 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
 
 ## Acceptance Criteria
 
-- [ ] Step 0 verification queries run on prod; results recorded in task
-      notes (verdict breakdown, would-be-Nft contract count, pending
-      volume under those contracts).
+- [x] **Step 0a** verification queries run on the snapshot proxy; results
+      recorded (Q1 verdict breakdown 294,963/21,523/1/2/4,875; Q2
+      would-be-Nft 107; Q3 Bachini=Other; Q4 promote 11,023/19,451).
+      Re-verified 2026-06-12.
+- [ ] **Step 0b** same queries re-run on prod CH (mTLS); results recorded —
+      go-live sizing (drop buckets will differ: live pending 59.7M/138.5M + regrown SAC-leak).
 - [ ] New crate `crates/ch-maintenance-runner` (bin `ch-maint`) created; `repair-tier1`,
       `asset-aggregates`, `nft-reclassify` relocated out of backfill-runner into it.
 - [ ] `ch-maint contract-type-rebuild` implemented (staging+EXCHANGE, Rust-side
