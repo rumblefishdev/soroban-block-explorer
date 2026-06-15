@@ -29,14 +29,27 @@
              100GiB caps tripped under normal filter use (CH Code: 201). The
              partition prune bounds any single query to ~one partition, so this
              higher cap still backstops an unpruned-scan regression. Lower back
-             toward ~1-2B once the skip-index makes filters seek. -->
+             toward ~1-2B once the skip-index makes filters seek.
+
+             read_rows 10B→50B: normal traffic hit exactly 10.02B/10B in a
+             single hour window (api_reader, 2026-06-15) and 201-ed every CH
+             endpoint. read_bytes is the real IO ceiling (~105 GB observed at
+             10B rows → ~525 GB at 50B, still under the 1 TiB cap), so 50B gives
+             ~5x headroom on the row proxy without loosening the byte guard.
+
+             errors 1000→0 (unlimited): a QUOTA_EXCEEDED rejection counts as an
+             error, so once read_rows tripped, the errors counter (1051/1000)
+             also blew and self-reinforced the lockout for the rest of the
+             window. An error cap on a single trusted read-only service is a
+             footgun, not a throttle — read_rows/read_bytes are the real
+             resource guards. -->
         <api_throttle>
             <interval>
                 <duration>3600</duration>
                 <queries>10000</queries>
-                <errors>1000</errors>
+                <errors>0</errors>
                 <result_rows>10000000000</result_rows>
-                <read_rows>10000000000</read_rows>
+                <read_rows>50000000000</read_rows>
                 <read_bytes>1099511627776</read_bytes>
                 <execution_time>1000</execution_time>
             </interval>
