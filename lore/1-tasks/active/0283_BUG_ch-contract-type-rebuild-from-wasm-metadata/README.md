@@ -106,6 +106,74 @@ history:
       Step 0 split into 0a (snapshot proxy - DONE, results recorded in
       README as standing reference) and 0b (prod re-run - OPEN, mTLS);
       AC updated accordingly. Pausing here for now.
+  - date: 2026-06-15
+    status: active
+    who: karolkow
+    note: >
+      Implementation session (Claude). LIVE inline fix landed for G1
+      (deploy verdict via writer prefetch of prior-ledger WASM), G2
+      (assets type-3 row on a Fungible verdict), G9 (event routing via
+      cross-ledger verdict). G9 done as Option (b) per-ledger batched
+      lookup, then upgraded to Option (c) lazy cache = the PG
+      `ClassificationCache` pattern, consolidated into `domain`
+      (single home; indexer/db-clickhouse re-export; the duplicate PG
+      copy moved to .trash). G3 found UNNEEDED live (G1 + protocol
+      ordering upload-before-deploy → nothing accumulates; closed). G5
+      (name-clobber) CONFIRMED a real bug via devil's-advocate (PG used a
+      column UPDATE, CH whole-row RMT clobbers) — DEFERRED (patch G5a/b or
+      the fundamental name-side-table per ADR 0048). BATCH:
+      `contract-type-rebuild` built in backfill-runner (staging+EXCHANGE,
+      Rust classifier reuse, dry-run, idempotent) with the
+      assets-fungible-backfill bundled as its Phase 5; `nft-reclassify`
+      audited (complete, correct, semantically identical to the live
+      router). Staging helpers deduped into `crate::ch_staging`
+      (repair-tier1 / asset-aggregates / contract-type-rebuild).
+      All edits local, NOT committed. Build + clippy green; new unit
+      tests for G1/G2/G9 + cache + rebuild pass. Two follow-ups sharpened:
+      deploy-linkage (the 4,461 orphans — `created`-only deploy filter
+      drops `restored` instances, but restored is a CANDIDATE not the
+      verified dominant cause; needs raw-XDR re-parse or Soroban RPC to
+      confirm) and WASM-upgrade-never-reclassified (confirmed; the parser
+      drops `updated` instances, pinned by test `skip_updated_contract_
+      instance`; severity low/theoretical). New follow-up: cache lives in
+      `domain` (move the legacy PG path off the trashed copy fully when PG
+      is removed). Crate relocation to `ch-maintenance-runner` still
+      deferred (logic developed in backfill-runner for now).
+  - date: 2026-06-15
+    status: active
+    who: karolkow
+    note: >
+      (session 2, Claude) Adjacent-bug analysis + RPC verification.
+      SHIPPED: SAC-skeleton suppression filter on /v1/contracts list (PG
+      queries.rs + CH queries_ch.rs) — only `is_sac` rows backed by an
+      `assets` type-2 row are listed; hides ~293k phantom skeletons; detail
+      endpoint unfiltered. WASM-upgrade fix REJECTED-as-naive: flipping the
+      `created`-only filter to include `updated` fabricates wrong
+      deployer/deployed_at_ledger and CLOBBERS the real deploy row under
+      RMT(version=wasm_uploaded_at_ledger) — same family as G5; needs a
+      writer-merge, folded into the G5 follow-up. Sub-agent audit of the
+      indexer found 2 NEW issues: (a) `extract_account_states` drops
+      `removed` for accounts → AccountMerge leaves a stale native-balance
+      row (no zero tombstone; trustlines DO zero out) — medium; (b)
+      `extract_contract_interfaces` dropping `Restored` (contract.rs:23)
+      also defeats the G1 prior-verdict prefetch for TTL-restored WASM —
+      medium-high coupling. SENIOR REFRAME of G5: `soroban_contracts.name`
+      is the lone late+partial writer on the identity row; ADR 0048 already
+      established "separate table per independent writer" but its blind spot
+      is intra-writer two-cadence clobber. contract_type/wasm_hash do NOT
+      need splitting (always written as complete rows). G5 options table:
+      G5a fold same-ledger / G5b writer-merge / G5c name→side-table / G5d
+      drop-name / (G5e version-only = rejected). RPC VERIFICATION of the
+      4,461 deploy-linkage orphans (script .tmp-rpc-0283/verify.js, batched
+      getLedgerEntries on mainnet.sorobanrpc.com): 200/200 sampled orphans
+      = `instance_absent_or_archived` (NOT in live state), positive control
+      Bachini found → method sound. CONCLUSION: RPC-live-backfill is a DEAD
+      branch for this population. NEW hypothesis: orphan profile (is_sac=
+      false + ALL deploy fields NULL) == G5 name-clobber victim profile, so
+      part of the 4,461 may be G5 fallout, not a parser change-type gap —
+      two discriminator CH queries handed off (orphan name-NOT-NULL count;
+      orphan max event ledger vs head). All session edits local, NOT
+      committed; verify.js is throwaway/uncommitted.
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
@@ -209,6 +277,48 @@ model, contracts-vs-rows, pending breakdown, location + live decisions:
   until hot `nfts` fills; 0282 needs a real NFT population sample.
 - ~27.6M accumulated SAC-leak rows (0221) in pending get dropped by the
   same reclassify run — separate manual drains become unnecessary.
+
+## Open problems (unsolved — standing list as of 2026-06-15 session 2)
+
+The core 0283 classification gap is fixed (live G1/G2/G9 + batch rebuild,
+all local/uncommitted). These remain OPEN:
+
+1. **deploy-linkage — 4,461 orphans (root cause now UNKNOWN, not just
+   "restored").** Contracts that emit events but have no deploy row / wasm_hash.
+   RPC check (200/200 sample) shows they are ALL absent from Soroban RPC live
+   state → **RPC-live-backfill rejected**. Two live sub-hypotheses, undecided:
+   (a) **G5 clobber victims** — profile (is_sac=false + all deploy fields NULL)
+   matches a name-write clobber exactly; if so it's not a parser gap at all.
+   (b) **archived/TTL** real contracts whose data lives only in historical
+   ledger meta → needs archive re-parse (Hubble/Galexie), not RPC. Discriminator
+   queries pending: orphan `name IS NOT NULL` count (G5 signal) + orphan max
+   event ledger vs head (archival signal). Until resolved, ~99% of pending
+   cannot drain and drop-outright stays unsafe.
+2. **G5 name-clobber.** Confirmed. Name-only RMT row NULLs out
+   wasm_hash/deployer/contract_type. Options A–D (see session-2 history);
+   recommended G5a+G5b (writer-merge) or G5c (name→side-table, completes ADR
+   0048). NOT fixed.
+3. **WASM-upgrade never reclassified.** `extract_contract_deployments` drops
+   `updated` instance entries (state.rs:59); naive fix clobbers (G5 family).
+   Correct fix = writer-merge; fold into the G5 follow-up. NOT fixed.
+4. **interface-`Restored` gap (NEW).** `extract_contract_interfaces`
+   (contract.rs:23) takes `Created|Updated` only, drops `Restored` → no
+   `wasm_interface_metadata` row for TTL-restored WASM → ALSO defeats the G1
+   prior-verdict prefetch. Medium-high. NOT fixed.
+5. **AccountMerge balance tombstone (NEW, off-scope but real).**
+   `extract_account_states` drops `removed` for accounts → merged account keeps
+   a stale `account_balances_current` row (trustlines DO zero out; asymmetric).
+   Needs verification + fix. NOT fixed.
+6. **SAC-skeleton root-derivation (context).** 294,963 phantom skeleton rows
+   still WRITTEN by the indexer; the list filter (shipped) only HIDES them in
+   `/v1/contracts`. Underlying over-derivation untouched.
+7. **Bachini / i128 SEP-39 extraction (Step 7).** i128 token_id events never
+   extracted → that NFT has 0 pending rows. Separate subsystem. NOT fixed.
+8. **G5 side-table = `ch-maintenance-runner` crate relocation** still deferred
+   (rebuild logic lives in backfill-runner for now).
+9. **Operational/prod (need live CH / mTLS, not code):** Step 0b prod queries,
+   Step 3 prod run, instrumentation + verification, RTT probe, E15/16/17 smoke,
+   docs (ADR 0046, runbooks 0217/0221, clickhouse-pilot).
 
 ## Implementation Plan
 
@@ -337,9 +447,17 @@ already hold a `clickhouse::Client` — `writer.rs:72`, `handler/mod.rs:130`).
 - **G1** verdict at deploy: one batched `wasm_hash IN(...)` lookup, only on
   deploy-bearing ledgers (**0.18%** of ledgers).
 - **G2** `assets` type-3 row on a Fungible verdict (same trigger).
-- **G3** promote pending→hot on an actual Nft flip (~once per 4 days).
+- **G3** promote pending→hot on an actual Nft flip (~once per 4 days) — note:
+  with G1 live + protocol ordering (upload precedes deploy) nothing accumulates
+  to promote going-forward, so this needs no separate live step; historical
+  pending is covered by the batch backstop (see Addendum 3).
 - **G5** name-write clobber fix (name-only RMT row must not NULL out
-  wasm_hash/deployer — read-merge before re-emit).
+  wasm*hash/deployer — read-merge before re-emit). \_DEFERRED (2026-06-15) —
+  confirmed real bug (PG used a column UPDATE; CH whole-row RMT clobbers).
+  Options: G5a suppress the same-ledger name-only row (cheap), G5b cross-ledger
+  prefetch+merge, or the fundamental fix — move `name` to its own RMT side
+  table joined at read (ADR 0048 pattern), which eliminates the two-writer
+  clobber class entirely.*
 - **G9** verdict at event-routing time: lazy in-memory verdict cache
   (5,707 distinct emitting contracts; **~9 cache-misses/day**; never cache
   unknown; Nft/Fungible verdicts are immutable once set). G9 **also closes the
@@ -413,13 +531,18 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       go-live sizing (drop buckets will differ: live pending 59.7M/138.5M + regrown SAC-leak).
 - [ ] New crate `crates/ch-maintenance-runner` (bin `ch-maint`) created; `repair-tier1`,
       `asset-aggregates`, `nft-reclassify` relocated out of backfill-runner into it.
-- [ ] `ch-maint contract-type-rebuild` implemented (staging+EXCHANGE, Rust-side
-      classifier reuse, `--dry-run`, idempotent).
-- [ ] `ch-maint assets-fungible-backfill` implemented (Step 2 — insert missing
-      type-3 Soroban-fungible `assets` rows from `contract_type=3`).
-- [ ] Unit/integration test: contract with `Other` verdict + matching
-      `wasm_interface_metadata` carrying `owner_of` flips to `Nft`;
-      SAC row untouched; contract without metadata untouched.
+      (DEFERRED 2026-06-15 — logic developed in `backfill-runner` for now;
+      shared staging helpers already deduped into `crate::ch_staging`.)
+- [x] `contract-type-rebuild` implemented — DONE 2026-06-15 in `backfill-runner`
+      (staging+EXCHANGE, Rust classifier reuse, `--dry-run` flip/asset counts,
+      idempotent). Live-CH integration run still pending (logic unit-tested).
+- [x] `assets-fungible-backfill` implemented — DONE 2026-06-15, **bundled as
+      Phase 5 of `contract-type-rebuild`** (insert type-3 rows from
+      `contract_type=3`, `NOT EXISTS` guard; PG-bridge parity).
+- [x] Unit test (2026-06-15): deploy with a prior-ledger `Nft` WASM verdict
+      flips to `Nft`; SAC untouched; no-verdict stays `Other`; Fungible→type-3
+      asset; Nft→no asset (G1/G2 stage tests). Live-CH integration test of the
+      rebuild itself still pending.
 - [ ] Prod run executed: rebuild → assets-backfill → `nft-reclassify`;
       before/after counts recorded (hot `nfts`/`nft_ownership` non-zero —
       local proxy ~11,023 / 19,451 promote; SAC/fungible pending dropped;
@@ -427,11 +550,15 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
 - [ ] E15/E16/E17 smoke against prod after the run (links 0259).
 - [x] **`queries_ch.rs::contract_type_name` fixed** (2→nft, 3→fungible) + test
       updated — DONE 2026-06-11. Verify `GET /v1/contracts` counts post-run.
-- [ ] **LIVE fix DECIDED — inline in the indexer** (Step 5): G1 verdict at
-      deploy + G2 assets row + G3 promote-at-flip + G5 name-clobber fix +
-      G9 routing cache — fail-open, batched, gated to rare ledgers
-      (measured: 0 ms on ~99% of ledgers, 4–8 ms otherwise). 3rd-Lambda
-      alternative evaluated and dropped after CTO review.
+- [x] **LIVE inline fix — G1 + G2 + G9 IMPLEMENTED** (2026-06-15, fail-open,
+      writer-prefetch → pure-stage maps): G1 deploy verdict, G2 assets type-3,
+      G9 event routing via cross-ledger verdict + lazy `ClassificationCache`
+      (consolidated in `domain`). **G3 closed** — unneeded live (G1 +
+      upload-before-deploy ordering ⇒ nothing accumulates to promote).
+      **G5 (name-clobber) DEFERRED** — confirmed real bug (PG column-UPDATE vs
+      CH whole-row RMT clobber); patch G5a/b or fundamental name-side-table
+      (ADR 0048). 3rd-Lambda alternative dropped after CTO review. Live-CH
+      integration + prod verification still pending (next 3 AC items).
 - [ ] RTT Lambda→Hetzner measured (one probe via mTLS) — confirms the last
       assumption (30 ms) behind the live numbers.
 - [ ] **Inline step instrumented + verified on prod**: emit per-ledger timing
@@ -443,6 +570,29 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
 - [ ] Follow-up task spawned: **deploy-linkage gap** — 4,461 contracts emit
       events but have no deploy/wasm_hash ever (99.4% of pending; top
       `CDP5RUMSC7YJ…` = 4.86M rows); blocks the TRUNCATE endgame.
+      **Confirmed defect (0283):** `extract_contract_deployments`
+      (`state.rs:59`) filters `change_type == "created"` only, so a
+      state-archival **`restored`** contract-instance entry (which DOES carry a
+      `wasm_hash`) is silently dropped — the parser emits `restored`
+      (`ledger_entry_changes.rs:154`) and every sibling extractor accepts it
+      (`state.rs:352`); the deploy extractor's `created`-only filter is the
+      asymmetry. **But `restored` is only a CANDIDATE cause, NOT verified as
+      the dominant one** (devil's-advocate audit): the 4,461 "never seen at
+      all" bucket more plausibly comes from meta-unavailable / unparsed deploys;
+      `restored` likely explains a tail. **Not verifiable on the CH snapshot**
+      (the dropped entries aren't there; soroban_events giant absent locally) —
+      verify by re-parsing raw S3 XDR for a sample orphan (e.g. `CDP5RUMSC7YJ…`)
+      or RPC `getLedgerEntries`. Fix splits into: (a) widen the deploy filter to
+      `restored`/`updated` (cheap; also fixes the WASM-upgrade follow-up below),
+      and (b) RPC-backfill wasm_hash for orphans that have no `created` at all.
+      **Ordered plan (do NOT re-parse everything first):** 1. **Verify the hypothesis cheaply via Soroban RPC** — `getLedgerEntries`
+      on a sample of orphan contract instances (`LedgerKeyContractInstance`):
+      do they exist on-chain, with a `wasm_hash`, and is the verdict what we
+      expect? Confirms whether the orphans are recoverable + which mechanism
+      (restored vs never-created) dominates. 2. **Only then decide the fix mechanism:** RPC-backfill (one-shot fetch of
+      wasm_hash for orphans, no re-parse) **vs** parser re-parse of raw S3
+      XDR (widen `created`→`restored`/`updated`, heavier, full re-ingest).
+      Pick based on step-1 findings (volume, recoverability, cost).
 - [ ] Follow-up task spawned: **SAC skeleton exposure** — 294,963 derived
       skeleton rows (92% of `soroban_contracts`) visible in `/v1/contracts`
       with no filter (real violation of "no speculative user-facing rows").

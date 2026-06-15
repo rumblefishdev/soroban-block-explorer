@@ -122,6 +122,8 @@ pub fn prepare(
         lp_positions,
         contract_name_writes,
         &[],
+        &HashMap::new(),
+        &HashMap::new(),
     )
 }
 
@@ -138,6 +140,17 @@ pub fn prepare(
 /// directly; legacy callers via [`prepare`] get a no-op override list
 /// and behave exactly as before — the override mechanism stays opt-in
 /// at the call site, so the addition is fully backward-compatible.
+///
+/// `prior_wasm_verdicts` (task 0283 live G1 fix) carries cross-ledger
+/// WASM verdicts the pure stage cannot see: on Soroban `uploadContractWasm`
+/// and `createContract` are separate transactions in (almost always)
+/// different ledgers, so a deploy's WASM is invisible to the same-ledger
+/// `wasm_classification` map below and the contract would persist the parser
+/// default `Other`. The writer pre-fetches the verdict for such hashes from
+/// the already-persisted `wasm_interface_metadata` (see
+/// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
+/// override consults it as a fallback after the same-ledger map. Legacy
+/// callers via [`prepare`] pass an empty map and behave exactly as before.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_with_sac_overrides(
     ledger: &ExtractedLedger,
@@ -156,6 +169,8 @@ pub fn prepare_with_sac_overrides(
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
     sac_overrides: &[SacOverride],
+    prior_wasm_verdicts: &HashMap<[u8; 32], ContractType>,
+    prior_contract_verdicts: &HashMap<String, ContractType>,
 ) -> Result<StagedLedger, SchemaError> {
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
@@ -374,15 +389,26 @@ pub fn prepare_with_sac_overrides(
         };
         let deployed = i64::from(dep.deployed_at_ledger);
         // Task 0118 Phase 2 (PG-side mirror) — if this deployment's
-        // wasm was classified in the same ledger and carries a
-        // definitive `Nft` / `Fungible` verdict, override the parser
-        // default (`Other` for non-SAC) before the row reaches CH.
-        // SAC deploys stay `Token` (is_sac short-circuits WASM
+        // wasm carries a definitive `Nft` / `Fungible` verdict, override
+        // the parser default (`Other` for non-SAC) before the row reaches
+        // CH. SAC deploys stay `Token` (is_sac short-circuits WASM
         // classification — SACs have no WASM).
+        //
+        // Verdict source, in precedence order:
+        //   1. `wasm_classification` — WASM uploaded in THIS ledger.
+        //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
+        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      (task 0283 live G1). This is the common Soroban case
+        //      (upload + deploy are separate txs / ledgers); without it
+        //      the contract would persist `Other` and its NFT events would
+        //      route to quarantine until the batch backstop drains them.
         let mut contract_type = dep.contract_type;
         if !dep.is_sac
             && let Some(hash) = wasm_hash
-            && let Some(&classified) = wasm_classification.get(&hash)
+            && let Some(classified) = wasm_classification
+                .get(&hash)
+                .or_else(|| prior_wasm_verdicts.get(&hash))
+                .copied()
             && matches!(classified, ContractType::Nft | ContractType::Fungible)
         {
             contract_type = classified;
@@ -876,6 +902,40 @@ pub fn prepare_with_sac_overrides(
         },
     );
 
+    // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
+    //
+    // Mirror of PG `insert_assets_from_reclassified_contracts`: a contract
+    // whose verdict resolved to `Fungible` (same-ledger classification or the
+    // writer's prior-ledger prefetch via the deploy override above) gets a
+    // bespoke-Soroban (`asset_type = 3`) asset row carrying only the
+    // `contract_id` — code/issuer are empty, aggregates are filled later by the
+    // `asset-aggregates` batch. `push_asset` dedups against any row the parser
+    // already emitted same-batch; SAC short-circuits `Fungible`, so these never
+    // collide with a `Sac` (type-2) row. Read from the staged `contract_rows`
+    // so the corrected verdict (incl. the prior-ledger override) is honoured.
+    let fungible_contract_ids: Vec<i64> = out
+        .contract_rows
+        .iter()
+        .filter(|r| !r.is_sac && r.contract_type == Some(ContractType::Fungible as i16))
+        .map(|r| r.id)
+        .collect();
+    for contract_id in fungible_contract_ids {
+        push_asset(
+            &mut out,
+            &mut asset_seen,
+            AssetRow {
+                asset_type: domain::TokenAssetType::Soroban as i16,
+                asset_code: String::new(),
+                issuer_id: 0,
+                contract_id,
+                name: None,
+                total_supply: None,
+                holder_count: None,
+                icon_url: None,
+            },
+        );
+    }
+
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------
     //
     // Build a per-contract verdict map keyed by strkey. Sources, in
@@ -886,11 +946,13 @@ pub fn prepare_with_sac_overrides(
     //        - WASM-classified deploy (the override applied above).
     //   2. SAC overrides (also Token) — these were skipped from Pass-2
     //      stubs, so they're in `out.contract_rows` already.
-    // Contracts with NO entry → treat as `Other`/uncached → route to
-    // pending. CH has no DB access in the stage, so prior-ledger
-    // classifications are not visible here; this is the same semantic
-    // PG would produce for a worker with an empty `ClassificationCache`
-    // — pending now, drained / promoted later via the runbook.
+    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
+    // route to pending. The stage itself has no DB access; cross-ledger
+    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
+    // writer's lookup of `soroban_contracts` for contracts emitting NFT
+    // rows/events here but deployed earlier. This restores the PG
+    // `ClassificationCache` semantic the CH cutover dropped — without it a
+    // later transfer from an already-classified NFT would quarantine.
     let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
     for row in &out.contract_rows {
         if let Some(ty_i16) = row.contract_type
@@ -901,18 +963,23 @@ pub fn prepare_with_sac_overrides(
     }
 
     // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
+    // (G9, cross-ledger) is the fallback for contracts not deployed here.
     enum NftRoute {
         Hot,
         Pending,
         Drop,
     }
     let route_for = |strkey: &str| -> NftRoute {
-        match verdict_by_contract.get(strkey).copied() {
+        let verdict = verdict_by_contract
+            .get(strkey)
+            .copied()
+            .or_else(|| prior_contract_verdicts.get(strkey).copied());
+        match verdict {
             Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
             Some(ContractType::Nft) => NftRoute::Hot,
-            // `Other` (cached or just-fetched) and uncached (no entry)
-            // both go to quarantine — same semantic as PG-side
-            // `resolve_nft_filter`.
+            // `Other` and uncached (no entry in either source) both go to
+            // quarantine — same semantic as PG-side `resolve_nft_filter`.
             _ => NftRoute::Pending,
         }
     };

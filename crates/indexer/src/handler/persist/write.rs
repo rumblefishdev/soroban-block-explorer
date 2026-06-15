@@ -13,8 +13,8 @@ use domain::{AssetType, ContractType, NftEventType, OperationType, TokenAssetTyp
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 
+use super::ClassificationCache;
 use super::HandlerError;
-use super::classification_cache::ClassificationCache;
 use super::staging::{AssetRow, BalanceRow, Staged, TxRow, WasmRow};
 
 const CHUNK_SIZE: usize = 5000;
