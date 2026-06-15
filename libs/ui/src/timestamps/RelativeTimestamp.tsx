@@ -20,6 +20,8 @@ export function RelativeTimestamp({
   timestamp,
   variant = 'bodySmRegular',
 }: RelativeTimestampProps) {
+  // `useNow` is refetch-synced inside a LiveNowProvider (live tables) and
+  // the 10s wall-clock tick everywhere else — transparent to this component.
   const now = useNow();
   const iso = toIso(timestamp);
   const label = iso ? formatRelative(timestamp, now) : FALLBACK;

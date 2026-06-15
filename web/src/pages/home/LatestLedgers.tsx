@@ -1,5 +1,6 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
@@ -20,9 +21,13 @@ import { ViewAllLink } from './ViewAllLink.js';
  * the Figma home design: sequence, hash, closed-at, protocol, tx count).
  */
 export function LatestLedgers() {
-  const { data, isLoading, isError, error, refetch } = useLatestLedgers();
+  const { data, dataUpdatedAt, isLoading, isError, error, refetch } =
+    useLatestLedgers();
   const rows = data?.data ?? [];
 
+  // Rows first: a transient failed poll must not blank a populated table —
+  // keep showing the last good rows; the full-size error state is reserved
+  // for "no data at all".
   let body: ReactNode;
   if (isLoading) {
     body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
@@ -33,7 +38,11 @@ export function LatestLedgers() {
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="ledgers" />;
   } else {
-    body = <LedgersTable rows={rows} />;
+    body = (
+      <LiveNowProvider dataUpdatedAt={dataUpdatedAt}>
+        <LedgersTable rows={rows} />
+      </LiveNowProvider>
+    );
   }
 
   return (

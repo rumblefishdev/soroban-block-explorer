@@ -369,6 +369,7 @@ pub async fn fetch_list(
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
+                    WHERE ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
                  ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
@@ -432,6 +433,7 @@ pub async fn fetch_list(
                     WHERE type = {op_type} \
                       AND intDiv(ledger_sequence, 500000) \
                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
@@ -473,12 +475,23 @@ pub async fn fetch_list(
             // sort key — also the correct in-ledger apply order, which the old
             // `id`-hash tie-break did NOT preserve), not the `id` surrogate.
             // See `handlers::list_cursor_for`.
+            // Cap the candidate scan at the newest ledger actually present in
+            // `ledgers`. The indexer can make a transaction visible slightly
+            // ahead of its ledger row; without this bound the inner LIMIT picks
+            // those head transactions, and the `INNER JOIN ledgers` below then
+            // drops the entire page (their `l` row does not exist yet) — the
+            // poll returns an empty list even though the feed is healthy. The
+            // join is load-bearing (`created_at = l.closed_at`), so the fix is
+            // to never page past the ledgers we have rather than to LEFT JOIN.
+            // The bound is the PK prefix, so it prunes via the index and is a
+            // no-op except at the live head.
             let sql = format!(
                 "SELECT {SLIM_PROJECTION} \
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                      AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
                       AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
                       AND ({src} IS NULL OR source_id = {src}) \
                     ORDER BY ledger_sequence {order}, application_order {order} \

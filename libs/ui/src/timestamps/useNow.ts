@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 
 const tickers = new Map<
   number,
@@ -39,21 +39,36 @@ function subscribe(intervalMs: number, cb: (d: Date) => void): () => void {
 const MIN_INTERVAL_MS = 500;
 
 /**
- * App-wide refresh cadence for relative-time labels ("5s ago"). This is the
- * single source of truth — `useNow` defaults to it, so every relative-time
- * renderer stays fresh without a per-component interval. It MUST stay small
- * enough to keep pace with the live-polled feeds (~5s); a stale `now` lags
- * fresh rows and (absent `formatRelative`'s clamp) renders them "in the
- * future". Do NOT pass a large interval for event-relative timestamps.
+ * App-wide refresh cadence for relative-time labels: 1s. Labels render
+ * exact seconds ("12s ago") and update every second so the count advances
+ * smoothly. Live-polled tables refine this through `LiveNowProvider`, which
+ * overrides the tick with a refetch-synced `now` (update per poll + the
+ * same 1s value as the stall fallback). A row fresher than the last tick is
+ * safe: `formatRelative` clamps negative deltas to "just now".
  */
 export const LIVE_TICK_MS = 1_000;
 
+/**
+ * Refetch-synced `now` override for live-polled tables. Populated by
+ * `LiveNowProvider` (see `LiveNow.tsx`); `useNow` reads it transparently,
+ * so consumers never branch on where `now` comes from.
+ */
+export const LiveNowContext = createContext<Date | null>(null);
+
 export function useNow(intervalMs = LIVE_TICK_MS): Date {
+  const liveNow = useContext(LiveNowContext);
+  const hasLive = liveNow !== null;
   const safe =
     Number.isFinite(intervalMs) && intervalMs >= MIN_INTERVAL_MS
       ? intervalMs
       : MIN_INTERVAL_MS;
   const [now, setNow] = useState(() => tickers.get(safe)?.now ?? new Date());
-  useEffect(() => subscribe(safe, setNow), [safe]);
-  return now;
+  useEffect(() => {
+    // Inside a LiveNowProvider the provider drives `now` — skip the
+    // ticker subscription so the component doesn't re-render on a
+    // wall-clock it never reads.
+    if (hasLive) return undefined;
+    return subscribe(safe, setNow);
+  }, [safe, hasLive]);
+  return liveNow ?? now;
 }
