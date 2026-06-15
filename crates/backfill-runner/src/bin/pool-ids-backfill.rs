@@ -67,7 +67,6 @@ use clap::Parser;
 use db_clickhouse::persist::PartitionWriter;
 use db_clickhouse::persist::rows::{LiquidityPoolSnapshotRow, OperationAppearanceRow};
 use db_clickhouse::persist::stage::{self, StagedLedger};
-use serde_json::Value;
 use tracing::{error, info, warn};
 
 /// Public-archive S3 partition size (folder granularity). Independent of the
@@ -141,38 +140,6 @@ fn affected_op_rows(op_rows: Vec<OperationAppearanceRow>) -> Vec<OperationAppear
         .collect()
 }
 
-/// Sum `gross_volume_a` (asset-A-side trade volume, stroops) per pool from the
-/// `claimedAtoms` the parser attached to crossing ops (task 0266 Phase 2 /
-/// 0279). Keyed by raw 32-byte pool id to match `LiquidityPoolSnapshotRow`.
-fn gross_volume_a_by_pool(
-    operations: &[(String, Vec<xdr_parser::types::ExtractedOperation>)],
-) -> HashMap<[u8; 32], i128> {
-    let mut gross: HashMap<[u8; 32], i128> = HashMap::new();
-    for (_tx, ops) in operations {
-        for op in ops {
-            let Some(atoms) = op.details.get("claimedAtoms").and_then(Value::as_array) else {
-                continue;
-            };
-            for atom in atoms {
-                let (Some(pool_hex), Some(amount_a)) = (
-                    atom.get("poolId").and_then(Value::as_str),
-                    atom.get("amountA").and_then(Value::as_i64),
-                ) else {
-                    continue;
-                };
-                let Ok(bytes) = hex::decode(pool_hex) else {
-                    continue;
-                };
-                let Ok(pool_id) = <[u8; 32]>::try_from(bytes.as_slice()) else {
-                    continue;
-                };
-                *gross.entry(pool_id).or_insert(0) += i128::from(amount_a);
-            }
-        }
-    }
-    gross
-}
-
 /// Take prepare's snapshot rows, keep only the pools that were **traded**
 /// this ledger, and stamp their `gross_volume_a`. The row is written whole
 /// (reserves + total_shares + gross_volume_a); `tvl`/`volume`/`fee_revenue`
@@ -244,7 +211,7 @@ async fn rows_for_file(path: &Path, seq: u32) -> Result<LedgerWrite, Box<dyn std
         snapshot_rows,
         ..
     } = staged;
-    let gross = gross_volume_a_by_pool(&parsed.operations);
+    let gross = stage::gross_volume_a_by_pool(&parsed.operations);
     Ok(LedgerWrite {
         op_rows: affected_op_rows(op_rows),
         snapshot_rows: augment_snapshots(snapshot_rows, &gross, seq),
@@ -470,7 +437,7 @@ mod tests {
                 ])),
             ],
         )];
-        let gross = gross_volume_a_by_pool(&ops);
+        let gross = stage::gross_volume_a_by_pool(&ops);
         assert_eq!(gross.get(&[0x11u8; 32]), Some(&800i128));
         assert_eq!(gross.get(&[0x22u8; 32]), Some(&900i128));
     }
