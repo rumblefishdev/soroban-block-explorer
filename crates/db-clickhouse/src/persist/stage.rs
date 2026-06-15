@@ -55,6 +55,41 @@ use super::ids;
 use super::rows::*;
 use crate::SchemaError;
 
+/// Sum `gross_volume_a` (asset-A-side trade volume, stroops) per pool from the
+/// `claimedAtoms` the parser attaches to path-payment / offer ops (the 0261
+/// claim-atom extractor emits `amountA` per atom). Keyed by raw 32-byte pool id
+/// to match [`LiquidityPoolSnapshotRow`]. Trades only — LP deposits/withdrawals
+/// carry no claimed atoms. Shared by live ingest (via [`prepare`]) and the 0266
+/// backfill worker, so the value is identical on either path.
+pub fn gross_volume_a_by_pool(
+    operations: &[(String, Vec<ExtractedOperation>)],
+) -> HashMap<[u8; 32], i128> {
+    let mut gross: HashMap<[u8; 32], i128> = HashMap::new();
+    for (_tx, ops) in operations {
+        for op in ops {
+            let Some(atoms) = op.details.get("claimedAtoms").and_then(Value::as_array) else {
+                continue;
+            };
+            for atom in atoms {
+                let (Some(pool_hex), Some(amount_a)) = (
+                    atom.get("poolId").and_then(Value::as_str),
+                    atom.get("amountA").and_then(Value::as_i64),
+                ) else {
+                    continue;
+                };
+                let Ok(bytes) = hex::decode(pool_hex) else {
+                    continue;
+                };
+                let Ok(pool_id) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+                    continue;
+                };
+                *gross.entry(pool_id).or_insert(0) += i128::from(amount_a);
+            }
+        }
+    }
+    gross
+}
+
 #[derive(Debug, Default)]
 pub struct StagedLedger {
     pub ledger_sequence: i64,
@@ -549,6 +584,10 @@ pub fn prepare_with_sac_overrides(
     }
 
     // ---- liquidity_pool_snapshots ----
+    // Per-(pool, ledger) asset-A trade volume from claim atoms (0261 extractor).
+    // Live ingest now derives it directly (previously backfill-only); the 0266
+    // worker reuses this same value via `prepare`, so live + backfill agree.
+    let gross_volume_by_pool = gross_volume_a_by_pool(operations);
     for snap in pool_snapshots {
         let pool_id = decode_hash(&snap.pool_id, "snapshot.pool_id")?;
         let reserve_a = snap
@@ -584,10 +623,10 @@ pub fn prepare_with_sac_overrides(
                 .as_deref()
                 .map(decimal7_string_to_i128)
                 .transpose()?,
-            // Live ingest does not derive gross_volume_a (no claim-atom
-            // aggregation here yet); the 0266 backfill / 0247 wiring populate
-            // it. Task 0261/0268.
-            gross_volume_a: None,
+            // Asset-A-side trade volume for this (pool, ledger) from claim atoms
+            // (0261). `None` when the pool had no trade this ledger. USD volume/
+            // fee_revenue remain read-time (ADR 0048); those columns stay NULL.
+            gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
         });
     }
 

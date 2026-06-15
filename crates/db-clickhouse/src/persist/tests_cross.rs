@@ -670,6 +670,81 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
 }
 
 #[test]
+fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
+    // 0261/0266: live ingest now derives gross_volume_a from claimed atoms and
+    // stamps it onto the traded pool's snapshot row; an untraded pool stays None.
+    let ledger = synthetic_ledger();
+    let seq = ledger.sequence;
+    let tx = synthetic_tx(0x33);
+    let traded = "aa".repeat(32);
+    let quiet = "bb".repeat(32);
+    let op = ExtractedOperation {
+        transaction_hash: tx.hash.clone(),
+        operation_index: 1,
+        op_type: OperationType::PathPaymentStrictSend,
+        source_account: None,
+        details: serde_json::json!({
+            "poolIds": [traded],
+            "claimedAtoms": [
+                { "poolId": traded, "amountA": 500i64 },
+                { "poolId": traded, "amountA": 300i64 },
+            ],
+        }),
+    };
+    let ops = vec![(tx.hash.clone(), vec![op])];
+    let snap = |pool: &str| xdr_parser::types::ExtractedLiquidityPoolSnapshot {
+        pool_id: pool.to_string(),
+        ledger_sequence: seq,
+        created_at: 0,
+        reserves: serde_json::json!({ "a": 1_000i64, "b": 2_000i64 }),
+        total_shares: "0".to_string(),
+        tvl: None,
+        volume: None,
+        fee_revenue: None,
+    };
+    let snaps = vec![snap(&traded), snap(&quiet)];
+
+    let staged = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &ops,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &snaps,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    let traded_row = staged
+        .snapshot_rows
+        .iter()
+        .find(|r| r.pool_id == [0xAAu8; 32])
+        .expect("traded snapshot row");
+    assert_eq!(
+        traded_row.gross_volume_a,
+        Some(800),
+        "live prepare must sum claimed-atom amountA per pool"
+    );
+    let quiet_row = staged
+        .snapshot_rows
+        .iter()
+        .find(|r| r.pool_id == [0xBBu8; 32])
+        .expect("quiet snapshot row");
+    assert_eq!(
+        quiet_row.gross_volume_a, None,
+        "untraded pool keeps gross_volume_a = None"
+    );
+}
+
+#[test]
 fn prepare_lp_deposit_single_element_pool_ids() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x32);
