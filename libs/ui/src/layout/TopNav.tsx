@@ -75,10 +75,13 @@ const TPS_FORMAT: Format = {
   maximumFractionDigits: 1,
 };
 
-/** ≥1M compacts to a one-decimal `M` suffix (the slim header has no room
- *  for nine grouped digits); below that, plain grouped integer. Mirrors
- *  the old string `formatNumber` exactly, as Intl options so NumberFlow
- *  can animate the digits. */
+/** ≥1M compacts to a one-decimal compact suffix (the slim header has no
+ *  room for nine grouped digits); below that, plain grouped integer.
+ *  Expressed as Intl options so NumberFlow can animate the digits. Close to
+ *  the old string `formatNumber` but not identical: whole millions keep one
+ *  decimal here ("5.0M" vs the old "5M"), and ≥1e9 uses Intl's `B` unit
+ *  ("2.0B" vs the old M-only "2000M"). Both are intentional — the chain
+ *  counters are well under 1e9 and the forced decimal reads consistently. */
 function countFormat(n: number): Format {
   return n >= 1_000_000
     ? {
