@@ -10,7 +10,7 @@ import { LIVE_TICK_MS, LiveNowContext } from './useNow.js';
  * ages atomically (a new row lands and every "Xs ago" advances in the same
  * frame) instead of each row changing on an unrelated wall-clock tick.
  *
- * The fallback interval (same 10s as the global `useNow` tick) is the
+ * The fallback interval (same 1s as the global `useNow` tick) is the
  * safety net for a stalled feed (hidden tab, API outage): it keeps labels
  * aging honestly when no refetch arrives, and is reset by every refetch —
  * on a healthy per-ledger poll (~5.8s) it never fires.
