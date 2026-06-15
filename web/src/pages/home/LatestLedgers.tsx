@@ -21,7 +21,8 @@ import { ViewAllLink } from './ViewAllLink.js';
  * the Figma home design: sequence, hash, closed-at, protocol, tx count).
  */
 export function LatestLedgers() {
-  const { data, isLoading, isError, error, refetch } = useLatestLedgers();
+  const { data, dataUpdatedAt, isLoading, isError, error, refetch } =
+    useLatestLedgers();
   const rows = data?.data ?? [];
 
   // Rows first: a transient failed poll must not blank a populated table —
@@ -34,8 +35,14 @@ export function LatestLedgers() {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
-  } else {
+  } else if (rows.length === 0) {
     body = <TableEmptyState kind="ledgers" />;
+  } else {
+    body = (
+      <LiveNowProvider dataUpdatedAt={dataUpdatedAt}>
+        <LedgersTable rows={rows} />
+      </LiveNowProvider>
+    );
   }
 
   return (

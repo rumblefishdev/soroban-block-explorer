@@ -63,7 +63,6 @@ export function LatestTransactionsTable({
       columns={columns}
       rows={rows}
       rowKey={(row) => row.hash}
-      highlightNewRows
     />
   );
 }
