@@ -310,6 +310,7 @@ pub async fn fetch_transactions(
         "SELECT tp.ledger_sequence AS ledger_sequence, tp.transaction_id AS transaction_id \
          FROM transaction_participants tp \
          WHERE tp.account_id = ? \
+           AND tp.ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
            AND ({cl} IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} ({cl}, {ct})) \
          ORDER BY tp.ledger_sequence {order}, tp.transaction_id {order} \
          LIMIT 1 BY tp.ledger_sequence, tp.transaction_id \

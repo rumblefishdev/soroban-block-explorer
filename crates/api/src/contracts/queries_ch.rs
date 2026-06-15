@@ -439,6 +439,7 @@ pub async fn fetch_invocation_appearances(
             SELECT ledger_sequence, transaction_id, caller_id, amount \
             FROM soroban_invocations_appearances \
             WHERE contract_id = ? \
+              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
               AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
             ORDER BY ledger_sequence {order}, transaction_id {order} \
             LIMIT ? \
@@ -624,7 +625,7 @@ pub async fn fetch_events(
          JOIN transactions t \
               ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence \
          INNER JOIN ledgers l ON l.sequence = se.ledger_sequence \
-         WHERE se.contract_id = ?{cursor_clause} \
+         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
          ORDER BY se.ledger_sequence {order}, se.transaction_id {order}, se.event_index {order} \
          LIMIT 1 BY se.ledger_sequence, se.transaction_id, se.event_index \
          LIMIT ?"
