@@ -1,7 +1,7 @@
 ---
 title: 'S: LP analytics on ClickHouse — TVL-only decision + Prices-API contract'
 type: synthesis
-status: seed
+status: developing
 spawned_from: ../README.md
 spawns: []
 tags: [clickhouse, enrichment, lp, prices-api, tvl, decision]
@@ -14,6 +14,17 @@ history:
       Records the daily decision (ship TVL only; defer volume/fee) and the
       confirmed Prices-API contract. Recreated from session chat after a fresh
       re-clone wiped the earlier uncommitted notes.
+  - date: '2026-06-12'
+    status: developing
+    who: stkrolikiewicz
+    note: >
+      Contract finalized with Oskar. Architecture refined vs the 2026-06-09
+      Variant B: USD is materialized write-time as a retention-proof close_usd
+      per grain and read via prices.* named views directly in-cluster (no sync
+      job, no local prices table). Added "Contract finalized — 2026-06-12"
+      section + recorded the two prices-side implementation deps (native-key
+      alignment, SAC->classic resolver = their 0061). ADR 0048 Decision §2
+      refined in lockstep.
 ---
 
 # LP analytics on ClickHouse — TVL-only decision + Prices-API contract
@@ -68,6 +79,67 @@ Sources: `prices-api-design-after-2nd-review.md` (rumblefishdev/stellar-scf-subm
 
 Backfill pattern (TVL): pull per-asset OHLCV series once, cache in `prices`, join
 locally against snapshots — never 273M per-snapshot API calls.
+
+## Contract finalized — 2026-06-12 (direct in-cluster views + write-time USD)
+
+> Supersedes the Variant B "price-sync job → local `prices` table" framing
+> above. We read the prices service's `prices.*` **named views directly in the
+> same CH cluster** (no HTTP, no sync job, no local copy). ADR 0048 Decision §2
+> refined in lockstep; the compute-at-read core is unchanged.
+
+**USD is materialized write-time.** Prices stores `close_usd` per aggregated
+grain (`_1h`/`_1d`/…), so historical USD is **retention-proof** — independent of
+`oracle_prices` (13-mo). Read-time computes only the TVL/volume multiply
+(on-chain quantity × stored `close_usd`), not the asset→quote→USD pivot. This
+refines the earlier "denomination price = vwap" row: candle `close`/`vwap` is in
+**quote units**; USD is the separate materialized `close_usd`.
+
+**Tiered USD reference** (prices-side): oracle USDC/XLM **in** the oracle window
+(captures depeg) → USDC/USDT peg ≡ $1 × XLM/USDC candle **out** of window. Depth
+reaches XLM/USDC genesis on SDEX (before our 2024-02-20 floor); exact first
+ledger TBC from the backfill run. Peg ≡ $1 is an approximation during depeg —
+accepted tolerance for LP analytics.
+
+**Primitive & key.** `price_usd_at(id, ts) → close_usd`, single-asset (TVL = two
+calls; `volume_usd = gross_volume_a × price_usd_at(A, t)`). Key = natural Stellar
+identity (`native` / `(code, issuer)` / `contract_address`), **never** the
+internal `asset_id` surrogate.
+
+**Failure contract (JOIN-friendly).** `close_usd` is NULL on any failure — never
+an error, never drops the row (designed for our LEFT JOIN). Discriminator beside
+the value:
+
+- `ok` — priced.
+- `no_asset_price` — asset has no candle at T but the USD reference **is** present
+  → partial TVL from the other leg is valid.
+- `no_reference` — the USD reference itself is absent at T (systemic; all
+  XLM-pivot assets NULL). Nuance: a **stablecoin** leg (peg, not XLM-pivot) stays
+  `ok`, so only pools with **both** legs XLM-pivot fully null.
+- Companion `usd_reference(bucket)` view (value / bool per bucket) — LEFT JOIN it
+  to detect systemic blackouts independently of any single asset.
+
+Consumer-side policy (ours, 0199 Phase 2 matrix): `no_asset_price` → partial TVL
+via the priced leg; `no_reference` → NULL when both legs XLM-pivot.
+
+### Two prices-side implementation deps (gate coverage, not the contract)
+
+1. **`native`-key alignment.** Today the writer stores XLM as
+   `asset_type='classic'` with empty issuer (`sink.rs:125`), not `native`; prices
+   will expose XLM as `native` and map internally. **Gates XLM legs = most pools
+   → critical-path.** Confirm: ETA; pure resolver mapping (no re-backfill); one
+   canonical XLM row. Stopgap if delayed — query XLM by its current
+   `(classic,'','')` key.
+2. **SAC→classic resolver = their task 0061.** Today `AssetIdentity` has only
+   `Native`/`Credit{code,issuer}` and the SDEX writer always sets
+   `contract_address=''` (`canonical.rs:6-9`, `sink.rs:135`). Decision: SAC +
+   underlying classic = **one row, one price** (ADR 0004 cross-source merge);
+   pure Soroban-native tokens key on `contract_address`. **Gates SAC-wrapped legs
+   = Soroban-DEX pools (Phoenix/Soroswap/Aquarius) → our 0199 Phase 3.** Phase 1/2
+   (classic PathPayment) is unaffected — naturally phased.
+
+Pending from prices (non-blocking): XLM/USDC first ledger; whether `_1m` carries
+`close_usd` (for T < 7d); grain-selection ownership (view picks coarsest-for-T vs
+caller passes `timeframe`).
 
 ## Deferred — volume / fee_revenue (gated on 0247)
 
