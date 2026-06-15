@@ -2,7 +2,7 @@
 id: '0266'
 title: 'OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill'
 type: OPS
-status: backlog
+status: active
 related_adr: ['0033', '0044', '0045']
 related_tasks:
   ['0199', '0228', '0247', '0252', '0261', '0267', '0268', '0279', '0281']
@@ -83,6 +83,20 @@ history:
       open, pick at kickoff. Also: weight the 3-way split by atom-bearing op
       count per 500k partition (query added), not ledger count, since ledger
       density is non-uniform.
+  - date: '2026-06-12'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active — starting the backfill worker (MVP Phase 1 =
+      pool_ids only; gross_volume_a deferred to Phase 2, gated on the 0279
+      asset-A attribution decision). Ran the per-partition profile on live
+      CH (50,457,424 → 62,981,504): total_ops = 6.14 B, atom_ops = 3.01 B
+      (~49 %). Split metric switched to total_ops (parse-bound, not write-
+      bound); weighted 3-way result M1 P100–110 / M2 P111–118 / M3 P119–125
+      (~4.6 % max imbalance). Disk-space estimate flagged as too low (the
+      old +2–5 % ignored that ~49 % of rows are atom-bearing and full tx
+      folds get re-written) → OPTIMIZE FINAL per-partition + measure delta
+      after partition 1.
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
@@ -274,30 +288,39 @@ Preconditions (2026-06-10 audit):
    partition boundaries (`PARTITION BY intDiv(ledger_sequence,
 500000)`) so transport/INSERT is partition-aligned.
 
-   **Weight the split by atom-bearing op count, not ledger count** —
-   ledger density is non-uniform (post-Soroban-launch ledgers are
-   heavier). Run this on CH to get the per-partition work profile,
-   then cut the 3 ranges at equal cumulative `atom_ops`:
+   **Weight the split by `total_ops`, not ledger count or `atom_ops`.**
+   The worker bottleneck is re-parsing the WHOLE ledger (download +
+   zstd + parse every op to find path payments) — that scales with
+   `total_ops` (ledger density). `atom_ops` only drives the small
+   targeted write. Per-partition profile query (run on live CH;
+   `BETWEEN 50457424 AND <tip>`):
 
    ```sql
-   -- atom-bearing ops = path payments (2,13) + offers (3,4,12);
-   -- these are the only ops the extractor can tag with a pool.
-   SELECT
-       intDiv(ledger_sequence, 500000)              AS part,
-       min(ledger_sequence)                         AS first_ledger,
-       max(ledger_sequence)                         AS last_ledger,
-       countIf(type IN (2, 13, 3, 4, 12))           AS atom_ops,
-       count()                                      AS total_ops
+   SELECT intDiv(ledger_sequence, 500000) AS part,
+          min(ledger_sequence) AS first_ledger,
+          max(ledger_sequence) AS last_ledger,
+          countIf(type IN (2, 13, 3, 4, 12)) AS atom_ops,  -- write proxy
+          count() AS total_ops                              -- parse proxy
    FROM operations_appearances
-   WHERE ledger_sequence BETWEEN 50457424 AND {W}
-   GROUP BY part
-   ORDER BY part;
+   WHERE ledger_sequence BETWEEN 50457424 AND <tip>
+   GROUP BY part ORDER BY part;
    ```
 
-   Baseline split (by ledger count, partitions 100–125, refine with
-   the query above): M1 = P100–P108 (50,457,424→54,499,999), M2 =
-   P109–P117 (54,500,000→58,999,999), M3 = P118–P125
-   (59,000,000→62,527,999).
+   **Measured 2026-06-12** (range `50,457,424 → 62,981,504`, partitions
+   100–125): total_ops = **6.14 B**, atom_ops = **3.01 B** (~49 %).
+   Weighted 3-way split at equal cumulative `total_ops` (⅓ ≈ 2.05 B):
+
+   | M   | partitions | ledgers                 | total_ops | Δ from ⅓ |
+   | --- | ---------- | ----------------------- | --------- | -------- |
+   | M1  | P100–P110  | 50,457,424 → 55,499,999 | 2.139 B   | +4.5 %   |
+   | M2  | P111–P118  | 55,500,000 → 59,499,999 | 2.047 B   | +0.0 %   |
+   | M3  | P119–P125  | 59,500,000 → 62,981,504 | 1.953 B   | −4.6 %   |
+
+   Max imbalance ~4.6 %. Partition counts are uneven (11/8/7) on
+   purpose — later partitions are denser. Re-run + re-cut at kickoff
+   against the real `W` (the tip will have advanced). atom_ops-weighted
+   alternative: M1 P100–106, M2 P107–114, M3 P115–125 (~6.5 % imbalance);
+   total_ops is the better wall-clock proxy.
 
 4. **Per-machine run** (parallel) — for each ledger in the assigned
    range:
@@ -330,8 +353,11 @@ Preconditions (2026-06-10 audit):
    - Spot-check 50 random `(ledger, tx, app_order)` triples:
      `WHERE pool_id IS NOT NULL` row content matches the freshly
      parsed op-meta.
-7. **Force merge** — `OPTIMIZE TABLE operations_appearances FINAL`.
-   Long-running; run in `tmux` with file-fd output.
+7. **Force merge — PER PARTITION**, not once at the end:
+   `OPTIMIZE TABLE operations_appearances PARTITION <P> FINAL` after
+   each partition's INSERTs land, so old (empty-`pool_ids`) rows collapse
+   before the whole table inflates (see Disk space risk). Long-running;
+   `tmux` with file-fd output.
 8. **Re-validate** via task 0267 → E20 compare hash-set ratio
    expected ≥ 99 % (single-hop), 100 % if 0268 Array schema also
    landed.
@@ -343,12 +369,19 @@ Preconditions (2026-06-10 audit):
   via 0272 — hence the snapshot precondition). Re-parse range is
   **strictly historical** (≤ W, the window deploy ledger); rows
   ≥ W are written correctly by the redeployed indexer; no overlap.
-- **Disk space**: re-parse only emits `(ledger, tx, app_order)`
-  rows where we previously had `pool_id = NULL` and now have a
-  derived `pool_id`. Estimated +2–5 % to the operations_appearances
-  table size before merges run (≈ +10–25 GiB depending on table
-  compression). Audit Hetzner `df -h /srv/clickhouse-data` before
-  starting; require ≥ 100 GiB headroom for safety.
+- **Disk space — earlier "+2–5 %" estimate is likely TOO LOW.** The
+  2026-06-12 profile shows **~49 %** of appearance rows are atom-bearing
+  types (3.01 B of 6.14 B). The backfill re-writes the **full fold of
+  every tx that crossed a pool** (not just the pool rows), and old + new
+  rows **coexist until the merge** — so pre-merge inflation could be a
+  large fraction of the table, not 2–5 %. The exact figure is unknowable
+  up front (we don't yet know what fraction of those 3 B ops actually hit
+  an LP vs order-book-only — that's what we're backfilling). Therefore:
+  (a) measure the real delta after the FIRST partition and extrapolate;
+  (b) `OPTIMIZE TABLE … FINAL` **per-partition** (collapse old rows before
+  the whole table inflates), not once at the end; (c) audit
+  `df -h /srv/clickhouse-data` with a much larger margin than 100 GiB,
+  sized from the first-partition measurement.
 - **Insertion-order tiebreaker** in ReplacingMergeTree dedup:
   ensure parser-machine clocks + insert sequence place the new
   rows AFTER the existing NULL rows on the Hetzner timeline. They
@@ -366,7 +399,9 @@ Preconditions (2026-06-10 audit):
       `oa_pool_seek` dropped, 0279 payload decision, fresh snapshot.
 - [ ] 3-machine split + per-machine ledger ranges documented in
       task history.
-- [ ] Hetzner CH disk headroom verified ≥ 100 GiB before kickoff.
+- [ ] Hetzner CH disk headroom verified before kickoff — margin sized
+      from the first-partition delta measurement, NOT a flat 100 GiB
+      (atom-bearing rows are ~49 % of the table; see Disk space risk).
 - [ ] All three machines complete their range; per-machine row
       counts + timing captured.
 - [ ] Rows landed on Hetzner (direct INSERT default; ADR 0045

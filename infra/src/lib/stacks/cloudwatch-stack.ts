@@ -8,8 +8,10 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as synthetics from 'aws-cdk-lib/aws-synthetics';
 import type { Construct } from 'constructs';
 
+import { originLockCanaryCode } from '../canaries/origin-lock.js';
 import type { EnvironmentConfig } from '../types.js';
 
 export interface CloudWatchStackProps extends cdk.StackProps {
@@ -22,6 +24,12 @@ export interface CloudWatchStackProps extends cdk.StackProps {
   /** Type-1 enrichment worker Lambda (task 0191) — error-rate alarm. */
   readonly enrichmentWorkerFunction: lambda.IFunction;
   readonly restApi: apigateway.RestApi;
+  /**
+   * CloudFront `*.cloudfront.net` domain of the SPA distribution, used as a
+   * target by the origin-lockdown canary (task 0277). Optional — when
+   * absent the canary only checks the execute-api URL.
+   */
+  readonly spaDistributionDomainName?: string;
 }
 
 /**
@@ -57,6 +65,7 @@ export class CloudWatchStack extends cdk.Stack {
       enrichmentDlq,
       enrichmentWorkerFunction,
       restApi,
+      spaDistributionDomainName,
     } = props;
 
     // ---------------------
@@ -357,6 +366,70 @@ export class CloudWatchStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
+
+    // ---------------------
+    // Origin-lockdown canary (task 0277 / ADR 0048, Step 7)
+    // ---------------------
+    // Periodically asserts the direct-origin bypass vectors stay BLOCKED
+    // (403): the raw execute-api URL and the *.cloudfront.net domain. Alarms
+    // via the same SNS→Slack topic if either starts answering 2xx — i.e. the
+    // Cloudflare-only origin lockdown regressed. Enable only post-cutover
+    // (validateConfig warns if the locks are off). ~15-min cadence keeps the
+    // canary run cost negligible (~$3-4/mo).
+    if (config.enableOriginLockCanary) {
+      const canary = new synthetics.Canary(this, 'OriginLockCanary', {
+        // AWS Synthetics canary names are capped at 21 chars (and lowercase);
+        // `${envName}-origin-lock` = 22 for "production" would pass synth but
+        // fail CreateCanary at deploy. Fixed short name (production is the only
+        // env; see infrastructure-overview §7.1).
+        canaryName: 'soroban-origin-lock',
+        runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_13_0,
+        test: synthetics.Test.custom({
+          code: synthetics.Code.fromInline(originLockCanaryCode()),
+          handler: 'index.handler',
+        }),
+        schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
+        environmentVariables: {
+          // Only probe a vector whose lock is actually live. With its lock
+          // off an origin legitimately returns 2xx, so probing it would make
+          // the canary alarm forever during a staged (one-leg-at-a-time)
+          // rollout. The raw execute-api URL returns 403 under EITHER API lock:
+          // the app-layer edge-secret check (missing X-Edge-Secret) OR mTLS
+          // (disableExecuteApiEndpoint) — so probe it whenever either is live.
+          // Gating only on enableApiMtls would leave the edge-secret-only prod
+          // config (the current one) with no API target → every run fails.
+          ...((config.enableApiMtls || config.enableEdgeSecretLock) && {
+            EXECUTE_API_URL: restApi.url,
+          }),
+          ...(config.enableOriginSecretLock &&
+            spaDistributionDomainName && {
+              CLOUDFRONT_URL: `https://${spaDistributionDomainName}/`,
+            }),
+        },
+      });
+
+      withActions(
+        new cloudwatch.Alarm(this, 'OriginLockCanaryAlarm', {
+          alarmName: `${config.envName}-origin-lock-bypass`,
+          alarmDescription:
+            'Origin-lockdown canary failed — a direct origin (execute-api / *.cloudfront.net) is answering instead of returning 403. Possible Cloudflare-bypass regression.',
+          metric: canary.metricSuccessPercent({
+            period: cdk.Duration.minutes(15),
+          }),
+          threshold: 100,
+          comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+          // Require 2 consecutive 15-min windows (~30 min) below 100% before
+          // paging — absorbs the cold-start gap before the first run and a
+          // single slow/missed run, while still catching a sustained
+          // regression or a stalled canary.
+          evaluationPeriods: 2,
+          datapointsToAlarm: 2,
+          // Security invariant: no fresh confirmation = treat as a breach,
+          // so a stalled canary also pages rather than failing silent.
+          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+        })
+      );
+    }
 
     // ---------------------
     // Dashboard

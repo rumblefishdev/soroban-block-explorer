@@ -8,6 +8,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
+import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
 import { relativeRecordName, type EnvironmentConfig } from '../types.js';
 
 export interface DeliveryStackProps extends cdk.StackProps {
@@ -86,9 +87,45 @@ export class DeliveryStack extends cdk.Stack {
     //
     // First-deploy gotcha: KVS is empty until you populate it. Until then,
     // requests fail closed and the function returns 503 (safer than open).
+    //
+    // CloudFront permits exactly ONE viewer-request function per behavior.
+    // The origin-secret lock (Cloudflare cutover, ADR 0048) and basic auth
+    // (pre-launch gate, task 0273) are therefore mutually exclusive —
+    // enforced in `validateConfig`. The origin-secret lock takes the slot
+    // when enabled. If both human-gating AND the Cloudflare lock are needed
+    // simultaneously, gate humans at the Cloudflare edge instead (or land a
+    // combined guard function).
     let viewerRequestFunction: cloudfront.Function | undefined;
 
-    if (config.enableBasicAuth) {
+    if (config.enableOriginSecretLock) {
+      // Cloudflare origin-secret lock — KVS holds the expected secret,
+      // populated out-of-band (see origin-secret.ts header). The secret
+      // value is never in this template or git.
+      const originSecretKvs = new cloudfront.KeyValueStore(
+        this,
+        'OriginSecretKvs',
+        {
+          keyValueStoreName: `${config.envName}-soroban-explorer-origin-secret`,
+        }
+      );
+
+      viewerRequestFunction = new cloudfront.Function(
+        this,
+        'OriginSecretFunction',
+        {
+          functionName: `${config.envName}-soroban-explorer-origin-secret`,
+          keyValueStore: originSecretKvs,
+          runtime: cloudfront.FunctionRuntime.JS_2_0,
+          code: cloudfront.FunctionCode.fromInline(
+            originSecretFunctionCode(originSecretKvs.keyValueStoreId)
+          ),
+        }
+      );
+
+      new cdk.CfnOutput(this, 'OriginSecretKvsArn', {
+        value: originSecretKvs.keyValueStoreArn,
+      });
+    } else if (config.enableBasicAuth) {
       const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
         keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
       });

@@ -1,0 +1,12 @@
+# Copy to backend.hcl (gitignored) and fill in. Then:
+#   terraform init -backend-config=backend.hcl
+#
+# Bucket = the CDK-provisioned state bucket (CloudflareBootstrapStack output
+# CloudflareTfStateBucketName), e.g. production-soroban-explorer-cf-tfstate.
+# This is THIS repo's own bucket (D11) — separate from rf-domains' bucket.
+
+bucket       = "production-soroban-explorer-cf-tfstate"
+key          = "sorobanscan-api.tfstate"
+region       = "eu-central-1"
+encrypt      = true
+use_lockfile = true

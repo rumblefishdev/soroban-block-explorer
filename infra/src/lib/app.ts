@@ -11,6 +11,7 @@ import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
 import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
+import { CloudflareBootstrapStack } from './stacks/cloudflare-bootstrap-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -76,7 +77,7 @@ export function createApp({
     cloudFrontWafArn = cloudFrontWaf.webAclArn;
   }
 
-  new DeliveryStack(app, `${prefix}-Delivery`, {
+  const delivery = new DeliveryStack(app, `${prefix}-Delivery`, {
     env,
     config,
     cloudFrontWafArn,
@@ -101,8 +102,19 @@ export function createApp({
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
     restApi: apiGateway.api,
+    spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });
   cloudWatch.addDependency(apiGateway);
+
+  // AWS-side bootstrap for THIS repo's Cloudflare module (task 0277 / ADR 0048):
+  // the Terraform remote-state bucket for infra/cloudflare/. Standalone — no
+  // dependency on the other stacks.
+  if (config.provisionCloudflareBootstrap) {
+    new CloudflareBootstrapStack(app, `${prefix}-CloudflareBootstrap`, {
+      env,
+      config,
+    });
+  }
 
   // HetznerDnsStack only when the env has a real `chDomainName`.
   if (
