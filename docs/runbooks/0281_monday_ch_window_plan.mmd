@@ -11,32 +11,32 @@ flowchart TB
   classDef infra fill:#F1EFE8,stroke:#888780,color:#2C2C2A;
   classDef schema fill:#FAEEDA,stroke:#BA7517,color:#412402;
 
-  W(["W = ostatni insertowany ledger na CH<br/>(po zatrzymaniu lambdy)"]):::startnode
+  W(["W = last ingested ledger on CH<br/>(after stopping the lambda)"]):::startnode
 
-  subgraph S1["1 - Backup (przed mutacja prod)"]
+  subgraph S1["1 - Backup (before prod mutation)"]
     direction TB
-    B0["Usun stary backup z Hetznera"]:::gate
+    B0["Delete old backup on Hetzner"]:::gate
     B1["Snapshot Hetzner"]:::gate
-    B2["rsync aktualny HERO -&gt; inny laptop"]:::gate
-    B3["rsync snapshot Hetzner -&gt; HERO"]:::gate
+    B2["rsync current HERO -&gt; another laptop"]:::gate
+    B3["rsync Hetzner snapshot -&gt; HERO"]:::gate
     B0 --> B1 --> B2 --> B3
   end
 
-  subgraph S2["2 - pool_ids + gross_volume_a (&le; W) -- wymaga 0268 ADD"]
+  subgraph S2["2 - pool_ids + gross_volume_a (&le; W) -- needs 0268 ADD"]
     direction TB
-    P0["Cyborg: top-up [62,996,872 -&gt; W] z S3"]:::backfill
-    P1["prod: drop projekcji oa_pool_seek"]:::backfill
+    P0["Cyborg: top-up [62,996,872 -&gt; W] from S3"]:::backfill
+    P1["prod: drop oa_pool_seek projection"]:::backfill
     P2["transport (FREEZE / rsync / ATTACH)"]:::backfill
-    P3["OPTIMIZE ... PARTITION FINAL per-partycja"]:::backfill
+    P3["OPTIMIZE ... PARTITION FINAL per-partition"]:::backfill
     P1 --> P2
     P0 --> P2
     P2 --> P3
   end
 
-  N3["3 - NFT / assets: reclassify + enrichment<br/>0283 -&gt; 0231 (Karol)<br/>+ do analizy: bug update name zeruje wasm_hash"]:::enrich
-  N4["4 - Walidacja<br/>E20: /v1/liquidity-pools/{id}/transactions vs Horizon<br/>NFT E15-17 niepuste"]:::verify
-  N5["5 - Redeploy + resume<br/>Deploy -&gt; indexer dogania od W"]:::infra
-  N6["6 - Po wznowieniu (po ZIELONYM E20)<br/>0268 Phase 3: MATERIALIZE -&gt; REMOVE DEFAULT -&gt; DROP pool_id"]:::schema
+  N3["3 - NFT / assets: reclassify + enrichment<br/>0283 -&gt; 0231 (Karol)<br/>+ to analyze: name-update bug nulls wasm_hash"]:::enrich
+  N4["4 - Validation<br/>E20: /v1/liquidity-pools/{id}/transactions vs Horizon<br/>NFT E15-17 non-empty"]:::verify
+  N5["5 - Redeploy + resume<br/>Deploy -&gt; indexer catches up from W"]:::infra
+  N6["6 - After resume (after GREEN E20)<br/>0268 Phase 3: MATERIALIZE -&gt; REMOVE DEFAULT -&gt; DROP pool_id"]:::schema
 
   W --> S1
   S1 --> S2

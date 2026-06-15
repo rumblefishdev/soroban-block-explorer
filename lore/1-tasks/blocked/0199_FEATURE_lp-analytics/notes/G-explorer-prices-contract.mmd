@@ -3,20 +3,20 @@
 graph LR
   subgraph PRICES["prices (Oskar) — write-time"]
     direction TB
-    P1["materializuje close_usd<br/>per grain _1h/_1d — retention-proof"]
-    P2["tiered referencja USD<br/>oracle in-window → peg × XLM/USDC"]
-    P3["prices.assets<br/>natural id → asset_id (wewnętrzny)"]
+    P1["materializes close_usd<br/>per grain _1h/_1d — retention-proof"]
+    P2["tiered USD reference<br/>oracle in-window → peg × XLM/USDC"]
+    P3["prices.assets<br/>natural id → asset_id (internal)"]
   end
-  subgraph IFACE["powierzchnia kontraktu — named views, ten sam klaster CH"]
+  subgraph IFACE["contract surface — named views, same CH cluster"]
     direction TB
     V1["price_usd_at(id, ts) → close_usd<br/>key: native / (code,issuer) / contract<br/>NULL-never-error · JOIN-friendly<br/>discr: ok / no_asset_price / no_reference"]
-    V2["usd_reference(bucket) → wartość / bool<br/>systemowy blackout"]
+    V2["usd_reference(bucket) → value / bool<br/>system blackout"]
   end
-  subgraph EXPL["explorer (my) — read-time"]
+  subgraph EXPL["explorer (ours) — read-time"]
     direction TB
-    E1["read-time LEFT JOIN<br/>snapshots × widoki (ledger→bucket)"]
+    E1["read-time LEFT JOIN<br/>snapshots × views (ledger→bucket)"]
     E2["TVL · volume · fee<br/>reserve·price · gva·price_A · fee=vol·bps/1e4"]
-    E3["owns: partial-vs-NULL + single-writer<br/>policy z dyskryminatora"]
+    E3["owns: partial-vs-NULL + single-writer<br/>policy from discriminator"]
   end
   P1 --> V1
   P2 --> V1
@@ -25,8 +25,8 @@ graph LR
   V1 --> E1
   V2 --> E1
   E1 --> E2 --> E3
-  DEPS["pending impl po stronie prices:<br/>native-key alignment → nogi XLM (krytyczne)<br/>SAC→classic resolver = ich 0061 → Soroban-DEX = Phase 3"]
-  DEPS -.->|gatuje pokrycie| V1
+  DEPS["pending impl on the prices side:<br/>native-key alignment → XLM legs (critical)<br/>SAC→classic resolver = their 0061 → Soroban-DEX = Phase 3"]
+  DEPS -.->|gates coverage| V1
   classDef iface fill:#E1F5EE,stroke:#0F6E56,color:#085041;
   classDef side fill:#F1EFE8,stroke:#5F5E5A,color:#444441;
   classDef deps fill:#FAEEDA,stroke:#854F0B,color:#633806;
