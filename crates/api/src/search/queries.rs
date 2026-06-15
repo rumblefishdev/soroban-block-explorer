@@ -3,33 +3,38 @@
 //! Implementation of the canonical SQL in
 //! `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
 //!
-//! Two queries:
-//!
-//! * [`fetch_redirect`] — exact-match short-circuit when `q` is a
-//!   fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey).
-//!   Returns `Some(EntityType, identifier)` for the first table that
-//!   matches, in priority order, or `None` for fall-through to broad
-//!   search.
-//! * [`fetch_search`] — runs the union-of-CTEs broad-search statement
-//!   with the per-bucket `:include_*` flags resolved from the optional
-//!   `?type=` filter.
+//! Single query: [`fetch_search`] runs the union-of-CTEs broad-search
+//! statement with the per-bucket `:include_*` flags resolved from the
+//! optional `?type=` filter. The handler returns a flat
+//! `SearchResults { groups }` response — FE inspects the row count
+//! and routes directly when exactly one hit is present (task 0271).
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
 use super::classifier::Classified;
 use super::dto::{EntityType, SearchHit};
+use crate::common::strkey::pool_id_hex_to_strkey;
 
 // ---------------------------------------------------------------------------
 // Type-filter map
 // ---------------------------------------------------------------------------
 
-/// Per-entity inclusion flags. Defaults to "include everything"; a
-/// caller-supplied `?type=foo,bar` filter narrows it before the query
-/// runs.
+/// Per-entity inclusion flags for the broad-search UNION. Defaults to
+/// "include everything"; a caller-supplied `?type=foo,bar` filter
+/// narrows it before the query runs.
+///
+/// Six flags, one per `EntityType`. Under option C every entity type
+/// has its own broad-search CTE — `transaction` and `pool` match by
+/// exact `BYTEA(32)` on `hash_bytes` (and so produce at most one row);
+/// `account` and `contract` match by `LIKE` prefix on the strkey text
+/// column; `asset` and `nft` match by `ILIKE` substring on the text
+/// label. Whichever bucket fires, the handler treats a singleton
+/// result as a redirect when the entity type is redirect-eligible
+/// (see `SearchRedirect::from_hit`).
 #[derive(Debug, Clone, Copy)]
 pub struct IncludeFlags {
-    pub tx: bool,
+    pub transaction: bool,
     pub contract: bool,
     pub asset: bool,
     pub account: bool,
@@ -40,7 +45,7 @@ pub struct IncludeFlags {
 impl IncludeFlags {
     pub fn all() -> Self {
         Self {
-            tx: true,
+            transaction: true,
             contract: true,
             asset: true,
             account: true,
@@ -51,7 +56,7 @@ impl IncludeFlags {
 
     pub fn none() -> Self {
         Self {
-            tx: false,
+            transaction: false,
             contract: false,
             asset: false,
             account: false,
@@ -62,7 +67,7 @@ impl IncludeFlags {
 
     pub fn enable(&mut self, t: EntityType) {
         match t {
-            EntityType::Transaction => self.tx = true,
+            EntityType::Transaction => self.transaction = true,
             EntityType::Contract => self.contract = true,
             EntityType::Asset => self.asset = true,
             EntityType::Account => self.account = true,
@@ -73,134 +78,14 @@ impl IncludeFlags {
 }
 
 // ---------------------------------------------------------------------------
-// Redirect short-circuit
-// ---------------------------------------------------------------------------
-
-/// Look up the first entity that matches `q` exactly. Used when the
-/// classifier flags `q` as fully-typed — frontend wants to skip the
-/// dropdown and navigate directly.
-///
-/// Priority (matches the human "what was the user looking for?"
-/// expectation when an id-shape value is ambiguous):
-///   1. transaction hash (32-byte BYTEA)
-///   2. liquidity pool id (also 32-byte BYTEA — same `hash_bytes`)
-///   3. account StrKey (full 56 chars, `G…`)
-///   4. soroban contract StrKey (full 56 chars, `C…`)
-///
-/// Returns `None` if no exact row matches; the caller falls through to
-/// broad search so the user still sees suggestions instead of a 404.
-/// Redirect-path result row. Carries the entity coordinates plus the
-/// same `successful` + `last_activity_at` enrichment as a `SearchHit`
-/// so the frontend can render a richer dropdown row when it presents
-/// the redirect as a clickable hit instead of auto-navigating.
-pub struct RedirectRow {
-    pub entity_type: EntityType,
-    pub entity_id: String,
-    pub successful: Option<bool>,
-    pub last_activity_at: Option<DateTime<Utc>>,
-}
-
-pub async fn fetch_redirect(
-    pool: &PgPool,
-    classified: &Classified,
-) -> Result<Option<RedirectRow>, sqlx::Error> {
-    if !classified.is_fully_typed {
-        return Ok(None);
-    }
-
-    if let Some(bytes) = &classified.hash_bytes {
-        // Same `(hash, created_at)` join as the broad-search tx_hits CTE
-        // — composite PK lookup, partition-pruned.
-        let tx: Option<(String, Option<bool>, DateTime<Utc>)> = sqlx::query_as(
-            r#"
-            SELECT encode(thi.hash, 'hex'),
-                   t.successful,
-                   thi.created_at
-            FROM transaction_hash_index thi
-            LEFT JOIN transactions t
-              ON t.hash = thi.hash
-             AND t.created_at = thi.created_at
-            WHERE thi.hash = $1
-            "#,
-        )
-        .bind(bytes.as_slice())
-        .fetch_optional(pool)
-        .await?;
-        if let Some((id, successful, last_activity_at)) = tx {
-            return Ok(Some(RedirectRow {
-                entity_type: EntityType::Transaction,
-                entity_id: id,
-                successful,
-                last_activity_at: Some(last_activity_at),
-            }));
-        }
-
-        let pool_row: Option<(String,)> =
-            sqlx::query_as("SELECT encode(pool_id, 'hex') FROM liquidity_pools WHERE pool_id = $1")
-                .bind(bytes.as_slice())
-                .fetch_optional(pool)
-                .await?;
-        if let Some((id,)) = pool_row {
-            return Ok(Some(RedirectRow {
-                entity_type: EntityType::Pool,
-                entity_id: id,
-                successful: None,
-                last_activity_at: None,
-            }));
-        }
-        return Ok(None);
-    }
-
-    if let Some(strkey) = &classified.strkey_prefix
-        && strkey.len() == 56
-    {
-        match strkey.as_bytes()[0] {
-            b'G' => {
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT account_id FROM accounts WHERE account_id = $1")
-                        .bind(strkey)
-                        .fetch_optional(pool)
-                        .await?;
-                if let Some((id,)) = row {
-                    return Ok(Some(RedirectRow {
-                        entity_type: EntityType::Account,
-                        entity_id: id,
-                        successful: None,
-                        last_activity_at: None,
-                    }));
-                }
-            }
-            b'C' => {
-                let row: Option<(String,)> = sqlx::query_as(
-                    "SELECT contract_id FROM soroban_contracts WHERE contract_id = $1",
-                )
-                .bind(strkey)
-                .fetch_optional(pool)
-                .await?;
-                if let Some((id,)) = row {
-                    return Ok(Some(RedirectRow {
-                        entity_type: EntityType::Contract,
-                        entity_id: id,
-                        successful: None,
-                        last_activity_at: None,
-                    }));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(None)
-}
-
-// ---------------------------------------------------------------------------
 // Broad search
 // ---------------------------------------------------------------------------
 
 /// Run the canonical `22_get_search.sql` UNION of six narrow CTEs and
 /// return the rows partitioned by `entity_type`. The caller groups
 /// these into [`SearchGroups`](super::dto::SearchGroups) for the JSON
-/// response.
+/// response. The FE inspects total row count and navigates directly
+/// when exactly one hit is returned (task 0271).
 pub async fn fetch_search(
     pool: &PgPool,
     q: &str,
@@ -208,27 +93,46 @@ pub async fn fetch_search(
     include: &IncludeFlags,
     per_group_limit: i32,
 ) -> Result<Vec<(String, SearchHit)>, sqlx::Error> {
-    // Verbatim port of `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
+    // Broad-search UNION across all six entity buckets. Task 0271
+    // collapsed the previous two-path design (redirect short-circuit
+    // + broad fallback) into this single SQL — the handler returns a
+    // flat `SearchResults`, and the FE decides "singleton → navigate"
+    // by inspecting row count + routing the hit through `routeForHit`.
     //
-    // `tx_hits` joins `transactions` ON (hash, created_at) — composite PK
-    // gives partition-pruned access. `successful` + `last_activity_at`
-    // come from that join. Other entity-type CTEs select NULLs for both
-    // columns; per-entity last-activity joins are a follow-up.
+    // CTE shape map:
+    //   tx_hits      — exact match on BYTEA(32) hash via `hash_bytes`
+    //                  (singleton ⇒ Redirect via tx detail page)
+    //   pool_hits    — exact match on BYTEA(32) pool_id via `hash_bytes`
+    //                  (singleton ⇒ Redirect via pool detail page;
+    //                  partial-L-prefix support deferred — see 0271
+    //                  Future Work for the CH-era denorm column)
+    //   contract_hits — `LIKE 'PREFIX%'` on contract_id text column
+    //                   OR full-text search when no prefix supplied
+    //   asset_hits    — `ILIKE '%SUBSTR%'` on asset_code text
+    //   account_hits  — `LIKE 'PREFIX%'` on account_id text column
+    //   nft_hits      — `ILIKE '%SUBSTR%'` on n.name text + JOIN to
+    //                   soroban_contracts for the C-strkey routing key
     let sql = r#"
         WITH
         tx_hits AS (
+            -- Composite-PK lookup over `(hash, created_at)` via the
+            -- partition-pruned index. JOIN `transactions` for the
+            -- richer `successful` enrichment surfaced on the redirect
+            -- payload.
             SELECT
-                'transaction'::text       AS entity_type,
-                encode(thi.hash, 'hex')   AS identifier,
-                'ledger ' || thi.ledger_sequence::text AS label,
-                NULL::bigint              AS surrogate_id,
-                t.successful              AS successful,
-                thi.created_at            AS last_activity_at
+                'transaction'::text                AS entity_type,
+                encode(thi.hash, 'hex')            AS identifier,
+                ''::text                           AS label,
+                NULL::varchar                      AS route_token,
+                t.successful                       AS successful,
+                thi.created_at                     AS last_activity_at,
+                NULL::varchar                      AS contract_id,
+                NULL::varchar                      AS token_id
             FROM transaction_hash_index thi
             LEFT JOIN transactions t
               ON t.hash = thi.hash
              AND t.created_at = thi.created_at
-            WHERE $5  = TRUE
+            WHERE $5 = TRUE
               AND $2 IS NOT NULL
               AND thi.hash = $2
             LIMIT $4
@@ -238,9 +142,11 @@ pub async fn fetch_search(
                 'contract'::text          AS entity_type,
                 sc.contract_id            AS identifier,
                 COALESCE(sc.name, '')              AS label,
-                sc.id                     AS surrogate_id,
+                NULL::varchar             AS route_token,
                 NULL::bool                AS successful,
-                NULL::timestamptz         AS last_activity_at
+                NULL::timestamptz         AS last_activity_at,
+                NULL::varchar             AS contract_id,
+                NULL::varchar             AS token_id
             FROM soroban_contracts sc
             WHERE $6 = TRUE
               AND (
@@ -254,10 +160,25 @@ pub async fn fetch_search(
                 'asset'::text                       AS entity_type,
                 COALESCE(a.asset_code, 'XLM')       AS identifier,
                 token_asset_type_name(a.asset_type) AS label,
-                a.id::bigint                        AS surrogate_id,
+                -- Canonical routing token = `canonical_id` in assets/handlers.rs:
+                -- contract StrKey if present, else CODE-ISSUER, else `native`.
+                -- The displayed `identifier` stays the asset code; this is what
+                -- the FE puts in `/assets/:id`.
+                COALESCE(
+                    sc.contract_id,
+                    CASE
+                        WHEN a.asset_code IS NOT NULL AND iss.account_id IS NOT NULL
+                        THEN a.asset_code || '-' || iss.account_id
+                    END,
+                    'native'
+                )                                   AS route_token,
                 NULL::bool                          AS successful,
-                NULL::timestamptz                   AS last_activity_at
+                NULL::timestamptz                   AS last_activity_at,
+                NULL::varchar                       AS contract_id,
+                NULL::varchar                       AS token_id
             FROM assets a
+            LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
+            LEFT JOIN accounts          iss ON iss.id = a.issuer_id
             WHERE $7 = TRUE
               AND (
                       (a.asset_code IS NOT NULL AND a.asset_code ILIKE '%' || $1 || '%')
@@ -270,9 +191,11 @@ pub async fn fetch_search(
                 'account'::text         AS entity_type,
                 a.account_id            AS identifier,
                 COALESCE(a.home_domain, '') AS label,
-                a.id                    AS surrogate_id,
+                NULL::varchar           AS route_token,
                 NULL::bool              AS successful,
-                NULL::timestamptz       AS last_activity_at
+                NULL::timestamptz       AS last_activity_at,
+                NULL::varchar           AS contract_id,
+                NULL::varchar           AS token_id
             FROM accounts a
             WHERE $8 = TRUE
               AND $3 IS NOT NULL
@@ -280,20 +203,32 @@ pub async fn fetch_search(
             LIMIT $4
         ),
         nft_hits AS (
+            -- JOIN soroban_contracts to project the C-strkey + token_id
+            -- composite that the FE needs to route to
+            -- `/nfts/:contract_id/:token_id` (per ADR 0030 / task 0264
+            -- Phase 8a). `n.contract_id` is the surrogate FK; the actual
+            -- public C-strkey lives in `soroban_contracts.contract_id`.
             SELECT
                 'nft'::text                          AS entity_type,
                 n.name                               AS identifier,
                 COALESCE(n.collection_name, '')      AS label,
-                n.id::bigint                         AS surrogate_id,
+                NULL::varchar                        AS route_token,
                 NULL::bool                           AS successful,
-                NULL::timestamptz                    AS last_activity_at
+                NULL::timestamptz                    AS last_activity_at,
+                sc.contract_id                       AS contract_id,
+                n.token_id                           AS token_id
             FROM nfts n
+            JOIN soroban_contracts sc ON sc.id = n.contract_id
             WHERE $9 = TRUE
               AND n.name IS NOT NULL
               AND n.name ILIKE '%' || $1 || '%'
             LIMIT $4
         ),
         pool_hits AS (
+            -- Exact match on BYTEA(32) `pool_id` via `hash_bytes` from
+            -- the classifier (full L-strkey decode). Partial-L prefix
+            -- matching requires a denormalised L-strkey text column —
+            -- deferred to the CH-era follow-up (see 0271 Future Work).
             SELECT
                 'pool'::text                AS entity_type,
                 encode(lp.pool_id, 'hex')   AS identifier,
@@ -302,26 +237,28 @@ pub async fn fetch_search(
                     || ' / '
                     || COALESCE(lp.asset_b_code, 'XLM')
                 )::text                     AS label,
-                NULL::bigint                AS surrogate_id,
+                NULL::varchar               AS route_token,
                 NULL::bool                  AS successful,
-                NULL::timestamptz           AS last_activity_at
+                NULL::timestamptz           AS last_activity_at,
+                NULL::varchar               AS contract_id,
+                NULL::varchar               AS token_id
             FROM liquidity_pools lp
             WHERE $10 = TRUE
               AND $2 IS NOT NULL
               AND lp.pool_id = $2
             LIMIT $4
         )
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM tx_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM tx_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM contract_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM contract_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM asset_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM asset_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM account_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM account_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM nft_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM nft_hits
         UNION ALL
-        SELECT entity_type, identifier, label, surrogate_id, successful, last_activity_at FROM pool_hits
+        SELECT entity_type, identifier, label, route_token, successful, last_activity_at, contract_id, token_id FROM pool_hits
     "#;
 
     let rows = sqlx::query(sql)
@@ -329,7 +266,7 @@ pub async fn fetch_search(
         .bind(classified.hash_bytes.as_deref())
         .bind(classified.strkey_prefix.as_deref())
         .bind(per_group_limit)
-        .bind(include.tx)
+        .bind(include.transaction)
         .bind(include.contract)
         .bind(include.asset)
         .bind(include.account)
@@ -355,18 +292,30 @@ pub async fn fetch_search(
             };
             let identifier: String = row.get("identifier");
             let label: String = row.get("label");
-            let surrogate_id: Option<i64> = row.get("surrogate_id");
+            let route_token: Option<String> = row.get("route_token");
             let successful: Option<bool> = row.get("successful");
             let last_activity_at: Option<DateTime<Utc>> = row.get("last_activity_at");
+            let contract_id: Option<String> = row.get("contract_id");
+            let token_id: Option<String> = row.get("token_id");
+            // Pool identifier on the wire is the canonical `L…` strkey
+            // (per ADR 0008 / task 0264). The CTE projects raw hex from
+            // `BYTEA(32)` — convert at the row-mapper boundary.
+            let identifier = if matches!(parsed, EntityType::Pool) {
+                pool_id_hex_to_strkey(&identifier)
+            } else {
+                identifier
+            };
             Some((
                 entity_type,
                 SearchHit {
                     entity_type: parsed,
                     identifier,
                     label,
-                    surrogate_id,
+                    route_token,
                     successful,
                     last_activity_at,
+                    contract_id,
+                    token_id,
                 },
             ))
         })

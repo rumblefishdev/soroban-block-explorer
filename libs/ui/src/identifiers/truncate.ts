@@ -1,6 +1,7 @@
 import type { EntityType, TruncationConfig } from './types.js';
 
-const ELLIPSIS = '...';
+/** Single-glyph ellipsis (`…`) — the canonical truncation marker. */
+export const ELLIPSIS_CHAR = '…';
 
 // Prefix/suffix lengths verified against the Figma tables (home + the
 // Transactions list page both truncate tx hashes 6/4 and accounts 4/4).
@@ -20,10 +21,11 @@ export function getDefaultTruncation(type: EntityType): TruncationConfig {
 
 export function truncateMiddle(
   value: string,
-  config: TruncationConfig
+  config: TruncationConfig,
+  ellipsis: string = ELLIPSIS_CHAR
 ): string {
   const { prefix, suffix } = config;
   if (prefix <= 0 && suffix <= 0) return value;
-  if (value.length <= prefix + suffix + ELLIPSIS.length) return value;
-  return `${value.slice(0, prefix)}${ELLIPSIS}${value.slice(-suffix)}`;
+  if (value.length <= prefix + suffix + ellipsis.length) return value;
+  return `${value.slice(0, prefix)}${ellipsis}${value.slice(-suffix)}`;
 }

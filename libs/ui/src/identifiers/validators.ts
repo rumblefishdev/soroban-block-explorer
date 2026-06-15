@@ -1,10 +1,10 @@
-import type { EntityType } from './types.js';
-
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
-const HEX_64_LOWER = /^[0-9a-f]{64}$/;
 const STELLAR_ACCOUNT = /^G[A-Z2-7]{55}$/;
 const STELLAR_CONTRACT = /^C[A-Z2-7]{55}$/;
+const STELLAR_POOL = /^L[A-Z2-7]{55}$/;
 const POSITIVE_INT = /^\d+$/;
+/** Classic asset code — 1-12 alphanumeric chars (SEP-11 `AssetCode`). */
+const ASSET_CODE = /^[A-Za-z0-9]{1,12}$/;
 
 export function isTransactionHash(value: string): boolean {
   return HEX_64.test(value);
@@ -23,33 +23,23 @@ export function isLedgerSequence(value: string | number): boolean {
   return POSITIVE_INT.test(s) && Number(s) > 0;
 }
 
-/**
- * Backend serves liquidity-pool ids as a 64-char lowercase hex
- * representation of the SHA-256 pool hash. The strkey encoder
- * (`poolIdHexToStrkey`) requires this shape and throws otherwise,
- * which would crash the detail-page header synchronously on mount.
- * Validate up front so an invalid id renders `NotFoundState` instead
- * of falling into a generic-error banner. Tolerates upper-case input
- * for resilient deep-linking.
- */
 export function isPoolId(value: string): boolean {
-  return HEX_64_LOWER.test(value.toLowerCase());
+  return STELLAR_POOL.test(value);
 }
 
-export function isValidIdentifier(type: EntityType, value: string): boolean {
-  switch (type) {
-    case 'transaction':
-      return isTransactionHash(value);
-    case 'account':
-      return isAccountId(value);
-    case 'contract':
-      return isContractId(value);
-    case 'ledger':
-      return isLedgerSequence(value);
-    case 'pool':
-      return isPoolId(value);
-    case 'asset':
-    case 'nft':
-      return value.length > 0;
-  }
+/**
+ * Canonical asset-id token (polymorphic). Accepts the three forms the
+ * `/assets/:id` route serves: the reserved `native` keyword, a contract
+ * StrKey (a SAC / Soroban asset), or classic `CODE-ISSUER` (a 1-12 char code
+ * and a G-strkey issuer). The numeric surrogate row-id is a backend internal,
+ * not a canonical FE asset id, so it is intentionally rejected here.
+ */
+export function isAssetId(value: string): boolean {
+  if (value === 'native') return true;
+  if (STELLAR_CONTRACT.test(value)) return true;
+  const dash = value.indexOf('-');
+  if (dash <= 0) return false;
+  const code = value.slice(0, dash);
+  const issuer = value.slice(dash + 1);
+  return ASSET_CODE.test(code) && STELLAR_ACCOUNT.test(issuer);
 }

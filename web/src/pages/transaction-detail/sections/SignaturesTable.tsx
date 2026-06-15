@@ -11,8 +11,10 @@ import {
 } from '@mui/material';
 import {
   CopyButton,
+  Dash,
   IdentifierWithCopy,
   monoFontFamily,
+  truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../../detail/SectionCard.js';
@@ -24,22 +26,6 @@ export interface SignatureRow extends SignatureDto {
 
 interface SignaturesTableProps {
   signatures: readonly SignatureRow[];
-}
-
-function truncateHex(hex: string, head = 12, tail = 12): string {
-  if (hex.length <= head + tail + 1) return hex;
-  return `${hex.slice(0, head)}…${hex.slice(-tail)}`;
-}
-
-function Dash() {
-  return (
-    <Typography
-      component="span"
-      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-    >
-      —
-    </Typography>
-  );
 }
 
 export function SignaturesTable({ signatures }: SignaturesTableProps) {
@@ -59,68 +45,73 @@ export function SignaturesTable({ signatures }: SignaturesTableProps) {
           </Typography>
         </Box>
       ) : (
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell
-                sx={(theme) => ({
-                  backgroundColor: theme.palette.surface.backgroundAlt,
-                })}
-              >
-                Signer
-              </TableCell>
-              <TableCell
-                sx={(theme) => ({
-                  width: 110,
-                  backgroundColor: theme.palette.surface.backgroundAlt,
-                })}
-              >
-                Weight
-              </TableCell>
-              <TableCell
-                sx={(theme) => ({
-                  backgroundColor: theme.palette.surface.backgroundAlt,
-                })}
-              >
-                Signature hex
-              </TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {signatures.map((sig) => (
-              <TableRow key={`${sig.hint}-${sig.signature}`}>
-                <TableCell>
-                  {sig.signer != null ? (
-                    <IdentifierWithCopy value={sig.signer} type="account" />
-                  ) : (
-                    <Dash />
-                  )}
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell
+                  sx={(theme) => ({
+                    backgroundColor: theme.palette.surface.backgroundAlt,
+                  })}
+                >
+                  Signer
                 </TableCell>
-                <TableCell>
-                  {sig.weight != null ? sig.weight : <Dash />}
+                <TableCell
+                  sx={(theme) => ({
+                    width: 110,
+                    backgroundColor: theme.palette.surface.backgroundAlt,
+                  })}
+                >
+                  Weight
                 </TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography
-                      component="span"
-                      sx={(theme) => ({
-                        fontFamily: monoFontFamily,
-                        fontSize: 14,
-                        color: theme.palette.text.primary,
-                      })}
-                    >
-                      {truncateHex(sig.signature)}
-                    </Typography>
-                    <CopyButton
-                      value={sig.signature}
-                      ariaLabel="Copy signature"
-                    />
-                  </Stack>
+                <TableCell
+                  sx={(theme) => ({
+                    backgroundColor: theme.palette.surface.backgroundAlt,
+                  })}
+                >
+                  Signature hex
                 </TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHead>
+            <TableBody>
+              {signatures.map((sig) => (
+                <TableRow key={`${sig.hint}-${sig.signature}`}>
+                  <TableCell>
+                    {sig.signer != null ? (
+                      <IdentifierWithCopy value={sig.signer} type="account" />
+                    ) : (
+                      <Dash />
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {sig.weight != null ? sig.weight : <Dash />}
+                  </TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography
+                        component="span"
+                        sx={(theme) => ({
+                          fontFamily: monoFontFamily,
+                          fontSize: 14,
+                          color: theme.palette.text.primary,
+                        })}
+                      >
+                        {truncateMiddle(sig.signature, {
+                          prefix: 12,
+                          suffix: 12,
+                        })}
+                      </Typography>
+                      <CopyButton
+                        value={sig.signature}
+                        ariaLabel="Copy signature"
+                      />
+                    </Stack>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
       )}
     </SectionCard>
   );

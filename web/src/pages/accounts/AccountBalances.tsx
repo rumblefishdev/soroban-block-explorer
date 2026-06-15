@@ -1,26 +1,82 @@
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { AccountBalance } from '@rumblefish/api-types';
-import { EmptyState } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
+import {
+  Chip,
+  EmptyState,
+  formatAmount,
+  IdentifierDisplay,
+  monoFontFamily,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
 
-function isNative(balance: AccountBalance): boolean {
-  return balance.asset_type_name === 'native';
+interface BalanceShape {
+  /** Native XLM — its subline is prose ("Native asset"); non-native sublines
+   *  are issuer addresses, rendered mono. */
+  isNative: boolean;
+  name: string;
+  code: string;
+  subline: string;
+  chipLabel: 'Classic' | 'SAC' | null;
+  href: string | undefined;
 }
 
-function BalanceRow({ balance }: { balance: AccountBalance }) {
-  const native = isNative(balance);
-  const code = native ? 'XLM' : balance.asset_code ?? '—';
-  const typeLabel = native ? 'Native asset' : 'Classic';
+function shape(balance: AccountBalance): BalanceShape {
+  if (balance.asset_type_name === 'native') {
+    return {
+      isNative: true,
+      name: 'Stellar Lumens',
+      code: 'XLM',
+      subline: 'Native asset',
+      chipLabel: null,
+      href: undefined,
+    };
+  }
+  const code = balance.asset_code ?? '—';
+  const issuer = balance.asset_issuer ?? '';
+
+  const isSac = issuer.startsWith('C');
   const href =
-    !native && balance.asset_code && balance.asset_issuer
+    balance.asset_code && balance.asset_issuer
       ? routes.asset(`${balance.asset_code}-${balance.asset_issuer}`)
       : undefined;
+  return {
+    isNative: false,
+    name: code,
+    code,
+    subline: issuer,
+    chipLabel: isSac ? 'SAC' : 'Classic',
+    href,
+  };
+}
+
+function BalanceRow({
+  balance,
+  alt,
+}: {
+  balance: AccountBalance;
+  alt: boolean;
+}) {
+  const s = shape(balance);
+  const nameNode = s.href ? (
+    <IdentifierDisplay
+      value={s.name}
+      type="asset"
+      truncate={false}
+      href={s.href}
+      fontSize={16}
+    />
+  ) : (
+    <Typography
+      variant="bodyMedium"
+      sx={(theme) => ({ color: theme.palette.text.primary })}
+    >
+      {s.name}
+    </Typography>
+  );
 
   return (
     <Box
@@ -29,7 +85,13 @@ function BalanceRow({ balance }: { balance: AccountBalance }) {
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 2,
-        p: 2,
+        px: 2,
+        py: 1,
+
+        backgroundColor: alt
+          ? theme.palette.surface.grayMainAlt
+          : theme.palette.surface.grayMain,
+
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         '&:last-of-type': { borderBottom: 'none' },
       })}
@@ -38,35 +100,59 @@ function BalanceRow({ balance }: { balance: AccountBalance }) {
         direction="row"
         spacing={1.5}
         alignItems="center"
-        sx={{ minWidth: 0 }}
+        sx={{ minWidth: 0, flex: 1 }}
       >
-        <AssetIcon code={code} />
-        <Stack sx={{ minWidth: 0 }}>
-          {href ? (
-            <Link
-              component={RouterLink}
-              to={href}
-              variant="bodySmMedium"
-              sx={{ color: 'text.primary' }}
+        <AssetIcon code={s.code} size={32} />
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'row',
+            gap: 1,
+            alignItems: 'center',
+          }}
+        >
+          <Stack>
+            {nameNode}
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
             >
-              {code}
-            </Link>
-          ) : (
-            <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
-              {code}
-            </Typography>
+              <Typography
+                component="span"
+                sx={(theme) => ({
+                  fontFamily: s.isNative ? undefined : monoFontFamily,
+                  fontSize: 12,
+                  color: theme.palette.text.tertiary,
+                  wordBreak: 'break-all',
+                })}
+              >
+                {s.subline}
+              </Typography>
+            </Stack>
+          </Stack>
+          {s.chipLabel && (
+            <Chip
+              size="sm"
+              color={s.chipLabel === 'SAC' ? 'brown' : 'default'}
+              label={s.chipLabel}
+            />
           )}
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
-            {typeLabel}
-          </Typography>
-        </Stack>
+        </Box>
       </Stack>
-      <Stack sx={{ alignItems: 'flex-end', flexShrink: 0 }}>
-        <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+      <Stack sx={{ alignItems: 'flex-end', flexShrink: 0 }} spacing={0.25}>
+        <Typography
+          variant="bodyMedium"
+          sx={(theme) => ({ color: theme.palette.text.primary })}
+        >
           {formatAmount(balance.balance, 2)}
         </Typography>
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
-          {code}
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
+          {s.code}
         </Typography>
       </Stack>
     </Box>
@@ -89,13 +175,11 @@ export function AccountBalances({
   return (
     <SectionCard title="Balances" meta={meta}>
       {balances.length === 0 ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-          <EmptyState
-            icon={<AccountBalanceWalletIcon />}
-            title="No balances yet"
-            description="Balances will appear here once network activity begins"
-          />
-        </Box>
+        <EmptyState
+          icon={<AccountBalanceWalletIcon />}
+          title="No balances yet"
+          description="Balances will appear here once network activity begins"
+        />
       ) : (
         balances.map((balance, index) => (
           <BalanceRow
@@ -103,6 +187,7 @@ export function AccountBalances({
               balance.asset_issuer ?? index
             }`}
             balance={balance}
+            alt={index % 2 === 1}
           />
         ))
       )}

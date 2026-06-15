@@ -1,6 +1,7 @@
 import { alpha, type Components, type Theme } from '@mui/material/styles';
 
 import { scales } from './colors.js';
+import { secondaryFontFamily } from './typography.js';
 
 export const overrides: Components<Theme> = {
   MuiCssBaseline: {
@@ -36,7 +37,8 @@ export const overrides: Components<Theme> = {
         textTransform: 'none',
         fontWeight: 500,
         letterSpacing: '-0.02em',
-        gap: 12,
+
+        gap: 8,
         '&.Mui-focusVisible': {
           outline: `2px solid ${theme.palette.stroke.action}`,
           outlineOffset: 2,
@@ -175,7 +177,7 @@ export const overrides: Components<Theme> = {
     styleOverrides: {
       root: ({ theme }) => ({
         borderRadius: 8,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontWeight: 500,
         letterSpacing: '-0.02em',
         height: 'auto',
@@ -207,7 +209,12 @@ export const overrides: Components<Theme> = {
       },
       {
         props: { size: 'sm' },
-        style: { padding: '2px 8px', fontSize: 14, lineHeight: 1.4 },
+        style: {
+          padding: '2px 8px',
+          fontSize: 12,
+          fontWeight: 700,
+          lineHeight: 1.4,
+        },
       },
 
       {
@@ -233,15 +240,21 @@ export const overrides: Components<Theme> = {
       },
       {
         props: { color: 'blue' },
-        style: { backgroundColor: '#dbeafe', color: '#155dfc' },
+        style: { backgroundColor: scales.blue[100], color: scales.blue[600] },
       },
       {
         props: { color: 'violet' },
-        style: { backgroundColor: '#ede9fe', color: '#7f22fe' },
+        style: {
+          backgroundColor: scales.violet[100],
+          color: scales.violet[600],
+        },
       },
       {
         props: { color: 'emerald' },
-        style: { backgroundColor: '#d0fae5', color: '#009966' },
+        style: {
+          backgroundColor: scales.emerald[100],
+          color: scales.emerald[600],
+        },
       },
       {
         props: { color: 'neutral' },
@@ -262,7 +275,10 @@ export const overrides: Components<Theme> = {
       },
       {
         props: { color: 'brown' },
-        style: { backgroundColor: '#724311', color: '#fffcc2' },
+        style: {
+          backgroundColor: scales.primary[900],
+          color: scales.primary[100],
+        },
       },
       {
         props: { color: 'accent' },
@@ -318,7 +334,7 @@ export const overrides: Components<Theme> = {
         },
       }),
       thumb: {
-        backgroundColor: '#ffffff',
+        backgroundColor: scales.base.white,
         boxShadow: 'none',
       },
       track: ({ theme }) => ({
@@ -468,7 +484,7 @@ export const overrides: Components<Theme> = {
 
         backgroundColor: theme.palette.surface.grayInverted,
         color: theme.palette.text.inverted,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 12,
         fontWeight: 600,
         lineHeight: 1.4,
@@ -505,7 +521,7 @@ export const overrides: Components<Theme> = {
       root: ({ theme }) => ({
         backgroundColor: theme.palette.surface.grayMain,
         borderRadius: 8,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 14,
         letterSpacing: '-0.02em',
         transition: theme.transitions.create(['background-color']),
@@ -557,7 +573,7 @@ export const overrides: Components<Theme> = {
   MuiInputLabel: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 14,
         letterSpacing: '-0.02em',
         color: theme.palette.text.primary,
@@ -576,7 +592,7 @@ export const overrides: Components<Theme> = {
   MuiFormHelperText: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 12,
         lineHeight: 1.4,
         letterSpacing: '-0.02em',
@@ -630,7 +646,7 @@ export const overrides: Components<Theme> = {
   MuiMenuItem: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 14,
         letterSpacing: '-0.02em',
         color: theme.palette.text.primary,
@@ -658,7 +674,7 @@ export const overrides: Components<Theme> = {
   MuiListSubheader: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 12,
         fontWeight: 500,
         letterSpacing: '-0.02em',
@@ -716,7 +732,7 @@ export const overrides: Components<Theme> = {
     styleOverrides: {
       root: ({ theme }) => ({
         textTransform: 'none',
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontWeight: 500,
         fontSize: 14,
         letterSpacing: '-0.02em',
@@ -776,7 +792,7 @@ export const overrides: Components<Theme> = {
   MuiTableCell: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         letterSpacing: '-0.02em',
         padding: '12px 16px',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
@@ -792,6 +808,7 @@ export const overrides: Components<Theme> = {
       }),
       body: ({ theme }) => ({
         fontSize: 14,
+        fontWeight: 500,
         color: theme.palette.text.primary,
       }),
     },
@@ -806,7 +823,7 @@ export const overrides: Components<Theme> = {
   MuiPaginationItem: {
     styleOverrides: {
       root: ({ theme }) => ({
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 14,
         fontWeight: 500,
         letterSpacing: '-0.02em',
@@ -840,7 +857,7 @@ export const overrides: Components<Theme> = {
       tooltip: ({ theme }) => ({
         backgroundColor: theme.palette.surface.grayInverted,
         color: theme.palette.text.inverted,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: secondaryFontFamily,
         fontSize: 12,
         fontWeight: 500,
         lineHeight: 1.4,

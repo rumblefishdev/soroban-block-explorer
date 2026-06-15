@@ -92,6 +92,7 @@ interface ExplorerMonoVariants {
   bodyMonoSmMedium: CSSProperties;
   bodyMonoSmRegular: CSSProperties;
   bodyMonoXsBold: CSSProperties;
+  bodyMonoXsMedium: CSSProperties;
   bodyMonoXsRegular: CSSProperties;
 }
 
@@ -147,6 +148,15 @@ declare module '@mui/material/styles' {
 
   interface ShapeOptions {
     radius?: typeof radius;
+  }
+
+  interface ZIndex {
+    pageGlow: number;
+    gridBackdrop: number;
+    contentMain: number;
+    secondaryNav: number;
+    footer: number;
+    topNav: number;
   }
 }
 
@@ -244,6 +254,7 @@ declare module '@mui/material/Typography' {
     bodyMonoSmMedium: true;
     bodyMonoSmRegular: true;
     bodyMonoXsBold: true;
+    bodyMonoXsMedium: true;
     bodyMonoXsRegular: true;
   }
 }

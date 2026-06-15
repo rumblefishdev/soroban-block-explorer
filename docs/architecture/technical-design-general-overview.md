@@ -59,9 +59,9 @@ REST API with polling-based updates for new transactions and events.
                │  /assets/:id                ── GET /assets/:id ─────────┤   │
                │  /contracts/:id             ── GET /contracts/:id ──────┤   │
                │  /nfts                      ── GET /nfts ───────────────┤   │
-               │  /nfts/:id                  ── GET /nfts/:id ───────────┤   │
+               │  /nfts/:contract_id/:token_id                  ── GET /nfts/:contract_id/:token_id ───────────┤   │
                │  /liquidity-pools           ── GET /liquidity-pools ────┤   │
-               │  /liquidity-pools/:id       ── GET /liquidity-pools/:id ┤   │
+               │  /liquidity-pools/:strkey       ── GET /liquidity-pools/:strkey ┤   │
                │  /search?q=                 ── GET /search ─────────────┘   │
                │                                         │                   │
                └─────────────────────────────────────────┼───────────────────┘
@@ -74,22 +74,22 @@ REST API with polling-based updates for new transactions and events.
 
 ### 1.3 Routes and Pages
 
-| Route                    | Page            | Primary API Endpoint(s)                                                     |
-| ------------------------ | --------------- | --------------------------------------------------------------------------- |
-| `/`                      | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10` |
-| `/transactions`          | Transactions    | `GET /transactions`                                                         |
-| `/transactions/:hash`    | Transaction     | `GET /transactions/:hash`                                                   |
-| `/ledgers`               | Ledgers         | `GET /ledgers`                                                              |
-| `/ledgers/:sequence`     | Ledger          | `GET /ledgers/:sequence`                                                    |
-| `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
-| `/assets`                | Assets          | `GET /assets`                                                               |
-| `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
-| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
-| `/nfts`                  | NFTs            | `GET /nfts`                                                                 |
-| `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                             |
-| `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
-| `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
-| `/search?q=`             | Search Results  | `GET /search`                                                               |
+| Route                          | Page            | Primary API Endpoint(s)                                                     |
+| ------------------------------ | --------------- | --------------------------------------------------------------------------- |
+| `/`                            | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10` |
+| `/transactions`                | Transactions    | `GET /transactions`                                                         |
+| `/transactions/:hash`          | Transaction     | `GET /transactions/:hash`                                                   |
+| `/ledgers`                     | Ledgers         | `GET /ledgers`                                                              |
+| `/ledgers/:sequence`           | Ledger          | `GET /ledgers/:sequence`                                                    |
+| `/accounts/:accountId`         | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
+| `/assets`                      | Assets          | `GET /assets`                                                               |
+| `/assets/:id`                  | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
+| `/contracts/:contractId`       | Contract        | `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`      |
+| `/nfts`                        | NFTs            | `GET /nfts`                                                                 |
+| `/nfts/:contract_id/:token_id` | NFT             | `GET /nfts/:contract_id/:token_id`                                          |
+| `/liquidity-pools`             | Liquidity Pools | `GET /liquidity-pools`                                                      |
+| `/liquidity-pools/:strkey`     | Liquidity Pool  | `GET /liquidity-pools/:strkey`                                              |
+| `/search?q=`                   | Search Results  | `GET /search`                                                               |
 
 #### Home (`/`)
 
@@ -197,7 +197,7 @@ List of NFTs on the Stellar network (Soroban-based NFT contracts).
 - Filters — collection, contract ID
 - Cursor-based pagination controls
 
-#### NFT (`/nfts/:id`)
+#### NFT (`/nfts/:contract_id/:token_id`)
 
 Single NFT overview.
 
@@ -216,7 +216,7 @@ Paginated table of all liquidity pools.
 - Filters — asset pair, minimum TVL
 - Cursor-based pagination controls
 
-#### Liquidity Pool (`/liquidity-pools/:id`)
+#### Liquidity Pool (`/liquidity-pools/:strkey`)
 
 - Pool summary — pool ID (full, copyable), asset pair, fee percentage, total shares,
   reserves per asset
@@ -396,23 +396,24 @@ types, return types).
 **`GET /nfts`** — Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]`, `filter[contract_id]`.
 
-**`GET /nfts/:id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
+**`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL.
 
-**`GET /nfts/:id/transfers`** — Transfer history for a single NFT.
+**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT.
 
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** — Paginated list of pools. Query params: `limit`, `cursor`,
 `filter[assets]`, `filter[min_tvl]`.
 
-**`GET /liquidity-pools/:id`** — Pool detail: asset pair, fee, reserves, total shares, TVL.
+**`GET /liquidity-pools/:strkey`** — Pool detail: asset pair, fee, reserves, total shares, TVL.
 
-**`GET /liquidity-pools/:id/transactions`** — Deposits, withdrawals, and trades for this
+**`GET /liquidity-pools/:strkey/transactions`** — Deposits, withdrawals, and trades for this
 pool.
 
-**`GET /liquidity-pools/:id/chart`** — Time-series data for TVL, volume, and fee revenue.
-Query params: `interval` (1h/1d/1w), `from`, `to`.
+**`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
+Query params: `interval` (1h/1d/1w), `from`, `to`. **Launch scope: TVL only**
+(volume / fee_revenue deferred — see §6.11 and [ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).
 
 #### Search
 
@@ -599,8 +600,9 @@ retention, and tighter access controls so pre-production validation does not car
 production cost. The staging web frontend should not be publicly open; it is expected to be
 protected by password-based access at the edge layer. Production durability and security
 baselines explicitly include automated RDS backups with point-in-time recovery, deletion
-protection on the production database, KMS-backed encryption for RDS and S3, and TLS on
-public ingress.
+protection on the production database, KMS-backed encryption for RDS, SSE-S3 (AES256)
+encryption for the public-XDR `stellar-ledger-data` bucket (KMS avoided there to drop
+per-object request cost — task 0278), and TLS on public ingress.
 
 ### 3.6 Scalability
 
@@ -936,12 +938,13 @@ Cross-cutting schema disciplines applied to every table:
   `soroban_contracts.contract_type`, `nft_ownership.event_type`, etc.) is `SMALLINT`
   backed by a Rust `#[repr(i16)]` enum with a `CHECK` range constraint and a
   `<name>_name(ty)` SQL helper for psql/BI.
-- **Monthly range partitioning on `created_at`** for high-volume child tables
-  (see §6.12). Partitions follow the `<table>_y{YYYY}m{MM}` naming convention and are
-  provisioned by the partition-management Lambda in `crates/db-partition-mgmt`
-  (see task 0139). The same crate ships a `bin/cli` that runs the identical
-  `ensure_all_partitions` code path against `DATABASE_URL` for local docker DBs
-  and one-shot staging bootstrap before the EventBridge cron takes over.
+- **Range partitioning on ledger sequence** for high-volume child tables
+  (see §6.12). On ClickHouse each MergeTree table declares
+  `PARTITION BY intDiv(sequence, 500000)` (500k-ledger blocks) and the engine
+  creates the parts automatically on insert — there is no provisioning step.
+  (The PG-era partition-management Lambda `crates/db-partition-mgmt`, which
+  pre-created monthly `<table>_y{YYYY}m{MM}` partitions, was removed with the
+  PG→CH cutover — task 0241.)
 - **No raw XDR in the DB** ([ADR 0029](../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)):
   `transactions` carries only typed summary columns. Full envelope / result / result-meta
   XDR for E3 `/transactions/:hash` and decoded event / invocation payloads for
@@ -1184,6 +1187,19 @@ CREATE TABLE liquidity_pool_snapshots (
 ) PARTITION BY RANGE (created_at);
 ```
 
+**ClickHouse — USD denomination at read time ([ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).**
+On the ClickHouse primary store ([ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)),
+`tvl` / `volume` / `fee_revenue` are **not** materialized into these rows by a
+write-back worker. Fast-change off-chain values (USD denominations) are computed
+at **read time** by joining a per-asset `prices(asset, time_bucket → usd)` table
+(synced once per asset from the team Prices API) against the snapshot's reserves,
+mapping `ledger → closed_at → price candle`. This keeps
+`liquidity_pool_snapshots` single-writer (indexer only) and avoids the
+`ReplacingMergeTree` per-row read-modify-write race. **Launch scope: TVL only**
+(`reserve_a·price_a + reserve_b·price_b`); `volume` / `fee_revenue` are deferred —
+they need a per-pool `gross_volume_a` from PathPayment `claimedOffers` whose
+historical XDR-reparse backfill is tracked in task 0247.
+
 ### 6.12 Partitioning and Retention
 
 Partitioned (`PARTITION BY RANGE (created_at)`, monthly):
@@ -1196,9 +1212,10 @@ Unpartitioned anchors and registries:
 `wasm_interface_metadata`, `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
 `account_balances_current`.
 
-Partition names follow `<table>_y{YYYY}m{MM}` (e.g. `operations_y2026m04`). The
-partition-management Lambda in `crates/db-partition-mgmt` provisions partitions two
-months ahead of the leading edge and drops only if storage constraints require it.
+On ClickHouse, partitions are 500k-ledger blocks (`PARTITION BY
+intDiv(sequence, 500000)`) created automatically by the engine on insert —
+there is no ahead-of-edge provisioning Lambda (the PG-era
+`crates/db-partition-mgmt` was removed with the PG→CH cutover, task 0241).
 Ledger and transaction history are kept indefinitely.
 
 ---
@@ -1347,16 +1364,34 @@ Ledger and transaction history are kept indefinitely.
 > in §6 (Architecture) and §7.3 (Scaling Model) of this document still describes
 > the pre-pivot baseline; a comprehensive sweep is deferred to the
 > docs-architecture cleanup follow-up.
+>
+> **Note (2026-05-27):** The Ledger Processor trigger mechanism was reworked
+> from per-S3-event Lambda invocations to an **SQS doorbell + ClickHouse-cursor
+> reconcile** in [task 0241](../../lore/1-tasks/archive/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md).
+> The PG-era migration + partition Lambdas (`crates/db-migrate`,
+> `crates/db-partition-mgmt`) and their CDK stacks were removed in the same
+> task; ClickHouse applies its schema box-side via the `db-clickhouse-init`
+> sidecar and auto-creates parts via `PARTITION BY intDiv(sequence, 500000)`.
 
 Galexie ECS Fargate task running on mainnet, writing `LedgerCloseMeta` XDR files to S3
-every ~5–6 seconds. Lambda Ledger Processor triggered per file, parsing and writing
+every ~5–6 seconds. Lambda Ledger Processor woken by an **SQS doorbell** (S3
+`ObjectCreated` notifications enqueue a doorbell message; `batchSize 1`,
+`ReportBatchItemFailures`); each invocation reconciles forward from
+`max(sequence) + 1` in ClickHouse oldest-first and persists the contiguous run until
+the next ledger is absent on S3 (gap) or the 540 s time budget is reached.
+`reservedConcurrentExecutions = 1` guarantees ascending, gapless ordering without
+needing an SQS FIFO queue; per-invocation state lives in ClickHouse, so the Lambda
+itself is stateless and freely re-runnable. The Lambda parses and writes
 ledgers, transactions, operations, accounts, Soroban invocations, and CAP-67 events to a
 dedicated **ClickHouse on Hetzner** database (`ch-prod-01`, single-node MergeTree, mTLS
 behind Caddy). Historical backfill from Soroban mainnet activation ledger (late 2023)
 delivered via FREEZE + rsync + ATTACH PART transport per
 [ADR 0045](../../lore/2-adrs/0045_clickhouse-local-backfill-then-mirror-to-hetzner-via-freeze-rsync-attach.md).
 Rust API scaffolding with core modules (axum + utoipa). OpenAPI specification. AWS CDK
-infrastructure-as-code. CI/CD pipeline. CloudWatch dashboards and ingestion lag alarms.
+infrastructure-as-code (AWS side) plus an Ansible playbook for the Hetzner database host;
+both halves are run from an operator's machine (`cdk deploy` and
+`ansible-playbook`) against clean environments with no manual one-off steps.
+CloudWatch dashboards and ingestion lag alarms.
 
 **Acceptance criteria:**
 
@@ -1421,7 +1456,8 @@ report.
 4. Load test report: p95 <200 ms at 1M requests/month equivalent; error rate <0.1%
 5. Security checklist signed off: no wildcard IAM, WAF/throttling active on public
    ingress, RDS has no public endpoint, production RDS backups/PITR/deletion protection
-   enabled, RDS and S3 encrypted with KMS-backed keys, all secrets in Secrets Manager, all
+   enabled, RDS encrypted with KMS-backed keys and the `stellar-ledger-data` bucket with
+   SSE-S3 (AES256), all secrets in Secrets Manager, all
    API inputs validated
 6. 7-day post-launch monitoring report: uptime %, API error rate, p95 latency, Galexie
    ingestion lag per day

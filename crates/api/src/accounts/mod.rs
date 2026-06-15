@@ -12,6 +12,7 @@
 pub mod dto;
 mod handlers;
 mod queries;
+mod queries_ch;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -21,6 +22,7 @@ use crate::state::AppState;
 /// Build the accounts sub-router (mounted under `/v1` in `main::app`).
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(handlers::list_accounts))
         .routes(routes!(handlers::get_account))
         .routes(routes!(handlers::list_account_transactions))
 }

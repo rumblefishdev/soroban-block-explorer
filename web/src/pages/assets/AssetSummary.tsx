@@ -1,13 +1,13 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { AssetDetailResponse } from '@rumblefish/api-types';
 import {
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { formatAmount } from '../format.js';
 
 function SupplyValue({
   supply,
@@ -18,11 +18,17 @@ function SupplyValue({
 }) {
   return (
     <Stack>
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
+      <Typography
+        variant="bodySmBold"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(supply)}
       </Typography>
       {code && (
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.secondary })}
+        >
           {code}
         </Typography>
       )}
@@ -96,7 +102,11 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
               />
             ),
           },
-          { label: 'Holders', value: formatAmount(asset.holder_count) },
+          {
+            label: 'Holders',
+            value: formatAmount(asset.holder_count),
+            labelMinWidth: 70,
+          },
         ]}
       />
       {asset.deployed_at_ledger != null && (

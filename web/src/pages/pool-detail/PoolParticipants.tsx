@@ -2,17 +2,17 @@ import GroupIcon from '@mui/icons-material/GroupOutlined';
 import { Box, Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
-  classifyError,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
+  IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
+  formatAmount,
+  formatPercent,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
@@ -20,7 +20,6 @@ import type { ReactNode } from 'react';
 import { usePoolParticipants } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { formatAmount } from '../format.js';
 
 const columns: ExplorerTableColumn<ParticipantItem>[] = [
   {
@@ -33,7 +32,11 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Shares',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(row.shares)}
       </Typography>
     ),
@@ -43,9 +46,13 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Share %',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {row.share_percentage != null
-          ? `${formatAmount(row.share_percentage, 2)}%`
+          ? formatPercent(Number(row.share_percentage))
           : '—'}
       </Typography>
     ),
@@ -55,9 +62,10 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
-        {formatAmount(row.first_deposit_ledger)}
-      </Typography>
+      <IdentifierDisplay
+        value={String(row.first_deposit_ledger)}
+        type="ledger"
+      />
     ),
   },
 ];
@@ -94,34 +102,16 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={6} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={6} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <EmptyState
-          icon={<GroupIcon />}
-          title="No participants yet"
-          description="This pool currently has no active liquidity providers."
-        />
-      </Box>
+      <EmptyState
+        icon={<GroupIcon />}
+        title="No participants yet"
+        description="This pool currently has no active liquidity providers."
+      />
     );
   } else {
     body = (

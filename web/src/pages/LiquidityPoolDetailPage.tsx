@@ -1,9 +1,6 @@
-import { Box, Stack } from '@mui/material';
+import { Stack } from '@mui/material';
 import {
-  CardSkeleton,
-  classifyError,
-  GenericErrorState,
-  isMissingResource,
+  DetailErrorState,
   isPoolId,
   NotFoundState,
   SectionErrorBoundary,
@@ -15,6 +12,7 @@ import { usePoolDetail } from '../api/index.js';
 
 import { PoolCharts } from './pool-detail/PoolCharts.js';
 import { PoolDetailHeader } from './pool-detail/PoolDetailHeader.js';
+import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
@@ -43,37 +41,31 @@ export default function LiquidityPoolDetailPage() {
   // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
-  // Pool ids must be a 64-char lowercase hex string. `PoolDetailHeader`
-  // synchronously calls `poolIdHexToStrkey` on mount and throws on a
-  // malformed id, which would crash the page into a generic error
-  // banner instead of the entity-specific NotFoundState routed via H8.
-  // `usePoolDetail` is hardcoded to skip the network when the id is
-  // empty; the guard below covers the non-empty malformed case.
+  // Pool ids must be a CAP-38 `L...` strkey (56 chars, base32). Validate
+  // up-front so a malformed id renders the entity-specific NotFoundState
+  // instead of firing a doomed request. `usePoolDetail` is hardcoded to
+  // skip the network when the id is empty.
   const validPoolId = isPoolId(poolId);
   const detail = usePoolDetail(validPoolId ? poolId : '');
   if (!validPoolId) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="liquidity-pool" identifier={poolId} />
-      </Box>
-    );
+    return <NotFoundState entity="liquidity-pool" identifier={poolId} />;
+  }
+
+  if (detail.isLoading) {
+    return <PoolDetailSkeleton />;
   }
 
   let summarySection: ReactNode = null;
   let kpiSection: ReactNode = null;
-  if (detail.isLoading) {
-    kpiSection = <CardSkeleton />;
-    summarySection = <CardSkeleton />;
-  } else if (detail.isError) {
-    const kind = classifyError(detail.error);
+  if (detail.isError) {
     summarySection = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {isMissingResource(kind) ? (
-          <NotFoundState entity="liquidity-pool" identifier={poolId} />
-        ) : (
-          <GenericErrorState onRetry={() => void detail.refetch()} />
-        )}
-      </Box>
+      <DetailErrorState
+        error={detail.error}
+        entity="liquidity-pool"
+        identifier={poolId}
+        onRetry={() => void detail.refetch()}
+        py={6}
+      />
     );
   } else if (detail.data) {
     kpiSection = <PoolKpiStrip pool={detail.data} />;
@@ -92,15 +84,22 @@ export default function LiquidityPoolDetailPage() {
       <SectionErrorBoundary sectionName="pool-summary">
         {summarySection}
       </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-charts">
-        <PoolCharts poolId={poolId} />
-      </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-participants">
-        <PoolParticipants poolId={poolId} />
-      </SectionErrorBoundary>
-      <SectionErrorBoundary sectionName="pool-transactions">
-        <PoolTransactions poolId={poolId} />
-      </SectionErrorBoundary>
+      {/* Gate the sub-sections on resolved parent data so their queries never
+          fire while the pool is still loading — a parent 404 then produces
+          zero sub-section 404s. */}
+      {detail.data != null && (
+        <>
+          <SectionErrorBoundary sectionName="pool-charts">
+            <PoolCharts poolId={poolId} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary sectionName="pool-participants">
+            <PoolParticipants poolId={poolId} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary sectionName="pool-transactions">
+            <PoolTransactions poolId={poolId} />
+          </SectionErrorBoundary>
+        </>
+      )}
     </Stack>
   );
 }

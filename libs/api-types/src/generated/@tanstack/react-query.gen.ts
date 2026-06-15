@@ -21,9 +21,11 @@ import {
   getSearch,
   getTransaction,
   health,
+  listAccounts,
   listAccountTransactions,
   listAssets,
   listAssetTransactions,
+  listContracts,
   listEvents,
   listInvocations,
   listLedgers,
@@ -70,6 +72,9 @@ import type {
   GetTransactionError,
   GetTransactionResponse,
   HealthData,
+  ListAccountsData,
+  ListAccountsError,
+  ListAccountsResponse,
   ListAccountTransactionsData,
   ListAccountTransactionsError,
   ListAccountTransactionsResponse,
@@ -79,6 +84,9 @@ import type {
   ListAssetTransactionsData,
   ListAssetTransactionsError,
   ListAssetTransactionsResponse,
+  ListContractsData,
+  ListContractsError,
+  ListContractsResponse,
   ListEventsData,
   ListEventsError,
   ListEventsResponse,
@@ -173,6 +181,125 @@ export const healthOptions = (options?: Options<HealthData>) =>
     queryKey: healthQueryKey(options),
   });
 
+export const listAccountsQueryKey = (options?: Options<ListAccountsData>) =>
+  createQueryKey('listAccounts', options);
+
+/**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccountsOptions = (options?: Options<ListAccountsData>) =>
+  queryOptions<
+    ListAccountsResponse,
+    ListAccountsError,
+    ListAccountsResponse,
+    ReturnType<typeof listAccountsQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await listAccounts({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: listAccountsQueryKey(options),
+  });
+
+const createInfiniteParams = <
+  K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>
+>(
+  queryKey: QueryKey<Options>,
+  page: K
+) => {
+  const params = { ...queryKey[0] };
+  if (page.body) {
+    params.body = {
+      ...(queryKey[0].body as any),
+      ...(page.body as any),
+    };
+  }
+  if (page.headers) {
+    params.headers = {
+      ...queryKey[0].headers,
+      ...page.headers,
+    };
+  }
+  if (page.path) {
+    params.path = {
+      ...(queryKey[0].path as any),
+      ...(page.path as any),
+    };
+  }
+  if (page.query) {
+    params.query = {
+      ...(queryKey[0].query as any),
+      ...(page.query as any),
+    };
+  }
+  return params as unknown as typeof page;
+};
+
+export const listAccountsInfiniteQueryKey = (
+  options?: Options<ListAccountsData>
+): QueryKey<Options<ListAccountsData>> =>
+  createQueryKey('listAccounts', options, true);
+
+/**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccountsInfiniteOptions = (
+  options?: Options<ListAccountsData>
+) =>
+  infiniteQueryOptions<
+    ListAccountsResponse,
+    ListAccountsError,
+    InfiniteData<ListAccountsResponse>,
+    QueryKey<Options<ListAccountsData>>,
+    | string
+    | Pick<
+        QueryKey<Options<ListAccountsData>>[0],
+        'body' | 'headers' | 'path' | 'query'
+      >
+  >(
+    // @ts-ignore
+    {
+      queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<
+          QueryKey<Options<ListAccountsData>>[0],
+          'body' | 'headers' | 'path' | 'query'
+        > =
+          typeof pageParam === 'object'
+            ? pageParam
+            : {
+                query: {
+                  cursor: pageParam,
+                },
+              };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await listAccounts({
+          ...options,
+          ...params,
+          signal,
+          throwOnError: true,
+        });
+        return data;
+      },
+      queryKey: listAccountsInfiniteQueryKey(options),
+    }
+  );
+
 export const getAccountQueryKey = (options: Options<GetAccountData>) =>
   createQueryKey('getAccount', options);
 
@@ -228,40 +355,6 @@ export const listAccountTransactionsOptions = (
     },
     queryKey: listAccountTransactionsQueryKey(options),
   });
-
-const createInfiniteParams = <
-  K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>
->(
-  queryKey: QueryKey<Options>,
-  page: K
-) => {
-  const params = { ...queryKey[0] };
-  if (page.body) {
-    params.body = {
-      ...(queryKey[0].body as any),
-      ...(page.body as any),
-    };
-  }
-  if (page.headers) {
-    params.headers = {
-      ...queryKey[0].headers,
-      ...page.headers,
-    };
-  }
-  if (page.path) {
-    params.path = {
-      ...(queryKey[0].path as any),
-      ...(page.path as any),
-    };
-  }
-  if (page.query) {
-    params.query = {
-      ...(queryKey[0].query as any),
-      ...(page.query as any),
-    };
-  }
-  return params as unknown as typeof page;
-};
 
 export const listAccountTransactionsInfiniteQueryKey = (
   options: Options<ListAccountTransactionsData>
@@ -476,6 +569,85 @@ export const listAssetTransactionsInfiniteOptions = (
     }
   );
 
+export const listContractsQueryKey = (options?: Options<ListContractsData>) =>
+  createQueryKey('listContracts', options);
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContractsOptions = (options?: Options<ListContractsData>) =>
+  queryOptions<
+    ListContractsResponse,
+    ListContractsError,
+    ListContractsResponse,
+    ReturnType<typeof listContractsQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await listContracts({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: listContractsQueryKey(options),
+  });
+
+export const listContractsInfiniteQueryKey = (
+  options?: Options<ListContractsData>
+): QueryKey<Options<ListContractsData>> =>
+  createQueryKey('listContracts', options, true);
+
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContractsInfiniteOptions = (
+  options?: Options<ListContractsData>
+) =>
+  infiniteQueryOptions<
+    ListContractsResponse,
+    ListContractsError,
+    InfiniteData<ListContractsResponse>,
+    QueryKey<Options<ListContractsData>>,
+    | string
+    | Pick<
+        QueryKey<Options<ListContractsData>>[0],
+        'body' | 'headers' | 'path' | 'query'
+      >
+  >(
+    // @ts-ignore
+    {
+      queryFn: async ({ pageParam, queryKey, signal }) => {
+        // @ts-ignore
+        const page: Pick<
+          QueryKey<Options<ListContractsData>>[0],
+          'body' | 'headers' | 'path' | 'query'
+        > =
+          typeof pageParam === 'object'
+            ? pageParam
+            : {
+                query: {
+                  cursor: pageParam,
+                },
+              };
+        const params = createInfiniteParams(queryKey, page);
+        const { data } = await listContracts({
+          ...options,
+          ...params,
+          signal,
+          throwOnError: true,
+        });
+        return data;
+      },
+      queryKey: listContractsInfiniteQueryKey(options),
+    }
+  );
+
 export const getContractQueryKey = (options: Options<GetContractData>) =>
   createQueryKey('getContract', options);
 
@@ -661,8 +833,9 @@ export const listLedgersQueryKey = (options?: Options<ListLedgersData>) =>
   createQueryKey('listLedgers', options);
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor
- * pagination.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgersOptions = (options?: Options<ListLedgersData>) =>
   queryOptions<
@@ -689,8 +862,9 @@ export const listLedgersInfiniteQueryKey = (
   createQueryKey('listLedgers', options, true);
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor
- * pagination.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgersInfiniteOptions = (
   options?: Options<ListLedgersData>
@@ -1304,15 +1478,17 @@ export const getSearchQueryKey = (options: Options<GetSearchData>) =>
  * `?limit=` caps each entity bucket independently (default 10,
  * ceiling 50).
  *
- * Behaviour:
- * * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
- * full C-StrKey) and the corresponding entity exists, the response
- * is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
- * navigates directly.
- * * Otherwise the response is `{ "type": "results", "groups": {...} }`
- * with up to `limit` rows per entity bucket. Rows carry the same
- * four columns regardless of bucket: `entity_type`, `identifier`,
- * `label`, `surrogate_id` (BIGINT FK or `null`).
+ * Behaviour (task 0271):
+ * * One SQL path: broad search across the six entity-typed CTEs.
+ * * Response is `{ "groups": {…} }` with up to `limit` rows per
+ * entity bucket. Rows carry the same columns regardless of
+ * bucket: `entity_type`, `identifier`, `label`, `route_token`
+ * (asset routing token or `null`), plus optional enrichment
+ * (`successful`, `last_activity_at`) and composite routing
+ * (`contract_id`, `token_id`) fields.
+ * * FE decides "singleton → direct navigation" by inspecting the
+ * response: total row count == 1 and `routeForHit(singleton)`
+ * resolves ⇒ navigate; else show the dropdown / list.
  *
  * Authoritative SQL:
  * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.

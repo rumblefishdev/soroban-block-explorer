@@ -13,7 +13,7 @@
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, direction_sql};
+use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
 
@@ -61,7 +61,7 @@ pub async fn fetch_list(
     direction: Direction,
 ) -> Result<Vec<NftItem>, sqlx::Error> {
     let cur_id: Option<i32> = params.cursor.as_ref().map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Static query plan per direction. SQL fragments `{op}` and `{order}`
     // are hardcoded literals (`<`/`>`, `DESC`/`ASC`) — no injection risk.
@@ -108,8 +108,19 @@ pub async fn fetch_list(
     Ok(rows.iter().map(map_nft_item).collect())
 }
 
-/// `GET /v1/nfts/:id` — surrogate-id lookup.
-pub async fn fetch_by_id(pool: &PgPool, id: i32) -> Result<Option<NftItem>, sqlx::Error> {
+/// `GET /v1/nfts/:contract_id/:token_id` — composite lookup.
+///
+/// Per task 0264 Phase 8a, the external NFT identity is
+/// `(contract C-strkey, token_id)` rather than the internal `nfts.id i32`
+/// surrogate PK. Joining `soroban_contracts sc` resolves the C-strkey to
+/// the BIGINT FK that `nfts.contract_id` actually stores (ADR 0030); the
+/// `UNIQUE (contract_id, token_id)` index on `nfts` (migration
+/// `0005_tokens_nfts.sql`) is used to satisfy the equality predicate.
+pub async fn fetch_by_composite(
+    pool: &PgPool,
+    contract_id: &str,
+    token_id: &str,
+) -> Result<Option<NftItem>, sqlx::Error> {
     let raw: Option<PgRow> = sqlx::query(
         r#"
         SELECT
@@ -125,23 +136,41 @@ pub async fn fetch_by_id(pool: &PgPool, id: i32) -> Result<Option<NftItem>, sqlx
         FROM nfts n
         JOIN      soroban_contracts sc  ON sc.id  = n.contract_id
         LEFT JOIN accounts          own ON own.id = n.current_owner_id
-        WHERE n.id = $1
+        WHERE sc.contract_id = $1
+          AND n.token_id     = $2
         "#,
     )
-    .bind(id)
+    .bind(contract_id)
+    .bind(token_id)
     .fetch_optional(pool)
     .await?;
     Ok(raw.as_ref().map(map_nft_item))
 }
 
-/// Cheap existence check used to disambiguate 404 from `200 + data: []`
-/// on the transfers endpoint.
-pub async fn nft_exists(pool: &PgPool, id: i32) -> Result<bool, sqlx::Error> {
-    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM nfts WHERE id = $1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.is_some())
+/// Resolve a `(contract_id, token_id)` composite to the internal
+/// `nfts.id i32` surrogate. Returns `None` when the NFT doesn't exist —
+/// disambiguates 404 from `200 + data: []` on the transfers endpoint
+/// while also surfacing the surrogate that downstream queries
+/// (`fetch_transfers`, cursor payloads) need.
+pub async fn nft_exists_by_composite(
+    pool: &PgPool,
+    contract_id: &str,
+    token_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT n.id
+        FROM nfts n
+        JOIN soroban_contracts sc ON sc.id = n.contract_id
+        WHERE sc.contract_id = $1
+          AND n.token_id     = $2
+        "#,
+    )
+    .bind(contract_id)
+    .bind(token_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
 }
 
 /// `GET /v1/nfts/:id/transfers` — paginated ownership history.
@@ -164,7 +193,7 @@ pub async fn fetch_transfers(
         ),
         None => (None, None, None),
     };
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Direction caveat: the LEAD window walks DESC to compute the
     // previous owner (oldest event below the current row). When fetching

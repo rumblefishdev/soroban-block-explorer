@@ -1,14 +1,10 @@
 import { Box, Link, Stack, Typography } from '@mui/material';
 import {
-  classifyError,
-  DetailSkeleton,
-  GenericErrorState,
+  DetailErrorState,
+  formatInteger,
   isLedgerSequence,
-  isMissingResource,
   NotFoundState,
-  RateLimitState,
   SectionErrorBoundary,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -17,6 +13,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom';
 import { useLedgerDetail } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
+import { LedgerDetailSkeleton } from './ledgers/LedgerDetailSkeleton.js';
 import { LedgerNav } from './ledgers/LedgerNav.js';
 import { LedgerSummary } from './ledgers/LedgerSummary.js';
 import { LedgerTransactions } from './ledgers/LedgerTransactions.js';
@@ -50,29 +47,22 @@ export default function LedgerDetailPage() {
   }
 
   if (isLoading) {
-    return <DetailSkeleton />;
+    return <LedgerDetailSkeleton />;
   }
 
   if (isError) {
-    const kind = classifyError(error);
-    if (isMissingResource(kind)) {
-      // Backend returns 400 INVALID_SEQUENCE for i64-overflow values
-      // (e.g. `/ledgers/99999999999`); 404 for in-range sequences with
-      // no record. Both are "this ledger isn't here" from the user's
-      // POV — single NotFound state (task 0251 H8).
-      return <NotFoundState entity="ledger" identifier={rawSequence} />;
-    }
-    const retry = () => void refetch();
+    // Backend returns 400 INVALID_SEQUENCE for i64-overflow values
+    // (e.g. `/ledgers/99999999999`); 404 for in-range sequences with no
+    // record. Both fold to NotFound (task 0251 H8); other errors get the
+    // shared rate-limit / transient / generic handling.
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+      <DetailErrorState
+        error={error}
+        entity="ledger"
+        identifier={rawSequence}
+        onRetry={() => void refetch()}
+        py={8}
+      />
     );
   }
 
@@ -82,7 +72,7 @@ export default function LedgerDetailPage() {
 
   const ledger = data;
   const txRows = ledger.transactions.data;
-  const sequenceLabel = ledger.sequence.toLocaleString('en-US');
+  const sequenceLabel = formatInteger(ledger.sequence);
 
   return (
     <Stack spacing={3}>
@@ -91,16 +81,22 @@ export default function LedgerDetailPage() {
           <Link
             component={RouterLink}
             to={routes.ledgers}
-            variant="bodySmRegular"
+            variant="bodySmMedium"
             underline="hover"
-            sx={{ color: 'text.tertiary' }}
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
             Ledger
           </Link>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             /
           </Typography>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {sequenceLabel}
           </Typography>
         </Box>
@@ -113,7 +109,7 @@ export default function LedgerDetailPage() {
             flexWrap: 'wrap',
           }}
         >
-          <Typography variant="heading3SemiBold" component="h1">
+          <Typography variant="heading5SemiBold" component="h1">
             Ledger {sequenceLabel}
           </Typography>
           <LedgerNav

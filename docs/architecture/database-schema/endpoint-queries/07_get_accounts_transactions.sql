@@ -1,6 +1,7 @@
 -- Endpoint:     GET /accounts/:account_id/transactions
 -- Purpose:      Paginated transactions involving a given account (as source
---               OR as a participant). Default ordering: newest first.
+--               OR as a participant). Default ordering: newest first;
+--               `order=asc` flips to oldest-first (see direction note below).
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.7
 -- Schema:       ADR 0037
 -- Data sources: DB-only.
@@ -26,6 +27,10 @@
 --   • `transaction_participants` includes the source account too (per
 --     ingestion contract — see ADR 0020 / task 0163), so this endpoint
 --     does NOT need a UNION with `transactions.source_id`.
+--   • Sort direction is driven by the `order` query param (`asc` | `desc`,
+--     default `desc`). It flips BOTH the keyset comparator (`<` ↔ `>`) and
+--     the ORDER BY direction in lock-step — shown below as DESC for the
+--     default; `order=asc` swaps the `<` on line 59 to `>` and DESC→ASC.
 
 WITH acc AS (
     SELECT id FROM accounts WHERE account_id = $1

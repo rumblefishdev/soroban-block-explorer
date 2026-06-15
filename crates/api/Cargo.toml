@@ -20,6 +20,8 @@ swagger-ui = ["dep:utoipa-swagger-ui"]
 [dependencies]
 domain = { path = "../domain", features = ["sqlx", "utoipa"] }
 db = { path = "../db", features = ["aws-secrets"] }
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
+clickhouse = { workspace = true }
 enrichment-shared = { path = "../enrichment-shared" }
 sqlx = { workspace = true }
 xdr-parser = { path = "../xdr-parser" }
@@ -30,6 +32,9 @@ lambda_http = { workspace = true }
 tower-http = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+reqwest = { workspace = true }
+# Session JWT for the free-tier auth (task 0277 paid-API): HS256 issue/verify.
+jsonwebtoken = "9"
 utoipa-swagger-ui = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -39,6 +44,7 @@ tracing-subscriber = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 stellar-xdr = { workspace = true }
+stellar-strkey = "0.0.16"
 thiserror = { workspace = true }
 futures = "0.3"
 hex = { workspace = true }
@@ -46,4 +52,5 @@ bytes = "1"
 moka = { version = "0.12", features = ["sync", "future"] }
 
 [dev-dependencies]
+aws-smithy-runtime-api = "=1.11.6"
 tower = "0.5"

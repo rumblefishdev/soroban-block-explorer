@@ -1,13 +1,10 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
-  classifyError,
-  GenericErrorState,
   PollingIndicator,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -22,71 +19,59 @@ import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
 /**
- * Latest Transactions section — the 10 newest transactions with a polling
+ * Latest Transactions section — the 10 newest transactions with a live
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, dataUpdatedAt, refetch } =
-    useLatestTransactions();
+  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
   const rows = data?.data ?? [];
+  // "Updated …" is anchored to the newest transaction's own close time, NOT
+  // react-query's `dataUpdatedAt`. The adaptive live poll refetches every few
+  // seconds and `dataUpdatedAt` bumps on every successful fetch even when the
+  // rows are identical — so it would read "just now" forever and never reveal
+  // a stalled feed. The newest row's `created_at` is the real data freshness.
+  const lastUpdated = rows[0]?.created_at;
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={LATEST_TX_COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={10} columns={LATEST_TX_COLUMN_COUNT} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" />;
   } else {
     body = <LatestTransactionsTable rows={rows} />;
   }
 
   return (
-    <Box sx={{ px: 10 }}>
-      <Card>
-        <TableSectionHeader
-          title="Latest transactions"
-          badge={<LiveIndicator />}
-          description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
-          action={<ViewAllLink to={routes.transactions} />}
-        />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+    <Card>
+      <TableSectionHeader
+        title="Latest transactions"
+        badge={<LiveIndicator />}
+        description={<PollingIndicator lastUpdated={lastUpdated} />}
+        action={<ViewAllLink to={routes.transactions} />}
+      />
+      <Box>{body}</Box>
+      {rows.length > 0 && (
         <Box
           sx={{
             px: 2,
             py: 1.5,
             borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+            backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
           }}
         >
           <Typography
             component="span"
             variant="bodySmRegular"
-            sx={{ color: 'text.tertiary' }}
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
             {rows.length} latest records
           </Typography>
         </Box>
-      </Card>
-    </Box>
+      )}
+    </Card>
   );
 }

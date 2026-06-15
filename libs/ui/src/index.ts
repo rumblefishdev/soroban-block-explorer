@@ -18,6 +18,29 @@ export {
 } from './theme/index.js';
 
 export { Chip, type ChipProps } from './components/Chip.js';
+export {
+  DebouncedField,
+  type DebouncedFieldProps,
+} from './components/DebouncedField.js';
+export { Dash } from './components/Dash.js';
+export { StatusChip } from './components/StatusChip.js';
+
+export {
+  formatAmount,
+  formatCompactAmount,
+  formatFee,
+  formatStroops,
+  formatInteger,
+  formatTps,
+  formatPercent,
+} from './format/index.js';
+
+export {
+  useDebouncedDraft,
+  useDebounced,
+  DEFAULT_DEBOUNCE_MS,
+  useCopyToClipboard,
+} from './hooks/index.js';
 
 export {
   TableSkeleton,
@@ -29,6 +52,8 @@ export {
   TransientErrorState,
   RateLimitState,
   GenericErrorState,
+  QueryErrorState,
+  DetailErrorState,
   EmptyState,
   type EmptyStateVariant,
   SectionErrorBoundary,
@@ -76,6 +101,8 @@ export {
   SearchInput,
   type SearchInputProps,
   type SearchInputSize,
+  isMac,
+  searchShortcutLabel,
   TopNav,
   type TopNavProps,
   type NetworkStats,
@@ -95,27 +122,25 @@ export {
   type IdentifierDisplayProps,
   IdentifierWithCopy,
   type IdentifierWithCopyProps,
-  getIdentifierHref,
+  routeForHit,
   getDefaultTruncation,
   truncateMiddle,
   type EntityType,
   type TruncationConfig,
   isAccountId,
+  isAssetId,
   isContractId,
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
-  isValidIdentifier,
 } from './identifiers/index.js';
 
 export {
   Tabs,
   useTabUrlState,
   TimeSeriesChart,
-  DEFAULT_TIME_SERIES_INTERVALS,
   OperationFlowTree,
   LazySection,
-  useIntersectionObserver,
 } from './visualization/index.js';
 export type {
   TabsProps,

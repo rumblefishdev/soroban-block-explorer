@@ -1,16 +1,15 @@
 import { Box } from '@mui/material';
 import type { AssetTransactionItem } from '@rumblefish/api-types';
 import {
-  classifyError,
+  Dash,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
+  StatusChip,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -19,7 +18,7 @@ import type { ReactNode } from 'react';
 
 import { useAssetTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { Dash, OperationCell, StatusCell } from '../transactions/cells.js';
+import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
@@ -53,7 +52,7 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'time',
@@ -87,31 +86,11 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={8} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={8} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" py={6} />;
   } else {
     body = (
       <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />

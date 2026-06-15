@@ -4,13 +4,20 @@ import { useQuery } from '@tanstack/react-query';
 import { detailPolicy } from '../polling.js';
 
 /**
- * `GET /nfts/:id` — a single NFT keyed by the numeric `nfts.id` surrogate.
- * `metadata` is fetched at request time and is fail-soft: `null` means the
- * off-chain JSON could not be resolved, not that the NFT is missing.
+ * `GET /v1/nfts/:contractId/:tokenId` — a single NFT keyed by the
+ * composite `(contract_id, token_id)` external path (ADR-aligned with
+ * stellar.expert; no surrogate `nfts.id` leak in the URL).
+ *
+ * `metadata` is fetched at request time and is fail-soft: `null` means
+ * the off-chain JSON could not be resolved, not that the NFT is missing.
  */
-export const useNftDetail = (id: number, enabled = true) =>
+export const useNftDetail = (
+  contractId: string,
+  tokenId: string,
+  enabled = true
+) =>
   useQuery({
-    ...getNftOptions({ path: { id } }),
+    ...getNftOptions({ path: { contract_id: contractId, token_id: tokenId } }),
     ...detailPolicy,
-    enabled: enabled && Number.isInteger(id) && id > 0,
+    enabled: enabled && contractId !== '' && tokenId !== '',
   });

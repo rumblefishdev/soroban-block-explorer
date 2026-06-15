@@ -1,16 +1,16 @@
-import { Box, Link, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
+  Dash,
   ExplorerTable,
+  formatAmount,
+  IdentifierDisplay,
   IdentifierWithCopy,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
-import { formatAmount } from '../format.js';
-import { Dash } from '../transactions/cells.js';
 
 import { AssetIcon } from './AssetIcon.js';
 import { assetTypeMeta } from './assetType.js';
@@ -31,20 +31,22 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              <Link
-                component={RouterLink}
-                to={routes.asset(String(row.id))}
-                variant="bodySmMedium"
-                sx={{ color: 'text.primary' }}
-              >
-                {row.asset_code ?? '—'}
-              </Link>
+              {row.asset_code ? (
+                <IdentifierDisplay
+                  value={row.asset_code}
+                  type="asset"
+                  truncate={false}
+                  href={routes.asset(row.id)}
+                />
+              ) : (
+                <Dash />
+              )}
               <Chip size="sm" color={meta.color} label={meta.label} />
             </Stack>
             {row.name && (
               <Typography
                 variant="bodyXsRegular"
-                sx={{ color: 'text.tertiary' }}
+                sx={(theme) => ({ color: theme.palette.text.secondary })}
               >
                 {row.name}
               </Typography>
@@ -76,7 +78,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           {formatAmount(row.total_supply)}
         </Typography>
         {row.asset_code && (
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             {row.asset_code}
           </Typography>
         )}
@@ -98,8 +103,12 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
 /** Number of columns — used to size the loading skeleton consistently. */
 export const ASSET_COLUMN_COUNT = columns.length;
 
+interface AssetsTableProps {
+  rows: readonly AssetItem[];
+}
+
 /** The assets list table — token, issuer/contract, supply and holder count. */
-export function AssetsTable({ rows }: { rows: readonly AssetItem[] }) {
+export function AssetsTable({ rows }: AssetsTableProps) {
   return (
     <ExplorerTable
       columns={columns}

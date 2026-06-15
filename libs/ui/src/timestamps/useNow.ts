@@ -38,7 +38,17 @@ function subscribe(intervalMs: number, cb: (d: Date) => void): () => void {
 
 const MIN_INTERVAL_MS = 500;
 
-export function useNow(intervalMs = 30_000): Date {
+/**
+ * App-wide refresh cadence for relative-time labels ("5s ago"). This is the
+ * single source of truth — `useNow` defaults to it, so every relative-time
+ * renderer stays fresh without a per-component interval. It MUST stay small
+ * enough to keep pace with the live-polled feeds (~5s); a stale `now` lags
+ * fresh rows and (absent `formatRelative`'s clamp) renders them "in the
+ * future". Do NOT pass a large interval for event-relative timestamps.
+ */
+export const LIVE_TICK_MS = 1_000;
+
+export function useNow(intervalMs = LIVE_TICK_MS): Date {
   const safe =
     Number.isFinite(intervalMs) && intervalMs >= MIN_INTERVAL_MS
       ? intervalMs

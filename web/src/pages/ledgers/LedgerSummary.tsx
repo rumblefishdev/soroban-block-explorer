@@ -1,13 +1,14 @@
 import type { LedgerDetailResponse } from '@rumblefish/api-types';
 import {
   Chip,
+  formatInteger,
   IdentifierWithCopy,
   TableSectionHeader,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { Box, Card, Stack, Typography } from '@mui/material';
+import { Box, Card, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 
-import { formatFee } from '../transactions/formatters.js';
+import { FeeCell } from '../detail/FeeCell.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 interface LedgerSummaryProps {
@@ -19,25 +20,27 @@ interface SummaryCell {
   value: ReactNode;
 }
 
-function BaseFee({ stroops }: { stroops: number }) {
-  return (
-    <Stack spacing={0.25}>
-      <Typography variant="bodySmRegular" sx={{ color: 'text.primary' }}>
-        {formatFee(stroops)}
-      </Typography>
-      <Typography variant="bodyMonoXsRegular" sx={{ color: 'text.tertiary' }}>
-        ({stroops.toLocaleString('en-US')} stroops)
-      </Typography>
-    </Stack>
-  );
-}
-
 function Cell({ label, value }: SummaryCell) {
   return (
-    <Box sx={{ display: 'flex', flex: 1, minWidth: 0, gap: 2, px: 2, py: 1.5 }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flex: 1,
+        minWidth: 0,
+        gap: 2,
+        px: 2,
+        py: 1.5,
+
+        alignItems: 'center',
+      }}
+    >
       <Typography
-        variant="bodySmRegular"
-        sx={{ color: 'text.secondary', width: 160, flexShrink: 0 }}
+        variant="bodySmMedium"
+        sx={(theme) => ({
+          color: theme.palette.text.primary,
+          width: { xs: 'auto', sm: 160 },
+          flexShrink: 0,
+        })}
       >
         {label}
       </Typography>
@@ -51,6 +54,7 @@ function Row({ cells, alt }: { cells: SummaryCell[]; alt: boolean }) {
     <Box
       sx={(theme) => ({
         display: 'flex',
+        flexDirection: { xs: 'column', sm: 'row' },
         backgroundColor: alt
           ? theme.palette.surface.grayMainAlt
           : theme.palette.surface.grayMain,
@@ -70,8 +74,11 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
       {
         label: 'Sequence',
         value: (
-          <Typography variant="bodySmMedium">
-            {ledger.sequence.toLocaleString('en-US')}
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            {formatInteger(ledger.sequence)}
           </Typography>
         ),
       },
@@ -96,6 +103,7 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
             value={ledger.hash}
             type="ledger"
             linked={false}
+            truncate={false}
           />
         ),
       },
@@ -105,14 +113,26 @@ export function LedgerSummary({ ledger }: LedgerSummaryProps) {
         label: 'Timestamp',
         value: <TransactionTime createdAt={ledger.closed_at} />,
       },
-      { label: 'Base fee', value: <BaseFee stroops={ledger.base_fee} /> },
+      {
+        label: 'Base fee',
+        value: (
+          <FeeCell
+            stroops={ledger.base_fee}
+            primaryVariant="bodySmBold"
+            secondaryVariant="bodyMonoXsRegular"
+          />
+        ),
+      },
     ],
     [
       {
         label: 'TX Count',
         value: (
-          <Typography variant="bodySmRegular">
-            {ledger.transaction_count.toLocaleString('en-US')}
+          <Typography
+            variant="bodySmBold"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
+            {formatInteger(ledger.transaction_count)}
           </Typography>
         ),
       },

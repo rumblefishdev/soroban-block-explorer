@@ -1,12 +1,9 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
-  classifyError,
-  GenericErrorState,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
@@ -28,60 +25,43 @@ export function LatestLedgers() {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={10} columns={LEDGER_COLUMN_COUNT} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <TableEmptyState kind="ledgers" />
-      </Box>
-    );
+    body = <TableEmptyState kind="ledgers" />;
   } else {
     body = <LedgersTable rows={rows} />;
   }
 
   return (
-    <Box sx={{ px: 10 }}>
-      <Card>
-        <TableSectionHeader
-          title="Latest Ledgers"
-          badge={<LiveIndicator />}
-          action={<ViewAllLink to={routes.ledgers} />}
-        />
-        <Box sx={{ minHeight: 320 }}>{body}</Box>
+    <Card>
+      <TableSectionHeader
+        title="Latest Ledgers"
+        badge={<LiveIndicator />}
+        action={<ViewAllLink to={routes.ledgers} />}
+      />
+      <Box>{body}</Box>
+      {rows.length > 0 && (
         <Box
           sx={{
             px: 2,
             py: 1.5,
             borderTop: (theme) => `1px solid ${theme.palette.stroke.default}`,
+            backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
           }}
         >
           <Typography
             component="span"
             variant="bodySmRegular"
-            sx={{ color: 'text.tertiary' }}
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
           >
-            Latest {rows.length} results
+            {rows.length} latest records
           </Typography>
         </Box>
-      </Card>
-    </Box>
+      )}
+    </Card>
   );
 }

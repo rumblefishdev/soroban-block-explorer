@@ -7,24 +7,96 @@ use domain::TokenAssetType;
 
 use crate::common::cache_control;
 use crate::common::cursor;
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{Direction, TsIdCursor};
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
-use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::pagination::{finalize_page, into_envelope};
+use crate::common::strkey::is_strkey_shape;
 use crate::openapi::schemas::{ErrorEnvelope, PageInfo, Paginated};
 use crate::runtime_enrichment::sep1::{Sep1Currency, Sep1TomlParsed};
 use crate::state::AppState;
+use crate::transactions::dto::TxListCursor;
 
 use super::dto::{AssetDetailResponse, AssetItem, AssetTransactionItem, ListParams};
 use super::queries::{
-    AssetIdCursor, AssetIdentity, AssetRow, ResolvedListParams, asset_predicate_present,
-    fetch_by_code_issuer, fetch_by_contract_id, fetch_by_id, fetch_list, fetch_transactions,
+    AssetIdentity, AssetKeyCursor, AssetRow, AssetTxRow, ResolvedListParams,
+    asset_predicate_present, fetch_by_code_issuer, fetch_by_contract_id, fetch_list, fetch_native,
+    fetch_transactions,
 };
+use super::queries_ch;
+
+/// Unified per-call fetch error so the handlers dispatch between PG and CH
+/// without leaking driver types up the call stack. Only `Display` is observed
+/// (forwarded to the canonical `db_error` envelope + tracing).
+#[derive(Debug, thiserror::Error)]
+enum AssetFetchError {
+    #[error("pg: {0}")]
+    Pg(sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(clickhouse::error::Error),
+}
+
+/// List dispatch — PG (`sqlx`) or CH (`clickhouse`) per `API_DATASOURCE_ASSETS`.
+async fn fetch_list_for_source(
+    state: &AppState,
+    source: DataSource,
+    params: &ResolvedListParams,
+    direction: Direction,
+) -> Result<Vec<AssetRow>, AssetFetchError> {
+    match source {
+        DataSource::Pg => fetch_list(&state.db, params, direction)
+            .await
+            .map_err(AssetFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction)
+            .await
+            .map_err(AssetFetchError::Ch),
+    }
+}
+
+/// `:id` detail-row dispatch — resolves the `AssetRow` through PG or CH per the
+/// module flag. (The `/transactions` sub-resource stays PG-only via the
+/// separate [`fetch_with`] until the CH cursor migration lands.)
+async fn fetch_asset_row_for_source(
+    state: &AppState,
+    source: DataSource,
+    parsed: AssetIdRef<'_>,
+) -> Result<Option<AssetRow>, AssetFetchError> {
+    match source {
+        DataSource::Pg => fetch_with(state, parsed).await.map_err(AssetFetchError::Pg),
+        DataSource::Ch => match parsed {
+            AssetIdRef::Native => queries_ch::fetch_native(state.ch()).await,
+            AssetIdRef::Contract(c) => queries_ch::fetch_by_contract_id(state.ch(), c).await,
+            AssetIdRef::CodeIssuer(code, issuer) => {
+                queries_ch::fetch_by_code_issuer(state.ch(), code, issuer).await
+            }
+        }
+        .map_err(AssetFetchError::Ch),
+    }
+}
+
+/// Canonical wire id — the single token usable as `/assets/{id}`: the contract
+/// StrKey when present (SAC / Soroban / native XLM), else the `CODE-ISSUER`
+/// composite (classic credit). Every asset has at least one (native XLM carries
+/// a `CSAC…` contract id), so the empty fallback is unreachable in practice.
+fn canonical_id(row: &AssetRow) -> String {
+    if let Some(contract_id) = &row.contract_id {
+        return contract_id.clone();
+    }
+    if let (Some(code), Some(issuer)) = (&row.asset_code, &row.issuer) {
+        return format!("{code}-{issuer}");
+    }
+    // Native XLM singleton (asset_type 0): no composite identity → reserved token.
+    if row.asset_type == 0 {
+        return "native".to_string();
+    }
+    String::new()
+}
 
 fn map_item(row: AssetRow) -> AssetItem {
     AssetItem {
-        id: row.id,
+        id: canonical_id(&row),
         asset_type_name: row.asset_type_name,
         asset_type: row.asset_type,
         asset_code: row.asset_code,
@@ -37,16 +109,20 @@ fn map_item(row: AssetRow) -> AssetItem {
     }
 }
 
-/// Three forms of `:id`. The first that parses cleanly drives the SQL.
+/// Forms of `:id` (the numeric surrogate was dropped — PR #175 / the composite
+/// move). The first that parses cleanly drives the SQL. `native` is a reserved
+/// token: the classic native XLM singleton (`asset_type = 0`) carries no
+/// composite identity (no contract_id, no code/issuer per `ck_assets_identity`),
+/// so it has no StrKey / CODE-ISSUER to address it by.
 enum AssetIdRef<'a> {
-    Numeric(i32),
+    Native,
     Contract(&'a str),
     CodeIssuer(&'a str, &'a str),
 }
 
 fn parse_asset_id(raw: &str) -> Option<AssetIdRef<'_>> {
-    if let Ok(n) = raw.parse::<i32>() {
-        return Some(AssetIdRef::Numeric(n));
+    if raw.eq_ignore_ascii_case("native") {
+        return Some(AssetIdRef::Native);
     }
     if is_strkey_shape(raw, 'C') {
         return Some(AssetIdRef::Contract(raw));
@@ -64,12 +140,6 @@ fn parse_asset_id(raw: &str) -> Option<AssetIdRef<'_>> {
         }
     }
     None
-}
-
-fn is_strkey_shape(s: &str, prefix: char) -> bool {
-    s.len() == 56
-        && s.starts_with(prefix)
-        && s.bytes().all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
 #[utoipa::path(
@@ -93,7 +163,7 @@ fn is_strkey_shape(s: &str, prefix: char) -> bool {
 )]
 pub async fn list_assets(
     State(state): State<AppState>,
-    pagination: Pagination<AssetIdCursor>,
+    pagination: Pagination<AssetKeyCursor>,
     Query(params): Query<ListParams>,
 ) -> Response {
     let asset_type: Option<i16> = match filters::parse_enum_opt::<TokenAssetType>(
@@ -112,26 +182,38 @@ pub async fn list_assets(
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
-        limit: i64::from(pagination.limit),
+        limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         asset_type,
         asset_code: params.filter_code,
     };
 
-    let mut rows: Vec<AssetRow> = match fetch_list(&state.db, &resolved, direction).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("DB error in list_assets: {e}");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
+    let source = DataSource::for_module(Module::Assets);
+    let mut rows: Vec<AssetRow> =
+        match fetch_list_for_source(&state, source, &resolved, direction).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(source = ?source, "DB error in list_assets: {e}");
+                return errors::internal_error(errors::DB_ERROR, "database error");
+            }
+        };
 
     let page = finalize_page(
         &mut rows,
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&AssetIdCursor { id: r.id }, dir),
+        |dir, r| {
+            cursor::encode(
+                &AssetKeyCursor {
+                    asset_type: r.asset_type,
+                    asset_code: r.asset_code.clone().unwrap_or_default(),
+                    issuer_id: r.issuer_id,
+                    contract_id: r.contract_surrogate_id,
+                },
+                dir,
+            )
+        },
     );
     let data: Vec<AssetItem> = rows.into_iter().map(map_item).collect();
 
@@ -146,7 +228,7 @@ pub async fn list_assets(
     tag = "assets",
     params(
         ("id" = String, Path,
-         description = "Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite."),
+         description = "Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM."),
     ),
     responses(
         (status = 200, description = "Asset detail", body = AssetDetailResponse),
@@ -161,18 +243,19 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
         None => {
             return errors::bad_request_with_details(
                 errors::INVALID_ID,
-                "id must be a numeric assets.id, contract StrKey (C…, 56 chars), \
-                 or `code-issuer` composite (e.g. USDC-GA…XYZ)",
+                "id must be a contract StrKey (C…, 56 chars) \
+                 or a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ)",
                 serde_json::json!({ "received": id }),
             );
         }
     };
 
-    let row = match fetch_with(&state, parsed).await {
+    let source = DataSource::for_module(Module::Assets);
+    let row = match fetch_asset_row_for_source(&state, source, parsed).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!("DB error fetching asset {id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching asset {id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -256,10 +339,76 @@ async fn fetch_with(
     parsed: AssetIdRef<'_>,
 ) -> Result<Option<AssetRow>, sqlx::Error> {
     match parsed {
-        AssetIdRef::Numeric(n) => fetch_by_id(&state.db, n).await,
+        AssetIdRef::Native => fetch_native(&state.db).await,
         AssetIdRef::Contract(c) => fetch_by_contract_id(&state.db, c).await,
         AssetIdRef::CodeIssuer(code, issuer) => fetch_by_code_issuer(&state.db, code, issuer).await,
     }
+}
+
+/// `:id/transactions` dispatch. PG keys the page on `(created_at, id)` via
+/// `AssetIdentity` (resolved StrKeys); CH keys on `(ledger_sequence, id)` over
+/// `operations_appearances`, using the surrogate ids carried on the row. The
+/// cross-source guard upstream guarantees a present cursor is the active
+/// backend's variant.
+async fn fetch_asset_tx_for_source(
+    state: &AppState,
+    source: DataSource,
+    row: &AssetRow,
+    limit: i64,
+    cursor: Option<&TxListCursor>,
+    direction: Direction,
+) -> Result<Vec<AssetTxRow>, AssetFetchError> {
+    match source {
+        DataSource::Pg => {
+            let ts_cursor = cursor.and_then(|c| match c {
+                TxListCursor::Pg { ts, id } => Some(TsIdCursor::new(*ts, *id)),
+                TxListCursor::Ch { .. } => None,
+            });
+            let identity = AssetIdentity {
+                asset_code: row.asset_code.as_deref(),
+                issuer: row.issuer.as_deref(),
+                contract_id: row.contract_id.as_deref(),
+            };
+            fetch_transactions(&state.db, &identity, limit, ts_cursor.as_ref(), direction)
+                .await
+                .map_err(AssetFetchError::Pg)
+        }
+        DataSource::Ch => queries_ch::fetch_transactions(
+            state.ch(),
+            row.asset_code.as_deref(),
+            row.issuer_id,
+            row.contract_surrogate_id,
+            limit,
+            cursor,
+            direction,
+        )
+        .await
+        .map_err(AssetFetchError::Ch),
+    }
+}
+
+/// Build the opaque asset-transactions cursor for a boundary row, tagged with
+/// the active datasource so a later request rejects a cross-backend replay.
+fn asset_tx_cursor_for(source: DataSource, r: &AssetTxRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.id,
+        },
+    }
+}
+
+/// True when the decoded cursor was minted for the currently-active datasource
+/// (ADR 0008 fail-clean on a cross-datasource replay).
+fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
 }
 
 #[utoipa::path(
@@ -268,7 +417,7 @@ async fn fetch_with(
     tag = "assets",
     params(
         ("id" = String, Path,
-         description = "Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite."),
+         description = "Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -285,7 +434,7 @@ async fn fetch_with(
 )]
 pub async fn list_asset_transactions(
     State(state): State<AppState>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<TxListCursor>,
     Path(id): Path<String>,
 ) -> Response {
     let parsed = match parse_asset_id(&id) {
@@ -293,27 +442,40 @@ pub async fn list_asset_transactions(
         None => {
             return errors::bad_request_with_details(
                 errors::INVALID_ID,
-                "id must be a numeric assets.id, contract StrKey (C…, 56 chars), \
-                 or `code-issuer` composite (e.g. USDC-GA…XYZ)",
+                "id must be a contract StrKey (C…, 56 chars) \
+                 or a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ)",
                 serde_json::json!({ "received": id }),
             );
         }
     };
 
-    let row = match fetch_with(&state, parsed).await {
+    let source = DataSource::for_module(Module::Assets);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor replayed
+    // after a flag flip to CH) — its keyset is meaningless under the active
+    // backend (ADR 0008 fail-clean). A legacy/untagged cursor already fails
+    // decode upstream; this guards the decodes-but-wrong-intent case.
+    if let Some(cursor) = &pagination.cursor
+        && !cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
+    let row = match fetch_asset_row_for_source(&state, source, parsed).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("asset not found"),
         Err(e) => {
-            tracing::error!("DB error fetching asset {id}: {e}");
+            tracing::error!(source = ?source, "DB error fetching asset {id}: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
     if TokenAssetType::try_from(row.asset_type).is_err() {
         tracing::error!(
-            "unknown asset_type discriminant {} for asset id={}",
-            row.asset_type,
-            row.id
+            asset_type = row.asset_type,
+            contract_id = ?row.contract_id,
+            asset_code = ?row.asset_code,
+            "unknown asset_type discriminant for asset"
         );
         return errors::internal_error(
             errors::DB_ERROR,
@@ -343,10 +505,11 @@ pub async fn list_asset_transactions(
         return resp;
     }
 
-    let mut rows = match fetch_transactions(
-        &state.db,
-        &identity,
-        i64::from(pagination.limit),
+    let mut rows = match fetch_asset_tx_for_source(
+        &state,
+        source,
+        &row,
+        pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
     )
@@ -354,18 +517,17 @@ pub async fn list_asset_transactions(
     {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_asset_transactions: {e}");
+            tracing::error!(source = ?source, "DB error in list_asset_transactions: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let page = finalize_ts_id_page(
+    let page = finalize_page(
         &mut rows,
         pagination.limit,
         pagination.direction,
         pagination.has_predecessor(),
-        |r| r.created_at,
-        |r| r.id,
+        |dir, r| cursor::encode(&asset_tx_cursor_for(source, r), dir),
     );
     let data: Vec<AssetTransactionItem> = rows
         .into_iter()
@@ -385,4 +547,187 @@ pub async fn list_asset_transactions(
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Shape-valid StrKeys (56 chars, correct prefix, base32) — never minted on
+    // mainnet, used purely to exercise the parser's prefix/shape branches.
+    const C_STRKEY: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ";
+    const G_STRKEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT";
+
+    fn asset_row(
+        asset_type: i16,
+        asset_code: Option<&str>,
+        issuer: Option<&str>,
+        contract_id: Option<&str>,
+    ) -> AssetRow {
+        AssetRow {
+            asset_type,
+            asset_type_name: None,
+            asset_code: asset_code.map(String::from),
+            issuer: issuer.map(String::from),
+            contract_id: contract_id.map(String::from),
+            name: None,
+            total_supply: None,
+            holder_count: None,
+            icon_url: None,
+            deployed_at_ledger: None,
+            issuer_home_domain: None,
+            issuer_id: 0,
+            contract_surrogate_id: 0,
+        }
+    }
+
+    fn parsed_label(parsed: &Option<AssetIdRef<'_>>) -> &'static str {
+        match parsed {
+            None => "None",
+            Some(AssetIdRef::Native) => "Native",
+            Some(AssetIdRef::Contract(_)) => "Contract",
+            Some(AssetIdRef::CodeIssuer(..)) => "CodeIssuer",
+        }
+    }
+
+    // -- parse_asset_id ------------------------------------------------------
+
+    #[test]
+    fn parse_native_token_case_insensitive() {
+        for raw in ["native", "NATIVE", "Native", "nAtIvE"] {
+            assert!(
+                matches!(parse_asset_id(raw), Some(AssetIdRef::Native)),
+                "{raw:?} should parse as Native"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_contract_strkey() {
+        assert!(matches!(
+            parse_asset_id(C_STRKEY),
+            Some(AssetIdRef::Contract(c)) if c == C_STRKEY
+        ));
+    }
+
+    #[test]
+    fn parse_code_issuer_composite() {
+        let raw = format!("USDC-{G_STRKEY}");
+        match parse_asset_id(&raw) {
+            Some(AssetIdRef::CodeIssuer(code, issuer)) => {
+                assert_eq!(code, "USDC");
+                assert_eq!(issuer, G_STRKEY);
+            }
+            other => panic!("expected CodeIssuer, got {}", parsed_label(&other)),
+        }
+    }
+
+    #[test]
+    fn parse_code_issuer_splits_on_last_dash() {
+        // A code is never supposed to contain `-`, but if a hyphenated string
+        // arrives the split is on the LAST dash so the issuer half validates.
+        let raw = format!("WEIRD-CODE-{G_STRKEY}");
+        match parse_asset_id(&raw) {
+            Some(AssetIdRef::CodeIssuer(code, issuer)) => {
+                assert_eq!(code, "WEIRD-CODE");
+                assert_eq!(issuer, G_STRKEY);
+            }
+            other => panic!("expected CodeIssuer, got {}", parsed_label(&other)),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_numeric_id() {
+        // The dropped numeric surrogate — must NOT resolve (handler → 400).
+        for raw in ["12345", "0", "2147483647", "-1"] {
+            assert!(
+                parse_asset_id(raw).is_none(),
+                "{raw:?} (numeric) must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_malformed() {
+        for raw in [
+            "",                     // empty
+            "not-an-asset-id",      // dash, but `id` is not a G-StrKey
+            "USDC-",                // trailing dash → issuer empty
+            "-GAAA",                // leading dash → idx == 0
+            G_STRKEY,               // bare G-StrKey (not C, no dash)
+            "USDC-NOTAVALIDISSUER", // issuer half wrong shape
+            "CAAA",                 // too-short C prefix, no dash
+            "nativex",              // close-but-not `native`, no dash, not C
+        ] {
+            assert!(parse_asset_id(raw).is_none(), "{raw:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn parse_code_issuer_requires_g_prefix_issuer() {
+        // A C-StrKey in the issuer position is rejected (only G addresses issue).
+        let raw = format!("USDC-{C_STRKEY}");
+        assert!(parse_asset_id(&raw).is_none());
+    }
+
+    // -- canonical_id (wire token) ------------------------------------------
+
+    #[test]
+    fn canonical_id_prefers_contract_strkey() {
+        // SAC classic-wrap carries BOTH a classic identity and a contract id;
+        // the contract StrKey wins (single canonical token).
+        let row = asset_row(2, Some("USDC"), Some(G_STRKEY), Some(C_STRKEY));
+        assert_eq!(canonical_id(&row), C_STRKEY);
+    }
+
+    #[test]
+    fn canonical_id_contract_only() {
+        let row = asset_row(3, None, None, Some(C_STRKEY));
+        assert_eq!(canonical_id(&row), C_STRKEY);
+    }
+
+    #[test]
+    fn canonical_id_code_issuer_for_classic() {
+        let row = asset_row(1, Some("USDC"), Some(G_STRKEY), None);
+        assert_eq!(canonical_id(&row), format!("USDC-{G_STRKEY}"));
+    }
+
+    #[test]
+    fn canonical_id_native_singleton() {
+        let row = asset_row(0, None, None, None);
+        assert_eq!(canonical_id(&row), "native");
+    }
+
+    #[test]
+    fn canonical_id_empty_fallback_is_unreachable_but_safe() {
+        // Defensive last arm: a non-native asset with neither a contract id nor
+        // a full code+issuer pair violates `ck_assets_identity` (unreachable in
+        // real data), but the token builder degrades to "" rather than panic.
+        let code_only = asset_row(1, Some("USDC"), None, None);
+        assert_eq!(canonical_id(&code_only), "");
+        let issuer_only = asset_row(1, None, Some(G_STRKEY), None);
+        assert_eq!(canonical_id(&issuer_only), "");
+    }
+
+    #[test]
+    fn canonical_id_roundtrips_through_parse() {
+        // Every token canonical_id emits must parse back to the same form.
+        let contract = asset_row(2, None, None, Some(C_STRKEY));
+        assert!(matches!(
+            parse_asset_id(&canonical_id(&contract)),
+            Some(AssetIdRef::Contract(_))
+        ));
+
+        let classic = asset_row(1, Some("USDC"), Some(G_STRKEY), None);
+        assert!(matches!(
+            parse_asset_id(&canonical_id(&classic)),
+            Some(AssetIdRef::CodeIssuer(..))
+        ));
+
+        let native = asset_row(0, None, None, None);
+        assert!(matches!(
+            parse_asset_id(&canonical_id(&native)),
+            Some(AssetIdRef::Native)
+        ));
+    }
 }

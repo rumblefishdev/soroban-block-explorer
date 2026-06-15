@@ -91,38 +91,9 @@
             <access_management>0</access_management>
         </ingestion_writer>
 
-        <!-- partition_admin is an admin-class user gated only by its
-             profile + quota — CH 26.3 refuses SQL GRANT/REVOKE on
-             users defined in users.xml storage
-             (ACCESS_STORAGE_READONLY, verified empirically), so the
-             "narrow to DROP PARTITION + SELECT" intent from task
-             0240's original draft is unreachable via XML+SQL combo.
-             Scope-narrowing comes from `partition_only` profile
-             (max_execution_time 300s) and `low_volume` quota
-             (100 queries/h) instead — both bound how much damage a
-             compromised partition_admin Lambda can do per hour. -->
-        <partition_admin>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>partition_only</profile>
-            <quota>low_volume</quota>
-            <access_management>0</access_management>
-        </partition_admin>
-
-        <migration_admin>
-            <no_password/>
-            <networks>
-                <ip>127.0.0.1</ip>
-                <ip>::1</ip>
-                <ip>172.30.0.0/16</ip>
-            </networks>
-            <profile>migration_full</profile>
-            <quota>low_volume</quota>
-            <access_management>0</access_management>
-        </migration_admin>
+        <!-- migration_admin + partition_admin users removed in task 0241
+             (PG-era migration + partition Lambdas dropped; CH applies its
+             schema box-side via the db-clickhouse-init sidecar and
+             auto-creates partitions on insert). -->
     </users>
 </clickhouse>

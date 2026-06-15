@@ -98,9 +98,9 @@ operator_ssh_pubkeys: "{{ lookup('env', 'OPERATOR_SSH_PUBKEYS') }}"
 #     <dev2>-laptop:dev_shared,\
 #     galexie-production:galexie,\
 #     lambda-api-production:api_reader,\
-#     lambda-ingestion-production:ingestion_writer,\
-#     lambda-partition-production:partition_admin,\
-#     lambda-migration-production:migration_admin"
+#     lambda-ingestion-production:ingestion_writer"
+# (migration + partition Lambdas were removed in task 0241 — no
+#  lambda-migration / lambda-partition CNs.)
 clickhouse_cn_user_pairs: "{{ lookup('env', 'CLICKHOUSE_CN_USER_MAP').split(',') | map('trim') | reject('equalto', '') | list }}"
 
 # Plain list of CNs derived from the pair list — used by the site.yml

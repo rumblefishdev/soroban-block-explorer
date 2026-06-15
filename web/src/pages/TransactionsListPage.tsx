@@ -1,24 +1,17 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, Button, Card, Stack, Typography } from '@mui/material';
+import { Stack } from '@mui/material';
 import type { ListTransactionsData } from '@rumblefish/api-types';
 import {
-  classifyError,
-  EmptyState,
-  GenericErrorState,
   isAccountId,
   isContractId,
-  PaginationControls,
-  RateLimitState,
-  TableEmptyState,
-  TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { useTransactionsList } from '../api/index.js';
 
+import { DataListCard } from './detail/DataListCard.js';
+import { PageHeader } from './detail/PageHeader.js';
 import { normalizeOperationType } from './transactions/operationTypes.js';
 import { TransactionFilters } from './transactions/TransactionFilters.js';
 import {
@@ -31,9 +24,10 @@ type Filters = NonNullable<ListTransactionsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function TransactionsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter } = useCursorPagination({
-    filterKeys: ['q', 'op'],
-  });
+  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+    useCursorPagination({
+      filterKeys: ['q', 'op'],
+    });
   const q = state.filters.q ?? '';
   // Normalise the URL `op` param against the backend enum — see
   // `normalizeOperationType` for the why. Bad / lowercase values
@@ -74,85 +68,39 @@ export default function TransactionsListPage() {
     (value: string) => setFilter('op', value || null),
     [setFilter]
   );
-  const handleClearFilters = useCallback(() => {
-    setFilter('q', null);
-    setFilter('op', null);
-  }, [setFilter]);
-
-  let body: ReactNode;
-  if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={10} columns={TRANSACTION_COLUMN_COUNT} />
-      </Box>
-    );
-  } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
-  } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {hasFilters ? (
-          <EmptyState
-            icon={<SearchIcon />}
-            title="No transactions match your filters"
-            description="Try adjusting or clearing the active filters"
-            action={
-              <Button variant="contained" onClick={handleClearFilters}>
-                Clear filters
-              </Button>
-            }
-          />
-        ) : (
-          <TableEmptyState kind="transactions" />
-        )}
-      </Box>
-    );
-  } else {
-    body = <TransactionsTable rows={rows} />;
-  }
 
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="heading5SemiBold" component="h1">
-          Transactions list
-        </Typography>
-        <Typography
-          variant="bodySmRegular"
-          sx={(theme) => ({ color: theme.palette.text.tertiary })}
-        >
-          All indexed transactions on the Stellar network
-        </Typography>
-      </Box>
-
-      <Card>
-        <TransactionFilters
-          search={q}
-          operationType={op}
-          onSearchChange={handleSearchChange}
-          onOperationTypeChange={handleOperationTypeChange}
-        />
-        <Box>{body}</Box>
-        <PaginationControls
-          caption="All results"
-          canPrev={canPrev}
-          canNext={canNext}
-          onPrev={handlePrev}
-          onNext={handleNext}
-        />
-      </Card>
+      <PageHeader
+        title="Transactions list"
+        subtitle="All indexed transactions on the Stellar network"
+      />
+      <DataListCard
+        filters={
+          <TransactionFilters
+            search={q}
+            operationType={op}
+            onSearchChange={handleSearchChange}
+            onOperationTypeChange={handleOperationTypeChange}
+          />
+        }
+        columnCount={TRANSACTION_COLUMN_COUNT}
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        onRetry={() => void refetch()}
+        rows={rows}
+        renderTable={(visibleRows) => <TransactionsTable rows={visibleRows} />}
+        hasActiveFilters={hasFilters}
+        emptyKind="transactions"
+        emptyNoun="transactions"
+        onClearFilters={clearFilters}
+        paginationCaption="All results"
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
     </Stack>
   );
 }

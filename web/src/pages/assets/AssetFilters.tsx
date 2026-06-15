@@ -1,11 +1,7 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import { Box, InputAdornment, Stack, TextField } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
-import { useEffect, useState } from 'react';
+import { Box, Divider, Stack } from '@mui/material';
+import { Chip, DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 import { ASSET_TYPE_FILTERS } from './assetType.js';
-
-const SEARCH_DEBOUNCE_MS = 300;
 
 interface AssetFiltersProps {
   /** Asset-code search value (`filter[code]`). */
@@ -26,43 +22,29 @@ export function AssetFilters({
   onSearchChange,
   onTypeChange,
 }: AssetFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
-
   return (
     <Box
       sx={(theme) => ({
         display: 'flex',
         flexWrap: 'wrap',
+        alignItems: 'center',
         gap: 2,
         p: 2,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
+        bgcolor: theme.palette.surface.grayMainAlt,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Search by asset code..."
-        aria-label="Search by asset code"
-        sx={{ flex: 1, minWidth: 240 }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Search by asset code"
+        width={320}
+        onCommit={onSearchChange}
+      />
+      <Divider
+        orientation="vertical"
+        flexItem
+        sx={{ display: { xs: 'none', sm: 'block' }, my: 0.5 }}
       />
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         {ASSET_TYPE_FILTERS.map((option) => {
@@ -71,7 +53,7 @@ export function AssetFilters({
             <Chip
               key={option.value}
               label={option.label}
-              size="md"
+              size="lg"
               color={active ? 'accent' : 'neutral'}
               clickable
               onClick={() => onTypeChange(option.value)}

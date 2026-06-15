@@ -37,6 +37,83 @@ history:
     status: active
     who: karolkow
     note: 'Promoted backlog → active via /promote-task. Ready to begin Wave 1 execution.'
+  - date: '2026-05-25'
+    status: active
+    who: karolkow
+    note: 'Wave 1 done (6 sub-phases, ~40 findings, 1 CRITICAL + 9 HIGH). Added Triage Gates section to Execution Strategy: Gate A (end Wave 3) + Gate B (end Wave 5). Invalidation taxonomy + cascade compression table + anti-pattern list. Findings classified A-E (baseline-breaker / routing-contract / visual-layout / catalog-only / off-band). Class A+B+C → fix-first at gates; Class D → defer Phase 3; Class E → off-band immediate.'
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      Incoming-merge protocol: merged develop into audit branch (ZERO
+      conflicts) bringing closure task 0272 (PR #230, archived), 0273
+      (CloudFront deploy, archived), 0243 (ClickHouse read paths), and
+      spawned active tasks 0274 (backend API gaps) + 0275 (contracts
+      list). 0272 self-reconciled the master action queue during its own
+      closure — code-verified impact pass found 0 residual finding/card
+      flips needed. Confirmed RESOLVED by 0272: F-DP-1 (NetworkToggle
+      removed e9122732), F-DP-2 (hex→tokens 0139a8a3), cards 2.1/2.4
+      (formatter consolidation), 5.1/5.3 (404 dedup), 7.2 (live
+      indicator), 11.5 (hamburger nav d184457f), and 7.3 share-% NOW
+      genuinely fixed (formatPercent .toFixed(2)) — supersedes the
+      2026-05-29 ILLUSORY verdict. Still TODO: F-DP-3/card 11.3 (z-index
+      scale), F-DP-4/card 11.4 (OperationFlowTree, data-blocked). New:
+      5 list-page findings from 0272 session (accounts=mock-data 404 root
+      cause, LP-vs-assets exact-vs-partial search, dead sort arrows,
+      silent no-op search, tx-type multi-select) → 0274/0275 own items
+      1-2; items 3-5 still need backlog spawn from develop. Queue 0272
+      merge-note block + card 1.3/6.3 cross-refs added.
+  - date: '2026-06-01'
+    status: active
+    who: karolkow
+    note: >
+      FULL RE-RUN on merged HEAD e3fe1968 (user-requested). 5-agent code
+      fan-out (API/type-safety, routes ×2, cross-cutting, Wave-4 state
+      matrix) + deterministic baseline + targeted live (:4201). Results in
+      audit-action-queue.md "Full re-run 2026-06-01" section. Baseline:
+      typecheck GREEN (deps built; stale-libs/ui-dist gives false errors —
+      benign build-order artifact, NOT regression); tests 60/86 local pass,
+      26 fail with React-null-in-QueryClientProvider = local-worktree env
+      artifact (VERIFIED 2026-06-01: main-repo checkout of same 0272 code =
+      86/86 PASS), NOT a regression — develop/CI green. 0272 consolidation
+      (NetworkToggle/formatters/hex/debounce/truncate) + error-state
+      primitives VERIFIED clean. 32 NEW findings F-RR-1..32 (2 🟠:
+      order-param cast drift F-RR-1, PoolCharts error-masking F-RR-17; ~13
+      🟡 incl. search inline error/no-retry F-RR-25, dead Ctrl+K F-RR-2,
+      OperationPicker mislabel F-RR-6, EventsSection unlinked contract
+      F-RR-7, Ledger reuse F-RR-13/14, FeePill/fee-format F-RR-18/19,
+      search a11y F-RR-21, libs/ui barrel tree-shake F-RR-26; rest 🟢
+      consistency/reuse). Earlier-session NEW: card 7.10 loading-skeleton
+      flicker (F-W6-LOADSKEL-1/2/3), card 6.5 list-page F-0272S-1..6. No
+      spawns (per user); all captured in queue. Live Waves 5-6: @375
+      responsive sweep DONE (15 routes clean except account-detail
+      NotFound overflow F-RR-33 + /contracts PageStub h1:0); F-0272S-1
+      live-confirmed (mock account → 404); runtime theme = light
+      (OS-driven, code default dark). 768px + Tier-4 visual + F-RR-17
+      error-inject NOT covered (optional). Test-fail classification
+      RESOLVED-benign: main-repo checkout of same 0272 code = 86/86 PASS,
+      so worktree 26-fail = local env artifact, develop/CI green.
+  - date: '2026-06-03'
+    status: active
+    who: karolkow
+    note: >
+      Incoming-merge iteration: merged origin/develop (HEAD afd36e77,
+      FF) bringing the round-2 closure — 0276 (audit-closing round 2, PR
+      #247), 0274 (accounts backend), 0275 (contracts list), 0243 (CH
+      datasource), 0247 (LP research). ZERO conflicts. Impact pass
+      (skeptical, code-verified) = pre-launch batch essentially DONE:
+      MUST F-0272S-1 RESOLVED by 0274 (real /v1/accounts endpoint, mock
+      gone) + 13/14 SHOULD closed (F-RR-2/3/6/7/14/17/18/25/33,
+      F-W6-LOADSKEL-1/2/3 — LOADSKEL-3 exceeded plan: all 7 detail
+      skeletons, F-0272S-2/3/4). Only open SHOULD = F-RR-21 (search a11y,
+      explicit 0276 SKIP). New residual F-RR-34 (contracts-list route uses
+      DetailSkeleton not ListPageSkeleton, cosmetic). Remaining queue =
+      F-RR-21 + ~20 NICE + 3 POST. Queue statuses flipped (card 7.10 DONE,
+      card 6.5 F-0272S-1 DONE, tier-triage roll-up). Note on 0276: this
+      session's spawned round-2 closing task (commit 3a039067) IS the one
+      that landed — promoted + implemented + merged (PR #247), kept number
+      0276. The ID collision was a SEPARATE LP-op-amount task also numbered
+      0276 → renamed to 0279 (`a5d7a441`); audit-closing 0276 unaffected.
 ---
 
 # Frontend comprehensive audit (pre-launch)
@@ -445,6 +522,32 @@ analysis + recommendation (keep / refactor / drop).
 
 ### Track 2 — Visual + UX audit (8 sub-phases, ~25.5h, Claude + user review)
 
+#### ⚠ Wave 6 baseline adjustments — post-Gate-B + post-0270 (2026-05-27)
+
+URL scheme + behavior changes that landed between original Wave 6 plan and dispatch. Track 2 measures against **THIS** baseline, not the original 14-route enumeration.
+
+| Aspect                               | Original plan                                      | Post-Gate-B + 0270 baseline                                                         |
+| ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **E11 NFT route**                    | `/nfts/:id` (numeric `i32` surrogate)              | `/nfts/:contractId/:tokenId` composite (0264 Phase 8a)                              |
+| **E13 pool route**                   | `/liquidity-pools/<hex>` (64-char hex)             | `/liquidity-pools/L<strkey>` (CAP-38 canonical, 0264 Phase 1-7)                     |
+| **E14 search — pool L-strkey paste** | F-L-1 expected (0 results)                         | RESOLVED — pool L-strkey decodes + redirects (0270 commit `047ce51e`)               |
+| **E14 search — empty-state hint**    | F-K-4 expected (no L… in hint)                     | RESOLVED — hint includes L… (0270 commit `6421d3d7`)                                |
+| **E14 search — NFT result click**    | NFT route 404 regression (post-0264 carry-over)    | RESOLVED — composite short-circuit via `routes.nft(c, t)` (0270 commit `6421d3d7`)  |
+| **E14 search — bare digit**          | classifier had no ledger branch (0 results)        | RESOLVED — FE `directRouteFor.ts` redirects to `/ledgers/<seq>` BEFORE API call     |
+| **Composite NotFound on E6/E9/E13**  | F-D-2 + F-AE-5 expected (2-4 stacked error blocks) | RESOLVED — render-gated on `!parent.isError` (0262 commits `473de2a2` + `9e88114b`) |
+| **Pool detail reserve links**        | F-K-2 expected (plain text)                        | RESOLVED — 3 sites wrapped in `<RouterLink>` (0263 commits `473de2a2` + `a5f15166`) |
+| **Pool participants "Since ledger"** | F-K-3 expected (plain number)                      | RESOLVED — wrapped in `<RouterLink to={routes.ledger(seq)}>`                        |
+
+**Track 2 implication:** these RESOLVED items become **positive verification** in Wave 6 (confirm fix works on visual + UX layer), not new findings. Any **regression** from these baselines = new HIGH/CRITICAL Wave 6 finding.
+
+**Still standing for Wave 6 to verify:**
+
+- DM-1 (footer "All systems operational" hardcoded) — Track 2 2.3 V live indicator will re-confirm
+- F-AI-1/2/10 (bundle perf baseline) — Track 2 2.2 will measure post-Gate-B numbers
+- F-AH cluster + F-Y cluster (visual/layout polish defer Phase 3) — Track 2 2.1 Figma may surface specifics
+
+**Stack state assumption:** API binary rebuilt from current develop tip (post-0270 schema with strkey wire + NFT composite + SearchHit composite fields); web dev server restarted to pick up new generated types.
+
 #### MUST (2.0, 2.3, ~4.5h)
 
 **2.0 Playwright MCP full re-pass (~4h)**
@@ -459,6 +562,14 @@ Same methodology as 0251-birthing pass, against post-fix baseline. All 14 routes
 - Console errors + React warnings (target: 0)
 - Tabs + filters + pagination state preservation
 - Search edge cases
+
+**Post-Gate-B verification adds:**
+
+- E11 NFT detail: use composite path `/nfts/:contractId/:tokenId`; find real composite IDs via `/v1/nfts?limit=N`
+- E13 pool detail: use strkey form `/liquidity-pools/L<55-base32>`; find via `/v1/liquidity-pools?limit=N`
+- E14 search: paste full pool L-strkey → redirect to `/liquidity-pools/L…`; paste bare digit → redirect to `/ledgers/<seq>`; NFT name search → result click → composite path
+- E6/E9/E13 valid-format-404: single NotFound block expected (positive verify F-D-2 fix)
+- Pool detail reserve labels: pointer cursor on hover + asset URL (positive verify F-K-2 fix)
 
 Output: `findings/playwright-pass/EXX-route.md` per endpoint.
 
@@ -634,6 +745,10 @@ separate backlog tasks during Phase 3.
 - [ ] Phase 3 — Spawned backlog tasks created with frontmatter `related_tasks: ['0257']`
 - [ ] Phase 3 — `audit-summary.md` written for team
 - [ ] Phase 3 — Out-of-scope follow-up tasks spawned (per Out of scope table)
+- [ ] Gate A — `findings/triage-gate-A.md` written with per-finding decision (fix-first / accept baseline / defer)
+- [ ] Gate A — every fix-first task spawned + landed before Wave 4 starts
+- [ ] Gate B — `findings/triage-gate-B.md` written with per-finding decision
+- [ ] Gate B — every Class B + Class C fix-first task landed before Wave 6 starts
 - [ ] **Docs updated** — `N/A — audit task, no architecture change.` Per ADR 0032.
 - [ ] **API types regenerated** — `N/A — no changes under crates/api/**, Cargo.{toml,lock}, libs/api-types/**.`
 
@@ -724,8 +839,11 @@ separate backlog tasks during Phase 3.
 
 - **Senior fresh-eye stance:** spec / Figma / docs / task body / code — all are
   someone's interpretation, any can be wrong. Flag every conflict.
-- **Read-only audit:** no code edits during the audit pass. Findings only.
-  Fixes spawn into separate backlog tasks in Phase 3.
+- **Read-only audit (with triage gates):** no code edits during the audit pass.
+  Findings only. Fixes spawn into separate backlog tasks in Phase 3 **except**
+  at named triage gates (A / B) where structural/contract findings that would
+  invalidate downstream sub-phases MUST be fixed before the next wave. See
+  "Triage gates" in Execution Strategy.
 - **Playwright MCP:** live exploration only (per `[[feedback_playwright_mcp_vs_cli]]`).
   CLI Playwright for any regression test that's spawned.
 - **Backfill state captured:** start + end of audit in `audit-summary.md`
@@ -743,7 +861,13 @@ A fresh Claude session picking up this task should:
 6. Promote `backlog/ → active/` via `git mv`, then update `status: backlog → active`
 7. Start with Wave 1 (see Execution Strategy below) — 4 parallel Explore subagents
 8. After each wave, write findings to `findings/<area>.md` per Output structure
-9. No commits without explicit user signal (per CLAUDE.md project rule)
+9. **STOP at Gate A (end of Wave 3)** and Gate B (end of Wave 5). Triage
+   findings per "Triage gates" section. Fix-first items spawn as
+   `audit-blocker`-tagged backlog tasks, land before resuming next wave.
+10. **Switch to `claude-opus-4-7` extra-high (1M context) before Wave 5**
+    and keep through Gate B + Phase 3. See "Model tier — when to upgrade"
+    in Execution Strategy.
+11. No commits without explicit user signal (per CLAUDE.md project rule)
 
 ## Execution Strategy
 
@@ -813,6 +937,227 @@ If starting cold and unsure where to enter, run these three sequentially:
 All three together = ~4-5h, fully deterministic, zero user input needed
 between them.
 
+### Model tier — when to upgrade
+
+This audit can run on `claude-opus-4-7` (high, ~200K context) for most
+waves. **Upgrade to `claude-opus-4-7` extra-high (1M context) at two
+specific points** where synthesis across many findings + many files
+matters more than per-sub-phase scope.
+
+| Stage                                 | Model                  | Rationale                                                                                                                                                                        |
+| ------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wave 1 (Tier 1 deterministic)         | high (200K)            | Bounded scope per sub-phase, file-based outputs, no cross-finding synthesis                                                                                                      |
+| Wave 2 (Tier 1 cleanup + Tier 2 grep) | high (200K)            | Same — grep + tooling output per sub-phase                                                                                                                                       |
+| Wave 3 (Tier 2 Playwright + grep)     | high (200K)            | Single browser session bounded; findings file-based                                                                                                                              |
+| 🛑 Gate A triage                      | high (200K)            | Per-finding decision is local; reference Wave 1-3 finding files directly                                                                                                         |
+| Wave 4 (Tier 3 sequential)            | high (200K)            | 1.5 state matrix 14×9 = 126 cells works fine row-by-row; 1.12 useTableUrlState analysis bounded                                                                                  |
+| Wave 5 (Tier 4 subjective)            | **extra-high (1M)** ✅ | 1.2 spec/source consistency + 1.10/10b/10c/10d senior craft → reads spec docs + Figma + code + ALL prior findings simultaneously; quality scales with context                    |
+| 🛑 Gate B triage                      | **extra-high (1M)** ✅ | Decisions span Track 1 + 2 boundaries; need to hold all ~150+ findings simultaneously to identify cascade-compression candidates                                                 |
+| Wave 6 (Track 2 visual + UX)          | high (200K)            | Per-route Playwright + Figma compare is bounded scope per route                                                                                                                  |
+| Wave 7 — **Phase 3 consolidation**    | **extra-high (1M)** ✅ | 3.1 aggregate findings + 3.2 spawn 20-50 backlog tasks + 3.4 audit-summary all require holding the complete findings set; one-pass synthesis avoids re-reading 30+ finding files |
+
+**Switch instructions:**
+
+1. **Before Wave 5:** end current session cleanly (worklog written, findings
+   committed-or-staged). Re-open in extra-high (1M). Re-read this README +
+   `findings/00-archaeology.md` + `findings/triage-gate-A.md` to re-prime
+   context, then start Wave 5.
+2. **At Gate B + Wave 7:** continue in extra-high (1M) without resetting —
+   context already large.
+3. **Optional Wave 4 upgrade:** if 1.5 state matrix surfaces unexpected
+   patterns requiring cross-route reasoning (e.g. all detail pages share
+   one broken loader), upgrade then rather than waiting for Wave 5.
+
+**Cost-benefit:** extra-high (1M) costs more per token. Use only where
+synthesis breadth pays back. Don't upgrade for bounded grep / Playwright
+work — wastes the context budget without quality gain.
+
+### Incoming merge protocol — analyse impact + identify re-audit scope
+
+The audit branch is long-lived (~96.5h scope, multi-week calendar). Other
+teammates ship code to `develop` during this window. **Every time external
+work merges into the audit branch, two analyses MUST run before continuing:**
+
+1. **Resolution check** — does the merged code resolve any findings we
+   already wrote? If yes, mark those findings `RESOLVED in <SHA>` in their
+   finding file + triage docs. Do not silently delete — preserve the trail.
+2. **Re-audit scope** — does the merged code change any sub-phase output
+   that's already written? If yes, the affected sub-phases need a delta
+   re-run on the merged scope ONLY (not full re-run). Cheaper than waiting
+   for Phase 3 to discover the regression.
+
+This applies to **every** incoming merge — a coworker's feature branch, a
+develop rebase that pulls in fixes, an off-band CVE bump, anything. Audit
+branch is a moving target; the protocol keeps findings honest.
+
+**Procedure:**
+
+1. **Inspect before merge.** Run `git diff --stat origin/develop...<branch>`
+   to get scope. List touched dirs / files.
+2. **Cross-ref scope against findings.** For each touched file/dir,
+   `grep -l "<file_or_dir>" findings/`. Each hit = candidate finding to
+   re-check post-merge.
+3. **Merge** (`git merge --no-ff <branch>` to keep merge-commit narrative;
+   never `--amend` or `rebase --interactive` on incoming merges).
+4. **Resolution pass.** For each candidate finding, verify against new code:
+   - If fixed → mark `RESOLVED in <SHA>` in the finding entry + worklog.
+   - If unchanged → no action; finding still stands.
+   - If partially changed → split: original finding stays for unchanged
+     part, new finding written for new state.
+5. **Re-audit scope identification.** Map merged files to sub-phases:
+   - New routes / pages → 1.5 row(s), 1.6 console, 1.7 cross-entity, 2.0,
+     2.1, 2.4 cells
+   - New components → 1.9 reuse check, 1.9b coupling, 1.10 senior craft
+   - New utils → 1.8 formatting consistency
+   - New state patterns → 1.12 state separation, 1.13 URL state
+   - New fetch paths → 1.1 OpenAPI adherence
+   - New deps → 1.16 bundle, 1.21 dep hygiene
+   - Schema/types changes → 1.11b type safety, 1.4 API consistency
+6. **Delta-audit scope written to worklog.** Format:
+   ```
+   ## Incoming merge — <branch> @ <SHA>
+   Scope: <file count> / +<ins> / -<del>
+   Findings resolved: <list>
+   Findings still standing: <list>
+   Delta-audit queue:
+     - 1.X: <specific scope, e.g. "E3 row only">
+     - 1.Y: <specific scope>
+   Estimated delta effort: <hours>
+   ```
+7. **Run delta-audit sub-phases** before continuing the main wave plan.
+   Findings from delta-audit append to existing finding files with a
+   `## Delta-audit <date> — merge <SHA>` section, not overwrite.
+
+**Anti-pattern:** silently absorbing an incoming merge and continuing the
+main wave without delta-audit. Either Phase 3 misses regressions, or the
+audit baseline becomes a lie (findings cite old state that no longer exists).
+
+**Cost calibration:** delta-audit typically 10-25% effort of the original
+sub-phase scope (single route, single component family, single new util).
+Full sub-phase re-run is rarely justified.
+
+### Triage gates — when to stop audit and fix-first
+
+Per user directive 2026-05-25: not every finding waits for Phase 3. Some
+findings change the baseline that later sub-phases measure against. Continuing
+audit on a stale baseline = invalid findings. Stop at named gates, triage,
+fix-first the ones that block accurate downstream work, defer the rest.
+
+**Invalidation taxonomy** — for every finding ask:
+
+| Class                   | Definition                                                                                                | Action                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **A. Baseline-breaker** | Toggling this changes auto-tooling output, route render, or state surface that a later sub-phase measures | Fix-first at the next gate (or document explicit "audit baseline = X" and defer)                   |
+| **B. Routing/contract** | Changes URL, error code, response shape that 1.5/1.7/2.0 will exercise                                    | Fix-first at Gate B (before Track 2)                                                               |
+| **C. Visual/layout**    | Changes rendered DOM, styling, or component composition                                                   | Fix-first at Gate B (before Track 2 Figma + responsive)                                            |
+| **D. Catalog-only**     | Lore drift, missing spawned tasks, code smells, docs gaps, dep upgrades that don't change behavior        | Defer to Phase 3 bulk spawning                                                                     |
+| **E. Off-band**         | Security CVE, secret leak, license violation                                                              | Fix immediately as separate task (does not invalidate findings, but does not wait for gate either) |
+
+**Gate A — end of Wave 3 (~9h cumulative, after Tier 1 + Tier 2 done)**
+
+State at gate: deterministic findings complete (archaeology, code quality,
+type safety, OpenAPI, deps, bundle, API consistency, formatting, lore process,
+build hygiene, quick wins, cross-entity links, URL state, search, security,
+polling). About to enter Wave 4 = Tier 3 Playwright marathon (1.5 state
+matrix 126 cells + 1.6 console + 1.9/1.9b/1.15 + 1.12).
+
+Triage agenda:
+
+1. **Route stubs / placeholder pages** — for each stub (e.g. E3
+   `TransactionDetailPage` per Wave 1 finding A1), decide: (a) fix now via
+   spawned blocker-priority task, or (b) document "Wave 4 baseline: route X =
+   stub" and accept 9 NotApplicable cells in 1.5 matrix. Do not enter Wave 4
+   without explicit decision per stub.
+2. **Type-safety flags (Class A)** — `noUncheckedIndexedAccess`,
+   `exactOptionalPropertyTypes`, etc. **Do not toggle mid-audit** —
+   toggling regenerates tsc errors and unwinds 1.11/1.11b baseline. Defer
+   toggle to Phase 3; finding stands as "flag absent" against current
+   baseline.
+3. **API client error shape (Class B)** — if `client.ts` error interceptor
+   flattens typed envelope, 1.6 console will catch but 1.5 state-matrix
+   cells D5/D6/D7 may misclassify error states. Decision: accept current
+   behavior + document, or fix-first before Wave 4.
+4. **Cross-entity link breakage (Class B)** — if 1.7 found dead links,
+   that's the same dead link 2.0 Playwright will hit. Fix-first means
+   Track 2 doesn't re-report. Defer means Track 2 cross-references the
+   Track 1 finding.
+5. **Off-band security (Class E)** — CVE in `npm audit` high/critical: fix
+   immediately via dedicated dependency-bump task, do NOT roll into audit
+   batch. Does not block gate.
+
+Gate A exit criteria: every Class A + Class B finding has a written
+decision (fix-first | accept baseline | defer to Phase 3). Decisions
+recorded in `findings/triage-gate-A.md`.
+
+**Gate B — end of Track 1 (~63h cumulative, after Wave 5 done)**
+
+State at gate: all 29 Track 1 sub-phases complete. About to enter Track 2 =
+visual + UX audit (Playwright full re-pass, Figma fidelity, perf, responsive,
+a11y, CSS theme).
+
+Triage agenda:
+
+1. **Structural/contract issues (Class B)** — fix-first before Track 2.
+   Reason: Track 2 Playwright pass 2.0 hits the same routes; if 1.7
+   cross-entity link or 1.13 URL state breaks remain, 2.0 logs duplicate
+   findings, plus responsive matrix 2.4 measures broken layouts that the
+   fix would change.
+2. **Component reimplementation (Class C)** — if 1.9 (component reuse)
+   found local reimplementations that should hoist to `libs/ui`, the hoist
+   refactor changes rendered DOM. Track 2 Figma fidelity 2.1 audits final
+   DOM; fix-first means Figma findings measure intended state.
+3. **State separation refactors (Class C)** — 1.12 useTableUrlState
+   analysis output: if recommendation is "drop the abstraction", that's a
+   list-page refactor affecting URL state + pagination UX. Decide before
+   Track 2.
+4. **Performance findings from Track 1 (Class A for 2.2)** — bundle size,
+   tree-shaking gaps from 1.16 feed directly into 2.2 perf audit. Fix
+   bundle first means 2.2 measures post-fix bundle (smaller, faster).
+5. **Everything else (Class D)** — defer to Phase 3.
+
+Gate B exit criteria: every Class B + Class C finding has a written
+decision. Class B + C marked "fix-first" must land before Wave 6 starts.
+Decisions recorded in `findings/triage-gate-B.md`.
+
+**Gate C — implicit, end of Track 2 + Phase 3 entry**
+
+No explicit triage; Phase 3 IS the bulk-spawning gate. All Class D findings
+
+- deferred-from-A/B + new Track 2 findings consolidate into
+  `findings/consolidated-bugs.md`, then spawn into backlog per 3.2.
+
+**Fix-first task spawning rules at Gate A / Gate B**
+
+- Spawn task under `lore/1-tasks/backlog/XXXX_BUG|REFACTOR_*.md` with
+  frontmatter `related_tasks: ['0257']`, tag `priority-high`, tag
+  `audit-blocker`, link back to specific finding file:section.
+- Immediately promote backlog → active, implement + merge, before resuming
+  audit. Do not interleave audit + fix work on same branch.
+- After fix lands on develop, rebase audit branch
+  (`research/0257_frontend-comprehensive-audit`) onto develop, document the
+  baseline reset in `worklog/YYYY-MM-DD-session.md`, then resume next wave.
+
+**Cascade compression — which fix-first items reduce future findings**
+
+These first-mover fixes are known to cut down downstream finding count:
+
+| Fix at gate                                         | Reduces findings in                                                                                                                     |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| TxDetail stub fully implemented (0070+0071)         | 1.5 (9 cells E3), 1.6 (E3 console), 1.7 (every link landing E3), 2.0 (E3 full visual pass), 2.1 (E3 Figma), 2.4 (E3 responsive 3 cells) |
+| Type-safety flag enabled + errors fixed             | 1.6 (fewer runtime issues caught by tsc upgrade), 2.2 (fewer defensive `?? ''` smells in perf review)                                   |
+| Cross-entity dead links fixed                       | 1.7 (root cause cleared), 2.0 (Playwright doesn't re-report), 2.5 (a11y on dead routes N/A)                                             |
+| Bundle size optimization (deps consolidation)       | 1.16 (post-fix baseline), 2.2 (LCP improves), 2.4 (faster responsive switching)                                                         |
+| Lore drift fixed (0066 body, missing spawned tasks) | 1.18 (clean baseline), 3.2 (less catch-up spawning)                                                                                     |
+| Component hoist to libs/ui                          | 1.9 (root cause cleared), 2.1 (Figma fidelity measures shared component, not divergent locals)                                          |
+
+**Anti-pattern: do NOT fix-first**
+
+- Lore drift mid-audit — wait for 1.18 to catalog all process gaps in one pass
+- Style/comment nits — batch in Phase 3 single PR
+- Doc updates that don't change code — Phase 3
+- Renamings / refactors without behavior change — Phase 3
+- Spawning Future Work backlog tasks — that's literally Phase 3 sub-phase 3.2
+
 ### Waves — parallelized execution plan
 
 Wave splitting maximizes Claude throughput via parallel Explore subagents
@@ -840,6 +1185,10 @@ After Wave 1: write findings, then continue.
   (single MCP run hitting all routes)
 - Parallel Explore agent: 1.17 Security + 1.22 Polling/cache (grep)
 
+🛑 **GATE A — STOP. Triage required before Wave 4.** See "Triage gates"
+above. Write decisions to `findings/triage-gate-A.md`. Land any fix-first
+tasks. Rebase audit branch onto develop. Then proceed.
+
 **Wave 4 — Tier 3 sequential (~10h)**
 
 - 1.5 State coverage matrix 14×9 = 126 (dedicated Playwright marathon, ~8h)
@@ -847,7 +1196,7 @@ After Wave 1: write findings, then continue.
 - 1.9 + 1.9b + 1.15 (grep-heavy, can run after 1.5/1.6)
 - 1.12 State separation + EXTRA useTableUrlState analysis
 
-**Wave 5 — Tier 4 subjective drafts (~8h)**
+**Wave 5 — Tier 4 subjective drafts (~8h)** — 🧠 **switch to extra-high (1M) model before this wave** (see "Model tier — when to upgrade" above)
 
 - 1.2 Spec/source consistency
 - 1.3 File/folder structure
@@ -857,10 +1206,16 @@ After Wave 1: write findings, then continue.
 User spot-check each Tier 4 finding before consolidation — drafts may need
 trim or expansion based on user judgment.
 
+🛑 **GATE B — STOP. Triage required before Wave 6.** See "Triage gates"
+above. Write decisions to `findings/triage-gate-B.md`. Class B (routing/
+contract) + Class C (visual/layout) fix-first items MUST land before Wave 6
+starts, otherwise Track 2 measures a baseline that's about to change. Rebase
+audit branch onto develop, then proceed.
+
 **Wave 6 — Track 2 visual + UX (~25h, requires user review)**
 
-Run only after Track 1 fixes (if any blocking) have landed. Otherwise visual
-findings may be invalidated by ongoing code-level changes.
+Run only after Gate B fixes have landed. Otherwise visual findings may be
+invalidated by ongoing code-level changes.
 
 - 2.0 Playwright MCP full re-pass (4h)
 - 2.1 Figma fidelity (6-8h, no time-box per user choice)
@@ -870,7 +1225,7 @@ findings may be invalidated by ongoing code-level changes.
 - 2.5 A11y visual + auto (2h)
 - 2.6 AK CSS theme (1h)
 
-**Wave 7 — Phase 3 consolidation (~8h)**
+**Wave 7 — Phase 3 consolidation (~8h)** — 🧠 **stay on extra-high (1M) model** (see "Model tier — when to upgrade" above)
 
 - 3.1 Aggregate findings → `consolidated-bugs.md`
 - 3.2 Spawn backlog tasks per finding cluster (mix of bug-fix / refactor / docs)
@@ -920,7 +1275,34 @@ _(to be filled during audit)_
 
 ### Emerged
 
-_(to be filled during audit)_
+11. **Triage gates A + B added per user 2026-05-25.** Original plan was
+    pure read-only end-to-end then bulk-spawn in Phase 3. User raised:
+    early-found bugs invalidate later findings → audit on stale baseline.
+    Resolution: two named gates (A end-Wave 3, B end-Wave 5) with
+    invalidation taxonomy (A-E classes) + cascade-compression table. Class
+    A+B+C fix-first at gates; Class D defer Phase 3; Class E off-band
+    immediate. Spawned fix-first tasks tagged `audit-blocker`. Audit branch
+    rebases onto develop after each gate fix-batch lands.
+
+12. **Model tier switchpoints documented per user 2026-05-25.** Wave 1-4 +
+    Gate A + Wave 6 run on `claude-opus-4-7` (high, 200K). Switch to
+    `claude-opus-4-7` extra-high (1M context) at start of Wave 5 (Tier 4
+    subjective drafts) and stay through Gate B + Phase 3 consolidation.
+    Rationale: bounded-scope sub-phases (grep, tooling, per-route
+    Playwright) don't benefit from larger context — wastes budget. Synthesis
+    sub-phases (1.2 spec-source consistency, 1.10 senior craft, 3.1/3.2/3.4
+    aggregation + bulk task spawning + audit-summary) require holding all
+    150+ findings + spec/Figma/code simultaneously — extra-high pays back.
+
+13. **Incoming merge protocol added per user 2026-05-25.** Audit branch is
+    multi-week scope; coworker branches and develop fixes will merge in
+    during execution. Original plan ignored this. Resolution: 7-step
+    protocol — inspect before merge, cross-ref scope vs findings, merge
+    with `--no-ff`, resolution pass (mark findings `RESOLVED in <SHA>`),
+    re-audit scope mapping per touched-file class, delta-audit (10-25%
+    cost of original sub-phase), append delta findings to existing files
+    under dated section header. Applied first to FilipDz
+    `feat/0070_0071_transaction-detail` merge.
 
 ## Future Work
 

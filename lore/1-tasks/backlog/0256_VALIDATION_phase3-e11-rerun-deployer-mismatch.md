@@ -6,7 +6,7 @@ status: backlog
 related_adr: []
 related_tasks: ['0255', '0252', '0241']
 tags: [priority-medium, effort-small, layer-validation, data-correctness]
-milestone: 1
+milestone: 2
 links:
   - lore/1-tasks/archive/0255_BUG_parser-deployer-id-op-source-semantic.md
   - lore/1-tasks/active/0252_VALIDATION_clickhouse-endpoint-parity-against-stellar-apis.md

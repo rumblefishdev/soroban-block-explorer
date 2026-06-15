@@ -1,17 +1,20 @@
-//! Lambda handler for the Ledger Processor.
+//! Lambda handler for the Ledger Processor — SQS "doorbell" sequencer.
 //!
-//! Receives S3 PutObject events, downloads and decompresses XDR files,
-//! orchestrates the four parsing stages, and persists each ledger via
-//! [`db_clickhouse::persist::persist_ledger_clickhouse`] — the same
-//! one-shot wrapper the runner's `Sink::persist_ledger` fallback drives
-//! (open `PartitionWriter` → write_ledger → commit per ledger). Per-
-//! ledger commit isolation: a failure on ledger N inside an S3 batch
-//! does not roll back already-committed ledgers 1..N-1; the Lambda
-//! returns Err on the first hard failure and S3 redelivery re-attempts
-//! the batch from scratch (`ReplacingMergeTree` dedupes the 17 RMT
-//! tables; `ledgers` stays plain MergeTree by design, see
-//! `live-tail-cutover.md` B-2 for the operator-side duplicate
-//! mitigation).
+//! The SQS message is a **content-free trigger** ("a file landed on S3, go
+//! work"); its body is ignored. On each invocation the handler reconciles the
+//! durable cursor — `max(sequence)` in ClickHouse — with what is contiguously
+//! available on S3, and persists forward **oldest-first** starting at
+//! `max + 1`, stopping at the first gap (next ledger not yet on S3) or when a
+//! per-invocation time budget is reached. Each ledger is persisted via
+//! [`db_clickhouse::persist::persist_ledger_clickhouse`] (open
+//! `PartitionWriter` → write_ledger → commit), with the `ledgers` row written
+//! last so a crash/timeout resumes cleanly from the new `max`.
+//!
+//! This gives **guaranteed ascending order without FIFO**: order comes from
+//! the cursor + S3 contents (the source of truth), not from SQS delivery
+//! order. It requires `reservedConcurrentExecutions = 1` — two concurrent
+//! invocations would race the same cursor — which is load-bearing for
+//! correctness, not a preference (see `compute-stack.ts`).
 //!
 //! Task 0241: the legacy 15-step PG flow (`handler::persist`) is now
 //! feature-gated behind `pg-persist`. The production Lambda binary
@@ -26,39 +29,49 @@ use aws_sdk_cloudwatch::Client as CloudWatchClient;
 use aws_sdk_s3::Client as S3Client;
 use db_clickhouse::persist::persist_ledger_clickhouse;
 use lambda_runtime::{Error, LambdaEvent};
-use serde::Deserialize;
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
-// S3 event types (subset of the full Lambda S3 event schema)
+// SQS event types (S3 → SQS → Lambda, task 0241)
 // ---------------------------------------------------------------------------
+//
+// The indexer is driven by an SQS event-source-mapping, not a direct S3
+// trigger. Each message is a content-free **doorbell** — its `body` is
+// ignored; it only wakes the reconcile (see module docs). We report
+// per-message failures via the `ReportBatchItemFailures` response so SQS
+// redelivers a failed doorbell (up to `maxReceiveCount`, then the DLQ);
+// successful ones are acknowledged and deleted. `message_id` is kept only to
+// name the batch-item-failure.
 
 #[derive(Debug, Deserialize)]
-pub struct S3Event {
+pub struct SqsEvent {
     #[serde(rename = "Records")]
-    pub records: Vec<S3EventRecord>,
+    pub records: Vec<SqsMessage>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct S3EventRecord {
-    pub s3: S3Entity,
+pub struct SqsMessage {
+    // Doorbell body is ignored (see module docs) — we only keep `messageId`
+    // to name a batch-item-failure on a failed reconcile. Serde ignores the
+    // unmapped `body` field in the SQS event JSON.
+    #[serde(rename = "messageId")]
+    pub message_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct S3Entity {
-    pub bucket: S3Bucket,
-    pub object: S3Object,
+/// Partial-batch-failure response read by the SQS event-source-mapping.
+/// An empty `batch_item_failures` acknowledges (deletes) every message.
+#[derive(Debug, Serialize)]
+pub struct SqsBatchResponse {
+    #[serde(rename = "batchItemFailures")]
+    pub batch_item_failures: Vec<BatchItemFailure>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct S3Bucket {
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct S3Object {
-    pub key: String,
+#[derive(Debug, Serialize)]
+pub struct BatchItemFailure {
+    #[serde(rename = "itemIdentifier")]
+    pub item_identifier: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +119,10 @@ const RETRY_BACKOFF_MS: [u64; 3] = [50, 200, 800];
 #[derive(Clone)]
 pub struct HandlerState {
     pub s3_client: S3Client,
+    /// Ledger bucket name (`BUCKET_NAME` env, set by `compute-stack.ts`).
+    /// The doorbell handler derives object keys from ledger numbers and
+    /// HEAD/GETs them against this bucket — it does not read the S3 event.
+    pub bucket: String,
     pub cw_client: CloudWatchClient,
     /// ClickHouse client (mTLS to Hetzner via Caddy). Construction lives
     /// in `main.rs` cold start; cloning is cheap (the underlying
@@ -120,66 +137,161 @@ pub struct HandlerState {
 }
 
 // ---------------------------------------------------------------------------
-// Lambda entry point
+// Lambda entry point — SQS "doorbell" sequencer (task 0241)
 // ---------------------------------------------------------------------------
 
-/// Top-level Lambda handler. Processes each S3 record independently.
-pub async fn handler(event: LambdaEvent<S3Event>, state: &HandlerState) -> Result<(), Error> {
+/// Wall-time budget per invocation. A reconcile stops its contiguous run once
+/// this elapses, leaving headroom under the Lambda timeout (600 s) for the
+/// in-flight ledger (worst observed ~1.6 s) plus the final ack. Remaining
+/// ledgers are picked up by the next doorbell — there are far more doorbells
+/// (one per S3 file) than the handful of deadline-stops a backlog needs, so
+/// the queue self-drains in order without re-enqueuing.
+const RECONCILE_DEADLINE: Duration = Duration::from_secs(540);
+
+/// Top-level Lambda handler. The SQS message is a content-free **doorbell**
+/// ("something landed on S3, go work") — the body is ignored. Each invocation
+/// runs [`reconcile`], which advances the CH cursor over the contiguous run
+/// available on S3, oldest-first.
+///
+/// A reconcile that hits a gap or the time budget returns Ok (the doorbell is
+/// acknowledged). A hard CH/S3 failure returns the message as a
+/// batch-item-failure so SQS redelivers the doorbell and the next reconcile
+/// resumes from the (possibly advanced) `max`.
+pub async fn handler(
+    event: LambdaEvent<SqsEvent>,
+    state: &HandlerState,
+) -> Result<SqsBatchResponse, Error> {
     let (payload, _ctx) = event.into_parts();
+    let mut batch_item_failures = Vec::new();
 
-    let total = payload.records.len();
-    let mut skipped = 0usize;
-
-    for record in &payload.records {
-        let bucket = &record.s3.bucket.name;
-        // S3 event keys are URL-encoded (e.g. slashes as %2F, spaces as +).
-        let key = percent_encoding::percent_decode_str(&record.s3.object.key)
-            .decode_utf8_lossy()
-            .into_owned();
-
-        info!(bucket, key = key.as_str(), "processing S3 record");
-
-        // Validate S3 key pattern (must match Galexie filename format).
-        let ledger_range = match xdr_parser::parse_s3_key(&key) {
-            Ok(range) => range,
-            Err(e) => {
-                warn!(bucket, key = key.as_str(), error = %e, "skipping non-matching S3 key");
-                skipped += 1;
-                continue;
-            }
-        };
-
-        match process_s3_object(state, bucket, &key, ledger_range).await {
-            Ok(()) => {
-                info!(
-                    bucket,
-                    key = key.as_str(),
-                    start = ledger_range.0,
-                    end = ledger_range.1,
-                    "S3 record processed",
-                );
-            }
-            Err(e) => {
-                let safe = safe_error_message(&e);
-                error!(bucket, key = key.as_str(), error = %safe, "failed to process S3 record");
-                // Hand the SANITISED string to lambda_runtime, not the
-                // raw `HandlerError` — `Diagnostic`'s `From<Error>`
-                // serializes the full `Display` to the Lambda error
-                // report (→ CloudWatch), which would re-leak the CH
-                // body that `safe` already stripped.
-                return Err(safe.into());
-            }
+    for msg in &payload.records {
+        // Body irrelevant — every doorbell triggers the same reconcile.
+        // batchSize is 1, so this loops once; if it ever isn't, a second
+        // reconcile in the same batch is a cheap no-op (cursor already moved).
+        if let Err(e) = reconcile(state).await {
+            // Sanitised label only — never the raw `HandlerError` Display,
+            // which (for a CH `BadResponse`) can echo row values into logs.
+            let safe = safe_error_message(&e);
+            error!(
+                message_id = %msg.message_id,
+                error = %safe,
+                "reconcile failed — will redeliver doorbell"
+            );
+            batch_item_failures.push(BatchItemFailure {
+                item_identifier: msg.message_id.clone(),
+            });
         }
     }
 
-    if skipped > 0 && skipped == total {
-        error!(
-            total,
-            skipped, "all S3 records skipped by parse_s3_key — no data persisted"
-        );
+    Ok(SqsBatchResponse {
+        batch_item_failures,
+    })
+}
+
+/// Persist the contiguous run of ledgers from `max(sequence) + 1` upward, in
+/// strict ascending order, until either:
+///   * the next ledger is **not yet on S3** (a gap) — return Ok and wait for a
+///     future doorbell (this is the ordering barrier), or
+///   * the **time budget** ([`RECONCILE_DEADLINE`]) is reached — return Ok;
+///     the next doorbell resumes from the new (higher) `max`.
+///
+/// Returns Err only on a hard CH/S3 failure, which fails the doorbell so SQS
+/// redelivers it. Already-persisted ledgers stay committed (the `ledgers` row
+/// is written last per ledger), so a resume never reprocesses them.
+async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
+    let start = Instant::now();
+
+    let max_seq: i64 = state
+        .ch_client
+        .query("SELECT max(sequence) FROM ledgers")
+        .fetch_one()
+        .await
+        .map_err(|e| HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(e)))?;
+
+    // Empty CH → `max()` is 0. Without a seeded baseline there is no floor to
+    // start from (HEAD-probing up from ledger 1 would be millions of misses),
+    // so no-op. Operationally CH is always seeded (snapshot / backfill) before
+    // the live tail runs, so this is a guard, not a normal path.
+    if max_seq <= 0 {
+        warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
+        return Ok(());
     }
 
-    Ok(())
+    let mut next = max_seq + 1;
+    let mut persisted = 0u64;
+
+    loop {
+        // Check the budget BEFORE starting a ledger so we never begin one we
+        // can't finish before the function timeout.
+        if start.elapsed() >= RECONCILE_DEADLINE {
+            info!(
+                next,
+                persisted, "reconcile hit time budget — stopping; next doorbell resumes"
+            );
+            return Ok(());
+        }
+
+        let key = ledger_s3_key(next);
+        if !s3_object_exists(state, &key).await? {
+            // `next` is not on S3 yet — stop. A future doorbell (when the file
+            // lands) resumes here. This gate is what guarantees no gaps.
+            if persisted == 0 {
+                info!(next, "no new contiguous ledger on S3 — nothing to do");
+            } else {
+                info!(next, persisted, "reached gap on S3 — contiguous run done");
+            }
+            return Ok(());
+        }
+
+        info!(ledger = next, key = key.as_str(), "processing ledger");
+        process_s3_object(state, &state.bucket, &key).await?;
+        persisted += 1;
+        next += 1;
+    }
+}
+
+/// Derive the S3 object key for a ledger from Galexie's datastore naming
+/// scheme (`ledgers_per_file = 1`, `files_per_partition = 64000`). Each name
+/// component is prefixed with the one's-complement of its number in uppercase
+/// hex, so S3's lexicographic listing is newest-first.
+///
+/// **Coupled to Galexie's scheme** (see `infra-hetzner` / the Galexie config
+/// `[datastore_config.schema]`): if the partition size or prefix format
+/// changes, update this in lockstep — a wrong key reads as a gap and stalls
+/// the tail. Verified against a live key:
+/// `L = 62528059` → `FC45E5FF--62528000-62591999/FC45E5C4--62528059.xdr.zst`.
+fn ledger_s3_key(ledger: i64) -> String {
+    const FILES_PER_PARTITION: i64 = 64_000;
+    let part_start = (ledger / FILES_PER_PARTITION) * FILES_PER_PARTITION;
+    let part_end = part_start + FILES_PER_PARTITION - 1;
+    let part_prefix = 0xFFFF_FFFFu32 - part_start as u32;
+    let file_prefix = 0xFFFF_FFFFu32 - ledger as u32;
+    format!("{part_prefix:08X}--{part_start}-{part_end}/{file_prefix:08X}--{ledger}.xdr.zst")
+}
+
+/// HEAD the object: `true` if it exists, `false` on `NotFound`. Any other
+/// error (network, permissions, throttling) propagates so the doorbell is
+/// retried — mistaking a transient failure for a gap would stall the tail.
+async fn s3_object_exists(state: &HandlerState, key: &str) -> Result<bool, HandlerError> {
+    match state
+        .s3_client
+        .head_object()
+        .bucket(&state.bucket)
+        .key(key)
+        .send()
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(err) => {
+            if err.as_service_error().is_some_and(|e| e.is_not_found()) {
+                Ok(false)
+            } else {
+                Err(HandlerError::S3Download(format!(
+                    "head_object failed for {key}"
+                )))
+            }
+        }
+    }
 }
 
 /// Download, decompress, parse, and persist one S3 object containing a
@@ -193,7 +305,6 @@ async fn process_s3_object(
     state: &HandlerState,
     bucket: &str,
     key: &str,
-    _ledger_range: (u32, u32),
 ) -> Result<(), HandlerError> {
     // Step 1: Download from S3
     let compressed = download_s3_object(&state.s3_client, bucket, key).await?;
@@ -595,6 +706,36 @@ async fn download_s3_object(
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    // -------------------------------------------------------------------
+    // ledger_s3_key — Galexie datastore key derivation (correctness-critical:
+    // a wrong key reads as a gap and stalls the tail)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ledger_s3_key_matches_galexie_scheme() {
+        // Verified against a live key observed in the cutover S3 bucket.
+        assert_eq!(
+            ledger_s3_key(62_528_059),
+            "FC45E5FF--62528000-62591999/FC45E5C4--62528059.xdr.zst"
+        );
+    }
+
+    #[test]
+    fn ledger_s3_key_partition_boundaries() {
+        // First ledger of a partition: partition start == ledger.
+        assert_eq!(
+            ledger_s3_key(62_528_000),
+            "FC45E5FF--62528000-62591999/FC45E5FF--62528000.xdr.zst"
+        );
+        // Last ledger of the same 64000-wide partition (62528000 + 63999).
+        assert_eq!(
+            ledger_s3_key(62_591_999),
+            "FC45E5FF--62528000-62591999/FC44EC00--62591999.xdr.zst"
+        );
+        // First ledger of the next partition rolls the partition prefix.
+        assert!(ledger_s3_key(62_592_000).starts_with("FC44EBFF--62592000-62655999/"));
+    }
 
     // -------------------------------------------------------------------
     // retry_with_backoff — generic loop control

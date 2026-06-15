@@ -30,18 +30,6 @@ deploy-production-ledger-bucket: build
 destroy-production-ledger-bucket: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-LedgerBucket --force
 
-deploy-production-migration: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Migration --require-approval broadening
-
-destroy-production-migration: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Migration --force
-
-deploy-production-partition: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Partition --require-approval broadening
-
-destroy-production-partition: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Partition --force
-
 deploy-production-compute: build
 	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Compute --require-approval broadening
 
@@ -89,6 +77,36 @@ deploy-production-hetzner-dns: build
 
 destroy-production-hetzner-dns: build
 	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
+
+# --- Cloudflare bootstrap (TF-state bucket for infra/cloudflare/) ---
+# Requires "provisionCloudflareBootstrap": true in envs/production.json.
+
+deploy-production-cloudflare-bootstrap: build
+	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudflareBootstrap --require-approval broadening
+
+destroy-production-cloudflare-bootstrap: build
+	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudflareBootstrap --force
+
+# --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
+# Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
+# VITE_API_BASE_URL is baked from cloudflareApiDomainName — the SPA calls the API
+# through the Cloudflare-fronted host (task 0277), NOT the legacy apiDomainName.
+
+build-production-web:
+	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
+		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
+		npx nx build @rumblefish/soroban-block-explorer-web
+
+deploy-production-web: build-production-web
+	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-production-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" --output text); \
+	DIST=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-production-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
+	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
+	cd .. && aws s3 sync web/dist/ "s3://$$BUCKET/" --delete && \
+	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
 
 # --- CI/CD (shared, deploy once per account) ---
 

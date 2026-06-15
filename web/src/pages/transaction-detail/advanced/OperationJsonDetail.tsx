@@ -1,6 +1,7 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 import { Box, Stack, Typography } from '@mui/material';
-import { Chip } from '@rumblefish/soroban-block-explorer-ui';
+import { Chip, EmptyState } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { HighlightedJson } from './HighlightedJson.js';
@@ -59,10 +60,10 @@ function AdvancedRow({ label, value }: { label: string; value: ReactNode }) {
     >
       <Typography
         component="span"
-        variant="bodySmSemiBold"
+        variant="bodySmRegular"
         sx={(theme) => ({
           color: theme.palette.text.primary,
-          minWidth: 180,
+          minWidth: 140,
           flexShrink: 0,
           pt: 0.25,
         })}
@@ -96,15 +97,13 @@ function inlineScalar(value: unknown): ReactNode {
 
 function HeavyUnavailable() {
   return (
-    <Box sx={{ p: 2 }}>
-      <Typography
-        variant="bodySmRegular"
-        sx={(theme) => ({ color: theme.palette.text.tertiary })}
-      >
-        Raw operation details are unavailable — heavy XDR fields could not be
-        loaded for this transaction.
-      </Typography>
-    </Box>
+    <EmptyState
+      icon={<WarningAmberOutlinedIcon />}
+      variant="warning"
+      title="Raw operation details unavailable"
+      description="Heavy XDR fields could not be loaded for this transaction."
+      py={4}
+    />
   );
 }
 

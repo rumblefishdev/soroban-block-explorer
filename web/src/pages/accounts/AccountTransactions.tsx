@@ -1,26 +1,25 @@
 import { Box, Typography } from '@mui/material';
 import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
-  classifyError,
   ExplorerTable,
-  GenericErrorState,
+  formatFee,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
+  type SortDirection,
+  StatusChip,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
 
 import { useAccountTransactions } from '../../api/index.js';
 import { SectionCard } from '../detail/SectionCard.js';
-import { OperationCell, StatusCell } from '../transactions/cells.js';
-import { formatFee } from '../transactions/formatters.js';
+import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
@@ -44,14 +43,18 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'fee',
     header: 'Fee',
     align: 'right',
     cell: (row) => (
-      <Typography component="span" variant="bodySmRegular">
+      <Typography
+        component="span"
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatFee(row.fee_charged)}
       </Typography>
     ),
@@ -59,6 +62,7 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'time',
     header: 'Time',
+    sortable: true,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -71,13 +75,25 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
 export function AccountTransactions({ accountId }: { accountId: string }) {
   // Cursors are account-scoped — `resetKey` drops the URL cursor when
   // the user navigates to a different account.
-  const { cursor, goNext, goPrev } = useCursorPagination({
+  const { state, cursor, goNext, goPrev, setSort } = useCursorPagination({
     resetKey: accountId,
   });
+  // Sort lives in the URL `sort` (column) + `dir` (direction) params via
+  // `setSort`, so it survives reload / deep links and stays paired with
+  // the cursor.
+  const sortDir = state.sortDir;
+
+  const handleSortChange = useCallback(
+    // Column id comes from the table; `setSort` writes `?sort=&dir=` and
+    // resets the cursor.
+    (id: string, next: SortDirection) => setSort(id, next),
+    [setSort]
+  );
 
   const { data, isLoading, isError, error, refetch } = useAccountTransactions(
     accountId,
-    cursor
+    cursor,
+    sortDir
   );
 
   const rows = data?.data ?? [];
@@ -89,34 +105,21 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={8} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={8} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState kind="transactions" />
-      </Box>
-    );
+    body = <TableEmptyState kind="transactions" py={6} />;
   } else {
     body = (
-      <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.hash}
+        sortBy="time"
+        sortDir={sortDir}
+        onSortChange={handleSortChange}
+      />
     );
   }
 

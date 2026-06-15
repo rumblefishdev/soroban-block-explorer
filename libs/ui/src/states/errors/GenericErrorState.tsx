@@ -7,12 +7,14 @@ interface GenericErrorStateProps {
   onRetry?: () => void;
   description?: string;
   meta?: string;
+  py?: number;
 }
 
 export function GenericErrorState({
   onRetry,
   description,
   meta,
+  py,
 }: GenericErrorStateProps) {
   return (
     <EmptyState
@@ -24,6 +26,7 @@ export function GenericErrorState({
         'An unexpected error occurred while rendering this section.'
       }
       meta={meta}
+      py={py}
       action={
         onRetry ? (
           <Button variant="contained" onClick={onRetry}>

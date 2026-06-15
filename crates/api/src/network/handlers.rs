@@ -7,12 +7,26 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::dto::NetworkStats;
-use super::queries;
+use super::{queries, queries_ch};
+
+/// Unified per-call fetch error so the moka cache initializer can dispatch
+/// between the PG and CH backends without leaking driver types up the
+/// call stack. Only the `Display` impl is observed (forwarded to the
+/// canonical `db_error` envelope + tracing); the variant is for
+/// diagnostics on the log side.
+#[derive(Debug, thiserror::Error)]
+enum FetchStatsError {
+    #[error("pg: {0}")]
+    Pg(#[from] sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(#[from] clickhouse::error::Error),
+}
 
 /// Get top-level chain overview stats.
 ///
@@ -37,24 +51,32 @@ use super::queries;
     ),
 )]
 pub async fn get_network_stats(State(state): State<AppState>) -> Response {
+    let source = DataSource::for_module(Module::Network);
     // `try_get_with` deduplicates concurrent cold-cache requests: only
     // the first task runs the DB query, every other concurrent task on
-    // the same key waits for that task's result and gets a clone of it
-    // — even though our DB query is async, because we are using
-    // `moka::future::Cache`. Errors are propagated as `Arc<sqlx::Error>`
-    // so a single failed fetch is not cached and the next request
-    // retries cleanly.
-    let result: Result<Arc<NetworkStats>, Arc<sqlx::Error>> = state
+    // the same key waits for that task's result. Errors are propagated
+    // as `Arc<FetchStatsError>` so a single failed fetch is not cached
+    // and the next request retries cleanly.
+    let result: Result<Arc<NetworkStats>, Arc<FetchStatsError>> = state
         .network_cache
         .try_get_with((), async {
-            queries::fetch_stats(&state.db).await.map(Arc::new)
+            match source {
+                DataSource::Pg => queries::fetch_stats(&state.db)
+                    .await
+                    .map(Arc::new)
+                    .map_err(FetchStatsError::from),
+                DataSource::Ch => queries_ch::fetch_stats(state.ch())
+                    .await
+                    .map(Arc::new)
+                    .map_err(FetchStatsError::from),
+            }
         })
         .await;
 
     match result {
         Ok(stats) => ok_response(stats),
         Err(e) => {
-            tracing::error!("DB error in get_network_stats: {e}");
+            tracing::error!(source = ?source, "DB error in get_network_stats: {e}");
             errors::internal_error(errors::DB_ERROR, "Unable to retrieve network statistics.")
         }
     }
@@ -88,33 +110,22 @@ mod tests {
     use tower::ServiceExt;
     use utoipa_axum::router::OpenApiRouter;
 
-    use crate::contracts::cache::new_contract_cache;
     use crate::network;
-    use crate::network::cache::new_network_cache;
     use crate::runtime_enrichment::RuntimeEnrichment;
     use crate::runtime_enrichment::sep1::Sep1Fetcher;
     use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
     use crate::state::AppState;
 
     fn app(db: PgPool) -> Router {
-        let aws_cfg = aws_sdk_s3::config::Builder::new()
-            .region(aws_sdk_s3::config::Region::new("us-east-2"))
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .build();
-        let s3 = aws_sdk_s3::Client::from_conf(aws_cfg);
         let runtime_enrichment = RuntimeEnrichment {
-            stellar_archive: StellarArchiveFetcher::new(s3),
+            stellar_archive: StellarArchiveFetcher::new(
+                crate::runtime_enrichment::stellar_archive::test_client(),
+            ),
             sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
             nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
                 .expect("build nft_token_uri fetcher"),
         };
-        let state = AppState {
-            db,
-            runtime_enrichment,
-            contract_cache: new_contract_cache(),
-            network_cache: new_network_cache(),
-            network_id: xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE),
-        };
+        let state = AppState::for_tests(db, runtime_enrichment);
 
         let (router, _spec) = OpenApiRouter::new()
             .nest("/v1", network::router())

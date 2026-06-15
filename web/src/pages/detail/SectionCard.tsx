@@ -27,10 +27,11 @@ export function SectionCard({
       <Box
         sx={(theme) => ({
           display: 'flex',
-          alignItems: 'flex-start',
+          alignItems: 'center',
           justifyContent: 'space-between',
           gap: 2,
           p: 2,
+
           // Card header sits on the darker surface; body stays on the
           // lighter Card surface (Figma "Table sections" vs "Slot").
           backgroundColor: theme.palette.surface.grayMainAlt,
@@ -47,7 +48,7 @@ export function SectionCard({
           )}
           {meta != null && (
             <Typography
-              variant="bodySmRegular"
+              variant="bodyMedium"
               sx={(theme) => ({ color: theme.palette.text.secondary })}
             >
               {meta}

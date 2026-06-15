@@ -7,34 +7,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// Discriminated response: `redirect` for unambiguous exact match,
-/// `results` for grouped broad search.
-///
-/// `#[serde(tag = "type")]` puts the discriminator on the wire as
-/// `"type": "redirect" | "results"` per the task spec, mirroring the
-/// frontend search-bar UX expectation: a `redirect` causes the bar to
-/// navigate directly; a `results` shows the dropdown with grouped hits.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum SearchResponse {
-    Redirect(SearchRedirect),
-    Results(SearchResults),
-}
-
-/// Redirect payload — frontend navigates directly to the entity page.
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct SearchRedirect {
-    pub entity_type: EntityType,
-    pub entity_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub successful: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_activity_at: Option<DateTime<Utc>>,
-}
-
 /// Results payload — six entity-typed buckets, each capped at the
 /// per-group `limit` chosen by the caller (default 10, ceiling 50).
+///
+/// FE decides "singleton → navigate directly" by inspecting
+/// `groups`: when the total row count across all buckets is exactly
+/// 1 and `routeForHit(singleton)` resolves, the FE navigates to the
+/// detail page; otherwise it renders the dropdown / Results page.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct SearchResults {
     pub groups: SearchGroups,
@@ -63,9 +42,18 @@ pub struct SearchGroups {
 /// Single search row. Same shape across every entity bucket.
 ///
 /// `identifier` is the canonical human-shown id (hex hash for
-/// transactions / pools, StrKey for accounts / contracts, asset code
-/// for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
-/// the frontend MUST route via `surrogate_id`.
+/// transactions, strkey `L…` for pools, StrKey for accounts /
+/// contracts, asset code for assets, name for NFTs). It is the routing
+/// key too for every type whose display id IS routable (transaction,
+/// account, contract, pool). The two exceptions carry a separate routing
+/// payload because their display id is NOT routable:
+///
+/// - `asset`: `identifier` is the asset code (not unique / not routable);
+///   `route_token` carries the canonical `/assets/:id` token (contract
+///   StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in
+///   `assets/handlers.rs`.
+/// - `nft`: identity is the composite `(contract_id, token_id)` per task
+///   0264 / ADR 0030 — the two fields below carry it for routing.
 ///
 /// `successful` and `last_activity_at` are populated only for
 /// `entity_type = transaction` today — joined from the partitioned
@@ -79,11 +67,22 @@ pub struct SearchHit {
     pub entity_type: EntityType,
     pub identifier: String,
     pub label: String,
-    pub surrogate_id: Option<i64>,
+    /// Canonical `/assets/:id` routing token for `asset` hits; `None` for
+    /// every other type (they route on `identifier`). See the struct doc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub successful: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// NFT composite routing key. Populated only when
+    /// `entity_type = nft`; `None` for every other bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_id: Option<String>,
+    /// NFT composite routing key. Populated only when
+    /// `entity_type = nft`; `None` for every other bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
 }
 
 /// Entity discriminator. Closed allowlist used by the `type=` filter
@@ -135,5 +134,75 @@ mod tests {
                 "EntityType::ALL contains `{name}` but parse() rejects it"
             );
         }
+    }
+
+    /// NFT hit carries the composite `(contract_id, token_id)` on the
+    /// wire so the frontend can route to `/nfts/:contract_id/:token_id`
+    /// without a second roundtrip. The fields must serialize when set
+    /// and disappear when `None` to keep the dropdown payload tight for
+    /// non-NFT buckets.
+    #[test]
+    fn nft_hit_serializes_composite_fields() {
+        let hit = SearchHit {
+            entity_type: EntityType::Nft,
+            identifier: "Cool Cat #7".to_string(),
+            label: "CoolCats".to_string(),
+            route_token: None,
+            successful: None,
+            last_activity_at: None,
+            contract_id: Some(
+                "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ".to_string(),
+            ),
+            token_id: Some("token-7".to_string()),
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(
+            json["contract_id"],
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ"
+        );
+        assert_eq!(json["token_id"], "token-7");
+    }
+
+    #[test]
+    fn non_nft_hit_omits_composite_fields() {
+        let hit = SearchHit {
+            entity_type: EntityType::Transaction,
+            identifier: "deadbeef".to_string(),
+            label: "ledger 1".to_string(),
+            route_token: None,
+            successful: Some(true),
+            last_activity_at: None,
+            contract_id: None,
+            token_id: None,
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert!(json.get("contract_id").is_none());
+        assert!(json.get("token_id").is_none());
+        // route_token omitted when None (non-asset hits route on identifier).
+        assert!(json.get("route_token").is_none());
+    }
+
+    /// Asset hit carries the canonical routing token (display id stays the
+    /// asset code in `identifier`). The FE routes `/assets/<route_token>`.
+    #[test]
+    fn asset_hit_serializes_route_token() {
+        let hit = SearchHit {
+            entity_type: EntityType::Asset,
+            identifier: "USDC".to_string(),
+            label: "classic_credit".to_string(),
+            route_token: Some(
+                "USDC-GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT".to_string(),
+            ),
+            successful: None,
+            last_activity_at: None,
+            contract_id: None,
+            token_id: None,
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json["identifier"], "USDC");
+        assert_eq!(
+            json["route_token"],
+            "USDC-GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT"
+        );
     }
 }

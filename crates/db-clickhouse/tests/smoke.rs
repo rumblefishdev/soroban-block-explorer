@@ -182,8 +182,8 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- operations_appearances (append-only fact) — no surrogate `id` -----
     client
         .query(
-            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_id, amount, ledger_sequence) \
-             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, NULL, 100, ?)",
+            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids, amount, ledger_sequence) \
+             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, [], 100, ?)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)

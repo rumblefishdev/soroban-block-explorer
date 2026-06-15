@@ -540,6 +540,5 @@ follows a passing validation).
 - [Task 0228 — parallel-backfill merge & validation](../../lore/1-tasks/active/0228_FEATURE_parallel-backfill-merge-and-validation/README.md)
 - [Task 0228 S-approved-plan §"Phase 6 — End-to-end validation"](../../lore/1-tasks/active/0228_FEATURE_parallel-backfill-merge-and-validation/notes/S-approved-plan.md)
 - [`compare-with-stellar-api` skill](../../.claude/skills/compare-with-stellar-api/SKILL.md)
-- [Companion: 0228 Phase 3+4 attach runbook (TBD task 0233)](merge-parallel-backfills.md)
 - [Companion: 0118 Phase 3 NFT cleanup](0118_phase3_cleanup_nfts.md) — implemented as `backfill-runner nft-reclassify`
 - [Companion: 0221 SAC drain from nfts_pending](0221_ch_drain_sac_from_nfts_pending.md)

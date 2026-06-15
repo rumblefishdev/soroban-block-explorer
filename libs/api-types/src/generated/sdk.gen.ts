@@ -42,6 +42,9 @@ import type {
   GetTransactionResponses,
   HealthData,
   HealthResponses,
+  ListAccountsData,
+  ListAccountsErrors,
+  ListAccountsResponses,
   ListAccountTransactionsData,
   ListAccountTransactionsErrors,
   ListAccountTransactionsResponses,
@@ -51,6 +54,9 @@ import type {
   ListAssetTransactionsData,
   ListAssetTransactionsErrors,
   ListAssetTransactionsResponses,
+  ListContractsData,
+  ListContractsErrors,
+  ListContractsResponses,
   ListEventsData,
   ListEventsErrors,
   ListEventsResponses,
@@ -110,6 +116,23 @@ export const health = <ThrowOnError extends boolean = false>(
   });
 
 /**
+ * List accounts ordered by `last_seen_ledger` (the only indexed sort) —
+ * newest-active first by default, oldest-first with `?order=asc`. The order
+ * is sticky across pages; cursor pagination walks within it.
+ * `filter[with_domain]` keeps only accounts that set a home_domain. No
+ * address search — exact lookup is the global search's redirect path. Same
+ * shape as the other list endpoints.
+ */
+export const listAccounts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListAccountsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListAccountsResponses,
+    ListAccountsErrors,
+    ThrowOnError
+  >({ url: '/v1/accounts', ...options });
+
+/**
  * Account detail — header from `accounts` + balances from
  * `account_balances_current` (canonical 06 statements A + B).
  */
@@ -163,6 +186,20 @@ export const listAssetTransactions = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({ url: '/v1/assets/{id}/transactions', ...options });
 
+/**
+ * List contracts, newest-ingested first (`id DESC`, the PK order — no
+ * user sort). `filter[type]` narrows by class, `filter[q]` searches
+ * id/name. Cursor-paginated like every other list endpoint.
+ */
+export const listContracts = <ThrowOnError extends boolean = false>(
+  options?: Options<ListContractsData, ThrowOnError>
+) =>
+  (options?.client ?? client).get<
+    ListContractsResponses,
+    ListContractsErrors,
+    ThrowOnError
+  >({ url: '/v1/contracts', ...options });
+
 export const getContract = <ThrowOnError extends boolean = false>(
   options: Options<GetContractData, ThrowOnError>
 ) =>
@@ -200,8 +237,9 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
   >({ url: '/v1/contracts/{contract_id}/invocations', ...options });
 
 /**
- * List ledgers ordered by `(closed_at DESC, sequence DESC)` with cursor
- * pagination.
+ * List ledgers ordered by `(closed_at, sequence)` — newest-first by
+ * default, oldest-first with `?order=asc`. The order is sticky across
+ * pages; cursor pagination walks forward/back within the chosen order.
  */
 export const listLedgers = <ThrowOnError extends boolean = false>(
   options?: Options<ListLedgersData, ThrowOnError>
@@ -319,7 +357,7 @@ export const getNft = <ThrowOnError extends boolean = false>(
   options: Options<GetNftData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetNftResponses, GetNftErrors, ThrowOnError>({
-    url: '/v1/nfts/{id}',
+    url: '/v1/nfts/{contract_id}/{token_id}',
     ...options,
   });
 
@@ -330,7 +368,7 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
     ListNftTransfersResponses,
     ListNftTransfersErrors,
     ThrowOnError
-  >({ url: '/v1/nfts/{id}/transfers', ...options });
+  >({ url: '/v1/nfts/{contract_id}/{token_id}/transfers', ...options });
 
 /**
  * Unified search across all entity types.
@@ -341,15 +379,17 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
  * `?limit=` caps each entity bucket independently (default 10,
  * ceiling 50).
  *
- * Behaviour:
- * * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
- * full C-StrKey) and the corresponding entity exists, the response
- * is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
- * navigates directly.
- * * Otherwise the response is `{ "type": "results", "groups": {...} }`
- * with up to `limit` rows per entity bucket. Rows carry the same
- * four columns regardless of bucket: `entity_type`, `identifier`,
- * `label`, `surrogate_id` (BIGINT FK or `null`).
+ * Behaviour (task 0271):
+ * * One SQL path: broad search across the six entity-typed CTEs.
+ * * Response is `{ "groups": {…} }` with up to `limit` rows per
+ * entity bucket. Rows carry the same columns regardless of
+ * bucket: `entity_type`, `identifier`, `label`, `route_token`
+ * (asset routing token or `null`), plus optional enrichment
+ * (`successful`, `last_activity_at`) and composite routing
+ * (`contract_id`, `token_id`) fields.
+ * * FE decides "singleton → direct navigation" by inspecting the
+ * response: total row count == 1 and `routeForHit(singleton)`
+ * resolves ⇒ navigate; else show the dropdown / list.
  *
  * Authoritative SQL:
  * `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.

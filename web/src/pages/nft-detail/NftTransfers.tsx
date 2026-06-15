@@ -1,17 +1,15 @@
 import SwapHorizIcon from '@mui/icons-material/SwapHorizOutlined';
-import { Box, Card, Typography } from '@mui/material';
+import { Box, Card } from '@mui/material';
 import type { NftTransferItem } from '@rumblefish/api-types';
 import {
-  classifyError,
+  Dash,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableSectionHeader,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -24,16 +22,10 @@ import { TransactionTime } from '../transactions/TransactionTime.js';
 import { NftEventBadge } from './NftEventBadge.js';
 
 interface NftTransfersProps {
-  /** Numeric `nfts.id` surrogate. */
-  nftId: number;
-}
-
-function Dash() {
-  return (
-    <Typography component="span" sx={{ color: 'text.tertiary' }}>
-      —
-    </Typography>
-  );
+  /** Issuing contract C-strkey. */
+  contractId: string;
+  /** Opaque contract-defined token id (≤128 ASCII). */
+  tokenId: string;
 }
 
 const columns: ExplorerTableColumn<NftTransferItem>[] = [
@@ -84,14 +76,15 @@ const COLUMN_COUNT = columns.length;
  * Transfer-history section of the NFT detail page — a cursor-paginated table
  * of mint / transfer / burn events for one NFT, per the Figma design.
  */
-export function NftTransfers({ nftId }: NftTransfersProps) {
+export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
   // Cursors are NFT-scoped — drop the URL cursor on NFT switch.
   const { cursor, goNext, goPrev } = useCursorPagination({
-    resetKey: nftId,
+    resetKey: `${contractId}/${tokenId}`,
   });
 
   const { data, isLoading, isError, error, refetch } = useNftTransfers(
-    nftId,
+    contractId,
+    tokenId,
     cursor
   );
 
@@ -104,34 +97,19 @@ export function NftTransfers({ nftId }: NftTransfersProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={5} columns={COLUMN_COUNT} />
-      </Box>
-    );
+    body = <TableSkeleton rows={5} columns={COLUMN_COUNT} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
     );
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <EmptyState
-          icon={<SwapHorizIcon />}
-          title="No transfer history"
-          description="This NFT has no recorded mint, transfer or burn events."
-        />
-      </Box>
+      <EmptyState
+        icon={<SwapHorizIcon />}
+        title="No transfer history"
+        description="This NFT has no recorded mint, transfer or burn events."
+        py={8}
+      />
     );
   } else {
     body = (

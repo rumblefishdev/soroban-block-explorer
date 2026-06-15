@@ -42,6 +42,26 @@ pub(crate) fn is_strkey_shape(value: &str, prefix: char) -> bool {
             .all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
+pub(crate) fn pool_id_hex_to_strkey(hex_str: &str) -> String {
+    assert_eq!(
+        hex_str.len(),
+        64,
+        "pool_id hex must be exactly 64 chars (got {})",
+        hex_str.len()
+    );
+    let bytes = hex::decode(hex_str)
+        .unwrap_or_else(|_| panic!("pool_id hex contains non-hex chars: {hex_str}"));
+    let payload: [u8; 32] = bytes
+        .try_into()
+        .expect("32 bytes — guaranteed by 64-char length assert above");
+    // Double `.to_string()` is intentional: the inherent
+    // `LiquidityPool::to_string` returns `heapless::String<56>` (no_std);
+    // the second `.to_string()` (via `Display`) bridges to `std::String`.
+    stellar_strkey::LiquidityPool(payload)
+        .to_string()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +105,45 @@ mod tests {
         // Lowercase 'a' is outside the uppercase-only base32 subset Stellar uses.
         let bad = "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert!(!is_strkey_shape(bad, 'C'));
+    }
+
+    // -----------------------------------------------------------------------
+    // pool_id_hex_to_strkey — round-trip with stellar_strkey::LiquidityPool
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pool_id_hex_to_strkey_round_trip_zero() {
+        let hex = "0".repeat(64);
+        let strkey = pool_id_hex_to_strkey(&hex);
+        assert!(strkey.starts_with('L'));
+        assert_eq!(strkey.len(), 56);
+        let decoded = stellar_strkey::LiquidityPool::from_string(&strkey).unwrap();
+        let mut round = String::with_capacity(64);
+        for b in &decoded.0 {
+            use core::fmt::Write;
+            let _ = write!(&mut round, "{b:02x}");
+        }
+        assert_eq!(round, hex);
+    }
+
+    #[test]
+    fn pool_id_hex_to_strkey_round_trip_mixed_bytes() {
+        // Pattern exercises both nibbles of each byte and the full hex alphabet.
+        let hex = "0123456789abcdef".repeat(4);
+        assert_eq!(hex.len(), 64);
+        let strkey = pool_id_hex_to_strkey(&hex);
+        let decoded = stellar_strkey::LiquidityPool::from_string(&strkey).unwrap();
+        let mut round = String::with_capacity(64);
+        for b in &decoded.0 {
+            use core::fmt::Write;
+            let _ = write!(&mut round, "{b:02x}");
+        }
+        assert_eq!(round, hex);
+    }
+
+    #[test]
+    #[should_panic(expected = "pool_id hex must be exactly 64 chars")]
+    fn pool_id_hex_to_strkey_panics_on_short_input() {
+        let _ = pool_id_hex_to_strkey("abc");
     }
 }

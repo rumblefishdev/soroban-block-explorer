@@ -1,29 +1,50 @@
 import { Box, Stack, Typography } from '@mui/material';
-import type { PoolItem } from '@rumblefish/api-types';
+import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
+  Dash,
   ExplorerTable,
+  formatAmount,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
+import type { ReactNode } from 'react';
 
 import { routes } from '../../router/routes.js';
-import { poolIdHexToStrkey } from '../../utils/poolIdStrkey.js';
-import { formatAmount } from '../format.js';
-// `assetLegLabel` lives in the detail-page helpers but the labelling
-// rules apply equally to the list — reuse the shared helper rather than
-// duplicating it, to keep the native-asset / fallback behaviour in one
-// place.
-import { assetLegLabel } from '../pool-detail/helpers.js';
-import { Dash } from '../transactions/cells.js';
+// `assetLegLabel` + `legHref` live in the detail-page helpers but the
+// labelling + linking rules apply equally to the list — reuse the
+// shared helpers rather than duplicating, to keep native-asset / SAC
+// mirror / classic-credit precedence in one place.
+import {
+  assetLegLabel,
+  legHref,
+  reserveDotColor,
+} from '../pool-shared/helpers.js';
 
-import { AssetAvatar } from './AssetAvatar.js';
-import { reserveDotColor } from './assetColor.js';
-import { FeePill } from './FeePill.js';
+import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
+import { FeePill } from '../pool-shared/FeePill.js';
 
 export const POOL_COLUMN_COUNT = 5;
 
+/** Render leg code text — wrapped in RouterLink when legHref resolves
+ *  (classic credit, SAC mirror); plain text otherwise (native, schema
+ *  drift). Matches the precedence used by PoolSummary + PoolKpiStrip. */
+function assetCodeNode(leg: PoolAssetLeg): ReactNode {
+  const code = assetLegLabel(leg);
+  const href = legHref(leg);
+  if (!href) return code;
+  return (
+    <IdentifierDisplay
+      value={code}
+      type="asset"
+      truncate={false}
+      href={href}
+      fontSize="inherit"
+    />
+  );
+}
+
 /** Colored dot for the per-leg reserves rows — color comes from the
- *  same `assetLegColor` mapping that drives `AssetAvatar`. */
+ *  same per-asset `assetColor` hash that drives the leg `AssetIcon`. */
 function AssetDot({ color }: { color: string }) {
   return (
     <Box
@@ -48,10 +69,6 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
         row.asset_b
       )}`;
-      // Display the SEP-23 `L...` strkey (Stellar canonical user-facing
-      // form), but keep the link target on the raw hex so the backend
-      // route still resolves.
-      const strkey = poolIdHexToStrkey(row.pool_id);
       return (
         <Stack
           direction="row"
@@ -59,16 +76,16 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <AssetAvatar leg={row.asset_a} />
-            <AssetAvatar leg={row.asset_b} overlap />
-          </Box>
+          <PoolAssetPair a={row.asset_a} b={row.asset_b} />
           <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-            <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+            <Typography
+              variant="bodySmMedium"
+              sx={(theme) => ({ color: theme.palette.text.primary })}
+            >
               {pair}
             </Typography>
             <IdentifierDisplay
-              value={strkey}
+              value={row.pool_id}
               type="pool"
               href={routes.pool(row.pool_id)}
             />
@@ -93,16 +110,16 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
         <Stack spacing={0.5}>
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_a)} />
-            <Typography variant="bodyXsMedium">
+            <Typography variant="bodyXsMedium" component="span">
               {row.reserve_a != null ? formatAmount(row.reserve_a) : '—'}{' '}
-              {assetLegLabel(row.asset_a)}
+              {assetCodeNode(row.asset_a)}
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_b)} />
-            <Typography variant="bodyXsMedium">
+            <Typography variant="bodyXsMedium" component="span">
               {row.reserve_b != null ? formatAmount(row.reserve_b) : '—'}{' '}
-              {assetLegLabel(row.asset_b)}
+              {assetCodeNode(row.asset_b)}
             </Typography>
           </Stack>
         </Stack>
@@ -122,10 +139,16 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       if (row.total_shares == null) return <Dash />;
       return (
         <Stack spacing={0.25} alignItems="flex-end">
-          <Typography variant="bodySmMedium" sx={{ color: 'text.primary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.primary })}
+          >
             {formatAmount(row.total_shares)}
           </Typography>
-          <Typography variant="bodyXsRegular" sx={{ color: 'text.secondary' }}>
+          <Typography
+            variant="bodyXsRegular"
+            sx={(theme) => ({ color: theme.palette.text.secondary })}
+          >
             shares
           </Typography>
         </Stack>
@@ -137,7 +160,10 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Participants',
     align: 'right',
     cell: (row) => (
-      <Typography variant="bodySmRegular">
+      <Typography
+        variant="bodySmMedium"
+        sx={(theme) => ({ color: theme.palette.text.primary })}
+      >
         {formatAmount(row.participant_count)}
       </Typography>
     ),
@@ -145,7 +171,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
 ];
 
 interface PoolsTableProps {
-  rows: PoolItem[];
+  rows: readonly PoolItem[];
 }
 
 /**

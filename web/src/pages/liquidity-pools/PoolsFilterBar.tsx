@@ -1,15 +1,5 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
-import {
-  Box,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
-  type SelectChangeEvent,
-} from '@mui/material';
-import { useEffect, useState } from 'react';
-
-const SEARCH_DEBOUNCE_MS = 300;
+import { Box, MenuItem, Select, type SelectChangeEvent } from '@mui/material';
+import { DebouncedField } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
  * TVL preset options (Figma node 267:60674).
@@ -45,21 +35,6 @@ export function PoolsFilterBar({
   onAssetChange,
   onMinTvlChange,
 }: PoolsFilterBarProps) {
-  const [draft, setDraft] = useState(asset);
-
-  // Keep the local draft in sync if the URL value changes externally
-  // (e.g. browser back/forward, programmatic reset).
-  useEffect(() => {
-    setDraft(asset);
-  }, [asset]);
-
-  // Debounce keystrokes; commits to the URL after the user pauses typing.
-  useEffect(() => {
-    if (draft === asset) return;
-    const id = setTimeout(() => onAssetChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, asset, onAssetChange]);
-
   const handleTvlChange = (event: SelectChangeEvent<string>) => {
     onMinTvlChange(event.target.value);
   };
@@ -71,25 +46,17 @@ export function PoolsFilterBar({
         flexWrap: 'wrap',
         gap: 1,
         p: 2,
+
         backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={asset}
         placeholder="Filter by asset pair..."
-        aria-label="Filter by asset pair"
-        sx={{ width: 400, maxWidth: '100%' }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Filter by asset pair"
+        width={400}
+        onCommit={onAssetChange}
       />
       <Select
         value={minTvl}

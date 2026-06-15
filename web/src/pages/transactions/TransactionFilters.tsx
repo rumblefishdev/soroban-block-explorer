@@ -1,22 +1,18 @@
-import SearchIcon from '@mui/icons-material/SearchOutlined';
+import { Box, MenuItem, Select } from '@mui/material';
 import {
-  Box,
-  InputAdornment,
-  MenuItem,
-  Select,
-  TextField,
-} from '@mui/material';
-import { useEffect, useState } from 'react';
+  DebouncedField,
+  isAccountId,
+  isContractId,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { OPERATION_TYPE_OPTIONS } from './operationTypes.js';
 
 const ALL_OPERATIONS = '';
-const SEARCH_DEBOUNCE_MS = 300;
 
 interface TransactionFiltersProps {
   /** Combined source-account / contract-ID search value. */
   search: string;
-  /** Raw operation-type enum, or `''` for "All operations type". */
+  /** Raw operation-type enum, or `''` for "All operation types". */
   operationType: string;
   onSearchChange: (value: string) => void;
   onOperationTypeChange: (value: string) => void;
@@ -33,20 +29,8 @@ export function TransactionFilters({
   onSearchChange,
   onOperationTypeChange,
 }: TransactionFiltersProps) {
-  const [draft, setDraft] = useState(search);
-
-  // Re-sync the local input when the value changes externally
-  // (e.g. the "Clear filters" action).
-  useEffect(() => {
-    setDraft(search);
-  }, [search]);
-
-  // Debounce committing the typed value so we don't refetch per keystroke.
-  useEffect(() => {
-    if (draft === search) return;
-    const id = setTimeout(() => onSearchChange(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft, search, onSearchChange]);
+  const isError =
+    search !== '' && !isAccountId(search) && !isContractId(search);
 
   return (
     <Box
@@ -54,39 +38,32 @@ export function TransactionFilters({
         display: 'flex',
         gap: 2,
         p: 2,
+        flexWrap: 'wrap',
         backgroundColor: theme.palette.surface.grayMainAlt,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
       })}
     >
-      <TextField
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+      <DebouncedField
+        value={search}
         placeholder="Source account or contract ID..."
-        aria-label="Filter by source account or contract ID"
-        sx={{ width: 400 }}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon
-                  sx={(theme) => ({
-                    fontSize: 18,
-                    color: theme.palette.text.tertiary,
-                  })}
-                />
-              </InputAdornment>
-            ),
-          },
-        }}
+        ariaLabel="Filter by source account or contract ID"
+        width={400}
+        onCommit={onSearchChange}
+        error={isError}
+        helperText={
+          isError
+            ? 'Requires a full Account (G...) or Contract ID (C...)'
+            : undefined
+        }
       />
       <Select
         value={operationType}
         onChange={(e) => onOperationTypeChange(e.target.value)}
         displayEmpty
         aria-label="Filter by operation type"
-        sx={{ width: 280 }}
+        sx={{ width: { xs: '100%', sm: 280 } }}
       >
-        <MenuItem value={ALL_OPERATIONS}>All operations type</MenuItem>
+        <MenuItem value={ALL_OPERATIONS}>All operation types</MenuItem>
         {OPERATION_TYPE_OPTIONS.map((option) => (
           <MenuItem key={option.value} value={option.value}>
             {option.label}

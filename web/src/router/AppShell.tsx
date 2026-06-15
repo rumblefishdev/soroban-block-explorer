@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 
@@ -12,6 +12,8 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useNetworkStats } from '../api/index.js';
+import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
+import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
 
@@ -20,6 +22,18 @@ const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
   href: link.to,
 }));
 
+const FOOTER_EXPLORER_LINKS: { label: string; href: string }[] = [
+  { label: 'Home', href: routes.home },
+  { label: 'Search', href: routes.search('') },
+  { label: 'Transactions', href: routes.transactions },
+  { label: 'Ledgers', href: routes.ledgers },
+  { label: 'Liquidity Pools', href: routes.pools },
+  { label: 'Tokens', href: routes.assets },
+  { label: 'Contracts', href: routes.contracts },
+  { label: 'Accounts', href: routes.accounts },
+  { label: 'NFTs', href: routes.nfts },
+];
+
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
 }
@@ -27,22 +41,27 @@ function isModifiedClick(e: React.MouseEvent): boolean {
 function HomeLogo({
   height,
   onClick,
+  variant = 'soroban',
 }: {
   height: number;
   onClick: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+
+  variant?: 'soroban' | 'rumblefish';
 }) {
+  const isSoroban = variant === 'soroban';
   return (
     <Box
       component="a"
       href={routes.home}
-      aria-label="Stellar Explorer — home"
+      aria-label={isSoroban ? 'Soroban Explorer — home' : 'Rumblefish — home'}
       onClick={onClick}
       sx={{ display: 'inline-flex', lineHeight: 0 }}
     >
-      <img
-        src="/rumblefish-logo.svg"
-        alt="Rumblefish"
-        style={{ height, display: 'block' }}
+      <Box
+        component="img"
+        src={isSoroban ? '/soroban-logo.webp' : '/rumblefish-logo.webp'}
+        alt={isSoroban ? 'Soroban' : 'Rumblefish'}
+        sx={{ height, width: 'auto', display: 'block' }}
       />
     </Box>
   );
@@ -50,11 +69,7 @@ function HomeLogo({
 
 function useActivePage(): string | undefined {
   const { pathname } = useLocation();
-  const match = NAV_LINKS.find((link) =>
-    link.to === routes.home
-      ? pathname === routes.home
-      : pathname.startsWith(link.to)
-  );
+  const match = NAV_LINKS.find((link) => pathname.startsWith(link.to));
   return match?.label;
 }
 
@@ -71,16 +86,30 @@ export function AppShell() {
 
   const enterHandlerRef = useRef<() => boolean>(() => false);
 
-  // The home page is full-bleed (hero band, edge-to-edge section
-  // backgrounds); every other route gets the standard content padding.
-  const isFullBleed = pathname === routes.home;
+  const isHome = pathname === routes.home;
+
+  // Global Cmd/Ctrl+K focuses the visible search input (header on most routes,
+  // hero on home) — the shortcut the "CTRL + K" pill advertises (F-RR-2).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const el = document.querySelector<HTMLElement>('[data-global-search]');
+        if (el) {
+          e.preventDefault();
+          el.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleSearchSubmit = () => {
     if (enterHandlerRef.current()) return;
     const q = searchValue.trim();
     if (q) {
       setSearchOpen(false);
-      void navigate(routes.search(q));
+      void navigate(directRouteFor(q) ?? routes.search(q));
     }
   };
 
@@ -115,63 +144,71 @@ export function AppShell() {
     void navigate(href);
   };
 
-  const FOOTER_NAV_ITEMS = NAV_ITEMS.map((item) => {
-    const href = item.href;
-    return {
-      ...item,
-      onClick: href
-        ? (e: React.MouseEvent<HTMLAnchorElement>) =>
-            handleFooterNavClick(href, e)
-        : undefined,
-    };
-  });
+  const FOOTER_NAV_ITEMS = FOOTER_EXPLORER_LINKS.map((item) => ({
+    label: item.label,
+    href: item.href,
+    onClick: (e: React.MouseEvent<HTMLAnchorElement>) =>
+      handleFooterNavClick(item.href, e),
+  }));
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <TopNav
-        stats={stats}
-        searchValue={searchValue}
-        onSearchChange={handleSearchChange}
-        onSearchSubmit={handleSearchSubmit}
-        onSearchClear={handleSearchClear}
-        searchOverlaySlot={
-          showSearchOverlay ? (
-            <GlobalSearchBar
-              q={searchValue}
-              onDismiss={() => setSearchOpen(false)}
-              registerEnterHandler={(handler) => {
-                enterHandlerRef.current = handler;
-              }}
-            />
-          ) : undefined
-        }
-      />
+      {!isHome && (
+        <TopNav
+          stats={stats}
+          searchValue={searchValue}
+          onSearchChange={handleSearchChange}
+          onSearchSubmit={handleSearchSubmit}
+          onSearchClear={handleSearchClear}
+          searchOverlaySlot={
+            showSearchOverlay ? (
+              <GlobalSearchBar
+                q={searchValue}
+                onDismiss={() => setSearchOpen(false)}
+                registerEnterHandler={(handler) => {
+                  enterHandlerRef.current = handler;
+                }}
+              />
+            ) : undefined
+          }
+        />
+      )}
       <SecondaryNav
-        logo={<HomeLogo height={32} onClick={handleHomeClick} />}
+        logo={<HomeLogo height={24} onClick={handleHomeClick} />}
         navItems={NAV_ITEMS}
         activePage={activePage}
         onNavClick={handleNavClick}
       />
-      <Box
-        component="main"
-        sx={{
-          flex: 1,
-          width: '100%',
-          maxWidth: isFullBleed ? 'none' : grid.desktop.maxWidth,
-          mx: 'auto',
-          ...(isFullBleed ? {} : { px: `${grid.desktop.margin}px`, py: 4 }),
-        }}
-      >
-        {/* Faint grid halo behind every page. The home page adds the
-            warm gold glow pills on top of this same backdrop; every
-            other route shows the grid on its own. */}
+      <Box sx={{ flex: 1, position: 'relative', width: '100%' }}>
         <PageGridBackdrop />
-        <Box sx={{ position: 'relative', zIndex: 1 }}>
+        {isHome && <HomeHeroGlow />}
+        <Box
+          component="main"
+          sx={(theme) => ({
+            width: '100%',
+            maxWidth: grid.desktop.maxWidth,
+            mx: 'auto',
+
+            px: {
+              xs: `${grid.mobile.margin}px`,
+              md: `${grid.desktop.margin}px`,
+            },
+            py: { xs: 2, md: 4 },
+            position: 'relative',
+            zIndex: theme.zIndex.contentMain,
+          })}
+        >
           <Outlet />
         </Box>
       </Box>
       <Footer
-        logo={<HomeLogo height={47} onClick={handleHomeClick} />}
+        logo={
+          <HomeLogo
+            height={47}
+            onClick={handleHomeClick}
+            variant="rumblefish"
+          />
+        }
         navItems={FOOTER_NAV_ITEMS}
       />
     </Box>

@@ -35,6 +35,23 @@ export type AccountDetailResponse = {
 };
 
 /**
+ * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
+ * first/last-seen activity window + `home_domain`. Ordered by
+ * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
+ * balance from `account_balances_current`; `null` if no native row exists.
+ */
+export type AccountListItem = {
+  account_id: string;
+  first_seen_ledger: number;
+  home_domain?: string | null;
+  last_seen_ledger: number;
+  /**
+   * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+   */
+  xlm_balance?: string | null;
+};
+
+/**
  * Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.
  */
 export type AccountTransactionItem = {
@@ -85,7 +102,15 @@ export type AssetDetailResponse = {
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+   * PG→CH composite move): CH keys assets on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
   total_supply?: string | null;
@@ -119,7 +144,15 @@ export type AssetItem = {
    */
   holder_count?: number | null;
   icon_url?: string | null;
-  id: number;
+  /**
+   * Canonical identifier — the single token usable as `/assets/{id}`:
+   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+   * PG→CH composite move): CH keys assets on
+   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   */
+  id: string;
   issuer?: string | null;
   name?: string | null;
   total_supply?: string | null;
@@ -165,6 +198,10 @@ export type ChartResponse = {
   data_points: Array<ChartDataPoint>;
   from: string;
   interval: string;
+  /**
+   * Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
+   * client supplied in the path.
+   */
   pool_id: string;
   to: string;
 };
@@ -181,7 +218,91 @@ export type ContractDetailResponse = {
   wasm_uploaded_at_ledger?: number | null;
 };
 
+/**
+ * One parameter on a Soroban contract function signature.
+ */
+export type ContractFunctionParam = {
+  name: string;
+  type_name: string;
+};
+
+/**
+ * A single public function signature extracted from a Soroban contract's
+ * WASM spec. Mirror of `xdr_parser::types::ContractFunction`, which is
+ * the indexer-side source of the persisted shape.
+ */
+export type ContractFunctionSig = {
+  /**
+   * Documentation string; may be empty.
+   */
+  doc: string;
+  inputs: Array<ContractFunctionParam>;
+  name: string;
+  /**
+   * Output type names; empty array == void return.
+   */
+  outputs: Array<string>;
+};
+
+/**
+ * Soroban contract interface metadata persisted in
+ * `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+ * indexer's `xdr_parser::types::ContractInterface` exactly — the API
+ * hands the same JSON object to clients that the indexer wrote.
+ */
+export type ContractInterfaceMetadata = {
+  functions: Array<ContractFunctionSig>;
+  /**
+   * Raw WASM byte length (informational).
+   */
+  wasm_byte_len: number;
+};
+
+/**
+ * One row of `GET /v1/contracts`. Identity + classification + deploy
+ * provenance + a 7-day activity signal. All fields come straight from
+ * `soroban_contracts` (+ a deployer join and a windowed invocation count);
+ * nullable fields are `None` until the contract's deploy is observed.
+ */
+export type ContractListItem = {
+  contract_id: string;
+  /**
+   * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+   * until deployment is observed.
+   */
+  contract_type?: number | null;
+  /**
+   * `token | other | nft | fungible`. `null` only on schema drift / no type.
+   */
+  contract_type_name?: string | null;
+  /**
+   * Ledger the deploy was observed at; `null` until then.
+   */
+  deployed_at_ledger?: number | null;
+  /**
+   * Deployer account G-strkey; `null` until the deploy op is observed.
+   */
+  deployer?: string | null;
+  /**
+   * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+   */
+  is_sac: boolean;
+  /**
+   * Invocation count over the last 7 days (windowed; matches the detail
+   * `ContractStats.recent_invocations` semantics).
+   */
+  recent_invocations: number;
+};
+
 export type ContractStats = {
+  /**
+   * Sum of `soroban_events_appearances.amount` over the same window
+   * as `recent_invocations`. One appearance row can represent multiple
+   * actual events (`amount > 1`) so we sum rather than COUNT(*) — the
+   * figure matches what `GET /v1/contracts/:id/events` would return
+   * over the window.
+   */
+  recent_events: number;
   recent_invocations: number;
   recent_unique_callers: number;
   /**
@@ -376,7 +497,7 @@ export type HeavyFieldsStatus = 'ok' | 'unavailable';
  */
 export type InterfaceResponse = {
   contract_id: string;
-  interface_metadata?: unknown;
+  interface_metadata?: null | ContractInterfaceMetadata;
   wasm_hash?: string | null;
 };
 
@@ -645,9 +766,23 @@ export type OperationItem = {
   destination_account?: string | null;
   ledger_sequence: number;
   /**
-   * Hex-encoded liquidity pool ID.
+   * Liquidity pools crossed by this operation, as SEP-23 strkeys
+   * (`L...`, 56 chars). Encoded from the DB hex form at the response
+   * boundary so cross-entity link targets match the
+   * `/v1/liquidity-pools/:id` route shape. Single-element for LP
+   * deposit/withdraw; the full crossed-pool list for path payments and
+   * offers that filled against a pool (task 0261/0268 — replaces the
+   * former nullable scalar `pool_id`).
+   *
+   * **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
+   * pool" **only** for ClickHouse-served responses. The Postgres backend
+   * (default until each module flips to CH, per task 0243) never received
+   * the claim-atom extraction, so it returns `[]` for *every* path-payment
+   * and offer op regardless of whether a pool was crossed — only LP
+   * deposit/withdraw carry a pool there. Treat `[]` as authoritative for
+   * pool absence only once the module reads from CH.
    */
-  pool_id?: string | null;
+  pool_ids: Array<string>;
   source_account?: string | null;
   /**
    * Raw `OperationType` SMALLINT (ADR 0031).
@@ -659,6 +794,40 @@ export type OperationItem = {
    */
   type_name: string;
 };
+
+/**
+ * Stellar operation type. Discriminants match the XDR numbering; the
+ * serde representation is the canonical SCREAMING_SNAKE_CASE label used
+ * by the Horizon API and historically persisted as VARCHAR.
+ */
+export type OperationType =
+  | 'CREATE_ACCOUNT'
+  | 'PAYMENT'
+  | 'PATH_PAYMENT_STRICT_RECEIVE'
+  | 'MANAGE_SELL_OFFER'
+  | 'CREATE_PASSIVE_SELL_OFFER'
+  | 'SET_OPTIONS'
+  | 'CHANGE_TRUST'
+  | 'ALLOW_TRUST'
+  | 'ACCOUNT_MERGE'
+  | 'INFLATION'
+  | 'MANAGE_DATA'
+  | 'BUMP_SEQUENCE'
+  | 'MANAGE_BUY_OFFER'
+  | 'PATH_PAYMENT_STRICT_SEND'
+  | 'CREATE_CLAIMABLE_BALANCE'
+  | 'CLAIM_CLAIMABLE_BALANCE'
+  | 'BEGIN_SPONSORING_FUTURE_RESERVES'
+  | 'END_SPONSORING_FUTURE_RESERVES'
+  | 'REVOKE_SPONSORSHIP'
+  | 'CLAWBACK'
+  | 'CLAWBACK_CLAIMABLE_BALANCE'
+  | 'SET_TRUST_LINE_FLAGS'
+  | 'LIQUIDITY_POOL_DEPOSIT'
+  | 'LIQUIDITY_POOL_WITHDRAW'
+  | 'INVOKE_HOST_FUNCTION'
+  | 'EXTEND_FOOTPRINT_TTL'
+  | 'RESTORE_FOOTPRINT';
 
 /**
  * Pagination metadata attached to list responses.
@@ -703,6 +872,29 @@ export type PageInfo = {
    * yet).
    */
   prev_cursor?: string | null;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedAccountListItem = {
+  data: Array<{
+    account_id: string;
+    first_seen_ledger: number;
+    home_domain?: string | null;
+    last_seen_ledger: number;
+    /**
+     * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+     */
+    xlm_balance?: string | null;
+  }>;
+  page: PageInfo;
 };
 
 /**
@@ -765,7 +957,15 @@ export type PaginatedAssetItem = {
      */
     holder_count?: number | null;
     icon_url?: string | null;
-    id: number;
+    /**
+     * Canonical identifier — the single token usable as `/assets/{id}`:
+     * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
+     * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
+     * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
+     * PG→CH composite move): CH keys assets on
+     * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+     */
+    id: string;
     issuer?: string | null;
     name?: string | null;
     total_supply?: string | null;
@@ -796,6 +996,48 @@ export type PaginatedAssetTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+  }>;
+  page: PageInfo;
+};
+
+/**
+ * Canonical envelope for paginated list responses.
+ *
+ * Generic over the item type `T` so every endpoint can reuse a single
+ * shape. Concrete instantiations (e.g. `Paginated<Transaction>`) are
+ * picked up automatically by utoipa-axum via the handler return type
+ * when M2 endpoint modules are wired in. Unused in M1 — kept as
+ * infrastructure that M2 endpoints will consume.
+ */
+export type PaginatedContractListItem = {
+  data: Array<{
+    contract_id: string;
+    /**
+     * Raw SMALLINT class (0=token, 1=other, 2=nft, 3=fungible). `null`
+     * until deployment is observed.
+     */
+    contract_type?: number | null;
+    /**
+     * `token | other | nft | fungible`. `null` only on schema drift / no type.
+     */
+    contract_type_name?: string | null;
+    /**
+     * Ledger the deploy was observed at; `null` until then.
+     */
+    deployed_at_ledger?: number | null;
+    /**
+     * Deployer account G-strkey; `null` until the deploy op is observed.
+     */
+    deployer?: string | null;
+    /**
+     * Stellar Asset Contract flag (stored, not derived from `contract_type`).
+     */
+    is_sac: boolean;
+    /**
+     * Invocation count over the last 7 days (windowed; matches the detail
+     * `ContractStats.recent_invocations` semantics).
+     */
+    recent_invocations: number;
   }>;
   page: PageInfo;
 };
@@ -1019,7 +1261,10 @@ export type PaginatedPoolItem = {
      */
     participant_count: number;
     /**
-     * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
+     * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
+     * 0024; the handler encodes to strkey at the response boundary so
+     * the wire shape matches the Stellar ecosystem canonical form
+     * (CAP-38 / SEP-23).
      */
     pool_id: string;
     reserve_a?: string | null;
@@ -1076,7 +1321,14 @@ export type PaginatedTransactionListItem = {
      */
     application_order: number;
     /**
-     * All C-StrKeys touched anywhere in the transaction.
+     * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+     * On the ClickHouse path this is sourced from `operations_appearances`
+     * only (primary-key seek): a contract reached solely via a nested
+     * sub-invocation or an emitted event — never a root-op `contract_id` — is
+     * NOT listed. For the overwhelming majority of Soroban transactions the
+     * invoked contract IS the root-op `contract_id`, so this matches the PG
+     * path in practice; the full 3-source set was dropped because its scan
+     * blew the read_rows quota (task 0243; see `common::ch`).
      */
     contract_ids: Array<string>;
     created_at: string;
@@ -1151,6 +1403,26 @@ export type ParticipantItem = {
  * One leg of an LP's asset pair. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
  * SMALLINT — same contract as `assets/dto::AssetItem`.
+ *
+ * Linkable identifiers (task 0263 / F-K-9). All link targets are the
+ * **asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic
+ * and accepts both C-strkey (SAC) and `code-issuer` composite, so all
+ * non-native legs resolve to the same asset row.
+ *
+ * * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
+ * address in classic Stellar protocol; SAC mirror is network-dependent).
+ * * `contract_id` — C-strkey of the SAC mirror for a classic credit
+ * leg (populated when an `assets` row with `asset_type = 2`
+ * exists for `(asset_code, issuer)` and carries a
+ * `soroban_contracts.contract_id`). `None` for legs without an
+ * SAC mirror. Pool legs only carry XDR `AssetType` (native /
+ * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
+ * so SAC / Soroban legs are not directly representable here;
+ * `contract_id` surfaces the SAC mirror look-up so the FE can
+ * route to the asset detail page via `/assets/${contract_id}`.
+ * * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE
+ * routes to `/assets/${asset_code}-${issuer}` (composite form
+ * accepted by `parse_asset_id`).
  */
 export type PoolAssetLeg = {
   asset_code?: string | null;
@@ -1162,6 +1434,19 @@ export type PoolAssetLeg = {
    * `native | classic_credit | sac | soroban`. `null` only on schema drift.
    */
   asset_type_name?: string | null;
+  /**
+   * C-strkey of the SAC mirror, when a matching `assets` row
+   * (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
+   * native legs and for classic credit legs without an SAC mirror.
+   */
+  contract_id?: string | null;
+  /**
+   * Asset icon URL, mirrored from the leg's `assets.icon_url` row so
+   * pool avatars render the same icon as the assets list. `None` for
+   * native legs and assets without an enriched icon — the FE falls back
+   * to the asset-code initial.
+   */
+  icon_url?: string | null;
   issuer?: string | null;
 };
 
@@ -1193,7 +1478,10 @@ export type PoolItem = {
    */
   participant_count: number;
   /**
-   * 64-char lowercase hex (BYTEA(32) on the wire) per ADR 0024.
+   * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
+   * 0024; the handler encodes to strkey at the response boundary so
+   * the wire shape matches the Stellar ecosystem canonical form
+   * (CAP-38 / SEP-23).
    */
   pool_id: string;
   reserve_a?: string | null;
@@ -1243,9 +1531,18 @@ export type SearchGroups = {
  * Single search row. Same shape across every entity bucket.
  *
  * `identifier` is the canonical human-shown id (hex hash for
- * transactions / pools, StrKey for accounts / contracts, asset code
- * for assets, name for NFTs). For `asset` and `nft` it is NOT unique —
- * the frontend MUST route via `surrogate_id`.
+ * transactions, strkey `L…` for pools, StrKey for accounts /
+ * contracts, asset code for assets, name for NFTs). It is the routing
+ * key too for every type whose display id IS routable (transaction,
+ * account, contract, pool). The two exceptions carry a separate routing
+ * payload because their display id is NOT routable:
+ *
+ * - `asset`: `identifier` is the asset code (not unique / not routable);
+ * `route_token` carries the canonical `/assets/:id` token (contract
+ * StrKey | `CODE-ISSUER` | `native`), mirroring `canonical_id` in
+ * `assets/handlers.rs`.
+ * - `nft`: identity is the composite `(contract_id, token_id)` per task
+ * 0264 / ADR 0030 — the two fields below carry it for routing.
  *
  * `successful` and `last_activity_at` are populated only for
  * `entity_type = transaction` today — joined from the partitioned
@@ -1256,44 +1553,36 @@ export type SearchGroups = {
  * whenever these fields are present.
  */
 export type SearchHit = {
+  /**
+   * NFT composite routing key. Populated only when
+   * `entity_type = nft`; `None` for every other bucket.
+   */
+  contract_id?: string | null;
   entity_type: EntityType;
   identifier: string;
   label: string;
   last_activity_at?: string | null;
+  /**
+   * Canonical `/assets/:id` routing token for `asset` hits; `None` for
+   * every other type (they route on `identifier`). See the struct doc.
+   */
+  route_token?: string | null;
   successful?: boolean | null;
-  surrogate_id?: number | null;
+  /**
+   * NFT composite routing key. Populated only when
+   * `entity_type = nft`; `None` for every other bucket.
+   */
+  token_id?: string | null;
 };
-
-/**
- * Redirect payload — frontend navigates directly to the entity page.
- */
-export type SearchRedirect = {
-  entity_id: string;
-  entity_type: EntityType;
-  last_activity_at?: string | null;
-  successful?: boolean | null;
-};
-
-/**
- * Discriminated response: `redirect` for unambiguous exact match,
- * `results` for grouped broad search.
- *
- * `#[serde(tag = "type")]` puts the discriminator on the wire as
- * `"type": "redirect" | "results"` per the task spec, mirroring the
- * frontend search-bar UX expectation: a `redirect` causes the bar to
- * navigate directly; a `results` shows the dropdown with grouped hits.
- */
-export type SearchResponse =
-  | (SearchRedirect & {
-      type: 'redirect';
-    })
-  | (SearchResults & {
-      type: 'results';
-    });
 
 /**
  * Results payload — six entity-typed buckets, each capped at the
  * per-group `limit` chosen by the caller (default 10, ceiling 50).
+ *
+ * FE decides "singleton → navigate directly" by inspecting
+ * `groups`: when the total row count across all buckets is exactly
+ * 1 and `routeForHit(singleton)` resolves, the FE navigates to the
+ * detail page; otherwise it renders the dropdown / Results page.
  */
 export type SearchResults = {
   groups: SearchGroups;
@@ -1379,7 +1668,14 @@ export type TransactionListItem = {
    */
   application_order: number;
   /**
-   * All C-StrKeys touched anywhere in the transaction.
+   * C-StrKeys of the contracts invoked as a root-operation `contract_id`.
+   * On the ClickHouse path this is sourced from `operations_appearances`
+   * only (primary-key seek): a contract reached solely via a nested
+   * sub-invocation or an emitted event — never a root-op `contract_id` — is
+   * NOT listed. For the overwhelming majority of Soroban transactions the
+   * invoked contract IS the root-op `contract_id`, so this matches the PG
+   * path in practice; the full 3-source set was dropped because its scan
+   * blew the read_rows quota (task 0243; see `common::ch`).
    */
   contract_ids: Array<string>;
   created_at: string;
@@ -1475,6 +1771,51 @@ export type HealthResponses = {
   200: unknown;
 };
 
+export type ListAccountsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Base sort order on `last_seen_ledger`: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
+    'filter[with_domain]'?: boolean | null;
+  };
+  url: '/v1/accounts';
+};
+
+export type ListAccountsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListAccountsError = ListAccountsErrors[keyof ListAccountsErrors];
+
+export type ListAccountsResponses = {
+  /**
+   * Paginated account list
+   */
+  200: PaginatedAccountListItem;
+};
+
+export type ListAccountsResponse =
+  ListAccountsResponses[keyof ListAccountsResponses];
+
 export type GetAccountData = {
   body?: never;
   path: {
@@ -1530,6 +1871,11 @@ export type ListAccountTransactionsData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Sort order on transaction time: `asc` | `desc` (default).
+     * Sticky — re-send on every page alongside `cursor`.
+     */
+    order?: string | null;
   };
   url: '/v1/accounts/{account_id}/transactions';
 };
@@ -1610,7 +1956,7 @@ export type GetAssetData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…, 56 chars), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -1648,7 +1994,7 @@ export type ListAssetTransactionsData = {
   body?: never;
   path: {
     /**
-     * Numeric `assets.id`, contract StrKey (C…), or `code-issuer` composite.
+     * Contract StrKey (C…, 56 chars), `CODE-ISSUER` composite (e.g. USDC-GA…), or the reserved `native` token for XLM.
      */
     id: string;
   };
@@ -1692,6 +2038,53 @@ export type ListAssetTransactionsResponses = {
 
 export type ListAssetTransactionsResponse =
   ListAssetTransactionsResponses[keyof ListAssetTransactionsResponses];
+
+export type ListContractsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Items per page (1–100, default 20).
+     */
+    limit?: number;
+    /**
+     * Opaque pagination cursor from a previous response.
+     */
+    cursor?: string;
+    /**
+     * Contract class: `token | other | nft | fungible`.
+     */
+    'filter[type]'?: string | null;
+    /**
+     * Free-text search over contract id + name (`search_vector`).
+     */
+    'filter[q]'?: string | null;
+  };
+  url: '/v1/contracts';
+};
+
+export type ListContractsErrors = {
+  /**
+   * Invalid query parameter
+   */
+  400: ErrorEnvelope;
+  /**
+   * Internal server error
+   */
+  500: ErrorEnvelope;
+};
+
+export type ListContractsError = ListContractsErrors[keyof ListContractsErrors];
+
+export type ListContractsResponses = {
+  /**
+   * Paginated contract list
+   */
+  200: PaginatedContractListItem;
+};
+
+export type ListContractsResponse =
+  ListContractsResponses[keyof ListContractsResponses];
 
 export type GetContractData = {
   body?: never;
@@ -1742,10 +2135,10 @@ export type ListEventsData = {
   };
   query?: {
     /**
-     * Items per page (1–100, default 20). Page granularity is per
-     * `(contract, transaction, ledger)` appearance — a single appearance
-     * can expand to multiple per-node items in the response, so the
-     * returned `data.len()` may exceed `limit`.
+     * Items per page (1–100, default 20). On the PG datasource the page is per
+     * `(contract, transaction, ledger)` appearance — one appearance can expand to
+     * multiple events, so `data.len()` may exceed `limit`. On the CH datasource the
+     * page is per event (one row → one item), so `data.len() <= limit`.
      */
     limit?: number;
     /**
@@ -1883,6 +2276,10 @@ export type ListLedgersData = {
      * Opaque pagination cursor from a previous response.
      */
     cursor?: string;
+    /**
+     * Base sort order: `asc` = oldest→newest, `desc` (default) = newest→oldest. Sticky — re-send it on every page alongside `cursor`. Reset to the first page (drop `cursor`) when changing it.
+     */
+    order?: string;
   };
   url: '/v1/ledgers';
 };
@@ -2015,7 +2412,7 @@ export type GetPoolData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)) per ADR 0024.
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
      */
     pool_id: string;
   };
@@ -2053,7 +2450,7 @@ export type GetPoolChartData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)).
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
      */
     pool_id: string;
   };
@@ -2108,7 +2505,7 @@ export type ListParticipantsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA) per ADR 0024.
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
      */
     pool_id: string;
   };
@@ -2157,7 +2554,7 @@ export type ListPoolTransactionsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — 64-char lowercase hex (BYTEA(32)).
+     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
      */
     pool_id: string;
   };
@@ -2286,17 +2683,21 @@ export type GetNftData = {
   body?: never;
   path: {
     /**
-     * Internal NFT surrogate id (`nfts.id`).
+     * Contract C-StrKey hosting the NFT (CAP-46-6 token contract).
      */
-    id: number;
+    contract_id: string;
+    /**
+     * Contract-defined token id (opaque string; ≤128 ASCII chars).
+     */
+    token_id: string;
   };
   query?: never;
-  url: '/v1/nfts/{id}';
+  url: '/v1/nfts/{contract_id}/{token_id}';
 };
 
 export type GetNftErrors = {
   /**
-   * Invalid id format
+   * Invalid contract_id / token_id
    */
   400: ErrorEnvelope;
   /**
@@ -2324,9 +2725,13 @@ export type ListNftTransfersData = {
   body?: never;
   path: {
     /**
-     * Internal NFT surrogate id (`nfts.id`).
+     * Contract C-StrKey hosting the NFT.
      */
-    id: number;
+    contract_id: string;
+    /**
+     * Contract-defined token id (opaque string; ≤128 ASCII chars).
+     */
+    token_id: string;
   };
   query?: {
     /**
@@ -2338,12 +2743,12 @@ export type ListNftTransfersData = {
      */
     cursor?: string;
   };
-  url: '/v1/nfts/{id}/transfers';
+  url: '/v1/nfts/{contract_id}/{token_id}/transfers';
 };
 
 export type ListNftTransfersErrors = {
   /**
-   * Invalid id / pagination
+   * Invalid contract_id / token_id / pagination
    */
   400: ErrorEnvelope;
   /**
@@ -2406,7 +2811,7 @@ export type GetSearchResponses = {
   /**
    * Search results
    */
-  200: SearchResponse;
+  200: SearchResults;
 };
 
 export type GetSearchResponse = GetSearchResponses[keyof GetSearchResponses];

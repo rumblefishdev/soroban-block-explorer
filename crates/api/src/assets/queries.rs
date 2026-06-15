@@ -11,11 +11,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, TsIdCursor, keyset_sql_desc};
 
 #[derive(Debug, Clone)]
 pub struct AssetRow {
-    pub id: i32,
     pub asset_type: i16,
     /// Pre-decoded via `token_asset_type_name()` SQL helper. `None` only
     /// when the discriminant is outside the schema CHECK range — defensive
@@ -38,6 +37,12 @@ pub struct AssetRow {
     /// native, no-issuer, and issuer accounts that did not set
     /// `home_domain` on-chain.
     pub issuer_home_domain: Option<String>,
+    /// Surrogate key columns — cursor keyset only, never on the wire. These
+    /// are the 4-tuple CH orders `assets` by `(asset_type, asset_code,
+    /// issuer_id, contract_id)`; `0` / `''` stand in for "absent" (native has
+    /// no issuer_id, classic-credit has no contract_id), matching CH defaults.
+    pub issuer_id: i64,
+    pub contract_surrogate_id: i64,
 }
 
 #[derive(Debug)]
@@ -54,17 +59,23 @@ pub struct AssetTxRow {
     pub operation_types: Vec<String>,
 }
 
-/// Pagination payload for `GET /v1/assets`. The `assets` table is
-/// unpartitioned and has no `created_at`, so the project-default
-/// `TsIdCursor` does not fit — natural order is `id DESC`.
+/// Pagination payload for `GET /v1/assets`. The numeric surrogate was dropped
+/// (PR #175 / the PG→CH composite move), so the keyset walks the natural
+/// identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)` — the
+/// exact `ORDER BY` of the CH `assets` table, so the cursor is
+/// datasource-agnostic. `issuer_id` / `contract_id` are the surrogate key
+/// columns (`0` = absent); `asset_code` is `''` for native.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssetIdCursor {
-    pub id: i32,
+pub struct AssetKeyCursor {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
 }
 
 pub struct ResolvedListParams {
     pub limit: i64,
-    pub cursor: Option<AssetIdCursor>,
+    pub cursor: Option<AssetKeyCursor>,
     pub asset_type: Option<i16>,
     /// Raw substring (no `%` / `_` from the caller). The SQL builder
     /// wraps it in `%...%` for the trigram match.
@@ -76,7 +87,7 @@ fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bo
     *has_where = true;
 }
 
-const ASSET_SELECT: &str = "SELECT a.id, \
+const ASSET_SELECT: &str = "SELECT \
      token_asset_type_name(a.asset_type) AS asset_type_name, \
      a.asset_type AS asset_type, \
      a.asset_code, \
@@ -87,14 +98,15 @@ const ASSET_SELECT: &str = "SELECT a.id, \
      a.total_supply::text AS total_supply, \
      a.holder_count, \
      a.icon_url, \
-     sc.deployed_at_ledger AS deployed_at_ledger \
+     sc.deployed_at_ledger AS deployed_at_ledger, \
+     COALESCE(a.issuer_id, 0)   AS issuer_id_key, \
+     COALESCE(a.contract_id, 0) AS contract_id_key \
      FROM assets a \
      LEFT JOIN accounts iss ON iss.id = a.issuer_id \
      LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id";
 
 fn map_asset_row(r: &PgRow) -> AssetRow {
     AssetRow {
-        id: r.get("id"),
         asset_type: r.get("asset_type"),
         asset_type_name: r.get("asset_type_name"),
         asset_code: r.get("asset_code"),
@@ -106,6 +118,8 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
         icon_url: r.get("icon_url"),
         deployed_at_ledger: r.get("deployed_at_ledger"),
         issuer_home_domain: r.get("issuer_home_domain"),
+        issuer_id: r.get("issuer_id_key"),
+        contract_surrogate_id: r.get("contract_id_key"),
     }
 }
 
@@ -114,7 +128,7 @@ pub async fn fetch_list(
     params: &ResolvedListParams,
     direction: Direction,
 ) -> Result<Vec<AssetRow>, sqlx::Error> {
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(ASSET_SELECT);
     let mut has_where = false;
@@ -135,20 +149,40 @@ pub async fn fetch_list(
     }
     if let Some(cursor) = &params.cursor {
         push_glue(&mut qb, &mut has_where);
-        qb.push(format!(" a.id {op} "));
-        qb.push_bind(cursor.id);
+        qb.push(
+            " (a.asset_type, COALESCE(a.asset_code, ''), COALESCE(a.issuer_id, 0), \
+              COALESCE(a.contract_id, 0)) "
+                .to_string(),
+        );
+        qb.push(format!("{op} ("));
+        qb.push_bind(cursor.asset_type);
+        qb.push(", ");
+        qb.push_bind(cursor.asset_code.clone());
+        qb.push(", ");
+        qb.push_bind(cursor.issuer_id);
+        qb.push(", ");
+        qb.push_bind(cursor.contract_id);
+        qb.push(")");
     }
 
-    qb.push(format!(" ORDER BY a.id {order} LIMIT "));
-    qb.push_bind(params.limit + 1);
+    qb.push(format!(
+        " ORDER BY a.asset_type {order}, COALESCE(a.asset_code, '') {order}, \
+          COALESCE(a.issuer_id, 0) {order}, COALESCE(a.contract_id, 0) {order} LIMIT "
+    ));
+    // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
+    qb.push_bind(params.limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw.iter().map(map_asset_row).collect())
 }
 
-pub async fn fetch_by_id(pool: &PgPool, id: i32) -> Result<Option<AssetRow>, sqlx::Error> {
-    let sql = format!("{ASSET_SELECT} WHERE a.id = $1");
-    let raw: Option<PgRow> = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
+/// Resolve the classic native XLM singleton (`asset_type = 0`). Native has no
+/// composite identity (no contract_id, no code/issuer per `ck_assets_identity`),
+/// so it is addressed by the reserved `/assets/native` token rather than a
+/// StrKey or CODE-ISSUER pair.
+pub async fn fetch_native(pool: &PgPool) -> Result<Option<AssetRow>, sqlx::Error> {
+    let sql = format!("{ASSET_SELECT} WHERE a.asset_type = 0 LIMIT 1");
+    let raw: Option<PgRow> = sqlx::query(&sql).fetch_optional(pool).await?;
     Ok(raw.as_ref().map(map_asset_row))
 }
 
@@ -211,7 +245,7 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<AssetTxRow>, sqlx::Error> {
     let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
     let has_contract = identity.contract_id.is_some();
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     // Defensive: never emit `WHERE ()`. The upstream handler routes through
     // `asset_predicate_present`, but `pub fn` callers in the future could
@@ -282,7 +316,8 @@ pub async fn fetch_transactions(
          ORDER BY t.created_at {order}, t.id {order} \
          LIMIT "
     ));
-    qb.push_bind(limit + 1);
+    // `limit` is the handler's `fetch_limit()` (already the peek +1).
+    qb.push_bind(limit);
 
     let raw: Vec<PgRow> = qb.build().fetch_all(pool).await?;
     Ok(raw
@@ -309,4 +344,50 @@ pub fn asset_predicate_present(identity: &AssetIdentity<'_>) -> bool {
     let has_classic = identity.asset_code.is_some() && identity.issuer.is_some();
     let has_contract = identity.contract_id.is_some();
     has_classic || has_contract
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::cursor;
+
+    /// The composite list cursor must survive the opaque encode→decode for
+    /// every asset shape — especially the native boundary, where `asset_code`
+    /// is the empty string and `issuer_id`/`contract_id` are the `0` sentinel.
+    /// A serde drift there would silently break pagination at the native row.
+    #[test]
+    fn asset_key_cursor_round_trips_including_native_boundary() {
+        let cases = [
+            // native: empty code + zero surrogates
+            AssetKeyCursor {
+                asset_type: 0,
+                asset_code: String::new(),
+                issuer_id: 0,
+                contract_id: 0,
+            },
+            // classic credit: code + issuer surrogate, no contract
+            AssetKeyCursor {
+                asset_type: 1,
+                asset_code: "USDC".to_string(),
+                issuer_id: 42,
+                contract_id: 0,
+            },
+            // SAC native-wrap: contract only, empty code
+            AssetKeyCursor {
+                asset_type: 2,
+                asset_code: String::new(),
+                issuer_id: 0,
+                contract_id: 99,
+            },
+        ];
+        for c in cases {
+            let encoded = cursor::encode(&c, Direction::Next);
+            let (dir, decoded): (Direction, AssetKeyCursor) = cursor::decode(&encoded).unwrap();
+            assert_eq!(dir, Direction::Next);
+            assert_eq!(decoded.asset_type, c.asset_type);
+            assert_eq!(decoded.asset_code, c.asset_code);
+            assert_eq!(decoded.issuer_id, c.issuer_id);
+            assert_eq!(decoded.contract_id, c.contract_id);
+        }
+    }
 }

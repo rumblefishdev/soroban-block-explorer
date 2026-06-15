@@ -6,23 +6,17 @@
 //! narrow means there is no per-entity dispatch logic in Rust to drift
 //! from the SQL contract.
 
-use crate::common::strkey::is_strkey_shape;
-
 /// Classifier output. `None` means "this branch should not fire".
 #[derive(Debug, Default, Clone)]
 pub struct Classified {
-    /// 32 bytes if `q` parses as 32-byte hex or base64; drives the
-    /// `transaction` and `pool` exact-match CTEs.
+    /// 32 bytes if `q` parses as 64-char hex or as a full CAP-38/SEP-23
+    /// `L…` pool strkey; drives the `transaction` and `pool` exact-match
+    /// CTEs (same BYTEA(32) shape on the wire).
     pub hash_bytes: Option<Vec<u8>>,
     /// Upper-cased StrKey or its prefix when `q` matches Stellar StrKey
     /// shape (full 56 chars or any prefix of `G…` / `C…`); drives the
     /// `account` and `contract` prefix CTEs.
     pub strkey_prefix: Option<String>,
-    /// True when `q` is a fully-typed entity id that should redirect
-    /// at the route level (no broad search) when an entity exists:
-    /// 64-hex-char (32-byte) hash, full 56-char `G…` StrKey, or full
-    /// 56-char `C…` StrKey.
-    pub is_fully_typed: bool,
 }
 
 /// Classify a trimmed, non-empty `q`.
@@ -35,31 +29,32 @@ pub fn classify(q: &str) -> Classified {
         && let Ok(bytes) = hex::decode(q)
     {
         out.hash_bytes = Some(bytes);
-        out.is_fully_typed = true;
         return out;
     }
 
-    // 32-byte base64. Stellar tooling sometimes hands hashes around as
-    // base64-encoded 32-byte payloads; the SQL accepts BYTEA(32) from
-    // either source so we normalise here.
+    // Full CAP-38 / SEP-23 L-strkey (liquidity pool). Decodes to the
+    // same 32-byte hash the pool CTE matches on, so feeding `hash_bytes`
+    // dispatches to the existing pool lookup without an extra SQL branch.
     //
-    // Standard alphabet only (`+/`); URL-safe is intentionally not
-    // accepted — Stellar tools emit standard base64 and accepting
-    // both opens classifier ambiguity for short strings.
-    if let Some(bytes) = decode_base64_32(q) {
+    // Partial L-prefix is intentionally NOT classified: pool storage is
+    // raw `BYTEA(32)` with no text mirror column, so a `LIKE 'L%'`
+    // prefix scan has nothing to scan. Partial-L prefix matching is
+    // tracked in backlog task 0271.
+    let upper = q.to_ascii_uppercase();
+    if let Ok(stellar_strkey::LiquidityPool(bytes)) =
+        stellar_strkey::LiquidityPool::from_string(&upper)
+    {
         out.hash_bytes = Some(bytes.to_vec());
-        out.is_fully_typed = true;
         return out;
     }
 
     // StrKey shape (full or prefix of G… / C…). The DB index is
     // `text_pattern_ops` so prefix `LIKE 'PREFIX%'` is the served
     // branch — both the full StrKey and any non-empty prefix work
-    // identically against the index.
-    let upper = q.to_ascii_uppercase();
+    // identically against the index. Full vs partial is read off the
+    // string length by `Classified::is_fully_typed`.
     if is_strkey_prefix(&upper, 'G') || is_strkey_prefix(&upper, 'C') {
-        out.strkey_prefix = Some(upper.clone());
-        out.is_fully_typed = is_strkey_shape(&upper, 'G') || is_strkey_shape(&upper, 'C');
+        out.strkey_prefix = Some(upper);
         return out;
     }
 
@@ -81,41 +76,6 @@ fn is_strkey_prefix(s: &str, prefix: char) -> bool {
     bytes.iter().all(|b| matches!(b, b'A'..=b'Z' | b'2'..=b'7'))
 }
 
-/// Try to decode `s` as standard-alphabet base64 representing exactly
-/// 32 bytes. Length 44 with `=` padding is the canonical encoding; we
-/// tolerate length 43 (no padding) for callers that strip it. Returns
-/// `None` for any other length / charset / payload size.
-fn decode_base64_32(s: &str) -> Option<[u8; 32]> {
-    use base64::Engine;
-    if !matches!(s.len(), 43 | 44) {
-        return None;
-    }
-    // Reject anything that's clearly out of the standard alphabet to
-    // avoid `decode` accepting whitespace or URL-safe chars.
-    let trimmed = s.trim_end_matches('=');
-    if !trimmed
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
-    {
-        return None;
-    }
-    // STANDARD engine refuses unpadded input. Re-pad to 44 chars when
-    // the caller stripped the trailing `=`, then run a single decode
-    // path. Avoids carrying two engine variants for what is the same
-    // 32-byte payload either way.
-    let padded: String;
-    let to_decode: &str = if s.len() == 43 {
-        padded = format!("{s}=");
-        &padded
-    } else {
-        s
-    };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(to_decode)
-        .ok()?;
-    bytes.try_into().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +88,6 @@ mod tests {
         let q = "a".repeat(64);
         let out = classify(&q);
         assert_eq!(out.hash_bytes.as_ref().map(Vec::len), Some(32));
-        assert!(out.is_fully_typed);
         assert!(out.strkey_prefix.is_none());
     }
 
@@ -136,7 +95,6 @@ mod tests {
     fn classifies_full_g_strkey() {
         let out = classify(FULL_G);
         assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_G));
-        assert!(out.is_fully_typed);
         assert!(out.hash_bytes.is_none());
     }
 
@@ -144,7 +102,6 @@ mod tests {
     fn classifies_full_c_strkey() {
         let out = classify(FULL_C);
         assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_C));
-        assert!(out.is_fully_typed);
     }
 
     #[test]
@@ -154,7 +111,6 @@ mod tests {
         let q = "gaaa";
         let out = classify(q);
         assert_eq!(out.strkey_prefix.as_deref(), Some("GAAA"));
-        assert!(!out.is_fully_typed);
     }
 
     #[test]
@@ -162,34 +118,27 @@ mod tests {
         let out = classify("hello world");
         assert!(out.hash_bytes.is_none());
         assert!(out.strkey_prefix.is_none());
-        assert!(!out.is_fully_typed);
     }
 
     #[test]
-    fn classifies_base64_32_bytes() {
-        // 32-byte payload encoded standard base64 — 44 chars with `=` padding.
-        let raw = [0x42u8; 32];
-        use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
-        assert_eq!(encoded.len(), 44);
-        let out = classify(&encoded);
-        assert_eq!(out.hash_bytes.as_deref(), Some(raw.as_slice()));
-        assert!(out.is_fully_typed);
+    fn classifies_full_l_strkey_as_pool_hash_bytes() {
+        // Full L-strkey decodes to the same 32-byte hash the pool CTE
+        // matches on, so it must populate `hash_bytes` (not
+        // `strkey_prefix`) so `pool_hits` exact-match fires.
+        let strkey = stellar_strkey::LiquidityPool([0u8; 32]).to_string();
+        let out = classify(&strkey);
+        assert_eq!(out.hash_bytes.as_deref(), Some([0u8; 32].as_slice()));
+        assert!(out.strkey_prefix.is_none());
     }
 
     #[test]
-    fn classifies_base64_32_bytes_unpadded() {
-        // Same 32-byte payload but caller stripped the trailing `=`.
-        // 44-char padded → 43-char unpadded. The decoder MUST tolerate
-        // the unpadded form because some Stellar tools emit it that way.
-        let raw = [0x42u8; 32];
-        use base64::Engine;
-        let padded = base64::engine::general_purpose::STANDARD.encode(raw);
-        let unpadded = padded.trim_end_matches('=').to_string();
-        assert_eq!(unpadded.len(), 43);
-        let out = classify(&unpadded);
-        assert_eq!(out.hash_bytes.as_deref(), Some(raw.as_slice()));
-        assert!(out.is_fully_typed);
+    fn rejects_partial_l_strkey() {
+        // Partial L-prefix is not a valid SEP-23 strkey (no CRC payload).
+        // Falls through to no classification — broad search has no pool
+        // text column to scan against (CH-era follow-up).
+        let out = classify("LAB");
+        assert!(out.hash_bytes.is_none());
+        assert!(out.strkey_prefix.is_none());
     }
 
     #[test]

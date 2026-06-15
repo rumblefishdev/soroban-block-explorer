@@ -1,16 +1,15 @@
 import { Box } from '@mui/material';
 import type { PaginatedInvocationItem } from '@rumblefish/api-types';
 import {
-  classifyError,
+  Dash,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
+  StatusChip,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -19,7 +18,6 @@ import type { ReactNode } from 'react';
 
 import { useContractInvocations } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
-import { Dash, StatusCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
@@ -48,7 +46,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
   {
     id: 'status',
     header: 'Status',
-    cell: (row) => <StatusCell successful={row.successful} />,
+    cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'ledger',
@@ -92,34 +90,16 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={8} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={8} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState
-          kind="transactions"
-          title="No invocations"
-          description="This contract has not been invoked yet."
-        />
-      </Box>
+      <TableEmptyState
+        kind="transactions"
+        title="No invocations"
+        description="This contract has not been invoked yet."
+      />
     );
   } else {
     body = (

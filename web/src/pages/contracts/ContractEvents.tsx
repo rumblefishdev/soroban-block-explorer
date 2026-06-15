@@ -3,15 +3,13 @@ import type { PaginatedEventItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
-  classifyError,
   ExplorerTable,
-  GenericErrorState,
   IdentifierDisplay,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   TableEmptyState,
   TableSkeleton,
-  TransientErrorState,
+  truncateMiddle,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -19,15 +17,16 @@ import {
 import { useMemo, type ReactNode } from 'react';
 
 import { useContractEvents } from '../../api/index.js';
+import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type EventRow = PaginatedEventItem['data'][number];
 
 // Chip colour per `event_type`, matching the Figma events table: contract
-// blue, system brown, diagnostic grey. `/contracts/:id/events` only ever
-// returns `contract` and `system` (the diagnostic container is dropped
-// server-side, task 0182) — `diagnostic` is mapped defensively anyway.
+// blue, system brown (amber/cream), diagnostic grey. `/contracts/:id/events`
+// only ever returns `contract` and `system` (the diagnostic container is
+// dropped server-side, task 0182) — `diagnostic` is mapped defensively.
 const EVENT_TYPE_COLOR: Record<string, ChipProps['color']> = {
   contract: 'blue',
   system: 'brown',
@@ -37,14 +36,8 @@ const EVENT_TYPE_COLOR: Record<string, ChipProps['color']> = {
 /** Event-type chip — colour-coded by the event's `event_type`. */
 function EventTypeBadge({ type }: { type: string }) {
   const color = EVENT_TYPE_COLOR[type] ?? 'neutral';
-  const label =
-    type.length > 0 ? type.charAt(0).toUpperCase() + type.slice(1) : 'Unknown';
+  const label = type.length > 0 ? capitalize(type) : 'Unknown';
   return <Chip size="sm" color={color} label={label} />;
-}
-
-/** Middle-truncates long identifier-like strings; leaves short labels whole. */
-function shortStr(value: string): string {
-  return value.length > 14 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value;
 }
 
 /**
@@ -65,22 +58,25 @@ function TopicsCell({ topics }: { topics: readonly unknown[] }) {
       component="span"
       variant="bodyMonoXsRegular"
       title={full}
-      sx={{
+      sx={(theme) => ({
         display: 'block',
         maxWidth: 380,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
-        color: 'text.secondary',
-      }}
+        color: theme.palette.text.secondary,
+      })}
     >
       [
       {topics.map((topic, index) => (
         <Box component="span" key={index}>
           {index > 0 && ', '}
           {typeof topic === 'string' ? (
-            <Box component="span" sx={{ color: 'text.success' }}>
-              {`"${shortStr(topic)}"`}
+            <Box
+              component="span"
+              sx={(theme) => ({ color: theme.palette.text.success })}
+            >
+              {`"${truncateMiddle(topic, { prefix: 4, suffix: 4 })}"`}
             </Box>
           ) : (
             JSON.stringify(topic) ?? String(topic)
@@ -104,21 +100,21 @@ function DataCell({ data }: { data: unknown }) {
   }, [data]);
   const display =
     typeof data === 'string' && data.length > 24
-      ? `${data.slice(0, 10)}…${data.slice(-10)}`
+      ? truncateMiddle(data, { prefix: 10, suffix: 10 })
       : full;
   return (
     <Typography
       component="span"
       variant="bodyMonoXsRegular"
       title={full}
-      sx={{
+      sx={(theme) => ({
         display: 'block',
         maxWidth: 260,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
-        color: 'text.primary',
-      }}
+        color: theme.palette.text.primary,
+      })}
     >
       {display}
     </Typography>
@@ -183,34 +179,17 @@ export function ContractEvents({ contractId }: { contractId: string }) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={8} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={8} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <TableEmptyState
-          kind="transactions"
-          title="No events"
-          description="This contract has not emitted any events yet."
-        />
-      </Box>
+      <TableEmptyState
+        kind="transactions"
+        title="No events"
+        description="This contract has not emitted any events yet."
+        py={6}
+      />
     );
   } else {
     body = (

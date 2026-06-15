@@ -15,7 +15,7 @@ export interface AssetTypeMeta {
 const META: Record<string, AssetTypeMeta> = {
   native: { label: 'Native', color: 'blue' },
   classic_credit: { label: 'Classic', color: 'neutral' },
-  sac: { label: 'SAC', color: 'violet' },
+  sac: { label: 'SAC', color: 'brown' },
   soroban: { label: 'Soroban', color: 'emerald' },
 };
 

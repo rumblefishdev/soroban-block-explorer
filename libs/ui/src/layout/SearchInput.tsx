@@ -7,6 +7,8 @@ import KeyboardReturnIcon from '@mui/icons-material/KeyboardReturn';
 
 import { monoFontFamily } from '../theme/typography.js';
 
+import { searchShortcutLabel } from './platform.js';
+
 export type SearchInputSize = 'md' | 'lg';
 
 export interface SearchInputProps {
@@ -54,7 +56,7 @@ export function SearchInput({
         flexDirection: isActive ? 'column' : 'row',
         alignItems: isActive ? 'flex-start' : 'center',
         justifyContent: isActive ? 'center' : undefined,
-        width: isExpanded ? 628 : 350,
+        width: { xs: '100%', lg: isExpanded ? 628 : 350 },
         height,
         px: 1.5,
         py,
@@ -101,6 +103,7 @@ export function SearchInput({
             />
             <Box
               component="input"
+              data-global-search="true"
               value={value}
               onChange={(e) => onChange(e.target.value)}
               onFocus={() => setFocused(true)}
@@ -192,6 +195,7 @@ export function SearchInput({
             />
             <Box
               component="input"
+              data-global-search="true"
               value={value}
               onChange={(e) => onChange(e.target.value)}
               onFocus={() => setFocused(true)}
@@ -220,7 +224,7 @@ export function SearchInput({
 
           <Box
             sx={(theme) => ({
-              display: 'inline-flex',
+              display: { xs: 'none', md: 'inline-flex' },
               alignItems: 'center',
               justifyContent: 'center',
               height: 20,
@@ -236,7 +240,7 @@ export function SearchInput({
               noWrap
               sx={{ fontFamily: monoFontFamily }}
             >
-              CTRL + F
+              {searchShortcutLabel}
             </Typography>
           </Box>
         </>

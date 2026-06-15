@@ -73,7 +73,7 @@ export class HetznerDnsStack extends cdk.Stack {
       recordName,
       target: route53.RecordTarget.fromValues(chIp),
       ttl: cdk.Duration.minutes(5),
-      comment: `Non-AWS target — Hetzner dedicated server (${config.envName})`,
+      comment: `Non-AWS target - Hetzner dedicated server (${config.envName})`,
     });
 
     cdk.Tags.of(this).add('Project', 'soroban-block-explorer');

@@ -23,7 +23,7 @@ export function PageGridBackdrop() {
         position: 'absolute',
         inset: '0 0 auto 0',
         height: 780,
-        zIndex: 0,
+        zIndex: theme.zIndex.gridBackdrop,
         pointerEvents: 'none',
         overflow: 'hidden',
         backgroundImage: `repeating-linear-gradient(0deg, ${alpha(

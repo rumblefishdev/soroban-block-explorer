@@ -23,7 +23,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::common::cursor::{Direction, TsIdCursor, direction_sql};
+use crate::common::cursor::{Direction, SortOrder, TsIdCursor, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TransactionListItem;
 
 use super::dto::LedgerListItem;
@@ -109,11 +109,12 @@ pub async fn fetch_list(
     pool: &PgPool,
     limit: i64,
     cursor: Option<&TsIdCursor>,
+    sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<LedgerListItem>, sqlx::Error> {
     let cursor_closed_at = cursor.map(|c| c.ts);
     let cursor_sequence = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql(sort, direction);
 
     let sql = format!(
         "SELECT \
@@ -205,7 +206,7 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<LedgerTxRow>, sqlx::Error> {
     let cursor_ts = cursor.map(|c| c.ts);
     let cursor_id = cursor.map(|c| c.id);
-    let (op, order) = direction_sql(direction);
+    let (op, order) = keyset_sql_desc(direction);
 
     let sql = format!(
         "SELECT \

@@ -7,7 +7,7 @@
 //!   | `transactions`    | 64-char hex                    | [`parse_hash`]          |
 //!   | `contracts`       | StrKey, prefix `C`             | [`strkey`] with `'C'`   |
 //!   | `accounts`        | StrKey, prefix `G`             | [`strkey`] with `'G'`   |
-//!   | `liquidity-pools` | 64-char lowercase hex (BYTEA32)| [`pool_id_hex`]         |
+//!   | `liquidity-pools` | StrKey, prefix `L` (SEP-23)    | [`pool_id_strkey`]      |
 //!   | `ledgers`         | numeric `u32`                  | [`sequence`]            |
 //!
 //! Each helper short-circuits the handler before any DB / S3 call —
@@ -102,27 +102,41 @@ pub fn strkey(value: &str, prefix: char, param: &str) -> Result<(), Response> {
 }
 
 // ---------------------------------------------------------------------------
-// BYTEA(32) hex (liquidity pools)
+// StrKey (liquidity pools) — SEP-23 `L...`
 // ---------------------------------------------------------------------------
 
-/// Validate a `pool_id`-shaped path parameter.
+/// Validate a `pool_id`-shaped path parameter (SEP-23 strkey `L...`) and
+/// return the 64-char lowercase-hex internal form for DB lookup.
 ///
-/// LP `pool_id` is `BYTEA(32)` per ADR 0024; the API surfaces it as 64
-/// lowercase hex characters. Failure envelope carries `INVALID_POOL_ID`
-/// and a `param` field in `details` mirroring the other path validators.
-pub fn pool_id_hex(value: &str, param: &str) -> Result<(), Response> {
-    if value.len() == 64
-        && value
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        Ok(())
-    } else {
-        Err(errors::bad_request_with_details(
+/// LP `pool_id` is `BYTEA(32)` in the DB per ADR 0024; the canonical
+/// user-facing form (per CAP-38 / SEP-23) is a 56-char strkey starting
+/// with `L`. Stellar Lab, stellar.expert, and Horizon all display the
+/// strkey form. Hex form is no longer accepted on input — clients must
+/// supply the strkey returned by `/v1/liquidity-pools` or shown in
+/// external explorers.
+///
+/// On success returns the 64-char lowercase-hex payload (32 bytes
+/// formatted as hex) for downstream DB lookup. The strkey decode
+/// implicitly validates the version byte, base32 alphabet, length, and
+/// CRC16 checksum — wrong-CRC values are rejected here with 400 rather
+/// than falling through to a 404 on DB miss (different UX from the
+/// `strkey` helper for accounts/contracts: pool decode is CRC-strict
+/// because the internal DB form is the hash, not the strkey itself).
+pub fn pool_id_strkey(value: &str, param: &str) -> Result<String, Response> {
+    match stellar_strkey::LiquidityPool::from_string(value) {
+        Ok(stellar_strkey::LiquidityPool(bytes)) => Ok(hex::encode(bytes)),
+        Err(_) => Err(errors::bad_request_with_details(
             errors::INVALID_POOL_ID,
-            "pool_id must be a 64-character lowercase hex string",
-            serde_json::json!({ "param": param, "received": value }),
-        ))
+            format!(
+                "{param} must be a 56-character Stellar StrKey starting with 'L' (SEP-23 canonical form)"
+            ),
+            serde_json::json!({
+                "param": param,
+                "received": value,
+                "expected_prefix": "L",
+                "hint": "use the strkey (L...) returned by /v1/liquidity-pools or shown in stellar.expert; hex form is no longer accepted",
+            }),
+        )),
     }
 }
 
@@ -272,48 +286,79 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // pool_id_hex
+    // pool_id_strkey
     // -----------------------------------------------------------------------
 
+    fn zero_pool_strkey() -> String {
+        // Round-trippable LP strkey for the 32-byte all-zeroes payload.
+        // Use the canonical encoder so the test stays valid if SEP-23
+        // changes (it shouldn't, but coupling the test to the crate
+        // avoids hand-computing CRC16-XModem).
+        stellar_strkey::LiquidityPool([0u8; 32])
+            .to_string()
+            .to_string()
+    }
+
     #[test]
-    fn pool_id_hex_valid_lowercase_accepted() {
-        let hex = "ab".repeat(32); // 64 chars all lowercase hex
-        assert!(pool_id_hex(&hex, "pool_id").is_ok());
-        assert!(pool_id_hex(&"0".repeat(64), "pool_id").is_ok());
+    fn pool_id_strkey_valid_accepted_and_decoded_to_lowercase_hex() {
+        let strkey = zero_pool_strkey();
+        let hex = pool_id_strkey(&strkey, "pool_id").unwrap();
+        assert_eq!(hex.len(), 64);
+        assert_eq!(hex, "0".repeat(64));
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
     }
 
     #[tokio::test]
-    async fn pool_id_hex_uppercase_rejected() {
-        // BYTEA(32) hex on the wire is canonically lowercase; uppercase
-        // would round-trip differently through `encode(... 'hex')`.
-        let bad = "AB".repeat(32);
-        let err = pool_id_hex(&bad, "pool_id").unwrap_err();
+    async fn pool_id_strkey_hex_rejected_with_strkey_hint() {
+        // Hex form was the legacy wire shape; rejected post-0264 with an
+        // informative envelope pointing the client at the strkey form.
+        let hex = "0".repeat(64);
+        let err = pool_id_strkey(&hex, "pool_id").unwrap_err();
         let (status, json) = body_json(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["code"], "invalid_pool_id");
         assert_eq!(json["details"]["param"], "pool_id");
+        assert_eq!(json["details"]["expected_prefix"], "L");
     }
 
     #[tokio::test]
-    async fn pool_id_hex_wrong_length_rejected() {
-        let err = pool_id_hex("abcdef", "pool_id").unwrap_err();
+    async fn pool_id_strkey_wrong_prefix_rejected() {
+        // 56-char shape-valid strkey but C-prefix (contract) — must not
+        // sneak through the pool validator.
+        let bad = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ";
+        let err = pool_id_strkey(bad, "pool_id").unwrap_err();
         let (_, json) = body_json(err).await;
         assert_eq!(json["code"], "invalid_pool_id");
     }
 
     #[tokio::test]
-    async fn pool_id_hex_non_hex_char_rejected() {
-        // Length 64, lowercase, but contains `g` which is outside hex.
-        let mut bad = "a".repeat(63);
-        bad.push('g');
-        let err = pool_id_hex(&bad, "pool_id").unwrap_err();
+    async fn pool_id_strkey_bad_crc_rejected() {
+        // Take a valid LP strkey and flip the trailing checksum char.
+        // Shape passes but CRC fails — pool_id_strkey is CRC-strict
+        // (unlike strkey() for accounts/contracts) because the internal
+        // DB form is the payload hash, not the strkey itself.
+        let mut bad = zero_pool_strkey();
+        let last = bad.pop().unwrap();
+        bad.push(if last == 'A' { 'B' } else { 'A' });
+        assert_eq!(bad.len(), 56);
+        let err = pool_id_strkey(&bad, "pool_id").unwrap_err();
         let (_, json) = body_json(err).await;
         assert_eq!(json["code"], "invalid_pool_id");
     }
 
     #[tokio::test]
-    async fn pool_id_hex_empty_rejected() {
-        let err = pool_id_hex("", "pool_id").unwrap_err();
+    async fn pool_id_strkey_wrong_length_rejected() {
+        let err = pool_id_strkey("L", "pool_id").unwrap_err();
+        let (_, json) = body_json(err).await;
+        assert_eq!(json["code"], "invalid_pool_id");
+    }
+
+    #[tokio::test]
+    async fn pool_id_strkey_empty_rejected() {
+        let err = pool_id_strkey("", "pool_id").unwrap_err();
         let (_, json) = body_json(err).await;
         assert_eq!(json["code"], "invalid_pool_id");
     }

@@ -13,56 +13,97 @@ import { AssetIcon } from './AssetIcon.js';
  * shown, and an empty section renders a short placeholder.
  */
 export function AssetMetadata({ asset }: { asset: AssetDetailResponse }) {
-  const rows: SummaryCell[] = [];
+  const hasIcon = Boolean(asset.icon_url || asset.asset_code);
+  const hasName = Boolean(asset.name);
 
-  if (asset.icon_url || asset.asset_code) {
-    rows.push({
+  const iconNameRow: SummaryCell[] = [];
+  if (hasIcon) {
+    iconNameRow.push({
       label: 'Icon',
-      value: <AssetIcon code={asset.asset_code} iconUrl={asset.icon_url} />,
-    });
-  }
-  if (asset.name) {
-    rows.push({ label: 'Name', value: asset.name });
-  }
-  if (asset.description) {
-    rows.push({ label: 'Description', value: asset.description });
-  }
-  if (asset.home_page) {
-    const safeUrl = safeHttpUrl(asset.home_page);
-    rows.push({
-      label: 'Homepage',
-      value: safeUrl ? (
-        <Link
-          href={safeUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          variant="bodySmRegular"
-          sx={{ color: 'text.accent', wordBreak: 'break-all' }}
-        >
-          {asset.home_page}
-        </Link>
-      ) : (
-        // Non-http(s) value — show as plain text, never as a clickable href.
-        <Typography
-          variant="bodySmRegular"
-          sx={{ color: 'text.primary', wordBreak: 'break-all' }}
-        >
-          {asset.home_page}
-        </Typography>
+      value: (
+        <Box sx={{ py: 0.5 }}>
+          <AssetIcon
+            code={asset.asset_code}
+            iconUrl={asset.icon_url}
+            size={32}
+          />
+        </Box>
       ),
     });
   }
+  if (hasName) {
+    iconNameRow.push({ label: 'Name', value: asset.name });
+  }
+
+  const safeUrl = safeHttpUrl(asset.home_page);
+  const domain = safeUrl
+    ? new URL(safeUrl).hostname.replace(/^www\./, '')
+    : null;
+
+  const homepageCell: SummaryCell | null = asset.home_page
+    ? {
+        label: 'Homepage',
+        value: safeUrl ? (
+          <Link
+            href={safeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.accent,
+              wordBreak: 'break-all',
+            })}
+          >
+            {asset.home_page}
+          </Link>
+        ) : (
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({
+              color: theme.palette.text.primary,
+              wordBreak: 'break-all',
+            })}
+          >
+            {asset.home_page}
+          </Typography>
+        ),
+      }
+    : null;
+
+  const domainHomepageRow: SummaryCell[] = [];
+  if (domain) {
+    domainHomepageRow.push({ label: 'Domain', value: domain });
+  }
+  if (homepageCell) {
+    domainHomepageRow.push(homepageCell);
+  }
+
+  const hasAny =
+    iconNameRow.length > 0 || asset.description || domainHomepageRow.length > 0;
 
   return (
     <SectionCard title="Metadata" meta="From TOML">
-      {rows.length === 0 ? (
+      {!hasAny ? (
         <Box sx={{ p: 3, textAlign: 'center' }}>
-          <Typography variant="bodySmRegular" sx={{ color: 'text.tertiary' }}>
+          <Typography
+            variant="bodySmMedium"
+            sx={(theme) => ({ color: theme.palette.text.tertiary })}
+          >
             No metadata available for this asset
           </Typography>
         </Box>
       ) : (
-        rows.map((cell) => <SummaryRow key={cell.label} cells={[cell]} />)
+        <>
+          {iconNameRow.length > 0 && <SummaryRow cells={iconNameRow} />}
+          {asset.description && (
+            <SummaryRow
+              cells={[{ label: 'Description', value: asset.description }]}
+            />
+          )}
+          {domainHomepageRow.length > 0 && (
+            <SummaryRow cells={domainHomepageRow} />
+          )}
+        </>
       )}
     </SectionCard>
   );

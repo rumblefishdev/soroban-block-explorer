@@ -4,16 +4,13 @@ import type { PoolTransactionItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
-  classifyError,
   EmptyState,
   ExplorerTable,
-  GenericErrorState,
   IdentifierWithCopy,
   PaginationControls,
-  RateLimitState,
+  QueryErrorState,
   RelativeTimestamp,
   TableSkeleton,
-  TransientErrorState,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -71,8 +68,8 @@ function classifyLpTx(operationTypes: readonly string[]): {
 
 const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
   {
-    id: 'type',
-    header: 'Type',
+    id: 'event',
+    header: 'Event',
     cell: (row) => {
       const { label, color } = classifyLpTx(row.operation_types);
       return <Chip size="sm" color={color} label={label} />;
@@ -96,7 +93,10 @@ const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
     cell: (row) => (
       <Stack spacing={0}>
         <RelativeTimestamp timestamp={row.created_at} />
-        <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+        <Typography
+          variant="bodyXsRegular"
+          sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        >
           {formatAbsoluteUtc(row.created_at)}
         </Typography>
       </Stack>
@@ -138,34 +138,16 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
 
   let body: ReactNode;
   if (isLoading) {
-    body = (
-      <Box sx={{ p: 2 }}>
-        <TableSkeleton rows={6} columns={columns.length} />
-      </Box>
-    );
+    body = <TableSkeleton rows={6} columns={columns.length} />;
   } else if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
-    body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
-    );
+    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <EmptyState
-          icon={<ListAltIcon />}
-          title="No transactions yet"
-          description="Activity for this pool will appear here once a deposit, withdrawal, or trade is recorded."
-        />
-      </Box>
+      <EmptyState
+        icon={<ListAltIcon />}
+        title="No transactions yet"
+        description="Activity for this pool will appear here once a deposit, withdrawal, or trade is recorded."
+      />
     );
   } else {
     body = (

@@ -1,17 +1,15 @@
-import { Box, Divider } from '@mui/material';
+import { Box, Divider, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  classifyError,
-  GenericErrorState,
-  RateLimitState,
-  TransientErrorState,
+  formatAmount,
+  formatTps,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useNetworkStats } from '../../api/index.js';
-import { formatAmount } from '../format.js';
+import { KpiCell } from '../detail/KpiCell.js';
 
-import { ChainOverviewCard } from './ChainOverviewCard.js';
 import { LiveIndicator } from './LiveIndicator.js';
 
 /**
@@ -25,63 +23,92 @@ export function ChainOverview() {
 
   let content: ReactNode;
   if (isError) {
-    const kind = classifyError(error);
-    const retry = () => void refetch();
     content = (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        {kind === 'rate-limit' ? (
-          <RateLimitState onRetry={retry} />
-        ) : kind === 'transient' ? (
-          <TransientErrorState onRetry={retry} />
-        ) : (
-          <GenericErrorState onRetry={retry} />
-        )}
-      </Box>
+      <QueryErrorState error={error} onRetry={() => void refetch()} py={4} />
     );
   } else {
+    const cells = [
+      <KpiCell
+        key="ledger"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label={<LiveIndicator />}
+        value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
+        caption="Current ledger"
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="tps"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="TPS"
+        value={data ? formatTps(data.tps_60s) : undefined}
+        caption="Last 60s"
+        valueColor={(theme) => theme.palette.text.success}
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="accounts"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="Accounts"
+        value={data ? formatAmount(data.total_accounts) : undefined}
+        caption="Total"
+        loading={isLoading}
+      />,
+      <KpiCell
+        key="contracts"
+        card={false}
+        align="center"
+        valueVariant="heading4SemiBold"
+        labelVariant="bodyMedium"
+        label="Contracts"
+        value={data ? formatAmount(data.total_contracts) : undefined}
+        caption="Soroban"
+        loading={isLoading}
+      />,
+    ];
     content = (
-      <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
-        <ChainOverviewCard
-          label={<LiveIndicator />}
-          value={data ? formatAmount(data.latest_ledger_sequence) : undefined}
-          caption="Current ledger"
-          loading={isLoading}
-        />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
-          label="TPS"
-          value={data ? data.tps_60s.toFixed(1) : undefined}
-          caption="Last 60s"
-          accentValue
-          loading={isLoading}
-        />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
-          label="Accounts"
-          value={data ? formatAmount(data.total_accounts) : undefined}
-          caption="Total"
-          loading={isLoading}
-        />
-        <Divider orientation="vertical" flexItem />
-        <ChainOverviewCard
-          label="Contracts"
-          value={data ? formatAmount(data.total_contracts) : undefined}
-          caption="Soroban"
-          loading={isLoading}
-        />
-      </Box>
+      <>
+        {/* Mobile/tablet: 2×2 grid — a 4-tall vertical stack reads as dead
+            space. 1px gap over a stroke-coloured bg paints the divider lines. */}
+        <Box
+          sx={(theme) => ({
+            display: { xs: 'grid', md: 'none' },
+            gridTemplateColumns: '1fr 1fr',
+            gap: '1px',
+            backgroundColor: theme.palette.stroke.default,
+            '& > *': { backgroundColor: theme.palette.surface.grayMainAlt },
+          })}
+        >
+          {cells}
+        </Box>
+        {/* Desktop: single row with vertical dividers. */}
+        <Stack
+          direction="row"
+          alignItems="stretch"
+          divider={<Divider orientation="vertical" flexItem />}
+          sx={{ width: '100%', display: { xs: 'none', md: 'flex' } }}
+        >
+          {cells}
+        </Stack>
+      </>
     );
   }
 
   return (
-    <Box sx={{ px: 10 }}>
+    <Box sx={{ display: 'flex', justifyContent: 'center' }}>
       <Box
         sx={(theme) => ({
+          width: '100%',
           maxWidth: 1064,
-          mx: 'auto',
-          // Exact Figma panel (node 4:2727): 16px radius, 80%-opaque
-          // surface so the hero glow shows through, 6px backdrop blur.
-          borderRadius: '16px',
+          borderRadius: `${theme.shape.radius.lg}px`,
           border: `1px solid ${theme.palette.stroke.default}`,
           backgroundColor: alpha(theme.palette.surface.grayMainAlt, 0.8),
           backdropFilter: 'blur(6px)',

@@ -219,10 +219,16 @@ aws ssm put-parameter \
 Source for `<hetzner-box-ipv4>`: Hetzner Robot dashboard → AX52 →
 public IPv4.
 
-### D-4 — Issue + upload mTLS client certs (6 services)
+### D-4 — Issue + upload mTLS client certs (3 services)
 
 Per `infra-hetzner/ca/README.md`. The script keeps the CA key on
 tmpfs; this section adds the AWS Secrets Manager upload.
+
+> Three CNs only: `lambda-api-production`, `lambda-ingestion-production`,
+> `galexie-production`. Task 0241 removed the migration + partition Lambdas,
+> so `lambda-migration-*` / `lambda-partition-*` certs are no longer issued;
+> the enrichment producer is stubbed (no CH connection), so no cert for it
+> either.
 
 ```bash
 # 1. Fetch CA key from password manager into tmpfs.
@@ -234,9 +240,6 @@ chmod 0600 /dev/shm/soroban-ca/ca.key
 cd infra-hetzner/ca
 for cn in lambda-api-production \
           lambda-ingestion-production \
-          lambda-partition-production \
-          lambda-migration-production \
-          lambda-enrichment-production \
           galexie-production; do
   ./issue-client-cert.sh "$cn"
 done
@@ -248,9 +251,6 @@ done
 #    disk-backed however — they get shredded in step 4.
 for cn in lambda-api-production \
           lambda-ingestion-production \
-          lambda-partition-production \
-          lambda-migration-production \
-          lambda-enrichment-production \
           galexie-production; do
   python3 -c "
 import json, sys
@@ -283,17 +283,22 @@ fields are needed since Caddy injects the CN-mapped CH user.
 
 ### D-5 — Register CNs on Hetzner box
 
-Update `~/.config/soroban-prod.env` — append six entries to
+Update `~/.config/soroban-prod.env` — append the three service entries to
 `CLICKHOUSE_CN_USER_MAP` per the [task 0240 RBAC user matrix](../architecture/security/clickhouse-rbac.md):
 
 ```text
 lambda-api-production:api_reader,
-lambda-ingestion-production:indexer,
-lambda-partition-production:partition_writer,
-lambda-migration-production:migration_full,
-lambda-enrichment-production:enrichment_writer,
+lambda-ingestion-production:ingestion_writer,
 galexie-production:galexie
 ```
+
+> Only three AWS workloads talk to CH: the API Lambda, the indexer Lambda,
+> and Galexie. Task 0241 removed the migration + partition Lambdas (PG-era —
+> CH applies its schema box-side via the `db-clickhouse-init` sidecar and
+> auto-creates partitions), so `lambda-migration-*` / `lambda-partition-*`
+> are no longer mapped. The enrichment producer is stubbed pending its CH
+> rewrite, so `lambda-enrichment-*` stays unmapped (it would 403 if it
+> connected).
 
 Then replay ansible with the narrow `caddy_reload` tag — re-renders the
 CN map snippet and reloads Caddy without touching the rest of the
@@ -322,18 +327,22 @@ cd infra
 make deploy-production
 ```
 
-CDK applies stacks in dependency order: Network → LedgerBucket →
-Migration → Partition → Compute → Ingestion → Delivery → Observability
-→ ApiGateway → CloudWatch → HetznerDns.
+CDK applies stacks in dependency order: Network → LedgerBucket → Compute
+→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch →
+HetznerDns.
 
-`MigrationStack` runs CH schema migrations as a CloudFormation custom
-resource; a failure there blocks deploy of all downstream stacks.
+**No stack connects to ClickHouse at deploy time.** The schema is applied
+box-side by the `db-clickhouse-init` sidecar (idempotent `init.sql`) and CH
+auto-creates partitions on insert. The migration + partition Lambdas
+(`MigrationStack` / `PartitionStack`) were removed in task 0241, so
+`make deploy-production` runs to completion even if CH is unreachable — the
+API and indexer Lambdas connect to CH only at runtime.
 
 ### D-7 — End-to-end smoke per AWS service
 
-For each of the 6 services exercise a real CH query through the mTLS
-path and verify the corresponding CN appears in Caddy access logs on
-the Hetzner box.
+For each of the three CH-talking services exercise a real CH query through
+the mTLS path and verify the corresponding CN appears in Caddy access logs
+on the Hetzner box.
 
 ```bash
 # API Lambda — invoke through API Gateway.
@@ -342,14 +351,13 @@ curl https://api.sorobanscan.rumblefish.dev/ledgers?limit=1
 # Indexer Lambda — upload a known ledger to the S3 trigger.
 aws s3 cp test.xdr.zst s3://production-stellar-ledger-data/test/
 
-# Enrichment Worker — enqueue a test message.
-aws sqs send-message --queue-url <enrichment-queue-url> --message-body '...'
-
-# Migration Lambda — already invoked by CDK custom resource at deploy.
-# Partition Lambda — already invoked by CDK custom resource at deploy.
 # Galexie — bump `galexieDesiredCount` to 1 in production.json and
 #           redeploy ingestion; check `aws logs tail /ecs/production/galexie-live`.
 ```
+
+> The enrichment producer is stubbed pending its CH rewrite, and the
+> migration + partition Lambdas were removed in task 0241 — no smoke for
+> those.
 
 On the Hetzner box, confirm each service shows up in Caddy access logs
 with its expected `X-Client-Subject: CN=<service>-production`:
@@ -357,12 +365,9 @@ with its expected `X-Client-Subject: CN=<service>-production`:
 ```bash
 ssh deploy@$HETZNER_IP
 docker logs caddy 2>&1 | grep -oE 'CN=[^,"]+' | sort -u
-# Expect at least:
+# Expect:
 #   CN=lambda-api-production
 #   CN=lambda-ingestion-production
-#   CN=lambda-partition-production
-#   CN=lambda-migration-production
-#   CN=lambda-enrichment-production
 #   CN=galexie-production
 ```
 
@@ -641,6 +646,92 @@ fi
 
 Expected: lag ≤ 6 ledgers (~30 s at 5 s ledger close time, allowing
 Galexie + S3 propagation + Lambda processing).
+
+#### B-2.1 — Per-table population check
+
+The gap check above only proves `ledgers` is gapless. It does **not** prove
+the production `persist_ledger_clickhouse` fills the _other_ 16 tables — the
+`persist_e2e` fixture only populated `ledgers` + the transaction-derived
+tables (`transactions`, `transaction_hash_index`, `transaction_participants`,
+`accounts`), leaving every other slice empty. The only place the full
+multi-table write is exercised with real data is live traffic, so confirm it
+here. (Invocation matches B-0 / D-7: container `app-clickhouse-1` +
+`--config-file=…/client.xml` — the authenticated form validated on the box;
+adjust the container alias if your compose project prefix differs.)
+
+```bash
+# L_last_closed — the 0228 backfill terminus; bump to your actual value.
+CUTOVER=62527999
+
+# (a) Append-only FACT tables — each carries `ledger_sequence`, so a windowed
+#     count proves the persist function writes each table per ledger.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
+SELECT 'ledgers'                            AS tbl, count() AS rows_post_cutover FROM ledgers                          WHERE sequence        > {cut:Int64}
+UNION ALL SELECT 'transactions',                    count() FROM transactions                    WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_hash_index',          count() FROM transaction_hash_index          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'operations_appearances',          count() FROM operations_appearances          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'soroban_invocations_appearances', count() FROM soroban_invocations_appearances WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'liquidity_pool_snapshots',        count() FROM liquidity_pool_snapshots        WHERE ledger_sequence > {cut:Int64}
+ORDER BY tbl FORMAT PrettyCompact
+\""
+
+# (b) STATE tables (ReplacingMergeTree upserts) — windowed by their ledger
+#     watermark column; counts entities touched in the post-cutover range.
+#     Plain count() (no FINAL) is enough for a non-zero / growth sanity check.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
+SELECT 'accounts'                  AS tbl, count() AS rows_touched FROM accounts                  WHERE last_seen_ledger        > {cut:Int64}
+UNION ALL SELECT 'account_balances_current', count() FROM account_balances_current WHERE last_updated_ledger     > {cut:Int64}
+UNION ALL SELECT 'soroban_contracts',        count() FROM soroban_contracts        WHERE wasm_uploaded_at_ledger > {cut:Int64}
+UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE minted_at_ledger        > {cut:Int64}
+UNION ALL SELECT 'liquidity_pools',           count() FROM liquidity_pools           WHERE last_updated_ledger     > {cut:Int64}
+UNION ALL SELECT 'lp_positions',              count() FROM lp_positions              WHERE last_updated_ledger     > {cut:Int64}
+ORDER BY tbl FORMAT PrettyCompact
+\""
+
+# (c) assets + wasm_interface_metadata have NO per-ledger column (asset-keyed /
+#     wasm_hash-keyed). Snapshot total count() at B-0 and re-check here; any
+#     positive delta proves the persist function is upserting them. Record the
+#     B-0 baseline in the Part C worklog.
+ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
+  --config-file=/etc/clickhouse-backup/client.xml -q \"
+SELECT 'assets'                  AS tbl, count() AS total_rows FROM assets
+UNION ALL SELECT 'wasm_interface_metadata', count() FROM wasm_interface_metadata
+FORMAT PrettyCompact
+\""
+```
+
+**Interpretation:**
+
+- `ledgers`, `transactions`, `transaction_hash_index`,
+  `transaction_participants`, `operations_appearances` — **must** be `> 0`
+  and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
+  Zero here = persist not running or a broken core write → page.
+- `soroban_events`, `soroban_invocations_appearances` — `> 0` over any
+  non-trivial pubnet window (Soroban traffic is continuous). The parser
+  extracts these (`extract_events` / `extract_invocations` in
+  `process.rs`) and persist writes them — they are **not** behind the
+  enrichment stub. Sustained `0` across thousands of post-cutover ledgers
+  points at a specific broken/unported persist branch, not a generic write
+  failure → investigate that slice.
+- `nft_ownership`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
+  `lp_positions` — activity-dependent; may legitimately be low/0 in a short
+  window. Cross-check against a known-active ledger range before concluding
+  a regression.
+- `accounts`, `account_balances_current`, `soroban_contracts` — `> 0`
+  (every ledger touches accounts/balances; contract deploys are steady on
+  pubnet).
+- `assets` / `wasm_interface_metadata` — confirm via the B-0 baseline delta.
+
+**Do not** confuse an empty _row count_ (a real problem) with the known-stale
+_columns_ below — the stubbed type-1 enrichment (SEP-1 asset `name`, NFT token
+URI) and the unported `recompute_asset_aggregates` leave certain **columns**
+NULL, but the **rows still land**. See [Known stale fields
+post-cutover](#known-stale-fields-post-cutover-not-a-regression).
 
 ### B-3 — Rollback (if needed)
 

@@ -4,14 +4,14 @@ import { validateConfig, type EnvironmentConfig } from './types.js';
 import { NetworkStack } from './stacks/network-stack.js';
 import { LedgerBucketStack } from './stacks/ledger-bucket-stack.js';
 import { ComputeStack } from './stacks/compute-stack.js';
-import { MigrationStack } from './stacks/migration-stack.js';
-import { PartitionStack } from './stacks/partition-stack.js';
+import { CloudFrontWafStack } from './stacks/cloudfront-waf-stack.js';
 import { DeliveryStack } from './stacks/delivery-stack.js';
 import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
 import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
+import { CloudflareBootstrapStack } from './stacks/cloudflare-bootstrap-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -41,19 +41,6 @@ export function createApp({
     config,
   });
 
-  const migration = new MigrationStack(app, `${prefix}-Migration`, {
-    env,
-    config,
-    cargoWorkspacePath,
-  });
-
-  const partition = new PartitionStack(app, `${prefix}-Partition`, {
-    env,
-    config,
-    cargoWorkspacePath,
-  });
-  partition.addDependency(migration);
-
   const compute = new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
@@ -61,7 +48,6 @@ export function createApp({
     ledgerBucketName: ledgerBucket.bucket.bucketName,
     cargoWorkspacePath,
   });
-  compute.addDependency(partition);
 
   new IngestionStack(app, `${prefix}-Ingestion`, {
     env,
@@ -74,9 +60,28 @@ export function createApp({
   // CDK auto-detects dependencies from cross-stack references
   // (vpc, ecsSecurityGroup, bucket ARN/name).
 
-  new DeliveryStack(app, `${prefix}-Delivery`, {
+  // CLOUDFRONT-scoped WAF must be created in us-east-1 (AWS requirement);
+  // the DeliveryStack distribution (in config.awsRegion) references its ARN
+  // via crossRegionReferences.
+  let cloudFrontWafArn: string | undefined;
+  if (config.enableWaf) {
+    const cloudFrontWaf = new CloudFrontWafStack(
+      app,
+      `${prefix}-CloudFrontWaf`,
+      {
+        env: { account: env.account, region: 'us-east-1' },
+        config,
+        crossRegionReferences: true,
+      }
+    );
+    cloudFrontWafArn = cloudFrontWaf.webAclArn;
+  }
+
+  const delivery = new DeliveryStack(app, `${prefix}-Delivery`, {
     env,
     config,
+    cloudFrontWafArn,
+    crossRegionReferences: true,
   });
 
   new ObservabilityStack(app, `${prefix}-Observability`, { env, config });
@@ -97,8 +102,19 @@ export function createApp({
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
     restApi: apiGateway.api,
+    spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });
   cloudWatch.addDependency(apiGateway);
+
+  // AWS-side bootstrap for THIS repo's Cloudflare module (task 0277 / ADR 0048):
+  // the Terraform remote-state bucket for infra/cloudflare/. Standalone — no
+  // dependency on the other stacks.
+  if (config.provisionCloudflareBootstrap) {
+    new CloudflareBootstrapStack(app, `${prefix}-CloudflareBootstrap`, {
+      env,
+      config,
+    });
+  }
 
   // HetznerDnsStack only when the env has a real `chDomainName`.
   if (

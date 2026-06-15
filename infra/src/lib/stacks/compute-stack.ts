@@ -1,11 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as lambdaDestinations from 'aws-cdk-lib/aws-lambda-destinations';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
@@ -124,6 +124,32 @@ export class ComputeStack extends cdk.Stack {
     this.deadLetterQueue = dlq;
 
     // ---------------------
+    // Ledger ingest queue (task 0241 — S3 → SQS → Lambda)
+    // ---------------------
+    // S3 `ObjectCreated` lands here; the indexer's SQS event-source-mapping
+    // drains it. A burst while the reserved concurrency slot is busy buffers
+    // in the queue (visible `ApproximateNumberOfMessages`, multi-day
+    // retention) rather than in Lambda's opaque ~6h async-invoke buffer.
+    // After `maxReceiveCount` failed deliveries a message moves to `dlq`,
+    // from which SQS redrive-to-source recovers it once the cause is fixed.
+    const ingestQueue = new sqs.Queue(this, 'LedgerIngestQueue', {
+      queueName: `${config.envName}-ledger-ingest`,
+      // MUST be ≥ the function timeout, else SQS redelivers a doorbell the
+      // indexer is still legitimately processing (a reconcile can run up to
+      // the full timeout). timeout + 60 s margin.
+      visibilityTimeout: cdk.Duration.seconds(config.indexerLambdaTimeout + 60),
+      retentionPeriod: cdk.Duration.days(DLQ_RETENTION_DAYS),
+      deadLetterQueue: {
+        queue: dlq,
+        // Higher than the usual 3: with `indexerLambdaConcurrency = 1` the SQS
+        // ESM over-polls and gets throttled (429) — those redeliveries bump
+        // ReceiveCount without being real failures. 10 absorbs the throttle
+        // churn so a genuinely processable ledger is not DLQ'd by accident.
+        maxReceiveCount: 10,
+      },
+    });
+
+    // ---------------------
     // Type-1 Enrichment Queue (task 0191)
     // ---------------------
     const enrichmentDlq = new sqs.Queue(this, 'EnrichmentDlq', {
@@ -152,6 +178,67 @@ export class ComputeStack extends cdk.Stack {
     // API Lambda
     // ---------------------
     const apiSecretName = `${config.mtlsSecretNamePrefix}/lambda-api-${config.envName}`;
+
+    // Origin-lock shared secret (task 0277 / ADR 0048, secret-header variant).
+    // CDK-generated. Two-phase, like the mTLS truststore, so the secret can exist
+    // (to be copied into the Cloudflare Transform Rule) BEFORE the Lambda starts
+    // requiring the header:
+    //   phase 1  provisionEdgeSecret  → create the secret (Lambda NOT yet armed)
+    //   (then)   copy value → rf-domains Transform Rule injects X-Edge-Secret
+    //   phase 2  enableEdgeSecretLock → set EDGE_SECRET env → middleware enforces
+    // RETAIN so rotation is deliberate.
+    const edgeSecret = config.provisionEdgeSecret
+      ? new secretsmanager.Secret(this, 'EdgeSecret', {
+          secretName: `soroban/${config.envName}/cloudflare/edge-secret`,
+          description:
+            'X-Edge-Secret shared by the Cloudflare Transform Rule (rf-domains) and the API Lambda origin-lock middleware (task 0277).',
+          generateSecretString: {
+            passwordLength: 48,
+            excludePunctuation: true,
+          },
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        })
+      : undefined;
+
+    // Paid-API access-layer secrets (task 0277; docs/paid-api/plan-platne-api.md).
+    // Phase 1 (provisionAuthSecrets): create them. JwtSecret is CDK-generated (a
+    // session-signing key, never copied out). TurnstileSecret + ApiKeysSecret are
+    // created with a generated placeholder the operator OVERWRITES with the real
+    // Turnstile secret key / the comma-separated paid keys (the Turnstile
+    // placeholder simply fails siteverify until then; the api-keys placeholder is
+    // one unknown key = no real paid access). RETAIN. Env wired in phase 2 below.
+    const authSecrets = config.provisionAuthSecrets
+      ? {
+          jwt: new secretsmanager.Secret(this, 'JwtSecret', {
+            secretName: `soroban/${config.envName}/auth/jwt-secret`,
+            description:
+              'HS256 signing key for free-tier session JWTs (task 0277 paid-API).',
+            generateSecretString: {
+              passwordLength: 64,
+              excludePunctuation: true,
+            },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+          turnstile: new secretsmanager.Secret(this, 'TurnstileSecret', {
+            secretName: `soroban/${config.envName}/auth/turnstile-secret`,
+            description:
+              'Cloudflare Turnstile SECRET key — operator overwrites with the value from the Turnstile widget (task 0277).',
+            generateSecretString: { passwordLength: 40 },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+          apiKeys: new secretsmanager.Secret(this, 'ApiKeysSecret', {
+            secretName: `soroban/${config.envName}/auth/api-keys`,
+            description:
+              'Comma-separated paid-tier API keys — operator overwrites (task 0277).',
+            generateSecretString: {
+              passwordLength: 40,
+              excludePunctuation: true,
+            },
+            removalPolicy: cdk.RemovalPolicy.RETAIN,
+          }),
+        }
+      : undefined;
+
     const apiFunction = new RustFunction(this, 'ApiFunction', {
       functionName: `${config.envName}-soroban-explorer-api`,
       manifestPath: cargoWorkspacePath,
@@ -160,11 +247,103 @@ export class ComputeStack extends cdk.Stack {
       logGroup: apiLogGroup,
       memorySize: config.apiLambdaMemory,
       timeout: cdk.Duration.seconds(config.apiLambdaTimeout),
+      // Build the `swagger-ui` opt-in feature (task 0243): serves an
+      // interactive OpenAPI explorer at `/api-docs` so the ClickHouse read
+      // paths can be exercised against the live API. Adds ~12 MB of embedded
+      // assets to the binary (cold-start load only; the 256 MB Lambda has
+      // ample headroom). The spec JSON at `/api-docs-json` is always on,
+      // feature or not.
+      bundling: {
+        cargoLambdaFlags: ['--features', 'swagger-ui'],
+      },
       environment: {
         ...sharedEnv,
         AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH: 'true',
-        API_BASE_URL: `https://${config.apiDomainName}`,
+        // Secret re-resolution lever (task 0277). The secret env vars below are
+        // CloudFormation `{{resolve:secretsmanager:...}}` dynamic references —
+        // CFN only re-resolves them when the TEMPLATE changes. After rotating a
+        // secret VALUE (api-keys, turnstile, edge, jwt) in Secrets Manager,
+        // BUMP this string and redeploy so the Lambda picks up the new value;
+        // otherwise `cdk deploy` reports "no changes" and keeps the stale env.
+        SECRETS_REVISION: '2',
+        // OpenAPI `servers` block (Swagger "Try it out" target). Must be the
+        // Cloudflare-fronted host so Swagger calls are same-origin with the docs
+        // page AND traverse the edge (X-Edge-Secret) instead of hitting the
+        // edge-locked legacy domain (task 0277). Falls back to the legacy domain
+        // for envs without the Cloudflare domain.
+        API_BASE_URL: `https://${
+          config.cloudflareApiDomainName ?? config.apiDomainName
+        }`,
+        // CORS allow-origin for the cross-origin SPA. API Gateway answers only
+        // the OPTIONS preflight; the actual responses come from the Lambda and
+        // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.
+        CORS_ALLOW_ORIGIN: `https://${config.domainName}`,
         MTLS_SECRET_NAME: apiSecretName,
+        // Origin lock (task 0277), phase 2: arm the middleware by injecting the
+        // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
+        // rejects any request (except /health) lacking a matching X-Edge-Secret —
+        // i.e. that did not pass through Cloudflare. Resolved by CloudFormation at
+        // deploy time (dynamic reference). Only when BOTH the secret is
+        // provisioned AND the lock is enabled; otherwise unset = middleware no-op.
+        ...(config.enableEdgeSecretLock &&
+          edgeSecret && {
+            EDGE_SECRET: edgeSecret.secretValue.unsafeUnwrap(),
+          }),
+        // Paid-API access layer (task 0277), phase 2: arm by injecting the
+        // session-signing key, Turnstile secret, and paid-key allowlist. The
+        // `auth` gate enforces only when JWT_SECRET is present. Resolved at
+        // deploy time — flip enableAuthLayer only AFTER the Turnstile secret is
+        // populated AND the SPA sends sessions, else real users get 401.
+        ...(config.enableAuthLayer &&
+          authSecrets && {
+            JWT_SECRET: authSecrets.jwt.secretValue.unsafeUnwrap(),
+            TURNSTILE_SECRET: authSecrets.turnstile.secretValue.unsafeUnwrap(),
+            API_KEYS: authSecrets.apiKeys.secretValue.unsafeUnwrap(),
+          }),
+        // Transitional PG placeholder. The API binary still constructs a sqlx
+        // PG pool at boot unconditionally (crates/api/src/main.rs); it uses
+        // `connect_lazy`, so this URL is NEVER dialed for CH-routed modules.
+        // RDS has been removed (ADR 0047), so without *some* value here
+        // `db::secrets::resolve_or_env()` returns MissingEnvVar and boot panics
+        // (502 on every route). This keeps boot healthy. The not-yet-migrated
+        // PG modules (Assets/NFTs/LiquidityPools/Search)
+        // still error on query until they get a CH path — expected. Removing
+        // this hack needs the PG pool made optional at boot (deferred
+        // follow-up); until then a `cdk deploy` MUST keep it, or it regresses
+        // prod to the boot panic.
+        DATABASE_URL: 'postgres://disabled:disabled@127.0.0.1:5432/disabled',
+        // ClickHouse read-path cutover (task 0243 / ADR 0047). Each
+        // `API_DATASOURCE_<MODULE>=ch` flips that handler module from the
+        // sqlx/PG path to the `clickhouse` path; absence (or any non-`ch`
+        // value) keeps PG. CH host (`CH_DOMAIN`) + the mTLS bundle
+        // (`MTLS_SECRET_NAME`, granted below) are already wired, so a flag
+        // is all it takes to opt a module in. Rollback per module = delete
+        // its line and redeploy.
+        //
+        // Enabled here: modules whose CH read path is merged on `develop` —
+        // Network (pilot, PR #221), Ledgers (PR #226), Transactions
+        // (PR #235), Accounts (PR #236), Contracts (PR #237), LiquidityPools
+        // (task 0243; PRs #246/#248/#250 — all 5 LP endpoints on CH, validated
+        // live on prod). The remaining modules (Assets, NFTs, Search) have no
+        // CH path yet.
+        //
+        // PRECONDITIONS before this deploy goes live (see PR checklist):
+        //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
+        //      otherwise the API serves stale data.
+        //   2. Operator CH smoke passed for the enabled modules. The list
+        //      read paths now read in primary-key order (no FINAL-over-
+        //      partition scan) and `contract_ids` is ops-only, so the polled
+        //      paths are cheap. The remaining read-heavy path is the contract
+        //      / op_type *filter* (Statement B/C driver scans a partition by a
+        //      non-PK column, ~2e8 rows) — bounded and user-initiated; watch
+        //      the api_reader `read_rows` quota (CH Code: 201) rather than the
+        //      memory limit.
+        API_DATASOURCE_NETWORK: 'ch',
+        API_DATASOURCE_LEDGERS: 'ch',
+        API_DATASOURCE_TRANSACTIONS: 'ch',
+        API_DATASOURCE_ACCOUNTS: 'ch',
+        API_DATASOURCE_CONTRACTS: 'ch',
+        API_DATASOURCE_LIQUIDITY_POOLS: 'ch',
       },
     });
     this.apiFunction = apiFunction;
@@ -194,19 +373,35 @@ export class ComputeStack extends cdk.Stack {
     this.processorFunction = processorFunction;
     grantMtlsSecretRead(this, processorFunction, processorSecretName);
 
-    new lambda.EventInvokeConfig(this, 'ProcessorInvokeConfig', {
-      function: processorFunction,
-      retryAttempts: config.indexerLambdaRetryAttempts,
-      onFailure: new lambdaDestinations.SqsDestination(dlq),
-    });
+    // S3 `ObjectCreated` → SQS. Always wired (not gated on concurrency) so a
+    // paused indexer (`indexerLambdaConcurrency = 0`) still captures events
+    // durably in the queue instead of dropping them on the floor.
+    ledgerBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.SqsDestination(ingestQueue),
+      { suffix: '.xdr.zst' }
+    );
 
+    // SQS → indexer event-source-mapping. Gated on concurrency so a
+    // `concurrency = 0` pause leaves messages waiting in the queue with no
+    // poller (no `maxReceiveCount` churn → no DLQ spam) until resume.
+    // `reportBatchItemFailures` lets the handler fail just the offending
+    // message; the rest of the batch is acknowledged and deleted.
     if (config.indexerLambdaConcurrency > 0) {
-      ledgerBucket.addEventNotification(
-        s3.EventType.OBJECT_CREATED,
-        new s3n.LambdaDestination(processorFunction),
-        { suffix: '.xdr.zst' }
+      processorFunction.addEventSource(
+        new lambdaEventSources.SqsEventSource(ingestQueue, {
+          batchSize: 1,
+          reportBatchItemFailures: true,
+          // No `maxConcurrency`: AWS requires ESM MaximumConcurrency ≤ the
+          // function's reserved concurrency AND its minimum is 2, so it is
+          // unsettable while `indexerLambdaConcurrency = 1`. Execution is
+          // capped to one-at-a-time by reserved concurrency alone; the ESM may
+          // over-poll and get throttled, which the queue's `maxReceiveCount`
+          // (10) absorbs without false-DLQ'ing a processable ledger.
+        })
       );
     }
+    ingestQueue.grantConsumeMessages(processorFunction);
 
     // ---------------------
     // Type-1 Enrichment Worker Lambda (task 0191)

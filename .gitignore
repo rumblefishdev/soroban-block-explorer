@@ -1,3 +1,7 @@
+# Company Cloudflare/DNS scaffold — belongs in the private `rf-domains` repo,
+# never in this public repo (task 0277 D9). Generated locally; move it out.
+rf-domains/
+
 # dependencies
 node_modules
 
@@ -18,6 +22,8 @@ coverage
 .env
 .env.local
 .env.*.local
+# per-dev local config (may hold a dev x-api-key for Option-B proxy) — never commit
+.env.development
 
 # editors
 /.idea
@@ -69,3 +75,7 @@ target/
 # Local Docker compose overrides (perf tunings, env-specific paths)
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# Playwright MCP runtime artefacts (snapshots + console logs from
+# browser-driven manual verification sessions)
+.playwright-mcp/

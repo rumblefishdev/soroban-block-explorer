@@ -1,4 +1,11 @@
 //! Axum handlers for the transactions endpoints.
+//!
+//! Both endpoints dispatch their DB reads through
+//! `DataSource::for_module(Module::Transactions)` — PG (`sqlx`) or CH
+//! (`clickhouse`) per the `API_DATASOURCE_TRANSACTIONS` flag (task 0243).
+//! The public response shape, the archive XDR enrichment path (ADR 0029),
+//! and the cursor wire format are datasource-agnostic; only the row
+//! fetches differ.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -6,12 +13,14 @@ use axum::response::{IntoResponse, Response};
 use domain::OperationType;
 
 use crate::common::cache_control;
-use crate::common::cursor::TsIdCursor;
+use crate::common::cursor::{self, Direction};
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
-use crate::common::pagination::{finalize_ts_id_page, into_envelope};
+use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
+use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
 use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
@@ -20,12 +29,22 @@ use crate::state::AppState;
 
 use super::dto::{
     EventAppearanceItem, InvocationAppearanceItem, ListParams, OperationItem,
-    TransactionDetailLight, TransactionListItem,
+    TransactionDetailLight, TransactionListItem, TxListCursor,
 };
-use super::queries::{
-    ResolvedListParams, fetch_detail, fetch_event_appearances, fetch_invocation_appearances,
-    fetch_list, fetch_operations, fetch_participants, lookup_hash_index,
-};
+use super::queries::{OpRow, ResolvedListParams, TxDetailRow, TxListRow};
+use super::{queries, queries_ch};
+
+/// Unified per-call fetch error so the handlers can dispatch between the PG
+/// and CH backends without leaking driver types up the call stack. Only the
+/// `Display` impl is observed (forwarded to the canonical `db_error`
+/// envelope + tracing); the variant tags the failing backend for logs.
+#[derive(Debug, thiserror::Error)]
+enum TxFetchError {
+    #[error("pg: {0}")]
+    Pg(sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(clickhouse::error::Error),
+}
 
 // ---------------------------------------------------------------------------
 // GET /v1/transactions
@@ -53,7 +72,7 @@ use super::queries::{
 )]
 pub async fn list_transactions(
     State(state): State<AppState>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<TxListCursor>,
     Query(params): Query<ListParams>,
 ) -> Response {
     // Shape-validate filters before touching DB. Without these checks an
@@ -80,6 +99,20 @@ pub async fn list_transactions(
         return resp;
     }
 
+    let source = DataSource::for_module(Module::Transactions);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor
+    // replayed after a flag flip to CH). Its keyset values are meaningless
+    // under the active backend, so per ADR 0008 we fail with `invalid_cursor`
+    // instead of silently mis-paginating. A legacy/untagged cursor already
+    // fails to decode upstream in the extractor; this guards the
+    // decodes-but-wrong-intent case.
+    if let Some(cursor) = &pagination.cursor
+        && !cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
@@ -91,23 +124,25 @@ pub async fn list_transactions(
     };
 
     // Fetch limit+1 rows — extra peek drives forward-continuation detection.
-    let mut rows: Vec<super::queries::TxListRow> =
-        match fetch_list(&state.db, &resolved, direction).await {
+    let mut rows: Vec<TxListRow> =
+        match fetch_list_for_source(&state, source, &resolved, direction).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("DB error in list_transactions: {e}");
+                tracing::error!(source = ?source, "DB error in list_transactions: {e}");
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
 
-    // Trim limit+1 → limit, derive page info with cursor built from last row.
-    let page = finalize_ts_id_page(
+    // Trim limit+1 → limit, derive page info with cursor built from the
+    // boundary rows. The cursor payload differs by datasource (PG keys on
+    // `(created_at, id)`; CH on `(ledger_sequence, id)`), but the wire
+    // format stays opaque — see `TxListCursor`.
+    let page = finalize_page(
         &mut rows,
         pagination.limit,
         direction,
         has_predecessor,
-        |r| r.created_at,
-        |r| r.id,
+        |dir, r| cursor::encode(&list_cursor_for(source, &resolved, r), dir),
     );
 
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
@@ -136,6 +171,55 @@ pub async fn list_transactions(
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
+}
+
+/// Build the opaque list cursor for a boundary row. PG keys the list scan on
+/// `(created_at, id)`. CH keys on `(ledger_sequence, <tie-break>)`, where the
+/// tie-break depends on which list statement served the page — the cursor must
+/// anchor the *same* keyset the next page's query will use:
+///
+/// - **Statement A** (no filter, the polled hot path) reads `transactions` in
+///   primary-key order `(ledger_sequence, application_order)` with FINAL
+///   dropped (the `read_rows` quota fix — see `queries_ch::fetch_list`), so its
+///   tie-break is `application_order`.
+/// - **Statements B/C** (contract / op_type filter) drive off
+///   `operations_appearances` and key on the `transactions.id` surrogate, so
+///   their tie-break is `id`.
+///
+/// The emitted variant is tagged with the active datasource so a later request
+/// can reject a cursor minted for the other backend (see `list_transactions`).
+/// A cursor is not tagged with its statement: switching filters mid-pagination
+/// resets the page in practice, and per ADR 0008 a stale opaque cursor that
+/// anchors the wrong keyset degrades to a re-aligned page, never a hard error.
+fn list_cursor_for(source: DataSource, params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: if params.contract_id.is_none() && params.op_type.is_none() {
+                i64::from(r.application_order)
+            } else {
+                r.id
+            },
+        },
+    }
+}
+
+/// True when the decoded cursor was minted for the currently-active
+/// datasource. A mismatch (e.g. a PG cursor replayed after an operator flips
+/// `API_DATASOURCE_TRANSACTIONS=ch` mid-pagination) must be rejected with
+/// `invalid_cursor` rather than silently mis-paginating — the PG keyset
+/// values (`transactions.id` BIGSERIAL) are meaningless as a CH
+/// `(ledger_sequence, id)` anchor and vice versa. ADR 0008: a cursor that
+/// decodes but lacks the current intent fails cleanly (HTTP 400).
+fn cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -175,32 +259,28 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     };
     let hash_bytes = hex::decode(&hash).expect("validated above");
 
-    let index = match lookup_hash_index(&state.db, &hash_bytes).await {
+    let source = DataSource::for_module(Module::Transactions);
+
+    // Resolve hash → transaction header. Combines the PG two-step
+    // (hash index → detail keyed by created_at) and the CH two-step
+    // (hash index → detail keyed by ledger_sequence) behind one helper;
+    // either backend's miss at either step surfaces as a 404.
+    let tx = match lookup_detail_for_source(&state, source, &hash, &hash_bytes).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("transaction not found"),
         Err(e) => {
-            tracing::error!("DB error looking up hash index: {e}");
+            tracing::error!(source = ?source, "DB error looking up transaction detail: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let tx = match fetch_detail(&state.db, &hash_bytes, index.created_at).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return errors::not_found("transaction not found"),
+    let op_rows: Vec<OpRow> = match fetch_operations_for_source(&state, source, &tx).await {
+        Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error fetching transaction detail: {e}");
+            tracing::error!(source = ?source, "DB error fetching operations: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
-
-    let op_rows: Vec<super::queries::OpRow> =
-        match fetch_operations(&state.db, tx.id, tx.created_at).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("DB error fetching operations: {e}");
-                return errors::internal_error(errors::DB_ERROR, "database error");
-            }
-        };
 
     // ADR 0029 read path: fetch the parent ledger from the public Stellar
     // archive. On upstream failure → graceful degradation: heavy = None,
@@ -231,7 +311,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         );
         None
     } else {
-        match u32::try_from(index.ledger_sequence) {
+        match u32::try_from(tx.ledger_sequence) {
             Ok(seq) => match state
                 .runtime_enrichment
                 .stellar_archive
@@ -247,7 +327,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             Err(_) => {
                 tracing::warn!(
                     "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
-                    index.ledger_sequence
+                    tx.ledger_sequence
                 );
                 None
             }
@@ -259,9 +339,9 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     // one array to `[]` rather than failing the whole detail call.
     let (participants, soroban_events, soroban_invocations) = if heavy.is_none() {
         let (p_res, e_res, i_res) = tokio::join!(
-            fetch_participants(&state.db, tx.id, tx.created_at),
-            fetch_event_appearances(&state.db, tx.id, tx.created_at),
-            fetch_invocation_appearances(&state.db, tx.id, tx.created_at),
+            fetch_participants_for_source(&state, source, &tx),
+            fetch_events_for_source(&state, source, &tx),
+            fetch_invocations_for_source(&state, source, &tx),
         );
         let participants = p_res.unwrap_or_else(|e| {
             tracing::warn!("DB fallback: fetch_participants failed: {e}");
@@ -331,7 +411,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     resp
 }
 
-fn db_operations(op_rows: &[super::queries::OpRow]) -> Vec<OperationItem> {
+fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
     op_rows
         .iter()
         .map(|op| OperationItem {
@@ -343,10 +423,134 @@ fn db_operations(op_rows: &[super::queries::OpRow]) -> Vec<OperationItem> {
             contract_id: op.contract_id.clone(),
             asset_code: op.asset_code.clone(),
             asset_issuer: op.asset_issuer.clone(),
-            pool_id: op.pool_id.clone(),
+            pool_ids: op
+                .pool_ids
+                .iter()
+                .map(|h| pool_id_hex_to_strkey(h))
+                .collect(),
             application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Per-source dispatch helpers
+// ---------------------------------------------------------------------------
+
+async fn fetch_list_for_source(
+    state: &AppState,
+    source: DataSource,
+    params: &ResolvedListParams,
+    direction: Direction,
+) -> Result<Vec<TxListRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_list(&state.db, params, direction)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+/// Resolve a tx hash to its DB header. PG keys the detail read by
+/// `(hash, created_at)` resolved via `transaction_hash_index`; CH keys it by
+/// `(ledger_sequence, hash)` resolved the same way. A miss at either step is
+/// `Ok(None)` → 404.
+async fn lookup_detail_for_source(
+    state: &AppState,
+    source: DataSource,
+    hash_hex: &str,
+    hash_bytes: &[u8],
+) -> Result<Option<TxDetailRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => {
+            let Some(index) = queries::lookup_hash_index(&state.db, hash_bytes)
+                .await
+                .map_err(TxFetchError::Pg)?
+            else {
+                return Ok(None);
+            };
+            queries::fetch_detail(&state.db, hash_bytes, index.created_at)
+                .await
+                .map_err(TxFetchError::Pg)
+        }
+        DataSource::Ch => {
+            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(state.ch(), hash_hex)
+                .await
+                .map_err(TxFetchError::Ch)?
+            else {
+                return Ok(None);
+            };
+            queries_ch::fetch_detail(state.ch(), hash_hex, ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_operations_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<OpRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_operations(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_operations(state.ch(), tx.id, tx.ledger_sequence)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+async fn fetch_participants_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<String>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_participants(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_participants(state.ch(), tx.id, tx.ledger_sequence)
+            .await
+            .map_err(TxFetchError::Ch),
+    }
+}
+
+async fn fetch_events_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<super::queries::EventAppearanceRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_event_appearances(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => {
+            queries_ch::fetch_event_appearances(state.ch(), tx.id, tx.ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
+}
+
+async fn fetch_invocations_for_source(
+    state: &AppState,
+    source: DataSource,
+    tx: &TxDetailRow,
+) -> Result<Vec<super::queries::InvocationAppearanceRow>, TxFetchError> {
+    match source {
+        DataSource::Pg => queries::fetch_invocation_appearances(&state.db, tx.id, tx.created_at)
+            .await
+            .map_err(TxFetchError::Pg),
+        DataSource::Ch => {
+            queries_ch::fetch_invocation_appearances(state.ch(), tx.id, tx.ledger_sequence)
+                .await
+                .map_err(TxFetchError::Ch)
+        }
+    }
 }

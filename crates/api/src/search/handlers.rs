@@ -13,9 +13,7 @@ use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
 use super::classifier;
-use super::dto::{
-    EntityType, SearchGroups, SearchHit, SearchRedirect, SearchResponse, SearchResults,
-};
+use super::dto::{EntityType, SearchGroups, SearchHit, SearchResults};
 use super::queries::{self, IncludeFlags};
 
 /// Default per-group cap when caller omits `?limit=` (matches
@@ -55,15 +53,17 @@ pub struct SearchParams {
 /// `?limit=` caps each entity bucket independently (default 10,
 /// ceiling 50).
 ///
-/// Behaviour:
-/// * If `q` is a fully-typed entity id (64-hex hash, full G-StrKey,
-///   full C-StrKey) and the corresponding entity exists, the response
-///   is `{ "type": "redirect", "entity_type", "entity_id" }` — frontend
-///   navigates directly.
-/// * Otherwise the response is `{ "type": "results", "groups": {...} }`
-///   with up to `limit` rows per entity bucket. Rows carry the same
-///   four columns regardless of bucket: `entity_type`, `identifier`,
-///   `label`, `surrogate_id` (BIGINT FK or `null`).
+/// Behaviour (task 0271):
+/// * One SQL path: broad search across the six entity-typed CTEs.
+/// * Response is `{ "groups": {…} }` with up to `limit` rows per
+///   entity bucket. Rows carry the same columns regardless of
+///   bucket: `entity_type`, `identifier`, `label`, `route_token`
+///   (asset routing token or `null`), plus optional enrichment
+///   (`successful`, `last_activity_at`) and composite routing
+///   (`contract_id`, `token_id`) fields.
+/// * FE decides "singleton → direct navigation" by inspecting the
+///   response: total row count == 1 and `routeForHit(singleton)`
+///   resolves ⇒ navigate; else show the dropdown / list.
 ///
 /// Authoritative SQL:
 /// `docs/architecture/database-schema/endpoint-queries/22_get_search.sql`.
@@ -80,7 +80,7 @@ pub struct SearchParams {
             minimum = 1, maximum = 50),
     ),
     responses(
-        (status = 200, description = "Search results", body = SearchResponse),
+        (status = 200, description = "Search results", body = SearchResults),
         (status = 400, description = "Validation error", body = ErrorEnvelope),
         (status = 500, description = "Database error", body = ErrorEnvelope),
     ),
@@ -125,31 +125,11 @@ pub async fn get_search(
         Err(resp) => return resp,
     };
 
-    // 4. Classify query.
+    // 4. Classify query — `hash_bytes` / `strkey_prefix` channels
+    //    feed the WHERE-gated CTE branches inside `fetch_search`.
     let classified = classifier::classify(q_raw);
 
-    // 5. Redirect short-circuit when `q` is a fully-typed entity id
-    //    that hits an existing row.
-    match queries::fetch_redirect(&state.db, &classified).await {
-        Ok(Some(row)) => {
-            let mut resp = Json(SearchResponse::Redirect(SearchRedirect {
-                entity_type: row.entity_type,
-                entity_id: row.entity_id,
-                successful: row.successful,
-                last_activity_at: row.last_activity_at,
-            }))
-            .into_response();
-            cache_control::attach(&mut resp, cache_control::NO_STORE);
-            return resp;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::error!("DB error in get_search redirect: {e}");
-            return errors::internal_error(errors::DB_ERROR, "Unable to perform search.");
-        }
-    }
-
-    // 6. Broad search.
+    // 5. Broad search — single SQL path covering all six entity types.
     let rows =
         match queries::fetch_search(&state.db, q_raw, &classified, &include, limit as i32).await {
             Ok(rows) => rows,
@@ -159,8 +139,11 @@ pub async fn get_search(
             }
         };
 
+    // 6. Group rows into per-entity buckets. FE inspects the result
+    //    and routes directly when the total row count is exactly 1
+    //    (task 0271) — backend stays pure data shaper, no synthesis.
     let groups = group_hits(rows);
-    let mut resp = Json(SearchResponse::Results(SearchResults { groups })).into_response();
+    let mut resp = Json(SearchResults { groups }).into_response();
     cache_control::attach(&mut resp, cache_control::NO_STORE);
     resp
 }
@@ -259,7 +242,7 @@ mod tests {
     #[test]
     fn parse_type_filter_accepts_csv() {
         let f = parse_type_filter(Some("transaction,contract,asset")).unwrap();
-        assert!(f.tx);
+        assert!(f.transaction);
         assert!(f.contract);
         assert!(f.asset);
         assert!(!f.account);
@@ -270,13 +253,13 @@ mod tests {
     #[test]
     fn parse_type_filter_missing_includes_all() {
         let f = parse_type_filter(None).unwrap();
-        assert!(f.tx && f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.transaction && f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
     fn parse_type_filter_empty_string_includes_all() {
         let f = parse_type_filter(Some("")).unwrap();
-        assert!(f.tx && f.contract && f.asset && f.account && f.nft && f.pool);
+        assert!(f.transaction && f.contract && f.asset && f.account && f.nft && f.pool);
     }
 
     #[test]
@@ -288,7 +271,7 @@ mod tests {
     #[test]
     fn parse_type_filter_tolerates_whitespace_and_empty_tokens() {
         let f = parse_type_filter(Some("  transaction , , account ")).unwrap();
-        assert!(f.tx);
+        assert!(f.transaction);
         assert!(f.account);
         assert!(!f.contract);
     }

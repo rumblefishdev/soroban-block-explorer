@@ -1,6 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 
-import { SearchSpinner } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  QueryErrorState,
+  SearchSpinner,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { SearchResultRow } from './SearchResultRow.js';
 import { SearchResultsTabs } from './SearchResultsTabs.js';
@@ -29,6 +32,8 @@ export function SearchResultsView({
     data,
     isFetching,
     isError,
+    error,
+    refetch,
     counts,
     totalCount,
     activeTab,
@@ -36,7 +41,7 @@ export function SearchResultsView({
     hitsForActiveTab,
   } = state;
 
-  const showResults = data?.type === 'results' && totalCount > 0;
+  const showResults = data != null && totalCount > 0;
 
   return (
     <Stack>
@@ -67,19 +72,7 @@ export function SearchResultsView({
         }
       >
         {isFetching && !showResults && <SearchSpinner />}
-        {isError && (
-          <Stack spacing={0.5} alignItems="center" sx={{ p: 3 }}>
-            <Typography variant="bodySmMedium" sx={{ color: 'text.secondary' }}>
-              Search request failed
-            </Typography>
-            <Typography
-              variant="bodyXsRegular"
-              sx={{ color: 'text.tertiary', textAlign: 'center' }}
-            >
-              Try again in a moment, or refine your query.
-            </Typography>
-          </Stack>
-        )}
+        {isError && <QueryErrorState error={error} onRetry={refetch} py={4} />}
         {!isFetching &&
           !isError &&
           effectiveQuery.length > 0 &&
@@ -87,16 +80,19 @@ export function SearchResultsView({
             <Stack spacing={0.5} alignItems="center" sx={{ p: 3 }}>
               <Typography
                 variant="bodySmMedium"
-                sx={{ color: 'text.secondary' }}
+                sx={(theme) => ({ color: theme.palette.text.secondary })}
               >
                 {emptyCopy?.title ?? `No results for "${effectiveQuery}"`}
               </Typography>
               <Typography
                 variant="bodyXsRegular"
-                sx={{ color: 'text.tertiary', textAlign: 'center' }}
+                sx={(theme) => ({
+                  color: theme.palette.text.tertiary,
+                  textAlign: 'center',
+                })}
               >
                 {emptyCopy?.description ??
-                  'Try a full transaction hash, account address (G…), contract address (C…), or token code.'}
+                  'Try a full transaction hash, account address (G…), contract address (C…), liquidity pool (L…), or token code.'}
               </Typography>
             </Stack>
           )}
@@ -104,7 +100,10 @@ export function SearchResultsView({
           <Stack alignItems="center" sx={{ p: 3 }}>
             <Typography
               variant="bodyXsRegular"
-              sx={{ color: 'text.tertiary', textAlign: 'center' }}
+              sx={(theme) => ({
+                color: theme.palette.text.tertiary,
+                textAlign: 'center',
+              })}
             >
               Type to search transactions, accounts, contracts, tokens, NFTs,
               and liquidity pools.
@@ -113,7 +112,10 @@ export function SearchResultsView({
         )}
         {showResults && hitsForActiveTab.length === 0 && (
           <Stack alignItems="center" sx={{ p: 3 }}>
-            <Typography variant="bodyXsRegular" sx={{ color: 'text.tertiary' }}>
+            <Typography
+              variant="bodyXsRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
               No results in this category.
             </Typography>
           </Stack>
@@ -122,7 +124,7 @@ export function SearchResultsView({
           hitsForActiveTab.map((hit, idx) => (
             <SearchResultRow
               key={`${hit.entity_type}:${
-                hit.surrogate_id ?? hit.identifier
+                hit.route_token ?? hit.identifier
               }:${idx}`}
               hit={hit}
               highlighted={idx === highlightedIndex}

@@ -293,9 +293,22 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     contract_id       Nullable(Int64),
     asset_code        LowCardinality(String),
     asset_issuer_id   Nullable(Int64),
-    pool_id           Nullable(FixedString(32)),
+    -- Crossed liquidity pools (task 0261/0268): single-element for LP
+    -- deposit/withdraw, full crossed-pool list (result claim atoms) for
+    -- path payments / offers, [] for no pool involvement (Array cannot be
+    -- Nullable; has([], x) = 0 so empty arrays miss pool filters). Sorted +
+    -- deduped by the stage fold. Filter with
+    -- has(pool_ids, toFixedString(unhex(...), 32)).
+    pool_ids          Array(FixedString(32)),
     amount            Int64,   -- fold count, see header comment
-    ledger_sequence   Int64
+    ledger_sequence   Int64,
+    -- Skip index for the `has(pool_ids, …)` pool filter (E20 /
+    -- liquidity-pools/:id/transactions). LP-touching ops are sparse, so a
+    -- bloom over the array prunes granules that hold no op for the queried
+    -- pool. This is the fresh-install / dev / E20 floor; the bounded
+    -- prod seek (the old scalar `oa_pool_seek` projection cannot serve array
+    -- membership) is redesigned in the 0281 window (task 0281 C).
+    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -383,7 +396,12 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     total_shares    Decimal128(7),
     tvl             Nullable(Decimal128(7)),
     volume          Nullable(Decimal128(7)),
-    fee_revenue     Nullable(Decimal128(7))
+    fee_revenue     Nullable(Decimal128(7)),
+    -- Gross trade volume in asset-A units per (pool, ledger), computed from
+    -- path-payment claim atoms (task 0261 extractor; written by the 0266
+    -- backfill / 0247 wiring). USD volume/fee stay NULL until the Prices
+    -- API lands (ADR 0048 read-time join).
+    gross_volume_a  Nullable(Decimal128(7))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

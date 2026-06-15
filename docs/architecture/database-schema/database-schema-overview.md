@@ -358,7 +358,12 @@ Design notes:
   the `op_type_name(ty)` SQL helper renders the canonical string for psql/BI
 - every account/contract/issuer reference is a `BIGINT` surrogate FK
   (ADRs 0026 / 0030); `pool_id` is a binary 32-byte pool hash (ADR 0024) with a
-  deferred FK attached once `liquidity_pools` exists in migration 0006
+  deferred FK attached once `liquidity_pools` exists in migration 0006.
+  **CH divergence (task 0261/0268):** the ClickHouse parallel store replaces
+  the scalar with `pool_ids Array(FixedString(32))` — path payments record
+  every pool crossed by their result claim atoms (multi-hop lossless), LP
+  deposit/withdraw a single element, `[]` = no pool. PG keeps the legacy
+  scalar (path payments stay NULL) pending its retirement
 - composite `(id, created_at)` PK is required because the partition key must be in
   every unique index on a partitioned table; `created_at` is inherited verbatim from
   the parent transaction so per-partition cascade is well-defined
@@ -1230,11 +1235,13 @@ anchor and registry tables stay unpartitioned:
   `soroban_contracts`, `wasm_interface_metadata`, `assets`, `nfts`,
   `liquidity_pools`, `lp_positions`, `account_balances_current`
 
-Partition creation is handled by a dedicated partition-management Lambda
-(`crates/db-partition-mgmt`, see task 0139); partitions follow the
-`<table>_y{YYYY}m{MM}` naming convention (e.g. `operations_y2026m04`) and are
-provisioned ahead of the leading edge. Partitioning keeps retention, maintenance,
-and time-sliced reads practical on the high-write tables.
+On ClickHouse, partitioning is declared in the table DDL as `PARTITION BY
+intDiv(sequence, 500000)` (500k-ledger blocks) and ClickHouse creates the
+parts automatically on insert — there is no provisioning step. (The PG-era
+partition-management Lambda `crates/db-partition-mgmt`, which pre-created
+monthly `<table>_y{YYYY}m{MM}` partitions, was removed with the PG→CH
+cutover — task 0241.) Partitioning keeps retention, maintenance, and
+ledger-sliced reads practical on the high-write tables.
 
 ### 6.3 Retention Model
 

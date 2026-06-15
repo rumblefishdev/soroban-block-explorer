@@ -1,5 +1,6 @@
 import type { TransactionListItem } from '@rumblefish/api-types';
 import {
+  formatInteger,
   PaginationControls,
   TableEmptyState,
   TableSectionHeader,
@@ -31,19 +32,17 @@ export function LedgerTransactions({
       <TableSectionHeader title="Transactions in this ledger" />
       <Box sx={{ minHeight: 200 }}>
         {rows.length === 0 ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-            <TableEmptyState
-              kind="transactions"
-              title="No transactions in this ledger"
-              description="This ledger closed without any transactions."
-            />
-          </Box>
+          <TableEmptyState
+            kind="transactions"
+            title="No transactions in this ledger"
+            description="This ledger closed without any transactions."
+          />
         ) : (
           <TransactionsTable rows={rows} />
         )}
       </Box>
       <PaginationControls
-        caption={`${totalCount.toLocaleString('en-US')} transactions`}
+        caption={`${formatInteger(totalCount)} transactions`}
         canPrev={canPrev}
         canNext={canNext}
         onPrev={onPrev}

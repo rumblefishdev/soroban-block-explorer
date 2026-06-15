@@ -1,6 +1,9 @@
 import SearchIcon from '@mui/icons-material/Search';
 import { Box, Typography } from '@mui/material';
-import { monoFontFamily } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  monoFontFamily,
+  searchShortcutLabel,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 interface HeroSearchProps {
   value: string;
@@ -31,7 +34,7 @@ export function HeroSearch({
         height: 56,
         px: 2,
         boxSizing: 'border-box',
-        borderRadius: '8px',
+        borderRadius: `${theme.shape.radius.s}px`,
         border: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMain,
         transition: 'border-color 0.15s ease',
@@ -46,10 +49,16 @@ export function HeroSearch({
       })}
     >
       <SearchIcon
-        sx={{ width: 16, height: 16, flexShrink: 0, color: 'text.secondary' }}
+        sx={(theme) => ({
+          width: 16,
+          height: 16,
+          flexShrink: 0,
+          color: theme.palette.text.secondary,
+        })}
       />
       <Box
         component="input"
+        data-global-search="true"
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -82,7 +91,7 @@ export function HeroSearch({
           height: 20,
           px: '6px',
           flexShrink: 0,
-          borderRadius: '8px',
+          borderRadius: `${theme.shape.radius.s}px`,
           backgroundColor: theme.palette.surface.grayLight,
         })}
       >
@@ -92,7 +101,7 @@ export function HeroSearch({
           noWrap
           sx={{ fontFamily: monoFontFamily }}
         >
-          CTRL + K
+          {searchShortcutLabel}
         </Typography>
       </Box>
     </Box>

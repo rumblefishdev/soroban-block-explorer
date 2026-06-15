@@ -1,12 +1,12 @@
 import type { AccountDetailResponse } from '@rumblefish/api-types';
 import {
+  formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
-import { formatAmount } from '../format.js';
 
 /**
  * Account summary card — account ID (copyable), sequence number, and the
@@ -27,6 +27,7 @@ export function AccountSummary({
               <IdentifierWithCopy
                 value={account.account_id}
                 type="account"
+                linked={false}
                 truncate={false}
               />
             ),

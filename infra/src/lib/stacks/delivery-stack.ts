@@ -8,11 +8,17 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
-import { WafWebAcl } from '../constructs/waf-web-acl.js';
+import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
 import { relativeRecordName, type EnvironmentConfig } from '../types.js';
 
 export interface DeliveryStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
+  /**
+   * ARN of the CLOUDFRONT-scoped WAF WebACL (created in `us-east-1` by
+   * `CloudFrontWafStack`, passed in via crossRegionReferences). Undefined
+   * when `config.enableWaf` is false.
+   */
+  readonly cloudFrontWafArn?: string;
 }
 
 /**
@@ -20,16 +26,18 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
- * - CloudFront distribution with SPA routing fallback
- * - WAF WebACL (CLOUDFRONT scope) attached to the distribution — gated
- *   by `config.enableWaf`
+ * - CloudFront distribution with SPA routing fallback, attached (when
+ *   `config.enableWaf`) to the CLOUDFRONT-scoped WAF WebACL whose ARN is
+ *   passed in via `cloudFrontWafArn`
  * - Route 53 DNS records for frontend
- * - Optional CloudFront Function basic auth gating — see `config.enableBasicAuth`
+ * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
  *
- * The API Gateway has its own REGIONAL WebACL defined in `ApiGatewayStack`.
- * A single WebACL cannot serve both CLOUDFRONT and REGIONAL scopes —
- * an AWS WAF design constraint. Both stacks instantiate `WafWebAcl` from
- * `lib/constructs/waf-web-acl.ts` to keep rule sets in lockstep.
+ * The CLOUDFRONT-scoped WebACL itself lives in `CloudFrontWafStack`
+ * (us-east-1 - AWS requires CLOUDFRONT-scope WebACLs there) and is wired in
+ * via crossRegionReferences. The API Gateway has its own REGIONAL WebACL in
+ * `ApiGatewayStack`. A single WebACL cannot serve both scopes; both stacks
+ * instantiate `WafWebAcl` from `lib/constructs/waf-web-acl.ts` to keep rule
+ * sets in lockstep.
  */
 export class DeliveryStack extends cdk.Stack {
   readonly distribution: cloudfront.Distribution;
@@ -37,18 +45,7 @@ export class DeliveryStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DeliveryStackProps) {
     super(scope, id, props);
 
-    const { config } = props;
-
-    // ---------------------
-    // WAF (CLOUDFRONT scope) — optional
-    // ---------------------
-    const waf = config.enableWaf
-      ? new WafWebAcl(this, 'Waf', {
-          scope: 'CLOUDFRONT',
-          name: `${config.envName}-soroban-explorer-cf`,
-          rateLimit: config.cloudFrontWafRateLimit,
-        })
-      : undefined;
+    const { config, cloudFrontWafArn } = props;
 
     // ---------------------
     // S3 Bucket (SPA)
@@ -90,9 +87,45 @@ export class DeliveryStack extends cdk.Stack {
     //
     // First-deploy gotcha: KVS is empty until you populate it. Until then,
     // requests fail closed and the function returns 503 (safer than open).
+    //
+    // CloudFront permits exactly ONE viewer-request function per behavior.
+    // The origin-secret lock (Cloudflare cutover, ADR 0048) and basic auth
+    // (pre-launch gate, task 0273) are therefore mutually exclusive —
+    // enforced in `validateConfig`. The origin-secret lock takes the slot
+    // when enabled. If both human-gating AND the Cloudflare lock are needed
+    // simultaneously, gate humans at the Cloudflare edge instead (or land a
+    // combined guard function).
     let viewerRequestFunction: cloudfront.Function | undefined;
 
-    if (config.enableBasicAuth) {
+    if (config.enableOriginSecretLock) {
+      // Cloudflare origin-secret lock — KVS holds the expected secret,
+      // populated out-of-band (see origin-secret.ts header). The secret
+      // value is never in this template or git.
+      const originSecretKvs = new cloudfront.KeyValueStore(
+        this,
+        'OriginSecretKvs',
+        {
+          keyValueStoreName: `${config.envName}-soroban-explorer-origin-secret`,
+        }
+      );
+
+      viewerRequestFunction = new cloudfront.Function(
+        this,
+        'OriginSecretFunction',
+        {
+          functionName: `${config.envName}-soroban-explorer-origin-secret`,
+          keyValueStore: originSecretKvs,
+          runtime: cloudfront.FunctionRuntime.JS_2_0,
+          code: cloudfront.FunctionCode.fromInline(
+            originSecretFunctionCode(originSecretKvs.keyValueStoreId)
+          ),
+        }
+      );
+
+      new cdk.CfnOutput(this, 'OriginSecretKvsArn', {
+        value: originSecretKvs.keyValueStoreArn,
+      });
+    } else if (config.enableBasicAuth) {
       const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
         keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
       });
@@ -186,7 +219,7 @@ export class DeliveryStack extends cdk.Stack {
       {
         cachePolicyName: `${config.envName}-soroban-explorer-short-ttl`,
         comment:
-          'Short TTL for SPA index.html and unknown paths — see task 0106',
+          'Short TTL for SPA index.html and unknown paths - see task 0106',
         minTtl: cdk.Duration.seconds(0),
         defaultTtl: cdk.Duration.seconds(60),
         maxTtl: cdk.Duration.minutes(5),
@@ -220,7 +253,7 @@ export class DeliveryStack extends cdk.Stack {
       certificate,
       defaultRootObject: 'index.html',
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      ...(waf && { webAclId: waf.webAclArn }),
+      ...(cloudFrontWafArn && { webAclId: cloudFrontWafArn }),
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       defaultBehavior: {
@@ -314,9 +347,9 @@ export class DeliveryStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId', {
       value: distribution.distributionId,
     });
-    if (waf) {
+    if (cloudFrontWafArn) {
       new cdk.CfnOutput(this, 'CloudFrontWafWebAclArn', {
-        value: waf.webAclArn,
+        value: cloudFrontWafArn,
       });
     }
   }

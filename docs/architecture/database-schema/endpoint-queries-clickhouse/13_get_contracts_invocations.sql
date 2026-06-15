@@ -1,3 +1,19 @@
+-- ============================================================================
+-- ⚠️  CH READ-COST NOTE (task 0243) — the live read path is a two-step shape:
+--       1. Driver: soroban_invocations_appearances WHERE contract_id = <surrogate>
+--          — contract_id is the LEADING primary key (ORDER BY (contract_id,
+--          ledger_sequence, transaction_id)), so this is a contract-scoped SEEK.
+--          ORDER BY (ledger_sequence, transaction_id) + keyset, LIMIT.
+--       2. Fetch the page's transaction headers (hash / successful / closed_at)
+--          by (ledger_sequence, id) IN (keys). Do NOT join the driver to an
+--          unpruned `transactions FINAL` — that merges the whole transactions
+--          table and blew the read_rows quota in the global list (CH Code: 201).
+--     A contract's invocations span many partitions; the IN-keys fetch is a
+--     primary-key-prefix prune per ledger (multi-partition-safe). Cursor keys on
+--     (ledger_sequence, transaction_id) (CH) / (created_at, transaction_id) (PG)
+--     — see transactions::dto::TxListCursor. created_at derives from the joined
+--     ledger closed_at.
+-- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/invocations
 -- Purpose:      Paginated list of recent invocations of a contract.
 --               Default ordering: most recent first.

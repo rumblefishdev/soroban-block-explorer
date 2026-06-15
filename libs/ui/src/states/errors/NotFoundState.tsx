@@ -11,6 +11,7 @@ export type NotFoundEntity =
   | 'operation'
   | 'asset'
   | 'liquidity-pool'
+  | 'nft'
   | 'generic';
 
 const TITLES: Record<NotFoundEntity, string> = {
@@ -21,6 +22,7 @@ const TITLES: Record<NotFoundEntity, string> = {
   operation: 'Operation not found',
   asset: 'Asset not found',
   'liquidity-pool': 'Liquidity pool not found',
+  nft: 'NFT not found',
   generic: 'Not found',
 };
 
@@ -29,6 +31,8 @@ interface NotFoundStateProps {
   identifier?: string;
   action?: ReactNode;
   titleOverride?: string;
+
+  py?: number;
 }
 
 export function NotFoundState({
@@ -36,6 +40,7 @@ export function NotFoundState({
   identifier,
   action,
   titleOverride,
+  py = 8,
 }: NotFoundStateProps) {
   return (
     <EmptyState
@@ -43,6 +48,7 @@ export function NotFoundState({
       title={titleOverride ?? TITLES[entity]}
       description="We couldn't find anything matching this identifier. Double-check the value and try again."
       meta={identifier}
+      py={py}
       action={action}
     />
   );

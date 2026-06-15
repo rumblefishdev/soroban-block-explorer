@@ -13,7 +13,8 @@ interface TransactionTimeProps {
  * Matches the Design System table Time column.
  */
 export function TransactionTime({ createdAt }: TransactionTimeProps) {
-  const now = useNow(30_000);
+  // app-wide LIVE_TICK_MS (see useNow) keeps this in step with the live feed
+  const now = useNow();
   const valid = Number.isFinite(new Date(createdAt).getTime());
 
   return (
@@ -21,14 +22,14 @@ export function TransactionTime({ createdAt }: TransactionTimeProps) {
       <Typography
         component="span"
         variant="bodySmRegular"
-        sx={{ color: 'text.primary' }}
+        sx={(theme) => ({ color: theme.palette.text.primary })}
       >
         {valid ? formatRelative(createdAt, now) : '—'}
       </Typography>
       <Typography
         component="span"
         variant="bodyMonoXsRegular"
-        sx={{ color: 'text.tertiary' }}
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
       >
         {formatAbsoluteUtc(createdAt)}
       </Typography>

@@ -117,6 +117,173 @@ export interface EnvironmentConfig {
    * Production should leave this false.
    */
   readonly enableBasicAuth: boolean;
+
+  // Cloudflare edge migration (task 0277 / ADR 0048) — origin lockdown.
+  // All default false until the Cloudflare zone + certs/secrets exist;
+  // enabling them does NOT move DNS, it provisions the AWS-side locks
+  // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
+
+  /**
+   * Provision the AWS-side bootstrap for THIS repo's Cloudflare module via CDK
+   * (so nothing is created by hand): the Terraform remote-state S3 bucket
+   * (versioned, encrypted, private) that backs `infra/cloudflare/`. Deploy this
+   * FIRST — the backend bucket must exist before the first `terraform apply`.
+   *
+   * DEPLOY-ONCE / LEAVE TRUE: the bucket is `RETAIN` and becomes the live
+   * Terraform backend. Flipping back to false removes the stack from the app and
+   * orphans the bucket from CDK (data survives via RETAIN, but it is then
+   * unmanaged) — so set it true once and keep it.
+   *
+   * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
+   * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
+   * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
+   * `rf-domains` repo. Default false.
+   */
+  readonly provisionCloudflareBootstrap: boolean;
+
+  /**
+   * Phase 1 of the API mTLS rollout: provision the **versioned** S3
+   * truststore bucket (and only that) so the operator can upload the CA
+   * bundle PEM (`truststore.pem`) BEFORE mTLS is attached.
+   *
+   * Split from `enableApiMtls` deliberately: API Gateway validates the
+   * truststore S3 object at deploy time, so attaching mTLS against an empty
+   * bucket fails. Two-phase rollout: provision bucket → upload PEM →
+   * `enableApiMtls`. Default false.
+   */
+  readonly provisionApiMtlsTruststore: boolean;
+
+  /**
+   * Phase 2 — lock the API Gateway custom domain to Cloudflare via mTLS
+   * (Path B in [ADR 0048]). When true the `ApiGatewayStack`:
+   *  - attaches the S3 **truststore** (the CA bundle that signed
+   *    Cloudflare's uploaded Authenticated-Origin-Pulls client cert) to
+   *    the REGIONAL custom domain, and
+   *  - sets `disableExecuteApiEndpoint=true` so the raw
+   *    `execute-api` URL — which bypasses custom-domain mTLS — stops
+   *    answering.
+   *
+   * REQUIRES `provisionApiMtlsTruststore=true` AND the PEM already uploaded
+   * (enforced in `validateConfig`). The CA bundle is a **non-secret** PEM
+   * uploaded out-of-band; no value is committed. No `crates/api` change
+   * (handshake-level reject).
+   *
+   * ORDERING GOTCHA (task 0277 Step 2): the custom-domain base-path mapping
+   * MUST already be live before `disableExecuteApiEndpoint` flips, otherwise
+   * the edge 403s itself. The custom domain already exists today, so flipping
+   * this on the existing domain is safe — but never enable it before the
+   * custom domain serves.
+   */
+  readonly enableApiMtls: boolean;
+
+  /**
+   * Keep the legacy API custom domain (`apiDomainName`,
+   * api.sorobanscan.rumblefish.dev) + its Route 53 A/AAAA records. Keep TRUE
+   * during the Cloudflare migration so the live SPA path keeps working; flip to
+   * false (one deploy) to RETIRE it after the cutover to the Cloudflare host is
+   * verified. Plain TLS, no mTLS — the SPA hits it directly.
+   */
+  readonly enableLegacyApiDomain: boolean;
+
+  /**
+   * Add the Cloudflare-fronted API custom domain (`cloudflareApiDomainName`,
+   * api.sorobanscan.rumblefishdev.com) on the REGIONAL API — a SECOND custom
+   * domain alongside the legacy one, with **no Route 53 record** (Cloudflare is
+   * authoritative for that zone). Its regional alias target is emitted as the
+   * `CloudflareApiRegionalTarget` output → feed it into the Cloudflare module's
+   * `api_origin_target`. mTLS attaches HERE (not the legacy domain) when
+   * `enableApiMtls`. Default false.
+   */
+  readonly enableCloudflareApiDomain: boolean;
+
+  /** Cloudflare-fronted API custom domain, e.g. "api.sorobanscan.rumblefishdev.com". */
+  readonly cloudflareApiDomainName: string;
+
+  /**
+   * ACM cert ARN for `cloudflareApiDomainName`. Same region as `awsRegion`
+   * (REGIONAL custom domain). DNS-validated via the rumblefishdev.com zone.
+   */
+  readonly cloudflareApiCertificateArn: string;
+
+  /**
+   * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
+   * the CDK-generated `EdgeSecret` in Secrets Manager (and only that). Split from
+   * `enableEdgeSecretLock` so the value can be copied into the Cloudflare
+   * Transform Rule (rf-domains) BEFORE the Lambda starts requiring the header.
+   * Default false.
+   */
+  readonly provisionEdgeSecret: boolean;
+
+  /**
+   * Phase 2 — arm the origin lock. When true the API Lambda gets the
+   * `EDGE_SECRET` env (the provisioned secret's value); the Lambda's `edge_lock`
+   * middleware then rejects any request (except `/health`) lacking a matching
+   * `X-Edge-Secret` — i.e. any request that did not pass through Cloudflare.
+   *
+   * REQUIRES `provisionEdgeSecret=true` AND the Cloudflare Transform Rule
+   * already injecting the matching value (rf-domains `enable_edge_secret`).
+   * Arming before the edge stamps the header would 403 even legitimate
+   * Cloudflare traffic. Default false.
+   */
+  readonly enableEdgeSecretLock: boolean;
+
+  /**
+   * Phase 1 of the paid-API access layer (task 0277; docs/paid-api/
+   * plan-platne-api.md): provision its Secrets Manager secrets — a CDK-generated
+   * `JwtSecret` (HS256 session signing key) plus operator-populated
+   * `TurnstileSecret` (the Cloudflare Turnstile *secret* key) and `ApiKeysSecret`
+   * (comma-separated paid-tier keys). Split from `enableAuthLayer` because the
+   * Lambda env resolves secret values at DEPLOY time, so the operator must
+   * overwrite the Turnstile/API-keys placeholders BEFORE arming. Default false.
+   */
+  readonly provisionAuthSecrets: boolean;
+
+  /**
+   * Phase 2 — arm the access layer. Injects `JWT_SECRET` / `TURNSTILE_SECRET` /
+   * `API_KEYS` into the API Lambda; the `auth` gate then requires a valid paid
+   * `X-API-Key` or a free session JWT (from Turnstile) on data routes (401 else).
+   *
+   * REQUIRES `provisionAuthSecrets=true` AND the Turnstile secret already
+   * populated AND the SPA already sending sessions (Turnstile → Bearer);
+   * arming before the SPA does so would 401 real users. Default false.
+   */
+  readonly enableAuthLayer: boolean;
+
+  /**
+   * Lock the CloudFront `*.cloudfront.net` distribution to Cloudflare via
+   * a secret header (Decision 4a in [ADR 0048]). When true a
+   * viewer-request CloudFront Function rejects any request whose
+   * `x-origin-secret` header does not match the value held in a CloudFront
+   * KeyValueStore.
+   *
+   * The secret VALUE never lives in git or the CloudFormation template —
+   * it is populated out-of-band into the KVS (mirroring the
+   * `enableBasicAuth` pattern) and set on the Cloudflare side (a Transform
+   * Rule) by Terraform. Canonical source is AWS Secrets Manager
+   * (`soroban/${envName}/cloudflare/origin-secret`), consistent with the
+   * mTLS-bundle precedent (`mtlsSecretNamePrefix`). Closed-by-default: an
+   * empty KVS yields 503, never an open distribution.
+   *
+   * CloudFront allows only ONE viewer-request function per behavior, so
+   * this cannot be combined with `enableBasicAuth` as two separate
+   * functions — see `validateConfig` (the two are mutually exclusive until
+   * a combined guard function lands).
+   */
+  readonly enableOriginSecretLock: boolean;
+
+  /**
+   * Deploy a CloudWatch Synthetics canary that periodically asserts the
+   * direct-origin bypass vectors stay **blocked** (return 403) — the
+   * recurring synthetic check in task 0277 Step 7 acceptance criteria.
+   * It hits the raw `execute-api` URL and the `*.cloudfront.net` domain and
+   * alarms (via the existing SNS→Slack topic) if either starts answering
+   * 2xx, i.e. the origin lockdown regressed.
+   *
+   * Enable only AFTER the locks are live (post-cutover): with the locks off
+   * those origins legitimately return 2xx, so the canary would alarm
+   * continuously (validateConfig warns about this).
+   */
+  readonly enableOriginLockCanary: boolean;
   /** Per-IP request limit over a 5-minute window for the CloudFront WAF. */
   readonly cloudFrontWafRateLimit: number;
   /** Per-IP request limit over a 5-minute window for the API Gateway WAF. */
@@ -131,7 +298,13 @@ export interface EnvironmentConfig {
 
   // Observability — CloudWatch alarms (consumed by CloudWatchStack)
 
-  /** Minutes of zero Ledger Processor invocations before the Galexie lag alarm fires. */
+  /**
+   * Length of the rolling window (in minutes) over which the Galexie lag alarm
+   * sums Ledger Processor invocations. Alarm fires when the sum is 0 — i.e.,
+   * no invocation started in the last N minutes. Must exceed the worst-case
+   * single-invocation runtime so a long-running batch does not trigger a
+   * false positive (current cap = `indexerLambdaTimeout` ≈ 10 min).
+   */
   readonly galexieLagMinutes: number;
   /** Error rate threshold (>0.0–1.0) for the Ledger Processor error-rate alarm. */
   readonly processorErrorRateThreshold: number;
@@ -142,7 +315,7 @@ export interface EnvironmentConfig {
   /** Slack channel ID for AWS Chatbot alarm notifications. */
   readonly slackChannelId: string;
 
-  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, MigrationStack, PartitionStack, HetznerDnsStack)
+  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, HetznerDnsStack)
 
   /**
    * FQDN that Route 53 maps to the Hetzner ClickHouse box. Used as both
@@ -324,6 +497,89 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
+  // CloudFront allows exactly ONE viewer-request function per behavior.
+  // basic auth and the origin-secret lock are each their own
+  // viewer-request function, so they cannot both be attached as separate
+  // functions. (A combined guard function is a future option — until then
+  // they are mutually exclusive.)
+  if (config.enableBasicAuth && config.enableOriginSecretLock) {
+    errors.push(
+      `enableBasicAuth and enableOriginSecretLock are mutually exclusive: ` +
+        `CloudFront permits only one viewer-request function per behavior. ` +
+        `Pick one (origin-secret lock is the Cloudflare-cutover lock per ADR 0048; ` +
+        `basic auth is the temporary pre-launch gate from task 0273), or land a ` +
+        `combined guard function first.`
+    );
+  }
+
+  // API mTLS is a two-phase rollout: the truststore bucket must be
+  // provisioned (and the CA PEM uploaded) BEFORE mTLS can be attached —
+  // API Gateway validates the truststore S3 object at deploy time.
+  if (config.enableApiMtls && !config.provisionApiMtlsTruststore) {
+    errors.push(
+      `enableApiMtls=true requires provisionApiMtlsTruststore=true: ` +
+        `provision the truststore bucket and upload truststore.pem first ` +
+        `(API Gateway validates the truststore object at deploy time).`
+    );
+  }
+
+  // Edge-secret origin lock is two-phase: the secret must exist before the
+  // Lambda is armed to require it.
+  if (config.enableEdgeSecretLock && !config.provisionEdgeSecret) {
+    errors.push(
+      `enableEdgeSecretLock=true requires provisionEdgeSecret=true: provision ` +
+        `the EdgeSecret and copy its value into the Cloudflare Transform Rule ` +
+        `(rf-domains) before arming the Lambda.`
+    );
+  }
+
+  // Auth layer is two-phase: the secrets (esp. the operator-populated Turnstile
+  // key) must exist before the Lambda env resolves them at deploy.
+  if (config.enableAuthLayer && !config.provisionAuthSecrets) {
+    errors.push(
+      `enableAuthLayer=true requires provisionAuthSecrets=true: provision the ` +
+        `JWT/Turnstile/API-keys secrets and populate the Turnstile secret first.`
+    );
+  }
+
+  // mTLS now attaches to the Cloudflare custom domain (not the legacy one), so
+  // it makes no sense without that domain present.
+  if (config.enableApiMtls && !config.enableCloudflareApiDomain) {
+    errors.push(
+      `enableApiMtls=true requires enableCloudflareApiDomain=true: mTLS attaches ` +
+        `to the Cloudflare API custom domain, not the legacy one.`
+    );
+  }
+
+  // The Cloudflare API domain needs a real same-region cert (not the placeholder).
+  if (
+    config.enableCloudflareApiDomain &&
+    (!config.cloudflareApiDomainName ||
+      config.cloudflareApiCertificateArn.includes('REPLACE'))
+  ) {
+    errors.push(
+      `enableCloudflareApiDomain=true requires cloudflareApiDomainName and a real ` +
+        `cloudflareApiCertificateArn (got a placeholder).`
+    );
+  }
+
+  // The origin-lock canary only probes vectors whose lock is live; with no lock
+  // on it has zero targets and every run fails. Enabling it then is always a
+  // mistake — fail at synth rather than page on every run at runtime.
+  if (
+    config.enableOriginLockCanary &&
+    !config.enableApiMtls &&
+    !config.enableOriginSecretLock &&
+    !config.enableEdgeSecretLock
+  ) {
+    errors.push(
+      `enableOriginLockCanary=true requires at least one origin lock ` +
+        `(enableApiMtls, enableOriginSecretLock, and/or enableEdgeSecretLock) ` +
+        `enabled — otherwise the canary has no targets and every run fails. ` +
+        `Enable it only after a lock is live (post-cutover).`
+    );
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `Invalid EnvironmentConfig for "${config.envName}":\n  - ${errors.join(
@@ -332,14 +588,20 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
-  // Soft sanity check: an environment with neither WAF nor basic auth
-  // exposes an unprotected public CloudFront distribution.
-  if (!config.enableWaf && !config.enableBasicAuth) {
+  // Soft sanity check: an environment with no edge gating at all
+  // (no WAF, no basic auth, no origin-secret lock) exposes an
+  // unprotected public CloudFront distribution.
+  if (
+    !config.enableWaf &&
+    !config.enableBasicAuth &&
+    !config.enableOriginSecretLock
+  ) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[validateConfig] WARNING: ${config.envName} has both enableWaf=false and enableBasicAuth=false. ` +
-        `The CloudFront distribution will be publicly accessible with no gating. ` +
-        `If this is intentional, ignore. Otherwise enable one of them in envs/${config.envName}.json.`
+      `[validateConfig] WARNING: ${config.envName} has enableWaf=false, enableBasicAuth=false ` +
+        `and enableOriginSecretLock=false. The CloudFront distribution will be publicly ` +
+        `accessible with no gating. If this is intentional, ignore. Otherwise enable one of ` +
+        `them in envs/${config.envName}.json.`
     );
   }
 }

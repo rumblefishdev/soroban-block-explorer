@@ -26,6 +26,7 @@
 //! breaking API change, as long as the previous format fails decode cleanly
 //! and produces an `INVALID_CURSOR` error.
 
+use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -45,6 +46,26 @@ pub enum CursorError {
     InvalidBase64,
     #[error("cursor payload does not match expected schema")]
     InvalidPayload,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SortOrderError {
+    #[error("invalid sort order '{received}', expected 'asc' or 'desc'")]
+    Invalid { received: String },
+}
+
+impl IntoResponse for SortOrderError {
+    fn into_response(self) -> Response {
+        match self {
+            SortOrderError::Invalid { received } => {
+                crate::common::errors::bad_request_with_details(
+                    crate::common::errors::INVALID_QUERY,
+                    format!("invalid sort order '{received}', expected 'asc' or 'desc'"),
+                    serde_json::json!({ "param": "order", "received": received }),
+                )
+            }
+        }
+    }
 }
 
 /// Walk direction encoded inside the cursor envelope.
@@ -140,18 +161,72 @@ impl TsIdCursor {
     }
 }
 
-/// SQL fragments for a direction-aware cursor walk: the comparison
-/// operator and the `ORDER BY` direction.
+/// Base sort order for a list endpoint — the user-facing `?order=`
+/// dimension, orthogonal to the cursor's [`Direction`].
 ///
-/// `Next` walks DESC strictly less than the cursor anchor; `Prev` walks
-/// ASC strictly greater than the cursor anchor (the caller reverses the
-/// resulting rows for presentation via `common::pagination::finalize_page`).
+/// `Desc` (newest-first) is the default and the only order the legacy
+/// endpoints expose; ledgers additionally accept `Asc` (oldest-first).
+/// The sort is a **sticky query param**, not encoded in the cursor: the
+/// client re-sends `?order=` on every page and resets to the first page
+/// when toggling it (the cursor's [`Direction`] is pure navigation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    Asc,
+    #[default]
+    Desc,
+}
+
+/// SQL fragments (comparison operator, `ORDER BY` direction) for a keyset
+/// walk, parameterised by the base [`SortOrder`] and the navigation
+/// [`Direction`]. The two axes are orthogonal.
+///
+/// `Next` walks in the presentation order; `Prev` walks the opposite
+/// order and is reversed in memory for presentation by
+/// `common::pagination::finalize_page`. So the effective SQL order flips
+/// on `Prev`, and the strict comparator points into the walk:
+///
+/// | sort   | dir    | SQL        |
+/// |--------|--------|------------|
+/// | `Desc` | `Next` | `< … DESC` |
+/// | `Desc` | `Prev` | `> … ASC`  |
+/// | `Asc`  | `Next` | `> … ASC`  |
+/// | `Asc`  | `Prev` | `< … DESC` |
+///
 /// Both fragments are `'static` SQL literals, safe to interpolate into
 /// `format!()` query strings — no client input flows through them.
-pub fn direction_sql(direction: Direction) -> (&'static str, &'static str) {
-    match direction {
-        Direction::Next => ("<", "DESC"),
-        Direction::Prev => (">", "ASC"),
+pub fn keyset_sql(sort: SortOrder, direction: Direction) -> (&'static str, &'static str) {
+    let fetch_desc = matches!(
+        (sort, direction),
+        (SortOrder::Desc, Direction::Next) | (SortOrder::Asc, Direction::Prev)
+    );
+    if fetch_desc {
+        ("<", "DESC")
+    } else {
+        (">", "ASC")
+    }
+}
+
+/// Desc-only keyset helper for the endpoints that expose a single
+/// newest-first order. Equivalent to `keyset_sql(SortOrder::Desc, …)`.
+pub fn keyset_sql_desc(direction: Direction) -> (&'static str, &'static str) {
+    keyset_sql(SortOrder::Desc, direction)
+}
+
+/// Parse a `?order=` query-string value into [`SortOrder`], returning a
+/// 400 `INVALID_QUERY` response for unrecognised values.
+///
+/// Accepts `"asc"` / `"desc"` case-insensitively; `None` defaults to
+/// [`SortOrder::Desc`] (newest-first). Every handler that exposes a user-
+/// facing `?order=` param should call this single function so the parsing
+/// rules and error shape stay consistent across the API.
+pub fn parse_sort_order(raw: Option<&str>) -> Result<SortOrder, SortOrderError> {
+    match raw {
+        None => Ok(SortOrder::Desc),
+        Some(s) if s.eq_ignore_ascii_case("asc") => Ok(SortOrder::Asc),
+        Some(s) if s.eq_ignore_ascii_case("desc") => Ok(SortOrder::Desc),
+        Some(invalid) => Err(SortOrderError::Invalid {
+            received: invalid.to_owned(),
+        }),
     }
 }
 
@@ -315,5 +390,40 @@ mod tests {
         );
         assert_eq!(obj["dir"], serde_json::json!("prev"));
         assert_eq!(obj["p"]["id"], 42);
+    }
+
+    #[test]
+    fn keyset_sql_covers_sort_and_direction_matrix() {
+        // Two orthogonal axes: base sort order (the user's `?order=`) and
+        // navigation direction (encoded in the cursor). The comparator +
+        // ORDER BY are a pure function of both. `Prev` always fetches the
+        // opposite of the presentation order and is reversed in memory by
+        // `pagination::finalize_page`, so the SQL order flips on Prev.
+        //
+        // DESC base (newest-first, the default for every legacy endpoint):
+        assert_eq!(keyset_sql(SortOrder::Desc, Direction::Next), ("<", "DESC"));
+        assert_eq!(keyset_sql(SortOrder::Desc, Direction::Prev), (">", "ASC"));
+        // ASC base (oldest-first):
+        assert_eq!(keyset_sql(SortOrder::Asc, Direction::Next), (">", "ASC"));
+        assert_eq!(keyset_sql(SortOrder::Asc, Direction::Prev), ("<", "DESC"));
+    }
+
+    #[test]
+    fn keyset_sql_desc_is_keyset_sql_desc_slice() {
+        // The legacy desc-only helper MUST stay byte-identical to the DESC
+        // slice of the generalised matrix — 9 endpoints still call it.
+        assert_eq!(
+            keyset_sql_desc(Direction::Next),
+            keyset_sql(SortOrder::Desc, Direction::Next)
+        );
+        assert_eq!(
+            keyset_sql_desc(Direction::Prev),
+            keyset_sql(SortOrder::Desc, Direction::Prev)
+        );
+    }
+
+    #[test]
+    fn sort_order_defaults_to_desc() {
+        assert_eq!(SortOrder::default(), SortOrder::Desc);
     }
 }

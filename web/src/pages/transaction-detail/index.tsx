@@ -1,10 +1,10 @@
 import { Box, Stack, Typography } from '@mui/material';
 import {
-  CardSkeleton,
-  classifyError,
-  GenericErrorState,
+  DetailErrorState,
+  getDefaultTruncation,
   NotFoundState,
   SectionErrorBoundary,
+  truncateMiddle,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useState } from 'react';
 
@@ -17,12 +17,9 @@ import { ModeToggle } from './sections/ModeToggle.js';
 import { OperationsSection } from './sections/OperationsSection.js';
 import { SignaturesTable } from './sections/SignaturesTable.js';
 import { TransactionSummary } from './sections/TransactionSummary.js';
+import { TransactionDetailSkeleton } from './TransactionDetailSkeleton.js';
 import { useDetailMode } from './useDetailMode.js';
 import { useTxHashParam } from './useTxHashParam.js';
-
-function shortHash(hash: string): string {
-  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
-}
 
 export default function TransactionDetailPage() {
   const { hash, valid } = useTxHashParam();
@@ -31,44 +28,22 @@ export default function TransactionDetailPage() {
   const query = useTransactionDetail(valid ? hash : '');
 
   if (!valid) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <NotFoundState entity="transaction" identifier={hash} />
-      </Box>
-    );
+    return <NotFoundState entity="transaction" identifier={hash} />;
   }
 
   if (query.isLoading) {
-    return (
-      <Stack spacing={3}>
-        <Box>
-          <PageBreadcrumb
-            items={[
-              { label: 'Transactions', to: '/transactions' },
-              { label: shortHash(hash) },
-            ]}
-          />
-          <Typography variant="heading5SemiBold" component="h1">
-            Transaction Detail
-          </Typography>
-        </Box>
-        <CardSkeleton />
-        <CardSkeleton />
-        <CardSkeleton />
-      </Stack>
-    );
+    return <TransactionDetailSkeleton />;
   }
 
   if (query.isError) {
-    const kind = classifyError(query.error);
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        {kind === 'not-found' ? (
-          <NotFoundState entity="transaction" identifier={hash} />
-        ) : (
-          <GenericErrorState onRetry={() => void query.refetch()} />
-        )}
-      </Box>
+      <DetailErrorState
+        error={query.error}
+        entity="transaction"
+        identifier={hash}
+        onRetry={() => void query.refetch()}
+        py={8}
+      />
     );
   }
 
@@ -82,7 +57,9 @@ export default function TransactionDetailPage() {
         <PageBreadcrumb
           items={[
             { label: 'Transactions', to: '/transactions' },
-            { label: shortHash(hash) },
+            {
+              label: truncateMiddle(hash, getDefaultTruncation('transaction')),
+            },
           ]}
         />
         <Stack
