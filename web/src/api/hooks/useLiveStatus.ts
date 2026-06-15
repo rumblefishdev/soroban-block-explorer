@@ -19,7 +19,7 @@ const LIVE_MAX_AGE_MS = 20_000;
  */
 export function useLiveStatus(): LiveStatus {
   const { data, isLoading, isError } = useNetworkStats();
-  const now = useNow();
+  const now = useNow(1_000);
 
   if (isError) return 'offline';
   if (isLoading || data == null) return 'unknown';

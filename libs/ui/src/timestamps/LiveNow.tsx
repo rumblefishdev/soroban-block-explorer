@@ -15,16 +15,19 @@ import { LIVE_TICK_MS, LiveNowContext } from './useNow.js';
  * aging honestly when no refetch arrives, and is reset by every refetch —
  * on a healthy per-ledger poll (~5.8s) it never fires.
  */
-export function useRefetchSyncedNow(dataUpdatedAt: number): Date {
+export function useRefetchSyncedNow(
+  dataUpdatedAt: number,
+  fallbackMs = LIVE_TICK_MS
+): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     // Effect re-runs on every refetch (`dataUpdatedAt` change): update
     // `now` in the same commit as the fresh rows, and restart the
     // fallback timer so it only ever fires when the feed has stalled.
     setNow(new Date());
-    const handle = setInterval(() => setNow(new Date()), LIVE_TICK_MS);
+    const handle = setInterval(() => setNow(new Date()), fallbackMs);
     return () => clearInterval(handle);
-  }, [dataUpdatedAt]);
+  }, [dataUpdatedAt, fallbackMs]);
   return now;
 }
 
