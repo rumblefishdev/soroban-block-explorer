@@ -170,7 +170,10 @@ export function TopNav({
             <Stat
               label="Accounts"
               value={
-                <AnimatedNumber value={stats?.total_accounts} format={countFormat} />
+                <AnimatedNumber
+                  value={stats?.total_accounts}
+                  format={countFormat}
+                />
               }
             />
             <StatDivider />

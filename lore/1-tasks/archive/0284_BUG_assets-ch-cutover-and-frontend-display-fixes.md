@@ -127,7 +127,7 @@ a home.
 - **"Updated Xs ago" anchor** — `PollingIndicator` now reads `dataUpdatedAt`
   (last successful poll) instead of the newest row's `created_at`.
 - **Backend ledger cap** — `AND <tbl>.ledger_sequence <= (SELECT
-  max(sequence) FROM ledgers)` on the newest-first driver of 8 CH query
+max(sequence) FROM ledgers)` on the newest-first driver of 8 CH query
   paths: transactions list (default/contract/op_type), account-tx, asset-tx,
   pool-tx, contract invocations, contract events.
 - **Removed** the `ExplorerTable.highlightNewRows` row-flash mechanism and
@@ -137,7 +137,7 @@ a home.
 
 ### Emerged
 
-1. **Cap reads at the newest *sealed* ledger.** Ingestion writes a ledger's
+1. **Cap reads at the newest _sealed_ ledger.** Ingestion writes a ledger's
    transactions (+ every other table) before the `ledgers` row, which is the
    last-written commit marker (`writer.rs`). The list queries pick the newest
    rows then `INNER JOIN ledgers` (tx timestamp = `l.closed_at`), so in the
