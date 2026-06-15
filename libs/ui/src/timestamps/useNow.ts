@@ -39,15 +39,14 @@ function subscribe(intervalMs: number, cb: (d: Date) => void): () => void {
 const MIN_INTERVAL_MS = 500;
 
 /**
- * App-wide refresh cadence for relative-time labels: 10s. Labels render
- * exact seconds ("12s ago") but update in 10s steps — the deliberate
- * trade: calm pages over per-second churn in every row. Live-polled
- * tables refine this through `LiveNowProvider`, which overrides the tick
- * with a refetch-synced `now` (update per poll + the same 10s value as
- * the stall fallback). A row fresher than the last tick is safe:
- * `formatRelative` clamps negative deltas to "just now".
+ * App-wide refresh cadence for relative-time labels: 1s. Labels render
+ * exact seconds ("12s ago") and update every second so the count advances
+ * smoothly. Live-polled tables refine this through `LiveNowProvider`, which
+ * overrides the tick with a refetch-synced `now` (update per poll + the
+ * same 1s value as the stall fallback). A row fresher than the last tick is
+ * safe: `formatRelative` clamps negative deltas to "just now".
  */
-export const LIVE_TICK_MS = 10_000;
+export const LIVE_TICK_MS = 1_000;
 
 /**
  * Refetch-synced `now` override for live-polled tables. Populated by

@@ -14,17 +14,18 @@ describe('formatRelative', () => {
 
   it('clamps future timestamps (clock skew / stale tick) to "just now"', () => {
     // Recorded events can never be in the future — a negative delta is
-    // skew, or a row fresher than the last 10s `useNow` tick.
+    // skew, or a row fresher than the last 1s `useNow` tick.
     expect(formatRelative(at(-12_000), NOW)).toBe('just now');
     expect(formatRelative(at(-1), NOW)).toBe('just now');
   });
 
-  it('renders "just now" under 5 seconds', () => {
+  it('renders "just now" under 1 second', () => {
     expect(formatRelative(at(0), NOW)).toBe('just now');
-    expect(formatRelative(at(4_999), NOW)).toBe('just now');
+    expect(formatRelative(at(999), NOW)).toBe('just now');
   });
 
   it('renders exact seconds, minutes, hours and days ago', () => {
+    expect(formatRelative(at(1_000), NOW)).toBe('1s ago');
     expect(formatRelative(at(12_000), NOW)).toBe('12s ago');
     expect(formatRelative(at(59_000), NOW)).toBe('59s ago');
     expect(formatRelative(at(90_000), NOW)).toBe('1 min ago');

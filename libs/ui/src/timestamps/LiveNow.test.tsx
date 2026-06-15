@@ -30,16 +30,20 @@ describe('useRefetchSyncedNow', () => {
     expect(result.current.getTime()).toBe(T0 + 6_000);
   });
 
-  it('does not tick between refetches before the fallback window', () => {
+  it('ticks every second between refetches', () => {
     const { result } = renderHook(() => useRefetchSyncedNow(T0));
     act(() => {
-      vi.advanceTimersByTime(9_000);
+      vi.advanceTimersByTime(1_000);
     });
-    // Healthy-poll window (<10s): no wall-clock drift, labels stay put.
-    expect(result.current.getTime()).toBe(T0);
+    // 1s cadence: labels advance each second even without a refetch.
+    expect(result.current.getTime()).toBe(T0 + 1_000);
+    act(() => {
+      vi.advanceTimersByTime(8_000);
+    });
+    expect(result.current.getTime()).toBe(T0 + 9_000);
   });
 
-  it('falls back to aging when no refetch arrives (stalled feed)', () => {
+  it('keeps aging when no refetch arrives (stalled feed)', () => {
     const { result } = renderHook(() => useRefetchSyncedNow(T0));
     act(() => {
       vi.advanceTimersByTime(10_000);
@@ -51,12 +55,13 @@ describe('useRefetchSyncedNow', () => {
     expect(result.current.getTime()).toBe(T0 + 20_000);
   });
 
-  it('resets the fallback timer on every refetch', () => {
+  it('restarts the tick on every refetch', () => {
     const { result, rerender } = renderHook(
       ({ updatedAt }) => useRefetchSyncedNow(updatedAt),
       { initialProps: { updatedAt: T0 } }
     );
-    // 9s in, a refetch lands — timer restarts from here.
+    // 9s in, a refetch lands — `now` jumps to the refetch moment and the
+    // 1s timer restarts from here.
     act(() => {
       vi.advanceTimersByTime(9_000);
     });
@@ -65,11 +70,10 @@ describe('useRefetchSyncedNow', () => {
     });
     expect(result.current.getTime()).toBe(T0 + 9_000);
 
-    // 9s more (18s since mount, 9s since refetch): fallback must NOT have
-    // fired — a non-reset timer would have ticked at the 10s mark.
+    // 3s more: three 1s ticks since the refetch.
     act(() => {
-      vi.advanceTimersByTime(9_000);
+      vi.advanceTimersByTime(3_000);
     });
-    expect(result.current.getTime()).toBe(T0 + 9_000);
+    expect(result.current.getTime()).toBe(T0 + 12_000);
   });
 });
