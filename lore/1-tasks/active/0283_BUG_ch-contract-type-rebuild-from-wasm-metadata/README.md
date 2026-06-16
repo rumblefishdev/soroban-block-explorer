@@ -3,7 +3,7 @@ id: '0283'
 title: 'BUG: CH never writes Nft/Fungible verdicts to soroban_contracts — contract-type rebuild from wasm_interface_metadata + prod NFT reclassification'
 type: BUG
 status: active
-related_adr: ['0046', '0049']
+related_adr: ['0046']
 related_tasks: ['0118', '0217', '0220', '0221', '0228', '0231', '0259', '0282']
 blocked_by: []
 tags:
@@ -176,6 +176,41 @@ history:
       two discriminator CH queries handed off (orphan name-NOT-NULL count;
       orphan max event ledger vs head). All session edits local, NOT
       committed; verify.js is throwaway/uncommitted.
+  - date: 2026-06-16
+    status: active
+    who: karolkow
+    note: >
+      (session 3, Claude) A SEPARATE NFT-event-SHAPE bug was found, FIXED, and
+      ground-truth-validated — distinct from the wasm-link gap. A fresh-eyes
+      5-agent deep-dive ("why orphans / can we enrich all real NFTs") surfaced
+      that `detect_nft_events` (nft.rs) handled only Shape A (from/to in
+      topics, token_id in data = SEP-50/OpenZeppelin) and SILENTLY dropped two
+      real mainnet shapes: Shape B packed-data-vec (Bachini / ERC-721 ports,
+      `topics=[Symbol], data=Vec(addr…, token_id)`) and Shape A2 token_id-as-
+      extra-topic. Affected NFTs never reach pending at all → a silent,
+      uncountable data-loss class. This CORRECTS open-problem #7: the i128
+      refutation was right but tested the wrong axis — the drop is event SHAPE,
+      not token_id type. FIX (local, uncommitted): unified `extract_args`
+      (A/A2/B) + a `tracing::warn!` tripwire on symbol-matched-but-unparsed;
+      map-data deferred (tripwire will surface real cases). VALIDATED on the
+      real on-chain Bachini Mint event — decoded from raw XDR (stellar.expert
+      /events + Soroban RPC: instance LIVE, wasm c5e2d06e, wasm contains
+      owner_of+token_uri ⇒ classifier=Nft) — via `detect_real_mainnet_bachini_
+      mint_event`. 244 xdr-parser tests green (+5), clippy clean. KEY: Bachini
+      is NOT an orphan (it HAS a wasm); its 0-rows was the shape bug, proving
+      shape-gap ⟂ wasm-link-gap. Wasm-link autopsy refined: orphans are stub-
+      only rows; `created`-only deploy filter REFUTED as dominant cause under
+      genesis-complete; candidates = parse_error deploy txs / phantom
+      diagnostic refs (needs 1 orphan create-ledger meta to confirm; data-
+      blocked). Link IS recoverable from CreateContract op-args (executable +
+      preimage), today parsed-then-dropped at stage.rs:1491 — proposed forward-
+      fix: persist `(contract_id, wasm_hash)` at ingest so new deploys can
+      never become orphans (existing still need a raw-S3 re-parse).
+      [Same-session follow-up: Shape A2 (token_id-as-extra-topic) was CUT —
+      SEP-50/SEP-41 grounding + a getEvents sweep (255 events: 98% Shape A,
+      0 B/A2, map=non-NFT) showed A2 has no spec and no on-chain instance.
+      Final shapes = A (SEP-50/41 standard) + B (verified Bachini), map
+      deferred; 243 xdr-parser tests green. See open-problem #7.]
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
@@ -287,13 +322,24 @@ all local/uncommitted). These remain OPEN. **Status below reflects a 7-agent
 adversarial verification pass (2026-06-15 session 2)** — each problem
 independently confirmed/refuted by a deep-dive sub-agent.
 
+> **SPAWN-OUT (2026-06-16, karolkow):** the side problems were spun off to
+> dedicated backlog tasks on develop, leaving 0283 to its core deliverable
+> (the rebuild + prod reclassification run = #9):
+> **#1 + #6 → [0294](../../backlog/0294_BUG_sac-labeling-and-orphan-composition/README.md)** (SAC labeling + orphan composition, DB-gated);
+> **#3 + #5 → [0295](../../backlog/0295_BUG_parser-change-type-extraction-gaps.md)** (parser change-type gaps);
+> **#7 + CAP-67 → [0296](../../backlog/0296_BUG_nft-event-extraction-completeness/README.md)** (NFT/event extraction — code parked as patches, reverted out of this branch);
+> **#2 structural-close + #2b → [0297](../../backlog/0297_FEATURE_contract-name-enrichment-and-bytes-decode.md)** (contract-name enrichment + bytes-decode).
+> **#8 (ch-maintenance-runner relocation): DROPPED — won't do.** > **#9 (operational/prod): STAYS here** — it is 0283's own finish line, not a
+> separate problem. **ADR 0049 deleted; its Family-A/Method-2 framing inlined
+> into the spawned tasks** (in-body "ADR 0049" mentions below are historical).
+
 1. **deploy-linkage — ~4,310 orphans.** _Verdict: real; cause = genuine
    missing-deploy (archival/parser), NOT G5._ **Discriminator query RAN
    (2026-06-15 snapshot): of 113,067 non-SAC contracts, `with_name = 0` — zero
    names anywhere, so `name_only` (the G5-clobber signature) = 0.** This REFUTES
    the earlier "deploy-linkage ⊆ G5" lean: orphans have no name → they are not
    clobber victims. They are genuinely missing deploy/wasm (5,607 have NULL
-   contract_type; 4,310 have no deployed_at_ledger), consistent with the RPC
+   contract\*type; 4,310 have no deployed*at_ledger), consistent with the RPC
    200/200-absent result. **Refined (operator: index is genesis-complete, no
    gaps):** with no window/gap, these contracts' CREATE ledger WAS indexed but
    their deploy was NOT extracted (they exist only as Pass-2 stub rows from
@@ -302,6 +348,11 @@ independently confirmed/refuted by a deep-dive sub-agent.
    doesn't match) — NOT a dropped `restored`, NOT a window gap, NOT G5.
    Fix = investigate why those creates were missed (needs their create-ledger
    meta), then re-parse / patch the extractor. Quarantine-only impact.
+   \_Refined + DB-confirmed (2026-06-16): orphans are stub-only rows; dominant
+   cause = **un-deployed SACs via CAP-67** (not mis-parsed deploys; `parse_error`
+   candidate refuted; top offender crypto-proven a SAC). Real NFTs in the set
+   are ~1.5%, mostly un-enrichable. **DECIDED: DEFER — no orphan code now.** Full
+   evidence, buckets, and the decisive split-queries are spawned to **0294**.*
 2. **G5 name-clobber.** _Mechanism CONFIRMED in code, but EMPIRICALLY INERT._
    The 2026-06-15 discriminator shows `with_name = 0` across 113,067 non-SAC
    contracts → the name-write path writes NOTHING to `soroban_contracts.name` on
@@ -360,15 +411,17 @@ independently confirmed/refuted by a deep-dive sub-agent.
    STRICTLY safer for the 0221 guarantee than the root fix** — Method 2 must
    re-populate pre-window SAC verdicts in the side table or the 0221 leak
    returns. The verdict rows are load-bearing for G9 routing. DECIDED (karolkow):
-   fix at the root via ADR 0049 Method 2 (side-table), NOT a read-filter. HARD
-   CONSTRAINT the side-table MUST satisfy: carry the SAC `Token` verdict for
-   **pre-window** SACs (the skeleton's current G9-routing job) or the 0221 leak
-   returns — re-validate 0221 as the acceptance gate.
-7. ~~**Bachini / i128 SEP-39 extraction.**~~ _Agent verdict: **REFUTED**._ The
-   token_id parser does NOT drop i128 (the rejecting whitelist was reverted
-   2026-05-13; `nft.rs` test passes). Bachini's events ARE extracted as
-   candidates; they don't surface because of the **classification gap (0283
-   core)**, not extraction. NOT a separate bug — removed from the open list.
+   fix at the root via a side-table, NOT a read-filter. HARD CONSTRAINT the
+   side-table MUST satisfy: carry the SAC `Token` verdict for **pre-window** SACs
+   (the skeleton's current G9-routing job) or the 0221 leak returns — re-validate
+   0221 as the acceptance gate. **SPAWNED → task 0294** (bundled with the orphan
+   composition #1 — they converge on the same SAC-derivation gap; ADR 0049 was
+   deleted 2026-06-16, its framing inlined into the spawned tasks).
+7. **NFT event-SHAPE extraction gap.** _FIXED + chain-validated 2026-06-16 →
+   spawned to **0296**._ Supersedes the earlier "Bachini/i128 REFUTED" — the drop
+   was the event SHAPE (packed `data=Vec`), not the i128 type. Fix + tripwire
+   validated on the real on-chain Bachini Mint; full taxonomy, SEP grounding,
+   sweep, and the parked code live in 0296.
 8. **G5 side-table = `ch-maintenance-runner` crate relocation** still deferred
    (rebuild logic lives in backfill-runner for now).
 9. **Operational/prod (need live CH / mTLS, not code):** Step 0b prod queries,
@@ -404,6 +457,21 @@ the 2026-05-21 state; live 2026-06-10 pending was already larger (59.7M /
 in the drop buckets (promote volume should stay in the same ballpark). This
 re-sizes the run and confirms nothing drifted. Requires mTLS cert
 (`infra-hetzner/ca/issue-client-cert.sh`) + `~/.config/soroban-prod.env`.
+
+**PROD RESULTS (2026-06-16, via `chq`) — partial (quota cap hit):**
+
+| metric                                       | prod                                                              | snapshot       |
+| -------------------------------------------- | ----------------------------------------------------------------- | -------------- |
+| Current verdicts (`soroban_contracts FINAL`) | **Nft 1 / Fungible 2** / SAC 311,153 / Other 107,457 / NULL 5,607 | Nft 1 / Fung 2 |
+| **Would-be after rebuild** (wasm classify)   | **Nft 125 / Fungible 4,118**                                      | 107 / 3,937    |
+| **Promotable NFT token rows**                | **11,214** across **40** collections                              | 11,023         |
+| **NFT collections with ZERO pending rows**   | **85 of 125** (classify Nft but 0 surfaced tokens)                | —              |
+| name non-empty                               | **0 of 424,220** (G5 off-ledger)                                  | —              |
+| orphans (is_sac=0, no deploy, no wasm)       | **4,310**, ALL with pending = **51.5M rows**                      | 4,461          |
+
+**Key reads:** (1) the rebuild flips ~125 contracts to Nft, surfacing **11,214 promotable token rows** = the enrichment population — confirms the snapshot on live prod. (2) **85 of 125 NFT-classified collections have 0 pending rows** — strong prod-wide signal that the NFT event-shape gap (→ task 0296) suppresses far more than the recent-window sweep suggested (some may also be genuinely inactive). (3) Bachini (`CDA5FGE4…`): Other + wasm + deploy `54599504` → rebuild flips it to Nft; NOT an orphan.
+
+**Quota-blocked (reset hourly):** phantom-caller magnitude + full crypto-match orphan split (task 0294) — `dev_read` 2B rows/h exhausted by the event scans.
 
 ### Step 1 — `ch-maint contract-type-rebuild` (NEW crate, not backfill-runner)
 
