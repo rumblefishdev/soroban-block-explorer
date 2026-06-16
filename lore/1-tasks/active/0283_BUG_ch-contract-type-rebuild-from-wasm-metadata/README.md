@@ -3,7 +3,7 @@ id: '0283'
 title: 'BUG: CH never writes Nft/Fungible verdicts to soroban_contracts — contract-type rebuild from wasm_interface_metadata + prod NFT reclassification'
 type: BUG
 status: active
-related_adr: ['0046']
+related_adr: ['0046', '0049']
 related_tasks: ['0118', '0217', '0220', '0221', '0228', '0231', '0259', '0282']
 blocked_by: []
 tags:
@@ -143,11 +143,13 @@ history:
     status: active
     who: karolkow
     note: >
-      (session 2, Claude) Adjacent-bug analysis + RPC verification.
-      SHIPPED: SAC-skeleton suppression filter on /v1/contracts list (PG
-      queries.rs + CH queries_ch.rs) — only `is_sac` rows backed by an
-      `assets` type-2 row are listed; hides ~293k phantom skeletons; detail
-      endpoint unfiltered. WASM-upgrade fix REJECTED-as-naive: flipping the
+      (session 2, Claude) Adjacent-bug analysis + RPC verification +
+      pattern synthesis (ADR 0049). SAC-skeleton suppression filter on
+      /v1/contracts list was prototyped (PG queries.rs + CH queries_ch.rs)
+      then REVERTED by operator (karolkow) — decision to fix the skeleton
+      at the root (move the routing verdict out of the public registry)
+      rather than band-aid it at read. WASM-upgrade fix REJECTED-as-naive:
+      flipping the
       `created`-only filter to include `updated` fabricates wrong
       deployer/deployed_at_ledger and CLOBBERS the real deploy row under
       RMT(version=wasm_uploaded_at_ledger) — same family as G5; needs a
@@ -281,39 +283,92 @@ model, contracts-vs-rows, pending breakdown, location + live decisions:
 ## Open problems (unsolved — standing list as of 2026-06-15 session 2)
 
 The core 0283 classification gap is fixed (live G1/G2/G9 + batch rebuild,
-all local/uncommitted). These remain OPEN:
+all local/uncommitted). These remain OPEN. **Status below reflects a 7-agent
+adversarial verification pass (2026-06-15 session 2)** — each problem
+independently confirmed/refuted by a deep-dive sub-agent.
 
-1. **deploy-linkage — 4,461 orphans (root cause now UNKNOWN, not just
-   "restored").** Contracts that emit events but have no deploy row / wasm_hash.
-   RPC check (200/200 sample) shows they are ALL absent from Soroban RPC live
-   state → **RPC-live-backfill rejected**. Two live sub-hypotheses, undecided:
-   (a) **G5 clobber victims** — profile (is_sac=false + all deploy fields NULL)
-   matches a name-write clobber exactly; if so it's not a parser gap at all.
-   (b) **archived/TTL** real contracts whose data lives only in historical
-   ledger meta → needs archive re-parse (Hubble/Galexie), not RPC. Discriminator
-   queries pending: orphan `name IS NOT NULL` count (G5 signal) + orphan max
-   event ledger vs head (archival signal). Until resolved, ~99% of pending
-   cannot drain and drop-outright stays unsafe.
-2. **G5 name-clobber.** Confirmed. Name-only RMT row NULLs out
-   wasm_hash/deployer/contract_type. Options A–D (see session-2 history);
-   recommended G5a+G5b (writer-merge) or G5c (name→side-table, completes ADR
-   0048). NOT fixed.
-3. **WASM-upgrade never reclassified.** `extract_contract_deployments` drops
-   `updated` instance entries (state.rs:59); naive fix clobbers (G5 family).
-   Correct fix = writer-merge; fold into the G5 follow-up. NOT fixed.
-4. **interface-`Restored` gap (NEW).** `extract_contract_interfaces`
-   (contract.rs:23) takes `Created|Updated` only, drops `Restored` → no
-   `wasm_interface_metadata` row for TTL-restored WASM → ALSO defeats the G1
-   prior-verdict prefetch. Medium-high. NOT fixed.
-5. **AccountMerge balance tombstone (NEW, off-scope but real).**
-   `extract_account_states` drops `removed` for accounts → merged account keeps
-   a stale `account_balances_current` row (trustlines DO zero out; asymmetric).
-   Needs verification + fix. NOT fixed.
-6. **SAC-skeleton root-derivation (context).** 294,963 phantom skeleton rows
-   still WRITTEN by the indexer; the list filter (shipped) only HIDES them in
-   `/v1/contracts`. Underlying over-derivation untouched.
-7. **Bachini / i128 SEP-39 extraction (Step 7).** i128 token_id events never
-   extracted → that NFT has 0 pending rows. Separate subsystem. NOT fixed.
+1. **deploy-linkage — ~4,310 orphans.** _Verdict: real; cause = genuine
+   missing-deploy (archival/parser), NOT G5._ **Discriminator query RAN
+   (2026-06-15 snapshot): of 113,067 non-SAC contracts, `with_name = 0` — zero
+   names anywhere, so `name_only` (the G5-clobber signature) = 0.** This REFUTES
+   the earlier "deploy-linkage ⊆ G5" lean: orphans have no name → they are not
+   clobber victims. They are genuinely missing deploy/wasm (5,607 have NULL
+   contract_type; 4,310 have no deployed_at_ledger), consistent with the RPC
+   200/200-absent result. **Refined (operator: index is genesis-complete, no
+   gaps):** with no window/gap, these contracts' CREATE ledger WAS indexed but
+   their deploy was NOT extracted (they exist only as Pass-2 stub rows from
+   events). Root = a **deploy-extraction / meta gap at create time**
+   (meta-unavailable ledgers, or a deploy shape `extract_contract_deployments`
+   doesn't match) — NOT a dropped `restored`, NOT a window gap, NOT G5.
+   Fix = investigate why those creates were missed (needs their create-ledger
+   meta), then re-parse / patch the extractor. Quarantine-only impact.
+2. **G5 name-clobber.** _Mechanism CONFIRMED in code, but EMPIRICALLY INERT._
+   The 2026-06-15 discriminator shows `with_name = 0` across 113,067 non-SAC
+   contracts → the name-write path writes NOTHING to `soroban_contracts.name` on
+   CH, so the clobber never fires (no name rows to outversion the deploy). The
+   code hazard is real (clobbered NULL wasm_hash would defeat the rebuild join
+   `contract_type_rebuild.rs:224`), but current impact = ZERO. **DEAD/LATENT —
+   DEPRIORITIZED.** Root cause of name=0 PROVEN (2026-06-15): RPC dump of
+   Bachini's ContractInstance shows EMPTY instance storage, no `Symbol("name")`
+   anywhere — Soroban tokens expose the name via a `name()` FUNCTION (read by
+   simulateTransaction), not a persisted ledger entry, so
+   `extract_contract_data_name_writes` can never match. Consequence: contract
+   NAMES are off-ledger → an ENRICHMENT job (RPC `name()`, ADR 0048/0231 family),
+   NOT a parser/Family-A fix. **GUARDRAIL SHIPPED (2026-06-15, local/uncommitted):**
+   the name-only row in stage.rs now uses `wasm_uploaded_at_ledger = 0` (was
+   current ledger) so a real deploy always outversions it → the partial name row
+   can NEVER clobber the deploy identity (name kept only when it is the sole row);
+   plus a TRIPWIRE `tracing::warn!` that fires if `contract_name_writes` is ever
+   non-empty (dormant path activating). Full merge-discipline NOT done (moot —
+   names dead/empty + headed to enrichment); structural close = names→enrichment
+   side-table when that work lands. **Agent deep-dive (2026-06-15)
+   CONFIRMED root cause (a):** producer (`scval.rs:53-56` → `{"type":"sym",
+"value":"name"}`) and consumer (`is_symbol_name_key`, state.rs:199) match
+   byte-for-byte — the "key-shape mismatch" hypothesis (b) is DISPROVED, tests
+   are faithful, the parser is correct. Names are off-ledger (function `name()`);
+   nothing to fix in xdr-parser; populating `name` is an enrichment job (RPC
+   `name()` simulate), not a parser change.
+   - **Minor secondary bug (NEW, low):** `ScVal::Bytes` name decode mismatch —
+     producer base64-encodes Bytes (`scval.rs:45`), but `decode_scval_string`
+     hex-decodes (`state.rs:243`) → a real bytes-typed name would fail to decode;
+     the unit test uses a hand-written hex string and masks it. Tiny/edge-case,
+     separate follow-up.
+3. **WASM-upgrade never reclassified.** _Agent verdict: CONFIRMED but **LOW
+   severity** (high conf)._ Classification is function-NAME based, so most
+   upgrades preserve the interface → invisible; the `created`-only filter is a
+   legitimate guard against the deployer-clobber a naive fix would cause.
+   Correct fix = parser handle `updated` + writer merge-discipline + cache
+   invalidation. Fold into the G5 follow-up. NOT fixed.
+4. **interface-`Restored` gap.** _RESOLVED as NOT-NEEDED (operator: indexing is
+   genesis-complete, no gaps)._ A `restored` ContractCode implies a prior
+   `created` that — under complete indexing — we already captured into
+   `wasm_interface_metadata` (our store is not subject to on-chain archival), so
+   `restored` is a pure duplicate and brings nothing. The `| Restored(e)` edit
+   was prototyped then REVERTED. Consequence: with a complete index,
+   `wasm_interface_metadata` coverage is COMPLETE for all deployed contracts →
+   interface coverage is NOT an enrichment blocker.
+5. **AccountMerge balance tombstone.** _Agent verdict: CONFIRMED but **LOW-MED**
+   (high conf)._ Tempered: can't merge an account holding trustlines (native row
+   only), task 0228 already ACCEPTS merged accounts as a "skeleton floor", and
+   it self-heals on StrKey re-creation. But the API DOES serve the stale balance
+   and a native-XLM aggregate could be inflated. Fix = emit a `balance=0` native
+   row at the merge ledger (account_id from the change key). NOT fixed.
+6. **SAC-skeleton root-derivation.** _Agent verdict: PARTIAL (med-UX/high)._
+   294,963 phantom rows pollute the public registry, BUT API correctness is
+   intact (only quarantine; hot nfts=0) and skeletons are distinguishable
+   (`deployed_at_ledger IS NULL`). **Red-team caveat: the read-filter is
+   STRICTLY safer for the 0221 guarantee than the root fix** — Method 2 must
+   re-populate pre-window SAC verdicts in the side table or the 0221 leak
+   returns. The verdict rows are load-bearing for G9 routing. DECIDED (karolkow):
+   fix at the root via ADR 0049 Method 2 (side-table), NOT a read-filter. HARD
+   CONSTRAINT the side-table MUST satisfy: carry the SAC `Token` verdict for
+   **pre-window** SACs (the skeleton's current G9-routing job) or the 0221 leak
+   returns — re-validate 0221 as the acceptance gate.
+7. ~~**Bachini / i128 SEP-39 extraction.**~~ _Agent verdict: **REFUTED**._ The
+   token_id parser does NOT drop i128 (the rejecting whitelist was reverted
+   2026-05-13; `nft.rs` test passes). Bachini's events ARE extracted as
+   candidates; they don't surface because of the **classification gap (0283
+   core)**, not extraction. NOT a separate bug — removed from the open list.
 8. **G5 side-table = `ch-maintenance-runner` crate relocation** still deferred
    (rebuild logic lives in backfill-runner for now).
 9. **Operational/prod (need live CH / mTLS, not code):** Step 0b prod queries,
