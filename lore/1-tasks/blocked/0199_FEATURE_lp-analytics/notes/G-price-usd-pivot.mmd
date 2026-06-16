@@ -8,7 +8,7 @@ graph TB
   Q4["no candle ≤ T<br/>→ null"]
   REF["deep-history reference:<br/>XLM/USDC, USDC=$1 → 2024-02-20"]
   ENR["enrichment — write-time:<br/>writes close_usd per grain (retention-proof)"]
-  VIEW["price_usd_at(id, ts) → close_usd<br/>read-time = lookup, no pivot"]
+  VIEW["price_usd_series(identity, bucket) → close_usd<br/>read-time = JOIN, no pivot"]
   EXP["explorer — LEFT JOIN:<br/>TVL = Σ reserve·price · volume = gva·price_A"]
   IN --> Q1
   IN --> Q2

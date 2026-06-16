@@ -29,6 +29,17 @@ history:
       prices-side implementation deps (native-key alignment, SAC->classic
       resolver = their 0061) in the linked S-note. Still proposed (read-cost
       measure + karolkow review pending).
+  - date: '2026-06-16'
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      Contract final code-side (prices PR #39). Body "Update 2026-06-16" added:
+      view name price_usd_series (not price_usd_at), interop pinned (asset_code
+      trimmed String, grain-floored DateTime bucket, Decimal(38,14)), live-spot
+      view current_price_usd, SAC seam via identity_by_contract, both deps
+      shipped. Flags an open item for this ADR: live-band ingestion-lambda
+      write-back vs the no-version RMT race partially revisits Decision #1 (no
+      write-back) for live only — choice open in 0199. Still proposed.
 ---
 
 # ADR 0048: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
@@ -108,12 +119,24 @@ re-parse over 273M snapshots) is tracked in task 0247.
 > as a retention-proof `close_usd` per grain (tiered oracle-in-window /
 > USDC-peg-out-of-window), so read-time computes only the on-chain-quantity ×
 > `close_usd` multiply. The compute-at-read core (no entity-row materialization,
-> single-writer table, read-time join) is unchanged. The view is single-asset
-> `price_usd_at(id, ts)` keyed by natural identity, returns NULL + a
-> `ok`/`no_asset_price`/`no_reference` discriminator, plus a companion
-> `usd_reference(bucket)`. Two prices-side deps gate coverage: `native`-key
+> single-writer table, read-time join) is unchanged. The series view is
+> **`price_usd_series(identity, bucket)`** keyed by structured natural-identity
+> columns, returns NULL + a `ok`/`no_asset_price`/`no_reference` discriminator,
+> plus a companion `usd_reference(bucket)` and a live-spot view
+> `current_price_usd(identity)`. Two prices-side deps gated coverage: `native`-key
 > alignment (XLM legs) and a SAC→classic resolver (their task 0061 → our 0199
 > Phase 3).
+>
+> **Update 2026-06-16 (final — prices PR #39).** Both deps **shipped**. Interop
+> pinned: `asset_code` trimmed `String`, `bucket` grain-floored `DateTime`
+> (`toStartOfHour`/`toStartOfDay`), `Decimal(38, 14)`. SAC seam: a SAC leg's price
+> lives under the **classic** identity, so resolve `contract_address →
+prices.identity_by_contract → natural identity → price_usd_series` (the series
+> has no SAC-keyed row). **Open for this ADR:** the **live band** may enrich the
+> tip via an **ingestion-lambda write-back** — this partially revisits Decision #1
+> (no write-back) for live only; version-column / side-table / stay-compute-at-read
+> is open (task 0199). Operational, not code: their 0039 live-spot writer +
+> production backfill to ledger 50,457,424.
 
 ## Rationale
 

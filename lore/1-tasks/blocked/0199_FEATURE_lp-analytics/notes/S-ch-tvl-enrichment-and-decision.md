@@ -25,6 +25,18 @@ history:
       section + recorded the two prices-side implementation deps (native-key
       alignment, SAC->classic resolver = their 0061). ADR 0048 Decision §2
       refined in lockstep.
+  - date: '2026-06-16'
+    status: developing
+    who: stkrolikiewicz
+    note: >
+      Contract final code-side (Oskar prices PR #39). Added "Final pins"
+      section: view name price_usd_series (not price_usd_at), structured-column
+      key, interop types (asset_code trimmed String, grain-floored DateTime
+      bucket, Decimal(38,14)), grain = caller-passes (1h/1d/1w), live-spot view
+      current_price_usd (staleness = now-updated_at, ours to threshold), SAC
+      seam = identity_by_contract indirection, both deps shipped. Open on our
+      side: live-lambda write-back vs RMT race. Operational pending: 0039 +
+      production backfill to ledger 50,457,424.
 ---
 
 # LP analytics on ClickHouse — TVL-only decision + Prices-API contract
@@ -100,10 +112,13 @@ reaches XLM/USDC genesis on SDEX (before our 2024-02-20 floor); exact first
 ledger TBC from the backfill run. Peg ≡ $1 is an approximation during depeg —
 accepted tolerance for LP analytics.
 
-**Primitive & key.** `price_usd_at(id, ts) → close_usd`, single-asset (TVL = two
-calls; `volume_usd = gross_volume_a × price_usd_at(A, t)`). Key = natural Stellar
-identity (`native` / `(code, issuer)` / `contract_address`), **never** the
-internal `asset_id` surrogate.
+**Primitive & key.** `price_usd_series(identity, bucket) → close_usd` — a
+JOIN-able series view (not a point function), single-asset (TVL = two legs;
+`volume_usd = gross_volume_a × price(A)`). Key = **structured natural-identity
+columns** `asset_kind + asset_code + issuer_address + contract_address`
+(`native` / `(code, issuer)` / `contract`), **never** the internal `asset_id`
+surrogate. No combined `asset_key` string. (See Final pins — the
+`price_usd_at(id, ts)` shorthand used elsewhere above is superseded.)
 
 **Failure contract (JOIN-friendly).** `close_usd` is NULL on any failure — never
 an error, never drops the row (designed for our LEFT JOIN). Discriminator beside
@@ -123,6 +138,10 @@ via the priced leg; `no_reference` → NULL when both legs XLM-pivot.
 
 ### Two prices-side implementation deps (gate coverage, not the contract)
 
+> **Resolved 2026-06-16 — both shipped in prices PR #39.** Read the two items
+> below as the original rationale; see **Final pins** for the settled result,
+> including the SAC seam correction (`identity_by_contract`).
+
 1. **`native`-key alignment.** Today the writer stores XLM as
    `asset_type='classic'` with empty issuer (`sink.rs:125`), not `native`; prices
    will expose XLM as `native` and map internally. **Gates XLM legs = most pools
@@ -140,6 +159,56 @@ via the priced leg; `no_reference` → NULL when both legs XLM-pivot.
 Pending from prices (non-blocking): XLM/USDC first ledger; whether `_1m` carries
 `close_usd` (for T < 7d); grain-selection ownership (view picks coarsest-for-T vs
 caller passes `timeframe`).
+
+## Final pins — 2026-06-16 (Oskar, prices PR #39)
+
+![Explorer to prices API — final contract](./G-explorer-prices-contract.svg)
+
+Contract is final code-side; both prices-side deps **shipped (PR #39)**, pinned in
+the prices `views.sql` header so they can't silently drift.
+
+**Names & types.**
+
+- Historical series view: **`price_usd_series`** (JOIN-able; `price_usd_at` was our
+  shorthand — a point function can't be JOINed).
+- Identifier: **structured columns** `asset_kind + asset_code + issuer_address +
+contract_address`; no `asset_key` string.
+- `asset_code` = **trimmed `String`** (`'XLM'`, `'USDC'`; `''` for native and
+  pure-Soroban tokens) — not a padded `FixedString`.
+- Time→bucket: `bucket` is a **grain-floored `DateTime`** — JOIN hourly on
+  `toStartOfHour(closed_at)`, daily on `toStartOfDay(closed_at)`.
+- `close_usd` / `price_usd` = **`Decimal(38, 14)`**.
+- Grain = **caller-passes** — our `/chart` `interval` (1h/1d/1w, all
+  forever-retained → no retention coupling). Series we consume: 1h + 1d.
+
+**Live spot — view `current_price_usd`.** One row per asset, natural-identity key,
+`price_usd Decimal(38,14)` + `updated_at`. **Never NULL for a known asset** —
+returns last spot + `updated_at` (only an unknown asset → no row → NULL). Cadence
+is owned by the **Current Price Updater (their task 0039)**, which writes
+`current_prices`; the view is empty until 0039 runs. **Staleness = `now −
+updated_at` is ours to threshold** (lenient on display via as-of; strict on
+sort/rank) — _not_ feed-health (that is 0039's signal).
+
+**SAC seam (correction to our assumption).** The SAC↔classic collapse is
+**write-time**, so a SAC leg's price lives under the **classic** identity —
+`price_usd_series` has **no row keyed by the SAC contract address**. Resolve a
+Soroban-DEX leg first: `leg.contract_address → prices.identity_by_contract(contract)
+→ natural identity → price_usd_series` (pure Soroban token → itself; SAC → classic
+underlying; `prices.assets.sac_address` backs it). Classic/native legs JOIN the
+series directly.
+
+**Deps — shipped (PR #39).** native-key alignment (XLM exposed as `native`, pure
+resolver mapping, one canonical row) + SAC→classic resolver (venue-agnostic;
+Phoenix/Soroswap/Aquarius).
+
+**Open on our side (waiting on no one).** The **live ingestion lambda's write-back**
+at the tip vs the no-version `ReplacingMergeTree` race — version column /
+side-table / stay compute-at-read. Partially revisits ADR 0048's "no write-back"
+for the live band only.
+
+**Operational pending (theirs, not code).** 0039 Current Price Updater (live-spot
+writer); production backfill to **ledger 50,457,424 (2024-02-20)**; concrete first
+XLM/USDC ledger reported from that run.
 
 ## Deferred — volume / fee_revenue (gated on 0247)
 
