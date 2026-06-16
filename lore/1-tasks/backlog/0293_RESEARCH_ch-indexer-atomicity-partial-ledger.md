@@ -1,5 +1,5 @@
 ---
-id: '0291'
+id: '0293'
 title: 'Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse'
 type: RESEARCH
 status: backlog
@@ -18,7 +18,7 @@ history:
   - date: '2026-06-16'
     status: backlog
     who: karolkow
-    note: 'Task created. Audit transactional integrity of CH indexer: crash mid-ledger, partial rows, backfill re-run idempotency.'
+    note: 'Task created (renumbered 0291→0293, collision on develop). Audit transactional integrity of CH indexer: crash mid-ledger, partial rows, backfill re-run idempotency.'
 ---
 
 # Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse
