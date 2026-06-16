@@ -426,19 +426,59 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    for (cid, name) in contract_name_writes {
-        out.contract_rows.push(SorobanContractRow {
-            id: ids::contract_id(cid),
-            contract_id: cid.clone(),
-            wasm_hash: None,
-            wasm_uploaded_at_ledger: ledger_sequence_i64,
-            deployer_id: None,
-            deployed_at_ledger: None,
-            contract_type: None,
-            is_sac: false,
-            name: Some(name.clone()),
-        });
+    // G5 guardrail + tripwire (task 0283 / ADR 0049).
+    //
+    // Contract names are empirically OFF-LEDGER: SEP-41 / OpenZeppelin Soroban
+    // tokens expose `name` via a `name()` WASM function (read off-ledger via
+    // simulateTransaction), NOT a persisted `Symbol("name")` ContractData entry.
+    // So `extract_contract_data_name_writes` matches nothing in practice — 0
+    // names across 424k contracts on the snapshot — and this loop is dormant.
+    //
+    // The row below is PARTIAL (deploy fields None). Under
+    // `ReplacingMergeTree(wasm_uploaded_at_ledger) ORDER BY (contract_id)` a
+    // version = current ledger would OUTVERSION and clobber the real deploy row
+    // (wasm_hash/deployer/contract_type → NULL), which also defeats the
+    // contract-type rebuild's `wasm_hash` join. We pin `wasm_uploaded_at_ledger
+    // = 0` so any real deploy (version = deploy ledger >= 1) always wins → a
+    // partial name row can NEVER clobber the deploy identity. The name is kept
+    // only when it is the sole row for that contract (harmless); it loses to a
+    // deploy (where the deploy IS the better data). Long-term, contract names
+    // belong in an enrichment side table (ADR 0048/0049), not this column.
+    //
+    // TRIPWIRE: this path is dormant today; if names ever start arriving (a
+    // non-OZ token that DOES persist `Symbol("name")`, or a future change wiring
+    // names through here), the warn fires so we learn the path activated and can
+    // route names to enrichment instead of silently dropping them on merge.
+    if !contract_name_writes.is_empty() {
+        tracing::error!(
+            count = contract_name_writes.len(),
+            first = contract_name_writes
+                .first()
+                .map(|(c, _)| c.as_str())
+                .unwrap_or(""),
+            "G5 dormant name-write path ACTIVATED: on-ledger Symbol(\"name\") \
+             entries observed and emitted as version=0 guarded rows (name kept \
+             only if no deploy row exists, else dropped on RMT merge). Route \
+             contract names to an enrichment side table per ADR 0049 — do not \
+             rely on soroban_contracts.name. See task 0283 (G5)."
+        );
     }
+    // for (cid, name) in contract_name_writes {
+    // out.contract_rows.push(SorobanContractRow {
+    //     id: ids::contract_id(cid),
+    //     contract_id: cid.clone(),
+    //     wasm_hash: None,
+    //     // G5 guardrail: version=0 sentinel (see comment above) — a real
+    //     // deploy (version = deploy ledger) always outversions this, so this
+    //     // partial name-only row can never clobber the deploy identity.
+    //     wasm_uploaded_at_ledger: 0,
+    //     deployer_id: None,
+    //     deployed_at_ledger: None,
+    //     contract_type: None,
+    //     is_sac: false,
+    //     name: Some(name.clone()),
+    // });
+    // }
 
     // Task 0220 — SAC override re-insert. For every observed classic
     // asset (Native / ClassicCredit), the parser already derived the

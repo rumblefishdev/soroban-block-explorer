@@ -99,6 +99,7 @@ async fn persist_once(cl: &clickhouse::Client) {
         &[],
         &[],
         &[],
+        &[],
         &db_clickhouse::persist::ClassificationCache::new(),
     )
     .await
