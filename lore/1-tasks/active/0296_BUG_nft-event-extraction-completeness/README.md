@@ -2,7 +2,7 @@
 id: '0296'
 title: 'BUG: NFT/event extraction completeness — packed-data NFT event shapes silently dropped + CAP-67 address robustness'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0283', '0231', '0259']
 tags:
@@ -25,6 +25,14 @@ history:
       kept OUT of 0283 scope. The code is parked in a git STASH on the fix/0283
       worktree — find by message `git stash list | grep '0296: NFT event-shape'`
       (base commit 1d421ba5). The stash also carries unrelated snapshot files;
+      extract ONLY crates/xdr-parser/src/{nft.rs,scval.rs}.
+  - date: 2026-06-16
+    status: active
+    who: karolkow
+    note: >
+      Activated for implementation (promote-task). Branch fix/0296. Step 1:
+      recover the parked stash from the fix/0283 worktree
+      (`git stash list | grep '0296: NFT event-shape'`, base 1d421ba5),
       extract ONLY crates/xdr-parser/src/{nft.rs,scval.rs}.
 ---
 
