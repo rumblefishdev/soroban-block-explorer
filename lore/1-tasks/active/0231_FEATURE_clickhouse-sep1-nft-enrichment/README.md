@@ -79,6 +79,28 @@ history:
       worker/indexer deploy (CDK env + GitHub auth blocked), prod drain (7),
       NFT read-join (4b — needs nfts→CH), full smoke (NFT RPC + clear-on-
       refresh), columns drop (8), async_insert (9).
+  - date: '2026-06-16'
+    status: active
+    who: karolkow
+    note: >
+      Cross-finding from 0283 session-3 deep research (chain-validated, not yet
+      acted on here): NFT enrichment has a HARD CEILING at live-RPC liveness.
+      `token_uri`/name/image are fetched from LIVE Soroban RPC (the parser sets
+      nft metadata=None at mint — not carried in the event), so a contract whose
+      ContractInstance is archived/evicted (state-archival TTL — restorable but
+      not live) returns nothing on `getLedgerEntries` and is UN-enrichable even
+      after perfect classification. Empirical: a network-wide `getEvents` sample
+      found ~66% of recent transfer/mint/burn emitters ABSENT from live state.
+      So the reachable target is "all real NFTs still LIVE on mainnet", not
+      literally all. Implications: (a) the status / NULL-ratio metric must SPLIT
+      "un-enrichable-because-evicted (RPC absent)" from "not-yet-tried" — else a
+      high NFT NULL ratio is ambiguous; (b) sentinel-on-permanent-fail never
+      auto-retries, so a transient RPC outage at enrich time = permanent empty
+      until a forced retry — consider a restore-or-retry path; (c) the batch
+      enrich candidate source is hot `nfts` (empty until 0283 reclassify
+      promotes), so 0283 gates the BACKLOG drain; the live path enriches new
+      mints route-independently but is gated on worker deploy. See 0283
+      open-problems #7 (NFT event-shape, FIXED) + #1 (wasm-link).
 ---
 
 # FEATURE: ClickHouse SEP-1 + NFT `token_uri` enrichment
