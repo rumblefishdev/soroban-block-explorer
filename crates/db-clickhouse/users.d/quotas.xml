@@ -55,6 +55,28 @@
             </interval>
         </api_throttle>
 
+        <!-- Human ad-hoc read access (`dev_read` user). Kept
+             SEPARATE from `api_throttle` on purpose so a teammate's ad-hoc
+             query can never exhaust the production API's budget (the 0290
+             failure mode). The `read_only` profile already caps any single
+             query (30s exec / 4 GB mem); this quota is the hourly aggregate
+             backstop. read_rows 2B/h, read_bytes 100 GiB/h — generous for
+             interactive analysis, well clear of the API. queries/errors/
+             execution_time left at 0 (unbounded): never throttle a human on
+             query count, and `errors` as a throttle is a footgun (see
+             api_throttle). Tighten if a dev ever runs the box hot. -->
+        <dev_read>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>2000000000</read_rows>
+                <read_bytes>107374182400</read_bytes>
+                <execution_time>0</execution_time>
+            </interval>
+        </dev_read>
+
         <!-- write-side quotas: queries / read intentionally
              unbounded (ingestion does both heavily); written_bytes
              ceiling is a sanity cap to catch a runaway bulk insert,
