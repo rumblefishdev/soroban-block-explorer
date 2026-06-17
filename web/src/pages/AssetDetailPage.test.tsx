@@ -110,7 +110,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/2'],
+      initialEntries: ['/assets/USDC-XYZ'],
       routePath: '/assets/:id',
     });
 
@@ -134,7 +134,7 @@ describe('AssetDetailPage', () => {
     );
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/3'],
+      initialEntries: ['/assets/EURC-XYZ'],
       routePath: '/assets/:id',
     });
 
@@ -154,7 +154,7 @@ describe('AssetDetailPage', () => {
     });
 
     renderWithProviders(<AssetDetailPage />, {
-      initialEntries: ['/assets/9999'],
+      initialEntries: ['/assets/MISSING-XYZ'],
       routePath: '/assets/:id',
     });
 
