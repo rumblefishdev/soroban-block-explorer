@@ -1,30 +1,42 @@
 ---
+
 id: '0290'
 title: 'Polled /transactions (Statement A) full-partition scan blows api_reader read_rows quota (CH Code 201)'
 type: BUG
-status: active
+status: completed
 related_adr: ['0044']
-related_tasks: ['0243', '0240']
+related_tasks: ['0243', '0240', '0298']
 tags:
-  ['clickhouse', 'api', 'performance', 'quota', 'phase-launch', 'priority-high']
+['clickhouse', 'api', 'performance', 'quota', 'phase-launch', 'priority-high']
 links: []
 history:
-  - date: 2026-06-15
-    status: active
-    who: fmazur
-    note: 'Created from live prod incident — api_reader read_rows quota exhausted (CH Code 201), 500-ing every CH endpoint. Root cause traced to Statement A reading ~35M rows/poll.'
-  - date: 2026-06-16
-    status: active
-    who: fmazur
-    note: >
-      Re-diagnosed on prod (EXPLAIN + per-table Processed). Original
-      read-in-order hypothesis REFUTED — transactions scan reads 0.2M
-      (InReverseOrder). The 35M is the JOINs: accounts 23M (ORDER BY
-      account_id, so the id-surrogate join cannot seek) + ledgers 13M
-      (hash-join over full table). Fix = accounts.id index (skip-index/dict) +
-      ledgers/accounts join→seek rewrite. Stopgap 50B/errors-0 now actually
-      live (CH restarted during 0293 dev_read deploy).
----
+
+- date: 2026-06-15
+  status: active
+  who: fmazur
+  note: 'Created from live prod incident — api_reader read_rows quota exhausted (CH Code 201), 500-ing every CH endpoint. Root cause traced to Statement A reading ~35M rows/poll.'
+- date: 2026-06-16
+  status: active
+  who: fmazur
+  note: >
+  Re-diagnosed on prod (EXPLAIN + per-table Processed). Original
+  read-in-order hypothesis REFUTED — transactions scan reads 0.2M
+  (InReverseOrder). The 35M is the JOINs: accounts 23M (ORDER BY
+  account_id, so the id-surrogate join cannot seek) + ledgers 13M
+  (hash-join over full table). Fix = accounts.id index (skip-index/dict) +
+  ledgers/accounts join→seek rewrite. Stopgap 50B/errors-0 now actually
+  live (CH restarted during 0293 dev_read deploy).
+- date: 2026-06-17
+  status: completed
+  who: fmazur
+  note: >
+  Fix shipped + verified on prod. Two-step seek rewrite (commit 27f672ea,
+  branch fix/lore-0290-statement-a-accounts-ledgers-seek) deployed via CDK
+  Compute stack; prod query_log confirms ~1.0M rows/poll (0.2M scan + 0.82M
+  accounts bloom-seek + ~0 ledgers PK-seek) vs old 35.7M — ~35x, the 35M
+  pattern gone. accounts.id bloom_filter(0.001) index live (ALTER +
+  MATERIALIZE) and in init.sql. 3 follow-ups (lower read_rows 50B→~1-2B,
+  canonical SQL doc, regression test) deferred to 0298.
 
 # Polled /transactions (Statement A) full-partition scan blows api_reader read_rows quota
 
@@ -42,14 +54,26 @@ key, so it cannot seek) + `ledgers` ~13M (hash-join over the full table). Fix =
 an `accounts.id` index + rewrite both joins to key-seeks; then lower the quota
 back toward ~1–2B.
 
-## Status: Active
+## Status: Completed (2026-06-17)
 
-**Current state:** Root cause CONFIRMED on prod CH (2026-06-16) — see Root cause
-below. The original read-in-order hypothesis is **REFUTED**: the `transactions`
-scan reads ~0.2M (`InReverseOrder`, fine). The 35M is the `accounts` (23M) +
-`ledgers` (13M) JOINs in the full query. Stopgap quota bump (50B / errors 0) is
-now actually live (CH restarted 2026-06-16 during the 0293 dev_read deploy). Fix
-not yet written — needs an `accounts.id` index (schema) + join→seek rewrite.
+**Final state:** Fix shipped and verified on prod. The two-step key-seek rewrite
+(drop the `accounts`/`ledgers` JOINs; resolve `source_account` via the
+`accounts.id` `bloom_filter(0.001)` skip-index and `created_at` via a `ledgers`
+PK seek) is live in the API Lambda (commit `27f672ea`, deployed via the CDK
+Compute stack). Prod `query_log` confirms ~1.0M rows/poll (0.2M scan + 0.82M
+accounts + ~0 ledgers) vs the old 35.7M — **~35× reduction**, the 35M pattern
+gone from the window. The `accounts.id` index is live (ALTER + MATERIALIZE) and
+carried in `init.sql` for fresh DBs.
+
+Root cause (confirmed 2026-06-16, EXPLAIN + per-table Processed): the original
+read-in-order hypothesis was **REFUTED** — the `transactions` scan reads ~0.2M
+(`InReverseOrder`, fine). The 35M was the two full-table JOINs (`accounts` 23M:
+`id` surrogate is not the sort key; `ledgers` 13M: hash-join over the whole
+table). See Root cause below.
+
+Three close-out items remain → **[[0298]]**: lower `api_throttle.read_rows`
+50B→~1–2B (the stopgap still hides a now-nonexistent problem), update canonical
+SQL `02_get_transactions_list.sql`, and add a regression test.
 
 ## Context
 
@@ -177,15 +201,30 @@ idx_acc_id id TYPE bloom_filter GRANULARITY 1` + `MATERIALIZE`. `id IN (…)`
       scanning ~23M, verified on prod CH
 - [x] Statement A full query reads ≪ 35M — two-step seek rewrite deployed
       2026-06-16; prod `query_log` shows ~1.0M/poll (0.2M scan + 0.82M accounts + ~0 ledgers) vs old 35.7M, the 35M pattern gone from the window
-- [ ] Regression test bounding Statement A `read_rows`
+- [ ] Regression test bounding Statement A `read_rows` — **deferred to [[0298]]**
 - [ ] `api_throttle.read_rows` lowered back toward ~1–2B after the fix (currently
-      50B live on prod)
+      50B live on prod) — **deferred to [[0298]]**
 - [ ] **Docs updated** — `02_get_transactions_list.sql` (and `quotas.xml`
       comment) reflect the fixed Statement A and final caps. Per
       [ADR 0032](../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
-- [ ] **API types regenerated** — likely `N/A` (query-internal change, no DTO /
-      route / openapi schema change). Confirm at PR time; regen if any
-      `crates/api/**` DTO/route changed. CI gate: `API types freshness`.
+      **Deferred to [[0298]].** (init.sql already carries the index + rationale.)
+- [x] **API types regenerated** — `N/A`: change is query-internal (SQL strings +
+      internal structs), no DTO / route / openapi schema touched, so the
+      generated types are unchanged. CI gate `API types freshness` is a no-op.
+
+## Future Work
+
+Spawned to **[[0298]]** (close-out, backlog):
+
+- Lower `api_throttle.read_rows` 50B→~1–2B + redeploy (ansible `--tags app` +
+  CH restart); keep `errors` at 0.
+- Update canonical SQL `02_get_transactions_list.sql` to the two-step Statement A.
+- Regression test bounding Statement A first-page `read_rows`.
+
+Out of scope here (separate backlog, if they recur): the `accounts` list (~81M)
+and LP list (~70M) single-run offenders from `query_log`; the
+`operations_appearances(type, contract_id)` skip-index for filtered Statements
+B/C; mounting `users.d/` as a directory to dodge the single-file inode trap.
 
 ## Notes
 
