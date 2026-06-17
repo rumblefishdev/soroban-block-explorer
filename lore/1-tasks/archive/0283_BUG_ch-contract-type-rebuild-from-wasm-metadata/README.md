@@ -231,15 +231,15 @@ history:
     who: karolkow
     note: >
       CLOSED — implementation delivered (mirrors 0231 → 0301 code/rollout
-      split). The classification CODE is on branch fix/0283 (16 commits ahead
-      of develop; PR → develop). Core: new `contract_type_rebuild.rs` (333 LOC,
-      staging + EXCHANGE, reuses the Rust classifier, --dry-run, idempotent) +
+      split). The classification CODE is on branch fix/0283 (ahead of develop;
+      PR #262 → develop). Core: new `contract_type_rebuild.rs` (staging +
+      EXCHANGE, reuses the Rust classifier, --dry-run, idempotent) +
       assets-fungible backfill bundled as its Phase 5; LIVE inline G1 (deploy
       verdict via writer prefetch), G2 (assets type-3 on Fungible), G9 (event
       routing via cross-ledger verdict + lazy `ClassificationCache`, consolidated
       into `domain`); `queries_ch.rs::contract_type_name` 2→nft/3→fungible.
-      ~18 code files, +2,824/−380 vs develop; new cross tests in
-      `tests_cross.rs` (412 LOC) for G1/G2/G9 + cache + rebuild; clippy clean.
+      17 Rust code files (25 total) vs develop; new cross tests in
+      `tests_cross.rs` for G1/G2/G9 + cache + rebuild; clippy clean.
       No `crates/api/**` / Cargo change → api-types codegen gate N/A.
       Everything operational (prod rebuild RUN, reclassify, assets-backfill,
       Step 0b, TRUNCATE, RTT probe, E15/16/17 smoke, docs) split to **0303**;
@@ -247,6 +247,35 @@ history:
       **0295** (parser change-type gaps), **0296** (NFT event-shape, code
       parked), **0297** (contract-name enrichment + bytes-decode). ADR 0049
       created then deleted (framing inlined into the spawned tasks).
+  - date: 2026-06-17
+    status: done
+    who: karolkow
+    note: >
+      Post-close review round on PR #262 — /review + a 4-agent fan-out
+      (devil's-advocate, requirements checklist, 2× simplify). Verdict:
+      mergeable with nits; the only hard gate is OPERATIONAL (the whole-table
+      EXCHANGE), which lives in 0303. Applied in-PR (all behaviour-neutral,
+      build+clippy+tests green): a row-count FENCE around the rebuild EXCHANGE
+      (`BackfillError::RebuildGuard` — aborts if the live count moves during the
+      staging build, catching a concurrent-write race); shared
+      `classify_wasm_metadata_json` helper (killed the WASM-metadata
+      parse/classify dup across `persist.rs` + `contract_type_rebuild.rs`);
+      `ch_staging::finalize` reuse in the rebuild; `tokio::join!` of the
+      independent G1/G9 prefetches; borrow-not-clone of contract_ids on the G9
+      hot path; deleted the commented-out name-write block; enum-derived verdict
+      ints; repointed stale "ADR 0049" comments → task 0297; a clearer rebuild
+      failure message; and a CLICKHOUSE_URL-gated, throwaway-DB integration test
+      exercising the real classify→staging→EXCHANGE→assets pipeline + idempotency
+      (compile-verified; live-CH run is a 0303 prereq). Documented as
+      known-limitations: G9 cache staleness on WASM upgrade (eviction gated on
+      parser `updated` support = 0295) and the same-batch upload-after-deploy
+      ordering (batch backstop recovers). Two wide refactors deferred as
+      follow-ups to keep the PR reviewable: a `StageInputs` params struct for the
+      17-arg `prepare_with_sac_overrides`, and a `VerdictResolver` owning both
+      prefetch paths + the cache. One flagged: `web/.../AssetDetailPage.test.tsx`
+      diverges from develop (2 `id:` overrides dropped via the 8c84a887 merge
+      resolution, aligned with 0243's FE cleanup) — left untouched per
+      respect-user-edits, pending author confirm.
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
