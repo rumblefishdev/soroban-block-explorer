@@ -17,6 +17,29 @@ history:
       category on the ClickHouse primary store. Pending a read-cost measurement
       of the read-time join at chart/list and review by karolkow (0043 author)
       before proposed → accepted.
+  - date: '2026-06-12'
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      Prices-API contract finalized with Oskar. Decision §2 refined: no local
+      prices table and no sync job — we read prices.* named views directly
+      in-cluster, and the USD pivot is materialized write-time by prices as a
+      retention-proof close_usd per grain (read-time computes only the
+      TVL/volume multiply). Compute-at-read core unchanged. Detail + two
+      prices-side implementation deps (native-key alignment, SAC->classic
+      resolver = their 0061) in the linked S-note. Still proposed (read-cost
+      measure + karolkow review pending).
+  - date: '2026-06-16'
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      Contract final code-side (prices PR #39). Body "Update 2026-06-16" added:
+      view name price_usd_series (not price_usd_at), interop pinned (asset_code
+      trimmed String, grain-floored DateTime bucket, Decimal(38,14)), live-spot
+      view current_price_usd, SAC seam via identity_by_contract, both deps
+      shipped. Flags an open item for this ADR: live-band ingestion-lambda
+      write-back vs the no-version RMT race partially revisits Decision #1 (no
+      write-back) for live only — choice open in 0199. Still proposed.
 ---
 
 # ADR 0048: Fast-change off-chain values on ClickHouse — compute-at-read via local price join
@@ -89,6 +112,32 @@ inputs).
 from PathPayment `claimedOffers` (on-chain), whose historical backfill (XDR
 re-parse over 273M snapshots) is tracked in task 0247.
 
+> **Update 2026-06-12 (contract finalized — see [S-note](../1-tasks/blocked/0199_FEATURE_lp-analytics/notes/S-ch-tvl-enrichment-and-decision.md)).**
+> Decision §2 is refined: there is **no local `prices` table and no sync job**.
+> We read the prices service's `prices.*` **named views directly in the same CH
+> cluster**. The asset→quote→USD pivot is **materialized write-time** by prices
+> as a retention-proof `close_usd` per grain (tiered oracle-in-window /
+> USDC-peg-out-of-window), so read-time computes only the on-chain-quantity ×
+> `close_usd` multiply. The compute-at-read core (no entity-row materialization,
+> single-writer table, read-time join) is unchanged. The series view is
+> **`price_usd_series(identity, bucket)`** keyed by structured natural-identity
+> columns, returns NULL + a `ok`/`no_asset_price`/`no_reference` discriminator,
+> plus a companion `usd_reference(bucket)` and a live-spot view
+> `current_price_usd(identity)`. Two prices-side deps gated coverage: `native`-key
+> alignment (XLM legs) and a SAC→classic resolver (their task 0061 → our 0199
+> Phase 3).
+>
+> **Update 2026-06-16 (final — prices PR #39).** Both deps **shipped**. Interop
+> pinned: `asset_code` trimmed `String`, `bucket` grain-floored `DateTime`
+> (`toStartOfHour`/`toStartOfDay`), `Decimal(38, 14)`. SAC seam: a SAC leg's price
+> lives under the **classic** identity, so resolve `contract_address →
+prices.identity_by_contract → natural identity → price_usd_series` (the series
+> has no SAC-keyed row). **Open for this ADR:** the **live band** may enrich the
+> tip via an **ingestion-lambda write-back** — this partially revisits Decision #1
+> (no write-back) for live only; version-column / side-table / stay-compute-at-read
+> is open (task 0199). Operational, not code: their 0039 live-spot writer +
+> production backfill to ledger 50,457,424.
+
 ## Rationale
 
 1. **Staleness.** A stored USD value is wrong within seconds; compute-at-read is
@@ -129,7 +178,9 @@ re-parse over 273M snapshots) is tracked in task 0247.
 - Heavier read path (join + compute per query) — mitigated because chart/list
   endpoints already aggregate. **Must be measured** at chart/list before flipping
   proposed → accepted (the CH read quota applies).
-- New `prices` table + a price-sync job.
+- ~~New `prices` table + a price-sync job.~~ Superseded 2026-06-12 — direct
+  in-cluster `prices.*` view reads, no local table / sync job (see the Decision
+  update note above).
 
 ### Neutral
 

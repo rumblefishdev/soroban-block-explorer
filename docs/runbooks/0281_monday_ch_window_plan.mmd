@@ -1,0 +1,46 @@
+%% CH maintenance-window runbook (task 0281) — SERIAL plan (downtime OK; staging).
+%% Supersedes the earlier hybrid (resume-early) version.
+%% Lambda paused manually (SQS ESM detached + reserved concurrency 0); W = last ingested ledger on CH.
+%% Source for 0281_monday_ch_window_plan.svg — edit + re-render via /mermaid-diagrams.
+flowchart TB
+  classDef startnode fill:#F1EFE8,stroke:#888780,color:#2C2C2A;
+  classDef gate fill:#FCEBEB,stroke:#E24B4A,color:#501313;
+  classDef backfill fill:#E6F1FB,stroke:#378ADD,color:#042C53;
+  classDef enrich fill:#EEEDFE,stroke:#7F77DD,color:#26215C;
+  classDef verify fill:#E1F5EE,stroke:#1D9E75,color:#04342C;
+  classDef infra fill:#F1EFE8,stroke:#888780,color:#2C2C2A;
+  classDef schema fill:#FAEEDA,stroke:#BA7517,color:#412402;
+
+  W(["W = last ingested ledger on CH<br/>(after stopping the lambda)"]):::startnode
+
+  subgraph S1["1 - Backup (before prod mutation)"]
+    direction TB
+    B0["Delete old backup on Hetzner"]:::gate
+    B1["Snapshot Hetzner"]:::gate
+    B2["rsync current HERO -&gt; another laptop"]:::gate
+    B3["rsync Hetzner snapshot -&gt; HERO"]:::gate
+    B0 --> B1 --> B2 --> B3
+  end
+
+  subgraph S2["2 - pool_ids + gross_volume_a (&le; W) -- needs 0268 ADD"]
+    direction TB
+    P0["Cyborg: top-up [62,996,872 -&gt; W] from S3"]:::backfill
+    P1["prod: drop oa_pool_seek projection"]:::backfill
+    P2["transport (FREEZE / rsync / ATTACH)"]:::backfill
+    P3["OPTIMIZE ... PARTITION FINAL per-partition"]:::backfill
+    P1 --> P2
+    P0 --> P2
+    P2 --> P3
+  end
+
+  N3["3 - NFT / assets: reclassify + enrichment<br/>0283 -&gt; 0231 (Karol)<br/>+ to analyze: name-update bug nulls wasm_hash"]:::enrich
+  N4["4 - Validation<br/>E20: /v1/liquidity-pools/{id}/transactions vs Horizon<br/>NFT E15-17 non-empty"]:::verify
+  N5["5 - Redeploy + resume<br/>Deploy -&gt; indexer catches up from W"]:::infra
+  N6["6 - After resume (after GREEN E20)<br/>0268 Phase 3: MATERIALIZE -&gt; REMOVE DEFAULT -&gt; DROP pool_id"]:::schema
+
+  W --> S1
+  S1 --> S2
+  S2 --> N3
+  N3 --> N4
+  N4 --> N5
+  N5 --> N6

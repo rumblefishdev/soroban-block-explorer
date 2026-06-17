@@ -487,7 +487,8 @@ pub async fn fetch_pool_transactions(
         "SELECT ls, tid FROM ( \
             SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
             FROM operations_appearances oa \
-            WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) {keyset} \
+            WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
+              AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
          ) \
          GROUP BY ls, tid \
          ORDER BY ls {order}, tid {order} \

@@ -57,8 +57,14 @@ stellar-strkey = "0.0.16"
 # can be unit-tested with a mock without spinning an `aws s3 ls`
 # subprocess. Single use site in sync.rs.
 async-trait = "0.1"
+# `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
+# gross_volume_a aggregation keyed by raw 32-byte pool id.
+hex = { workspace = true }
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture
 # directories without polluting the developer's filesystem.
 tempfile = "3"
+# `pool-ids-backfill` tests construct `ExtractedOperation` whose `op_type`
+# field is a `domain::OperationType`.
+domain = { path = "../domain" }

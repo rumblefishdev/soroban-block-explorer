@@ -344,6 +344,13 @@ export class ComputeStack extends cdk.Stack {
         API_DATASOURCE_ACCOUNTS: 'ch',
         API_DATASOURCE_CONTRACTS: 'ch',
         API_DATASOURCE_LIQUIDITY_POOLS: 'ch',
+        // Assets list + detail were orphaned on the PG default after the
+        // CH cutover (PG is no longer the live store), so both endpoints
+        // served nothing. The CH path (`assets/queries_ch.rs`) mirrors the
+        // contracts/accounts modules already on CH. Operator must run the
+        // CH read-rows smoke (per `queries_ch.rs` header) before relying on
+        // this in prod.
+        API_DATASOURCE_ASSETS: 'ch',
       },
     });
     this.apiFunction = apiFunction;

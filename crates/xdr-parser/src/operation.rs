@@ -128,6 +128,15 @@ fn claim_lp_atoms(op_result: &OperationResult) -> impl Iterator<Item = &ClaimLiq
 /// (pool, ledger) can be computed downstream without a second parse pass
 /// (tasks 0247/0266/0199). No-op for ops with no LP atoms, so it is safe to
 /// call unconditionally for every op.
+///
+/// Each atom also carries `amountA` — the fill amount on the pool's **canonical
+/// asset A** side. A pool's `assetA` is by definition the canonically-smaller
+/// of its two assets (`assetA < assetB`, Stellar pool-param rule), and an
+/// atom's `{asset_sold, asset_bought}` are exactly the pool's two assets, so
+/// `amountA` is the amount on `min(asset_sold, asset_bought)` (XDR `Asset`
+/// ordering = type, then code, then issuer) — no pool-definition lookup
+/// needed. This is the `gross_volume_a` per-atom contribution (task 0266
+/// Phase 2 / 0279): the worker sums `amountA` per `(pool, ledger)`.
 fn append_pool_claims(details: &mut Value, op_result: Option<&OperationResult>) {
     let Some(op_result) = op_result else { return };
     let Value::Object(map) = details else { return };
@@ -136,12 +145,19 @@ fn append_pool_claims(details: &mut Value, op_result: Option<&OperationResult>) 
     let mut claimed: Vec<Value> = Vec::new();
     for atom in claim_lp_atoms(op_result) {
         let id = hex::encode(atom.liquidity_pool_id.0.as_slice());
+        // Canonical asset-A side: the smaller of the two assets carries A.
+        let amount_a = if atom.asset_sold <= atom.asset_bought {
+            atom.amount_sold
+        } else {
+            atom.amount_bought
+        };
         claimed.push(json!({
             "poolId": &id,
             "assetSold": format_asset(&atom.asset_sold),
             "amountSold": atom.amount_sold,
             "assetBought": format_asset(&atom.asset_bought),
             "amountBought": atom.amount_bought,
+            "amountA": amount_a,
         }));
         if !pool_ids.contains(&id) {
             pool_ids.push(id);
@@ -840,6 +856,43 @@ mod tests {
         assert_eq!(atoms[0]["amountSold"], 500);
         assert_eq!(atoms[0]["amountBought"], 200);
         assert_eq!(atoms[0]["assetSold"], "native");
+        // both legs native here → amountA = amountSold side.
+        assert_eq!(atoms[0]["amountA"], 500);
+    }
+
+    #[test]
+    fn amount_a_picks_canonical_asset_a_side() {
+        // native < credit (XDR Asset order: type 0 < type 1), so asset A is
+        // native regardless of which leg of the atom it is.
+        let credit = Asset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4(*b"USDC"),
+            issuer: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0x09; 32]))),
+        });
+        // sold = native (A), bought = credit (B) → amountA = amountSold.
+        let a1 = ClaimAtom::LiquidityPool(ClaimLiquidityAtom {
+            liquidity_pool_id: PoolId(Hash([0x11; 32])),
+            asset_sold: Asset::Native,
+            amount_sold: 700,
+            asset_bought: credit.clone(),
+            amount_bought: 300,
+        });
+        // sold = credit (B), bought = native (A) → amountA = amountBought.
+        let a2 = ClaimAtom::LiquidityPool(ClaimLiquidityAtom {
+            liquidity_pool_id: PoolId(Hash([0x22; 32])),
+            asset_sold: credit,
+            amount_sold: 250,
+            asset_bought: Asset::Native,
+            amount_bought: 900,
+        });
+        let op = build_path_payment_send_op();
+        let tx = build_v1_tx(vec![op]);
+        let inner = InnerTxRef::V1(&tx);
+        let results = vec![path_payment_send_result(vec![a1, a2])];
+
+        let result = extract_operations(&inner, None, Some(&results), "abcd1234", 100, 0);
+        let atoms = result[0].details["claimedAtoms"].as_array().unwrap();
+        assert_eq!(atoms[0]["amountA"], 700, "native is A, on the sold side");
+        assert_eq!(atoms[1]["amountA"], 900, "native is A, on the bought side");
     }
 
     #[test]

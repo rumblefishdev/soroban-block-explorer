@@ -323,9 +323,9 @@ Highlights:
   payments stay NULL there) pending retirement
 - `liquidity_pool_snapshots` carries the CH-only `gross_volume_a
 Nullable(Decimal128(7))` — per-(pool, ledger) trade volume in asset-A
-  units from path-payment claim atoms (written by the 0266 backfill /
-  0247 wiring; USD `volume`/`fee_revenue` stay NULL until the Prices API,
-  ADR 0048)
+  units from path-payment claim atoms (derived at ingest by the live
+  indexer and, for history, by the 0266 backfill; USD `volume`/`fee_revenue`
+  stay NULL until the Prices API, ADR 0048)
 - `NUMERIC(28,7)` → `Decimal128(7)`
 - The only `TIMESTAMPTZ` column that survives is
   `ledgers.closed_at`, which becomes `DateTime64(3, 'UTC')`

@@ -13,7 +13,9 @@ interface TransactionTimeProps {
  * Matches the Design System table Time column.
  */
 export function TransactionTime({ createdAt }: TransactionTimeProps) {
-  // app-wide LIVE_TICK_MS (see useNow) keeps this in step with the live feed
+  // `useNow` is refetch-synced inside a LiveNowProvider (home live tables:
+  // labels age atomically with each poll) and the 10s wall-clock tick
+  // everywhere else — transparent to this component.
   const now = useNow();
   const valid = Number.isFinite(new Date(createdAt).getTime());
 
