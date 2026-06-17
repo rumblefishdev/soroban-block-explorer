@@ -2,7 +2,7 @@
 id: '0293'
 title: 'Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse'
 type: RESEARCH
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags:
@@ -19,6 +19,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Task created (renumbered 0291→0293, collision on develop). Audit transactional integrity of CH indexer: crash mid-ledger, partial rows, backfill re-run idempotency.'
+  - date: '2026-06-17'
+    status: active
+    who: karolkow
+    note: 'Promoted to active via /promote-task. Starting atomicity audit.'
 ---
 
 # Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse
