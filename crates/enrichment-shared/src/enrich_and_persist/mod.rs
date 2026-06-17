@@ -40,8 +40,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Wall-clock milliseconds — the `version` for the enrichment side tables'
 /// `ReplacingMergeTree(version)` (latest-write-wins). Enrichment has no ledger
 /// context (it is an off-chain fetch, not triggered by a ledger), so wall-clock
-/// time is its monotonic update clock — the enrichment analog of the
-/// `last_updated_ledger` version used by the on-chain state tables.
+/// time is its update clock — the enrichment analog of the `last_updated_ledger`
+/// version used by the on-chain state tables.
+///
+/// CAVEAT — this is monotonic only *per machine*, NOT globally. Two writers can
+/// touch the same key (the live worker Lambda and the operator-run
+/// `backfill-enrichment-runner`). If their clocks are skewed, a writer with a
+/// lagging clock can land a row with a LOWER `version` than an existing one and
+/// lose the merge — e.g. a backfill that re-derives a real value could be
+/// overwritten by (or fail to overwrite) an older sentinel. The values are
+/// low-stakes (a logo / a name) and the skew window is small, but it is a real
+/// gap: a `--force-retry`/drain MUST NOT run concurrently with the live worker
+/// over overlapping keys (see 0299 ordering note). A future hardening is to
+/// floor the version at `max(existing_version + 1, now_ms)` via a read-back.
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

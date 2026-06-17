@@ -225,28 +225,34 @@ async fn send_one_batch(
     }
 }
 
-pub(crate) async fn publish_nft_token_uri_messages(
+/// Chunk `keys` into SQS batches (max 10) and publish each, encoding every key
+/// through the shared `EnrichmentMessage` (`to_message`) so the wire cannot
+/// drift from the worker's decoder (single source of truth, message.rs).
+/// `id_prefix` + the in-chunk `idx` guarantee Id uniqueness within a batch; the
+/// full key is appended so a failed entry (SQS reports failures by Id) stays
+/// traceable to its source row. `id_prefix` is kept per-kind to preserve the
+/// exact wire-log ids.
+async fn publish_messages<K: std::fmt::Display>(
     client: &SqsClient,
     queue_url: &str,
-    keys: &[NftKey],
+    keys: &[K],
+    kind: &'static str,
+    id_prefix: &str,
+    to_message: impl Fn(&K) -> EnrichmentMessage,
 ) {
     for chunk in keys.chunks(10) {
         let mut entries = Vec::with_capacity(chunk.len());
         for (idx, key) in chunk.iter().enumerate() {
-            // Encode via the shared `EnrichmentMessage` so the wire cannot drift
-            // from the worker's decoder (single source of truth, message.rs).
-            let body = match serde_json::to_string(&EnrichmentMessage::NftTokenUri(key.clone())) {
+            let body = match serde_json::to_string(&to_message(key)) {
                 Ok(body) => body,
                 Err(e) => {
                     warn!(error = %e, key = %key, "skipping unencodable enrichment msg");
                     continue;
                 }
             };
-            debug!(kind = "nft_token_uri", key = %key, "publishing enrichment msg");
-            // `idx` guarantees Id uniqueness within the batch; the full key
-            // makes a failed entry (SQS reports failures by Id) traceable.
+            debug!(kind, key = %key, "publishing enrichment msg");
             let entry = SendMessageBatchRequestEntry::builder()
-                .id(format!("nft-{idx}-{key}"))
+                .id(format!("{id_prefix}-{idx}-{key}"))
                 .message_body(body)
                 .build();
             match entry {
@@ -254,8 +260,19 @@ pub(crate) async fn publish_nft_token_uri_messages(
                 Err(e) => warn!(error = %e, key = %key, "skipping malformed SQS entry"),
             }
         }
-        send_one_batch(client, queue_url, entries, "nft_token_uri").await;
+        send_one_batch(client, queue_url, entries, kind).await;
     }
+}
+
+pub(crate) async fn publish_nft_token_uri_messages(
+    client: &SqsClient,
+    queue_url: &str,
+    keys: &[NftKey],
+) {
+    publish_messages(client, queue_url, keys, "nft_token_uri", "nft", |key| {
+        EnrichmentMessage::NftTokenUri(key.clone())
+    })
+    .await;
 }
 
 pub(crate) async fn publish_sep1_assets_messages(
@@ -263,33 +280,10 @@ pub(crate) async fn publish_sep1_assets_messages(
     queue_url: &str,
     keys: &[AssetKey],
 ) {
-    for chunk in keys.chunks(10) {
-        let mut entries = Vec::with_capacity(chunk.len());
-        for (idx, key) in chunk.iter().enumerate() {
-            // Encode via the shared `EnrichmentMessage` so the wire cannot drift
-            // from the worker's decoder (single source of truth, message.rs).
-            let body = match serde_json::to_string(&EnrichmentMessage::Sep1Assets(key.clone())) {
-                Ok(body) => body,
-                Err(e) => {
-                    warn!(error = %e, key = %key, "skipping unencodable enrichment msg");
-                    continue;
-                }
-            };
-            debug!(kind = "sep1_assets", key = %key, "publishing enrichment msg");
-            // `idx` guarantees Id uniqueness within the batch; the full
-            // composite key makes a failed entry (SQS reports failures by Id)
-            // traceable to its source row.
-            let entry = SendMessageBatchRequestEntry::builder()
-                .id(format!("msg-{idx}-{key}"))
-                .message_body(body)
-                .build();
-            match entry {
-                Ok(entry) => entries.push(entry),
-                Err(e) => warn!(error = %e, key = %key, "skipping malformed SQS entry"),
-            }
-        }
-        send_one_batch(client, queue_url, entries, "sep1_assets").await;
-    }
+    publish_messages(client, queue_url, keys, "sep1_assets", "msg", |key| {
+        EnrichmentMessage::Sep1Assets(key.clone())
+    })
+    .await;
 }
 
 #[cfg(test)]

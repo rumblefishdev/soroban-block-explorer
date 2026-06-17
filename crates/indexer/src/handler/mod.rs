@@ -128,11 +128,12 @@ pub struct HandlerState {
     /// in `main.rs` cold start; cloning is cheap (the underlying
     /// `hyper-util` pool is `Arc`-shared).
     pub ch_client: clickhouse::Client,
-    /// Type-1 enrichment SQS publisher (task 0191). Currently runs in
-    /// **stub mode** — the lookup queries against PG no longer execute
-    /// (PG is frozen post-cutover). The publisher is retained at the
-    /// CDK + IAM layer pending the CH-aware rewrite called out in
-    /// `enrichment_publish.rs`.
+    /// Type-1 enrichment SQS publisher (task 0191; CH-repointed in 0231 step 6).
+    /// **Live** — per batch it runs the ClickHouse anti-join against
+    /// `*_enrichment` and publishes the misses (SEP-1 assets + NFT `token_uri`);
+    /// see `enrichment_publish.rs`. (Operationally the consumer worker is gated
+    /// off in prod until the 0299 rollout — the producer still publishes, so the
+    /// worker must be enabled or the producer gated to avoid SQS age-out.)
     pub enrichment_publisher: enrichment_publish::Publisher,
 }
 
