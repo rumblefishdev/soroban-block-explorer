@@ -58,9 +58,14 @@ worker's CDK env), so the live rollout was split out here.
    backfill the existing ~1M+ assets/NFTs; report SEP-1/NFT NULL ratios + RPC
    quota; measure the read-join cost.
 3. **Step 4b — NFT read-join (CODE)**: the `nfts` API module is still PG-only
-   (no `queries_ch`). Add the CH read path (`NULLIF(ne.col,'')` from
-   `nft_enrichment`) + `DataSource` dispatch — the 0243-style API PG→CH migration
-   for nfts. Prerequisite for the NFT half of the full smoke.
+   (no `queries_ch`). Add the CH read path + `DataSource` dispatch — the
+   0243-style API PG→CH migration for nfts. `nft_enrichment` is
+   `ReplacingMergeTree(version)`, so the join MUST collapse to one latest row
+   per key — use the same versioned pattern as the asset read-join
+   (`queries_ch.rs`: an `argMax(col, version) … GROUP BY <key>` sub-aggregate,
+   or `nft_enrichment FINAL`) BEFORE the LEFT JOIN, else an un-merged duplicate
+   multiplies NFT rows. Then `NULLIF(ne.col,'')` neutralises the `''` sentinel.
+   Prerequisite for the NFT half of the full smoke.
 4. **Step 10 — full prod smoke (live path)**: verify `SQS → worker → side-table
 → read-join → API` end-to-end on prod (NFT `token_uri` RPC round-trip + write;
    SEP-1 asset round-trip; clear-on-refresh; API serves the enriched value).
