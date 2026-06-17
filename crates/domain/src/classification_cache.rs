@@ -24,6 +24,13 @@
 //! encounter so that a later WASM upload (processed later in time) can promote
 //! the contract out of `Other`.
 //!
+//! A **definitive** verdict, once cached, is held for the cache's lifetime —
+//! there is no invalidation. A contract upgraded from one decisive interface to
+//! another (e.g. `Fungible` → `Nft`) therefore keeps its first verdict until
+//! the owning process recycles. Callers that must honour upgrades have to evict
+//! the affected key explicitly when they observe a WASM change (see the live
+//! G9 path in `db_clickhouse::persist`, task 0283/0295).
+//!
 //! # Concurrency
 //!
 //! The cache is cloneable (shares an `Arc`) and could be shared across futures.

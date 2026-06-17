@@ -461,7 +461,7 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    // G5 guardrail + tripwire (task 0283 / ADR 0049).
+    // G5 guardrail + tripwire (task 0283; name-enrichment follow-up = task 0297).
     //
     // Contract names are empirically OFF-LEDGER: SEP-41 / OpenZeppelin Soroban
     // tokens expose `name` via a `name()` WASM function (read off-ledger via
@@ -478,7 +478,7 @@ pub fn prepare_with_sac_overrides(
     // partial name row can NEVER clobber the deploy identity. The name is kept
     // only when it is the sole row for that contract (harmless); it loses to a
     // deploy (where the deploy IS the better data). Long-term, contract names
-    // belong in an enrichment side table (ADR 0048/0049), not this column.
+    // belong in an enrichment side table (ADR 0048; task 0297), not this column.
     //
     // TRIPWIRE: this path is dormant today; if names ever start arriving (a
     // non-OZ token that DOES persist `Symbol("name")`, or a future change wiring
@@ -494,7 +494,7 @@ pub fn prepare_with_sac_overrides(
             "G5 dormant name-write path ACTIVATED: on-ledger Symbol(\"name\") \
              entries observed and emitted as version=0 guarded rows (name kept \
              only if no deploy row exists, else dropped on RMT merge). Route \
-             contract names to an enrichment side table per ADR 0049 — do not \
+             contract names to an enrichment side table per task 0297 — do not \
              rely on soroban_contracts.name. See task 0283 (G5)."
         );
     }
