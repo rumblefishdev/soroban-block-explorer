@@ -93,6 +93,19 @@ fn collect_tx_infos(meta: &LedgerCloseMeta) -> Vec<TxInfo<'_>> {
     }
 }
 
+/// Collect per-transaction `TransactionResult` references from any
+/// LedgerCloseMeta variant. Index-aligned with `extract_envelopes` and the
+/// `collect_tx_metas` helpers (same `tx_processing` order). Feed each entry
+/// through `operation::tx_op_results` to reach the per-op results consumed
+/// by `extract_operations` (task 0261).
+pub fn collect_tx_results(meta: &LedgerCloseMeta) -> Vec<&TransactionResult> {
+    match meta {
+        LedgerCloseMeta::V0(v) => v.tx_processing.iter().map(|p| &p.result.result).collect(),
+        LedgerCloseMeta::V1(v) => v.tx_processing.iter().map(|p| &p.result.result).collect(),
+        LedgerCloseMeta::V2(v) => v.tx_processing.iter().map(|p| &p.result.result).collect(),
+    }
+}
+
 /// Extract a single transaction, producing a partial record on error.
 fn extract_single_transaction(
     info: &TxInfo<'_>,

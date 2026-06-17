@@ -4,10 +4,10 @@ import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
 import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
-import { FeePill } from '../liquidity-pools/FeePill.js';
-import { PoolAssetPair } from '../liquidity-pools/PoolAssetPair.js';
+import { FeePill } from '../pool-shared/FeePill.js';
+import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
 
-import { assetLegLabel } from './helpers.js';
+import { assetLegLabel } from '../pool-shared/helpers.js';
 
 interface PoolDetailHeaderProps {
   poolId: string;

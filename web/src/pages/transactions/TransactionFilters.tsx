@@ -12,7 +12,7 @@ const ALL_OPERATIONS = '';
 interface TransactionFiltersProps {
   /** Combined source-account / contract-ID search value. */
   search: string;
-  /** Raw operation-type enum, or `''` for "All operations type". */
+  /** Raw operation-type enum, or `''` for "All operation types". */
   operationType: string;
   onSearchChange: (value: string) => void;
   onOperationTypeChange: (value: string) => void;
@@ -63,7 +63,7 @@ export function TransactionFilters({
         aria-label="Filter by operation type"
         sx={{ width: { xs: '100%', sm: 280 } }}
       >
-        <MenuItem value={ALL_OPERATIONS}>All operations type</MenuItem>
+        <MenuItem value={ALL_OPERATIONS}>All operation types</MenuItem>
         {OPERATION_TYPE_OPTIONS.map((option) => (
           <MenuItem key={option.value} value={option.value}>
             {option.label}

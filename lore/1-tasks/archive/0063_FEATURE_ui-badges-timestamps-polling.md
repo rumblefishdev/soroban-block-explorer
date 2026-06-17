@@ -2,9 +2,9 @@
 id: '0063'
 title: 'UI lib: badges, relative timestamps, polling indicator'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
-related_tasks: []
+related_tasks: ['0257']
 tags: [priority-high, effort-small, layer-frontend-shared]
 milestone: 2
 links: []
@@ -21,6 +21,21 @@ history:
     status: active
     who: FilipDz
     note: 'Primitives in libs/ui done — network badges via Chip color="blue"/color="warning" at call sites, RelativeTimestamp + PollingIndicator + useNow + formatRelative shipped under libs/ui/src/timestamps/. Re-opened because PollingIndicator "visible on polling-enabled pages" lands when 0068+ home/list pages wire it up; ergonomic enhancements (`isFetching` prop + spin animation + optional `onRefresh` click) come with that consumption.'
+  - date: 2026-06-08
+    status: completed
+    who: karolkow
+    note: >
+      Completed + archived. Last open AC (PollingIndicator visible on
+      polling-enabled pages) closed: wired into the home "Latest transactions"
+      section header `description` slot, fed by TanStack Query `dataUpdatedAt`
+      → "Updated Xs ago" (commit 5a9e1570, feat(lore-0063)). Figma places the
+      freshness line on transactions ONLY (Latest Ledgers has just the LIVE
+      pill), so it is tx-only by design. The earlier-noted `isFetching` spin +
+      `onRefresh` click "enhancements" are NOT in the Figma design (static
+      "Updated 5 sec ago"), so they are dropped as gold-plating rather than
+      deferred. Stale body status drift (said "Backlog / Not started" while
+      frontmatter was active and primitives shipped 2026-05-14) also corrected
+      — part of audit 0257 card 6.1 drift sweep.
 ---
 
 # UI lib: badges, relative timestamps, polling indicator
@@ -29,9 +44,11 @@ history:
 
 Implement badge components, relative timestamp display, and a polling indicator in `libs/ui/src/badges/` and `libs/ui/src/timestamps/`. These small but ubiquitous primitives appear on nearly every page and must be accessible, consistent, and informative.
 
-## Status: Backlog
+## Status: Completed
 
-**Current state:** Not started.
+**Current state:** Primitives shipped 2026-05-14; PollingIndicator wired into
+the home "Latest transactions" header 2026-06-08 (commit 5a9e1570). All
+acceptance criteria satisfied. Archived 2026-06-08.
 
 ## Context
 
@@ -113,7 +130,7 @@ Export all badge and timestamp components from `libs/ui` barrel.
 - [x] RelativeTimestamp — shows "2 min ago" style, full ISO on hover via tooltip.
 - [x] Timestamps contrast — uses `text.secondary` semantic token (inherited from Figma design system, WCAG-validated upstream).
 - [x] Relative timestamps re-render — `useNow(intervalMs)` shared hook ticks every 30s by default.
-- [ ] PollingIndicator — primitive built (refresh icon + "Updated Xs ago", default 5s tick via `intervalMs`), but not yet **visible on polling-enabled pages** per spec — those pages (0068 home, list pages) don't exist yet. Also pending: `isFetching` prop + spin animation + optional `onRefresh` click handler — will land when a real polling page wires up TanStack Query's `dataUpdatedAt` and `isFetching`.
+- [x] PollingIndicator — primitive built (refresh icon + "Updated Xs ago", default 5s tick via `intervalMs`) AND **visible on a polling-enabled page**: wired into the home "Latest transactions" header `description` slot, fed by TanStack Query `dataUpdatedAt` (commit 5a9e1570, 2026-06-08). Figma puts the freshness line on transactions only, so it is tx-only by design. The `isFetching` spin + `onRefresh` "enhancements" are absent from the Figma design and dropped as gold-plating (not deferred).
 - [x] Text labels primary — every badge above passes the label string; color is decoration.
 - [x] All components exported — `NetworkBadge`, `RelativeTimestamp`, `PollingIndicator`, plus helpers `formatRelative` + `useNow`, all re-exported from `libs/ui` barrel.
 

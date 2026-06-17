@@ -36,7 +36,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
                   value={row.asset_code}
                   type="asset"
                   truncate={false}
-                  href={routes.asset(String(row.id))}
+                  href={routes.asset(row.id)}
                 />
               ) : (
                 <Dash />
@@ -110,10 +110,6 @@ interface AssetsTableProps {
 /** The assets list table — token, issuer/contract, supply and holder count. */
 export function AssetsTable({ rows }: AssetsTableProps) {
   return (
-    <ExplorerTable
-      columns={columns}
-      rows={rows}
-      rowKey={(row) => String(row.id)}
-    />
+    <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.id} />
   );
 }

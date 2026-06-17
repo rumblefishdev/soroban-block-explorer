@@ -2,6 +2,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import {
   DetailErrorState,
   getDefaultTruncation,
+  IdentifierWithCopy,
   isAccountId,
   NotFoundState,
   SectionErrorBoundary,
@@ -67,15 +68,10 @@ export default function AccountDetailPage() {
         <Typography variant="heading5SemiBold" component="h1">
           Account
         </Typography>
-        <Typography
-          variant="bodyMedium"
-          sx={(theme) => ({
-            color: theme.palette.text.secondary,
-            wordBreak: 'break-all',
-          })}
-        >
-          {accountId}
-        </Typography>
+        {/* Truncated under-title identity (full id stays in the summary
+            card below); the special identifier component carries the copy
+            affordance. */}
+        <IdentifierWithCopy value={accountId} type="account" linked={false} />
       </Box>
 
       <SectionErrorBoundary sectionName="account-summary">

@@ -768,11 +768,23 @@ export type OperationItem = {
   destination_account?: string | null;
   ledger_sequence: number;
   /**
-   * Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded
-   * from the DB hex form at the response boundary so cross-entity
-   * link targets match the `/v1/liquidity-pools/:id` route shape.
+   * Liquidity pools crossed by this operation, as SEP-23 strkeys
+   * (`L...`, 56 chars). Encoded from the DB hex form at the response
+   * boundary so cross-entity link targets match the
+   * `/v1/liquidity-pools/:id` route shape. Single-element for LP
+   * deposit/withdraw; the full crossed-pool list for path payments and
+   * offers that filled against a pool (task 0261/0268 — replaces the
+   * former nullable scalar `pool_id`).
+   *
+   * **Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means "no
+   * pool" **only** for ClickHouse-served responses. The Postgres backend
+   * (default until each module flips to CH, per task 0243) never received
+   * the claim-atom extraction, so it returns `[]` for *every* path-payment
+   * and offer op regardless of whether a pool was crossed — only LP
+   * deposit/withdraw carry a pool there. Treat `[]` as authoritative for
+   * pool absence only once the module reads from CH.
    */
-  pool_id?: string | null;
+  pool_ids: Array<string>;
   source_account?: string | null;
   /**
    * Raw `OperationType` SMALLINT (ADR 0031).
@@ -784,6 +796,40 @@ export type OperationItem = {
    */
   type_name: string;
 };
+
+/**
+ * Stellar operation type. Discriminants match the XDR numbering; the
+ * serde representation is the canonical SCREAMING_SNAKE_CASE label used
+ * by the Horizon API and historically persisted as VARCHAR.
+ */
+export type OperationType =
+  | 'CREATE_ACCOUNT'
+  | 'PAYMENT'
+  | 'PATH_PAYMENT_STRICT_RECEIVE'
+  | 'MANAGE_SELL_OFFER'
+  | 'CREATE_PASSIVE_SELL_OFFER'
+  | 'SET_OPTIONS'
+  | 'CHANGE_TRUST'
+  | 'ALLOW_TRUST'
+  | 'ACCOUNT_MERGE'
+  | 'INFLATION'
+  | 'MANAGE_DATA'
+  | 'BUMP_SEQUENCE'
+  | 'MANAGE_BUY_OFFER'
+  | 'PATH_PAYMENT_STRICT_SEND'
+  | 'CREATE_CLAIMABLE_BALANCE'
+  | 'CLAIM_CLAIMABLE_BALANCE'
+  | 'BEGIN_SPONSORING_FUTURE_RESERVES'
+  | 'END_SPONSORING_FUTURE_RESERVES'
+  | 'REVOKE_SPONSORSHIP'
+  | 'CLAWBACK'
+  | 'CLAWBACK_CLAIMABLE_BALANCE'
+  | 'SET_TRUST_LINE_FLAGS'
+  | 'LIQUIDITY_POOL_DEPOSIT'
+  | 'LIQUIDITY_POOL_WITHDRAW'
+  | 'INVOKE_HOST_FUNCTION'
+  | 'EXTEND_FOOTPRINT_TTL'
+  | 'RESTORE_FOOTPRINT';
 
 /**
  * Pagination metadata attached to list responses.

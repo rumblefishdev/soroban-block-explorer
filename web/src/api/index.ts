@@ -3,7 +3,8 @@ import './client.js';
 export { apiBaseUrl } from './config.js';
 export { QueryProvider } from './QueryProvider.js';
 export {
-  homePolicy,
+  livePolicy,
+  midpointPollDelay,
   listPolicy,
   detailPolicy,
   searchPolicy,

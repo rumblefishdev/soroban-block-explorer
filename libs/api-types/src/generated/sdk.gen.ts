@@ -326,7 +326,8 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
  * Reads the canonical single-statement network-stats query (latest
  * ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
  * estimates for accounts / contracts) and caches the assembled
- * response for 30s in process memory. See the task 0045 spec and
+ * response for 4s in process memory (below the ledger cadence — see
+ * `network/cache.rs`). See the task 0045 spec and
  * `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
  * for the full data-source mapping.
  *

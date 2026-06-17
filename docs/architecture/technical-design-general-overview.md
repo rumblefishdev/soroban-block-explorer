@@ -674,7 +674,7 @@ Stellar Network (mainnet peers)
 │     (no raw envelope/result XDR — ADR 0029)             │
 │  5. Aggregate operations by identity (type, source_id,  │
 │     destination_id, contract_id, asset_code,            │
-│     asset_issuer_id, pool_id) → `operations_appearances`│
+│     asset_issuer_id, pool_ids) →`operations_appearances`│
 │     with `amount BIGINT` counting collapsed duplicates  │
 │     (ADR 0163 — no transfer_amount, no application_order,│
 │     no details JSONB)                                   │
@@ -1197,8 +1197,9 @@ mapping `ledger → closed_at → price candle`. This keeps
 `liquidity_pool_snapshots` single-writer (indexer only) and avoids the
 `ReplacingMergeTree` per-row read-modify-write race. **Launch scope: TVL only**
 (`reserve_a·price_a + reserve_b·price_b`); `volume` / `fee_revenue` are deferred —
-they need a per-pool `gross_volume_a` from PathPayment `claimedOffers` whose
-historical XDR-reparse backfill is tracked in task 0247.
+their on-chain input `gross_volume_a` (PathPayment claim atoms) is now derived at
+ingest by the live indexer and backfilled for history (task 0266); only the USD
+denomination waits on the Prices API.
 
 ### 6.12 Partitioning and Retention
 

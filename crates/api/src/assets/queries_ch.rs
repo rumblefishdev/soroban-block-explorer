@@ -332,7 +332,7 @@ pub async fn fetch_transactions(
     let driver_sql = format!(
         "SELECT oa.ledger_sequence AS ledger_sequence, oa.transaction_id AS transaction_id \
          FROM operations_appearances oa \
-         WHERE ({predicate}){cursor_clause} \
+         WHERE ({predicate}) AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
          ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
          LIMIT 1 BY oa.ledger_sequence, oa.transaction_id \
          LIMIT ?"

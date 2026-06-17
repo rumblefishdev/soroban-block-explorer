@@ -37,7 +37,7 @@ pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
 pub use nft::detect_nft_events;
 pub use op_source::extract_op_source_per_contract;
-pub use operation::extract_operations;
+pub use operation::{extract_operations, tx_op_results};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id,
     derive_sac_overrides_from_assets, extract_sac_identities, network_id, passphrase_for,
@@ -48,7 +48,7 @@ pub use state::{
     extract_contract_data_name_writes, extract_contract_deployments, extract_liquidity_pools,
     extract_lp_positions, extract_nft_ownership_events, native_asset_singleton,
 };
-pub use transaction::extract_transactions;
+pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,

@@ -190,6 +190,7 @@ export type {
   NftItem,
   NftTransferItem,
   OperationItem,
+  OperationType,
   PageInfo,
   PaginatedAccountListItem,
   PaginatedAccountTransactionItem,

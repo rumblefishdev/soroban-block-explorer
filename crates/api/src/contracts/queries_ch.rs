@@ -44,11 +44,14 @@ use super::queries::{
 };
 
 /// `contract_type` SMALLINT → label, matching the PG `contract_type_name`
-/// function. `None` for an out-of-range code (PG `CASE` returns NULL).
+/// function (migration `20260422000100_contract_type_add_nft_fungible`).
+/// `None` for an out-of-range code (PG `CASE` returns NULL).
 fn contract_type_name(contract_type: i16) -> Option<String> {
     match contract_type {
         0 => Some("token".to_string()),
         1 => Some("other".to_string()),
+        2 => Some("nft".to_string()),
+        3 => Some("fungible".to_string()),
         _ => None,
     }
 }
@@ -436,6 +439,7 @@ pub async fn fetch_invocation_appearances(
             SELECT ledger_sequence, transaction_id, caller_id, amount \
             FROM soroban_invocations_appearances \
             WHERE contract_id = ? \
+              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
               AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
             ORDER BY ledger_sequence {order}, transaction_id {order} \
             LIMIT ? \
@@ -621,7 +625,7 @@ pub async fn fetch_events(
          JOIN transactions t \
               ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence \
          INNER JOIN ledgers l ON l.sequence = se.ledger_sequence \
-         WHERE se.contract_id = ?{cursor_clause} \
+         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
          ORDER BY se.ledger_sequence {order}, se.transaction_id {order}, se.event_index {order} \
          LIMIT 1 BY se.ledger_sequence, se.transaction_id, se.event_index \
          LIMIT ?"
@@ -645,7 +649,9 @@ mod tests {
     fn contract_type_name_matches_pg_function() {
         assert_eq!(contract_type_name(0).as_deref(), Some("token"));
         assert_eq!(contract_type_name(1).as_deref(), Some("other"));
-        assert_eq!(contract_type_name(2), None);
+        assert_eq!(contract_type_name(2).as_deref(), Some("nft"));
+        assert_eq!(contract_type_name(3).as_deref(), Some("fungible"));
+        assert_eq!(contract_type_name(4), None);
     }
 
     fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {

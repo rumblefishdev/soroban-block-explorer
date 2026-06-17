@@ -16,20 +16,25 @@
 -- Data sources: DB-only.
 -- Inputs:
 --   $1  :pool_id             FixedString(32)   raw 32-byte pool id
+--                            (matched via has(pool_ids, $1) — task 0261/0268)
 --   $2  :limit               Int               page size
 --   $3  :cursor_ledger       Int64             NULL on first page
 --   $4  :cursor_tx_id        Int64             NULL on first page
 -- Indexes:      operations_appearances ORDER BY (ledger_sequence,
---                 transaction_id, id) + PARTITION BY intDiv. `pool_id` is a
---                 non-leading filter column → bloom filter / full partition
---                 scan; pool-bound predicate selectivity reduces cost.
+--                 transaction_id, id) + PARTITION BY intDiv. `pool_ids` is a
+--                 non-leading Array filter column → full partition scan until
+--                 the 0281-window seek replacement (skip index / arrayJoin
+--                 projection / helper table) lands; pool-bound predicate
+--                 selectivity reduces cost.
 --               transactions ORDER BY (ledger_sequence, application_order, id).
 -- CH Engine:    All Replacing — FINAL.
--- CH Pattern:   same shape as E07 / E10, just with `pool_id` filter.
+-- CH Pattern:   same shape as E07 / E10, just with `has(pool_ids, …)` filter.
 -- ADR 0044 §:   §4.3 (operations_appearances Replacing partitioned),
 --                 §4.2 (transactions), §4.5 (accounts), §5.2 (no closed_at).
 -- Notes:
---   • Driver is `operations_appearances` filtered by `pool_id`. Same shape
+--   • Driver is `operations_appearances` filtered by `has(pool_ids, $1)`
+--     (task 0261/0268: Array of crossed pools — path payments contribute
+--     every pool crossed by their claim atoms; [] = no pool). Same shape
 --     as PG E20.
 --   • Cursor drops `created_at` (§5.2). Natural keyset
 --     `(ledger_sequence, transaction_id)`.
@@ -56,7 +61,7 @@ SELECT
 FROM (
     SELECT oa.transaction_id, oa.ledger_sequence
     FROM operations_appearances oa FINAL
-    WHERE oa.pool_id = $1
+    WHERE has(oa.pool_ids, $1)
       AND ($3 IS NULL OR (oa.ledger_sequence, oa.transaction_id) < ($3, $4))
     ORDER BY oa.ledger_sequence DESC, oa.transaction_id DESC
     LIMIT 1 BY oa.transaction_id

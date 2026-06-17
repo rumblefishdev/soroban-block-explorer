@@ -91,6 +91,28 @@
             <access_management>0</access_management>
         </ingestion_writer>
 
+        <!-- Read-only human access for a teammate's mTLS cert.
+             A SEPARATE user from `api_reader` ON PURPOSE: a developer's
+             ad-hoc query must NOT share the production API's `api_throttle`
+             quota — a heavy human query on `api_reader` would burn the API's
+             read_rows budget and 500 every CH endpoint (the 0290 failure
+             mode). `read_only` profile caps any single query (30s exec, 4 GB
+             mem); the `dev_read` quota backstops the hourly aggregate. To
+             grant a teammate read-only (not admin), map their cert CN to
+             THIS user in CLICKHOUSE_CN_USER_MAP (`<cn>:dev_read`) instead of
+             `dev_shared`. -->
+        <dev_read>
+            <no_password/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.30.0.0/16</ip>
+            </networks>
+            <profile>read_only</profile>
+            <quota>dev_read</quota>
+            <access_management>0</access_management>
+        </dev_read>
+
         <!-- migration_admin + partition_admin users removed in task 0241
              (PG-era migration + partition Lambdas dropped; CH applies its
              schema box-side via the db-clickhouse-init sidecar and

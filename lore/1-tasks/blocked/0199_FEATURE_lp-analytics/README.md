@@ -79,6 +79,21 @@ history:
       deferred until the Prices API is live (read-time join, ADR 0048). The
       TVL-only launch cut is unchanged; this only ensures the volume input is not
       thrown away. Linked 0247/0261/0266.
+  - date: '2026-06-12'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Prices-API contract finalized with Oskar (recorded in
+      notes/S-ch-tvl-enrichment-and-decision.md + ADR 0048 history). Refined vs
+      2026-06-09: USD materialized write-time as retention-proof close_usd per
+      grain, read via prices.* named views directly in-cluster (no sync job / no
+      local prices table); single-asset price_usd_at(id,ts) keyed by natural
+      identity; NULL + ok/no_asset_price/no_reference discriminator +
+      usd_reference(bucket). Stays blocked: API not yet shipped + two prices-side
+      impl deps — native-key alignment (gates XLM legs = most pools,
+      critical-path) and SAC->classic resolver (their 0061 → gates Soroban-DEX
+      legs = Phase 3). Phase 1/2 (classic) unblocks when API live; Phase 3 gated
+      on 0061.
 ---
 
 # LP analytics: TVL + volume + fee_revenue

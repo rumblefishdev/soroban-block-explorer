@@ -4,6 +4,7 @@ import {
   Chip,
   ExplorerTable,
   IdentifierDisplay,
+  IdentifierWithCopy,
   Dash,
   formatAmount,
   type ExplorerTableColumn,
@@ -18,7 +19,7 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
     id: 'contract',
     header: 'Contract',
     cell: (row) => (
-      <IdentifierDisplay
+      <IdentifierWithCopy
         value={row.contract_id}
         type="contract"
         href={routes.contract(row.contract_id)}

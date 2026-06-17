@@ -21,6 +21,7 @@
     "@mui/icons-material": "^7.3.9",
     "@mui/material": "^7.3.9",
     "@mui/x-charts": "^9.2.0",
+    "@number-flow/react": "^0.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tslib": "^2.3.0"

@@ -169,7 +169,10 @@ pub async fn list_transactions(
         .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
+    // LIVE (max-age=0): the home feed polls this list once per ledger; any
+    // browser-cache TTL ≥ the ~5.8s cadence would batch 2-3 ledgers per
+    // visible update (see common::cache_control).
+    cache_control::attach(&mut resp, cache_control::LIVE);
     resp
 }
 
@@ -423,7 +426,11 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
             contract_id: op.contract_id.clone(),
             asset_code: op.asset_code.clone(),
             asset_issuer: op.asset_issuer.clone(),
-            pool_id: op.pool_id.as_deref().map(pool_id_hex_to_strkey),
+            pool_ids: op
+                .pool_ids
+                .iter()
+                .map(|h| pool_id_hex_to_strkey(h))
+                .collect(),
             application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,
