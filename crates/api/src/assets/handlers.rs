@@ -243,8 +243,9 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
         None => {
             return errors::bad_request_with_details(
                 errors::INVALID_ID,
-                "id must be a contract StrKey (C…, 56 chars) \
-                 or a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ)",
+                "id must be a contract StrKey (C…, 56 chars), \
+                 a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ), \
+                 or the reserved `native` token for XLM",
                 serde_json::json!({ "received": id }),
             );
         }
@@ -442,8 +443,9 @@ pub async fn list_asset_transactions(
         None => {
             return errors::bad_request_with_details(
                 errors::INVALID_ID,
-                "id must be a contract StrKey (C…, 56 chars) \
-                 or a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ)",
+                "id must be a contract StrKey (C…, 56 chars), \
+                 a `CODE-ISSUER` composite (e.g. USDC-GA…XYZ), \
+                 or the reserved `native` token for XLM",
                 serde_json::json!({ "received": id }),
             );
         }

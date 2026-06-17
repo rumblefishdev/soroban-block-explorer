@@ -9,7 +9,7 @@ import {
   TableHead,
   TableRow,
 } from '@mui/material';
-import type { ReactNode } from 'react';
+import { type ReactNode } from 'react';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -110,6 +110,7 @@ export function ExplorerTable<T>({
   emptyState,
 }: ExplorerTableProps<T>) {
   const isEmpty = rows.length === 0;
+
   return (
     <TableContainer
       sx={{

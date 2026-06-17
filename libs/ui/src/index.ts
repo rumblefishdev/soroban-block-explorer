@@ -26,6 +26,7 @@ export { Dash } from './components/Dash.js';
 export { StatusChip } from './components/StatusChip.js';
 
 export {
+  AnimatedNumber,
   formatAmount,
   formatCompactAmount,
   formatFee,
@@ -67,6 +68,7 @@ export {
   PollingIndicator,
   formatRelative,
   useNow,
+  LiveNowProvider,
 } from './timestamps/index.js';
 
 export {

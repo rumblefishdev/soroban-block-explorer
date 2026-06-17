@@ -213,11 +213,11 @@ async fn rebuild_lp_positions(
            FROM lp_positions AS lp FINAL
            LEFT JOIN (
              SELECT
-                 pool_id AS pool_id,
+                 arrayJoin(pool_ids) AS pool_id,
                  source_id AS account_id,
                  min(ledger_sequence) AS min_ledger
                FROM operations_appearances
-              WHERE type = 22 AND isNotNull(source_id) AND isNotNull(pool_id)
+              WHERE type = 22 AND isNotNull(source_id) AND notEmpty(pool_ids)
               GROUP BY pool_id, source_id
            ) AS m ON m.pool_id = lp.pool_id AND m.account_id = lp.account_id"
     );

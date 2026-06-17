@@ -32,6 +32,9 @@ lambda_http = { workspace = true }
 tower-http = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+reqwest = { workspace = true }
+# Session JWT for the free-tier auth (task 0277 paid-API): HS256 issue/verify.
+jsonwebtoken = "9"
 utoipa-swagger-ui = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }

@@ -6,7 +6,7 @@
 //!
 //! Per task 0191 (write path ported PG → CH, task 0231):
 //! - Writes are INSERTs into the ClickHouse enrichment side tables
-//!   (`asset_enrichment` / `nft_enrichment`, ADR 0048) with `version =
+//!   (`asset_enrichment` / `nft_enrichment`, ADR 0050) with `version =
 //!   now_ms` — `ReplacingMergeTree` keeps the latest write per key
 //!   (latest-wins). The indexer-owned tables are never touched. Per-key
 //!   fetch + sentinel rules live in `enrichment_shared::enrich_and_persist::*`.
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Error> {
 
     // Same mTLS bundle path as the indexer Lambda (MTLS_SECRET_NAME +
     // CH_DOMAIN → Secrets extension → rustls client). Writes land in the
-    // enrichment side tables (ADR 0048); the indexer-owned tables are
+    // enrichment side tables (ADR 0050); the indexer-owned tables are
     // never touched by this worker.
     let client = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
         .await

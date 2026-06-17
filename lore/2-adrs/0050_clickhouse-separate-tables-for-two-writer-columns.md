@@ -1,5 +1,5 @@
 ---
-id: '0048'
+id: '0050'
 title: 'Separate ClickHouse tables for indexer-owned vs externally-enriched columns (no two-writer column mixing)'
 status: accepted
 deciders: [karolkow]
@@ -18,7 +18,7 @@ history:
       side tables, never mixed with indexer-owned columns in one table.
 ---
 
-# ADR 0048: Separate ClickHouse tables for indexer-owned vs externally-enriched columns
+# ADR 0050: Separate ClickHouse tables for indexer-owned vs externally-enriched columns
 
 **Related:**
 
@@ -80,10 +80,16 @@ collection_name, version`), both `ReplacingMergeTree(version)`, in the **same
   database**, sitting next to `assets` / `nfts`.
 - Written **only** by the enrichment worker / batch runner; the indexer never
   touches them.
-- The API joins them at read time
-  (`assets a LEFT JOIN asset_enrichment ae … FINAL/argMax`, with
-  `COALESCE(NULLIF(ae.name,''), a.name)` so the indexer-owned soroban-native
-  name still wins where there is no SEP-1 name).
+- The API joins them at read time (`assets a LEFT JOIN ( … argMax(_, version) …
+GROUP BY key ) ae`, the sub-aggregate collapsing the RMT to one latest row per
+  key so the join can't multiply rows). The shipped name composition is the
+  evolved **Option C** — a single owner per `asset_type`, composed disjointly:
+  `coalesce(nullIf(ae.name,''), nullIf(sc.name,''), if(asset_type=0,'Stellar
+Lumen',NULL))` (classic/SAC → `asset_enrichment.name`; soroban →
+  `soroban_contracts.name`; native → literal). NOTE: the read no longer falls
+  back to the indexer-owned `assets.name`/`assets.icon_url` at all — those
+  columns are dropped (0231 step 8 / 0301), so a populated `asset_enrichment` is
+  a hard prerequisite of the `ASSETS=ch` read flip (see 0301 ordering gate).
 
 **Generalised rule:** on ClickHouse, when two independent writers own **disjoint
 columns** of the same logical entity, give each writer its **own table** keyed

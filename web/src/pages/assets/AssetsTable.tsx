@@ -110,10 +110,6 @@ interface AssetsTableProps {
 /** The assets list table — token, issuer/contract, supply and holder count. */
 export function AssetsTable({ rows }: AssetsTableProps) {
   return (
-    <ExplorerTable
-      columns={columns}
-      rows={rows}
-      rowKey={(row) => String(row.id)}
-    />
+    <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.id} />
   );
 }

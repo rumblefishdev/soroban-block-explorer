@@ -4,6 +4,7 @@ import {
   Dash,
   ExplorerTable,
   formatAmount,
+  formatCompactAmount,
   IdentifierDisplay,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -111,14 +112,14 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_a)} />
             <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_a != null ? formatAmount(row.reserve_a) : '—'}{' '}
+              {row.reserve_a != null ? formatCompactAmount(row.reserve_a) : '—'}{' '}
               {assetCodeNode(row.asset_a)}
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} alignItems="center">
             <AssetDot color={reserveDotColor(row.asset_b)} />
             <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_b != null ? formatAmount(row.reserve_b) : '—'}{' '}
+              {row.reserve_b != null ? formatCompactAmount(row.reserve_b) : '—'}{' '}
               {assetCodeNode(row.asset_b)}
             </Typography>
           </Stack>
@@ -143,7 +144,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
             variant="bodySmMedium"
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
-            {formatAmount(row.total_shares)}
+            {formatCompactAmount(row.total_shares)}
           </Typography>
           <Typography
             variant="bodyXsRegular"

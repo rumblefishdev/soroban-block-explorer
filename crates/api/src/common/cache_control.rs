@@ -1,8 +1,15 @@
 //! Centralised `Cache-Control` policy per task 0055.
 //!
-//! Four tiers map to the per-endpoint TTL strategy that the API Gateway
+//! Five tiers map to the per-endpoint TTL strategy that the API Gateway
 //! stage cache will consume (CDK config landed by task 0097):
 //!
+//! - `LIVE` — max-age=0 for the live-polled feeds (home ledgers /
+//!   transactions lists, network stats). The frontend polls these on the
+//!   ledger cadence (~5.8s) and anchors its adaptive schedule on the
+//!   newest row's close time; any browser-cache TTL ≥ the cadence makes
+//!   polls re-read a stale payload and the feed advance 2-3 ledgers per
+//!   visible update. `max-age=0, must-revalidate` forces every poll to
+//!   consult the origin.
 //! - `SHORT` — 10s for lists / frequently-mutating detail (matches API
 //!   Gateway `apiGatewayCacheTtlMutable`).
 //! - `MEDIUM` — 60s for slowly-changing metadata (asset/contract/nft
@@ -20,6 +27,7 @@ use axum::http::{HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
+pub const LIVE: HeaderValue = HeaderValue::from_static("public, max-age=0, must-revalidate");
 pub const SHORT: HeaderValue = HeaderValue::from_static("public, max-age=10");
 pub const MEDIUM: HeaderValue = HeaderValue::from_static("public, max-age=60");
 pub const LONG: HeaderValue = HeaderValue::from_static("public, max-age=300");

@@ -243,7 +243,10 @@ pub struct OperationAppearanceRow {
     pub contract_id: Option<i64>,
     pub asset_code: String,
     pub asset_issuer_id: Option<i64>,
-    pub pool_id: Option<[u8; 32]>,
+    /// Crossed liquidity pools, sorted + deduped (canonical order — see the
+    /// stage fold). Empty = no pool involvement; `[]` replaces the legacy
+    /// scalar NULL (task 0261/0268).
+    pub pool_ids: Vec<[u8; 32]>,
     pub amount: i64,
     pub ledger_sequence: i64,
 }
@@ -322,4 +325,8 @@ pub struct LiquidityPoolSnapshotRow {
     pub tvl: Option<i128>,
     pub volume: Option<i128>,
     pub fee_revenue: Option<i128>,
+    /// Gross trade volume in asset-A units per (pool, ledger), from
+    /// path-payment/offer claim atoms. NULL until the 0266 backfill / 0247
+    /// wiring writes it (live ingest leaves it NULL today). Task 0261/0268.
+    pub gross_volume_a: Option<i128>,
 }
