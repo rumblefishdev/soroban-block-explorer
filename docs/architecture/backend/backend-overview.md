@@ -505,12 +505,13 @@ Per task 0055, every public endpoint sets an explicit `Cache-Control` header
 that the API Gateway stage cache (CDK config — task 0097) honours. Constants
 live in [`crates/api/src/common/cache_control.rs`](../../../crates/api/src/common/cache_control.rs).
 
-| Tier             | `Cache-Control`       | Endpoints                                                                                                                                                                                                           |
-| ---------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Long** (300s)  | `public, max-age=300` | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                      |
-| **Medium** (60s) | `public, max-age=60`  | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                   |
-| **Short** (10s)  | `public, max-age=10`  | `GET /network/stats`, list endpoints, `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, etc. |
-| **No-store**     | `no-store`            | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                              |
+| Tier             | `Cache-Control`                      | Endpoints                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Long** (300s)  | `public, max-age=300`                | `GET /ledgers/:sequence` (closed), `GET /transactions/:hash` (heavy archive overlay available)                                                                                                                                                                                                                                                                                 |
+| **Medium** (60s) | `public, max-age=60`                 | `GET /assets/:id`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /nfts/:id`, `GET /liquidity-pools/:pool_id/chart`                                                                                                                                                                                                                              |
+| **Short** (10s)  | `public, max-age=10`                 | `GET /accounts/:account_id` and its sub-resource, head-ledger detail, `GET /transactions/:hash` (heavy unavailable), `GET /contracts/:contract_id/{invocations,events}`, non-live lists, etc.                                                                                                                                                                                  |
+| **Live** (0s)    | `public, max-age=0, must-revalidate` | `GET /network/stats`, `GET /ledgers` (list), `GET /transactions` (list) — the per-ledger live polls. Any browser-cache TTL ≥ the ~5.8 s ledger cadence re-serves a stale payload to the adaptive poll and the feed batches 2-3 ledgers per visible update, so these endpoints opt out of HTTP caching entirely; request coalescing is the in-process moka layer's job instead. |
+| **No-store**     | `no-store`                           | `GET /search` (variable `q`); also forced on every non-2xx response by tower middleware (`enforce_no_store_on_errors`) — error envelopes never reach the gateway cache                                                                                                                                                                                                         |
 
 Two endpoints carry **conditional** logic:
 
@@ -596,9 +597,11 @@ Caching operates at two levels:
   transactions, closed ledgers) are cached with long TTLs at the API ingress layer. Mutable
   data (recent transactions, network stats) uses short TTLs (5-15 seconds). CloudFront is
   reserved for static frontend/document delivery in the initial topology.
-- **Backend in-memory caching** - frequently accessed reference data (contract metadata,
-  network stats) is cached in the Lambda execution environment with TTLs of 30-60 seconds
-  to reduce database round-trips. All in-process caches are built on the
+- **Backend in-memory caching** - frequently accessed reference data is cached in the
+  Lambda execution environment to reduce database round-trips. Reference data
+  (contract metadata) uses TTLs of 30-60 seconds; live-polled data (network stats)
+  must stay _below_ the ~5.8 s ledger cadence so each per-ledger frontend poll can
+  observe the new head. All in-process caches are built on the
   `moka` crate via the shared `crate::cache::ttl_cache` helper in
   `crates/api/src/cache.rs`, which fixes the TTL + `max_capacity` bound
   and yields lock-free reads, TinyLFU eviction and stampede protection
@@ -606,9 +609,10 @@ Caching operates at two levels:
   - `ContractMetadataCache` (`crates/api/src/contracts/cache.rs`,
     45 s TTL, 10 000 entries) — keyed by contract StrKey, populated on
     `GET /v1/contracts/{contract_id}`.
-  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`, 30 s TTL,
-    single-entry; uses `moka::future::Cache::try_get_with` so concurrent
-    cold-cache requests deduplicate down to a single Postgres query).
+  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`, 4 s TTL —
+    below the ledger cadence, see §6.4 "Live" tier — single-entry; uses
+    `moka::future::Cache::try_get_with` so concurrent cold-cache requests
+    deduplicate down to a single DB query).
     Every cache is a field of `AppState` and shared across handler
     invocations on the same warm Lambda container; cold starts begin with
     empty caches and rebuild on demand.

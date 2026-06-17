@@ -19,7 +19,7 @@ history:
     note: 'Promoted to active. Pre-requirement for 0239 (AWS cutover) Phase 4-5. Unblocks dev-laptop mTLS access to Hetzner CH once LE cert is issued from a real DNS name.'
   - date: '2026-05-20'
     status: completed
-    who: claude
+    who: fmazur
     note: >
       Code-side implementation done: HetznerDnsStack (Route 53 ARecord
       with IP from SSM Parameter Store), `chDomainName` field in

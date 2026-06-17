@@ -9,24 +9,26 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::cursor;
-use crate::common::cursor::TsIdCursor;
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
-use crate::common::pagination::{finalize_page, finalize_ts_id_page, into_envelope};
+use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
+use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     ChartParams, ChartResponse, ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor,
     PoolListParams, PoolTransactionItem, SharesCursor,
 };
 use super::queries::{
-    PoolRow, ResolvedPoolListParams, fetch_participants, fetch_pool_by_id, fetch_pool_chart,
-    fetch_pool_list, fetch_pool_transactions, pool_exists,
+    PoolRow, PoolTxRow, ResolvedPoolListParams, fetch_participants, fetch_pool_by_id,
+    fetch_pool_chart, fetch_pool_list, fetch_pool_transactions, pool_exists,
 };
+use super::queries_ch;
 
 #[utoipa::path(
     get,
@@ -62,7 +64,16 @@ pub async fn list_participants(
     // 404 vs 200-empty disambiguation: a missing pool gets 404 so the
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -76,15 +87,27 @@ pub async fn list_participants(
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
-    let mut rows = match fetch_participants(
-        &state.db,
-        &pool_id_hex,
-        pagination.cursor.as_ref(),
-        fetch_limit,
-        direction,
-    )
-    .await
-    {
+    let fetched = match source {
+        DataSource::Pg => fetch_participants(
+            &state.db,
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_participants(
+            state.ch(),
+            &pool_id_hex,
+            pagination.cursor.as_ref(),
+            fetch_limit,
+            direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_participants({pool_id}): {e}");
@@ -304,7 +327,19 @@ pub async fn list_pools(
         asset_code: normalize_asset_code(params.filter_asset_code),
     };
 
-    let mut rows = match fetch_pool_list(&state.db, &resolved, direction).await {
+    // Per-module datasource dispatch (task 0243 / ADR 0047). The CH list
+    // keys on `last_updated_ledger` (see `queries_ch::fetch_pool_list`); the
+    // sort key travels in `PoolRow::cursor_ledger` regardless of source.
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_list(&state.db, &resolved, direction)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_list(state.ch(), &resolved, direction)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in list_pools: {e}");
@@ -320,7 +355,7 @@ pub async fn list_pools(
         |dir, r| {
             cursor::encode(
                 &PoolListCursor {
-                    created_at_ledger: r.created_at_ledger,
+                    created_at_ledger: r.cursor_ledger,
                     pool_id_hex: r.pool_id_hex.clone(),
                 },
                 dir,
@@ -355,7 +390,18 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         Err(resp) => return resp,
     };
 
-    let row = match fetch_pool_by_id(&state.db, &pool_id_hex).await {
+    // Per-module datasource dispatch (task 0243 / ADR 0047). PG and CH return
+    // different error types; unify to a String so the match below is shared.
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_by_id(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_by_id(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    let row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -367,6 +413,32 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     let mut resp = Json(map_pool_item(row)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
+}
+
+/// `true` when the cursor's datasource tag matches the active backend.
+/// A cross-tagged cursor (e.g. a PG cursor after a flip to CH) carries keyset
+/// values meaningless under the other backend → reject as `invalid_cursor`.
+fn pool_tx_cursor_matches_source(source: DataSource, cursor: &TxListCursor) -> bool {
+    matches!(
+        (source, cursor),
+        (DataSource::Pg, TxListCursor::Pg { .. }) | (DataSource::Ch, TxListCursor::Ch { .. })
+    )
+}
+
+/// Build the next/prev cursor from a boundary row, tagged for the active
+/// datasource: PG keys on `(created_at, id)`, CH on
+/// `(ledger_sequence, transaction_id)` — `transaction_id` == `transactions.id`.
+fn pool_tx_cursor_for(source: DataSource, r: &PoolTxRow) -> TxListCursor {
+    match source {
+        DataSource::Pg => TxListCursor::Pg {
+            ts: r.created_at,
+            id: r.id,
+        },
+        DataSource::Ch => TxListCursor::Ch {
+            ledger_sequence: r.ledger_sequence,
+            tiebreak: r.id,
+        },
+    }
 }
 
 #[utoipa::path(
@@ -393,14 +465,34 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
 pub async fn list_pool_transactions(
     State(state): State<AppState>,
     Path(pool_id): Path<String>,
-    pagination: Pagination<TsIdCursor>,
+    pagination: Pagination<TxListCursor>,
 ) -> Response {
     let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
         Ok(hex) => hex,
         Err(resp) => return resp,
     };
 
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+
+    // Reject a cursor minted for the other datasource (e.g. a PG cursor
+    // replayed after a flag flip to CH): its keyset values are meaningless
+    // under the active backend, so fail with `invalid_cursor` rather than
+    // silently mis-paginating (ADR 0008). Mirrors `transactions::list`.
+    if let Some(cursor) = pagination.cursor.as_ref()
+        && !pool_tx_cursor_matches_source(source, cursor)
+    {
+        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
+    }
+
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -409,15 +501,27 @@ pub async fn list_pool_transactions(
         }
     }
 
-    let mut rows = match fetch_pool_transactions(
-        &state.db,
-        &pool_id_hex,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        pagination.direction,
-    )
-    .await
-    {
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_transactions(
+            &state.db,
+            &pool_id_hex,
+            pagination.fetch_limit(),
+            pagination.cursor.as_ref(),
+            pagination.direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::fetch_pool_transactions(
+            state.ch(),
+            &pool_id_hex,
+            pagination.fetch_limit(),
+            pagination.cursor.as_ref(),
+            pagination.direction,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_transactions({pool_id}): {e}");
@@ -425,13 +529,14 @@ pub async fn list_pool_transactions(
         }
     };
 
-    let page = finalize_ts_id_page(
+    // Cursor payload differs by datasource (PG keys on `(created_at, id)`;
+    // CH on `(ledger_sequence, transaction_id)`) but stays opaque on the wire.
+    let page = finalize_page(
         &mut rows,
         pagination.limit,
         pagination.direction,
         pagination.has_predecessor(),
-        |r| r.created_at,
-        |r| r.id,
+        |dir, r| cursor::encode(&pool_tx_cursor_for(source, r), dir),
     );
     let data: Vec<PoolTransactionItem> = rows
         .into_iter()
@@ -583,7 +688,16 @@ pub async fn get_pool_chart(
         );
     }
 
-    match pool_exists(&state.db, &pool_id_hex).await {
+    let source = DataSource::for_module(Module::LiquidityPools);
+    let exists = match source {
+        DataSource::Pg => pool_exists(&state.db, &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => queries_ch::pool_exists(state.ch(), &pool_id_hex)
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match exists {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -592,7 +706,17 @@ pub async fn get_pool_chart(
         }
     }
 
-    let data_points = match fetch_pool_chart(&state.db, &pool_id_hex, &interval, from, to).await {
+    let fetched = match source {
+        DataSource::Pg => fetch_pool_chart(&state.db, &pool_id_hex, &interval, from, to)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => {
+            queries_ch::fetch_pool_chart(state.ch(), &pool_id_hex, &interval, from, to)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    };
+    let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("DB error in fetch_pool_chart({pool_id}): {e}");
@@ -685,6 +809,7 @@ mod map_pool_item_tests {
             fee_bps: 30,
             fee_percent: "0.30".into(),
             created_at_ledger: 100,
+            cursor_ledger: 100,
             participant_count: 0,
             latest_snapshot_ledger: None,
             reserve_a: None,

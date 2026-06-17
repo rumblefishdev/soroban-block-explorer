@@ -1408,7 +1408,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse for 30s in process memory. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N Postgres round-trips.",
+        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`\nestimates for accounts / contracts) and caches the assembled\nresponse for 4s in process memory (below the ledger cadence — see\n`network/cache.rs`). See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N Postgres round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -3065,6 +3065,7 @@
           "appearance_id",
           "type_name",
           "type",
+          "pool_ids",
           "ledger_sequence",
           "created_at"
         ],
@@ -3100,9 +3101,12 @@
             "type": "integer",
             "format": "int64"
           },
-          "pool_id": {
-            "type": ["string", "null"],
-            "description": "Liquidity pool ID as SEP-23 strkey (`L...`, 56 chars). Encoded\nfrom the DB hex form at the response boundary so cross-entity\nlink targets match the `/v1/liquidity-pools/:id` route shape."
+          "pool_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Liquidity pools crossed by this operation, as SEP-23 strkeys\n(`L...`, 56 chars). Encoded from the DB hex form at the response\nboundary so cross-entity link targets match the\n`/v1/liquidity-pools/:id` route shape. Single-element for LP\ndeposit/withdraw; the full crossed-pool list for path payments and\noffers that filled against a pool (task 0261/0268 — replaces the\nformer nullable scalar `pool_id`).\n\n**Backend caveat (PG↔CH migration, ADR 0047).** Empty `[]` means \"no\npool\" **only** for ClickHouse-served responses. The Postgres backend\n(default until each module flips to CH, per task 0243) never received\nthe claim-atom extraction, so it returns `[]` for *every* path-payment\nand offer op regardless of whether a pool was crossed — only LP\ndeposit/withdraw carry a pool there. Treat `[]` as authoritative for\npool absence only once the module reads from CH."
           },
           "source_account": {
             "type": ["string", "null"]
@@ -3117,6 +3121,39 @@
             "description": "Operation type tag in canonical SCREAMING_SNAKE_CASE\n(e.g. `\"INVOKE_HOST_FUNCTION\"`)."
           }
         }
+      },
+      "OperationType": {
+        "type": "string",
+        "description": "Stellar operation type. Discriminants match the XDR numbering; the\nserde representation is the canonical SCREAMING_SNAKE_CASE label used\nby the Horizon API and historically persisted as VARCHAR.",
+        "enum": [
+          "CREATE_ACCOUNT",
+          "PAYMENT",
+          "PATH_PAYMENT_STRICT_RECEIVE",
+          "MANAGE_SELL_OFFER",
+          "CREATE_PASSIVE_SELL_OFFER",
+          "SET_OPTIONS",
+          "CHANGE_TRUST",
+          "ALLOW_TRUST",
+          "ACCOUNT_MERGE",
+          "INFLATION",
+          "MANAGE_DATA",
+          "BUMP_SEQUENCE",
+          "MANAGE_BUY_OFFER",
+          "PATH_PAYMENT_STRICT_SEND",
+          "CREATE_CLAIMABLE_BALANCE",
+          "CLAIM_CLAIMABLE_BALANCE",
+          "BEGIN_SPONSORING_FUTURE_RESERVES",
+          "END_SPONSORING_FUTURE_RESERVES",
+          "REVOKE_SPONSORSHIP",
+          "CLAWBACK",
+          "CLAWBACK_CLAIMABLE_BALANCE",
+          "SET_TRUST_LINE_FLAGS",
+          "LIQUIDITY_POOL_DEPOSIT",
+          "LIQUIDITY_POOL_WITHDRAW",
+          "INVOKE_HOST_FUNCTION",
+          "EXTEND_FOOTPRINT_TTL",
+          "RESTORE_FOOTPRINT"
+        ]
       },
       "PageInfo": {
         "type": "object",

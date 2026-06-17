@@ -1,0 +1,43 @@
+%% Final contract: explorer <-> prices API (final 2026-06-16, prices PR #39)
+%% Source for G-explorer-prices-contract.svg. Edit + re-render via /mermaid-diagrams.
+graph LR
+  subgraph PRICES["prices (Oskar) — write-time"]
+    direction TB
+    P1["materializes close_usd<br/>per grain _1h/_1d — retention-proof"]
+    P2["tiered USD reference<br/>oracle in-window → peg × XLM/USDC"]
+    P3["current_prices (live spot)<br/>written by 0039 — pending"]
+    P4["prices.assets<br/>natural id + sac_address"]
+  end
+  subgraph IFACE["contract surface — named views, same CH cluster"]
+    direction TB
+    V1["price_usd_series(identity, bucket) → close_usd<br/>structured-id key · Decimal(38,14)<br/>NULL-never-error · discr ok/no_asset_price/no_reference"]
+    V2["current_price_usd(identity) → price_usd + updated_at<br/>live spot · never NULL for known asset"]
+    V3["identity_by_contract(contract) → identity<br/>SAC / Soroban leg resolution"]
+    V4["usd_reference(bucket) → value / bool<br/>systemic blackout"]
+  end
+  subgraph EXPL["explorer (ours) — read + live"]
+    direction TB
+    E1["historical: LEFT JOIN snapshots × price_usd_series<br/>on toStartOfHour/Day(closed_at)"]
+    E2["Soroban-DEX leg: contract → identity_by_contract → series"]
+    E3["live tip: ingestion lambda → current_price_usd<br/>staleness = now − updated_at (ours)"]
+    E4["owns: partial-vs-NULL + staleness<br/>OPEN: live write-back vs RMT race"]
+  end
+  P1 --> V1
+  P2 --> V4
+  P3 --> V2
+  P4 --> V3
+  V1 --> E1
+  V4 --> E1
+  V3 --> E2
+  E2 --> E1
+  V2 --> E3
+  E1 --> E4
+  E3 --> E4
+  STATUS["shipped — prices PR #39: native-key align + SAC→classic resolver<br/>operational pending: 0039 live writer · backfill → ledger 50,457,424"]
+  STATUS -.-> IFACE
+  classDef iface fill:#E1F5EE,stroke:#0F6E56,color:#085041;
+  classDef side fill:#F1EFE8,stroke:#5F5E5A,color:#444441;
+  classDef status fill:#FAEEDA,stroke:#854F0B,color:#633806;
+  class V1,V2,V3,V4 iface;
+  class P1,P2,P3,P4,E1,E2,E3,E4 side;
+  class STATUS status;

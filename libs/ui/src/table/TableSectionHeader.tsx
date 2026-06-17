@@ -38,7 +38,11 @@ export function TableSectionHeader({
           {badge}
         </Stack>
         {description ? (
-          <Typography variant="bodyMedium" color="text.secondary">
+          <Typography
+            component="div"
+            variant="bodyMedium"
+            color="text.secondary"
+          >
             {description}
           </Typography>
         ) : null}

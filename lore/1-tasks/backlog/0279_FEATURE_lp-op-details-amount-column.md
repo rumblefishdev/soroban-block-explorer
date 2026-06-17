@@ -24,6 +24,19 @@ history:
       after a deep-dive confirmed per-op LP amounts are not in the DB and
       cannot be served cheaply today. Blocked on the path decision from
       research 0247 (read-time XDR fetch vs ingest-side extraction).
+  - date: '2026-06-03'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      0247 concluded → path decision = **Path B (ingest-side extraction)**.
+      Measured on prod CH: per-op collision rate 25% (5.75% per-group), which
+      quantifies the "reserve-delta unreliable" note above — a pure-CH-SQL
+      snapshot-delta approach (0247 "Path E") caps at ~75% per-op coverage.
+      Product requires 100% per-tx amounts, so read-time XDR (Path A) as a
+      25%-of-rows hot-path fallback is rejected. Ingest-side extraction reads
+      each op's own (non-collapsed) LedgerEntryChanges → 100% per-op, no
+      collision, no hot-path S3. Now unblocked. See 0247 notes
+      (R-clickhouse-snapshot-delta, S-recommendation).
 ---
 
 # LP per-op amounts: wire `?expand=lp_op_details` + un-hide Amount column
@@ -44,10 +57,31 @@ no claimedOffers/deposit/withdraw extraction, the LP-tx endpoint is DB-only,
 and reserve-delta is unreliable (multi-op/ledger netting). So this is a real
 feature, not a field add.
 
-**Blocked on the path decision from research 0247** (read-time S3 XDR fetch vs
-ingest-side extraction + narrow side table).
+~~**Blocked on the path decision from research 0247**~~ — **RESOLVED
+2026-06-03: 0247 selected Path B (ingest-side extraction).** Unblocked.
 
-## Implementation (after 0247 picks a path)
+## Path decision (from 0247)
+
+**Selected: Path B (ingest-side extraction).** Path A (read-time XDR) and the
+pure-CH-SQL snapshot-delta shortcut are both rejected:
+
+- The snapshot reserve-delta shortcut (0247 "Path E") is exact only for
+  ledgers with a single LP op per pool. Measured per-op collision rate on
+  prod CH = **25%** (5.75% per-group; collisions are op-dense) → caps at
+  ~75% per-op coverage. This is the quantified version of the
+  "reserve-delta unreliable" note above.
+- Product requires **100%** per-tx amounts → a 25%-of-rows read-time XDR
+  fallback (Path A) on this hot list endpoint is too costly.
+- **Path B** reads each op's own (non-collapsed) `LedgerEntryChanges` at
+  ingest → 100% per-op, no collision, no hot-path S3. Needs a narrow
+  side table + an ADR-0029 clarification (LP-only amounts ≈ single-digit
+  MB, not the multi-TB corpus ADR 0029 rejected).
+
+Full reasoning + the concrete build steps (xdr-parser extractor, CH
+`lp_operation_amounts` table, indexer persist, backfill) are in 0247's
+`notes/R-clickhouse-snapshot-delta.md` and `notes/S-recommendation.md`.
+
+## Implementation (Path B — ingest-side, per 0247)
 
 - **Parser**: add LP-op amount extraction to `xdr_parser` — `claimedOffers[]`
   (PathPayment, op types 2 + 13) for swaps + `LiquidityPoolDeposit`/`Withdraw`
@@ -63,7 +97,7 @@ ingest-side extraction + narrow side table).
 
 ## Acceptance Criteria
 
-- [ ] 0247 path decision recorded.
+- [x] 0247 path decision recorded — **Path B (ingest-side)**, see above.
 - [ ] `?expand=lp_op_details` returns correct per-op amounts (verified vs Horizon
       on a known mixed-direction pool).
 - [ ] FE "Amount" column un-hidden and rendering deposit/withdraw/trade shapes.

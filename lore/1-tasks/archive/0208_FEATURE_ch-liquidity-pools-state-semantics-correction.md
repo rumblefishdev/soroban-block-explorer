@@ -30,7 +30,7 @@ history:
       implementing.
   - date: '2026-05-12'
     status: completed
-    who: claude
+    who: fmazur
     note: >
       **Folded into task 0206 production-schema refactor (Path 2
       chosen).** User redirected scope: "schema ma być produkcyjna od

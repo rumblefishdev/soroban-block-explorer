@@ -1,0 +1,33 @@
+%% asset -> usd routing; pivot is write-time (close_usd materialized per grain)
+%% Source for G-price-usd-pivot.svg. Edit + re-render via /mermaid-diagrams.
+graph TB
+  IN["asset candle (vwap)<br/>in quote units — not USD"]
+  Q1["quote: USDC / stable<br/>× peg $1"]
+  Q2["quote: XLM<br/>× XLM/USDC close"]
+  Q3["asset in oracle<br/>oracle.price_usd (≤ 13 months)"]
+  Q4["no candle ≤ T<br/>→ null"]
+  REF["deep-history reference:<br/>XLM/USDC, USDC=$1 → 2024-02-20"]
+  ENR["enrichment — write-time:<br/>writes close_usd per grain (retention-proof)"]
+  VIEW["price_usd_series(identity, bucket) → close_usd<br/>read-time = JOIN, no pivot"]
+  EXP["explorer — LEFT JOIN:<br/>TVL = Σ reserve·price · volume = gva·price_A"]
+  IN --> Q1
+  IN --> Q2
+  IN --> Q3
+  IN --> Q4
+  REF -.->|XLM pivot| Q2
+  Q1 --> ENR
+  Q2 --> ENR
+  Q3 --> ENR
+  Q4 --> ENR
+  ENR --> VIEW
+  VIEW --> EXP
+  classDef ok fill:#EAF3DE,stroke:#3B6D11,color:#27500A;
+  classDef lim fill:#FAEEDA,stroke:#854F0B,color:#633806;
+  classDef none fill:#FCEBEB,stroke:#A32D2D,color:#791F1F;
+  classDef iface fill:#E1F5EE,stroke:#0F6E56,color:#085041;
+  classDef neut fill:#F1EFE8,stroke:#5F5E5A,color:#444441;
+  class Q1,Q2 ok;
+  class Q3 lim;
+  class Q4 none;
+  class VIEW iface;
+  class IN,REF,ENR,EXP neut;

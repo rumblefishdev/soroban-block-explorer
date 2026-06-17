@@ -412,7 +412,8 @@ media URL.
 pool.
 
 **`GET /liquidity-pools/:strkey/chart`** — Time-series data for TVL, volume, and fee revenue.
-Query params: `interval` (1h/1d/1w), `from`, `to`.
+Query params: `interval` (1h/1d/1w), `from`, `to`. **Launch scope: TVL only**
+(volume / fee_revenue deferred — see §6.11 and [ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).
 
 #### Search
 
@@ -673,7 +674,7 @@ Stellar Network (mainnet peers)
 │     (no raw envelope/result XDR — ADR 0029)             │
 │  5. Aggregate operations by identity (type, source_id,  │
 │     destination_id, contract_id, asset_code,            │
-│     asset_issuer_id, pool_id) → `operations_appearances`│
+│     asset_issuer_id, pool_ids) →`operations_appearances`│
 │     with `amount BIGINT` counting collapsed duplicates  │
 │     (ADR 0163 — no transfer_amount, no application_order,│
 │     no details JSONB)                                   │
@@ -1185,6 +1186,20 @@ CREATE TABLE liquidity_pool_snapshots (
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 ```
+
+**ClickHouse — USD denomination at read time ([ADR 0048](../../lore/2-adrs/0048_fast-change-offchain-compute-at-read.md)).**
+On the ClickHouse primary store ([ADR 0047](../../lore/2-adrs/0047_clickhouse-primary-api-datastore.md)),
+`tvl` / `volume` / `fee_revenue` are **not** materialized into these rows by a
+write-back worker. Fast-change off-chain values (USD denominations) are computed
+at **read time** by joining a per-asset `prices(asset, time_bucket → usd)` table
+(synced once per asset from the team Prices API) against the snapshot's reserves,
+mapping `ledger → closed_at → price candle`. This keeps
+`liquidity_pool_snapshots` single-writer (indexer only) and avoids the
+`ReplacingMergeTree` per-row read-modify-write race. **Launch scope: TVL only**
+(`reserve_a·price_a + reserve_b·price_b`); `volume` / `fee_revenue` are deferred —
+their on-chain input `gross_volume_a` (PathPayment claim atoms) is now derived at
+ingest by the live indexer and backfilled for history (task 0266); only the USD
+denomination waits on the Prices API.
 
 ### 6.12 Partitioning and Retention
 

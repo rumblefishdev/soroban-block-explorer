@@ -4,6 +4,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as targets from 'aws-cdk-lib/aws-route53-targets';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import type { Construct } from 'constructs';
 
@@ -40,12 +41,37 @@ export class ApiGatewayStack extends cdk.Stack {
     const { config, apiFunction } = props;
 
     // ---------------------
+    // API mTLS truststore (Cloudflare origin lockdown — ADR 0048, Path B)
+    // ---------------------
+    // Phase 1, provisioned independently of the mTLS attachment: the
+    // operator uploads the CA bundle (`truststore.pem` — the CA that signed
+    // Cloudflare's Authenticated-Origin-Pulls client cert) into this bucket
+    // BEFORE flipping `enableApiMtls`, because API Gateway validates the
+    // truststore S3 object at deploy time. Versioned per the archival
+    // guidance and required for CA rotation (mTLS references object versions).
+    const mtlsTruststoreBucket = config.provisionApiMtlsTruststore
+      ? new s3.Bucket(this, 'ApiMtlsTruststore', {
+          bucketName: `${config.envName}-soroban-explorer-api-mtls-truststore`,
+          versioned: true,
+          blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+          encryption: config.kmsEncryption
+            ? s3.BucketEncryption.KMS_MANAGED
+            : s3.BucketEncryption.S3_MANAGED,
+          enforceSSL: true,
+          removalPolicy: cdk.RemovalPolicy.RETAIN,
+        })
+      : undefined;
+
+    // ---------------------
     // REST API
     // ---------------------
     const api = new apigateway.LambdaRestApi(this, 'Api', {
       restApiName: `${config.envName}-soroban-explorer-api`,
       handler: apiFunction,
       proxy: true,
+      // Phase 2: kill the raw execute-api endpoint, which bypasses
+      // custom-domain mTLS. Only flips with enableApiMtls.
+      ...(config.enableApiMtls && { disableExecuteApiEndpoint: true }),
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
@@ -60,8 +86,14 @@ export class ApiGatewayStack extends cdk.Stack {
       },
       defaultCorsPreflightOptions: {
         allowOrigins: [`https://${config.domainName}`],
-        allowMethods: ['GET', 'OPTIONS'],
-        allowHeaders: ['Content-Type', 'Accept'],
+        // POST is needed for the cross-origin `/auth/session` mint (task 0277
+        // paid-API). The SPA on `domainName` calls the API on a different host,
+        // so every non-simple request triggers a browser preflight.
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        // `Authorization` (free-tier session JWT) and `x-api-key` (paid tier)
+        // are non-safelisted request headers — without them the preflight is
+        // rejected and the armed SPA cannot send a Bearer / partner key.
+        allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
@@ -120,51 +152,101 @@ export class ApiGatewayStack extends cdk.Stack {
     usagePlan.addApiKey(apiKey);
 
     // ---------------------
-    // Custom Domain + Route 53
+    // Custom Domains (Cloudflare migration — task 0277 / ADR 0048)
     // ---------------------
-    const certificate = acm.Certificate.fromCertificateArn(
-      this,
-      'ApiCertificate',
-      config.apiCertificateArn
-    );
+    // mTLS attaches to the CLOUDFLARE custom domain only — the legacy domain
+    // stays plain (the SPA hits it directly, with no client cert). validateConfig
+    // guarantees the truststore bucket exists when enableApiMtls is set; the
+    // extra guard keeps this type-safe.
+    const mtlsConfig =
+      config.enableApiMtls && mtlsTruststoreBucket
+        ? {
+            mtls: {
+              bucket: mtlsTruststoreBucket,
+              key: 'truststore.pem',
+            },
+            securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+          }
+        : {};
 
-    const apiDomain = api.addDomainName('ApiDomain', {
-      domainName: config.apiDomainName,
-      certificate,
-      endpointType: apigateway.EndpointType.REGIONAL,
-    });
+    // Legacy custom domain (api.sorobanscan.rumblefish.dev) + Route 53 — plain
+    // TLS. Live during the migration so the SPA keeps working; retire with one
+    // deploy via enableLegacyApiDomain=false after the cutover is verified.
+    if (config.enableLegacyApiDomain) {
+      const certificate = acm.Certificate.fromCertificateArn(
+        this,
+        'ApiCertificate',
+        config.apiCertificateArn
+      );
 
-    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
-      this,
-      'HostedZone',
-      {
-        hostedZoneId: config.hostedZoneId,
-        zoneName: config.hostedZoneName,
-      }
-    );
+      const apiDomain = api.addDomainName('ApiDomain', {
+        domainName: config.apiDomainName,
+        certificate,
+        endpointType: apigateway.EndpointType.REGIONAL,
+      });
 
-    // recordName must be RELATIVE to the hosted zone — see
-    // relativeRecordName() in types.ts.
-    const apiRecordName = relativeRecordName(
-      config.apiDomainName,
-      config.hostedZoneName
-    );
+      const hostedZone = route53.HostedZone.fromHostedZoneAttributes(
+        this,
+        'HostedZone',
+        {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.hostedZoneName,
+        }
+      );
 
-    new route53.ARecord(this, 'ApiARecord', {
-      zone: hostedZone,
-      recordName: apiRecordName,
-      target: route53.RecordTarget.fromAlias(
-        new targets.ApiGatewayDomain(apiDomain)
-      ),
-    });
+      // recordName must be RELATIVE to the hosted zone — see
+      // relativeRecordName() in types.ts.
+      const apiRecordName = relativeRecordName(
+        config.apiDomainName,
+        config.hostedZoneName
+      );
 
-    new route53.AaaaRecord(this, 'ApiAaaaRecord', {
-      zone: hostedZone,
-      recordName: apiRecordName,
-      target: route53.RecordTarget.fromAlias(
-        new targets.ApiGatewayDomain(apiDomain)
-      ),
-    });
+      new route53.ARecord(this, 'ApiARecord', {
+        zone: hostedZone,
+        recordName: apiRecordName,
+        target: route53.RecordTarget.fromAlias(
+          new targets.ApiGatewayDomain(apiDomain)
+        ),
+      });
+
+      new route53.AaaaRecord(this, 'ApiAaaaRecord', {
+        zone: hostedZone,
+        recordName: apiRecordName,
+        target: route53.RecordTarget.fromAlias(
+          new targets.ApiGatewayDomain(apiDomain)
+        ),
+      });
+
+      new cdk.CfnOutput(this, 'ApiCustomDomain', {
+        value: `https://${config.apiDomainName}`,
+      });
+    }
+
+    // Cloudflare-fronted custom domain (api-sorobanscan.rumblefishdev.com) — a
+    // SECOND custom domain on the same API, with NO Route 53 record (Cloudflare
+    // is authoritative). mTLS-lockable. Its regional alias target is output so it
+    // can be fed into the Cloudflare module's api_origin_target.
+    if (config.enableCloudflareApiDomain) {
+      const cfCertificate = acm.Certificate.fromCertificateArn(
+        this,
+        'CloudflareApiCertificate',
+        config.cloudflareApiCertificateArn
+      );
+
+      const cfApiDomain = api.addDomainName('CloudflareApiDomain', {
+        domainName: config.cloudflareApiDomainName,
+        certificate: cfCertificate,
+        endpointType: apigateway.EndpointType.REGIONAL,
+        ...mtlsConfig,
+      });
+
+      new cdk.CfnOutput(this, 'CloudflareApiRegionalTarget', {
+        value: cfApiDomain.domainNameAliasDomainName,
+      });
+      new cdk.CfnOutput(this, 'CloudflareApiCustomDomain', {
+        value: `https://${config.cloudflareApiDomainName}`,
+      });
+    }
 
     // ---------------------
     // Tags
@@ -179,9 +261,11 @@ export class ApiGatewayStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: api.url,
     });
-    new cdk.CfnOutput(this, 'ApiCustomDomain', {
-      value: `https://${config.apiDomainName}`,
-    });
+    if (mtlsTruststoreBucket) {
+      new cdk.CfnOutput(this, 'ApiMtlsTruststoreBucket', {
+        value: mtlsTruststoreBucket.bucketName,
+      });
+    }
     if (waf) {
       new cdk.CfnOutput(this, 'ApiWafWebAclArn', {
         value: waf.webAclArn,

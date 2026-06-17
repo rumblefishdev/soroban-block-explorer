@@ -1,5 +1,4 @@
 ---
-
 id: '0172'
 title: 'REFACTOR: switch application_order from 0-based to 1-based for Stellar ecosystem parity'
 type: REFACTOR
@@ -7,63 +6,67 @@ status: completed
 related_adr: ['0028', '0037']
 related_tasks: ['0167', '0168', '0169']
 tags:
-[
-indexer,
-schema,
-api,
-application-order,
-ecosystem-parity,
-pre-mainnet-backfill,
-]
+  [
+    indexer,
+    schema,
+    api,
+    application-order,
+    ecosystem-parity,
+    pre-mainnet-backfill,
+  ]
 links:
-
-- 'crates/indexer/src/handler/persist/staging.rs'
-- 'crates/api/src/stellar_archive/dto.rs'
-- 'lore/2-adrs/0028_parsed-ledger-artifact-v1-shape.md'
-- 'docs/architecture/database-schema/endpoint-queries/02_get_transactions_list.sql'
-  history:
-- date: 2026-04-28
-  status: backlog
-  who: fmazur
-  note: >
-  Spawned from manual E02 verification. 8/8 sampled transactions
-  across 5 ledgers confirm DB application_order is systematically
-  0-based while Horizon paging_token (and the rest of the Stellar
-  ecosystem — stellar.expert, stellar-core) is 1-based. Off-by-1
-  is structural, not a data corruption: `staging.rs:479` uses
-  Rust's `.enumerate()` (0-indexed) and ADR 0028 documents the
-  0-based convention as a deliberate choice. Owner has not yet
-  started mainnet backfill, so reindex cost is contained — fix
-  the convention now before backfill locks data shape.
-- date: 2026-04-28
-  status: active
-  who: fmazur
-  note: 'Promoted to active via /promote-task'
-- date: 2026-04-28
-  status: completed
-  who: fmazur
-  note: >
-  Implementation landed across 7 files: indexer staging.rs (idx+1),
-  xdr-parser operation.rs (i+1) + 4 test assertion updates, types.rs
-  doc comment, persist_integration.rs fixture builders (0,1→1,2),
-  api/dto.rs comment, audit doc, ADR 0028 convention update.
-  297 tests passing, clippy + fmt clean. Owner reset DB and
-  re-ran local backfill of 100 audit ledgers (62016000–62016099,
-  Protocol 25); verification passed: 100/100 ledgers have
-  MIN(app_order)=1 and MAX=transaction_count, 0 zero-valued rows
-  across 36,319 tx, 19/19 sampled tx match Horizon paging_token
-  (paging_token = ledger × 2^32 + app_order × 2^12, extra_bits=0
-  on every decode). Acceptance criteria 1–3, 7, 8 fully met.
-  Criterion 4 (CHECK constraint) deferred per task plan
-  ("defer if owner prefers no constraint"). Criteria 5/6
-  partially met — operation.rs unit tests assert 1, 2, 3 sequence
-  via the sister enumeration that drives the same `idx + 1` logic;
-  direct staging.rs unit test omitted as the change is
-  single-line arithmetic with full empirical coverage from the
-  reindex spot-check. Drive-by from E02 verification: discovered
-  task 0173 (xdr-parser drops per-op events on V4 meta /
-  Protocol 23+) — spawned to backlog with full repro + impact
-  metrics + structural proof; out of scope for this task.
+  - 'crates/indexer/src/handler/persist/staging.rs'
+  - 'crates/api/src/stellar_archive/dto.rs'
+  - 'lore/2-adrs/0028_parsed-ledger-artifact-v1-shape.md'
+  - 'docs/architecture/database-schema/endpoint-queries/02_get_transactions_list.sql'
+history:
+  - date: '2026-04-28'
+    status: backlog
+    who: fmazur
+    note: >
+      Spawned from manual E02 verification. 8/8 sampled transactions
+      across 5 ledgers confirm DB application_order is systematically
+      0-based while Horizon paging_token (and the rest of the Stellar
+      ecosystem — stellar.expert, stellar-core) is 1-based. Off-by-1
+      is structural, not a data corruption: `staging.rs:479` uses
+      Rust's `.enumerate()` (0-indexed) and ADR 0028 documents the
+      0-based convention as a deliberate choice. Owner has not yet
+      started mainnet backfill, so reindex cost is contained — fix
+      the convention now before backfill locks data shape.
+  - date: '2026-04-28'
+    status: active
+    who: fmazur
+    note: 'Promoted to active via /promote-task'
+  - date: '2026-04-28'
+    status: completed
+    who: fmazur
+    note: >
+      Implementation landed across 7 files: indexer staging.rs (idx+1),
+      xdr-parser operation.rs (i+1) + 4 test assertion updates, types.rs
+      doc comment, persist_integration.rs fixture builders (0,1→1,2),
+      api/dto.rs comment, audit doc, ADR 0028 convention update.
+      297 tests passing, clippy + fmt clean. Owner reset DB and
+      re-ran local backfill of 100 audit ledgers (62016000–62016099,
+      Protocol 25); verification passed: 100/100 ledgers have
+      MIN(app_order)=1 and MAX=transaction_count, 0 zero-valued rows
+      across 36,319 tx, 19/19 sampled tx match Horizon paging_token
+      (paging_token = ledger × 2^32 + app_order × 2^12, extra_bits=0
+      on every decode). Acceptance criteria 1–3, 7, 8 fully met.
+      Criterion 4 (CHECK constraint) deferred per task plan
+      ("defer if owner prefers no constraint"). Criteria 5/6
+      partially met — operation.rs unit tests assert 1, 2, 3 sequence
+      via the sister enumeration that drives the same `idx + 1` logic;
+      direct staging.rs unit test omitted as the change is
+      single-line arithmetic with full empirical coverage from the
+      reindex spot-check. Drive-by from E02 verification: discovered
+      task 0173 (xdr-parser drops per-op events on V4 meta /
+      Protocol 23+) — spawned to backlog with full repro + impact
+      metrics + structural proof; out of scope for this task.
+  - date: '2026-06-09'
+    status: completed
+    who: stkrolikiewicz
+    note: 'Repaired malformed YAML frontmatter (broken indentation, missing closing delimiter, unquoted dates). No content change. Found via lore-framework_validate.'
+---
 
 # REFACTOR: switch application_order from 0-based to 1-based for Stellar ecosystem parity
 

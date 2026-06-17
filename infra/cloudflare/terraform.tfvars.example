@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) and fill in. No secrets here — the
+# Cloudflare API token comes from CLOUDFLARE_API_TOKEN (see providers.tf), the
+# mTLS cert/key from ./certs/ (see origin-lock.tf).
+
+# Zone id of rumblefishdev.com — from rf-domains' `zone_id` output (D9/D11).
+cloudflare_zone_id = "REPLACE_WITH_RUMBLEFISHDEV_ZONE_ID"
+
+api_hostname = "api-sorobanscan.rumblefishdev.com"
+
+# API Gateway REGIONAL custom-domain target (CDK ApiGateway stack output).
+api_origin_target = "REPLACE_WITH_dYYYY.execute-api.eu-central-1.amazonaws.com"
+
+# Rollout gates — keep false until the cutover / cert generation steps.
+create_dns_record   = false
+enable_api_mtls_aop = false

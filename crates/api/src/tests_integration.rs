@@ -368,7 +368,6 @@ async fn detail_endpoint_projects_full_operation_columns_against_real_db() {
         "contract_id",
         "asset_code",
         "asset_issuer",
-        "pool_id",
     ] {
         assert!(
             op.get(field).is_some(),
@@ -379,6 +378,12 @@ async fn detail_endpoint_projects_full_operation_columns_against_real_db() {
             "operations[0].{field} bad type: {op}"
         );
     }
+    // pool_ids replaced the scalar pool_id (task 0261/0268): always present,
+    // always an array (empty when no pool crossed).
+    assert!(
+        op.get("pool_ids").is_some_and(Value::is_array),
+        "operations[0].pool_ids missing or not array: {op}"
+    );
     assert!(
         op["ledger_sequence"].is_number(),
         "operations[0].ledger_sequence not number: {op}"
@@ -2056,7 +2061,7 @@ async fn ledgers_list_returns_paginated_envelope_against_real_db() {
     assert_eq!(status, StatusCode::OK, "expected 200, got {status}: {json}");
     assert_eq!(
         cc.as_deref(),
-        Some("public, max-age=10"),
+        Some("public, max-age=0, must-revalidate"),
         "list Cache-Control: {cc:?}"
     );
     assert!(json["data"].is_array(), "data not array: {json}");
@@ -3995,9 +4000,9 @@ async fn handler_404_returns_no_store_against_real_db() {
     assert_eq!(cache_control(&resp).as_deref(), Some("no-store"));
 }
 
-/// `GET /v1/transactions` → SHORT (10s).
+/// `GET /v1/transactions` → LIVE (max-age=0).
 #[tokio::test]
-async fn transactions_list_cache_control_short_against_real_db() {
+async fn transactions_list_cache_control_live_against_real_db() {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
         return;
     };
@@ -4014,7 +4019,10 @@ async fn transactions_list_cache_control_short_against_real_db() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(cache_control(&resp).as_deref(), Some("public, max-age=10"));
+    assert_eq!(
+        cache_control(&resp).as_deref(),
+        Some("public, max-age=0, must-revalidate")
+    );
 }
 
 /// `GET /v1/transactions/:hash` → conditional.

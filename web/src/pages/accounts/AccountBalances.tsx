@@ -6,7 +6,6 @@ import {
   EmptyState,
   formatAmount,
   IdentifierDisplay,
-  monoFontFamily,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
@@ -119,17 +118,32 @@ function BalanceRow({
               alignItems="center"
               sx={{ flexWrap: 'wrap', rowGap: 0.5 }}
             >
-              <Typography
-                component="span"
-                sx={(theme) => ({
-                  fontFamily: s.isNative ? undefined : monoFontFamily,
-                  fontSize: 12,
-                  color: theme.palette.text.tertiary,
-                  wordBreak: 'break-all',
-                })}
-              >
-                {s.subline}
-              </Typography>
+              {s.isNative ? (
+                <Typography
+                  component="span"
+                  sx={(theme) => ({
+                    fontSize: 12,
+                    color: theme.palette.text.tertiary,
+                  })}
+                >
+                  {s.subline}
+                </Typography>
+              ) : (
+                // Issuer address: truncated via the identifier component
+                // (the full id is one tap away on the asset/issuer page);
+                // `tone='inherit'` adopts the tertiary subline colour.
+                <Box
+                  component="span"
+                  sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                >
+                  <IdentifierDisplay
+                    value={s.subline}
+                    type={s.subline.startsWith('C') ? 'contract' : 'account'}
+                    tone="inherit"
+                    fontSize={12}
+                  />
+                </Box>
+              )}
             </Stack>
           </Stack>
           {s.chipLabel && (

@@ -358,7 +358,12 @@ Design notes:
   the `op_type_name(ty)` SQL helper renders the canonical string for psql/BI
 - every account/contract/issuer reference is a `BIGINT` surrogate FK
   (ADRs 0026 / 0030); `pool_id` is a binary 32-byte pool hash (ADR 0024) with a
-  deferred FK attached once `liquidity_pools` exists in migration 0006
+  deferred FK attached once `liquidity_pools` exists in migration 0006.
+  **CH divergence (task 0261/0268):** the ClickHouse parallel store replaces
+  the scalar with `pool_ids Array(FixedString(32))` — path payments record
+  every pool crossed by their result claim atoms (multi-hop lossless), LP
+  deposit/withdraw a single element, `[]` = no pool. PG keeps the legacy
+  scalar (path payments stay NULL) pending its retirement
 - composite `(id, created_at)` PK is required because the partition key must be in
   every unique index on a partitioned table; `created_at` is inherited verbatim from
   the parent transaction so per-partition cascade is well-defined

@@ -1,5 +1,7 @@
 import { Box, Card, Typography } from '@mui/material';
 import {
+  LiveNowProvider,
+  PollingIndicator,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
@@ -22,8 +24,14 @@ import { ViewAllLink } from './ViewAllLink.js';
  * indicator and a "View All" link to the full Transactions list.
  */
 export function LatestTransactions() {
-  const { data, isLoading, isError, error, refetch } = useLatestTransactions();
+  const { data, dataUpdatedAt, isLoading, isError, error, refetch } =
+    useLatestTransactions();
   const rows = data?.data ?? [];
+  // "Updated …" is anchored to react-query's `dataUpdatedAt` — the moment of
+  // the last successful poll — so it resets toward "just now" on every
+  // refetch (its literal meaning). A genuinely stalled feed still surfaces:
+  // a failed poll stops bumping `dataUpdatedAt`, and a feed returning the
+  // same rows shows its age in every row's relative time.
 
   let body: ReactNode;
   if (isLoading) {
@@ -35,7 +43,11 @@ export function LatestTransactions() {
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" />;
   } else {
-    body = <LatestTransactionsTable rows={rows} />;
+    body = (
+      <LiveNowProvider dataUpdatedAt={dataUpdatedAt}>
+        <LatestTransactionsTable rows={rows} />
+      </LiveNowProvider>
+    );
   }
 
   return (
@@ -43,6 +55,7 @@ export function LatestTransactions() {
       <TableSectionHeader
         title="Latest transactions"
         badge={<LiveIndicator />}
+        description={<PollingIndicator lastUpdated={dataUpdatedAt} />}
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>

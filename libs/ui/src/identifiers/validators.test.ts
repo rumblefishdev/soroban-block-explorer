@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAccountId,
+  isAssetId,
   isContractId,
   isLedgerSequence,
   isPoolId,
@@ -86,5 +87,27 @@ describe('isLedgerSequence', () => {
     expect(isLedgerSequence('1.5')).toBe(false);
     expect(isLedgerSequence('abc')).toBe(false);
     expect(isLedgerSequence('')).toBe(false);
+  });
+});
+
+describe('isAssetId', () => {
+  it('accepts the reserved native keyword', () => {
+    expect(isAssetId('native')).toBe(true);
+  });
+  it('accepts a contract StrKey (SAC / Soroban asset)', () => {
+    expect(isAssetId(VALID_CONTRACT)).toBe(true);
+  });
+  it('accepts classic CODE-ISSUER', () => {
+    expect(isAssetId(`USDC-${VALID_ACCOUNT}`)).toBe(true);
+    expect(isAssetId(`A-${VALID_ACCOUNT}`)).toBe(true); // 1-char code
+    expect(isAssetId(`USDCUSDCUSDC-${VALID_ACCOUNT}`)).toBe(true); // 12-char
+  });
+  it('rejects malformed code-issuer and bare strings', () => {
+    expect(isAssetId('')).toBe(false);
+    expect(isAssetId('USDC')).toBe(false); // no issuer
+    expect(isAssetId(`-${VALID_ACCOUNT}`)).toBe(false); // empty code
+    expect(isAssetId(`USDC-${VALID_CONTRACT}`)).toBe(false); // issuer not G
+    expect(isAssetId(`USDCUSDCUSDCX-${VALID_ACCOUNT}`)).toBe(false); // 13-char code
+    expect(isAssetId('42')).toBe(false); // numeric surrogate is NOT a canonical id
   });
 });
