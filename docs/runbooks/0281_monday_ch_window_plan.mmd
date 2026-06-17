@@ -25,8 +25,8 @@ flowchart TB
   subgraph S2["2 - pool_ids + gross_volume_a (&le; W) -- needs 0268 ADD"]
     direction TB
     P0["Cyborg: top-up [62,996,872 -&gt; W] from S3"]:::backfill
-    P1["prod: drop oa_pool_seek projection"]:::backfill
-    P2["transport (FREEZE / rsync / ATTACH)"]:::backfill
+    P1["prod: apply 0268 ADDs (were missing on prod) +<br/>drop oa_pool_seek / dead indexes"]:::backfill
+    P2["transport: direct INSERT (zstd ssh-pipe)<br/>schema mismatch killed FREEZE/ATTACH"]:::backfill
     P3["OPTIMIZE ... PARTITION FINAL per-partition"]:::backfill
     P1 --> P2
     P0 --> P2
