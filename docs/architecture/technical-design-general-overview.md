@@ -674,7 +674,7 @@ Stellar Network (mainnet peers)
 │     (no raw envelope/result XDR — ADR 0029)             │
 │  5. Aggregate operations by identity (type, source_id,  │
 │     destination_id, contract_id, asset_code,            │
-│     asset_issuer_id, pool_id) → `operations_appearances`│
+│     asset_issuer_id, pool_ids) →`operations_appearances`│
 │     with `amount BIGINT` counting collapsed duplicates  │
 │     (ADR 0163 — no transfer_amount, no application_order,│
 │     no details JSONB)                                   │
