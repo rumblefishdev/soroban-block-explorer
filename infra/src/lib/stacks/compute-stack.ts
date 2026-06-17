@@ -221,8 +221,10 @@ export class ComputeStack extends cdk.Stack {
         //
         // Enabled here: modules whose CH read path is merged on `develop` —
         // Network (pilot, PR #221), Ledgers (PR #226), Transactions
-        // (PR #235), Accounts (PR #236), Contracts (PR #237). The remaining
-        // modules (Assets, NFTs, LiquidityPools, Search) have no CH path yet.
+        // (PR #235), Accounts (PR #236), Contracts (PR #237), LiquidityPools
+        // (task 0243; PRs #246/#248/#250 — all 5 LP endpoints on CH, validated
+        // live on prod). The remaining modules (Assets, NFTs, Search) have no
+        // CH path yet.
         //
         // PRECONDITIONS before this deploy goes live (see PR checklist):
         //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
@@ -240,6 +242,7 @@ export class ComputeStack extends cdk.Stack {
         API_DATASOURCE_TRANSACTIONS: 'ch',
         API_DATASOURCE_ACCOUNTS: 'ch',
         API_DATASOURCE_CONTRACTS: 'ch',
+        API_DATASOURCE_LIQUIDITY_POOLS: 'ch',
       },
     });
     this.apiFunction = apiFunction;

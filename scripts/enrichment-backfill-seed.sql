@@ -33,12 +33,12 @@
 -- NOTE: ClickHouse VALUES does not allow trailing `--` comments on data rows.
 -- Re-runnable: clears its own rows (id/issuer/contract in 900000..999999) first.
 
-ALTER TABLE accounts            DELETE WHERE id BETWEEN 900000 AND 999999;
-ALTER TABLE assets              DELETE WHERE issuer_id BETWEEN 900000 AND 999999;
-ALTER TABLE asset_enrichment    DELETE WHERE issuer_id BETWEEN 900000 AND 999999;
-ALTER TABLE soroban_contracts   DELETE WHERE id BETWEEN 900000 AND 999999;
-ALTER TABLE nfts                DELETE WHERE contract_id BETWEEN 900000 AND 999999;
-ALTER TABLE nft_enrichment      DELETE WHERE contract_id BETWEEN 900000 AND 999999;
+DELETE FROM accounts            WHERE id BETWEEN 900000 AND 999999;
+DELETE FROM assets              WHERE issuer_id BETWEEN 900000 AND 999999;
+DELETE FROM asset_enrichment    WHERE issuer_id BETWEEN 900000 AND 999999;
+DELETE FROM soroban_contracts   WHERE id BETWEEN 900000 AND 999999;
+DELETE FROM nfts                WHERE contract_id BETWEEN 900000 AND 999999;
+DELETE FROM nft_enrichment      WHERE contract_id BETWEEN 900000 AND 999999;
 
 INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number, home_domain) VALUES
   (900001, 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN', 0, 0, 0, 'centre.io'),

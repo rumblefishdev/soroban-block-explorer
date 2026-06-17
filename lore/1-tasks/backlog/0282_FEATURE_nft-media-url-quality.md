@@ -10,11 +10,11 @@ links: []
 history:
   - date: 2026-06-10
     status: backlog
-    who: claude
+    who: karolkow
     note: 'Spawned from 0231 NFT enrichment. url-fallback for media_url landed (option A); content-type validation (B) + the token_image() fetch fallback are deferred here.'
   - date: 2026-06-10
     status: backlog
-    who: claude
+    who: karolkow
     note: 'Renumbered 0280 → 0282 — 0280/0281 already taken on develop (ci-swagger-flake / ch-maintenance-window).'
 ---
 

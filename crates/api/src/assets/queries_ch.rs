@@ -71,7 +71,7 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 /// `None` on a JOIN miss via the `nullIf(...)` wraps (readonly-safe; no
 /// `SETTINGS join_use_nulls`).
 // Enrichment (icon_url + classic/SAC name) is read from the `asset_enrichment`
-// side table (ADR 0050 / task 0231), NOT the indexer-owned `assets.{icon_url,
+// side table (ADR 0048 / task 0231), NOT the indexer-owned `assets.{icon_url,
 // name}` placeholders (dropped, task 0231 step 8). Per Option C the name has a
 // single owner per `asset_type`, composed disjointly at read:
 //   classic/SAC (1,2) → `asset_enrichment.name`

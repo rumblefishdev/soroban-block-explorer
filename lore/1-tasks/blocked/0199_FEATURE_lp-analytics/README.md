@@ -3,8 +3,8 @@ id: '0199'
 title: 'LP analytics: TVL + volume + fee_revenue (per-op extraction + USD)'
 type: FEATURE
 status: blocked
-related_adr: ['0027', '0031', '0043']
-related_tasks: ['0125', '0194', '0195']
+related_adr: ['0027', '0031', '0043', '0048']
+related_tasks: ['0125', '0194', '0195', '0247', '0261', '0266']
 tags:
   [
     priority-medium,
@@ -34,6 +34,51 @@ history:
       + SQS + DLQ) is in place; gating dependency is solely the price API.
       Move back to active once Oskar's API contract (endpoint shape,
       freshness, no-price-for-asset behavior, latency budget) is finalized.
+  - date: '2026-06-09'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Converted file → directory; added notes/S-ch-tvl-enrichment-and-decision.md
+      (+ G-lp-tvl-flow.svg). Daily decision: SHIP TVL ONLY for now; drop
+      volume + fee_revenue from chart/detail + endpoint contract until the
+      gross_volume_a backfill is feasible. Prices-API contract confirmed
+      (prices-api-design-after-2nd-review.md + Oskar): 1h/1d history to
+      2024-02-20, per-asset OHLCV (timeframe=all / start+end, 100 req/s),
+      per-candle vwap, identifier {code}:{issuer}/{contract}/native, null for
+      untracked asset → no second API needed for TVL. Recommended implementation:
+      Variant B (compute-at-read) — indexer is the single writer of reserves;
+      price-sync job is the only Prices-API consumer (per-asset → prices table);
+      TVL computed at read via join. Avoids the ReplacingMergeTree per-row UPDATE
+      race (no version column → a later plain insert can silently erase
+      analytics). Deferred: volume/fee need gross_volume_a (per-pool, on-chain,
+      not reconstructable from reserve-delta) → historical XDR re-parse backfill,
+      gated on 0247. Provenance: LP analytics are self-imposed scope from our SCF
+      submission, NOT in customer RFP 4 — which itself permits launching with
+      recent history. Follow-up: ADR 0043 amendment (compute-at-read), schema ADD
+      gross_volume_a when volume returns, docs/architecture chart contract = TVL
+      only for now.
+  - date: '2026-06-09'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Created ADR 0048 (proposed) — "fast-change off-chain values on ClickHouse:
+      compute-at-read via local price join" — codifying the architectural part of
+      this decision (amends ADR 0043's off-chain=rare-change assumption; fourth
+      path in the taxonomy). Updated docs/architecture/technical-design-general-overview.md
+      (§6.11 + §2.3) per ADR 0032 evergreen rule. ADR 0048 is proposed, pending a
+      read-cost measurement of the read-time join + karolkow review. The TVL-only
+      scope cut stays a task-level decision (here), not in the ADR.
+  - date: '2026-06-09'
+    status: blocked
+    who: stkrolikiewicz
+    note: >
+      Cross-link + reframe (see 0261 Decision): gross_volume_a (the on-chain input
+      to volume/fee) shares one claim-atom extractor + one historical re-parse with
+      the pool_id fix (0261/0266). Decision: capture gross_volume_a NOW on that
+      shared re-parse — do not re-parse twice — while USD volume/fee display stays
+      deferred until the Prices API is live (read-time join, ADR 0048). The
+      TVL-only launch cut is unchanged; this only ensures the volume input is not
+      thrown away. Linked 0247/0261/0266.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
