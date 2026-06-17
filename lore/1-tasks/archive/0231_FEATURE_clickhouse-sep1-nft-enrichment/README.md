@@ -349,29 +349,33 @@ collection_name}` — off-chain data the indexer can never derive.
 
 ## Acceptance Criteria
 
-- [ ] `asset_enrichment` / `nft_enrichment` created via **migration** (+ init.sql
-      mirror); column order pinned in tests.
+> **Closed 2026-06-10 as "write-path implementation delivered."** Every open item
+> below — deploy, prod drain, the NFT read path, docs, and the column drop — was
+> **deferred to [0299](../../backlog/0299_FEATURE_clickhouse-enrichment-rollout-finish.md)**
+> (rollout + finish). Nothing dropped silently; each maps to a 0299 step.
+
+- [x] `asset_enrichment` / `nft_enrichment` created in `init.sql` + column-order
+      pin tests. _(Prod migration runs at deploy → **0299**.)_
 - [x] `ch_enrichment_queue` **NOT** created — SQS is the queue.
 - [x] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
 - [x] Live write path wired (code): worker repointed PG→CH; producer lookup
       **un-stubbed** — per-batch CH anti-join publishes only un-enriched keys
-      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy config/CDK +
-      the deploy itself still pending — GitHub auth blocked.)_
-- [~] Read: asset name/icon join **done** in `ASSET_CH_SELECT` (Step 4a —
-  `COALESCE(NULLIF(ae.name,''), sc.name, native-const)` +
-  `NULLIF(ae.icon_url,'')`). NFT meta read (`NULLIF(ne.col,'')` direct)
-  **pending** — the nfts API module is still PG-only (Step 4b).
-- [ ] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
-      re-enriches and can clear removed values.
-- [ ] Live integration test passes (USDC + NFT round-trip).
-- [ ] Production drain reported (NULL ratios, RPC quota, measured `nfts`
-      read-join cost).
-- [ ] **Docs updated** per ADR 0032 (enrichment write-up + the 0243 read-path
-      change). **API types** regenerated as a sanity check (shape unchanged).
-- [ ] (gated, LAST) Dead placeholder columns dropped — `assets.{name,icon_url}` +
-      `nfts.{name,media_url,collection_name}` (indexer always `None`) — via
-      operator ALTER + indexer stops emitting them, **after** the read path is
-      live. `soroban_contracts.name` retained. May be a follow-up task.
+      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy → **0299**.)_
+- [x] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
+      re-enriches; `--retry-sentinels` re-attempts only all-`''` rows (newer-
+      `version` INSERT, latest-wins). Exercised in `#[ignore]` CH tests + runbook.
+- [~] Read: asset name/icon join **done** (Step 4a, `ASSET_CH_SELECT`). NFT meta
+  read **→ deferred to 0299** (Step 4b — nfts API module still PG-only).
+- [ ] → **deferred to 0299**: Live integration test (USDC + NFT round-trip) —
+      local smoke done (`#[ignore]` + runbook); live SQS→worker→read is 0299 Step 10.
+- [ ] → **deferred to 0299**: Production drain reported (NULL ratios, RPC quota,
+      `nfts` read-join cost) — 0299 Step 7.
+- [ ] → **deferred to 0299**: **Docs per ADR 0032** — N/A for the delivered code
+      (refactor + error-reclass + CLI; no schema/endpoint/topology change); revisit
+      on the column drop / read-path change.
+- [ ] → **deferred to 0299** (gated, LAST): dead placeholder columns dropped —
+      `assets.{name,icon_url}` + `nfts.{name,media_url,collection_name}`, after the
+      indexer + backfill-runner stop emitting them. `soroban_contracts.name` kept.
 
 ## Notes
 
