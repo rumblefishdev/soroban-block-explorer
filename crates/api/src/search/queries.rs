@@ -161,16 +161,20 @@ pub async fn fetch_search(
                 COALESCE(a.asset_code, 'XLM')       AS identifier,
                 token_asset_type_name(a.asset_type) AS label,
                 -- Canonical routing token = `canonical_id` in assets/handlers.rs:
-                -- contract StrKey if present, else CODE-ISSUER, else `native`.
-                -- The displayed `identifier` stays the asset code; this is what
-                -- the FE puts in `/assets/:id`.
+                -- contract StrKey if present, else CODE-ISSUER, else `native` —
+                -- the `native` arm GATED on `asset_type = 0`. A malformed row
+                -- (code present but issuer unresolved) therefore yields NULL (an
+                -- honest no-route) instead of mis-routing to the native XLM page.
+                -- Mirrors the type-gated last arm of `canonical_id` (which
+                -- returns "" in that case). The displayed `identifier` stays the
+                -- asset code; this is what the FE puts in `/assets/:id`.
                 COALESCE(
                     sc.contract_id,
                     CASE
                         WHEN a.asset_code IS NOT NULL AND iss.account_id IS NOT NULL
                         THEN a.asset_code || '-' || iss.account_id
                     END,
-                    'native'
+                    CASE WHEN a.asset_type = 0 THEN 'native' END
                 )                                   AS route_token,
                 NULL::bool                          AS successful,
                 NULL::timestamptz                   AS last_activity_at,
