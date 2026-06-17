@@ -23,6 +23,26 @@ history:
       verdict — 18/200 anchors with diff) to ~99 % (single-hop
       coverage with Option A scalar `pool_id`) or 100 % (with
       Option B Array via task 0268).
+  - date: '2026-06-17'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Pre-validation spot-check during the 0281 window (after the 0266
+      transport + per-partition OPTIMIZE landed). Took the top path-payment
+      pool by op count (a01fce…512159, 3.7M type-2/13 ops) and verified 10
+      recent path-payment txs three ways in parallel: Horizon effects,
+      stellar.expert result-XDR, and an independent py-stellar-sdk decode of
+      the result XDR (ground truth). 10/10 CONFIRMED — the target pool id is
+      literally present in the path-payment ClaimLiquidityAtoms of every tx
+      (each a 3-hop path payment crossing 3 pools), proving the backfill read
+      the claim atoms correctly and that Array(pool_ids) captures multi-hop.
+      CH attribution matches chain truth. The FORMAL compare_e20.py (200
+      anchors, hash-set) still pends step-5 redeploy — it hits the API
+      endpoint, which needs the has(pool_ids) Lambda live. Also surfaced:
+      idx_oa_pool_ids (the bloom "E20 floor") full-scans for POPULAR pools
+      (present in ~every granule), so the bounded prod seek (0281 C) is
+      required before the endpoint serves top pools within the api_reader
+      quota.
 ---
 
 # VALIDATION: E20 re-run post-0266, confirm 100 % path-payment pool coverage
