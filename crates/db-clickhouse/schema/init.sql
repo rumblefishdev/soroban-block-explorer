@@ -315,12 +315,15 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     amount            Int64,   -- fold count, see header comment
     ledger_sequence   Int64,
     -- Skip index for the `has(pool_ids, …)` pool filter (E20 /
-    -- liquidity-pools/:id/transactions). LP-touching ops are sparse, so a
-    -- bloom over the array prunes granules that hold no op for the queried
-    -- pool. This is the fresh-install / dev / E20 floor; the bounded
-    -- prod seek (the old scalar `oa_pool_seek` projection cannot serve array
-    -- membership) is redesigned in the 0281 window (task 0281 C).
-    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter GRANULARITY 1
+    -- liquidity-pools/:id/transactions; task 0281 C). The read driver
+    -- (fetch_pool_transactions) seeks via read-in-order `ORDER BY ledger DESC
+    -- LIMIT`, so a POPULAR pool early-terminates near the tip; this bloom bounds
+    -- the OTHER regime — a sparse pool whose last activity is far below the tip,
+    -- where the driver must scan back to reach it. `bloom_filter(0.001)` (not the
+    -- 0.025 default) keeps that scan's false-positive floor at ~0.1 % of the table
+    -- (~6 M rows) instead of ~2.5 % (~155 M, box-measured 2026-06-17); same
+    -- tight-FP rationale as the 0290 `idx_acc_id`.
+    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

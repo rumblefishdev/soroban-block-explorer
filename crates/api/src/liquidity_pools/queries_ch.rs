@@ -467,34 +467,43 @@ pub async fn fetch_pool_transactions(
         _ => String::new(),
     };
 
-    // STEP 1 — page keys. HISTORY: the scalar-`pool_id` era seeked via the
-    // `oa_pool_seek` projection with a **bare** filter (the long rationale —
-    // auto-optimizer, Code 164, `:ro` users.d — lives in 0243 / git history).
-    // Task 0261/0268 swapped the column to `pool_ids Array(FixedString(32))`
-    // and the filter to `has(...)` — array membership cannot prefix-seek that
-    // projection, so the seek strategy is being redesigned in the 0281-window
-    // task (skip index / arrayJoin projection / helper table; re-validate the
-    // read cost there). The subquery-wrap shape is kept: it stays correct and
-    // bounded (≤ limit keys transferred) regardless of which seek lands.
-    // `GROUP BY (ls, tid)` is the
-    // `LIMIT 1 BY (ledger_sequence, transaction_id)` dedupe (ops → one row/tx).
+    // STEP 1 — page keys, bounded by a read-in-order seek. HISTORY: the scalar
+    // `pool_id` era seeked via the `oa_pool_seek` projection with a bare filter
+    // (rationale — auto-optimizer, Code 164, `:ro` users.d — in 0243 / git
+    // history). Task 0261/0268 swapped to `pool_ids Array(FixedString(32))` +
+    // `has(...)`; array membership cannot prefix-seek, and the `idx_oa_pool_ids`
+    // bloom only prunes SPARSE pools — a popular pool sits in ~every granule, so
+    // no prune → 6.75B-row scan (box-measured 2026-06-17).
+    //
+    // FIX (0281 C): the INNER subquery gets its own `ORDER BY ledger {order} +
+    // LIMIT`, so CH's `optimize_read_in_order` reads from the tip and
+    // EARLY-TERMINATES — 6.75B → 6.23M (~1000x) on the top pool. The dedup stays
+    // in the OUTER `GROUP BY (ls, tid)`: a `LIMIT 1 BY` *inside* the inner blocks
+    // read-in-order (box-measured 1.13B). The inner over-fetches `limit * 4` raw
+    // op-rows so the outer still yields `limit` distinct txs when a tx crosses the
+    // pool via >1 op-row (K≈1 for path payments). Under-fetch only short-pages —
+    // it never skips a tx, since the keyset cursor resumes from the last shown.
     //
     // `toFixedString(unhex(?), 32)`: `pool_ids` is `Array(FixedString(32))` and
     // `unhex` yields `String`; the explicit cast makes the needle's type match
     // the element type so `has` compares as fixed bytes (the input is a
     // validated 64-char hex → exactly 32 bytes, so the cast never pads/truncates).
+    let overfetch = limit.saturating_mul(4);
     let driver_sql = format!(
         "SELECT ls, tid FROM ( \
             SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
             FROM operations_appearances oa \
             WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
               AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+            ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
+            LIMIT {overfetch} \
          ) \
          GROUP BY ls, tid \
          ORDER BY ls {order}, tid {order} \
          LIMIT {limit}",
         keyset = keyset,
         order = order,
+        overfetch = overfetch,
         limit = limit,
     );
     let keys = client
