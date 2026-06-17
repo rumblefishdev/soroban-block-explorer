@@ -475,42 +475,67 @@ pub async fn fetch_pool_transactions(
     // bloom only prunes SPARSE pools — a popular pool sits in ~every granule, so
     // no prune → 6.75B-row scan (box-measured 2026-06-17).
     //
-    // FIX (0281 C): the INNER subquery gets its own `ORDER BY ledger {order} +
-    // LIMIT`, so CH's `optimize_read_in_order` reads from the tip and
-    // EARLY-TERMINATES — 6.75B → 6.23M (~1000x) on the top pool. The dedup stays
-    // in the OUTER `GROUP BY (ls, tid)`: a `LIMIT 1 BY` *inside* the inner blocks
-    // read-in-order (box-measured 1.13B). The inner over-fetches `limit * 4` raw
-    // op-rows so the outer still yields `limit` distinct txs when a tx crosses the
-    // pool via >1 op-row (K≈1 for path payments). Under-fetch only short-pages —
-    // it never skips a tx, since the keyset cursor resumes from the last shown.
+    // FIX (0281 C): give the inner read its own `ORDER BY ledger {order} + LIMIT`
+    // so CH's `optimize_read_in_order` reads from the tip and EARLY-TERMINATES —
+    // 6.75B → 7.4M (~900x) on the top pool. The LIMIT counts RAW op-rows, not
+    // distinct txs, so we dedup `(ls, tid)` in Rust (consecutive runs — read-in-
+    // order keeps a tx's op-rows adjacent), NOT via an outer `GROUP BY`. That lets
+    // us tell a CAPPED page (raw rows hit the over-fetch LIMIT → more txs exist)
+    // from an EXHAUSTED one (fewer raw rows → the pool's tail). A pool whose txs
+    // cross it via many op-rows can starve the `limit*4` budget below `limit`
+    // distinct; the earlier outer-GROUP-BY shape silently dropped the peek row and
+    // `finalize_page` read that as the last page (next_cursor=None) → lost-tail
+    // data loss (caught in 0281-C review). On a capped under-delivery we re-fetch
+    // ONCE with the hard bound `limit*128`: a Stellar tx carries <=100 ops, so
+    // `limit*128` raw op-rows always cover `limit` distinct txs. Exhausted / last
+    // pages never re-query. `LIMIT 1 BY` and `DISTINCT` inside the inner both
+    // DEFEAT read-in-order (box-measured 1.13B / 0.97B) — hence raw + Rust dedup.
     //
     // `toFixedString(unhex(?), 32)`: `pool_ids` is `Array(FixedString(32))` and
     // `unhex` yields `String`; the explicit cast makes the needle's type match
     // the element type so `has` compares as fixed bytes (the input is a
     // validated 64-char hex → exactly 32 bytes, so the cast never pads/truncates).
-    let overfetch = limit.saturating_mul(4);
-    let driver_sql = format!(
-        "SELECT ls, tid FROM ( \
-            SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
-            FROM operations_appearances oa \
-            WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
-              AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
-            ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
-            LIMIT {overfetch} \
-         ) \
-         GROUP BY ls, tid \
-         ORDER BY ls {order}, tid {order} \
-         LIMIT {limit}",
-        keyset = keyset,
-        order = order,
-        overfetch = overfetch,
-        limit = limit,
-    );
-    let keys = client
-        .query(&driver_sql)
-        .bind(pool_id_hex)
-        .fetch_all::<DriverKeyRow>()
-        .await?;
+    let mut overfetch = limit.saturating_mul(4);
+    let keys = loop {
+        let driver_sql = format!(
+            "SELECT oa.ledger_sequence AS ls, oa.transaction_id AS tid \
+             FROM operations_appearances oa \
+             WHERE has(oa.pool_ids, toFixedString(unhex(?), 32)) \
+               AND oa.ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
+             ORDER BY oa.ledger_sequence {order}, oa.transaction_id {order} \
+             LIMIT {overfetch}",
+            keyset = keyset,
+            order = order,
+            overfetch = overfetch,
+        );
+        let raw = client
+            .query(&driver_sql)
+            .bind(pool_id_hex)
+            .fetch_all::<DriverKeyRow>()
+            .await?;
+        let capped = raw.len() as i64 >= overfetch;
+
+        // A tx's op-rows are adjacent in read-in-order, so collapsing consecutive
+        // equal `(ls, tid)` is exactly the outer GROUP BY we replaced.
+        let mut distinct: Vec<DriverKeyRow> = Vec::with_capacity(raw.len());
+        for r in raw {
+            if distinct
+                .last()
+                .is_none_or(|l| l.ls != r.ls || l.tid != r.tid)
+            {
+                distinct.push(r);
+            }
+        }
+
+        // Enough distinct txs, OR the pool is exhausted (raw under the cap), OR we
+        // already spent the hard bound → finalize. Otherwise it was a capped
+        // under-delivery: re-fetch once with the `limit*128` guarantee.
+        if (distinct.len() as i64) >= limit || !capped || overfetch >= limit.saturating_mul(128) {
+            distinct.truncate(limit.max(0) as usize);
+            break distinct;
+        }
+        overfetch = limit.saturating_mul(128);
+    };
     if keys.is_empty() {
         return Ok(Vec::new());
     }
