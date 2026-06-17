@@ -204,7 +204,7 @@ pub struct ExtractedContractInterface {
 }
 
 /// A single public function signature extracted from a contract's WASM spec.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContractFunction {
     /// Function name.
     pub name: String,
@@ -217,7 +217,7 @@ pub struct ContractFunction {
 }
 
 /// A function parameter with name and type.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionParam {
     pub name: String,
     pub type_name: String,

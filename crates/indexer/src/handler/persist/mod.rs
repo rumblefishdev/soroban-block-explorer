@@ -46,11 +46,14 @@ use xdr_parser::types::{
 
 use super::HandlerError;
 
-mod classification_cache;
 mod staging;
 mod write;
 
-pub use classification_cache::ClassificationCache;
+// Task 0283 — the classification cache now lives in `domain` (a generic,
+// IO-free verdict memo, single home for both the live CH G9 routing fix and
+// this legacy PG path). Re-export so existing `super::persist::ClassificationCache`
+// users keep resolving.
+pub use domain::ClassificationCache;
 use staging::Staged;
 
 /// Max retries on transient serialization / deadlock errors (40001 / 40P01).

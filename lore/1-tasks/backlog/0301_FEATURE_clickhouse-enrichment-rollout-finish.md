@@ -91,6 +91,25 @@ worker's CDK env), so the live rollout was split out here.
 7. **Docs (ADR 0032)**: update `docs/architecture/**` if any schema/endpoint
    shape changes during the above (the column drop does).
 
+### Constraint — live-RPC liveness ceiling (from 0283 research, 2026-06-16)
+
+NFT `token_uri`/name/image are fetched from **live** Soroban RPC (the parser
+stores no metadata at mint), so a contract whose ContractInstance is
+archived/evicted (state-archival TTL — restorable but not live) returns nothing
+and is **un-enrichable even after perfect classification**. A network-wide
+`getEvents` sample found **~66% of recent transfer/mint/burn emitters ABSENT**
+from live state. Implications for this rollout:
+
+- **Step 7 NULL-ratio MUST split** "un-enrichable-because-evicted (RPC absent)"
+  from "not-yet-tried" — else a high NFT NULL ratio is ambiguous (job incomplete
+  vs hitting the ceiling).
+- Reachable target = "all real NFTs still **live** on mainnet", not literally all.
+- The `''` sentinel on permanent-fail never auto-retries → a transient RPC outage
+  at enrich time = permanent empty until `--retry-sentinels`; consider a
+  restore-or-retry path.
+
+(Cross-ref **0283**: classification is the upstream gate; this is the downstream ceiling.)
+
 ## Review-flagged gates (PR #261 review round, 2026-06-17)
 
 - **HARD GATE — `ASSETS=ch` read flip is blocked on a completed + verified prod

@@ -89,6 +89,8 @@ async fn main() -> Result<(), Error> {
         cw_client,
         ch_client,
         enrichment_publisher,
+        // Task 0283 live G9 — fresh per cold start; warms across invocations.
+        classification_cache: domain::ClassificationCache::new(),
     };
 
     info!("indexer ready — starting Lambda runtime");
