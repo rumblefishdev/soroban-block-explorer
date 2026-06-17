@@ -424,9 +424,11 @@ independently confirmed/refuted by a deep-dive sub-agent.
    sweep, and the parked code live in 0296.
 8. **G5 side-table = `ch-maintenance-runner` crate relocation** still deferred
    (rebuild logic lives in backfill-runner for now).
-9. **Operational/prod (need live CH / mTLS, not code):** Step 0b prod queries,
-   Step 3 prod run, instrumentation + verification, RTT probe, E15/16/17 smoke,
-   docs (ADR 0046, runbooks 0217/0221, clickhouse-pilot).
+9. **Operational/prod (need live CH / mTLS, not code) → SPAWNED to [0303](../../backlog/0303_OPS_ch-reclassification-rollout.md).**
+   The prod RUN + validation (rebuild run, reclassify, assets-backfill, Step 0b,
+   TRUNCATE decision, RTT probe, E15/16/17 smoke, docs) was split out so 0283 can
+   archive once the CODE merges — mirrors the 0231 → 0301 code/rollout split.
+   0303 carries the run + the 0294/0296 prereqs.
 
 ## Implementation Plan
 
