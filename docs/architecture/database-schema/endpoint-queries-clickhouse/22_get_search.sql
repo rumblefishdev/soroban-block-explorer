@@ -102,7 +102,7 @@ SELECT entity_type, identifier, label, route_token FROM (
             nullIf(sc.contract_id, ''),
             if(length(a.asset_code) > 0 AND iss.account_id != '',
                concat(a.asset_code, '-', iss.account_id), NULL),
-            'native')                                                                       AS route_token
+            if(a.asset_type = 0, 'native', NULL))                                           AS route_token
     FROM assets a FINAL
     LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
     LEFT JOIN accounts          iss ON iss.id = a.issuer_id
@@ -127,9 +127,9 @@ SELECT entity_type, identifier, label, route_token FROM (
     LIMIT $4
 ) UNION ALL
 SELECT entity_type, identifier, label, route_token FROM (
-    -- NFTs: substring on name (CH no pg_trgm — linear scan).
-    -- PR #175 dropped `nfts.id` surrogate; project synthetic
-    -- cityHash64(contract_id, token_id) as opaque routing key.
+    -- NFTs: substring on name (CH no pg_trgm — linear scan). NFT identity is
+    -- the (contract_id, token_id) composite (ADR 0030), not a single token, so
+    -- route_token is NULL — the FE routes on the composite fields.
     SELECT
         'nft'                                                                               AS entity_type,
         coalesce(n.name, '')                                                                AS identifier,
