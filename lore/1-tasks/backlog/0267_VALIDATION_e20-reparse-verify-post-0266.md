@@ -43,6 +43,27 @@ history:
       (present in ~every granule), so the bounded prod seek (0281 C) is
       required before the endpoint serves top pools within the api_reader
       quota.
+  - date: '2026-06-17'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Second spot-check — a SPARSE pool (3d53f0b2…, last activity ledger
+      57.27M < W), where the whole tx set fits one comparison so both recall
+      AND precision are checkable. Recall: PERFECT — CH holds all the pool's
+      genuine transactions (≤W), 0 missed. Precision: 11/11 correct. A parallel
+      verifier subagent flagged 1 "over-attribution" (tx 90c05ae9 at the pool's
+      CREATION ledger 52,977,190), but the CH-side op-type check OVERTURNED it:
+      that tx is change_trust (op1, pool_ids=[]) + liquidity_pool_deposit (op2,
+      type 22, pool_ids=[3d53f0b2]) — the pool birth + initial deposit, which
+      genuinely touches the pool. The subagent was misled because Horizon 404s
+      the pool's old ops (retention) → it byte-inspected the XDR, misread the
+      deposit as order-book, and conflated "not in the trades list" with
+      "doesn't touch the pool" (a deposit is not a trade). Lesson: confirm a
+      subagent's attribution claim against CH directly when the external source
+      is retention-limited. Net: backfill recall AND precision validated on both
+      a POPULAR pool (10/10 path-payment crossings) and a SPARSE pool (11/11 =
+      10 trades + 1 deposit). Strong green ahead of the formal compare_e20.py
+      (200 anchors), which still pends the step-5 redeploy.
 ---
 
 # VALIDATION: E20 re-run post-0266, confirm 100 % path-payment pool coverage
