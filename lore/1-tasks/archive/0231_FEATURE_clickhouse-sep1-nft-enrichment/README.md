@@ -2,9 +2,9 @@
 id: '0231'
 title: 'FEATURE: ClickHouse SEP-1 + NFT token_uri enrichment (AWS Lambda/SQS → CH side tables)'
 type: FEATURE
-status: active
-related_adr: ['0044', '0045', '0047', '0048']
-related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243']
+status: completed
+related_adr: ['0044', '0045', '0047', '0050']
+related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243', '0282', '0299']
 blocked_by: []
 tags:
   [
@@ -79,6 +79,27 @@ history:
       worker/indexer deploy (CDK env + GitHub auth blocked), prod drain (7),
       NFT read-join (4b — needs nfts→CH), full smoke (NFT RPC + clear-on-
       refresh), columns drop (8), async_insert (9).
+  - date: '2026-06-10'
+    status: completed
+    who: karolkow
+    note: >
+      CLOSED as "write-path implementation delivered" (NOT "live in prod" — the
+      feature has never been deployed; live rollout is split out). The enrichment
+      WRITE path is code-complete + committed on feat/0231: side tables, enrich_*
+      PG→CH, worker repoint, producer anti-join un-stub, batch runner, asset
+      read-join (4a), local seed+runbook smoke. This session added (9 commits):
+      is_transient SorobanRpc→permanent-by-default fix (DLQ-loop bug), the manual
+      --retry-sentinels re-enroll, status partials, per-failure reason= logging,
+      media_url image→url fallback, the persist.rs single write-surface, an
+      indicatif progress bar, and Step 10. Reviewed by 3 fresh-eye agents:
+      safe (writes only asset_enrichment/nft_enrichment, append-only; no
+      injection; retry can't clobber real), senior, no hallucinations, ~85%
+      appropriately scoped. ALL remaining work — deploy (blocked: GitHub auth +
+      worker CDK env), prod drain (7), NFT read-join (4b, CODE — nfts API still
+      PG-only), full prod smoke (10), drop dead columns (8), async_insert (9),
+      ADR-0032 docs — moved to **0299**. Also spawned 0282 (NFT media-url quality).
+      Docs/architecture (ADR 0032): N/A for the delivered code (refactor +
+      error-reclassification + operator CLI; no schema/endpoint/topology change).
 ---
 
 # FEATURE: ClickHouse SEP-1 + NFT `token_uri` enrichment
@@ -89,7 +110,7 @@ Populate the off-chain enrichment values on ClickHouse — asset **icon / name**
 (SEP-1 issuer TOML) and NFT **name / media_url / collection_name** (`token_uri()`
 
 - IPFS). Written into dedicated **side tables** (`asset_enrichment` /
-  `nft_enrichment`, ADR 0048) — never the indexer-owned `assets`/`nfts` — and
+  `nft_enrichment`, ADR 0050) — never the indexer-owned `assets`/`nfts` — and
   read-composed by the API (Option C: enrichment owns the off-chain values;
   on-chain soroban names come from `soroban_contracts`). The CH successor to the PG
   enrichment (PG retiring, ADR 0047).
@@ -388,8 +409,11 @@ collection_name}` — off-chain data the indexer can never derive.
   - _Worker has no pre-check + producer lookup stubbed + SQS at-least-once_ →
     redundant third-party fetches possible; add a refresh-intent flag to the
     message before going live at scale.
-  - _Sentinels never auto-retry_ (`NOT IN` skips them forever) → a momentarily-
-    broken / late-published source stays empty; a sentinel-TTL re-enroll fixes it.
+  - _Sentinels never **auto**-retry_ (`NOT IN` skips them forever) → a momentarily-
+    broken / late-published source stays empty. **Manual re-enroll shipped:**
+    `--retry-sentinels` / `DrainMode::Sentinels` re-attempts only all-`''` rows,
+    leaving real + partial untouched. An **automatic** sentinel-TTL re-enroll
+    remains future (→ 0299 if wanted).
   - _`now_ms().unwrap_or(0)` + `DateTime64(3)` version_ — fine under latest-wins;
     revisit only if a version-priority scheme is ever adopted.
 
