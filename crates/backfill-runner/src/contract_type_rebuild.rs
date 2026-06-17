@@ -330,4 +330,121 @@ mod tests {
         assert_eq!(stats.flipped_nft, 0);
         assert_eq!(stats.assets_inserted, 0);
     }
+
+    /// End-to-end against a real ClickHouse — exercises the whole pipeline the
+    /// operators actually run (classify → staging → EXCHANGE swap → assets
+    /// backfill) and the SQL the unit tests can't reach (`hex()` case-fold,
+    /// `FINAL` joins, `NOT EXISTS` guard, EXCHANGE).
+    ///
+    /// Gated on `CLICKHOUSE_URL` (skips cleanly when unset, like `persist_e2e`).
+    /// **Isolated**: runs entirely inside a throwaway database it creates and
+    /// drops, because `execute` does a whole-table `EXCHANGE` on
+    /// `soroban_contracts` and must NEVER touch a real table — even if
+    /// `CLICKHOUSE_URL` points at a shared server.
+    ///
+    ///   docker compose up -d clickhouse
+    ///   CLICKHOUSE_URL=http://localhost:8123 \
+    ///       cargo test -p backfill-runner contract_type_rebuild
+    #[tokio::test]
+    async fn rebuild_e2e_flips_other_and_backfills_assets() {
+        use db_clickhouse::{Config, apply_init_sql, client};
+
+        let Ok(url) = std::env::var("CLICKHOUSE_URL") else {
+            eprintln!("CLICKHOUSE_URL not set — skipping contract_type_rebuild e2e");
+            return;
+        };
+        let db = "ch_test_0283_rebuild";
+        let base = client(&Config {
+            url: url.clone(),
+            ..Config::from_env()
+        });
+        base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+            .execute()
+            .await
+            .expect("drop pre-existing throwaway db");
+        base.query(&format!("CREATE DATABASE {db}"))
+            .execute()
+            .await
+            .expect("create throwaway db");
+
+        let cl = client(&Config {
+            url,
+            database: db.to_string(),
+            ..Config::from_env()
+        });
+        apply_init_sql(&cl).await.expect("apply init schema");
+
+        // Seed: a definitive-Nft WASM (owner_of) + a definitive-Fungible WASM
+        // (total_supply), and three contracts — two non-SAC at the parser
+        // default `Other` (1) whose WASM should flip them, plus a SAC (Token=0)
+        // that must stay untouched.
+        let nft_hash = "11".repeat(32); // 64 hex chars = FixedString(32)
+        let fun_hash = "22".repeat(32);
+        cl.query(&format!(
+            "INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES \
+             (unhex('{nft_hash}'), '{{\"functions\":[{{\"name\":\"owner_of\",\"doc\":\"\",\"inputs\":[],\"outputs\":[]}}],\"wasm_byte_len\":1}}'), \
+             (unhex('{fun_hash}'), '{{\"functions\":[{{\"name\":\"total_supply\",\"doc\":\"\",\"inputs\":[],\"outputs\":[]}}],\"wasm_byte_len\":1}}')"
+        ))
+        .execute()
+        .await
+        .expect("seed wasm_interface_metadata");
+
+        cl.query(&format!(
+            "INSERT INTO soroban_contracts \
+             (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac, name) VALUES \
+             (1001, 'CNFT', unhex('{nft_hash}'), 100, NULL, 100, 1, false, NULL), \
+             (1002, 'CFUN', unhex('{fun_hash}'), 100, NULL, 100, 1, false, NULL), \
+             (1003, 'CSAC', NULL, 0, NULL, NULL, 0, true, NULL)"
+        ))
+        .execute()
+        .await
+        .expect("seed soroban_contracts");
+
+        let sink = Sink::Clickhouse(cl.clone());
+        let stats = execute(&sink, false).await.expect("rebuild run");
+        assert_eq!(stats.flipped_nft, 1, "one Other -> Nft");
+        assert_eq!(stats.flipped_fungible, 1, "one Other -> Fungible");
+        assert_eq!(stats.assets_inserted, 1, "one type-3 asset for the fungible");
+
+        let verdict = |cid: &'static str| {
+            let cl = cl.clone();
+            async move {
+                // `contract_type` is Nullable(Int16) → Option<i16>.
+                cl.query("SELECT contract_type FROM soroban_contracts FINAL WHERE contract_id = ?")
+                    .bind(cid)
+                    .fetch_one::<Option<i16>>()
+                    .await
+                    .expect("verdict row")
+                    .expect("verdict is non-null")
+            }
+        };
+        assert_eq!(verdict("CNFT").await, 2, "Nft verdict written");
+        assert_eq!(verdict("CFUN").await, 3, "Fungible verdict written");
+        assert_eq!(verdict("CSAC").await, 0, "SAC untouched");
+
+        let type3 = |contract_id: i64| {
+            let cl = cl.clone();
+            async move {
+                cl.query("SELECT count() FROM assets FINAL WHERE asset_type = 3 AND contract_id = ?")
+                    .bind(contract_id)
+                    .fetch_one::<u64>()
+                    .await
+                    .expect("assets count")
+            }
+        };
+        assert_eq!(type3(1002).await, 1, "Fungible gets a type-3 asset");
+        assert_eq!(type3(1001).await, 0, "Nft gets NO asset row");
+
+        // Idempotent: a second run flips nothing new and inserts no asset dup.
+        let stats2 = execute(&sink, false).await.expect("idempotent re-run");
+        assert_eq!(stats2.flipped_nft, 0, "re-run flips nothing");
+        assert_eq!(stats2.flipped_fungible, 0, "re-run flips nothing");
+        assert_eq!(stats2.assets_inserted, 0, "re-run inserts no asset");
+        assert_eq!(type3(1002).await, 1, "still exactly one type-3 asset");
+
+        base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+            .execute()
+            .await
+            .expect("cleanup throwaway db");
+    }
 }
