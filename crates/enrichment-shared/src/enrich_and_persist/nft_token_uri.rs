@@ -1,5 +1,5 @@
 //! `nft_enrichment` side-table fill from per-token `token_uri()` JSON
-//! metadata (task 0195 §2d / ADR 0048).
+//! metadata (task 0195 §2d / ADR 0050).
 //!
 //! Writes `(name, media_url, collection_name)` into the `nft_enrichment`
 //! side table — never the indexer-owned `nfts` table. These three are

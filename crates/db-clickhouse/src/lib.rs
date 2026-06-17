@@ -141,7 +141,7 @@ mod tests {
         // 21 CREATE TABLE + 1 CREATE DICTIONARY = 22. 17-table base; task 0217
         // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
         // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
-        // to PR #180); task 0231 (ADR 0048) added the `asset_enrichment` +
+        // to PR #180); task 0231 (ADR 0050) added the `asset_enrichment` +
         // `nft_enrichment` enrichment side tables.
         assert_eq!(
             stmts.len(),

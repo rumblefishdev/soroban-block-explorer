@@ -143,7 +143,9 @@ already-tried keys (idempotent, newer-`version` INSERT, latest-wins).
 ## 6. `status` vs `report` — they answer different questions
 
 - **report** = _this run's dynamics_: processed / real / sentinel / transient /
-  db-failed / duration (+ a bounded sample of transient errors).
+  db-failed / duration. Per-key failure detail (which key, what, why) is in the
+  run log — every failure logs its composite key + a `reason=` tag; the report
+  keeps only the counts (the old bounded transient-sample was dropped).
 - **status** = _standing coverage_: candidates / tried / untried + the
   per-column real-vs-sentinel split. Independent of any run.
 

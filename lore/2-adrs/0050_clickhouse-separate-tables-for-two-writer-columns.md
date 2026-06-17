@@ -1,5 +1,5 @@
 ---
-id: '0048'
+id: '0050'
 title: 'Separate ClickHouse tables for indexer-owned vs externally-enriched columns (no two-writer column mixing)'
 status: accepted
 deciders: [karolkow]
@@ -18,7 +18,7 @@ history:
       side tables, never mixed with indexer-owned columns in one table.
 ---
 
-# ADR 0048: Separate ClickHouse tables for indexer-owned vs externally-enriched columns
+# ADR 0050: Separate ClickHouse tables for indexer-owned vs externally-enriched columns
 
 **Related:**
 
