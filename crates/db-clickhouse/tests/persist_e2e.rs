@@ -100,6 +100,7 @@ async fn persist_once(cl: &clickhouse::Client) {
         &[],
         &[],
         &[],
+        &db_clickhouse::persist::ClassificationCache::new(),
     )
     .await
     .expect("persist_ledger_clickhouse must succeed against live CH");

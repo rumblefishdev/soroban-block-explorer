@@ -41,7 +41,7 @@ history:
       routing token (Option A — surrogate dropped PR #175) and reserved `native`
       token; search `surrogate_id` → `route_token` (asset hits ship the
       canonical token, fixes the search→asset 404 + CH-has-no-surrogate dead
-      path). 290 lib/unit tests pass (+ routing/canonical/cursor/route_token);
+      path). 290 lib/unit tests pass at this point (+ routing/canonical/cursor/route_token; later 294 once +4 event-decode tests landed — see Implementation notes);
       FE web+ui typecheck clean, 17 FE tests; api-types + ADR-0032 docs updated.
       NOT done: 3 of 9 modules left (LP/NFT/search), per-module staging smoke +
       prod flips, 0231 enrichment dependency, review (see Review Plan). Code not

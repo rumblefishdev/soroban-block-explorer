@@ -47,9 +47,9 @@
 //! correctness-critical aggregate. Outside this pass, the
 //! no-`FINAL`-at-query-time invariant (ADR 0044) holds.
 
-use clickhouse::Client as ClickhouseClient;
-use tracing::{debug, info};
+use tracing::info;
 
+use crate::ch_staging::{create_staging_like, drop_if_exists, finalize, staging_row_count};
 use crate::error::BackfillError;
 use crate::sink::Sink;
 
@@ -130,61 +130,6 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<AssetAggregatesStats,
         assets_rows: rows,
         dry_run,
     })
-}
-
-async fn finalize(
-    client: &ClickhouseClient,
-    live: &str,
-    staging: &str,
-    dry_run: bool,
-) -> Result<(), BackfillError> {
-    if dry_run {
-        debug!(live, staging, "asset_aggregates: dry-run, dropping staging");
-        drop_if_exists(client, staging).await?;
-        return Ok(());
-    }
-    client
-        .query(&format!("EXCHANGE TABLES {live} AND {staging}"))
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-    info!(live, staging, "asset_aggregates: tables exchanged");
-    drop_if_exists(client, staging).await?;
-    Ok(())
-}
-
-async fn create_staging_like(
-    client: &ClickhouseClient,
-    source: &str,
-    staging: &str,
-) -> Result<(), BackfillError> {
-    let sql = format!("CREATE TABLE {staging} AS {source}");
-    client
-        .query(&sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-    debug!(source, staging, "asset_aggregates: staging table created");
-    Ok(())
-}
-
-async fn drop_if_exists(client: &ClickhouseClient, table: &str) -> Result<(), BackfillError> {
-    let sql = format!("DROP TABLE IF EXISTS {table}");
-    client
-        .query(&sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-    Ok(())
-}
-
-async fn staging_row_count(client: &ClickhouseClient, table: &str) -> Result<u64, BackfillError> {
-    let n: u64 = client
-        .query(&format!("SELECT count() FROM {table}"))
-        .fetch_one::<u64>()
-        .await
-        .map_err(BackfillError::Ch)?;
-    Ok(n)
 }
 
 #[cfg(test)]

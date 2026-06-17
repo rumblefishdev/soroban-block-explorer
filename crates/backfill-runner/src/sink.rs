@@ -225,6 +225,13 @@ impl PartitionWriterHandle<'_> {
                     &parsed.lp_positions,
                     &parsed.contract_name_writes,
                     &parsed.sac_overrides,
+                    // Task 0283 live G1/G9 are for the live indexer path only.
+                    // Backfill stays as-is (empty maps = pre-0283 behaviour):
+                    // historical cross-ledger verdicts are reconstructed by
+                    // the batch `ch-maint contract-type-rebuild` + one-shot
+                    // `nft-reclassify`, not inline.
+                    &std::collections::HashMap::new(),
+                    &std::collections::HashMap::new(),
                 )?;
                 pw.write_ledger(staged).await?;
                 Ok(())
