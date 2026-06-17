@@ -35,19 +35,13 @@
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
+use db_clickhouse::persist::classify_wasm_metadata_json;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
-use xdr_parser::types::ContractFunction;
-use xdr_parser::{ContractClassification, classify_contract_from_wasm_spec};
+use tracing::info;
 
-use crate::ch_staging::{create_staging_like, drop_if_exists, exchange_tables};
+use crate::ch_staging::{create_staging_like, drop_if_exists, finalize};
 use crate::error::BackfillError;
 use crate::sink::Sink;
-
-/// `ContractType::Nft = 2`.
-const CONTRACT_TYPE_NFT: i16 = 2;
-/// `ContractType::Fungible = 3`.
-const CONTRACT_TYPE_FUNGIBLE: i16 = 3;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ContractTypeRebuildStats {
@@ -65,14 +59,6 @@ pub struct ContractTypeRebuildStats {
 struct WasmMetaRow {
     wasm_hash: [u8; 32],
     metadata: String,
-}
-
-/// JSON shape of `wasm_interface_metadata.metadata` (the `functions` slice is
-/// all the classifier reads); written by the stage as
-/// `{"functions":[…],"wasm_byte_len":N}`.
-#[derive(Deserialize)]
-struct WasmMetadata {
-    functions: Vec<ContractFunction>,
 }
 
 /// Row written to the temp verdict table, keyed by raw `wasm_hash`.
@@ -114,6 +100,7 @@ pub async fn execute(
     // ---- Phase 3: build the rebuilt `soroban_contracts` into staging ----
     drop_if_exists(client, STAGING_TABLE).await?;
     create_staging_like(client, "soroban_contracts", STAGING_TABLE).await?;
+
     build_staging(client, STAGING_TABLE, VERDICT_TABLE).await?;
 
     // Count verdict transitions vs the still-live table (works pre-EXCHANGE).
@@ -123,16 +110,16 @@ pub async fn execute(
     // assets that would be inserted (read from staging, which has the new type-3).
     let assets_would_insert = count_assets_to_insert(client, STAGING_TABLE).await?;
 
+    // The verdict temp is orthogonal to the swap — always drop it.
+    drop_if_exists(client, VERDICT_TABLE).await?;
+
     if dry_run {
-        debug!("contract_type_rebuild: dry-run — dropping staging, no swap/insert");
-        drop_if_exists(client, STAGING_TABLE).await?;
-        drop_if_exists(client, VERDICT_TABLE).await?;
+        // `finalize(dry_run=true)` just drops staging; live untouched.
+        finalize(client, "soroban_contracts", STAGING_TABLE, true).await?;
         stats.assets_inserted = assets_would_insert;
     } else {
-        // ---- Phase 4: atomic swap ----
-        exchange_tables(client, "soroban_contracts", STAGING_TABLE).await?;
-        drop_if_exists(client, STAGING_TABLE).await?;
-        drop_if_exists(client, VERDICT_TABLE).await?;
+        // ---- Phase 4: atomic swap (run with the indexer STOPPED) ----
+        finalize(client, "soroban_contracts", STAGING_TABLE, false).await?;
         // ---- Phase 5: assets type-3 backfill (contract_type now authoritative)
         stats.assets_inserted = backfill_assets(client).await?;
     }
@@ -157,22 +144,19 @@ async fn classify_all_wasm(client: &ClickhouseClient) -> Result<Vec<VerdictRow>,
         .await
         .map_err(BackfillError::Ch)?;
 
-    let mut out = Vec::new();
-    for row in rows {
-        let Ok(meta) = serde_json::from_str::<WasmMetadata>(&row.metadata) else {
-            continue;
-        };
-        // Only Nft/Fungible are worth overriding `Other` (the parser default).
-        let verdict = match classify_contract_from_wasm_spec(&meta.functions) {
-            ContractClassification::Nft => CONTRACT_TYPE_NFT,
-            ContractClassification::Fungible => CONTRACT_TYPE_FUNGIBLE,
-            _ => continue,
-        };
-        out.push(VerdictRow {
-            wasm_hash: row.wasm_hash,
-            verdict,
-        });
-    }
+    // `classify_wasm_metadata_json` (shared with the live G1 path) parses the
+    // stored metadata JSON, runs the canonical classifier, and returns a verdict
+    // only for the override-worthy `Nft`/`Fungible` cases — `Other`/`Token`/
+    // parse-failure yield `None` (the parser default needs no override).
+    let out = rows
+        .into_iter()
+        .filter_map(|row| {
+            classify_wasm_metadata_json(&row.metadata).map(|verdict| VerdictRow {
+                wasm_hash: row.wasm_hash,
+                verdict: verdict as i16,
+            })
+        })
+        .collect();
     Ok(out)
 }
 
@@ -404,7 +388,10 @@ mod tests {
         let stats = execute(&sink, false).await.expect("rebuild run");
         assert_eq!(stats.flipped_nft, 1, "one Other -> Nft");
         assert_eq!(stats.flipped_fungible, 1, "one Other -> Fungible");
-        assert_eq!(stats.assets_inserted, 1, "one type-3 asset for the fungible");
+        assert_eq!(
+            stats.assets_inserted, 1,
+            "one type-3 asset for the fungible"
+        );
 
         let verdict = |cid: &'static str| {
             let cl = cl.clone();
@@ -425,11 +412,13 @@ mod tests {
         let type3 = |contract_id: i64| {
             let cl = cl.clone();
             async move {
-                cl.query("SELECT count() FROM assets FINAL WHERE asset_type = 3 AND contract_id = ?")
-                    .bind(contract_id)
-                    .fetch_one::<u64>()
-                    .await
-                    .expect("assets count")
+                cl.query(
+                    "SELECT count() FROM assets FINAL WHERE asset_type = 3 AND contract_id = ?",
+                )
+                .bind(contract_id)
+                .fetch_one::<u64>()
+                .await
+                .expect("assets count")
             }
         };
         assert_eq!(type3(1002).await, 1, "Fungible gets a type-3 asset");
