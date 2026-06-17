@@ -35,6 +35,7 @@ pg-persist = ["dep:db", "dep:sqlx", "domain/sqlx"]
 xdr-parser = { path = "../xdr-parser" }
 domain = { path = "../domain" }
 db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
+enrichment-shared = { path = "../enrichment-shared" }
 clickhouse = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

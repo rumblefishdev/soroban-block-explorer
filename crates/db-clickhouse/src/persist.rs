@@ -39,6 +39,7 @@ use xdr_parser::types::{
 
 use crate::SchemaError;
 
+pub mod enrichment;
 pub mod ids;
 pub mod rows;
 pub mod stage;

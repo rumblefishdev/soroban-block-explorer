@@ -78,6 +78,24 @@ fn column_order_assets() {
     );
 }
 
+/// Task 0231 — off-chain enrichment side table. Keyed like `assets` +
+/// enrichment columns + `version`; positional RowBinary must match `init.sql`.
+#[test]
+fn column_order_asset_enrichment() {
+    assert_columns::<AssetEnrichmentRow>(
+        "asset_enrichment",
+        &[
+            "asset_type",
+            "asset_code",
+            "issuer_id",
+            "contract_id",
+            "icon_url",
+            "name",
+            "version",
+        ],
+    );
+}
+
 #[test]
 fn column_order_account_balances_current() {
     assert_columns::<AccountBalanceRow>(
@@ -144,6 +162,23 @@ fn column_order_nfts_pending() {
             "minted_at_ledger",
             "current_owner_id",
             "current_owner_ledger",
+        ],
+    );
+}
+
+/// Task 0231 — off-chain enrichment side table for NFTs. Keyed like `nfts`
+/// + metadata + `version`; positional RowBinary must match `init.sql`.
+#[test]
+fn column_order_nft_enrichment() {
+    assert_columns::<NftEnrichmentRow>(
+        "nft_enrichment",
+        &[
+            "contract_id",
+            "token_id",
+            "name",
+            "media_url",
+            "collection_name",
+            "version",
         ],
     );
 }

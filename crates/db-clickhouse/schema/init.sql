@@ -178,6 +178,31 @@ CREATE TABLE IF NOT EXISTS assets (
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
+-- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed byte-for-byte like
+-- `assets`, joined at read (`… FINAL`/`argMax`). Lives in a separate table
+-- because the live indexer re-writes whole `assets` rows (enrichment columns
+-- NULL) and would clobber it; `ReplacingMergeTree(version)` is order-safe under
+-- retries and lets the enricher CLEAR a value (re-insert NULL with a higher
+-- `version`). `version` = enricher processing timestamp (ms; non-nullable as
+-- RMT requires). NOTE: `assets.{icon_url,name}` stay — `icon_url` there is
+-- vestigial (always NULL; dropping it on the live table is a heavy ALTER, low
+-- value — deferred to a cleanup task), and `name` is still indexer-owned for
+-- soroban-native assets (read path does `COALESCE(asset_enrichment.name,
+-- assets.name)`). Full reasoning + measured evidence: lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS asset_enrichment (
+    asset_type   Int16,
+    asset_code   LowCardinality(String),
+    issuer_id    Int64,
+    contract_id  Int64,
+    icon_url     Nullable(String),
+    name         Nullable(String),
+    version      DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
     asset_type          Int16,
@@ -226,6 +251,27 @@ CREATE TABLE IF NOT EXISTS nfts_pending (
     current_owner_ledger  Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
+-- Off-chain `token_uri` enrichment for `nfts` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed like `nfts`, joined at
+-- read. Separate table for the same reason as `asset_enrichment`: the live
+-- indexer re-writes whole `nfts` rows on every ownership change (metadata
+-- NULL) and the ownership clock (`current_owner_ledger`) is its RMT version —
+-- so enrichment in `nfts` would be clobbered AND has no safe version to claim.
+-- Here `version` is the enricher's own clock (ms), independent of ownership.
+-- `nfts.{name,media_url,collection_name}` stay vestigial (NULL; DROP deferred
+-- to a cleanup task). See lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS nft_enrichment (
+    contract_id      Int64,
+    token_id         String,
+    name             Nullable(String),
+    media_url        Nullable(String),
+    collection_name  Nullable(String),
+    version          DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (contract_id, token_id);
 
 -- liquidity_pools (task 0208 Path 2 folded inline): RMT(last_updated_ledger),
