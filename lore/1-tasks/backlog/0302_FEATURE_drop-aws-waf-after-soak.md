@@ -1,5 +1,5 @@
 ---
-id: '0283'
+id: '0302'
 title: 'FEATURE: Drop AWS WAF after Cloudflare soak'
 type: FEATURE
 status: backlog
@@ -13,6 +13,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0277 future work.'
+  - date: 2026-06-16
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0283 → 0302 to resolve a shared-ID collision — '0283' was also
+      claimed (same day) by the active contract-type-rebuild task (older,
+      milestone-1, with child tasks 0294-0297, and the namesake of branch
+      fix/0283). Content unchanged; only id + filename. Heads-up @fmazur.
 ---
 
 # Drop AWS WAF after Cloudflare soak
