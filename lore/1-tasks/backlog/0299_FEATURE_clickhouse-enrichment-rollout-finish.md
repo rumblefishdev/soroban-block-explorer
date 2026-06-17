@@ -3,7 +3,7 @@ id: '0299'
 title: 'ClickHouse enrichment rollout + finish: deploy, prod drain, NFT read-join, full smoke, cleanup'
 type: FEATURE
 status: backlog
-related_adr: ['0044', '0045', '0047', '0048']
+related_adr: ['0044', '0045', '0047', '0050']
 related_tasks: ['0231', '0243', '0282']
 tags:
   [
@@ -41,7 +41,7 @@ were blocked on deploy or on adjacent workstreams.
 ## Context
 
 0231 ported SEP-1 asset + NFT `token_uri` enrichment PG→CH (side tables
-`asset_enrichment` / `nft_enrichment`, ADR 0048), repointed the live worker,
+`asset_enrichment` / `nft_enrichment`, ADR 0050), repointed the live worker,
 un-stubbed the indexer producer anti-join, and shipped the batch runner +
 asset read-join (4a) + local smoke. **Blocked on deploy** (GitHub auth + the
 worker's CDK env), so the live rollout was split out here.
@@ -81,6 +81,31 @@ worker's CDK env), so the live rollout was split out here.
    the many tiny per-key INSERTs are server-batched. Cheap; could ride 0281.
 7. **Docs (ADR 0032)**: update `docs/architecture/**` if any schema/endpoint
    shape changes during the above (the column drop does).
+
+## Review-flagged gates (PR #261 review round, 2026-06-17)
+
+- **HARD GATE — `ASSETS=ch` read flip is blocked on a completed + verified prod
+  drain (Step 7), not merely on "0231 landed".** The read path
+  (`api/src/assets/queries_ch.rs::ASSET_CH_SELECT`) was changed to read
+  classic/SAC name+icon **only** from `asset_enrichment` — there is NO fallback
+  to the indexer-owned `assets.name`/`assets.icon_url` (Option C). So flipping
+  `API_DATASOURCE_ASSETS=ch` against an **empty** `asset_enrichment` shows blank
+  names/icons for every classic/SAC asset site-wide. Sequence: drain → verify
+  non-NULL coverage (a staging assertion that classic/SAC assets return non-NULL
+  name+icon) → only then flip. Same gate applies to `NFTS=ch` once 4b lands.
+- **Multi-writer `version` skew.** `version = now_ms()` is per-machine monotonic
+  only. Do NOT run the drain / `--force-retry` concurrently with the live worker
+  over overlapping keys — a lagging operator clock can regress a real value under
+  an older sentinel (see `enrich_and_persist::now_ms` caveat). Either run the
+  drain with the worker paused, or partition keys. Consider the
+  `max(existing_version+1, now_ms)` read-back hardening if concurrent drains
+  become routine.
+- **`is_transient` coverage alarm.** The allow-list was widened (gateway 5xx /
+  timeout / `-32000`), but permanent-by-default still means a provider outage can
+  silently convert a chunk of the population to `''` sentinels. Add a CloudWatch
+  alarm on the sentinel ratio (or a periodic `status` delta) so a
+  transient-storm-turned-permanent is visible without manual polling; recover
+  with `--retry-sentinels`.
 
 ## Acceptance Criteria
 
