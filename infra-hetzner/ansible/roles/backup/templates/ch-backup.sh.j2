@@ -2,10 +2,11 @@
 #
 # Managed by infra-hetzner/ansible/roles/backup — do not edit by hand.
 #
-# Daily ClickHouse backup → Borg → Hetzner BX21 Storage Box.
+# Weekly ClickHouse backup → Borg → Hetzner BX21 Storage Box.
 #
 # Cron entry installs this at /usr/local/bin/ch-backup; runs as
-# root from /etc/cron.d/ch-backup once a day at
+# root from /etc/cron.d/ch-backup weekly (cron weekday
+# {{ borg_cron_weekday }}; 0 = Sunday) at
 # {{ borg_cron_hour }}:{{ '%02d' | format(borg_cron_minute) }} {{ host_timezone }}.
 
 set -euo pipefail
@@ -169,15 +170,16 @@ main() {
         --glob-archives 'ch-*' \
         "${BORG_REPO}"
 
-    # `borg compact` reclaims space freed by `prune`. Holds the
-    # repo lock, so we run it once per week rather than daily —
-    # avoids overlap with a long-running create on the next day's
-    # cron if a single run ever exceeds 24 h. Day-of-week test:
-    # 0 = Sunday in `date -u +%w`.
-    if [[ "$(date -u +%w)" == "0" ]]; then
-        log "Sunday — compacting repository"
-        borg compact "${BORG_REPO}"
-    fi
+    # `borg compact` reclaims the space `prune` freed — without it,
+    # pruned segments are only marked dead and the repo never shrinks.
+    # It holds the repo lock, so the original code gated it to Sundays
+    # to avoid overlapping a long create on the NEXT day's daily cron.
+    # With the weekly cadence (task 0236) that contention is gone — runs
+    # are ~7 days apart — so we compact on every run. This also makes
+    # compaction independent of which weekday the backup is scheduled on
+    # (the old Sunday gate silently never fired on a non-Sunday weekly).
+    log "Compacting repository"
+    borg compact "${BORG_REPO}"
 
     log "Done"
 }

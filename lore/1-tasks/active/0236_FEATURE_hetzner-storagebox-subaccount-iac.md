@@ -2,7 +2,7 @@
 id: '0236'
 title: 'FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API'
 type: FEATURE
-status: completed
+status: active
 related_adr: []
 related_tasks: ['0227', '0235']
 tags:
@@ -44,6 +44,18 @@ history:
       completed at operator request. NOTE: runtime acceptance criteria
       (AC1–AC5) require a live `ansible-playbook` against BX21 and remain
       UNCHECKED pending the operator's first deploy — see Acceptance Criteria.
+  - date: '2026-06-17'
+    status: active
+    who: fmazur
+    note: >
+      Reopened for the first operator deploy. Before deploying, the backup
+      cadence/retention is being revised to fit the BX21 space budget and the
+      re-derivable-from-S3 data model: switch the Borg cron from daily to
+      WEEKLY (Sunday), retention to keep 4 (keep-weekly=4, keep-daily=0,
+      keep-monthly=0), and fix the `borg compact` Sunday-only gate so reclaimed
+      space is actually freed under the new cadence. See "Reopen scope
+      (2026-06-17): weekly cadence + retention + compact fix" below. No change
+      to the hetzner_storagebox role; AC1–AC5 still verified on this deploy.
 ---
 
 # FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API
@@ -167,6 +179,45 @@ implementation found:
   role's "add this key via Robot UI" debug task). Replace with a
   one-liner referencing `STORAGEBOX_ID` / `HCLOUD_TOKEN`.
 
+## Reopen scope (2026-06-17): weekly cadence + retention + compact fix
+
+Added on reopen, ahead of the first operator deploy. Motivation: the
+Borg repo on the BX21 grows with the ClickHouse corpus (~700 GB per
+full snapshot and rising). Borg deduplicates, so the repo is NOT
+`N × full` — but the operator wants a tighter, predictable window. The
+ClickHouse data is **re-derivable from the `stellar-ledger-data` S3 XDR
+archives** (the indexer is resumable), so a 7-day RPO is acceptable: a
+worst-case box loss means re-ingesting up to a week, not permanent loss.
+The backup itself stays **online** — ClickHouse `BACKUP DATABASE`
+snapshots the immutable MergeTree parts present at start; the indexer
+keeps writing (new parts land in the next run), so **no maintenance
+window / writer stop is required**.
+
+Changes (all in the `backup` role + group_vars; the `hetzner_storagebox`
+role is untouched):
+
+1. **Cadence: daily → weekly (Sunday).** Add `borg_cron_weekday`
+   (env `BORG_CRON_WEEKDAY`, default `0` = Sunday) and pass `weekday:`
+   to the `ch-backup` cron task. Sunday is chosen so the existing
+   compact path also fires (see 3); a true "every 7 days" is not a clean
+   cron expression, so a pinned weekday is the right mechanism. Hour /
+   minute (03:30 UTC) + jitter unchanged.
+2. **Retention: keep 4.** group_vars defaults `borg_keep_daily 7 → 0`,
+   `borg_keep_weekly 4` (unchanged), `borg_keep_monthly 6 → 0`. Yields a
+   4-archive (~4-week) window. `keep-weekly=4` protects the single first
+   archive on a fresh repo (last-of-week), so prune never deletes it.
+   Still env-overridable.
+3. **Fix the `borg compact` gate.** `ch-backup.sh.j2` only compacts on
+   Sundays (`date +%w == 0`). With a weekly backup on a non-Sunday that
+   would mean compact NEVER runs → `prune` marks segments dead but space
+   is never reclaimed → repo bloats (the opposite of the goal). Run
+   `compact` on every backup run instead (weekly cadence removes the
+   original daily-lock-contention rationale), making it independent of
+   the chosen weekday.
+4. **Docs:** update `infra-hetzner/README.md` (env-override block defaults
+   - the DR line "until the next _daily_ run lands" → weekly). Architecture
+     docs state Borg backups but not the cadence → N/A.
+
 ## Acceptance Criteria
 
 > AC1–AC5 are **runtime** criteria: they require a live
@@ -195,6 +246,13 @@ implementation found:
       script the next day adds a second archive (proves cron
       pathway). The day-2 check is inherently temporal — done by
       the operator after the first cron fire.
+- [ ] **(reopen) Weekly cron** — the installed `/etc/cron.d/ch-backup`
+      fires only on the configured weekday (Sunday by default), not daily.
+- [ ] **(reopen) Retention keep-4** — `borg prune` runs with
+      `--keep-weekly=4 --keep-daily=0 --keep-monthly=0`; the first/only
+      archive on a fresh repo survives the prune.
+- [ ] **(reopen) Compact reclaims space** — `borg compact` runs on every
+      backup run (not gated to Sunday), so pruned segments are freed.
 - [x] **API types regenerated** — N/A — this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`.
 - [x] **Docs updated** — `infra-hetzner/README.md` updated: `ansible-env`

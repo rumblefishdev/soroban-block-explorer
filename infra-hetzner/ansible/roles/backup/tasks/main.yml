@@ -218,12 +218,15 @@
     group: root
     mode: '0750'
 
-- name: Install the daily backup cron entry
+- name: Install the weekly backup cron entry
+  # WEEKLY cadence (task 0236): `weekday` pins the run to one day
+  # (default Sunday = 0). Set BORG_CRON_WEEKDAY=* to restore daily runs.
   ansible.builtin.cron:
     name: 'ch-backup'
     user: root
     minute: '{{ borg_cron_minute }}'
     hour: '{{ borg_cron_hour }}'
+    weekday: '{{ borg_cron_weekday }}'
     job: '/usr/local/bin/ch-backup >> /var/log/ch-backup.log 2>&1'
     cron_file: ch-backup
 

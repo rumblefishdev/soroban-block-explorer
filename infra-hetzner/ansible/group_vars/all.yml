@@ -174,13 +174,29 @@ borg_repo_path: "{{ lookup('env', 'BORG_REPO_PATH') | default('./backups/clickho
 
 # Borg retention policy — overridable for envs with different
 # capacity / retention requirements.
-borg_keep_daily: "{{ lookup('env', 'BORG_KEEP_DAILY') | default('7', true) | int }}"
+#
+# Policy (task 0236): WEEKLY backups, keep the last 4 (~4-week window).
+# The ClickHouse corpus is large (~700 GB+ per full snapshot, growing)
+# and re-derivable from the stellar-ledger-data S3 XDR archives, so a
+# tight 4-archive window is the right space/RPO trade-off. With a weekly
+# cron, `keep-weekly=4` retains 4 archives; `keep-daily`/`keep-monthly`
+# are 0 (a daily/monthly bucket makes no sense at a weekly cadence).
+# `keep-weekly` protects the single first archive on a fresh repo
+# (last-of-week), so the first run is never pruned away.
+borg_keep_daily: "{{ lookup('env', 'BORG_KEEP_DAILY') | default('0', true) | int }}"
 borg_keep_weekly: "{{ lookup('env', 'BORG_KEEP_WEEKLY') | default('4', true) | int }}"
-borg_keep_monthly: "{{ lookup('env', 'BORG_KEEP_MONTHLY') | default('6', true) | int }}"
+borg_keep_monthly: "{{ lookup('env', 'BORG_KEEP_MONTHLY') | default('0', true) | int }}"
 
-# Daily backup cron — UTC. Box is forced to UTC by the base role.
+# Weekly backup cron — UTC. Box is forced to UTC by the base role.
+# `borg_cron_weekday` pins the day (0 = Sunday, cron/`date +%w`
+# convention). Sunday is the default so the `borg compact` step in
+# ch-backup.sh — which also keys on Sunday historically, now runs every
+# run — stays aligned. A true "every 7 days" has no clean cron
+# expression, so a pinned weekday is the mechanism. Set BORG_CRON_WEEKDAY
+# to `*` to restore daily backups.
 borg_cron_hour: "{{ lookup('env', 'BORG_CRON_HOUR') | default('3', true) | int }}"
 borg_cron_minute: "{{ lookup('env', 'BORG_CRON_MINUTE') | default('30', true) | int }}"
+borg_cron_weekday: "{{ lookup('env', 'BORG_CRON_WEEKDAY') | default('0', true) }}"
 
 # Local timezone for the host.
 host_timezone: "{{ lookup('env', 'HOST_TIMEZONE') | default('Etc/UTC', true) }}"

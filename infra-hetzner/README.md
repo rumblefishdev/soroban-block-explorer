@@ -112,11 +112,14 @@ PUBKEYS
 # export STORAGEBOX_RUN_BACKUP_VALIDATION="true"  # set false to skip the first-run full backup
 # export STORAGEBOX_SSH_PORT="23"
 # export BORG_REPO_PATH="./backups/clickhouse"
-# export BORG_KEEP_DAILY="7"
+# Backup cadence + retention (task 0236): WEEKLY backups, keep 4.
+# Defaults below; override only for a different cadence/retention.
+# export BORG_KEEP_DAILY="0"
 # export BORG_KEEP_WEEKLY="4"
-# export BORG_KEEP_MONTHLY="6"
+# export BORG_KEEP_MONTHLY="0"
 # export BORG_CRON_HOUR="3"
 # export BORG_CRON_MINUTE="30"
+# export BORG_CRON_WEEKDAY="0"   # 0 = Sunday; set "*" to back up daily
 # export HOST_TIMEZONE="Etc/UTC"
 # export HETZNER_SERVER_NAME="ch-prod-01"
 ```
@@ -448,7 +451,7 @@ CRL/OCSP infrastructure required.
 Backups are off-site replicated only against operator-managed
 backups (Borg → BX21 is the primary; no secondary). If BX21 is
 lost, re-order, init a new Borg repo, accept the historical-
-backup gap until the next daily run lands.
+backup gap until the next weekly run lands.
 
 ### CA private key compromise
 
