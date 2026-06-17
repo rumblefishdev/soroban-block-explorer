@@ -1,5 +1,5 @@
 ---
-id: '0299'
+id: '0301'
 title: 'ClickHouse enrichment rollout + finish: deploy, prod drain, NFT read-join, full smoke, cleanup'
 type: FEATURE
 status: backlog
@@ -27,6 +27,15 @@ history:
       "implementation delivered". This task carries everything that requires a
       DEPLOY or follows it, plus the small remaining code follow-ups (NFT read-join
       4b, column-drop writer-change 8, async_insert 9, ADR-0032 docs).
+  - date: '2026-06-17'
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0299 → 0301. The develop merge revealed 0299 was already
+      taken there by 0299_REFACTOR_routes-consolidation-single-source (different
+      task, allocated first on develop). Moved this task to the next free id
+      (0300 was the prior max). Rewrote all refs (0231 README, ADR 0050, the
+      enrichment code comments).
 ---
 
 # ClickHouse enrichment rollout + finish

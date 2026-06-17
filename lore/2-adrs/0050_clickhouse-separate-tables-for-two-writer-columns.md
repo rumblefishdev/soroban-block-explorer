@@ -88,8 +88,8 @@ GROUP BY key ) ae`, the sub-aggregate collapsing the RMT to one latest row per
 Lumen',NULL))` (classic/SAC → `asset_enrichment.name`; soroban →
   `soroban_contracts.name`; native → literal). NOTE: the read no longer falls
   back to the indexer-owned `assets.name`/`assets.icon_url` at all — those
-  columns are dropped (0231 step 8 / 0299), so a populated `asset_enrichment` is
-  a hard prerequisite of the `ASSETS=ch` read flip (see 0299 ordering gate).
+  columns are dropped (0231 step 8 / 0301), so a populated `asset_enrichment` is
+  a hard prerequisite of the `ASSETS=ch` read flip (see 0301 ordering gate).
 
 **Generalised rule:** on ClickHouse, when two independent writers own **disjoint
 columns** of the same logical entity, give each writer its **own table** keyed

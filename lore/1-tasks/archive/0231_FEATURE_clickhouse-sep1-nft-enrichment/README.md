@@ -4,7 +4,7 @@ title: 'FEATURE: ClickHouse SEP-1 + NFT token_uri enrichment (AWS Lambda/SQS →
 type: FEATURE
 status: completed
 related_adr: ['0044', '0045', '0047', '0050']
-related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243', '0282', '0299']
+related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243', '0282', '0301']
 blocked_by: []
 tags:
   [
@@ -97,7 +97,7 @@ history:
       appropriately scoped. ALL remaining work — deploy (blocked: GitHub auth +
       worker CDK env), prod drain (7), NFT read-join (4b, CODE — nfts API still
       PG-only), full prod smoke (10), drop dead columns (8), async_insert (9),
-      ADR-0032 docs — moved to **0299**. Also spawned 0282 (NFT media-url quality).
+      ADR-0032 docs — moved to **0301**. Also spawned 0282 (NFT media-url quality).
       Docs/architecture (ADR 0032): N/A for the delivered code (refactor +
       error-reclassification + operator CLI; no schema/endpoint/topology change).
 ---
@@ -351,29 +351,29 @@ collection_name}` — off-chain data the indexer can never derive.
 
 > **Closed 2026-06-10 as "write-path implementation delivered."** Every open item
 > below — deploy, prod drain, the NFT read path, docs, and the column drop — was
-> **deferred to [0299](../../backlog/0299_FEATURE_clickhouse-enrichment-rollout-finish.md)**
-> (rollout + finish). Nothing dropped silently; each maps to a 0299 step.
+> **deferred to [0301](../../backlog/0301_FEATURE_clickhouse-enrichment-rollout-finish.md)**
+> (rollout + finish). Nothing dropped silently; each maps to a 0301 step.
 
 - [x] `asset_enrichment` / `nft_enrichment` created in `init.sql` + column-order
-      pin tests. _(Prod migration runs at deploy → **0299**.)_
+      pin tests. _(Prod migration runs at deploy → **0301**.)_
 - [x] `ch_enrichment_queue` **NOT** created — SQS is the queue.
 - [x] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
 - [x] Live write path wired (code): worker repointed PG→CH; producer lookup
       **un-stubbed** — per-batch CH anti-join publishes only un-enriched keys
-      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy → **0299**.)_
+      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy → **0301**.)_
 - [x] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
       re-enriches; `--retry-sentinels` re-attempts only all-`''` rows (newer-
       `version` INSERT, latest-wins). Exercised in `#[ignore]` CH tests + runbook.
 - [~] Read: asset name/icon join **done** (Step 4a, `ASSET_CH_SELECT`). NFT meta
-  read **→ deferred to 0299** (Step 4b — nfts API module still PG-only).
-- [ ] → **deferred to 0299**: Live integration test (USDC + NFT round-trip) —
-      local smoke done (`#[ignore]` + runbook); live SQS→worker→read is 0299 Step 10.
-- [ ] → **deferred to 0299**: Production drain reported (NULL ratios, RPC quota,
-      `nfts` read-join cost) — 0299 Step 7.
-- [ ] → **deferred to 0299**: **Docs per ADR 0032** — N/A for the delivered code
+  read **→ deferred to 0301** (Step 4b — nfts API module still PG-only).
+- [ ] → **deferred to 0301**: Live integration test (USDC + NFT round-trip) —
+      local smoke done (`#[ignore]` + runbook); live SQS→worker→read is 0301 Step 10.
+- [ ] → **deferred to 0301**: Production drain reported (NULL ratios, RPC quota,
+      `nfts` read-join cost) — 0301 Step 7.
+- [ ] → **deferred to 0301**: **Docs per ADR 0032** — N/A for the delivered code
       (refactor + error-reclass + CLI; no schema/endpoint/topology change); revisit
       on the column drop / read-path change.
-- [ ] → **deferred to 0299** (gated, LAST): dead placeholder columns dropped —
+- [ ] → **deferred to 0301** (gated, LAST): dead placeholder columns dropped —
       `assets.{name,icon_url}` + `nfts.{name,media_url,collection_name}`, after the
       indexer + backfill-runner stop emitting them. `soroban_contracts.name` kept.
 
@@ -417,7 +417,7 @@ collection_name}` — off-chain data the indexer can never derive.
     broken / late-published source stays empty. **Manual re-enroll shipped:**
     `--retry-sentinels` / `DrainMode::Sentinels` re-attempts only all-`''` rows,
     leaving real + partial untouched. An **automatic** sentinel-TTL re-enroll
-    remains future (→ 0299 if wanted).
+    remains future (→ 0301 if wanted).
   - _`now_ms().unwrap_or(0)` + `DateTime64(3)` version_ — fine under latest-wins;
     revisit only if a version-priority scheme is ever adopted.
 

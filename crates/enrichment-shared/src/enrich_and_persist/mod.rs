@@ -51,7 +51,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// overwritten by (or fail to overwrite) an older sentinel. The values are
 /// low-stakes (a logo / a name) and the skew window is small, but it is a real
 /// gap: a `--force-retry`/drain MUST NOT run concurrently with the live worker
-/// over overlapping keys (see 0299 ordering note). A future hardening is to
+/// over overlapping keys (see 0301 ordering note). A future hardening is to
 /// floor the version at `max(existing_version + 1, now_ms)` via a read-back.
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()

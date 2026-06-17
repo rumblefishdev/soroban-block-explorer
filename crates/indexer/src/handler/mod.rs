@@ -132,7 +132,7 @@ pub struct HandlerState {
     /// **Live** — per batch it runs the ClickHouse anti-join against
     /// `*_enrichment` and publishes the misses (SEP-1 assets + NFT `token_uri`);
     /// see `enrichment_publish.rs`. (Operationally the consumer worker is gated
-    /// off in prod until the 0299 rollout — the producer still publishes, so the
+    /// off in prod until the 0301 rollout — the producer still publishes, so the
     /// worker must be enabled or the producer gated to avoid SQS age-out.)
     pub enrichment_publisher: enrichment_publish::Publisher,
 }
