@@ -297,14 +297,12 @@ async fn main() {
             );
         }
         Command::ContractTypeRebuild { dry_run } => {
-            let stats = contract_type_rebuild::execute(&sink, dry_run)
-                .await
-                .expect(
-                    "contract_type_rebuild failed — if it failed AFTER the table \
+            let stats = contract_type_rebuild::execute(&sink, dry_run).await.expect(
+                "contract_type_rebuild failed — if it failed AFTER the table \
                      swap (e.g. during the assets backfill), simply re-run: the \
                      pass is idempotent (re-flip is a no-op, assets insert is \
                      NOT EXISTS-guarded)",
-                );
+            );
             println!(
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
