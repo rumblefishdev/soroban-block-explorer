@@ -1,5 +1,5 @@
 ---
-id: '0299'
+id: '0304'
 title: 'FEATURE: 0297 metadata follow-ups — backfill, deploy/flip, validation, frontend amounts, cleanup'
 type: FEATURE
 status: backlog
