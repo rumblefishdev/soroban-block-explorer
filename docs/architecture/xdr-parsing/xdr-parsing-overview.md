@@ -287,6 +287,22 @@ entities:
   variants from observed contract deployments. Without the dedicated
   classic-credit producer, `account_balances_current` would carry the
   balances but the entity row never existed (Karol's pre-audit Bug #1).
+- **un-deployed-SAC labeling from events** → an `is_sac=true, contract_type=Token`
+  override on the `soroban_contracts` row for a classic asset's deterministic
+  SAC `contract_id`, derived from the asset string carried in the asset's own
+  SAC events — `transfer`/`mint`/`burn`/`clawback`/`set_authorized` — NOT only
+  from `trustline` changes (`detect_classic_credit_assets`) or deploys
+  (`detect_assets`). An un-deployed SAC emits under its reserved `C…` address
+  with no on-chain instance (direct SAC host-function invocation pre-Protocol-23;
+  CAP-67 unified asset events post-P23), so `xdr_parser::derive_sac_overrides_from_events`
+  reads the asset (`CODE:ISSUER`/`native`) from the event's **last** topic and
+  emits a `SacOverride` ONLY when the emitter id equals the cryptographically
+  derived SAC id (`emitter == derive_sac(asset)`) — a gate that rejects bespoke
+  WASM contracts emitting the same event shape (task 0294). The identical gate
+  runs as a one-shot batch (`backfill-runner sac-orphan-relabel`) to relabel
+  historical "orphan" rows. Writes use the `wasm_uploaded_at_ledger = 0`
+  RMT-override sentinel (task 0220 convention): it wins over the `is_sac=false`
+  skeleton but loses to any real deploy.
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.
