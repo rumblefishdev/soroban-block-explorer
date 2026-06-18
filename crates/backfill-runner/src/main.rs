@@ -17,6 +17,7 @@ mod repair_tier1;
 mod resume;
 mod rpc_snapshot;
 mod run;
+mod sac_orphan_relabel;
 mod sink;
 mod status;
 mod sync;
@@ -203,6 +204,25 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Task 0294 — one-shot batch relabel of un-deployed-SAC "orphan" rows
+    /// (`is_sac=false`, no deploy, NULL `wasm_hash`, yet emitting SAC events).
+    /// Reads one sample SAC event per orphan, crypto-match-gates in Rust
+    /// (`emitter == derive_sac(asset)`, shared with the live path), and
+    /// re-INSERTs a corrected `is_sac=true, contract_type=Token` row (RMT
+    /// `version=0` override — wins over the skeleton, loses to a real deploy).
+    /// Lets `nft-reclassify` (task 0303) drop their ~51.5M false-positive
+    /// `nfts_pending` rows. Idempotent (a flipped row is no longer an orphan);
+    /// `--dry-run` reports the crypto-confirmed count without writing. CH-only.
+    SacOrphanRelabel {
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Network whose SAC `contract_id`s to derive
+        /// (mainnet | testnet | futurenet).
+        #[arg(long, default_value = "mainnet")]
+        network: String,
+    },
 }
 
 #[tokio::main]
@@ -323,6 +343,22 @@ async fn main() {
                 stats.dropped_pending_ownership,
                 stats.dropped_legacy_nfts,
                 stats.dropped_legacy_ownership,
+            );
+        }
+        Command::SacOrphanRelabel { dry_run, network } => {
+            let passphrase = xdr_parser::passphrase_for(&network).unwrap_or_else(|| {
+                panic!("unknown --network '{network}' (expected mainnet|testnet|futurenet)")
+            });
+            let stats = sac_orphan_relabel::execute(&sink, dry_run, passphrase)
+                .await
+                .expect(
+                    "sac_orphan_relabel failed — the pass is idempotent (RMT \
+                     version=0 override; a flipped row is no longer an orphan), \
+                     so a re-run is safe",
+                );
+            println!(
+                "sac_orphan_relabel completed (dry_run={}): orphans_scanned={} crypto_confirmed={} rows_inserted={}",
+                stats.dry_run, stats.orphans_scanned, stats.crypto_confirmed, stats.rows_inserted,
             );
         }
     }
