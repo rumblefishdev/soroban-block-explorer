@@ -56,6 +56,24 @@ history:
       space is actually freed under the new cadence. See "Reopen scope
       (2026-06-17): weekly cadence + retention + compact fix" below. No change
       to the hetzner_storagebox role; AC1–AC5 still verified on this deploy.
+  - date: '2026-06-18'
+    status: active
+    who: fmazur
+    note: >
+      First operator deploy (--tags backup,storagebox, validation off):
+      subaccount CREATED on BX21 (no 0227 subaccount actually existed) and the
+      Borg pubkey authorised via the bootstrap path — the hetzner_storagebox
+      role works. BUT the first backup exposed a fatal design flaw: ch-backup's
+      `BACKUP DATABASE TO Disk` writes a FULL local copy (~737 GiB) before borg
+      pushes it, and on this box dataset ≈ disk (737 GiB on 1.8 TB) → ENOSPC.
+      The full disk wedged ClickHouse's logging channel; with NO docker log
+      rotation the container json log ballooned to ~209 GiB, sustaining a
+      disk-full spiral (full prod incident). Recovered by truncating docker
+      json logs + restarting CH; weekly cron DISARMED so it cannot re-trigger
+      the broken backup. Scope EXPANDED in this task: redesign ch-backup to
+      FREEZE+borg (no full local copy; ledgers-first freeze order), add docker
+      log rotation, re-arm cron after. See "Backup mechanism redesign
+      (2026-06-18)" below.
 ---
 
 # FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API
@@ -218,6 +236,136 @@ role is untouched):
    - the DR line "until the next _daily_ run lands" → weekly). Architecture
      docs state Borg backups but not the cadence → N/A.
 
+## Backup mechanism redesign (2026-06-18): `BACKUP TO Disk` → FREEZE + borg
+
+**Why (supersedes the `BACKUP DATABASE` mechanism above).** The first deploy
+proved `ch-backup` is unworkable on ch-prod-01. `BACKUP DATABASE ... TO
+Disk('backups')` writes a **full copy** of the dataset to `/srv/backups` on
+the same `/dev/md1` before borg pushes it. With dataset ≈ disk (737 GiB on
+1.8 TB), a full local copy needs ~2× → ENOSPC. It filled the disk, wedged
+ClickHouse's logging channel, and — with **no docker log rotation** — the
+container json log grew to ~209 GiB → self-reinforcing disk-full spiral / prod
+incident. Borg dedup only bounds the **remote** repo; it does NOT shrink the
+**local staging** (CH writes a full copy every run), so the local-staging
+model can never fit here.
+
+**New mechanism — FREEZE + borg → BX21 (no full local copy):**
+Replace `BACKUP TO Disk` with `ALTER TABLE ... FREEZE` (hardlinks immutable
+MergeTree parts into `shadow/`, **~0 extra disk**), then `borg create` reads
+the frozen `shadow/` tree and pushes to the BX21 subaccount, then UNFREEZE.
+
+- **Local disk ~0** (hardlinks) + small borg chunk-index cache → removes the
+  ENOSPC root cause.
+- **Encryption (required):** borg `repokey-blake2` = authenticated client-side
+  encryption. The indexer's _derived_ data must not leak — Hetzner only ever
+  sees ciphertext. (Rules out plain SSE object storage where the provider
+  holds keys; rules out `BACKUP→mounted-StorageBox`.)
+- **Online (verified):** FREEZE does not block INSERT/SELECT — measured 238
+  inserts + 238 selects, 0 errors, during 243 concurrent freeze cycles
+  (CH 26.3). Snapshot isolation preserves point-in-time values even for a
+  ReplacingMergeTree row updated + merged after the freeze (live returns the
+  latest; restored-from-freeze returns the frozen version).
+- Borg is Hetzner's recommended Storage Box tool (chunked, resumable, dedup,
+  encrypted over SSH) → reuses the 0236 subaccount/key/repo. (Direct CH
+  `BACKUP` to a mounted Storage Box rejected: small-file SSHFS/CIFS is slow +
+  fragile, no resume.)
+
+### ⚠️ Freeze ORDER is critical — `ledgers` FIRST (marker-first)
+
+Our indexer writes the **`ledgers` row LAST** as a commit marker: _if a row
+exists in `ledgers`, all other data from that ledger's XDR is already in the
+DB._ Therefore the FREEZE loop MUST freeze **`ledgers` first**, then every
+other table (any order among the rest):
+
+```
+1. FREEZE ledgers            ← last-written commit marker → frozen FIRST
+2. FREEZE <all other tables>
+```
+
+Freezing `ledgers` at T1 then the detail tables at T2 > T1 guarantees every
+ledger present in the frozen `ledgers` had its children written before
+T1 < T2 → the children snapshot ⊇ what `ledgers` claims → **no orphans; the
+frozen `ledgers` is a conservative, trustworthy high-water mark.** Detail
+tables may hold a little extra (a partially-ingested ledger beyond the marker)
+— harmless, reconciled on restore. This yields a referentially-consistent
+backup **without pausing the indexer**.
+
+Freezing `ledgers` LAST would be **WRONG** — it could then claim ledger N
+whose children were not captured → orphan rows / a lying marker. The freeze
+order MUST be an **explicit, configurable list with `ledgers` pinned first** —
+never "whatever `system.tables` returns".
+
+### Restore procedure
+
+Place frozen parts into each table's `detached/`, then `ALTER TABLE ...
+ATTACH`. High-water mark = `max(ledger)` from the restored `ledgers`; resume
+ingestion from `max(ledger)+1` (data re-derivable from S3). Optionally trim
+detail rows for ledgers `> max(ledger)` before resuming (only needed if the
+indexer is not idempotent on partial re-ingest).
+
+### Optional pause (default OFF)
+
+Marker-first already gives a referentially-consistent snapshot. For absolute
+cross-table atomicity, pause the indexer **only for the FREEZE loop** (seconds
+at 379 parts / 19 tables), NOT for the borg upload (which reads immutable
+frozen parts while the indexer runs).
+
+### Companion fixes (in this task)
+
+- **Docker log rotation** — add `logging: {driver: json-file, options:
+{max-size: "100m", max-file: "5"}}` to the `clickhouse` service in the
+  compose prod overlay + recreate, and mirror it in the `app`/`docker` role
+  (and ideally `daemon.json`). Missing rotation is what turned a failed
+  backup into the incident.
+- **Re-arm the cron** — the FREEZE-based `ch-backup` redeploy restores
+  `/etc/cron.d/ch-backup` (weekly Sunday 03:30 UTC). Until then the box has
+  **NO scheduled backup** (cron DISARMED 2026-06-18 →
+  `/root/ch-backup.cron.disabled`).
+- **`snapshot_pre_0281` (~761 GiB)** — delete once the 0281 rollback is no
+  longer needed → frees ~half the disk (operational, not code).
+- **Capacity** — ch-prod-01 is undersized (737 GiB data on 1.8 TB, snapshot
+  consuming the rest); track under 0216.
+
+### Empirically validated (2026-06-18)
+
+The redesign's assumptions were proven on a local CH 26.3.12 sandbox
+(== prod major) before implementation:
+
+1. **Online** — INSERT + SELECT ran uninterrupted during FREEZE: 238
+   inserts + 238 selects, **0 errors**, across 243 concurrent
+   FREEZE/UNFREEZE cycles.
+2. **Snapshot isolation + encrypted Borg roundtrip** — 1000-row table;
+   after FREEZE it was heavily mutated (→V2, +500 rows, OPTIMIZE) AND
+   again post-archive (all→V3); a full FREEZE → `borg create` (repokey) →
+   `borg extract` → ATTACH roundtrip restored **exactly** the freeze-time
+   fingerprint, **≠** live. Bit-for-bit.
+3. **Literal single row** — freeze X=`ORIGINAL`; ledger changes it to
+   `CHANGED` (RMT) + merge: live query returns `CHANGED`,
+   restored-from-borg returns `ORIGINAL`.
+4. **`ledgers`-first ordering** — multi-table test: marker-first → **0
+   orphans**; marker-last → **1 orphan** (a ledger whose children weren't
+   captured). Confirms the freeze order is load-bearing.
+5. **Partitioned multi-table restore (drill)** — full FREEZE → `borg create`
+   (repokey) → `borg extract` → per-table `cp *_*` + `ATTACH PART` restore of
+   a mixed schema (2 PARTITION-BY tables with parts `0_*…4_*`, 1 plain
+   MergeTree, 1 RMT) reconstructed **every** table bit-for-bit (row counts +
+   cityHash sums == backup-time; live mutated + reverted in between).
+   Validates the partition-aware restore (review finding #2) end-to-end.
+
+A max-effort code review (10 finder angles) ran on the redesign; it found
+and fixed 2 critical bugs (a `docker compose exec -T` stdin-steal that froze
+only the marker table; the `all_*`/`ATTACH PARTITION ID 'all'` restore that
+left partitioned tables empty) plus hardening (borg exit-1 handling, signal
+trap exit, `flock`, marker-first guard, TOCTOU single-query, dead-`/srv/backups`
+cleanup). Credentials scan: clean.
+
+(`FREEZE` ≈ 0 disk is by construction — hardlinks.) Restore gotchas the
+tests surfaced are baked into the DR runbook: `chown 101:101` the copied
+parts, `data_paths[1]` (no scalar `path`), `ATTACH PARTITION ID 'all'`,
+`SYSTEM UNFREEZE` disabled → per-table `ALTER ... UNFREEZE WITH NAME`,
+and a `_table_uuids.tsv` map written into the shadow tree so a restore
+can map Atomic-DB `store/<uuid>/` dirs back to table names.
+
 ## Acceptance Criteria
 
 > AC1–AC5 are **runtime** criteria: they require a live
@@ -253,6 +401,27 @@ role is untouched):
       archive on a fresh repo survives the prune.
 - [ ] **(reopen) Compact reclaims space** — `borg compact` runs on every
       backup run (not gated to Sunday), so pruned segments are freed.
+- [ ] **(redesign) FREEZE, not `BACKUP TO Disk`** — `ch-backup` uses
+      `ALTER TABLE ... FREEZE` + `borg create` from `shadow/`; a backup run
+      consumes ~0 extra local disk (no full local copy → no ENOSPC).
+- [ ] **(redesign) `ledgers`-first freeze order** — the freeze order is an
+      explicit list with `ledgers` pinned FIRST, then all other tables
+      (marker-first → consistent high-water mark without pausing the indexer).
+- [ ] **(redesign) encrypted borg → BX21 + restore documented** — frozen
+      snapshot pushed to the subaccount, client-side encrypted; restore via
+      `max(ledger)` high-water mark + ATTACH-from-detached is documented.
+- [ ] **(redesign) docker log rotation** — `json-file` `max-size`/`max-file`
+      on the CH container and in the role (no unbounded container logs that
+      can refill the disk).
+- [ ] **(redesign) cron re-armed by the FREEZE deploy** — `/etc/cron.d/ch-backup`
+      restored (weekly Sunday 03:30 UTC). Currently DISARMED
+      (`/root/ch-backup.cron.disabled`) so the broken backup cannot fire.
+- [x] **(redesign) restore drill-tested** — full multi-table
+      FREEZE → borg → extract → ATTACH restore exercised end-to-end on a
+      local CH 26.3.12 sandbox with a mixed PARTITION-BY/plain/RMT schema;
+      every table (incl. partitioned `0_*…4_*`) reconstructed bit-for-bit.
+      (Local mechanism proven; a real BX21 restore is still the operator's
+      first live DR exercise.)
 - [x] **API types regenerated** — N/A — this task does not touch
       `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`.
 - [x] **Docs updated** — `infra-hetzner/README.md` updated: `ansible-env`

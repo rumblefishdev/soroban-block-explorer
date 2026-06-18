@@ -1,18 +1,21 @@
 ---
-# Daily encrypted backup of the ClickHouse data set to the
+# Weekly encrypted backup of the ClickHouse data set to the
 # Hetzner BX21 Storage Box via Borg over SSH.
 #
-# Workflow (executed by /usr/local/bin/ch-backup on cron):
-#   1. `BACKUP DATABASE default TO Disk('backups', ...)` inside CH
-#      → produces a consistent snapshot in /srv/backups/.
-#   2. `borg create` pushes the snapshot directory to BX21.
-#   3. Local snapshot is deleted (it has been pushed; BX21 is
-#      the durable copy).
-#   4. `borg prune` enforces retention.
+# Workflow (executed by /usr/local/bin/ch-backup on cron — task 0236
+# redesign; replaces the old `BACKUP DATABASE TO Disk` which needed a
+# full local copy that did not fit on this box, dataset ~= disk size):
+#   1. `ALTER TABLE ... FREEZE` each MergeTree table (marker `ledgers`
+#      first) → hardlinks the immutable parts into <data>/shadow/
+#      (~0 extra disk; no full copy; INSERT/SELECT keep running).
+#   2. `borg create` pushes the frozen shadow tree to BX21.
+#   3. `ALTER TABLE ... UNFREEZE WITH NAME` releases the hardlinks.
+#   4. `borg prune` + `borg compact` enforce retention and reclaim space.
 #
 # Encryption: Borg encrypts client-side using the passphrase from
 # /etc/soroban-backup/borg.passphrase. Hetzner stores ciphertext;
-# a Hetzner-side disclosure does not leak our data.
+# a Hetzner-side disclosure does not leak our data (the indexer's
+# derived data set).
 
 - name: Assert the Storage Box SSH endpoint is known before configuring Borg
   # storagebox_ssh_user/host are normally DISCOVERED by the

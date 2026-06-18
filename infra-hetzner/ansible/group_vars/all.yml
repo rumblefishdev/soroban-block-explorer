@@ -172,6 +172,14 @@ storagebox_authorized_keys: []
 storagebox_run_backup_validation: "{{ lookup('env', 'STORAGEBOX_RUN_BACKUP_VALIDATION') | default('true', true) | bool }}"
 borg_repo_path: "{{ lookup('env', 'BORG_REPO_PATH') | default('./backups/clickhouse', true) }}"
 
+# Backup marker table — frozen FIRST by ch-backup so its high-water mark
+# is conservative (task 0236 redesign). The indexer writes `ledgers`
+# LAST as a commit marker (a `ledgers` row implies all its children are
+# already in the DB), so freezing it first guarantees every ledger in
+# the backup has its children — no orphans, no indexer pause. Env-
+# overridable only if the marker table is ever renamed.
+borg_marker_table: "{{ lookup('env', 'BORG_MARKER_TABLE') | default('ledgers', true) }}"
+
 # Borg retention policy — overridable for envs with different
 # capacity / retention requirements.
 #
@@ -251,7 +259,6 @@ app_repo_dest: /srv/app
 # mounts. Ownership matches the in-container CH UID (101).
 ch_data_dir: /srv/clickhouse-data
 ch_logs_dir: /srv/clickhouse-logs
-backups_dir: /srv/backups
 
 # ClickHouse runs as UID/GID 101 inside the official 26.x image.
 clickhouse_uid: 101

@@ -259,6 +259,21 @@ ansible-playbook ... --tags hetzner
 ansible-playbook ... --tags storagebox
 ```
 
+> **Docker log rotation — one-time container recreate.** The CH log cap
+> (`logging: json-file max-size=100m max-file=5` in `docker-compose.prod.yml`)
+> only applies to containers **created after** it lands. A `--tags app` run
+> recreates the `clickhouse` service when its compose definition changed, so
+> the cap takes effect then. If you deployed the backup change via a narrower
+> tag set, force it once explicitly (the running container keeps its old,
+> unbounded log driver because `daemon.json` has `live-restore: true`):
+>
+> ```bash
+> docker compose -f /srv/app/docker-compose.yml \
+>                -f /srv/app/docker-compose.prod.yml up -d --force-recreate clickhouse
+> # verify the cap is live:
+> docker inspect -f '{{.HostConfig.LogConfig}}' clickhouse   # → max-size:100m max-file:5
+> ```
+
 ## Post-deploy verification
 
 After the first deploy and after any potentially disruptive
@@ -392,47 +407,94 @@ CRL/OCSP infrastructure required.
    it automatically** (overwriting `authorized_keys`, which also
    revokes the dead box's key). No manual Robot UI / Console step.
 
-5. Restore from the most recent Borg snapshot.
+5. Restore from the most recent Borg snapshot (FREEZE-based — task 0236).
+
+   The archive contains: immutable MergeTree **parts**, the **live schema**
+   (`_schema.sql` — `SHOW CREATE` of every table+dictionary), and a
+   **uuid↔name map** (`_table_uuids.tsv`). You re-create the EXACT schema
+   from `_schema.sql` (NOT `init.sql` — which can drift from prod via online
+   ALTERs), then re-attach the parts. There is no SQL `RESTORE`.
+
+   > Drill-tested locally end-to-end (mixed partitioned/plain/RMT schema,
+   > full FREEZE→borg→extract→ATTACH roundtrip, fingerprints matched). A real
+   > BX21 restore is still the operator's first LIVE exercise — rehearse it
+   > once on a throwaway box.
 
    ```bash
    ssh deploy@<new-box-ip>
+   SB="ssh://<sb-user>@<sb-host>:23/./backups/clickhouse"   # from `borg list`
+   export BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
+   export BORG_RSH="ssh -i /root/.ssh/borg_ed25519"          # cron key; root has no default identity
 
-   # Borg archives preserve absolute paths from the source box —
-   # extracting writes files under <target>/srv/backups/ch-<stamp>/.
-   # Pick the most recent archive name from `borg list` first.
-   # BORG_RSH must point at the dedicated cron key — otherwise
-   # ssh tries the host's default identity (none for root on a
-   # fresh box) and the connection fails with permission denied.
-   sudo BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase" \
-        BORG_RSH="ssh -i /root/.ssh/borg_ed25519" \
-        borg list \
-            "ssh://<sb-user>@<sb-host>:23/./backups/clickhouse"
+   # a) pick the archive (prefer the most recent that did NOT end with
+   #    warnings in `borg list`, if a clean later one exists)
+   sudo -E borg list "$SB"
 
-   # Stage the archive under /tmp/borg-restore (not directly into
-   # /srv/clickhouse-data: that's the live CH data dir; the BACKUP
-   # snapshot is a separate artefact restored via the SQL RESTORE
-   # statement below, not a raw data-volume swap).
+   # b) extract. The archive stores paths RELATIVE to the freeze root
+   #    (`store/<uuid>/…`, `_schema.sql`, `_table_uuids.tsv`), so they land
+   #    directly under the --target dir.
    sudo mkdir -p /tmp/borg-restore
-   sudo BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase" \
-        BORG_RSH="ssh -i /root/.ssh/borg_ed25519" \
-        borg extract --target /tmp/borg-restore \
-            "ssh://<sb-user>@<sb-host>:23/./backups/clickhouse::ch-<latest>"
+   sudo -E borg extract --target /tmp/borg-restore "$SB::ch-<stamp>"
+   SHADOW=/tmp/borg-restore
 
-   # Move the staged snapshot into /srv/backups (the host path the
-   # CH 'backups' disk points at — see config.d/backups.xml).
-   # Ownership must match the in-container CH UID 101:101.
-   sudo mv /tmp/borg-restore/srv/backups/ch-<latest> /srv/backups/
-   sudo chown -R 101:101 /srv/backups/ch-<latest>
+   CB="sudo docker compose -f /srv/app/docker-compose.yml -f /srv/app/docker-compose.prod.yml exec -T clickhouse"
+   chq() { $CB clickhouse-client --config-file=/etc/clickhouse-backup/client.xml "$@" </dev/null; }
 
-   # Tell CH to consume the snapshot via the SQL RESTORE statement.
-   # The credentials file is the same one the backup script uses;
-   # never need to type the password manually.
-   sudo docker compose -f /srv/app/docker-compose.yml \
-                       -f /srv/app/docker-compose.prod.yml \
-                       exec -T clickhouse \
-       clickhouse-client \
-           --config-file=/etc/clickhouse-backup/client.xml \
-           --query="RESTORE DATABASE default FROM Disk('backups', 'ch-<latest>/')"
+   # c) recreate the EXACT snapshot schema (replaces the init.sql schema the
+   #    stack just created — so the recreated tables match the frozen parts
+   #    even if prod had online ALTERs not in init.sql).
+   for t in $(chq --query="SELECT name FROM system.tables WHERE database='default' AND engine!='Dictionary'"); do
+     chq --query="DROP TABLE IF EXISTS default.\`$t\` SYNC"
+   done
+   for d in $(chq --query="SELECT name FROM system.dictionaries WHERE database='default'"); do
+     chq --query="DROP DICTIONARY IF EXISTS default.\`$d\`"
+   done
+   # apply captured DDL (file on stdin — NOT chq, which redirects </dev/null)
+   $CB clickhouse-client --config-file=/etc/clickhouse-backup/client.xml --multiquery < "$SHADOW/_schema.sql"
+
+   # d) ATTACH each table's frozen parts.
+   #    GOTCHAS: HOST path via the bind mount (data_paths[1] shows the
+   #    container path); chown 101:101 after cp (else ATTACH EPERM);
+   #    partitioned parts are `<pid>_*` not `all_*` → copy `*_*` and ATTACH
+   #    PART per part; `chq </dev/null` avoids the docker-exec stdin-steal.
+   #    A "NO PARTS" / "ATTACH FAILED" / "PARTIAL" line is a RED FLAG (table
+   #    restores EMPTY or with missing rows) — investigate; do not ignore.
+   miss=""
+   while IFS=$'\t' read -r olduuid table; do
+     [ -z "$table" ] && continue
+     newuuid=$(chq --query="SELECT toString(uuid) FROM system.tables WHERE database='default' AND name='$table'" | tr -d '\r\n')
+     [ -z "$newuuid" ] && { echo "!! MISSING TABLE $table (schema apply failed?)"; miss="$miss $table"; continue; }
+     src="$SHADOW/store/${olduuid:0:3}/$olduuid"
+     dst="/srv/clickhouse-data/store/${newuuid:0:3}/$newuuid/detached"
+     sudo mkdir -p "$dst"
+     if ! sudo cp -r "$src"/*_* "$dst"/ 2>/dev/null; then
+       echo "!! NO PARTS for $table — investigate (empty table or path error)"; miss="$miss $table"; continue
+     fi
+     sudo chown -R 101:101 "$dst"
+     # ATTACH every copied part; count successes vs parts present so a single
+     # failed ATTACH (corrupt/version-skew part) can't masquerade as success.
+     want=$(ls "$dst" | wc -l); got=0
+     for part in $(ls "$dst"); do
+       if chq --query="ALTER TABLE default.\`$table\` ATTACH PART '$part'"; then got=$((got+1))
+       else echo "!! ATTACH FAILED: $table part $part"; fi
+     done
+     if [ "$got" -ne "$want" ]; then echo "!! PARTIAL: $table attached $got/$want parts"; miss="$miss $table"
+     else echo "attached: $table ($got parts)"; fi
+   done < "$SHADOW/_table_uuids.tsv"
+   [ -n "$miss" ] && echo "!!!! NOT FULLY RESTORED:$miss — DO NOT declare success"
+
+   # e) reload dictionaries (cache dicts loaded empty on the fresh stack;
+   #    they only see the freshly-ATTACHed source rows after a reload).
+   chq --query="SYSTEM RELOAD DICTIONARIES"
+
+   # f) completeness + sanity. Every table from _table_uuids.tsv must appear
+   #    with rows; RMT counts settle after a background merge (force if needed:
+   #    OPTIMIZE TABLE default.<t> FINAL).
+   chq --query="SELECT name, total_rows FROM system.tables WHERE database='default' ORDER BY name FORMAT TSV"
+
+   # g) resume point. The marker (ledgers) was frozen FIRST → its max is the
+   #    last FULLY-committed ledger; restart the indexer from max+1.
+   chq --query="SELECT max(sequence)+1 AS resume_from FROM default.ledgers"
    ```
 
 6. Validate the restore: row counts on a few large tables, schema
