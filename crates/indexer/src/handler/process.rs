@@ -445,8 +445,22 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     // `network_id` above (not a hard-coded mainnet constant) — on a
     // non-mainnet stack a mainnet-pinned passphrase would compute
     // wrong SAC contract_ids and corrupt SAC identity fixing.
-    let sac_overrides =
+    let mut sac_overrides =
         xdr_parser::derive_sac_overrides_from_assets(&all_assets, network_passphrase());
+    // Task 0294: un-deployed SACs (no trustline change, no in-window deploy)
+    // surface ONLY via their SAC events (transfer/mint/burn/clawback/
+    // set_authorized), so `detect_classic_credit_assets` never observes them
+    // and they persist as `is_sac=false` orphans. Derive overrides straight
+    // from the events — crypto-match-gated (emitter == derived SAC id), so a
+    // bespoke WASM contract emitting the same shape is rejected.
+    // `prepare_with_sac_overrides` dedups by contract_id, so per-tx overlap
+    // (and overlap with the asset-derived overrides above) is harmless.
+    for (_tx_hash, tx_events) in &all_events {
+        sac_overrides.extend(xdr_parser::derive_sac_overrides_from_events(
+            tx_events,
+            network_passphrase(),
+        ));
+    }
 
     let parse_ms = parse_timer.elapsed().as_millis();
 

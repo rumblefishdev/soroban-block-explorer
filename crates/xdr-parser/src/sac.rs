@@ -18,6 +18,7 @@
 //! <https://developers.stellar.org/docs/data/rpc/api-reference/methods/getNetwork>.
 
 use core::str::FromStr;
+use std::collections::HashSet;
 
 use domain::TokenAssetType;
 use sha2::{Digest, Sha256};
@@ -31,7 +32,7 @@ use tracing::{instrument, warn};
 
 use crate::envelope::InnerTxRef;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::types::{ExtractedAsset, SacAssetIdentity};
+use crate::types::{EventSource, ExtractedAsset, ExtractedEvent, SacAssetIdentity};
 
 pub const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
@@ -204,6 +205,135 @@ pub fn derive_sac_overrides_from_assets(
     }
 
     out
+}
+
+/// Forward-derive SAC overrides from classic-asset SAC *events* (task 0294).
+///
+/// Un-deployed SACs surface `transfer`/`mint`/`burn`/`clawback`/`set_authorized`
+/// events under their deterministic SAC `contract_id` — via direct SAC
+/// host-function invocation (Protocol 20+) pre-P23, and additionally via CAP-67
+/// unified asset events post-P23 — carrying the asset `CODE:ISSUER` (or
+/// `native`) as an `ScVal::String` in the LAST topic.
+/// [`detect_classic_credit_assets`](crate::detect_classic_credit_assets) reads
+/// only trustline changes, so payment/transfer-only SACs are never
+/// forward-derived and persist as `is_sac=false` orphans.
+///
+/// **Crypto-match gate (task 0294 C1):** an override is emitted ONLY when the
+/// emitter `contract_id` equals the SAC `contract_id` derived from the topic
+/// asset (`emitter == derive_sac(asset)`). This rejects bespoke WASM contracts
+/// that merely emit a SAC-shaped event with an asset-string topic — their id
+/// never equals the derived SAC id — so they are never mislabeled `is_sac`.
+pub fn derive_sac_overrides_from_events(
+    events: &[ExtractedEvent],
+    network_passphrase: &str,
+) -> Vec<SacOverride> {
+    let net_id = network_id(network_passphrase);
+    let mut out: Vec<SacOverride> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for event in events {
+        // Diagnostic events are byte-identical mirrors of the consensus per-op
+        // events (task 0182) — skip to avoid redundant work.
+        if event.source == EventSource::Diagnostic {
+            continue;
+        }
+        let Some(emitter) = event.contract_id.as_deref() else {
+            continue;
+        };
+        let Some(ov) = sac_override_from_event_topics(emitter, &event.topics, &net_id) else {
+            continue;
+        };
+        if seen.insert(ov.contract_id.clone()) {
+            out.push(ov);
+        }
+    }
+
+    out
+}
+
+/// Crypto-match-gated SAC override for a single event's `(emitter, topics)`.
+///
+/// Returns `Some` only when `emitter` IS the SAC contract for the asset carried
+/// in the event's LAST topic (`emitter == derive_sac(asset)`) and the event's
+/// first topic is a SAC-control signature. This is the shared core of the live
+/// path ([`derive_sac_overrides_from_events`]) and the batch orphan-relabel
+/// pass (task 0294) — both must apply the identical gate so a bespoke WASM
+/// emitter of a SAC-shaped event is never mislabeled `is_sac`.
+///
+/// `net_id` is `network_id(passphrase)` — hoist it out of any loop.
+pub fn sac_override_from_event_topics(
+    emitter: &str,
+    topics: &serde_json::Value,
+    net_id: &[u8; 32],
+) -> Option<SacOverride> {
+    let topics = topics.as_array()?;
+    // Signature topic + the trailing asset topic at minimum.
+    if topics.len() < 2 {
+        return None;
+    }
+    let signature = topic_symbol_value(&topics[0]).to_ascii_lowercase();
+    if !SAC_CONTROL_EVENT_SIGNATURES.contains(&signature.as_str()) {
+        return None;
+    }
+    // The SEP-11 asset string rides in the LAST topic across every SAC event
+    // shape (transfer/mint/burn/clawback/set_authorized) — both the pre-P23
+    // direct-invocation form and the post-P23 CAP-67 form.
+    let asset_str = topics.last().and_then(topic_string_value)?;
+    let asset = parse_sac_asset_string(&asset_str)?;
+    let preimage = ContractIdPreimage::Asset(asset.clone());
+    let derived = derive_sac_contract_id(&preimage, net_id).ok()?;
+    // Crypto-match gate (task 0294 C1): a contract is the asset's SAC only if
+    // its own id IS the derived SAC id.
+    if derived != emitter {
+        return None;
+    }
+    Some(SacOverride {
+        contract_id: derived,
+        identity: asset_to_identity(&asset),
+    })
+}
+
+/// Classic-asset SAC control-event signatures. `transfer`/`mint`/`burn` are
+/// shared with bespoke tokens, but `clawback`/`set_authorized` are SAC-only
+/// (a custom Soroban NFT never emits them). The crypto-match gate in
+/// [`derive_sac_overrides_from_events`] is what makes the shared signatures
+/// safe to act on.
+const SAC_CONTROL_EVENT_SIGNATURES: &[&str] =
+    &["transfer", "mint", "burn", "clawback", "set_authorized"];
+
+/// Extract an `ScVal::Symbol` string from a tagged JSON topic (`type: "sym"`).
+fn topic_symbol_value(topic: &serde_json::Value) -> String {
+    if topic.get("type").and_then(|v| v.as_str()) == Some("sym")
+        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
+    {
+        return s.to_string();
+    }
+    String::new()
+}
+
+/// Extract an `ScVal::String` value from a tagged JSON topic (`type: "string"`).
+fn topic_string_value(topic: &serde_json::Value) -> Option<String> {
+    if topic.get("type").and_then(|v| v.as_str()) == Some("string")
+        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
+        && !s.is_empty()
+    {
+        return Some(s.to_string());
+    }
+    None
+}
+
+/// Parse a SEP-11 asset string (`"native"` or `"CODE:ISSUER"`) into an XDR
+/// `Asset`. Returns `None` for malformed strings or invalid issuer StrKeys.
+fn parse_sac_asset_string(s: &str) -> Option<Asset> {
+    if s == "native" {
+        return Some(Asset::Native);
+    }
+    let (code, issuer) = s.split_once(':')?;
+    if code.is_empty() {
+        return None;
+    }
+    let issuer_acct = AccountId::from_str(issuer).ok()?;
+    build_credit_asset(code, issuer_acct).ok()
 }
 
 /// Build the XDR `Asset` for a classic credit asset given `(code, issuer)`.
@@ -454,6 +584,128 @@ mod tests {
                 issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
             }
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // Task 0294 — `derive_sac_overrides_from_events` (un-deployed SAC labeling)
+    // ----------------------------------------------------------------------
+
+    const USDC_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+    const USDC_SAC: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+    const NATIVE_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+
+    /// Build a SAC-shaped event: `[sym(sig), addr, addr, <asset_topic>]`.
+    /// The asset rides in the LAST topic across every SAC event shape.
+    fn make_sac_event(emitter: &str, sig: &str, asset_topic: serde_json::Value) -> ExtractedEvent {
+        ExtractedEvent {
+            transaction_hash: "deadbeef".into(),
+            event_type: domain::ContractEventType::Contract,
+            source: EventSource::PerOp,
+            contract_id: Some(emitter.into()),
+            topics: serde_json::json!([
+                {"type": "sym", "value": sig},
+                {"type": "address", "value": "GFROM"},
+                {"type": "address", "value": "GTO"},
+                asset_topic,
+            ]),
+            data: serde_json::json!({"type": "i128", "value": "8441727124"}),
+            event_index: 0,
+            ledger_sequence: 60_000_000,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    fn usdc_asset_topic() -> serde_json::Value {
+        serde_json::json!({"type": "string", "value": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"})
+    }
+
+    #[test]
+    fn events_emitter_is_real_sac_yields_token_override() {
+        let ev = make_sac_event(USDC_SAC, "transfer", usdc_asset_topic());
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].contract_id, USDC_SAC);
+        assert_eq!(
+            out[0].identity,
+            SacAssetIdentity::Credit {
+                code: "USDC".into(),
+                issuer: USDC_ISSUER.into(),
+            }
+        );
+    }
+
+    /// C1 guardrail: a bespoke WASM contract emits the SAC transfer shape with
+    /// a real asset string, but its own id != derive_sac(asset). It MUST NOT be
+    /// flipped to `is_sac=true` (verified: 3 such mainnet contracts exist).
+    #[test]
+    fn events_crypto_match_gate_rejects_non_sac_emitter() {
+        // emitter is the *native* SAC id, asset string is USDC → mismatch.
+        let ev = make_sac_event(NATIVE_SAC, "transfer", usdc_asset_topic());
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert!(out.is_empty(), "non-SAC emitter must be rejected, got {out:?}");
+    }
+
+    #[test]
+    fn events_native_asset_yields_native_override() {
+        let ev = make_sac_event(
+            NATIVE_SAC,
+            "mint",
+            serde_json::json!({"type": "string", "value": "native"}),
+        );
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].contract_id, NATIVE_SAC);
+        assert_eq!(out[0].identity, SacAssetIdentity::Native);
+    }
+
+    #[test]
+    fn events_clawback_signature_is_sac_control() {
+        // clawback is SAC/asset-only — a bespoke NFT never emits it.
+        let ev = make_sac_event(USDC_SAC, "clawback", usdc_asset_topic());
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].contract_id, USDC_SAC);
+    }
+
+    #[test]
+    fn events_non_sac_signature_ignored() {
+        let ev = make_sac_event(USDC_SAC, "approve", usdc_asset_topic());
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn events_same_sac_deduped_to_one_override() {
+        let evs = [
+            make_sac_event(USDC_SAC, "transfer", usdc_asset_topic()),
+            make_sac_event(USDC_SAC, "mint", usdc_asset_topic()),
+        ];
+        let out = derive_sac_overrides_from_events(&evs, MAINNET_PASSPHRASE);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn events_diagnostic_source_skipped() {
+        let mut ev = make_sac_event(USDC_SAC, "transfer", usdc_asset_topic());
+        ev.source = EventSource::Diagnostic;
+        let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn helper_override_from_topics_positive_and_gate() {
+        let net = network_id(MAINNET_PASSPHRASE);
+        let topics = serde_json::json!([
+            {"type": "sym", "value": "transfer"},
+            {"type": "address", "value": "GFROM"},
+            {"type": "address", "value": "GTO"},
+            {"type": "string", "value": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"},
+        ]);
+        // positive: emitter IS the USDC SAC
+        let ov = sac_override_from_event_topics(USDC_SAC, &topics, &net);
+        assert_eq!(ov.expect("override").contract_id, USDC_SAC);
+        // gate: wrong emitter (native SAC id) → rejected
+        assert!(sac_override_from_event_topics(NATIVE_SAC, &topics, &net).is_none());
     }
 
     #[test]
