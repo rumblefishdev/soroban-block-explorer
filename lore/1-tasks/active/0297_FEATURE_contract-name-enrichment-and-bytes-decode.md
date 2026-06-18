@@ -2,7 +2,7 @@
 id: '0297'
 title: 'FEATURE: contract-name enrichment (off-ledger name() → side-table) + ScVal::Bytes name-decode fix'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0283', '0231']
 tags: [clickhouse, enrichment, soroban, layer-data, priority-low, effort-medium]
@@ -16,6 +16,15 @@ history:
       the contract-name enrichment job with a minor ScVal::Bytes name-decode
       bug found in the same audit. The contract-name piece overlaps 0231 and may
       fold there.
+  - date: 2026-06-17
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active for a fresh-eye deep-dive. The "names are off-ledger"
+      framing is contested: Staszek's 0283 hand-off asserts name/symbol/decimals
+      ARE on-ledger in contract instance storage under Symbol("METADATA"), and
+      that scval.rs drops inst.storage. Scope now also covers the decimals
+      question. Body claims to be verified against mainnet before any rewrite.
 ---
 
 # FEATURE: contract-name enrichment + bytes-decode fix

@@ -1,5 +1,5 @@
 //! `enrich` — local CLI that drains un-enriched ClickHouse rows into the
-//! enrichment side tables (`asset_enrichment` / `nft_enrichment`, ADR 0048)
+//! enrichment side tables (`asset_enrichment` / `nft_enrichment`, ADR 0050)
 //! by calling the same `enrichment_shared::enrich_and_persist::*` functions
 //! the live SQS-driven `enrichment-worker` Lambda invokes per message. No
 //! SQS in the loop — a bulk publish would hit SQS rate limits and waste
@@ -22,7 +22,7 @@
 //!
 //! - **Standard filter** = the key has no side-table row yet
 //!   (`(key) NOT IN (SELECT key FROM *_enrichment)`). Row existence is the
-//!   "tried" marker (ADR 0048): a permanent fail still INSERTs a `''`
+//!   "tried" marker (ADR 0050): a permanent fail still INSERTs a `''`
 //!   sentinel row, so the key is skipped on the next pass.
 //! - **`--force-retry`** = drop the filter and walk every key. `enrich_*`
 //!   is idempotent — a later run upgrades a sentinel to a real value (or
@@ -441,7 +441,7 @@ async fn select_nft_chunk(
 // ---------------------------------------------------------------------------
 
 /// Per-side-table coverage. "untried" = candidate keys with no enrichment row
-/// yet (existence = "tried", ADR 0048). Per column: "real" = non-empty
+/// yet (existence = "tried", ADR 0050). Per column: "real" = non-empty
 /// non-NULL value, "sentinel" = the `''` permanent-fail marker.
 async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     async fn cnt(c: &Client, sql: &str) -> Result<u64, clickhouse::error::Error> {

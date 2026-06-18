@@ -122,6 +122,39 @@ pub struct StagedLedger {
     pub balance_rows: Vec<AccountBalanceRow>,
 }
 
+/// Named, borrowed inputs to [`prepare_with_sac_overrides`].
+///
+/// Replaces the former ~18 positional arguments: many are `&[T]` slices and a
+/// few share types, so a positional call could silently transpose two. Named
+/// fields make the call site readable and a wrong order a compile error. `Copy`
+/// (every field is a shared reference) so the stage body can destructure it
+/// back into locals with zero ceremony.
+#[derive(Clone, Copy)]
+pub struct StageInputs<'a> {
+    pub ledger: &'a ExtractedLedger,
+    pub transactions: &'a [ExtractedTransaction],
+    pub operations: &'a [(String, Vec<ExtractedOperation>)],
+    pub events: &'a [(String, Vec<ExtractedEvent>)],
+    pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
+    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub contract_deployments: &'a [ExtractedContractDeployment],
+    pub account_states: &'a [ExtractedAccountState],
+    pub liquidity_pools: &'a [ExtractedLiquidityPool],
+    pub pool_snapshots: &'a [ExtractedLiquidityPoolSnapshot],
+    pub assets: &'a [ExtractedAsset],
+    pub nfts: &'a [ExtractedNft],
+    pub nft_events: &'a [ExtractedNftEvent],
+    pub lp_positions: &'a [ExtractedLpPosition],
+    pub contract_name_writes: &'a [(String, String)],
+    /// Task 0220 Part 2 — SAC override re-insert rows. Empty for legacy callers.
+    pub sac_overrides: &'a [SacOverride],
+    /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
+    /// for legacy callers (behaves exactly as pre-0283).
+    pub prior_wasm_verdicts: &'a HashMap<[u8; 32], ContractType>,
+    /// Task 0283 live G9 — cross-ledger contract verdicts by `contract_id`.
+    pub prior_contract_verdicts: &'a HashMap<String, ContractType>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     ledger: &ExtractedLedger,
@@ -140,7 +173,9 @@ pub fn prepare(
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
 ) -> Result<StagedLedger, SchemaError> {
-    prepare_with_sac_overrides(
+    // Convenience wrapper: no SAC overrides, no cross-ledger verdicts (the
+    // legacy / test path). Behaves exactly as the pre-StageInputs `prepare`.
+    prepare_with_sac_overrides(&StageInputs {
         ledger,
         transactions,
         operations,
@@ -156,10 +191,10 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_name_writes,
-        &[],
-        &HashMap::new(),
-        &HashMap::new(),
-    )
+        sac_overrides: &[],
+        prior_wasm_verdicts: &HashMap::new(),
+        prior_contract_verdicts: &HashMap::new(),
+    })
 }
 
 /// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
@@ -186,27 +221,30 @@ pub fn prepare(
 /// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
 /// override consults it as a fallback after the same-ledger map. Legacy
 /// callers via [`prepare`] pass an empty map and behave exactly as before.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_with_sac_overrides(
-    ledger: &ExtractedLedger,
-    transactions: &[ExtractedTransaction],
-    operations: &[(String, Vec<ExtractedOperation>)],
-    events: &[(String, Vec<ExtractedEvent>)],
-    invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
-    contract_deployments: &[ExtractedContractDeployment],
-    account_states: &[ExtractedAccountState],
-    liquidity_pools: &[ExtractedLiquidityPool],
-    pool_snapshots: &[ExtractedLiquidityPoolSnapshot],
-    assets: &[ExtractedAsset],
-    nfts: &[ExtractedNft],
-    nft_events: &[ExtractedNftEvent],
-    lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
-    sac_overrides: &[SacOverride],
-    prior_wasm_verdicts: &HashMap<[u8; 32], ContractType>,
-    prior_contract_verdicts: &HashMap<String, ContractType>,
-) -> Result<StagedLedger, SchemaError> {
+pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedger, SchemaError> {
+    // Destructure back into locals (StageInputs is `Copy`) so the body below is
+    // unchanged from the positional-argument era — every name matches.
+    let StageInputs {
+        ledger,
+        transactions,
+        operations,
+        events,
+        invocations,
+        contract_interfaces,
+        contract_deployments,
+        account_states,
+        liquidity_pools,
+        pool_snapshots,
+        assets,
+        nfts,
+        nft_events,
+        lp_positions,
+        contract_name_writes,
+        sac_overrides,
+        prior_wasm_verdicts,
+        prior_contract_verdicts,
+    } = *input;
+
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
     let ledger_closed_at_ms = ledger.closed_at.saturating_mul(1_000);
@@ -461,7 +499,7 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    // G5 guardrail + tripwire (task 0283 / ADR 0049).
+    // G5 guardrail + tripwire (task 0283; name-enrichment follow-up = task 0297).
     //
     // Contract names are empirically OFF-LEDGER: SEP-41 / OpenZeppelin Soroban
     // tokens expose `name` via a `name()` WASM function (read off-ledger via
@@ -478,7 +516,7 @@ pub fn prepare_with_sac_overrides(
     // partial name row can NEVER clobber the deploy identity. The name is kept
     // only when it is the sole row for that contract (harmless); it loses to a
     // deploy (where the deploy IS the better data). Long-term, contract names
-    // belong in an enrichment side table (ADR 0048/0049), not this column.
+    // belong in an enrichment side table (ADR 0048; task 0297), not this column.
     //
     // TRIPWIRE: this path is dormant today; if names ever start arriving (a
     // non-OZ token that DOES persist `Symbol("name")`, or a future change wiring
@@ -494,7 +532,7 @@ pub fn prepare_with_sac_overrides(
             "G5 dormant name-write path ACTIVATED: on-ledger Symbol(\"name\") \
              entries observed and emitted as version=0 guarded rows (name kept \
              only if no deploy row exists, else dropped on RMT merge). Route \
-             contract names to an enrichment side table per ADR 0049 — do not \
+             contract names to an enrichment side table per task 0297 — do not \
              rely on soroban_contracts.name. See task 0283 (G5)."
         );
     }

@@ -276,7 +276,9 @@ Cross-cutting:
 - **assets whole module → CH** — new `assets/queries_ch.rs` (list +
   by-contract + by-code-issuer + native + transactions), two-step driver-seek
   for tx (same shape as accounts/contracts), `assets a FINAL` + plain lookup
-  joins, `join_use_nulls=1`, positional `clickhouse::Row` decode.
+  joins, `nullIf(...)` sentinels for JOIN-miss → `None` (NOT `join_use_nulls=1`
+  — `api_reader` runs `readonly=1`, which rejects per-query SETTINGS),
+  positional `clickhouse::Row` decode.
 - **Composite `:id` routing (Option A)** — the numeric surrogate was dropped on
   CH (PR #175), so `/assets/:id` is a single canonical token: contract StrKey /
   `CODE-ISSUER` / reserved `native`. `AssetItem.id` `i32 → String` (the token);
@@ -368,8 +370,9 @@ branch session. Reviewer must decide three things and run two checks:
 - [ ] **assets-list cursor binds (not inlines) the 4-tuple** — safe only because
       the keyset clause is omitted on page 1; accept the convention drift vs his
       inline-i64 cursors, or inline for uniformity.
-- [ ] **Two `limit+1` conventions** in one branch (accounts-list adds it in the
-      handler; contracts/assets-list in the query) — normalise or document.
+- [ ] **`limit+1` convention** — this branch's lists + assets-tx normalised to
+      handler-owns-`+1` (`pagination.fetch_limit()`; queries bind raw); repo-wide
+      a mix persists (transactions uses query-side `+1`) — normalise or document.
 - [ ] **`canonical_id` precedence == search `route_token` COALESCE** byte-for-byte
       (`assets/handlers.rs` ↔ `search/queries.rs`).
 - [ ] **Positional decode** — `AssetChRow` ↔ `ASSET_CH_SELECT` column-for-column.

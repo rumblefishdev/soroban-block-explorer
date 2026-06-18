@@ -1,7 +1,7 @@
 //! `asset_enrichment` side-table fill from issuer SEP-1 stellar.toml.
 //!
 //! A single fetch yields both `image` and `name` from the matching
-//! `CURRENCIES[]` row; both land in one `asset_enrichment` row (ADR 0048).
+//! `CURRENCIES[]` row; both land in one `asset_enrichment` row (ADR 0050).
 //! The indexer-owned `assets` table is **never** written here, so the
 //! indexer's continuous whole-row re-inserts cannot clobber the
 //! enrichment.

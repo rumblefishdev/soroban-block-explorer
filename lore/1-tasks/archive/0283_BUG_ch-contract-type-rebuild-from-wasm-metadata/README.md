@@ -2,9 +2,24 @@
 id: '0283'
 title: 'BUG: CH never writes Nft/Fungible verdicts to soroban_contracts — contract-type rebuild from wasm_interface_metadata + prod NFT reclassification'
 type: BUG
-status: active
+status: completed
 related_adr: ['0046']
-related_tasks: ['0118', '0217', '0220', '0221', '0228', '0231', '0259', '0282']
+related_tasks:
+  [
+    '0118',
+    '0217',
+    '0220',
+    '0221',
+    '0228',
+    '0231',
+    '0259',
+    '0282',
+    '0294',
+    '0295',
+    '0296',
+    '0297',
+    '0303',
+  ]
 blocked_by: []
 tags:
   [
@@ -211,6 +226,56 @@ history:
       0 B/A2, map=non-NFT) showed A2 has no spec and no on-chain instance.
       Final shapes = A (SEP-50/41 standard) + B (verified Bachini), map
       deferred; 243 xdr-parser tests green. See open-problem #7.]
+  - date: 2026-06-17
+    status: done
+    who: karolkow
+    note: >
+      CLOSED — implementation delivered (mirrors 0231 → 0301 code/rollout
+      split). The classification CODE is on branch fix/0283 (ahead of develop;
+      PR #262 → develop). Core: new `contract_type_rebuild.rs` (staging +
+      EXCHANGE, reuses the Rust classifier, --dry-run, idempotent) +
+      assets-fungible backfill bundled as its Phase 5; LIVE inline G1 (deploy
+      verdict via writer prefetch), G2 (assets type-3 on Fungible), G9 (event
+      routing via cross-ledger verdict + lazy `ClassificationCache`, consolidated
+      into `domain`); `queries_ch.rs::contract_type_name` 2→nft/3→fungible.
+      17 Rust code files (25 total) vs develop; new cross tests in
+      `tests_cross.rs` for G1/G2/G9 + cache + rebuild; clippy clean.
+      No `crates/api/**` / Cargo change → api-types codegen gate N/A.
+      Everything operational (prod rebuild RUN, reclassify, assets-backfill,
+      Step 0b, TRUNCATE, RTT probe, E15/16/17 smoke, docs) split to **0303**;
+      side-problems to **0294** (SAC labeling + orphan composition),
+      **0295** (parser change-type gaps), **0296** (NFT event-shape, code
+      parked), **0297** (contract-name enrichment + bytes-decode). ADR 0049
+      created then deleted (framing inlined into the spawned tasks).
+  - date: 2026-06-17
+    status: done
+    who: karolkow
+    note: >
+      Post-close review round on PR #262 — /review + a 4-agent fan-out
+      (devil's-advocate, requirements checklist, 2× simplify). Verdict:
+      mergeable with nits; the only hard gate is OPERATIONAL (the whole-table
+      EXCHANGE), which lives in 0303. Applied in-PR (all behaviour-neutral,
+      build+clippy+tests green): a row-count FENCE around the rebuild EXCHANGE
+      (`BackfillError::RebuildGuard` — aborts if the live count moves during the
+      staging build, catching a concurrent-write race); shared
+      `classify_wasm_metadata_json` helper (killed the WASM-metadata
+      parse/classify dup across `persist.rs` + `contract_type_rebuild.rs`);
+      `ch_staging::finalize` reuse in the rebuild; `tokio::join!` of the
+      independent G1/G9 prefetches; borrow-not-clone of contract_ids on the G9
+      hot path; deleted the commented-out name-write block; enum-derived verdict
+      ints; repointed stale "ADR 0049" comments → task 0297; a clearer rebuild
+      failure message; and a CLICKHOUSE_URL-gated, throwaway-DB integration test
+      exercising the real classify→staging→EXCHANGE→assets pipeline + idempotency
+      (compile-verified; live-CH run is a 0303 prereq). Documented as
+      known-limitations: G9 cache staleness on WASM upgrade (eviction gated on
+      parser `updated` support = 0295) and the same-batch upload-after-deploy
+      ordering (batch backstop recovers). Two wide refactors deferred as
+      follow-ups to keep the PR reviewable: a `StageInputs` params struct for the
+      17-arg `prepare_with_sac_overrides`, and a `VerdictResolver` owning both
+      prefetch paths + the cache. One flagged: `web/.../AssetDetailPage.test.tsx`
+      diverges from develop (2 `id:` overrides dropped via the 8c84a887 merge
+      resolution, aligned with 0243's FE cleanup) — left untouched per
+      respect-user-edits, pending author confirm.
 ---
 
 # BUG: CH never writes Nft/Fungible verdicts — contract-type rebuild + prod NFT reclassification
@@ -424,9 +489,11 @@ independently confirmed/refuted by a deep-dive sub-agent.
    sweep, and the parked code live in 0296.
 8. **G5 side-table = `ch-maintenance-runner` crate relocation** still deferred
    (rebuild logic lives in backfill-runner for now).
-9. **Operational/prod (need live CH / mTLS, not code):** Step 0b prod queries,
-   Step 3 prod run, instrumentation + verification, RTT probe, E15/16/17 smoke,
-   docs (ADR 0046, runbooks 0217/0221, clickhouse-pilot).
+9. **Operational/prod (need live CH / mTLS, not code) → SPAWNED to [0303](../../backlog/0303_OPS_ch-reclassification-rollout.md).**
+   The prod RUN + validation (rebuild run, reclassify, assets-backfill, Step 0b,
+   TRUNCATE decision, RTT probe, E15/16/17 smoke, docs) was split out so 0283 can
+   archive once the CODE merges — mirrors the 0231 → 0301 code/rollout split.
+   0303 carries the run + the 0294/0296 prereqs.
 
 ## Implementation Plan
 
@@ -650,12 +717,12 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       recorded (Q1 verdict breakdown 294,963/21,523/1/2/4,875; Q2
       would-be-Nft 107; Q3 Bachini=Other; Q4 promote 11,023/19,451).
       Re-verified 2026-06-12.
-- [ ] **Step 0b** same queries re-run on prod CH (mTLS); results recorded —
-      go-live sizing (drop buckets will differ: live pending 59.7M/138.5M + regrown SAC-leak).
-- [ ] New crate `crates/ch-maintenance-runner` (bin `ch-maint`) created; `repair-tier1`,
-      `asset-aggregates`, `nft-reclassify` relocated out of backfill-runner into it.
-      (DEFERRED 2026-06-15 — logic developed in `backfill-runner` for now;
-      shared staging helpers already deduped into `crate::ch_staging`.)
+- [~] **Step 0b** prod-CH re-run (via `chq`) — PARTIAL (recorded in Step 0b:
+  Nft 125 / Fungible 4,118 / 11,214 promotable token rows); full re-run at
+  run time → **0303**.
+- [x] New crate `crates/ch-maintenance-runner` relocation — **DROPPED (won't do,
+      open-problem #8)**; logic stays in `backfill-runner`, staging helpers
+      deduped into `crate::ch_staging`.
 - [x] `contract-type-rebuild` implemented — DONE 2026-06-15 in `backfill-runner`
       (staging+EXCHANGE, Rust classifier reuse, `--dry-run` flip/asset counts,
       idempotent). Live-CH integration run still pending (logic unit-tested).
@@ -666,11 +733,10 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       flips to `Nft`; SAC untouched; no-verdict stays `Other`; Fungible→type-3
       asset; Nft→no asset (G1/G2 stage tests). Live-CH integration test of the
       rebuild itself still pending.
-- [ ] Prod run executed: rebuild → assets-backfill → `nft-reclassify`;
-      before/after counts recorded (hot `nfts`/`nft_ownership` non-zero —
-      local proxy ~11,023 / 19,451 promote; SAC/fungible pending dropped;
-      assets type-3 grows ~2 → ~3,937).
-- [ ] E15/E16/E17 smoke against prod after the run (links 0259).
+- [→] Prod run executed: rebuild → assets-backfill → `nft-reclassify`;
+  before/after counts recorded — **operational, → 0303** (local-snapshot
+  rehearsal measured: ~11,023/19,451 promote, ~9 s full pipeline).
+- [→] E15/E16/E17 smoke against prod after the run (links 0259) — **→ 0303**.
 - [x] **`queries_ch.rs::contract_type_name` fixed** (2→nft, 3→fungible) + test
       updated — DONE 2026-06-11. Verify `GET /v1/contracts` counts post-run.
 - [x] **LIVE inline fix — G1 + G2 + G9 IMPLEMENTED** (2026-06-15, fail-open,
@@ -682,58 +748,27 @@ task. Without it, "NFTs fixed" still leaves the flagship NFT empty.
       CH whole-row RMT clobber); patch G5a/b or fundamental name-side-table
       (ADR 0048). 3rd-Lambda alternative dropped after CTO review. Live-CH
       integration + prod verification still pending (next 3 AC items).
-- [ ] RTT Lambda→Hetzner measured (one probe via mTLS) — confirms the last
-      assumption (30 ms) behind the live numbers.
-- [ ] **Inline step instrumented + verified on prod**: emit per-ledger timing
-      of the new step, cache hit/miss counters, and a fail-open counter
-      (lookup skipped due to error). After deploy, compare a week of prod
-      metrics against the simulated numbers (~0 ms typical / 10–40 ms on
-      deploy-WASM-miss ledgers / fail-open ≈ 0) — closes the "if it's real"
-      question with production data.
-- [ ] Follow-up task spawned: **deploy-linkage gap** — 4,461 contracts emit
-      events but have no deploy/wasm_hash ever (99.4% of pending; top
-      `CDP5RUMSC7YJ…` = 4.86M rows); blocks the TRUNCATE endgame.
-      **Confirmed defect (0283):** `extract_contract_deployments`
-      (`state.rs:59`) filters `change_type == "created"` only, so a
-      state-archival **`restored`** contract-instance entry (which DOES carry a
-      `wasm_hash`) is silently dropped — the parser emits `restored`
-      (`ledger_entry_changes.rs:154`) and every sibling extractor accepts it
-      (`state.rs:352`); the deploy extractor's `created`-only filter is the
-      asymmetry. **But `restored` is only a CANDIDATE cause, NOT verified as
-      the dominant one** (devil's-advocate audit): the 4,461 "never seen at
-      all" bucket more plausibly comes from meta-unavailable / unparsed deploys;
-      `restored` likely explains a tail. **Not verifiable on the CH snapshot**
-      (the dropped entries aren't there; soroban_events giant absent locally) —
-      verify by re-parsing raw S3 XDR for a sample orphan (e.g. `CDP5RUMSC7YJ…`)
-      or RPC `getLedgerEntries`. Fix splits into: (a) widen the deploy filter to
-      `restored`/`updated` (cheap; also fixes the WASM-upgrade follow-up below),
-      and (b) RPC-backfill wasm_hash for orphans that have no `created` at all.
-      **Ordered plan (do NOT re-parse everything first):** 1. **Verify the hypothesis cheaply via Soroban RPC** — `getLedgerEntries`
-      on a sample of orphan contract instances (`LedgerKeyContractInstance`):
-      do they exist on-chain, with a `wasm_hash`, and is the verdict what we
-      expect? Confirms whether the orphans are recoverable + which mechanism
-      (restored vs never-created) dominates. 2. **Only then decide the fix mechanism:** RPC-backfill (one-shot fetch of
-      wasm_hash for orphans, no re-parse) **vs** parser re-parse of raw S3
-      XDR (widen `created`→`restored`/`updated`, heavier, full re-ingest).
-      Pick based on step-1 findings (volume, recoverability, cost).
-- [ ] Follow-up task spawned: **SAC skeleton exposure** — 294,963 derived
-      skeleton rows (92% of `soroban_contracts`) visible in `/v1/contracts`
-      with no filter (real violation of "no speculative user-facing rows").
-- [ ] Follow-up task spawned: **WASM upgrades never re-classified** — the
-      parser drops contract-instance `updated` entries (`state.rs:59`,
-      created-only), so an upgraded contract keeps its deploy-time
-      wasm_hash/verdict forever on BOTH paths (pre-existing, PG parity;
-      found by devil's-advocate audit, Addendum 4).
-- [ ] Bachini/i128 SEP-39 event-extraction gap (Step 7) — investigated;
-      tracked here or graduated to its own task.
-- [ ] ADR 0046 amended (re-emission correction → actual mechanism: inline
-      bridges + batch backstop) + runbook 0217/0221 updated; command strings
-      `backfill-runner …` → `ch-maint …`.
-- [ ] **Docs updated** — `clickhouse-pilot.md` §quarantine (rebuild step +
-      pending-as-DLQ); ingestion-pipeline docs for the new inline writer step;
-      infra topology N/A (no new Lambda).
-- [ ] **API types regenerated** — `crates/api/**` touched (contract_type_name) + new `Cargo.lock` → run `nx run @rumblefish/api-types:generate` before
-      commit (label change likely no-op on the spec, but the gate checks it).
+- [→] RTT Lambda→Hetzner measured (one probe via mTLS) — **operational, → 0303**.
+- [→] **Inline step instrumented + verified on prod** (per-ledger timing, cache
+  hit/miss + fail-open counters; week-of-prod-metrics compare) —
+  **operational, → 0303**.
+- [x] Follow-up spawned: **deploy-linkage gap + SAC skeleton exposure** → **0294**
+      (un-deployed-SAC orphans dominant via CAP-67, DB-confirmed; SAC labeling +
+      orphan composition bundled).
+- [x] Follow-up spawned: **WASM upgrades never re-classified** + AccountMerge
+      tombstone → **0295** (parser change-type extraction gaps).
+- [x] Follow-up spawned: **NFT event-SHAPE extraction gap** (supersedes the
+      Bachini/i128 framing — drop is the packed `data=Vec` shape, not i128) →
+      **0296** (code parked in stash; chain-validated on the real Bachini Mint).
+- [x] Follow-up spawned: **contract-name enrichment (off-ledger `name()`) +
+      ScVal::Bytes decode mismatch** → **0297**.
+- [→] ADR 0046 amend + runbook 0217/0221 + `clickhouse-pilot.md` docs —
+  **operational/run-coupled, → 0303** (ADR 0049 created then deleted; its
+  framing inlined into the spawned tasks).
+- [x] **API types regenerated** — **N/A for this PR**: the `contract_type_name`
+      2→nft/3→fungible fix already landed on develop (via 0243); diff vs develop
+      touches **no `crates/api/**` and no Cargo files\*\* → the api-types gate does
+      not trigger.
 
 ## Notes
 

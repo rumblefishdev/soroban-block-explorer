@@ -136,13 +136,27 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
 /// without enumeration. A misfire (a true transient phrased outside the
 /// allow-list → false sentinel) is recoverable with `--retry-sentinels`;
 /// the inverse (false transient → DLQ loop) is not.
+///
+/// The allow-list still errs narrow on purpose, but covers the common
+/// server/gateway 5xx phrasings a provider emits during an outage — left out,
+/// a provider's bad hour silently converts a chunk of the population to
+/// permanent sentinels (recoverable only by an operator running
+/// `--retry-sentinels`). Matching is case-insensitive.
 fn is_transient_soroban_rpc_pattern(msg: &str) -> bool {
-    // JSON-RPC -32603 "Internal error" — server-side, retryable.
-    msg.contains("-32603")
+    let m = msg.to_ascii_lowercase();
+    // JSON-RPC server-side error codes — retryable.
+    m.contains("-32603")   // "Internal error"
+        || m.contains("-32000") // generic server error (execution/timeout)
         // Rate-limiting / load-shedding phrasings.
-        || msg.contains("rate limit")
-        || msg.contains("try again")
-        || msg.contains("overloaded")
+        || m.contains("rate limit")
+        || m.contains("try again")
+        || m.contains("overloaded")
+        // Gateway / upstream 5xx phrasings (LB/proxy in front of the RPC).
+        || m.contains("unavailable") // "service unavailable" / 503
+        || m.contains("bad gateway") // 502
+        || m.contains("gateway timeout") // 504
+        || m.contains("timeout")
+        || m.contains("deadline") // "context deadline exceeded"
 }
 
 #[cfg(test)]
@@ -177,6 +191,24 @@ mod tests {
         assert!(is_transient(&NftTokenUriError::SorobanRpc(
             "rate limit exceeded, try again".into()
         )));
+    }
+
+    #[test]
+    fn soroban_rpc_gateway_5xx_is_transient() {
+        // Provider/LB outage phrasings (mixed case) — server-side, retryable.
+        for msg in [
+            "503 Service Unavailable",
+            "502 Bad Gateway",
+            "504 Gateway Timeout",
+            "upstream request timeout",
+            "context deadline exceeded",
+            "{\"code\":-32000,\"message\":\"execution timeout\"}",
+        ] {
+            assert!(
+                is_transient(&NftTokenUriError::SorobanRpc(msg.into())),
+                "{msg:?} should be transient"
+            );
+        }
     }
 
     #[test]
