@@ -4,7 +4,16 @@ Ready-to-run when the DB is reachable. Columns verified against
 `crates/db-clickhouse/schema/init.sql`. `soroban_contracts` is a
 ReplacingMergeTree → use `FINAL`.
 
-**Canonical orphan predicate:** `is_sac=false AND deployed_at_ledger IS NULL AND wasm_hash IS NULL`.
+**Canonical orphan predicate (CORRECTED 2026-06-18):**
+`is_sac=false AND coalesce(deployed_at_ledger, 0) = 0 AND wasm_hash IS NULL`.
+The old `deployed_at_ledger IS NULL`-only form **undercounts by 1,297**
+`=0`-sentinel orphans (true population **5,607**, not 4,310 — devil's-advocate
+note). Apply the corrected form in every query below.
+
+> **Quota/OOM caution:** when joining the orphan set into `soroban_events`,
+> pass the orphans as a **SUBQUERY**, never an inline `IN (id1, id2, …)` of all
+> ids — the inline form OOMs at ~3.73 GiB. Export one event per contract
+> (`LIMIT 1 BY contract_id`) and scan `transfer`/`mint` only.
 
 ```sql
 -- Q0  population + pending impact
