@@ -67,9 +67,11 @@
       }}
 
 - name: Probe whether the Borg key is already authorised
-  # BatchMode=yes forbids password fallback. rc==0 → key authorised
-  # (steady). rc!=0 needs classification (next task): only an
-  # AUTH-DENIAL means "key not yet authorised" (bootstrap); a
+  # BatchMode=yes forbids password fallback. The remote `true` is just a
+  # connection probe — a Storage Box restricted shell may reject it, so
+  # the NEXT task classifies by ssh's exit convention (rc 255 = ssh/auth
+  # failure; any other rc = auth succeeded), NOT by the command's own rc.
+  # Only an AUTH-DENIAL means "key not yet authorised" (bootstrap); a
   # connectivity / host-key failure must NOT trigger a password reset.
   # StrictHostKeyChecking=yes relies on the host key the `backup`
   # role pinned in /root/.ssh/known_hosts.
@@ -100,14 +102,19 @@
   check_mode: false
 
 - name: Classify the probe result (auth denial vs connectivity failure)
-  # sb_key_authorised → steady path. sb_key_denied → bootstrap path
-  # (the server actively refused the key). Anything else with rc!=0 is
-  # a connectivity/host-key problem and is handled by the fail-fast
-  # below, so we never reset the password on a transient blip.
+  # `ssh` exits 255 ONLY for its own errors (connection refused, timeout,
+  # auth denial, host-key mismatch). When authentication SUCCEEDS it
+  # returns the REMOTE command's exit code instead. A Hetzner Storage Box
+  # subaccount has a RESTRICTED shell that rejects arbitrary commands
+  # (our `true` probe → rc 8 "Command not found"), so any non-255 rc
+  # proves the key authenticated even when the command itself was refused.
+  # Hence: rc != 255 → authorised (steady); rc == 255 with an auth-denial
+  # signature → bootstrap; rc == 255 otherwise → connectivity/host-key
+  # problem (fail-fast — never reset the password on a transient blip).
   ansible.builtin.set_fact:
-    sb_key_authorised: '{{ sb_key_probe.rc == 0 }}'
+    sb_key_authorised: '{{ sb_key_probe.rc != 255 }}'
     sb_key_denied: >-
-      {{ sb_key_probe.rc != 0
+      {{ sb_key_probe.rc == 255
          and (sb_key_probe.stderr | default('')
               is search('Permission denied|publickey|Too many authentication failures')) }}
 
