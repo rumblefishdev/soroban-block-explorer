@@ -14,13 +14,17 @@
 #   precision = |Horizon ∩ CH| / |CH|         — did it OVER-ATTRIBUTE non-pool txs?
 #
 # Two chain realities are handled so they don't read as bugs:
-#   * live-drift  — CH is frozen at W = max(sequence); Horizon is live ahead.
-#                   Horizon txs with ledger > W are dropped (not a recall gap).
+#   * live-drift  — CH is frozen at W = max(sequence) while Horizon runs live
+#                   ahead, so for an ACTIVE pool the recent Horizon page is ALL
+#                   ledger > W. We JUMP to the <=W window with a constructed TOID
+#                   cursor = (W+1)<<32 + order=desc (Horizon returns records
+#                   strictly below it), skipping the drift in one request rather
+#                   than paging tens of pages through it.
 #   * retention   — Horizon prunes old history (404/410). The window is anchored
-#                   at Horizon's OLDEST retained tx for the pool; pools Horizon
-#                   has no data for are SKIPPED (counted, not failed). When Horizon
-#                   truncates at the limit, the boundary ledger is excluded from
-#                   both sides (Horizon may have cut it off mid-ledger).
+#                   at the oldest <=W tx Horizon still returns for the pool; pools
+#                   Horizon has no data for are SKIPPED (counted, not failed). When
+#                   the <=W set is truncated at --horizon-limit, the boundary ledger
+#                   is excluded from both sides (Horizon may cut it off mid-ledger).
 #
 # Documented tolerances (NOT bugs — see lore 0252 / feedback_ch_horizon_semantic_diffs):
 #   * CH backfill floor (~50,457,424): a pool whose window dips below it shows
@@ -93,18 +97,39 @@ def get_anchors(n):
     return [row[0] for row in ch(q)]
 
 
-def horizon_pool_txs(pool_hex, limit, tip):
-    """Newest `limit` Horizon txs for the pool, with ledger; drop live-drift (> W)."""
-    data = http_json(
-        f"{HORIZON}/liquidity_pools/{pool_hex}/transactions?order=desc&limit={limit}"
-    )
-    if not data or "_embedded" not in data:
+def horizon_pool_txs(pool_hex, want, tip, page_sleep):
+    """Horizon txs for the pool at ledger <= tip, newest-first, up to `want`.
+    JUMPS straight to the <=tip window with a constructed TOID cursor = (tip+1)<<32
+    — the paging_token of the first slot of ledger tip+1 — plus order=desc, so
+    Horizon returns records strictly below it (ledger <= tip), SKIPPING the live
+    drift (> tip) in one request instead of paging tens of pages through it. CH is
+    frozen at W=tip while Horizon runs live ahead; the hottest pools have thousands
+    of drift txs, so paging back is hopeless — the cursor jump is exact and cheap.
+    Returns [(hash, ledger)], or None if Horizon has no <=tip data for the pool
+    (retention pruned it, pool created after W, or it never existed)."""
+    # TOID = (ledger_seq << 32) | (tx_order << 12) | op_index ; start-of-ledger = seq<<32.
+    cursor = (tip + 1) * 4294967296
+    url = f"{HORIZON}/liquidity_pools/{pool_hex}/transactions?order=desc&limit=200&cursor={cursor}"
+    out, saw_any = [], False
+    for _ in range((want // 200) + 3):
+        data = http_json(url)
+        if not data or "_embedded" not in data:
+            break
+        recs = data["_embedded"]["records"]
+        if not recs:
+            break
+        saw_any = True
+        out.extend((r["hash"].lower(), int(r["ledger"])) for r in recs if int(r["ledger"]) <= tip)
+        if len(out) >= want:
+            break
+        nxt = data.get("_links", {}).get("next", {}).get("href")
+        if not nxt:
+            break
+        url = nxt
+        time.sleep(page_sleep)
+    if not saw_any:
         return None
-    return [
-        (rec["hash"].lower(), int(rec["ledger"]))
-        for rec in data["_embedded"]["records"]
-        if int(rec["ledger"]) <= tip
-    ]
+    return out[:want]
 
 
 def ch_pool_txs(pool_hex, lo, hi):
@@ -146,13 +171,17 @@ def main():
 
     for i, p in enumerate(pools, 1):
         try:
-            h = horizon_pool_txs(p, args.horizon_limit, tip)
+            h = horizon_pool_txs(p, args.horizon_limit, tip, min(args.sleep, 0.3))
         except Exception as e:  # noqa: BLE001 — best-effort harness, keep going
             print(f"# ERR horizon {p}: {e}", file=sys.stderr)
             continue
+        if h is None:
+            skipped += 1
+            print(f"# SKIP {p} — no Horizon data (retention / pool never existed)", file=sys.stderr)
+            continue
         if not h:
             skipped += 1
-            print(f"# SKIP {p} — no Horizon data (retention / never traded in window)", file=sys.stderr)
+            print(f"# SKIP {p} — no <=W txs (pool created after W, or retention pruned the <=W set)", file=sys.stderr)
             continue
 
         lo = min(led for _, led in h)
