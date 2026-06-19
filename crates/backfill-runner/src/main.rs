@@ -6,6 +6,8 @@
 
 mod asset_aggregates;
 mod bootstrap;
+mod ch_staging;
+mod contract_type_rebuild;
 mod dashboard;
 mod error;
 mod ingest;
@@ -173,6 +175,19 @@ enum Command {
         dry_run: bool,
     },
 
+    /// One-shot rebuild of `soroban_contracts.contract_type` from
+    /// `wasm_interface_metadata` + `assets` type-3 backfill (task 0283).
+    /// Classifies every WASM in Rust (parity with the parser), rebuilds
+    /// `soroban_contracts` into staging and `EXCHANGE TABLES`-swaps it, then
+    /// inserts the missing Soroban-fungible `assets` rows. Must run BEFORE
+    /// `nft-reclassify` (which promotes `contract_type = 2`), with the indexer
+    /// STOPPED (whole-table swap). Idempotent; `--dry-run` reports verdict
+    /// transitions + would-be asset inserts without writing. CH-only.
+    ContractTypeRebuild {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -279,6 +294,18 @@ async fn main() {
             println!(
                 "asset_aggregates completed (dry_run={}): assets_rows={}",
                 stats.dry_run, stats.assets_rows,
+            );
+        }
+        Command::ContractTypeRebuild { dry_run } => {
+            let stats = contract_type_rebuild::execute(&sink, dry_run).await.expect(
+                "contract_type_rebuild failed — if it failed AFTER the table \
+                     swap (e.g. during the assets backfill), simply re-run: the \
+                     pass is idempotent (re-flip is a no-op, assets insert is \
+                     NOT EXISTS-guarded)",
+            );
+            println!(
+                "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
+                stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
         Command::NftReclassify { dry_run } => {

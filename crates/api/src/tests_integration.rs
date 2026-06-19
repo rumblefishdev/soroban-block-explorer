@@ -724,14 +724,11 @@ async fn assets_filter_type_native_returns_singleton_against_real_db() {
 /// touching the DB. No DATABASE_URL needed.
 #[tokio::test]
 async fn assets_detail_numeric_id_rejected_with_400() {
-    let pool = match std::env::var("DATABASE_URL") {
-        Ok(url) => match PgPool::connect(&url).await {
-            Ok(p) => p,
-            Err(_) => return,
-        },
-        // The 400 is emitted before any DB access; a lazy pool is fine.
-        Err(_) => return,
-    };
+    // The 400 is emitted before any DB access, so a lazy pool that never
+    // connects exercises the path without a live DB (matches `build_app`'s
+    // contract for validation-only tests). No DATABASE_URL required.
+    let pool =
+        PgPool::connect_lazy("postgres://localhost/test_unused").expect("connect_lazy never fails");
     let router = build_app(pool);
     let resp = router
         .oneshot(

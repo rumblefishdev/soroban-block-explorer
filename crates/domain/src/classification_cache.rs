@@ -1,10 +1,16 @@
-//! Per-worker cache of `soroban_contracts.contract_type` used by the NFT
-//! insert filter (task 0118 Phase 2).
+//! Per-(warm-process) cache of contract classifications, keyed by StrKey
+//! `contract_id`.
 //!
-//! The indexer processes many ledgers per Lambda invocation. Without a
-//! cache, every ledger would re-query `soroban_contracts` for the same
-//! contracts referenced by NFT-candidate events. The cache collapses that
-//! to one batch lookup per ledger, hitting only contracts unseen so far.
+//! A generic, IO-free verdict memo over [`ContractType`] — lives in `domain`
+//! because it belongs to no single storage backend (it caches verdicts read
+//! from whatever store the caller uses). Originally the PG NFT-filter cache
+//! (task 0118 Phase 2); now the single home for both the live ClickHouse
+//! NFT-routing fix (task 0283 G9) and the legacy PostgreSQL persist path.
+//!
+//! The indexer processes many ledgers per Lambda invocation. Without a cache,
+//! every ledger would re-query the store for the same contracts referenced by
+//! NFT-candidate events. The cache collapses that to one batch lookup per
+//! ledger, hitting only contracts unseen so far.
 //!
 //! # Cacheable values
 //!
@@ -14,21 +20,27 @@
 //! * [`ContractType::Nft`]      — WASM exposes NFT discriminators
 //! * [`ContractType::Fungible`] — WASM exposes SEP-0041 discriminators
 //!
-//! [`ContractType::Other`] is **never** cached. Workers must re-query on
-//! next encounter so that a later WASM upload (processed by a different
-//! worker or later in time) can promote the contract out of `Other`.
+//! [`ContractType::Other`] is **never** cached. Callers must re-query on next
+//! encounter so that a later WASM upload (processed later in time) can promote
+//! the contract out of `Other`.
+//!
+//! A **definitive** verdict, once cached, is held for the cache's lifetime —
+//! there is no invalidation. A contract upgraded from one decisive interface to
+//! another (e.g. `Fungible` → `Nft`) therefore keeps its first verdict until
+//! the owning process recycles. Callers that must honour upgrades have to evict
+//! the affected key explicitly when they observe a WASM change (see the live
+//! G9 path in `db_clickhouse::persist`, task 0283/0295).
 //!
 //! # Concurrency
 //!
-//! Lambda invocations are serialized per instance, but `HandlerState` is
-//! cloneable and could in principle be shared across futures. A cheap
-//! `std::sync::Mutex` suffices — lock contention is effectively zero in
-//! practice.
+//! The cache is cloneable (shares an `Arc`) and could be shared across futures.
+//! A cheap `std::sync::Mutex` suffices — lock contention is effectively zero in
+//! practice (serialized Lambda invocations).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use domain::ContractType;
+use crate::ContractType;
 
 /// Shared, clone-on-write cache of contract classifications.
 #[derive(Clone, Default)]
@@ -43,7 +55,7 @@ impl ClassificationCache {
 
     /// Fast path lookup for a single id. Prefer [`Self::snapshot_for`]
     /// when inspecting many ids from a hot loop — one lock round-trip
-    /// instead of one per call. `None` means "ask the DB": the entry was
+    /// instead of one per call. `None` means "ask the store": the entry was
     /// never observed or it was observed as `Other` (deliberately not
     /// cached so promotion can happen later).
     #[allow(dead_code)] // consumed by integration tests + diagnostics
@@ -72,7 +84,7 @@ impl ClassificationCache {
     }
 
     /// Collect the `contract_id`s unseen by the cache. Callers issue one
-    /// `SELECT … WHERE contract_id = ANY(…)` for the result, then populate
+    /// `SELECT … WHERE contract_id IN (…)` for the result, then populate
     /// via [`Self::extend_definitive`].
     pub fn missing<'a, I>(&self, ids: I) -> Vec<&'a str>
     where
@@ -90,7 +102,7 @@ impl ClassificationCache {
     /// Take a single lock and read every known verdict for `ids` into a
     /// local map. The returned `HashMap` is then consulted lock-free by
     /// callers making per-row filter decisions — avoids one lock round-trip
-    /// per row on large ledgers (task 0118 Phase 2 NFT filter).
+    /// per row on large ledgers.
     pub fn snapshot_for<'a, I>(&self, ids: I) -> HashMap<&'a str, ContractType>
     where
         I: IntoIterator<Item = &'a str>,
@@ -106,7 +118,7 @@ impl ClassificationCache {
 }
 
 /// Whether a `ContractType` value should be cached.
-pub(crate) fn is_definitive(ty: ContractType) -> bool {
+fn is_definitive(ty: ContractType) -> bool {
     matches!(
         ty,
         ContractType::Token | ContractType::Nft | ContractType::Fungible

@@ -2086,7 +2086,7 @@
               },
               "id": {
                 "type": "string",
-                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+                "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
               },
               "issuer": {
                 "type": ["string", "null"]
@@ -2148,7 +2148,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+            "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
           },
           "issuer": {
             "type": ["string", "null"]
@@ -3328,7 +3328,7 @@
                 },
                 "id": {
                   "type": "string",
-                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe contract StrKey (`C…`) when the asset has one (SAC / Soroban /\nnative XLM), otherwise the `CODE-ISSUER` composite (classic credit,\ne.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the\nPG→CH composite move): CH keys assets on\n`(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate."
+                  "description": "Canonical identifier — the single token usable as `/assets/{id}`:\nthe reserved `native` token for native XLM, the contract StrKey\n(`C…`) for contract-backed assets (SAC / Soroban), otherwise the\n`CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces\nthe dropped numeric surrogate (PR #175 / the PG→CH composite move):\nCH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,\nwith no surrogate."
                 },
                 "issuer": {
                   "type": ["string", "null"]

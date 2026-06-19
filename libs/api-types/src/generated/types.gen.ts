@@ -104,11 +104,12 @@ export type AssetDetailResponse = {
   icon_url?: string | null;
   /**
    * Canonical identifier — the single token usable as `/assets/{id}`:
-   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
-   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
-   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
-   * PG→CH composite move): CH keys assets on
-   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   * the reserved `native` token for native XLM, the contract StrKey
+   * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+   * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+   * with no surrogate.
    */
   id: string;
   issuer?: string | null;
@@ -146,11 +147,12 @@ export type AssetItem = {
   icon_url?: string | null;
   /**
    * Canonical identifier — the single token usable as `/assets/{id}`:
-   * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
-   * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
-   * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
-   * PG→CH composite move): CH keys assets on
-   * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+   * the reserved `native` token for native XLM, the contract StrKey
+   * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+   * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+   * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+   * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+   * with no surrogate.
    */
   id: string;
   issuer?: string | null;
@@ -959,11 +961,12 @@ export type PaginatedAssetItem = {
     icon_url?: string | null;
     /**
      * Canonical identifier — the single token usable as `/assets/{id}`:
-     * the contract StrKey (`C…`) when the asset has one (SAC / Soroban /
-     * native XLM), otherwise the `CODE-ISSUER` composite (classic credit,
-     * e.g. `USDC-GA…`). Replaces the dropped numeric surrogate (PR #175 / the
-     * PG→CH composite move): CH keys assets on
-     * `(asset_type, asset_code, issuer_id, contract_id)`, with no surrogate.
+     * the reserved `native` token for native XLM, the contract StrKey
+     * (`C…`) for contract-backed assets (SAC / Soroban), otherwise the
+     * `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`). Replaces
+     * the dropped numeric surrogate (PR #175 / the PG→CH composite move):
+     * CH keys assets on `(asset_type, asset_code, issuer_id, contract_id)`,
+     * with no surrogate.
      */
     id: string;
     issuer?: string | null;
