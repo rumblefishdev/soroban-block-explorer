@@ -363,8 +363,16 @@ mod tests {
                     .expect("contract row")
             }
         };
-        assert_eq!(row(USDC_SAC).await, (true, Some(0)), "USDC SAC flipped to is_sac/Token");
-        assert_eq!(row(NOT_USDC_SAC).await, (false, None), "non-SAC orphan untouched");
+        assert_eq!(
+            row(USDC_SAC).await,
+            (true, Some(0)),
+            "USDC SAC flipped to is_sac/Token"
+        );
+        assert_eq!(
+            row(NOT_USDC_SAC).await,
+            (false, None),
+            "non-SAC orphan untouched"
+        );
 
         // Idempotent: after the flip, 7001 is no longer an orphan; 7002 stays
         // rejected → a re-run confirms/inserts nothing.

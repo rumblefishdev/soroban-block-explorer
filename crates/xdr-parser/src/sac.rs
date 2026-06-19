@@ -642,7 +642,10 @@ mod tests {
         // emitter is the *native* SAC id, asset string is USDC → mismatch.
         let ev = make_sac_event(NATIVE_SAC, "transfer", usdc_asset_topic());
         let out = derive_sac_overrides_from_events(&[ev], MAINNET_PASSPHRASE);
-        assert!(out.is_empty(), "non-SAC emitter must be rejected, got {out:?}");
+        assert!(
+            out.is_empty(),
+            "non-SAC emitter must be rejected, got {out:?}"
+        );
     }
 
     #[test]
