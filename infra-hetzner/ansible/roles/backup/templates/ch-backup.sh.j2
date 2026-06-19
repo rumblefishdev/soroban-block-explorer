@@ -97,10 +97,11 @@ cleanup_in_flight() {
 trap cleanup_in_flight EXIT INT TERM HUP
 
 # Sweep orphaned shadow dirs from previous failed runs (>24 h old; a
-# healthy weekly run never leaves one that old).
+# healthy weekly run never leaves one that old). Matches `ch*` so it also
+# catches dirs from the old hyphenated label that CH wrote as `ch%2D…`.
 cleanup_stale_freezes() {
     [[ -d "${SHADOW_BASE}" ]] || return 0
-    find "${SHADOW_BASE}" -mindepth 1 -maxdepth 1 -name 'ch-*' -type d -mtime +1 \
+    find "${SHADOW_BASE}" -mindepth 1 -maxdepth 1 -name 'ch*' -type d -mtime +1 \
         -exec rm -rf {} + 2>/dev/null || true
 }
 
@@ -159,9 +160,15 @@ main() {
 
     local stamp
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    FREEZE_NAME="ch-${stamp}"
+    # FREEZE_NAME is the ClickHouse freeze label AND the on-disk shadow dir
+    # name — but CH percent-escapes every char outside [A-Za-z0-9_] in that
+    # dir (a '-' becomes '%2D'), so a hyphenated label would make shadow_dir
+    # below not match what FREEZE actually created. The stamp is already
+    # all-alphanumeric, so 'ch'+stamp is escape-free → the dir is verbatim.
+    # The borg ARCHIVE keeps the 'ch-' prefix that the prune glob matches.
+    FREEZE_NAME="ch${stamp}"
     : "${FREEZE_NAME:?}"
-    local archive="${FREEZE_NAME}"
+    local archive="ch-${stamp}"
 
     # Capture the freeze set ONCE: "<uuid>\t<name>" lines, marker first. The
     # freeze/unfreeze loops use the names; the restore map (_table_uuids.tsv)
