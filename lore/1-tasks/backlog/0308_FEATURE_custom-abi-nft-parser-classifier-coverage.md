@@ -62,7 +62,7 @@ interfaces) and official SEP-50/OpenZeppelin docs — NOT our repo/logs.
      event archive `to` == RPC `get_token_info` owner, zero our-DB).
    - `bulk_mint`: `topics=[Symbol("bulk_mint"), Address(to)]`, `data=vec[u32 token_id…]`.
      `extract_args` (Shapes A/B/C) matches none → dropped + tripwired. Worse: **`bulk_mint` is not a
-     recognised symbol** (`nft.rs` match arms = transfer|mint|burn|consecutive*mint, then `* => continue`)
+     recognised symbol** (`nft.rs` match arms = `transfer|mint|burn|consecutive_mint`, then catch-all `_ => continue`)
      → silently skipped with **no tripwire** — and it's the dominant event. The tripwire under-reports.
 2. **Classifier** — `classification.rs` is name-based: `Nft` iff the WASM exports a function named
    `owner_of`/`token_uri`/`approve_for_all`/`get_approved`/`is_approved_for_all`. This family uses
@@ -112,6 +112,43 @@ to:Some, from:None }` (mint path already uses `from:None`).
       relevant `docs/architecture/**` per [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
 - [ ] **API types regenerated** — `N/A` (no `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`
       change expected; revisit if a handler/DTO is touched).
+
+## Open Risks & Hardening (devils-advocate, 2026-06-19)
+
+Shape assumptions were adversarially probed against chain/CH and **held**: the
+`transfer` shape (`[transfer, u32]` + `data:address`, `topic_count=2`) is uniform
+across all 4 wasm versions; `bulk_mint` data is always `vec<u32>` (never the
+`Vec<(u32,String)>` the function takes). Backfill supersede is sound:
+`nfts_pending` is `ReplacingMergeTree(current_owner_ledger)` keyed by
+`(contract_id, token_id)`, and a re-derived row sees a superset of events so its
+watermark is always ≥ the existing partial row → correct owner wins on merge. The
+residual risks below are the parts the plan must nail BEFORE coding:
+
+1. **[blocking] Classifier false-positives.** `get_token_info`/`bulk_mint`/
+   `freeze_collection` are not NFT-exclusive names; a single-name match could
+   mislabel a fungible/game contract `Nft` and pollute hot `nfts`. Rule must
+   require a COMBINATION (≥2 family fns) AND absence of fungible markers
+   (`decimals`/`allowance`/`total_supply`); test against the whole contract
+   population, not just these 11.
+2. **[verify first] Shape-based classify feasibility.** The classifier is
+   name-only (`classification.rs:101-119`). "Classify by `transfer` taking
+   `token_id:u32`" needs arg-TYPE access — confirm `classify_contract_from_wasm_spec`
+   exposes types before choosing shape-based over name-list extension.
+3. **[verify first] Reclassify trigger.** `contract_type_rebuild` may only process
+   newly-observed wasm uploads; the 11 are already `Other` and won't auto-flip. Add
+   an explicit reclassify pass over the 4 affected hashes to the backfill.
+4. **bulk_mint guards.** Empty `vec[]` occurs on-chain (handle as no-op, no false
+   tripwire) and veclen reaches 20+ (add a MAX element cap mirroring
+   `MAX_CONSECUTIVE_RANGE` — DoS guard for the Lambda indexer).
+5. **Direction proven on 1 of 4 versions.** `data=to` is proven only on `086b776c`
+   (CBMKS). Structure is uniform across versions, so low risk — close it by running
+   the `get_token_info` cross-check on one contract each from `f84321e8`/`f29c8762`/
+   `297bfc31`.
+6. **Observability.** Add an aggregate counter / periodic query of unparsed-symbol
+   tripwire hits by contract, so the next custom ABI surfaces without log-eyeballing.
+7. **Optional interim unblock.** As a stopgap before the general fix, manually set
+   `contract_type=Nft` for the 4 known wasm hashes to surface these collections now
+   (accepting it won't cover future uploads/new hashes).
 
 ## Notes
 
