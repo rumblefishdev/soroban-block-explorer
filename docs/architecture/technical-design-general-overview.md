@@ -659,9 +659,10 @@ Stellar Network (mainnet peers)
 ┌──────────────────────────────────┐
 │  S3: stellar-ledger-data/        │
 │  ledgers/{seq_start}-{seq_end}   │
-│                    .xdr.zstd     │
+│                    .xdr.zst      │
 └──────────────┬───────────────────┘
-               │ S3 PutObject event notification
+               │ S3 ObjectCreated → SNS {env}-ledger-events
+               │ → SQS ledger-ingest (rawMessageDelivery; fan-out, task 0306)
                ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Lambda "Ledger Processor"  (event-driven, per file)    │
@@ -758,9 +759,16 @@ Galexie (ECS Fargate) → S3 (~5-6 s per ledger)
 **Recovery from Galexie restart:** Galexie is checkpoint-aware. On restart it reads the
 last exported ledger sequence and resumes from there. No manual intervention required.
 
-**Recovery from Ledger Processor failure:** S3 PutObject event notifications are retried
-by Lambda automatically. For permanent failures, the file remains in S3 and can be
-replayed by re-triggering the Lambda with the S3 key.
+**Recovery from Ledger Processor failure:** once a doorbell is in the
+`ledger-ingest` queue, a failing invocation is redelivered automatically (per
+`maxReceiveCount`, then `ledger-processor-dlq`, recoverable via SQS
+redrive-to-source). Note this covers only the SQS → Lambda cycle; the upstream
+S3 → SNS → SQS hops have no DLQ, so a doorbell dropped before it reaches the
+queue is _not_ recoverable via `maxReceiveCount`. The durable backstop for any
+lost doorbell is that the file remains in S3 (retained indefinitely, ADR 0006)
+and the next doorbell's reconcile reads `max(sequence)` from CH and replays the
+contiguous gap forward — a single missed doorbell self-heals on the next ledger;
+a sustained SNS outage requires a manual re-trigger by S3 key.
 
 **Replay artifact retention:** the `stellar-ledger-data` bucket retains files indefinitely
 (ADR 0006). No automatic deletion. This supports replay and post-incident validation at any
@@ -1376,8 +1384,10 @@ Ledger and transaction history are kept indefinitely.
 
 Galexie ECS Fargate task running on mainnet, writing `LedgerCloseMeta` XDR files to S3
 every ~5–6 seconds. Lambda Ledger Processor woken by an **SQS doorbell** (S3
-`ObjectCreated` notifications enqueue a doorbell message; `batchSize 1`,
-`ReportBatchItemFailures`); each invocation reconciles forward from
+`ObjectCreated` notifications publish to the `{env}-ledger-events` SNS topic,
+which fans out to the `ledger-ingest` queue via a `rawMessageDelivery`
+subscription — and to a second tenant, prices-api, on its own queue, task 0306;
+`batchSize 1`, `ReportBatchItemFailures`); each invocation reconciles forward from
 `max(sequence) + 1` in ClickHouse oldest-first and persists the contiguous run until
 the next ledger is absent on S3 (gap) or the 540 s time budget is reached.
 `reservedConcurrentExecutions = 1` guarantees ascending, gapless ordering without
