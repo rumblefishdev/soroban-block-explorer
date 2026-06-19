@@ -2,11 +2,26 @@
 #
 # Managed by infra-hetzner/ansible/roles/backup — do not edit by hand.
 #
-# Daily ClickHouse backup → Borg → Hetzner BX21 Storage Box.
+# Weekly ClickHouse backup → Borg → Hetzner BX21 Storage Box.
 #
-# Cron entry installs this at /usr/local/bin/ch-backup; runs as
-# root from /etc/cron.d/ch-backup once a day at
-# {{ borg_cron_hour }}:{{ '%02d' | format(borg_cron_minute) }} {{ host_timezone }}.
+# Mechanism (task 0236 redesign): ClickHouse `ALTER TABLE ... FREEZE`
+# hardlinks the immutable MergeTree parts into the data dir's `shadow/`
+# (~0 extra disk — NO full local copy), Borg pushes the frozen tree to
+# the Storage Box (client-side encrypted + deduplicated), then UNFREEZE
+# releases the hardlinks. This replaces the old `BACKUP DATABASE TO
+# Disk`, which wrote a full local copy and could not fit on this box
+# (dataset ~= disk size → ENOSPC → prod incident).
+#
+# CONSISTENCY: tables are frozen with the marker table
+# (`{{ borg_marker_table }}`) FIRST. The indexer writes that row LAST as
+# a commit marker (a marker row implies all its children are already in
+# the DB). Freezing it first makes the backup's marker a conservative
+# high-water mark — every marker row in the backup has its child rows
+# present (no orphans) — WITHOUT pausing the indexer.
+#
+# Cron installs this at /usr/local/bin/ch-backup; runs as root from
+# /etc/cron.d/ch-backup weekly (cron weekday {{ borg_cron_weekday }};
+# 0 = Sunday) at {{ borg_cron_hour }}:{{ '%02d' | format(borg_cron_minute) }} {{ host_timezone }}.
 
 set -euo pipefail
 
@@ -17,14 +32,17 @@ set -euo pipefail
 readonly BORG_REPO="{{ borg_repo_url }}"
 export BORG_REPO
 export BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
-# `ConnectTimeout` bounds the initial TCP handshake; `ServerAliveInterval`
-# probes a stuck connection so a hung Storage Box does not hold the
-# Borg repo lock for the kernel's default ~15 min TCP retransmit window
-# (which would block the next day's cron run).
+# `ConnectTimeout` bounds the initial handshake; `ServerAliveInterval`
+# probes a stuck connection so a hung Storage Box does not hold the Borg
+# repo lock for the kernel's ~15 min TCP retransmit window.
 export BORG_RSH="ssh -i /root/.ssh/borg_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3"
 
-readonly BACKUPS_DIR="{{ backups_dir }}"
 readonly APP_DIR="{{ app_repo_dest }}"
+readonly DB="default"
+readonly MARKER_TABLE="{{ borg_marker_table }}"
+# ClickHouse data dir on the host (bind-mounted to /var/lib/clickhouse
+# in the container). FREEZE writes hardlinks under <data>/shadow/<name>.
+readonly SHADOW_BASE="{{ ch_data_dir }}/shadow"
 readonly KEEP_DAILY={{ borg_keep_daily }}
 readonly KEEP_WEEKLY={{ borg_keep_weekly }}
 readonly KEEP_MONTHLY={{ borg_keep_monthly }}
@@ -32,144 +50,259 @@ readonly KEEP_MONTHLY={{ borg_keep_monthly }}
 # ---------------------------------------------------------------------
 # Logging helpers
 # ---------------------------------------------------------------------
-
 log()   { printf '%s [ch-backup] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 fatal() { log "FATAL: $*"; exit 1; }
 
 # ---------------------------------------------------------------------
-# Cleanup
+# clickhouse-client inside the CH container. Credentials come from the
+# read-only config bind-mounted at /etc/clickhouse-backup/client.xml —
+# never on argv/env.
 # ---------------------------------------------------------------------
+ch() {
+    # `</dev/null` is REQUIRED: `docker compose exec -T` attaches stdin (the
+    # -T only disables the TTY), so calling this inside a `while read … done
+    # <<< "${tables}"` loop would let docker drain the loop's here-string and
+    # the loop would run only once (only the first table frozen). Redirect
+    # stdin from /dev/null — clickhouse-client `--query=` never reads stdin.
+    docker compose -f "${APP_DIR}/docker-compose.yml" \
+                   -f "${APP_DIR}/docker-compose.prod.yml" \
+                   exec -T clickhouse \
+        clickhouse-client --config-file=/etc/clickhouse-backup/client.xml --host=127.0.0.1 "$@" </dev/null
+}
 
-# Wipe the in-flight local staging dir on any non-success exit.
-# Without this trap a failed `borg create` leaves an orphan archive
-# directory in /srv/backups that grows on every retry until the
-# filesystem fills up and CH itself stalls.
-ARCHIVE=""
+# ---------------------------------------------------------------------
+# Cleanup — release frozen hardlinks on any non-success exit so a failed
+# run never pins disk space (the shadow hardlinks otherwise keep
+# merged-away parts alive). Removing the shadow dir is SAFE: these are
+# hardlinks; the live parts are untouched.
+# ---------------------------------------------------------------------
+FREEZE_NAME=""
 SLEEP_PID=""
 cleanup_in_flight() {
     local rc=$?
-    # Disarm the EXIT trap before doing anything — bash invokes
-    # both the signal handler AND the EXIT trap on signal-driven
-    # termination, which would re-run this function twice (once
-    # from INT/TERM/HUP, once from the implicit EXIT). Cosmetic
-    # but it makes incident logs ambiguous about which path fired.
     trap - EXIT
-    # If we were sleeping when the signal arrived, kill the sleep
-    # child so the script does not block waiting for it to wake.
     if [[ -n "${SLEEP_PID}" ]] && kill -0 "${SLEEP_PID}" 2>/dev/null; then
         kill "${SLEEP_PID}" 2>/dev/null || true
     fi
-    if [[ -n "${ARCHIVE}" && -d "${BACKUPS_DIR}/${ARCHIVE}" ]]; then
-        log "Cleaning up local stage ${ARCHIVE} (exit ${rc})"
-        rm -rf "${BACKUPS_DIR:?}/${ARCHIVE:?}"
+    if [[ -n "${FREEZE_NAME}" && -d "${SHADOW_BASE}/${FREEZE_NAME}" ]]; then
+        log "Releasing frozen snapshot ${FREEZE_NAME} (exit ${rc})"
+        rm -rf "${SHADOW_BASE:?}/${FREEZE_NAME:?}"
     fi
+    # Exit explicitly: for a SIGNAL trap (INT/TERM/HUP) bash would otherwise
+    # RESUME after the interrupted command — with the shadow dir already
+    # removed and the EXIT trap disarmed above. (Harmless on the normal
+    # EXIT-trap path, which is already exiting with this same rc.)
+    exit "${rc}"
 }
-# Trap on EXIT covers normal exit + `set -e` aborts; INT/TERM/HUP
-# cover signal-driven termination (systemctl stop cron, OOM-killer
-# SIGTERM, reboot). SIGKILL is unrecoverable by design. Without
-# the signal traps, a SIGTERM during borg create would leave the
-# local stage dangling for the daily-+24h `cleanup_stale_stages`
-# sweep to catch — much slower recovery than this trap.
 trap cleanup_in_flight EXIT INT TERM HUP
 
-# Sweep any orphaned ch-* directories from previous failed runs that
-# pre-date the trap (or where the trap itself failed). Anything older
-# than 24 h is fair game — the cron interval is 24 h, so a healthy
-# run never leaves a directory of that age behind.
-cleanup_stale_stages() {
-    find "${BACKUPS_DIR}" -maxdepth 1 -name 'ch-*' -type d -mtime +1 \
+# Sweep orphaned shadow dirs from previous failed runs (>24 h old; a
+# healthy weekly run never leaves one that old). Matches `ch*` so it also
+# catches dirs from the old hyphenated label that CH wrote as `ch%2D…`.
+cleanup_stale_freezes() {
+    [[ -d "${SHADOW_BASE}" ]] || return 0
+    find "${SHADOW_BASE}" -mindepth 1 -maxdepth 1 -name 'ch*' -type d -mtime +1 \
         -exec rm -rf {} + 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------
 # Ensure the Borg repo exists (idempotent — first run initialises).
 # ---------------------------------------------------------------------
-
 ensure_repo() {
-    if borg info "${BORG_REPO}" >/dev/null 2>&1; then
+    local out rc=0
+    out="$(borg info "${BORG_REPO}" 2>&1)" || rc=$?
+    if (( rc == 0 )); then
         return 0
     fi
-    log "Repo not initialised; running borg init"
-    borg init --encryption=repokey-blake2 "${BORG_REPO}"
+    # Only a genuine "repository does not exist" warrants init. Any other
+    # failure (ssh / network / lock / auth) must NOT silently re-init — that
+    # would mask the real fault and the init would then fail confusingly.
+    if grep -qi 'does not exist' <<< "${out}"; then
+        log "Repo not initialised; running borg init"
+        borg init --encryption=repokey-blake2 "${BORG_REPO}"
+    else
+        log "borg info failed (not a missing-repo error): ${out}"
+        fatal "cannot reach/verify the Borg repo — refusing to re-init"
+    fi
 }
 
-# ---------------------------------------------------------------------
-# Take a CH-side BACKUP, push, prune.
-# ---------------------------------------------------------------------
+# List MergeTree tables in <DB> as "<uuid>\t<name>", MARKER_TABLE first.
+# ONE query captures both the freeze order (names) and the restore map
+# (uuid<->name) so they cannot diverge under concurrent DDL.
+list_tables_meta() {
+    ch --query="SELECT toString(uuid), name FROM system.tables WHERE database='${DB}' AND engine LIKE '%MergeTree%' ORDER BY (name='${MARKER_TABLE}') DESC, name FORMAT TSV"
+}
 
 main() {
-    # Randomised delay 0–30 min before any real work. The cron
-    # entry fires at a fixed wall-clock time; without this jitter
-    # an attacker watching Storage Box metadata could correlate
-    # backup-archive timestamps to infer the schedule even with
-    # contents encrypted. Bash's $RANDOM yields 0..32767, modulo
-    # 1800 → 0..1799 s ≈ 0..30 min. Cheap, low-rent obscurity.
-    #
-    # `sleep & wait $!` runs sleep as a background child and
-    # waits for it explicitly. Without this, a SIGTERM (e.g.
-    # `systemctl stop cron`, OOM-killer) delivered to bash
-    # during a foreground `sleep` is deferred until sleep
-    # returns — up to 30 minutes. The wait builtin is
-    # signal-interruptible, so the trap fires immediately.
-    sleep $(( RANDOM % 1800 )) &
-    SLEEP_PID=$!
-    wait "${SLEEP_PID}" 2>/dev/null || true
-    SLEEP_PID=""
+    # Serialize runs: a cron fire and the Ansible first-run validation (or
+    # two stacked crons) would otherwise collide on the same-second
+    # FREEZE_NAME and the Borg repo lock, and one's cleanup trap could rm the
+    # other's in-progress shadow dir. flock -n → skip (exit 0) if another run
+    # already holds the lock.
+    exec 9>/run/lock/ch-backup.lock
+    if ! flock -n 9; then
+        log "another ch-backup run is in progress — skipping this invocation"
+        exit 0
+    fi
+
+    # Randomised 0–30 min jitter (skip with CH_BACKUP_NO_JITTER=1 for a
+    # manual / Ansible-driven validation run). The cron never sets it.
+    if [[ "${CH_BACKUP_NO_JITTER:-0}" != "1" ]]; then
+        sleep $(( RANDOM % 1800 )) &
+        SLEEP_PID=$!
+        wait "${SLEEP_PID}" 2>/dev/null || true
+        SLEEP_PID=""
+    fi
 
     log "Starting"
-
-    cleanup_stale_stages
+    cleanup_stale_freezes
     ensure_repo
 
     local stamp
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    ARCHIVE="ch-${stamp}"
-    : "${ARCHIVE:?archive name must be non-empty}"
+    # FREEZE_NAME is the ClickHouse freeze label AND the on-disk shadow dir
+    # name — but CH percent-escapes every char outside [A-Za-z0-9_] in that
+    # dir (a '-' becomes '%2D'), so a hyphenated label would make shadow_dir
+    # below not match what FREEZE actually created. The stamp is already
+    # all-alphanumeric, so 'ch'+stamp is escape-free → the dir is verbatim.
+    # The borg ARCHIVE keeps the 'ch-' prefix that the prune glob matches.
+    FREEZE_NAME="ch${stamp}"
+    : "${FREEZE_NAME:?}"
+    local archive="ch-${stamp}"
 
-    log "Creating CH backup snapshot ${ARCHIVE}"
-    # `clickhouse-client` reads credentials from the config file
-    # bind-mounted at /etc/clickhouse-backup/client.xml inside the
-    # CH container (delivered by Ansible's backup role to
-    # /etc/soroban-backup/clickhouse-client.xml on the host, mode
-    # 0440 root:101). The password never enters argv or env in
-    # either the host process or the in-container process.
-    docker compose -f "${APP_DIR}/docker-compose.yml" \
-                   -f "${APP_DIR}/docker-compose.prod.yml" \
-                   exec -T clickhouse \
-        clickhouse-client \
-            --config-file=/etc/clickhouse-backup/client.xml \
-            --host=127.0.0.1 \
-            --query="BACKUP DATABASE default TO Disk('backups', '${ARCHIVE}/')"
+    # Capture the freeze set ONCE: "<uuid>\t<name>" lines, marker first. The
+    # freeze/unfreeze loops use the names; the restore map (_table_uuids.tsv)
+    # is written from THIS same capture, so the frozen parts and the restore
+    # map can never diverge under concurrent DDL.
+    local tables_meta tables
+    tables_meta="$(list_tables_meta)"
+    [[ -n "${tables_meta}" ]] || fatal "no MergeTree tables found in ${DB}"
+    tables="$(cut -f2 <<< "${tables_meta}")"
 
-    log "Pushing ${ARCHIVE} to ${BORG_REPO}"
-    borg create \
-        --stats --compression zstd,6 \
-        "${BORG_REPO}::${ARCHIVE}" \
-        "${BACKUPS_DIR}/${ARCHIVE}"
+    # SQL value-list of the frozen table names ('a','b',...) — used to scope
+    # the schema dump (below) to EXACTLY the frozen set, so a table CREATEd by
+    # a concurrent DDL after this capture cannot leak into _schema.sql and be
+    # recreated empty on restore. (Table names here are plain identifiers with
+    # no quotes; safe to single-quote as string literals.)
+    local name_csv
+    name_csv="$(printf "'%s'," ${tables})"
+    name_csv="${name_csv%,}"
 
-    log "Removing local snapshot ${ARCHIVE}"
-    rm -rf "${BACKUPS_DIR:?}/${ARCHIVE:?}"
-    # Snapshot wiped successfully — clear the trap target so the
-    # EXIT handler does not attempt a double-remove.
-    ARCHIVE=""
+    # Consistency guard. The marker table is load-bearing: freezing it first
+    # makes the backup a conservative high-water mark (no orphan rows). Fail
+    # LOUD on ANY state that would silently void that guarantee, rather than
+    # ship an orphan-prone backup:
+    #   * marker var empty/whitespace (typo'd override),
+    #   * marker NOT in the frozen set (renamed / no longer a MergeTree),
+    #   * marker present but not first (ORDER BY regressed).
+    [[ -n "${MARKER_TABLE// /}" ]] \
+        || fatal "BORG_MARKER_TABLE is empty/whitespace — refusing to back up without a marker"
+    grep -qxF -- "${MARKER_TABLE}" <<< "${tables}" \
+        || fatal "marker table '${MARKER_TABLE}' not among MergeTree tables in ${DB} (renamed / no longer MergeTree?) — fix the schema or BORG_MARKER_TABLE"
+    [[ "$(head -n1 <<< "${tables}")" == "${MARKER_TABLE}" ]] \
+        || fatal "marker table '${MARKER_TABLE}' is not frozen first — consistency guarantee broken"
 
+    # ----- 1. FREEZE (marker table first → consistent high-water mark) -
+    log "Freezing ${DB} tables (marker '${MARKER_TABLE}' first) as ${FREEZE_NAME}"
+    local t
+    while IFS= read -r t; do
+        [[ -z "${t}" ]] && continue
+        ch --query="ALTER TABLE \`${DB}\`.\`${t}\` FREEZE WITH NAME '${FREEZE_NAME}'"
+    done <<< "${tables}"
+
+    local shadow_dir="${SHADOW_BASE}/${FREEZE_NAME}"
+    [[ -d "${shadow_dir}" ]] || fatal "shadow dir ${shadow_dir} missing after FREEZE"
+
+    # Self-describing restore aid: map each frozen `store/<uuid>/` dir
+    # back to a table name (Atomic DBs store parts under opaque UUIDs,
+    # which differ on a fresh box). Lands inside the shadow tree so Borg
+    # captures it; the DR runbook reads it to ATTACH parts per table. Written
+    # from the SAME capture as the freeze list (no second query → no drift).
+    printf '%s\n' "${tables_meta}" > "${shadow_dir}/_table_uuids.tsv"
+
+    # Self-describing SCHEMA: the LIVE `CREATE` of every object the restore
+    # needs, so it recreates the EXACT schema the parts were frozen under —
+    # instead of depending on init.sql, which drifts from prod via online
+    # ALTERs (e.g. an added column/index would make a part fail to ATTACH
+    # against an init.sql-recreated table). Scoped to the frozen tables
+    # (`name IN (${name_csv})`) PLUS dictionaries (dataless, recreated for the
+    # app) — so this read cannot pick up a table created after the freeze
+    # capture above. MergeTree tables sort first so a dictionary's source
+    # table exists before its CREATE. Restore applies it with
+    # `clickhouse-client --multiquery`.
+    ch --query="SELECT concat(create_table_query, ';') FROM system.tables WHERE database='${DB}' AND create_table_query != '' AND (name IN (${name_csv}) OR engine = 'Dictionary') ORDER BY (engine LIKE '%MergeTree%') DESC, name FORMAT TSVRaw" \
+        > "${shadow_dir}/_schema.sql"
+
+    # ----- 2. Borg push the frozen tree (encrypted, deduplicated) ------
+    # Reads hardlinks only — ~0 extra disk; no full local copy.
+    log "Pushing frozen snapshot ${archive} to ${BORG_REPO}"
+    # Borg exit code 1 = WARNINGS (e.g. a part vanished mid-create due to a
+    # concurrent merge) but the archive IS written; only >=2 is a real error.
+    # Without this, `set -e` would abort on a warning, the EXIT trap would
+    # delete the shadow, and prune/compact would be skipped (repo bloat).
+    local borg_rc=0
+    # Archive the frozen tree from INSIDE it (`cd … && borg create ::arch .`)
+    # so the paths Borg records are STABLE across runs (`store/<uuid>/…`),
+    # instead of the per-run `…/shadow/ch-<stamp>/…` which would change every
+    # path. Combined with `--files-cache=mtime,size,inode`: FREEZE re-hardlinks
+    # the SAME part inode each run; hardlinking bumps ctime (Borg's DEFAULT
+    # cache key) but NOT mtime, so the default cache would miss and re-read +
+    # re-chunk the whole ~700 GB tree weekly. Stable path + mtime/size/inode
+    # key lets Borg fast-path unchanged parts. (Dedup is content-based
+    # regardless, so the repo stays delta-sized either way — this only saves
+    # local read/CPU. The DR runbook extracts with `--target <dir>` and reads
+    # `<dir>/store/…`, matching this relative layout.)
+    ( cd "${shadow_dir}" && borg create --stats --compression zstd,6 \
+        --files-cache=mtime,size,inode \
+        "${BORG_REPO}::${archive}" . ) || borg_rc=$?
+    if (( borg_rc >= 2 )); then
+        fatal "borg create failed (exit ${borg_rc})"
+    elif (( borg_rc == 1 )); then
+        log "borg create completed with warnings (exit 1) — archive is usable"
+    fi
+
+    # ----- 3. UNFREEZE — release the hardlinks ------------------------
+    # SYSTEM UNFREEZE is disabled by default on this server, so unfreeze
+    # per table with ALTER ... UNFREEZE WITH NAME; rm the shadow dir as
+    # belt-and-braces (and in case a table was dropped mid-run).
+    log "Unfreezing ${FREEZE_NAME}"
+    while IFS= read -r t; do
+        [[ -z "${t}" ]] && continue
+        ch --query="ALTER TABLE \`${DB}\`.\`${t}\` UNFREEZE WITH NAME '${FREEZE_NAME}'" || true
+    done <<< "${tables}"
+    rm -rf "${SHADOW_BASE:?}/${FREEZE_NAME:?}" 2>/dev/null || true
+    FREEZE_NAME=""   # disarm the cleanup trap
+
+    # ----- 4. Prune + compact (retention; reclaim freed space) --------
+    # As with `borg create`, exit 1 = warnings (e.g. a transient lock/SSH blip
+    # on the Storage Box) but the operation completed; only >=2 is a real
+    # error. These MUST be guarded: bare under `set -e`, a prune exit-1 would
+    # abort the script BEFORE compact runs, so pruned segments are never
+    # reclaimed and the repo bloats — the exact failure the weekly-cadence
+    # reopen set out to fix.
     log "Pruning old snapshots (keep ${KEEP_DAILY}d ${KEEP_WEEKLY}w ${KEEP_MONTHLY}m)"
-    borg prune \
-        --stats \
+    local prune_rc=0
+    borg prune --stats \
         --keep-daily="${KEEP_DAILY}" \
         --keep-weekly="${KEEP_WEEKLY}" \
         --keep-monthly="${KEEP_MONTHLY}" \
         --glob-archives 'ch-*' \
-        "${BORG_REPO}"
+        "${BORG_REPO}" || prune_rc=$?
+    if (( prune_rc >= 2 )); then
+        fatal "borg prune failed (exit ${prune_rc})"
+    elif (( prune_rc == 1 )); then
+        log "borg prune completed with warnings (exit 1)"
+    fi
 
-    # `borg compact` reclaims space freed by `prune`. Holds the
-    # repo lock, so we run it once per week rather than daily —
-    # avoids overlap with a long-running create on the next day's
-    # cron if a single run ever exceeds 24 h. Day-of-week test:
-    # 0 = Sunday in `date -u +%w`.
-    if [[ "$(date -u +%w)" == "0" ]]; then
-        log "Sunday — compacting repository"
-        borg compact "${BORG_REPO}"
+    # Compact runs on EVERY backup (not gated to a weekday) so pruned segments
+    # are always reclaimed; same exit-1 = warning treatment.
+    log "Compacting repository"
+    local compact_rc=0
+    borg compact "${BORG_REPO}" || compact_rc=$?
+    if (( compact_rc >= 2 )); then
+        fatal "borg compact failed (exit ${compact_rc})"
+    elif (( compact_rc == 1 )); then
+        log "borg compact completed with warnings (exit 1)"
     fi
 
     log "Done"
