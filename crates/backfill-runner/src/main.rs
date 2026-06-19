@@ -22,7 +22,7 @@ mod sink;
 mod status;
 mod sync;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -63,6 +63,23 @@ struct Cli {
     /// are picked up by `db_clickhouse::Config::from_env()` as usual.
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
+
+    /// Client certificate (PEM) for mTLS to the Caddy-fronted ClickHouse
+    /// (`https://<CH_DOMAIN>`). When all of `--ch-cert` / `--ch-key` /
+    /// `--ch-ca` are set, the `--target clickhouse` sink connects over mTLS
+    /// (the cert CN maps to a CH user via Caddy's `CLICKHOUSE_CN_USER_MAP`)
+    /// instead of the plain HTTP client; `--clickhouse-url` / `CLICKHOUSE_URL`
+    /// must then be the https Caddy endpoint. All three absent → plain client.
+    #[arg(long, env = "CLICKHOUSE_CERT")]
+    ch_cert: Option<PathBuf>,
+
+    /// Client private key (PEM) — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_KEY")]
+    ch_key: Option<PathBuf>,
+
+    /// CA cert (PEM) that signed the client cert — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_CA")]
+    ch_ca: Option<PathBuf>,
 
     /// Soroban RPC endpoint (e.g.
     /// `https://soroban-rpc.mainnet.stellar.gateway.fm`). Used by the
@@ -258,6 +275,9 @@ async fn main() {
         cli.target,
         cli.database_url.as_deref(),
         cli.clickhouse_url.as_deref(),
+        cli.ch_cert.as_deref(),
+        cli.ch_key.as_deref(),
+        cli.ch_ca.as_deref(),
     );
 
     match cli.command {
@@ -376,10 +396,19 @@ async fn main() {
 /// database) via `db_clickhouse::Config::from_env`; the `--clickhouse-url`
 /// CLI flag already overrides `CLICKHOUSE_URL` for the URL field
 /// because clap is reading the same env var.
+///
+/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the CH
+/// sink instead connects over mTLS to the Caddy-fronted endpoint: the PEMs are
+/// read into an `MtlsBundle` and `client_with_mtls` presents the client cert
+/// (whose CN Caddy maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url`
+/// must be the https Caddy host; user/password are ignored on that path.
 fn build_sink(
     target: Target,
     database_url: Option<&str>,
     clickhouse_url: Option<&str>,
+    ch_cert: Option<&Path>,
+    ch_key: Option<&Path>,
+    ch_ca: Option<&Path>,
 ) -> sink::Sink {
     match target {
         Target::Postgres => {
@@ -394,7 +423,34 @@ fn build_sink(
             if let Some(url) = clickhouse_url {
                 cfg.url = url.to_string();
             }
-            sink::Sink::Clickhouse(db_clickhouse::client(&cfg))
+            match (ch_cert, ch_key, ch_ca) {
+                (Some(cert), Some(key), Some(ca)) => {
+                    let read = |p: &Path| {
+                        std::fs::read_to_string(p)
+                            .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
+                    };
+                    let bundle = db_clickhouse::mtls::MtlsBundle {
+                        cert_pem: read(cert),
+                        key_pem: read(key),
+                        ca_pem: read(ca),
+                    };
+                    // `client_with_mtls` prepends `https://`, so hand it the
+                    // bare host — strip any scheme / trailing slash from cfg.url.
+                    let domain = cfg
+                        .url
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                        .trim_end_matches('/');
+                    let client =
+                        db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
+                            .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
+                    sink::Sink::Clickhouse(client)
+                }
+                (None, None, None) => sink::Sink::Clickhouse(db_clickhouse::client(&cfg)),
+                _ => panic!(
+                    "--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted"
+                ),
+            }
         }
     }
 }
