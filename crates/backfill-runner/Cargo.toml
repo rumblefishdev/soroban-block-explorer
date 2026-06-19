@@ -60,6 +60,10 @@ async-trait = "0.1"
 # `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
 # gross_volume_a aggregation keyed by raw 32-byte pool id.
 hex = { workspace = true }
+# Task 0296: `ContractEventType::Contract` to build `ExtractedEvent`s for the
+# CH-direct NFT re-parse (`nft_reparse`). Runtime dep of the main bin, not just
+# tests — the dev-dependency below is for pool-ids-backfill tests only.
+domain = { path = "../domain" }
 
 [dev-dependencies]
 # Used by sync.rs unit tests to materialise tiny `.xdr.zst` fixture

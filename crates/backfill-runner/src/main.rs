@@ -12,6 +12,7 @@ mod dashboard;
 mod error;
 mod ingest;
 mod nft_reclassify;
+mod nft_reparse;
 mod partition;
 mod repair_tier1;
 mod resume;
@@ -203,6 +204,26 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Re-parse `soroban_events` through the task-0296 NFT parser and write
+    /// recovered candidates to `nfts_pending` / `nft_ownership_pending`
+    /// (CH-direct — no raw-S3 re-ingest; the dropped events are already stored
+    /// decoded). Scans only the shapes the old parser missed (map / packed-vec
+    /// / consecutive_mint); Shape-A scalars are already in pending. Writes
+    /// PENDING only — run `contract-type-rebuild` + `nft-reclassify` after to
+    /// promote/drop. Idempotent (ReplacingMergeTree). CH-only.
+    NftReparse {
+        /// First ledger sequence (inclusive).
+        #[arg(long)]
+        start: u32,
+
+        /// Last ledger sequence (inclusive).
+        #[arg(long)]
+        end: u32,
+
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -321,6 +342,27 @@ async fn main() {
                 stats.dropped_pending_ownership,
                 stats.dropped_legacy_nfts,
                 stats.dropped_legacy_ownership,
+            );
+        }
+        Command::NftReparse {
+            start,
+            end,
+            dry_run,
+        } => {
+            let stats = nft_reparse::execute(&sink, start, end, dry_run)
+                .await
+                .expect("nft_reparse failed — idempotent, safe to re-run by range");
+            let verb = if stats.dry_run {
+                "would recover"
+            } else {
+                "recovered"
+            };
+            println!(
+                "nft_reparse completed (dry_run={}): events_scanned={} {verb} nft_pending_rows={} ownership_pending_rows={}",
+                stats.dry_run,
+                stats.events_scanned,
+                stats.nft_pending_rows,
+                stats.ownership_pending_rows,
             );
         }
     }
