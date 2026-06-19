@@ -1,0 +1,146 @@
+---
+# Reconcile the Borg backup Storage Box subaccount via the Hetzner
+# Cloud API and discover its SSH endpoint.
+#
+# Runs on the controller (localhost). The legacy Robot Web Service
+# Storage Box endpoints were removed 2025-07-30, so all subaccount
+# management goes through the Cloud API (`hetzner.hcloud`,
+# `HCLOUD_TOKEN`).
+#
+# This half deliberately does NOT touch SSH keys — no Cloud API /
+# Ansible surface manages a subaccount's authorised_keys. Key
+# authorisation is the separate `authorize.yml` play that runs
+# after the `backup` role has generated the box's Borg pubkey.
+#
+# `no_log: true` on the API tasks — `hcloud_token` and the
+# subaccount password are module parameters.
+
+- name: List existing subaccounts on the Storage Box
+  # Used to ADOPT a subaccount created out-of-band (the 0227 deploy
+  # created one manually in the Console). Matching on `home_directory`
+  # — a stable, real API field — rather than on the cosmetic name,
+  # so re-declaring the same home reconciles the existing subaccount
+  # instead of creating a duplicate.
+  hetzner.hcloud.storage_box_subaccount_info:
+    api_token: '{{ hcloud_token }}'
+    storage_box: '{{ storagebox_id }}'
+  register: storagebox_existing
+  no_log: true
+
+- name: Identify an already-present subaccount to adopt
+  # Match on EITHER home_directory OR the declared name, because the
+  # `storage_box_subaccount` module keys its own idempotency on
+  # `name`: if we matched only on home and the existing subaccount's
+  # name differed, the module would not find it and would CREATE a
+  # duplicate. Home-match is tried first (the 0227 subaccount was
+  # created by home), then name-match (our own prior create / rename
+  # cases). `search` with `^/?<home>$` matches whether Hetzner stored
+  # the home with or without a leading slash. First hit wins.
+  ansible.builtin.set_fact:
+    storagebox_matched_sub: >-
+      {{
+        (
+          (storagebox_existing.hcloud_storage_box_subaccount_info | default([])
+            | selectattr('home_directory', 'search',
+                         '^/?' ~ (storagebox_subaccount_home | regex_replace('^/', '') | regex_escape) ~ '/?$')
+            | list)
+          +
+          (storagebox_existing.hcloud_storage_box_subaccount_info | default([])
+            | selectattr('name', 'equalto', storagebox_subaccount_name)
+            | list)
+        ) | first | default(None)
+      }}
+
+- name: Derive the effective subaccount name and home
+  # `X.attr if X else Y` only dereferences the matched dict when it
+  # is truthy, so this is safe under `error_on_undefined_vars=true`
+  # even when no subaccount matched (adoption vs fresh create).
+  ansible.builtin.set_fact:
+    storagebox_effective_name: '{{ storagebox_matched_sub.name if storagebox_matched_sub else storagebox_subaccount_name }}'
+    storagebox_effective_home: '{{ storagebox_matched_sub.home_directory if storagebox_matched_sub else storagebox_subaccount_home }}'
+
+- name: Reconcile the Borg subaccount (create or update access settings)
+  # Idempotent on re-run: state=present with unchanged access
+  # settings is a no-op. The password is only sent when CREATING a
+  # brand-new subaccount (the API requires it then); when adopting
+  # an existing one we omit it here and let `authorize.yml` reset it
+  # on the bootstrap path if SSH-key auth is not yet working. `name`
+  # reuses the matched subaccount's name so the module updates it in
+  # place instead of creating a duplicate.
+  hetzner.hcloud.storage_box_subaccount:
+    api_token: '{{ hcloud_token }}'
+    storage_box: '{{ storagebox_id }}'
+    name: '{{ storagebox_effective_name }}'
+    home_directory: '{{ storagebox_effective_home }}'
+    description: 'Borg backup cron (managed by infra-hetzner hetzner_storagebox role)'
+    password: '{{ storagebox_subaccount_password if not storagebox_matched_sub else omit }}'
+    access_settings:
+      ssh_enabled: '{{ storagebox_subaccount_access.ssh_enabled }}'
+      samba_enabled: '{{ storagebox_subaccount_access.samba_enabled }}'
+      webdav_enabled: '{{ storagebox_subaccount_access.webdav_enabled }}'
+      readonly: '{{ storagebox_subaccount_access.readonly }}'
+      reachable_externally: '{{ storagebox_subaccount_access.reachable_externally }}'
+    state: present
+  register: storagebox_subaccount
+  no_log: true
+
+- name: Capture the discovered subaccount username and host
+  # The Cloud API response carries `username` (e.g. u514605-sub1)
+  # and `server` (e.g. u514605-sub1.your-storagebox.de). These are
+  # the Borg SSH endpoint — not knowable in advance on a fresh box.
+  # `no_log` because the source register `storagebox_subaccount` is
+  # the full module result (captured under no_log) — keep it masked
+  # so a verbose run cannot echo it. The values themselves are
+  # printed deliberately by the debug task below.
+  #
+  # The `default({}, true).<field> | default('', true)` chain degrades
+  # to '' instead of aborting under `--check` on a FRESH box, where the
+  # would-create module run returns no resource (no username/server to
+  # discover yet). On a real run the fields are always present.
+  ansible.builtin.set_fact:
+    storagebox_discovered_user: "{{ (storagebox_subaccount.hcloud_storage_box_subaccount | default({}, true)).username | default('', true) }}"
+    storagebox_discovered_host: "{{ (storagebox_subaccount.hcloud_storage_box_subaccount | default({}, true)).server | default('', true) }}"
+  no_log: true
+
+- name: Guard against a stale STORAGEBOX_SSH_USER / STORAGEBOX_SSH_HOST pin
+  # If the operator pinned these in env (for targeted --tags backup
+  # runs) but they no longer match what the API reports, fail loudly
+  # rather than silently letting the discovered host fact win and
+  # confusing a later debugging session.
+  ansible.builtin.assert:
+    that:
+      - (lookup('env', 'STORAGEBOX_SSH_USER') | trim | length == 0)
+        or (lookup('env', 'STORAGEBOX_SSH_USER') | trim == storagebox_discovered_user)
+      - (lookup('env', 'STORAGEBOX_SSH_HOST') | trim | length == 0)
+        or (lookup('env', 'STORAGEBOX_SSH_HOST') | trim == storagebox_discovered_host)
+    fail_msg: |
+      STORAGEBOX_SSH_USER / STORAGEBOX_SSH_HOST are set in your env but do
+      not match the subaccount the Cloud API returned:
+        env user:        {{ lookup('env', 'STORAGEBOX_SSH_USER') | default('(unset)', true) }}
+        discovered user: {{ storagebox_discovered_user }}
+        env host:        {{ lookup('env', 'STORAGEBOX_SSH_HOST') | default('(unset)', true) }}
+        discovered host: {{ storagebox_discovered_host }}
+      Unset them (discovery is authoritative) or correct them, then re-run.
+
+- name: Propagate the discovered SSH endpoint onto the box host
+  # `delegate_facts: true` writes the fact into the ch_prod host's
+  # vars, where it outranks the env-derived group_var default — so
+  # the `backup` role (next play) builds borg_repo_url and pins the
+  # Storage Box host key against the real subaccount.
+  ansible.builtin.set_fact:
+    storagebox_ssh_user: '{{ storagebox_discovered_user }}'
+    storagebox_ssh_host: '{{ storagebox_discovered_host }}'
+  delegate_to: "{{ groups['ch_prod'][0] }}"
+  delegate_facts: true
+
+- name: Show the discovered Storage Box SSH endpoint
+  # Surface the values so the operator can pin them in env for a
+  # later `--tags backup`-only re-run (which skips this play, so the
+  # discovered facts are not regenerated).
+  ansible.builtin.debug:
+    msg: |
+      Borg Storage Box subaccount reconciled:
+        STORAGEBOX_SSH_USER={{ storagebox_discovered_user }}
+        STORAGEBOX_SSH_HOST={{ storagebox_discovered_host }}
+      Export these in ~/.config/soroban-prod.env if you intend to run
+      `ansible-playbook ... --tags backup` on its own later.

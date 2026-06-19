@@ -1,7 +1,7 @@
 ---
 # Application stack on the box:
 #   - Repository checkout under /srv/app
-#   - Data / log / backup staging directories under /srv/
+#   - Data and log directories under /srv/
 #   - mTLS CA public certificate delivery
 #   - /srv/app/.env rendered from the operator env
 #   - Compose stack started (Caddy + ClickHouse + sidecar)
@@ -21,17 +21,6 @@
 - name: Ensure ClickHouse logs directory exists
   ansible.builtin.file:
     path: '{{ ch_logs_dir }}'
-    state: directory
-    owner: '{{ clickhouse_uid }}'
-    group: '{{ clickhouse_gid }}'
-    mode: '0750'
-
-- name: Ensure backup staging directory exists
-  # ClickHouse writes BACKUP TO Disk('backups', ...) here from
-  # inside the container; the Borg cron then reads from the host
-  # path and pushes to BX21.
-  ansible.builtin.file:
-    path: '{{ backups_dir }}'
     state: directory
     owner: '{{ clickhouse_uid }}'
     group: '{{ clickhouse_gid }}'

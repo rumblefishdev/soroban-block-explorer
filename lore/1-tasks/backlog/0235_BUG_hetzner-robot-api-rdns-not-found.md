@@ -20,6 +20,18 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from 0227 first-deploy debugging — Robot API rejects rDNS / firewall updates for auction server #<auction-id> (<box-ipv4>) with "IP not found" despite the IP being clearly owned and rDNS already set by Hetzner default. Initial deploy worked around by `--skip-tags hetzner`.'
+  - date: '2026-06-19'
+    status: backlog
+    who: fmazur
+    note: >
+      0236 deploy surfaced new info. rDNS "IP not found" appears RESOLVED —
+      the full `site.yml` run set Robot rDNS successfully ("Set Robot reverse
+      DNS … → changed"), so PR #200's ipv4-derivation fix worked. NEW, distinct
+      blocker found: `community.hrobot.firewall` (1.9.x) requires `ip_version`
+      on every rule — error "missing parameter(s) required by 'protocol':
+      ip_version found in rules -> input". Decided approach: ipv4-only (add
+      `ip_version: 'ipv4'` to each rule in `hetzner_firewall_rules`). NOT yet
+      applied — task stays in backlog, to action later.
 ---
 
 # BUG: community.hrobot Robot API returns "IP not found" for auction server
@@ -35,6 +47,44 @@ entry (`static.<reverse-ipv4>.clients.your-server.de`). Initial
 deploy of task 0227 worked around the failure by invoking
 `--skip-tags hetzner`, leaving the Hetzner Robot side without
 IaC ownership.
+
+## Update (2026-06-19) — findings from the 0236 deploy
+
+Running the 0236 Storage-Box deploy exercised the `hetzner` play and
+split this bug into two distinct issues:
+
+1. **rDNS "IP not found" — RESOLVED.** A full `site.yml` run (before
+   `--skip-tags hetzner`) executed **"Set Robot reverse DNS for the
+   server IPv4 → changed"** successfully. PR #200's change of
+   `hetzner_server_ipv4` to `{{ hostvars[groups['ch_prod'][0]].ansible_host }}`
+   (instead of `ansible_host`, which was `localhost` under the
+   localhost-run play) fixed it. The original root cause is gone.
+
+2. **NEW blocker — firewall requires `ip_version`.** The `hetzner` play
+   now fails on **"Apply Robot stateless firewall rules"** with:
+
+   ```
+   Module failed: missing parameter(s) required by 'protocol':
+   ip_version found in rules -> input
+   ```
+
+   `community.hrobot.firewall` (1.9.x — the pinned version) declares
+   `required_by={protocol: [ip_version]}` for each rule's `input`, so
+   every rule that sets `protocol` MUST also set `ip_version`. The rules
+   in `hetzner_firewall_rules` set `protocol` but never had `ip_version`
+   (confirmed: `git log -S ip_version` = zero hits) → the task could
+   never have passed with hrobot ≥1.9.0. This is **independent** of the
+   old "IP not found" issue and is what now keeps `--skip-tags hetzner`
+   in place.
+
+**Decided approach: ipv4-only.** The box is reached over IPv4; the Robot
+stateless firewall has separate v4/v6 chains, and nothing is exposed
+over IPv6, so `ip_version: 'ipv4'` on each rule is sufficient.
+
+**NOT yet applied — task stays in backlog.** When actioned: add
+`ip_version: 'ipv4'` to every rule in `hetzner_firewall_rules`
+(`group_vars/all.yml`), then validate with a `--tags hetzner` deploy
+(no skip) and confirm the rules appear in Robot UI before closing.
 
 ## Context
 

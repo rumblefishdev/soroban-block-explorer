@@ -1,5 +1,4 @@
 {
-  "_comment": "Managed by infra-hetzner/ansible/roles/docker — do not edit by hand.",
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "100m",
