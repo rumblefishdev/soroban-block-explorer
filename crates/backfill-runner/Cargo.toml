@@ -16,8 +16,11 @@ indexer = { path = "../indexer", features = ["pg-persist"] }
 xdr-parser = { path = "../xdr-parser" }
 db = { path = "../db" }
 # ClickHouse pilot sink (task 0205, ADR 0044). Persist path currently
-# stubbed; flag-gated via `--target clickhouse`.
-db-clickhouse = { path = "../db-clickhouse" }
+# stubbed; flag-gated via `--target clickhouse`. `aws-mtls` exposes the
+# reusable `client_with_mtls` builder for the mTLS sink path (task 0307,
+# `--ch-cert`/`--ch-key`/`--ch-ca`); the Lambda-only extension fetch in that
+# feature compiles unused here (harmless — pub fns).
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
 # `LedgerCloseMeta` is the input type to the sink's `persist_ledger`
 # (task 0205). Already in the workspace via `indexer` and `xdr-parser`.
