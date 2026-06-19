@@ -80,4 +80,4 @@ consistent with project convention.** The findings worth recording:
 Senior-quality, safe, on-scope. The labeling logic is correct and the gate is
 airtight; the only must-fix is the prod query plan, which belongs to the 0303
 RUN (validatable only against prod CH). Architecture docs updated per ADR 0032
-(event-derived SAC labeling). Step 3 (registry de-pollution) spun to 0306.
+(event-derived SAC labeling). Step 3 (registry de-pollution) spun to 0307.

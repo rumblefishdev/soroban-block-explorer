@@ -4,7 +4,7 @@ title: 'BUG: SAC labeling + orphan composition — un-deployed SACs mislabeled i
 type: BUG
 status: completed
 related_adr: []
-related_tasks: ['0283', '0221', '0218', '0259', '0303', '0306']
+related_tasks: ['0283', '0221', '0218', '0259', '0303', '0307']
 tags:
   [
     clickhouse,
@@ -51,7 +51,7 @@ history:
       simplify + devil + checklist) converged: correct / safe / senior /
       right-sized / consistent. 254 xdr-parser + 3 backfill tests green, clippy
       -D warnings clean. Architecture docs updated (ADR 0032). Step 3 (registry
-      de-pollution) spun to 0306; the prod RUN + the relabel's prod OOM-query
+      de-pollution) spun to 0307; the prod RUN + the relabel's prod OOM-query
       fix go to 0303 (scope updated there). Evidence:
       notes/S-devil-advocate-full-crypto-split.md + notes/S-review-synthesis.md.
 ---
@@ -229,8 +229,8 @@ new deploys can never become orphans; existing → re-parse.
 - [x] Step 2 flip gated on crypto-match `emitter_id == derive_sac(topic[3])` (C1), tested — the 3 shape-colliding WASM contracts NOT flipped
 - [x] Orphan predicate uses `coalesce(deployed_at_ledger, 0) = 0` (C2) — all 5,607 covered
 - [x] Un-deployed-SAC orphans labeled `is_sac=true`, `contract_type=Token` — LIVE forward-fix (`derive_sac_overrides_from_events`, wired in `process.rs`) + batch (`sac-orphan-relabel`). Prod RUN → 0303.
-- [ ] `/v1/contracts` no longer polluted by skeleton placeholders → **0306** (de-bundled)
-- [ ] 0221 event-leak re-validated → **0306** (only if 0306 picks the side-table option)
+- [ ] `/v1/contracts` no longer polluted by skeleton placeholders → **0307** (de-bundled)
+- [ ] 0221 event-leak re-validated → **0307** (only if 0307 picks the side-table option)
 - [x] Forward-fix prevents new WASM orphans → N/A: the split found 0 WASM orphans (Step 5 dropped)
 
 ## Implementation Notes
@@ -267,7 +267,7 @@ new deploys can never become orphans; existing → re-parse.
 
 ## Future Work
 
-- **0306** — SAC-skeleton `/v1/contracts` de-pollution (Step 3 research).
+- **0307** — SAC-skeleton `/v1/contracts` de-pollution (Step 3 research).
 - **0303** — prod RUN, incl. the relabel's prod **OOM-query fix**
   (`fetch_orphan_events` must anchor on the ~5,607 orphan ids before running).
 - Nits (review, optional): `version=1` sentinel hardening (uniform with 0220);

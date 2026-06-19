@@ -44,7 +44,7 @@ history:
       MUST-FIX: the tool's `fetch_orphan_events` query OOMs on prod (3.73 GiB,
       reproduced) - rewrite to anchor on the ~5,607 orphan ids before running
       (even `--dry-run` runs it). All deploy / rerun / relabel-run lives here,
-      not in 0294 (code-only). NB 0306 (SAC-skeleton /v1/contracts de-pollution)
+      not in 0294 (code-only). NB 0307 (SAC-skeleton /v1/contracts de-pollution)
       is NOT a prereq - it is orthogonal to NFT reclassification.
 ---
 

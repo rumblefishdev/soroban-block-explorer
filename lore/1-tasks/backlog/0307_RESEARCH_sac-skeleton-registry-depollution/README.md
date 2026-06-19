@@ -1,5 +1,5 @@
 ---
-id: '0306'
+id: '0307'
 title: 'RESEARCH: SAC-skeleton /v1/contracts de-pollution — read-filter vs side-table (0294 Step 3)'
 type: RESEARCH
 status: backlog
