@@ -93,10 +93,10 @@ fn nft_real_corpus_invariants() {
 
     for (ev, sig) in events.iter().zip(sig_of.iter()) {
         *input_by_sig.entry(sig.clone()).or_default() += 1;
-        if let Some(c) = &ev.contract_id {
-            if let Ok(n) = c.parse::<i64>() {
-                contracts_in.insert(n);
-            }
+        if let Some(c) = &ev.contract_id
+            && let Ok(n) = c.parse::<i64>()
+        {
+            contracts_in.insert(n);
         }
         let out = detect_nft_events(std::slice::from_ref(ev));
         if !out.is_empty() {
@@ -151,16 +151,16 @@ fn nft_real_corpus_invariants() {
     eprintln!("=========================\n");
 
     // consecutive_mint, when present, must expand (range -> N mints).
-    if let Some(&n) = input_by_sig.get("consecutive_mint") {
-        if n > 0 {
-            assert!(
-                detected_by_sig
-                    .get("consecutive_mint")
-                    .copied()
-                    .unwrap_or(0)
-                    >= n,
-                "consecutive_mint should expand to >= input count"
-            );
-        }
+    if let Some(&n) = input_by_sig.get("consecutive_mint")
+        && n > 0
+    {
+        assert!(
+            detected_by_sig
+                .get("consecutive_mint")
+                .copied()
+                .unwrap_or(0)
+                >= n,
+            "consecutive_mint should expand to >= input count"
+        );
     }
 }
