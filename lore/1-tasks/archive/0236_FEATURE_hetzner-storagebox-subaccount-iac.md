@@ -2,7 +2,7 @@
 id: '0236'
 title: 'FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0227', '0235']
 tags:
@@ -74,6 +74,25 @@ history:
       FREEZE+borg (no full local copy; ledgers-first freeze order), add docker
       log rotation, re-arm cron after. See "Backup mechanism redesign
       (2026-06-18)" below.
+  - date: '2026-06-19'
+    status: completed
+    who: fmazur
+    note: >
+      FREEZE+borg mechanism deployed and validated live on BX21. Full
+      roundtrip succeeded: FREEZE (marker 'ledgers' first) → borg push →
+      UNFREEZE → prune(keep 4, deleted 0 B) → compact → Done; archive
+      `ch-20260619T072807Z` (791.46 GB → 700.94 GB, 8868 files, 2h59m). All
+      redesign + reopen ACs verified on the box (FREEZE ~0 disk, weekly cron
+      `30 3 * * 0`, log cap json-file 100m×5, encrypted repokey-blake2 → BX21,
+      cron re-armed). Three deploy-surfaced bugs fixed: CH shadow-dir name
+      escaping (commit 41a47bfc), daemon.json `_comment` rejected by dockerd
+      (23dc47c9), storagebox key-probe rc classification (55234797). Operator
+      also uploaded a permanent encrypted legacy floor to a separate prune-
+      immune repo `clickhouse-baseline`. Deferred (mechanism present): AC4
+      steady-path delta-reconcile (`cat` vs Storage Box restricted shell →
+      scp-download refinement); firewall `ip_version` tracked in 0235; first
+      live BX21 restore drill = operator's DR exercise. Marked completed at
+      operator request.
 ---
 
 # FEATURE: Declarative Hetzner Storage Box subaccount + SSH key via API
@@ -368,54 +387,55 @@ can map Atomic-DB `store/<uuid>/` dirs back to table names.
 
 ## Acceptance Criteria
 
-> AC1–AC5 are **runtime** criteria: they require a live
-> `ansible-playbook` against the BX21 and are **not yet checked** —
-> verification is the operator's first deploy. The implementation is
-> complete and statically validated (syntax-check, unit-tested Jinja,
-> no_log/credential audit, three review rounds). Tick these after the
-> deploy confirms them.
+> AC1–AC5 + the redesign ACs were **runtime** criteria. **Verified on the
+> 2026-06-18/19 operator deploy(s) against BX21** (subaccount created, key
+> authorised, full FREEZE→borg→BX21 roundtrip `ch-20260619T072807Z`
+> succeeded). Two items remain partial (AC2 adopt-pubkey-missing sub-case,
+> AC4 steady-path delta) — see notes; their mechanisms are in place.
 
-- [ ] `ansible-playbook` against a fresh BX21 (no subaccount yet)
+- [x] `ansible-playbook` against a fresh BX21 (no subaccount yet)
       creates the subaccount and registers the pubkey in a single
-      run, without UI interaction.
-- [ ] `ansible-playbook` against the BX21 we hand off from 0227
-      (subaccount already present, **pubkey missing**) is also a
-      single-run flow: detect the existing subaccount via the
-      `name` / `home_directory` match, attach the pubkey, validate.
-- [ ] Re-running the playbook is idempotent (no-op when the
-      subaccount + pubkey already match the declared state).
-- [ ] Revocation / delta: the subaccount `authorized_keys` is
-      rendered (overwrite) from the declared key set, so a rotated
-      or removed pubkey replaces/clears the old one on the next run
-      (delta reconciliation, not just "create on missing").
-- [ ] First Borg backup roundtrip succeeds: `ch-backup` runs from
-      the box, the repo on BX21 lists at least one `ch-*` archive
-      (script names archives `ch-<UTC-stamp>`), and re-running the
-      script the next day adds a second archive (proves cron
-      pathway). The day-2 check is inherently temporal — done by
-      the operator after the first cron fire.
-- [ ] **(reopen) Weekly cron** — the installed `/etc/cron.d/ch-backup`
-      fires only on the configured weekday (Sunday by default), not daily.
-- [ ] **(reopen) Retention keep-4** — `borg prune` runs with
-      `--keep-weekly=4 --keep-daily=0 --keep-monthly=0`; the first/only
-      archive on a fresh repo survives the prune.
-- [ ] **(reopen) Compact reclaims space** — `borg compact` runs on every
-      backup run (not gated to Sunday), so pruned segments are freed.
-- [ ] **(redesign) FREEZE, not `BACKUP TO Disk`** — `ch-backup` uses
-      `ALTER TABLE ... FREEZE` + `borg create` from `shadow/`; a backup run
-      consumes ~0 extra local disk (no full local copy → no ENOSPC).
-- [ ] **(redesign) `ledgers`-first freeze order** — the freeze order is an
-      explicit list with `ledgers` pinned FIRST, then all other tables
-      (marker-first → consistent high-water mark without pausing the indexer).
-- [ ] **(redesign) encrypted borg → BX21 + restore documented** — frozen
-      snapshot pushed to the subaccount, client-side encrypted; restore via
-      `max(ledger)` high-water mark + ATTACH-from-detached is documented.
-- [ ] **(redesign) docker log rotation** — `json-file` `max-size`/`max-file`
-      on the CH container and in the role (no unbounded container logs that
-      can refill the disk).
-- [ ] **(redesign) cron re-armed by the FREEZE deploy** — `/etc/cron.d/ch-backup`
-      restored (weekly Sunday 03:30 UTC). Currently DISARMED
-      (`/root/ch-backup.cron.disabled`) so the broken backup cannot fire.
+      run, without UI interaction. — **verified 2026-06-18**: no 0227
+      subaccount actually existed, so the CREATE + bootstrap-pubkey path ran.
+- [x] `ansible-playbook` against an existing subaccount adopts it —
+      verified on every re-run (`Identify an already-present subaccount to
+    adopt` → ok, idempotent). Note: the exact "pubkey **missing** on an
+      adopted subaccount" sub-case was not separately triggered (no
+      pre-existing subaccount on first deploy; key present on re-runs).
+- [x] Re-running the playbook is idempotent — `--tags storagebox` re-run
+      green with `localhost changed=0` (no-op when subaccount + key match).
+- [ ] Revocation / delta (**deferred** — mechanism in place, steady path
+      unverified): bootstrap renders `authorized_keys` by full overwrite
+      (verified on create). The **steady**-path delta-reconcile reads the
+      current set via `ssh … cat authorized_keys`, which the Storage Box
+      restricted shell may reject (`failed_when:false` → reconcile silently
+      skips). Box key is the only authorised key (no rotation scenario yet).
+      Refine to `scp`-download for the read — see Future Work.
+- [x] First Borg backup roundtrip succeeds — **verified 2026-06-19**:
+      `ch-backup` (FREEZE) ran from the box, repo on BX21 lists
+      `ch-20260619T072807Z` (`borg info`: 791.46 GB → 700.94 GB, 8868 files).
+      Day-2 second archive is temporal — the operator confirms after the
+      first weekly cron fire.
+- [x] **(reopen) Weekly cron** — `/etc/cron.d/ch-backup` installed as
+      `30 3 * * 0` (Sunday only), verified on the box.
+- [x] **(reopen) Retention keep-4** — the FREEZE run's prune logged
+      `keep 0d 4w 0m` and `Deleted 0 B` (first archive survives).
+- [x] **(reopen) Compact reclaims space** — `borg compact` ran on the run
+      (logged `Compacting repository` → `Done`), not gated to a weekday.
+- [x] **(redesign) FREEZE, not `BACKUP TO Disk`** — verified: FREEZE +
+      `borg create` from `shadow/`; disk stayed flat (~92%, hardlinks) — no
+      full local copy, no ENOSPC.
+- [x] **(redesign) `ledgers`-first freeze order** — verified in the log:
+      `Freezing default tables (marker 'ledgers' first)`.
+- [x] **(redesign) encrypted borg → BX21 + restore documented** — frozen
+      snapshot pushed client-side-encrypted (repokey-blake2) to the
+      subaccount; restore (ATTACH-from-detached + `max(sequence)+1`)
+      documented in the README DR runbook.
+- [x] **(redesign) docker log rotation** — verified:
+      `docker inspect clickhouse` → `json-file max-size:100m max-file:5`.
+- [x] **(redesign) cron re-armed by the FREEZE deploy** —
+      `/etc/cron.d/ch-backup` restored (weekly Sunday 03:30 UTC); the
+      `/root/ch-backup.cron.disabled` workaround is retired.
 - [x] **(redesign) restore drill-tested** — full multi-table
       FREEZE → borg → extract → ATTACH restore exercised end-to-end on a
       local CH 26.3.12 sandbox with a mixed PARTITION-BY/plain/RMT schema;
@@ -523,6 +543,41 @@ the new role reads it directly).
 - **No Ansible/Cloud-API surface manages a subaccount's SSH public
   keys** — forced the SFTP `authorized_keys` mechanism.
 
+### Surfaced + fixed during the live deploy (2026-06-18/19)
+
+- **CH percent-escapes the FREEZE shadow-dir name** — `ALTER … FREEZE
+WITH NAME 'ch-<stamp>'` creates `shadow/ch%2D<stamp>/` (CH escapes every
+  char outside `[A-Za-z0-9_]`; `-`→`%2D`), but the script looked for
+  `shadow/ch-<stamp>/` → `FATAL: shadow dir … missing after FREEZE`. The
+  local drill used the label `'drill'` (no special chars) so never hit it.
+  **Fix (commit `41a47bfc`):** escape-free freeze label `ch<stamp>` for the
+  FREEZE/UNFREEZE/shadow path; borg ARCHIVE keeps `ch-<stamp>` (prune glob
+  `ch-*` / `^ch-` checks unchanged); `cleanup_stale_freezes` widened to
+  `ch*`. Re-ran clean (`ch-20260619T072807Z`, Done).
+- **`daemon.json` `_comment` key rejected by dockerd** — the docker role's
+  `docker-daemon.json` carried a `"_comment"` key; dockerd rejects unknown
+  directives, so the first real `systemctl restart docker` in weeks (the
+  `app`-role recreate triggered by the logging change) failed and left the
+  daemon down (containers survived via `live-restore`). Recovered by
+  removing `_comment` on the box + `systemctl start docker`. **Fix (commit
+  `23dc47c9`, `fix(docker)`):** removed `_comment` from the repo file.
+- **`community.hrobot.firewall` (1.9.x) requires `ip_version` per rule** —
+  the `hetzner` play fails on "Apply Robot stateless firewall rules"
+  (`missing parameter(s) required by 'protocol': ip_version`). Pre-existing
+  (the rules never had `ip_version`); independent of the 0235 "IP not found"
+  issue (which this deploy showed is now resolved — rDNS set successfully).
+  **NOT fixed here** — diagnosed + decided approach (ipv4-only) recorded in
+  **0235**, which stays in backlog; `--skip-tags hetzner` remains the
+  workaround for full-deploy runs.
+- **Steady-path `authorized_keys` reconcile uses `cat` over the Storage
+  Box restricted shell** — may be rejected (the shell rejects arbitrary
+  commands; `true` returned rc 8 "Command not found"), so the steady delta
+  read silently no-ops (`failed_when:false`). Initial key install (bootstrap
+  `scp`) works; only the steady delta/revocation read is affected. See
+  Future Work. (Also drove the `authorize.yml` probe fix, commit `55234797`:
+  classify the key probe by ssh rc 255 vs the remote command's rc, since the
+  restricted shell returns non-zero for a working key.)
+
 ## Future Work
 
 Pre-existing / out-of-scope items surfaced during review (left as prose
@@ -534,4 +589,21 @@ per operator preference — not spawned as backlog tasks):
   (shell-history exposure on the box; root-only, manual op).
 - `clickhouse-client.xml` mode comment in `ch-backup.sh.j2` vs the `app`
   role's actual `0400 owner=101` — doc drift.
-- **Runtime validation (AC1–AC5)** against BX21 — operator's first deploy.
+- **Runtime validation (AC1–AC5)** against BX21 — DONE on the 2026-06-18/19
+  deploy (see Acceptance Criteria).
+- **Steady-path `authorized_keys` delta-reconcile** (AC4) — replace the
+  `ssh … cat authorized_keys` read (rejected by the Storage Box restricted
+  shell) with an `scp`-download of the remote file, so rotation/revocation
+  is actually diffed on steady runs. Box-key install (bootstrap) already
+  works; this only affects the delta path.
+- **Firewall `ip_version`** — adding `ip_version: 'ipv4'` to each
+  `hetzner_firewall_rules` entry so the `hetzner` play passes without
+  `--skip-tags hetzner`. Tracked in **0235** (decided ipv4-only; in backlog).
+- **Legacy floor on the Storage Box** — the operator uploaded
+  `snapshot_c_post_0268_20260618` (738 GiB, BACKUP-TO-Disk artifact) to a
+  separate, prune-immune repo `…/backups/clickhouse-baseline` (encrypted,
+  `borg info`-verified) as a permanent manual restore-point floor. Local
+  `/srv/backups` copy can be deleted to reclaim ~738 GiB once trusted.
+- **First live BX21 restore drill** — extract `ch-<stamp>` + ATTACH +
+  row-count compare on a throwaway target; the local mechanism is proven,
+  this is the operator's real DR exercise.
