@@ -272,6 +272,38 @@ pub struct ExtractedLedgerEntryChange {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds).
     pub created_at: i64,
+    /// Token metadata (`name` / `symbol` / `decimals`) recovered from the
+    /// instance-storage `Symbol("METADATA")` struct, when this change is a
+    /// contract-instance entry that carries one; `None` for every other entry
+    /// type or change. Populated for entry-bearing changes (created / updated /
+    /// state / restored); consumers read it on `created` + `updated`.
+    ///
+    /// Chain-verified location (task 0297) — distinct from, and replaces, the
+    /// dead standalone `Symbol("name")` path. Derived in-memory only; NOT
+    /// serialized into `data` JSON, so it does not bloat persisted entry rows.
+    pub token_metadata: Option<crate::token_metadata::TokenMetadata>,
+    /// True when this change is a contract-instance entry whose executable is
+    /// the native Stellar Asset Contract. A **typed** signal (read off the XDR,
+    /// not the serialized `data` JSON), used by the metadata producer to skip
+    /// SACs. `false` for every non-SAC or non-contract-instance change.
+    pub is_sac: bool,
+}
+
+/// One token-metadata write for a contract, derived from a contract-instance
+/// `created`/`updated` change carrying a `Symbol("METADATA")` struct.
+///
+/// Maps to a `soroban_contract_metadata` side-table row (ADR 0049): a separate
+/// per-contract table, written by the indexer, composed at read time — never
+/// mixed into `soroban_contracts` (RMT whole-row clobber + different update
+/// clocks). SACs are excluded by the producer
+/// (`state::extract_contract_metadata_writes`) since their name/symbol/decimals
+/// are already derivable from the SAC identity.
+#[derive(Debug, Clone)]
+pub struct ExtractedContractMetadata {
+    pub contract_id: String,
+    pub metadata: crate::token_metadata::TokenMetadata,
+    /// Ledger the metadata was observed — the side table's RMT version slot.
+    pub ledger: u32,
 }
 
 /// Extracted contract deployment from LedgerEntryChanges.

@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use stellar_xdr::curr::*;
 
 use crate::scval::scval_to_typed_json;
+use crate::token_metadata::{TokenMetadata, extract_token_metadata, is_stellar_asset_instance};
 use crate::types::ExtractedLedgerEntryChange;
 
 /// Extract all ledger entry changes from a transaction's metadata.
@@ -134,26 +135,54 @@ fn extract_single_change(
     created_at: i64,
     change_index: u32,
 ) -> Option<ExtractedLedgerEntryChange> {
-    let (change_type, entry_type, key, data) = match change {
+    let (change_type, entry_type, key, data, token_metadata, is_sac) = match change {
         LedgerEntryChange::Created(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("created", et, k, Some(d))
+            (
+                "created",
+                et,
+                k,
+                Some(d),
+                entry_token_metadata(entry),
+                entry_is_sac(entry),
+            )
         }
         LedgerEntryChange::Updated(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("updated", et, k, Some(d))
+            (
+                "updated",
+                et,
+                k,
+                Some(d),
+                entry_token_metadata(entry),
+                entry_is_sac(entry),
+            )
         }
         LedgerEntryChange::Removed(ledger_key) => {
             let (et, k) = extract_key_info(ledger_key);
-            ("removed", et, k, None)
+            ("removed", et, k, None, None, false)
         }
         LedgerEntryChange::State(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("state", et, k, Some(d))
+            (
+                "state",
+                et,
+                k,
+                Some(d),
+                entry_token_metadata(entry),
+                entry_is_sac(entry),
+            )
         }
         LedgerEntryChange::Restored(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("restored", et, k, Some(d))
+            (
+                "restored",
+                et,
+                k,
+                Some(d),
+                entry_token_metadata(entry),
+                entry_is_sac(entry),
+            )
         }
     };
 
@@ -167,7 +196,30 @@ fn extract_single_change(
         operation_index,
         ledger_sequence,
         created_at,
+        token_metadata,
+        is_sac,
     })
+}
+
+/// Pull token metadata (`name`/`symbol`/`decimals`) from a contract-instance
+/// entry's stored value. Returns `None` for any non-`ContractData` entry, or a
+/// `ContractData` value that is not a contract instance carrying a `METADATA`
+/// struct. See `crate::token_metadata`.
+fn entry_token_metadata(entry: &LedgerEntry) -> Option<TokenMetadata> {
+    match &entry.data {
+        LedgerEntryData::ContractData(cd) => extract_token_metadata(&cd.val),
+        _ => None,
+    }
+}
+
+/// True when the entry is a contract instance whose executable is a SAC.
+/// Typed signal carried on the change so the metadata producer can skip SACs
+/// without re-deriving from serialized JSON. See [`is_stellar_asset_instance`].
+fn entry_is_sac(entry: &LedgerEntry) -> bool {
+    match &entry.data {
+        LedgerEntryData::ContractData(cd) => is_stellar_asset_instance(&cd.val),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -968,5 +1020,136 @@ mod tests {
                 .unwrap()
                 .starts_with('C')
         );
+    }
+
+    #[test]
+    fn contract_instance_metadata_extracted_on_created() {
+        // Mainnet shape (liquidFi bridge CDKRSOVB…): instance storage holds a
+        // Symbol("METADATA") => Map{decimal, name, symbol} struct.
+        let sym = |s: &str| ScVal::Symbol(ScSymbol::try_from(s.as_bytes().to_vec()).unwrap());
+        let sstr = |s: &str| ScVal::String(ScString::try_from(s.as_bytes().to_vec()).unwrap());
+        let metadata = ScVal::Map(Some(
+            ScMap::try_from(vec![
+                ScMapEntry {
+                    key: sym("decimal"),
+                    val: ScVal::U32(7),
+                },
+                ScMapEntry {
+                    key: sym("name"),
+                    val: sstr("liquidFi bridge token"),
+                },
+                ScMapEntry {
+                    key: sym("symbol"),
+                    val: sstr("lUSDC"),
+                },
+            ])
+            .unwrap(),
+        ));
+        let instance = ScVal::ContractInstance(ScContractInstance {
+            executable: ContractExecutable::Wasm(Hash([0xAA; 32])),
+            storage: Some(
+                ScMap::try_from(vec![ScMapEntry {
+                    key: sym("METADATA"),
+                    val: metadata,
+                }])
+                .unwrap(),
+            ),
+        });
+        let entry = LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ContractData(ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0xCC; 32]))),
+                key: ScVal::LedgerKeyContractInstance,
+                durability: ContractDataDurability::Persistent,
+                val: instance,
+            }),
+            ext: LedgerEntryExt::V0,
+        };
+        let changes: LedgerEntryChanges =
+            vec![LedgerEntryChange::Created(entry)].try_into().unwrap();
+        let tx_meta = TransactionMeta::V3(TransactionMetaV3 {
+            ext: ExtensionPoint::V0,
+            tx_changes_before: changes,
+            operations: VecM::default(),
+            tx_changes_after: LedgerEntryChanges::default(),
+            soroban_meta: None,
+        });
+
+        let results = extract_ledger_entry_changes(&tx_meta, "abc123", 100, 1700000000);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entry_type, "contract_data");
+        let md = results[0]
+            .token_metadata
+            .as_ref()
+            .expect("instance METADATA should be extracted onto the change");
+        assert_eq!(md.name.as_deref(), Some("liquidFi bridge token"));
+        assert_eq!(md.symbol.as_deref(), Some("lUSDC"));
+        assert_eq!(md.decimals, Some(7));
+    }
+
+    #[test]
+    fn contract_instance_metadata_extracted_on_updated() {
+        // Deploy-then-init: METADATA set by a later init() lands on an `updated`
+        // instance change (chain-confirmed updated path — task 0297 Option B).
+        let sym = |s: &str| ScVal::Symbol(ScSymbol::try_from(s.as_bytes().to_vec()).unwrap());
+        let sstr = |s: &str| ScVal::String(ScString::try_from(s.as_bytes().to_vec()).unwrap());
+        let metadata = ScVal::Map(Some(
+            ScMap::try_from(vec![
+                ScMapEntry {
+                    key: sym("decimal"),
+                    val: ScVal::U32(7),
+                },
+                ScMapEntry {
+                    key: sym("name"),
+                    val: sstr("liquidFi LP token"),
+                },
+                ScMapEntry {
+                    key: sym("symbol"),
+                    val: sstr("lUSDC"),
+                },
+            ])
+            .unwrap(),
+        ));
+        let instance = ScVal::ContractInstance(ScContractInstance {
+            executable: ContractExecutable::Wasm(Hash([0xAA; 32])),
+            storage: Some(
+                ScMap::try_from(vec![ScMapEntry {
+                    key: sym("METADATA"),
+                    val: metadata,
+                }])
+                .unwrap(),
+            ),
+        });
+        let entry = LedgerEntry {
+            last_modified_ledger_seq: 100,
+            data: LedgerEntryData::ContractData(ContractDataEntry {
+                ext: ExtensionPoint::V0,
+                contract: ScAddress::Contract(ContractId(Hash([0xCC; 32]))),
+                key: ScVal::LedgerKeyContractInstance,
+                durability: ContractDataDurability::Persistent,
+                val: instance,
+            }),
+            ext: LedgerEntryExt::V0,
+        };
+        let changes: LedgerEntryChanges =
+            vec![LedgerEntryChange::Updated(entry)].try_into().unwrap();
+        let tx_meta = TransactionMeta::V3(TransactionMetaV3 {
+            ext: ExtensionPoint::V0,
+            tx_changes_before: changes,
+            operations: VecM::default(),
+            tx_changes_after: LedgerEntryChanges::default(),
+            soroban_meta: None,
+        });
+
+        let results = extract_ledger_entry_changes(&tx_meta, "abc123", 100, 1700000000);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].change_type, "updated");
+        let md = results[0]
+            .token_metadata
+            .as_ref()
+            .expect("instance METADATA should be extracted on `updated` too");
+        assert_eq!(md.name.as_deref(), Some("liquidFi LP token"));
+        assert_eq!(md.decimals, Some(7));
     }
 }

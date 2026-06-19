@@ -443,7 +443,7 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger      BIGINT,
     contract_type           SMALLINT,                                       -- ADR 0031, nullable
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
-    name                    VARCHAR(256),                                   -- ADR 0042, on-chain Symbol("name")
+    name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see ADR 0049
     search_vector           TSVECTOR GENERATED ALWAYS AS (
                                 to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
                             ) STORED,
@@ -455,6 +455,20 @@ CREATE INDEX idx_contracts_wasm   ON soroban_contracts (wasm_hash) WHERE wasm_ha
 CREATE INDEX idx_contracts_search ON soroban_contracts USING GIN (search_vector);
 CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern_ops);
 ```
+
+> **On-chain token metadata (ADR 0049, ClickHouse).** `name` / `symbol` /
+> `decimals` for Soroban tokens are on-ledger in the contract's instance storage
+> under `Symbol("METADATA")` (a `{decimal, name, symbol}` struct — NOT a
+> standalone `Symbol("name")` entry; the `name` column above is empirically
+> empty). On the CH datastore the parser recovers them into a dedicated side
+> table `soroban_contract_metadata(contract_id, name, symbol, decimals, version)`
+> — `ReplacingMergeTree(version)`, key `contract_id` — written by the indexer
+> (`created` + `updated`, SACs skipped) and composed at read (`LEFT JOIN`;
+> `decimals` defaults to 7 for classic/SAC). It is a separate table, not columns
+> on `soroban_contracts`: RMT whole-row replace + that table's multiple writers
+> would clobber in-row metadata, and identity vs metadata update on different
+> clocks. The API exposes `name`/`symbol`/`decimals` on the contract-detail and
+> asset detail/list responses.
 
 Purpose:
 

@@ -208,7 +208,7 @@ impl PartitionWriterHandle<'_> {
                 // backwards-compat shim with empty overrides; this is
                 // the production wire-up the PR #186 description called
                 // out as a follow-up.
-                let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
+                let mut staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                     &parsed.ledger,
                     &parsed.transactions,
                     &parsed.operations,
@@ -233,6 +233,10 @@ impl PartitionWriterHandle<'_> {
                     &std::collections::HashMap::new(),
                     &std::collections::HashMap::new(),
                 )?;
+                // ADR 0049: on-chain token metadata → its own side table.
+                staged.metadata_rows = db_clickhouse::persist::stage::build_metadata_rows(
+                    &parsed.contract_metadata_writes,
+                );
                 pw.write_ledger(staged).await?;
                 Ok(())
             }

@@ -85,6 +85,7 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
+    contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
     sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), SchemaError> {
@@ -108,7 +109,7 @@ pub async fn persist_ledger_clickhouse(
         classification_cache,
     )
     .await;
-    let staged = stage::prepare_with_sac_overrides(
+    let mut staged = stage::prepare_with_sac_overrides(
         ledger,
         transactions,
         operations,
@@ -128,6 +129,9 @@ pub async fn persist_ledger_clickhouse(
         &prior_wasm_verdicts,
         &prior_contract_verdicts,
     )?;
+    // ADR 0049: on-chain token metadata → its own side table, assigned here
+    // (not threaded through `prepare`). SAC filtering already done upstream.
+    staged.metadata_rows = stage::build_metadata_rows(contract_metadata_writes);
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -392,6 +396,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

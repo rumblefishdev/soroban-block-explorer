@@ -145,6 +145,39 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
 ENGINE = ReplacingMergeTree(wasm_uploaded_at_ledger)
 ORDER BY (contract_id);
 
+-- On-chain Soroban token metadata (name/symbol/decimals) read from the
+-- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,
+-- INDEXER-derived (NOT the off-chain enrichment family). A SEPARATE table, not
+-- columns on `soroban_contracts`, because: (1) RMT whole-row replace +
+-- soroban_contracts' many writers (deploy / contract_type_rebuild EXCHANGE /
+-- stub INSERTs / db-merge) would clobber in-row metadata to NULL (the G5 bug
+-- class); (2) deploy identity (wasm_hash/deployer, from the deploy tx, NOT in
+-- the instance entry) and metadata live on DIFFERENT update clocks, which one
+-- RMT version column cannot track. Written by the parser on contract-instance
+-- `created` / `updated` / `restored` changes; SACs skipped (name=CODE:ISSUER /
+-- symbol=code / decimals=7 already derivable from SAC identity). `version` =
+-- observed ledger (deterministic/replay-safe; latest wins). `decimals` is
+-- rendered as 7 at read for classic/SAC.
+-- INVARIANT: every row is a WHOLE-struct snapshot at one ledger (name+symbol+
+-- decimals all set from the same METADATA at that version) — never a partial
+-- single-column write. This is what makes the per-column `argMax(_, version)`
+-- read safe: the three independent argMaxes can't stitch a Frankenstein row
+-- from different versions. Read: `soroban_contracts sc LEFT JOIN (SELECT
+-- contract_id, argMax(name,version), argMax(symbol,version),
+-- argMax(decimals,version) FROM soroban_contract_metadata GROUP BY contract_id)
+-- m ON m.contract_id = sc.contract_id`, `COALESCE(m.name, sc.name)`. Detail
+-- (point lookup) pushes `WHERE contract_id = ?` into the sub-aggregate; the
+-- list keeps it full-table. Full reasoning: ADR 0049, task 0297.
+CREATE TABLE IF NOT EXISTS soroban_contract_metadata (
+    contract_id  String,
+    name         Nullable(String),
+    symbol       Nullable(String),
+    decimals     Nullable(UInt32),
+    version      Int64
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (contract_id);
+
 ----------------------------------------------------------------------
 -- State tables — composite natural keys (no surrogate id)
 ----------------------------------------------------------------------

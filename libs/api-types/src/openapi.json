@@ -2059,7 +2059,7 @@
           {
             "type": "object",
             "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-            "required": ["id", "asset_type"],
+            "required": ["id", "asset_type", "decimals"],
             "properties": {
               "asset_code": {
                 "type": ["string", "null"]
@@ -2075,6 +2075,12 @@
               },
               "contract_id": {
                 "type": ["string", "null"]
+              },
+              "decimals": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                "minimum": 0
               },
               "holder_count": {
                 "type": ["integer", "null"],
@@ -2093,6 +2099,10 @@
               },
               "name": {
                 "type": ["string", "null"]
+              },
+              "symbol": {
+                "type": ["string", "null"],
+                "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
               },
               "total_supply": {
                 "type": ["string", "null"]
@@ -2121,7 +2131,7 @@
       "AssetItem": {
         "type": "object",
         "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-        "required": ["id", "asset_type"],
+        "required": ["id", "asset_type", "decimals"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2137,6 +2147,12 @@
           },
           "contract_id": {
             "type": ["string", "null"]
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+            "minimum": 0
           },
           "holder_count": {
             "type": ["integer", "null"],
@@ -2155,6 +2171,10 @@
           },
           "name": {
             "type": ["string", "null"]
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
           },
           "total_supply": {
             "type": ["string", "null"]
@@ -2279,6 +2299,12 @@
           "contract_type_name": {
             "type": ["string", "null"]
           },
+          "decimals": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Token decimals (SEP-41 `METADATA`) — load-bearing for amount rendering.\n`None` for non-token contracts.",
+            "minimum": 0
+          },
           "deployed_at_ledger": {
             "type": ["integer", "null"],
             "format": "int64"
@@ -2289,8 +2315,16 @@
           "is_sac": {
             "type": "boolean"
           },
+          "name": {
+            "type": ["string", "null"],
+            "description": "Token name from the on-chain instance-storage `METADATA` struct\n(ADR 0049), via the `soroban_contract_metadata` side table. `None` for\nnon-token contracts (SAC names derive from the asset code, not here)."
+          },
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "Token symbol (SEP-41 `METADATA`). `None` for non-token contracts."
           },
           "wasm_hash": {
             "type": ["string", "null"]
@@ -3301,7 +3335,7 @@
             "items": {
               "type": "object",
               "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `token_asset_type_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
-              "required": ["id", "asset_type"],
+              "required": ["id", "asset_type", "decimals"],
               "properties": {
                 "asset_code": {
                   "type": ["string", "null"]
@@ -3317,6 +3351,12 @@
                 },
                 "contract_id": {
                   "type": ["string", "null"]
+                },
+                "decimals": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                  "minimum": 0
                 },
                 "holder_count": {
                   "type": ["integer", "null"],
@@ -3335,6 +3375,10 @@
                 },
                 "name": {
                   "type": ["string", "null"]
+                },
+                "symbol": {
+                  "type": ["string", "null"],
+                  "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
                 },
                 "total_supply": {
                   "type": ["string", "null"]

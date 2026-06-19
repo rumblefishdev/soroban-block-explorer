@@ -138,15 +138,16 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 21 CREATE TABLE + 1 CREATE DICTIONARY = 22. 17-table base; task 0217
+        // 22 CREATE TABLE + 1 CREATE DICTIONARY = 23. 17-table base; task 0217
         // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
         // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
         // to PR #180); task 0231 (ADR 0048) added the `asset_enrichment` +
-        // `nft_enrichment` enrichment side tables.
+        // `nft_enrichment` enrichment side tables; task 0297 (ADR 0049) added
+        // `soroban_contract_metadata` (on-chain token name/symbol/decimals).
         assert_eq!(
             stmts.len(),
-            22,
-            "expected 21 tables + 1 dictionary, got {}",
+            23,
+            "expected 22 tables + 1 dictionary, got {}",
             stmts.len()
         );
     }

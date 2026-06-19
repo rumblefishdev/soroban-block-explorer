@@ -43,6 +43,7 @@ use std::collections::{HashMap, HashSet};
 
 use domain::{AssetType, ContractType, OperationType};
 use serde_json::Value;
+use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
@@ -98,6 +99,10 @@ pub struct StagedLedger {
     pub account_rows: Vec<AccountRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
+    /// On-chain Soroban token metadata side table (ADR 0049). Populated by
+    /// the CH write callers via [`build_metadata_rows`], NOT by `prepare`
+    /// (metadata is orthogonal to deploy staging + arrives on its own clock).
+    pub metadata_rows: Vec<SorobanContractMetadataRow>,
     pub transaction_rows: Vec<TransactionRow>,
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
@@ -160,6 +165,27 @@ pub fn prepare(
         &HashMap::new(),
         &HashMap::new(),
     )
+}
+
+/// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
+/// rows (ADR 0049). Kept out of `prepare` on purpose: metadata is orthogonal to
+/// deploy staging and arrives on its own clock, so the CH write callers assign
+/// `staged.metadata_rows = build_metadata_rows(..)` instead of threading it
+/// through `prepare`'s signature. SAC filtering already happened in the producer
+/// (`xdr_parser::extract_contract_metadata_writes`); `version` = observed ledger.
+pub fn build_metadata_rows(
+    writes: &[ExtractedContractMetadata],
+) -> Vec<SorobanContractMetadataRow> {
+    writes
+        .iter()
+        .map(|w| SorobanContractMetadataRow {
+            contract_id: w.contract_id.clone(),
+            name: w.metadata.name.clone(),
+            symbol: w.metadata.symbol.clone(),
+            decimals: w.metadata.decimals,
+            version: i64::from(w.ledger),
+        })
+        .collect()
 }
 
 /// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
@@ -461,59 +487,15 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    // G5 guardrail + tripwire (task 0283 / ADR 0049).
-    //
-    // Contract names are empirically OFF-LEDGER: SEP-41 / OpenZeppelin Soroban
-    // tokens expose `name` via a `name()` WASM function (read off-ledger via
-    // simulateTransaction), NOT a persisted `Symbol("name")` ContractData entry.
-    // So `extract_contract_data_name_writes` matches nothing in practice — 0
-    // names across 424k contracts on the snapshot — and this loop is dormant.
-    //
-    // The row below is PARTIAL (deploy fields None). Under
-    // `ReplacingMergeTree(wasm_uploaded_at_ledger) ORDER BY (contract_id)` a
-    // version = current ledger would OUTVERSION and clobber the real deploy row
-    // (wasm_hash/deployer/contract_type → NULL), which also defeats the
-    // contract-type rebuild's `wasm_hash` join. We pin `wasm_uploaded_at_ledger
-    // = 0` so any real deploy (version = deploy ledger >= 1) always wins → a
-    // partial name row can NEVER clobber the deploy identity. The name is kept
-    // only when it is the sole row for that contract (harmless); it loses to a
-    // deploy (where the deploy IS the better data). Long-term, contract names
-    // belong in an enrichment side table (ADR 0048/0049), not this column.
-    //
-    // TRIPWIRE: this path is dormant today; if names ever start arriving (a
-    // non-OZ token that DOES persist `Symbol("name")`, or a future change wiring
-    // names through here), the warn fires so we learn the path activated and can
-    // route names to enrichment instead of silently dropping them on merge.
-    if !contract_name_writes.is_empty() {
-        tracing::error!(
-            count = contract_name_writes.len(),
-            first = contract_name_writes
-                .first()
-                .map(|(c, _)| c.as_str())
-                .unwrap_or(""),
-            "G5 dormant name-write path ACTIVATED: on-ledger Symbol(\"name\") \
-             entries observed and emitted as version=0 guarded rows (name kept \
-             only if no deploy row exists, else dropped on RMT merge). Route \
-             contract names to an enrichment side table per ADR 0049 — do not \
-             rely on soroban_contracts.name. See task 0283 (G5)."
-        );
-    }
-    // for (cid, name) in contract_name_writes {
-    // out.contract_rows.push(SorobanContractRow {
-    //     id: ids::contract_id(cid),
-    //     contract_id: cid.clone(),
-    //     wasm_hash: None,
-    //     // G5 guardrail: version=0 sentinel (see comment above) — a real
-    //     // deploy (version = deploy ledger) always outversions this, so this
-    //     // partial name-only row can never clobber the deploy identity.
-    //     wasm_uploaded_at_ledger: 0,
-    //     deployer_id: None,
-    //     deployed_at_ledger: None,
-    //     contract_type: None,
-    //     is_sac: false,
-    //     name: Some(name.clone()),
-    // });
-    // }
+    // (ADR 0049) The legacy G5 name-write tripwire + dormant `Symbol("name")`
+    // version=0 row were removed here: on-chain token name/symbol/decimals now
+    // land in the dedicated `soroban_contract_metadata` side table via
+    // `build_metadata_rows(contract_metadata_writes)` — exactly the "route to a
+    // side table" the old tripwire pointed at. The legacy `contract_name_writes`
+    // plumbing is now vestigial; full un-threading (parser
+    // `extract_contract_data_name_writes`, the deploy-time `Symbol("name")`
+    // second pass, PG `apply_contract_name_writes`) is a tracked follow-up
+    // cleanup — see task 0297.
 
     // Task 0220 — SAC override re-insert. For every observed classic
     // asset (Native / ClassicCredit), the parser already derived the

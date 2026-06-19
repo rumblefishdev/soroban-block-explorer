@@ -20,6 +20,7 @@ pub mod operation;
 pub mod sac;
 pub mod scval;
 pub mod state;
+pub mod token_metadata;
 pub mod transaction;
 pub mod types;
 
@@ -45,16 +46,18 @@ pub use sac::{
 pub use scval::scval_to_typed_json;
 pub use state::{
     detect_assets, detect_classic_credit_assets, detect_nfts, extract_account_states,
-    extract_contract_data_name_writes, extract_contract_deployments, extract_liquidity_pools,
-    extract_lp_positions, extract_nft_ownership_events, native_asset_singleton,
+    extract_contract_data_name_writes, extract_contract_deployments,
+    extract_contract_metadata_writes, extract_liquidity_pools, extract_lp_positions,
+    extract_nft_ownership_events, native_asset_singleton,
 };
+pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
-    ExtractedLedger, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedTransaction, NftEvent, SacAssetIdentity,
+    ExtractedContractDeployment, ExtractedContractInterface, ExtractedContractMetadata,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLedgerEntryChange,
+    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
+    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, NftEvent, SacAssetIdentity,
 };
 
 use stellar_xdr::curr::{LedgerCloseMetaBatch, ReadXdr};

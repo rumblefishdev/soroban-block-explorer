@@ -83,6 +83,7 @@ struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
     wasm: Option<Insert<WasmInterfaceMetadataRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
+    metadata: Option<Insert<SorobanContractMetadataRow>>,
     transactions: Option<Insert<TransactionRow>>,
     hash_index: Option<Insert<TransactionHashIndexRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
@@ -150,6 +151,13 @@ impl PartitionWriter {
             &mut self.inserts.contracts,
             "soroban_contracts",
             &staged.contract_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.metadata,
+            "soroban_contract_metadata",
+            &staged.metadata_rows,
         )
         .await?;
         write_rows(
@@ -284,6 +292,7 @@ impl PartitionWriter {
         end(self.inserts.accounts).await?;
         end(self.inserts.wasm).await?;
         end(self.inserts.contracts).await?;
+        end(self.inserts.metadata).await?;
         end(self.inserts.transactions).await?;
         end(self.inserts.hash_index).await?;
         end(self.inserts.participants).await?;

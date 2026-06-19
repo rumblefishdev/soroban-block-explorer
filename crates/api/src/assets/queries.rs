@@ -26,6 +26,12 @@ pub struct AssetRow {
     /// Already resolved through `soroban_contracts.contract_id` join.
     pub contract_id: Option<String>,
     pub name: Option<String>,
+    /// On-chain SEP-41 token symbol from `soroban_contract_metadata` (ADR 0049);
+    /// `None` on the PG path and for classic/native.
+    pub symbol: Option<String>,
+    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+    /// (Stellar classic precision).
+    pub decimals: u32,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -113,6 +119,10 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
         issuer: r.get("issuer"),
         contract_id: r.get("contract_id"),
         name: r.get("name"),
+        // soroban_contract_metadata is CH-only (ADR 0049); PG path: no symbol,
+        // decimals default 7 (classic precision).
+        symbol: None,
+        decimals: 7,
         total_supply: r.get("total_supply"),
         holder_count: r.get("holder_count"),
         icon_url: r.get("icon_url"),

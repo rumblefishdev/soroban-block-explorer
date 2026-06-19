@@ -12,8 +12,9 @@ use tracing::{instrument, warn};
 use crate::classification::{ContractClassification, classify_contract_from_wasm_spec};
 use crate::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
-    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent, SacAssetIdentity,
+    ExtractedContractMetadata, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent,
+    SacAssetIdentity,
 };
 use domain::{ContractType, NftEventType, TokenAssetType};
 
@@ -186,6 +187,59 @@ pub fn extract_contract_data_name_writes(
         if let Some(name) = decode_scval_string(data) {
             out.push((contract_id, name));
         }
+    }
+    out
+}
+
+/// Extract token-metadata writes from contract-instance `created` / `updated`
+/// changes that carry a `Symbol("METADATA")` struct in instance storage.
+///
+/// Reads the typed `change.token_metadata` (populated in `ledger_entry_changes`,
+/// chain-verified location — task 0297) rather than re-decoding. Emits one
+/// [`ExtractedContractMetadata`] per qualifying change, for the
+/// `soroban_contract_metadata` side table (ADR 0049).
+///
+/// - `created` + `updated` + `restored` carry the current value and are kept;
+///   `state` (pre-image) and `removed` are ignored. `restored` matters because
+///   an instance restored from archival is the first time live ingestion may
+///   see a contract's METADATA — dropping it would leave a cold-start hole.
+/// - **SACs are skipped** — their name (`CODE:ISSUER`), symbol (= asset code)
+///   and decimals (= 7) are already derivable from the SAC identity, so a row
+///   here would be redundant and bloat the table. The skip reads the typed
+///   `change.is_sac` flag (off the XDR), not the serialized `data` JSON.
+pub fn extract_contract_metadata_writes(
+    changes: &[ExtractedLedgerEntryChange],
+) -> Vec<ExtractedContractMetadata> {
+    let mut out = Vec::new();
+    for change in changes {
+        // Cheap structural guards first, so we never clone metadata for a
+        // change we then drop.
+        if change.entry_type != "contract_data" {
+            continue;
+        }
+        if !matches!(
+            change.change_type.as_str(),
+            "created" | "updated" | "restored"
+        ) {
+            continue;
+        }
+        if !is_contract_instance_key(&change.key) {
+            continue;
+        }
+        if change.is_sac {
+            continue;
+        }
+        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
+            continue;
+        };
+        let Some(metadata) = change.token_metadata.clone() else {
+            continue;
+        };
+        out.push(ExtractedContractMetadata {
+            contract_id,
+            metadata,
+            ledger: change.ledger_sequence,
+        });
     }
     out
 }
@@ -1171,6 +1225,8 @@ mod tests {
             operation_index: None,
             ledger_sequence: 100,
             created_at: 1700000000,
+            token_metadata: None,
+            is_sac: false,
         }
     }
 
@@ -1332,6 +1388,132 @@ mod tests {
                 }},
             })),
         )
+    }
+
+    // -- extract_contract_metadata_writes (ADR 0049 side-table source) --
+
+    /// Helper: a contract-instance change with a given executable type and a
+    /// preset `token_metadata` (mirrors what `ledger_entry_changes` produces).
+    fn make_instance_meta_change(
+        contract_id: &str,
+        change_type: &str,
+        executable_type: &str,
+        meta: crate::token_metadata::TokenMetadata,
+    ) -> ExtractedLedgerEntryChange {
+        let exec = if executable_type == "wasm" {
+            json!({ "type": "wasm", "hash": "aa".repeat(32) })
+        } else {
+            json!({ "type": "stellar_asset" })
+        };
+        let mut c = make_change(
+            "contract_data",
+            change_type,
+            json!({
+                "contract": contract_id,
+                "key": { "type": "ledger_key_contract_instance", "value": null },
+                "durability": "persistent",
+            }),
+            Some(
+                json!({ "val": { "type": "contract_instance", "value": { "executable": exec } } }),
+            ),
+        );
+        c.token_metadata = Some(meta);
+        // Mirror the typed SAC signal `ledger_entry_changes` would set.
+        c.is_sac = executable_type == "stellar_asset";
+        c
+    }
+
+    #[test]
+    fn extract_metadata_writes_from_wasm_instance() {
+        let c = make_instance_meta_change(
+            "CWASMTOKEN",
+            "created",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("liquidFi bridge token".into()),
+                symbol: Some("lUSDC".into()),
+                decimals: Some(7),
+            },
+        );
+        let writes = extract_contract_metadata_writes(&[c]);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].contract_id, "CWASMTOKEN");
+        assert_eq!(
+            writes[0].metadata.name.as_deref(),
+            Some("liquidFi bridge token")
+        );
+        assert_eq!(writes[0].metadata.symbol.as_deref(), Some("lUSDC"));
+        assert_eq!(writes[0].metadata.decimals, Some(7));
+        assert_eq!(writes[0].ledger, 100);
+    }
+
+    #[test]
+    fn extract_metadata_writes_skips_sac() {
+        // SAC METADATA (name = CODE:ISSUER) is redundant with SAC identity → skip.
+        let c = make_instance_meta_change(
+            "CSAC",
+            "created",
+            "stellar_asset",
+            crate::token_metadata::TokenMetadata {
+                name: Some("USDC:GISSUER".into()),
+                symbol: Some("USDC".into()),
+                decimals: Some(7),
+            },
+        );
+        assert!(extract_contract_metadata_writes(&[c]).is_empty());
+    }
+
+    #[test]
+    fn extract_metadata_writes_includes_restored() {
+        // A contract instance restored from archival re-materializes the
+        // current value — its METADATA must be (re)written (closes the
+        // cold-start-after-eviction hole; ADR 0049 / task 0297 review).
+        let c = make_instance_meta_change(
+            "CRESTORED",
+            "restored",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("Restored Token".into()),
+                symbol: Some("RST".into()),
+                decimals: Some(7),
+            },
+        );
+        let w = extract_contract_metadata_writes(&[c]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].metadata.name.as_deref(), Some("Restored Token"));
+    }
+
+    #[test]
+    fn extract_metadata_writes_skips_state_preimage() {
+        let c = make_instance_meta_change(
+            "CWASM2",
+            "state",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("old".into()),
+                symbol: None,
+                decimals: None,
+            },
+        );
+        assert!(extract_contract_metadata_writes(&[c]).is_empty());
+    }
+
+    #[test]
+    fn extract_metadata_writes_includes_updated_late_init() {
+        let c = make_instance_meta_change(
+            "CLATE",
+            "updated",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("Late Init Token".into()),
+                symbol: Some("LI".into()),
+                decimals: Some(6),
+            },
+        );
+        let w = extract_contract_metadata_writes(&[c]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].metadata.name.as_deref(), Some("Late Init Token"));
+        assert_eq!(w[0].metadata.decimals, Some(6));
     }
 
     /// Constructor pattern — deploy and `Symbol("name")` storage init in

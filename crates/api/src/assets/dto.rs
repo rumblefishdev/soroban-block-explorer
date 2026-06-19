@@ -39,6 +39,12 @@ pub struct AssetItem {
     pub issuer: Option<String>,
     pub contract_id: Option<String>,
     pub name: Option<String>,
+    /// On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+    /// (use `asset_code`) and native.
+    pub symbol: Option<String>,
+    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+    /// (Stellar classic precision). Load-bearing for amount rendering.
+    pub decimals: u32,
     pub total_supply: Option<String>,
     /// May be `null` / stale until task 0135 ships.
     pub holder_count: Option<i32>,

@@ -81,14 +81,25 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
+//
+// On-chain token metadata (`soroban_contract_metadata` m, ADR 0049) is joined
+// via `sc.contract_id` — `assets` carries only the surrogate `a.contract_id`,
+// not the strkey, so the metadata key is resolved through `soroban_contracts`.
+// Consequence: a soroban asset whose `soroban_contracts` row is missing/stale
+// joins NULL metadata even when the side table holds it. Acceptable — the
+// deploy is always indexed before transfers create the asset row — but it is a
+// structural coupling, not an independent join. Unlike the detail point-lookup,
+// the list keeps the full-table `argMax` sub-aggregate (one row per contract).
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
      nullIf(iss.account_id, '')   AS issuer, \
      nullIf(iss.home_domain, '')  AS issuer_home_domain, \
      nullIf(sc.contract_id, '')   AS contract_id, \
-     coalesce(nullIf(ae.name, ''), nullIf(sc.name, ''), \
+     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), nullIf(sc.name, ''), \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+     nullIf(m.symbol, '')         AS symbol, \
+     coalesce(m.decimals, 7)      AS decimals, \
      toString(a.total_supply)     AS total_supply, \
      a.holder_count               AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
@@ -98,6 +109,14 @@ const ASSET_CH_SELECT: &str = "SELECT \
      FROM assets a FINAL \
      LEFT JOIN accounts iss          ON iss.id = a.issuer_id \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
+     LEFT JOIN ( \
+         SELECT contract_id, \
+                argMax(name, version)     AS name, \
+                argMax(symbol, version)   AS symbol, \
+                argMax(decimals, version) AS decimals \
+         FROM soroban_contract_metadata \
+         GROUP BY contract_id \
+     ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
@@ -115,6 +134,8 @@ struct AssetChRow {
     issuer_home_domain: Option<String>,
     contract_id: Option<String>,
     name: Option<String>,
+    symbol: Option<String>,
+    decimals: u32,
     total_supply: Option<String>,
     holder_count: Option<i32>,
     deployed_at_ledger: Option<i64>,
@@ -131,6 +152,8 @@ fn map_ch_row(r: AssetChRow) -> AssetRow {
         issuer: r.issuer,
         contract_id: r.contract_id,
         name: r.name,
+        symbol: r.symbol,
+        decimals: r.decimals,
         total_supply: r.total_supply,
         holder_count: r.holder_count,
         icon_url: r.icon_url,
