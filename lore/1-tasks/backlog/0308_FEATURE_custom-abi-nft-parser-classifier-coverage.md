@@ -1,10 +1,10 @@
 ---
 id: '0308'
-title: 'Custom-ABI NFT family: parser shapes + classifier coverage (double-missed launchpad NFTs)'
+title: 'Custom-ABI NFT coverage: parser shapes + classifier verdicts + never-silently-drop'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0306']
+related_tasks: ['0306', '0296', '0283']
 tags:
   [
     'nft',
@@ -21,142 +21,117 @@ history:
   - date: 2026-06-19
     status: backlog
     who: karolkow
-    note: 'Spawned from nft-reparse tripwire deep-dive + /devils-advocate chain verification. All claims chain-proven (RPC + stellar.expert archive + SEP-50 docs).'
+    note: 'Spawned from an nft-reparse tripwire during 0306. Scope set via empirical CH census + two adversarial deep-researches (SEP-50/OZ docs + on-chain RPC). All claims chain-verified.'
 ---
 
-# Custom-ABI NFT family: parser shapes + classifier coverage
+# Custom-ABI NFT coverage
 
 ## Summary
 
-A family of **real, on-chain NFT collections** (launchpad codebase, e.g. "8888 SKELETONS",
-"Doughy Donuts", "Skeletrons") is **double-missed** by our pipeline: the event parser drops
-its event shapes, and the WASM classifier labels it `Other` so even recovered rows never reach
-the hot `nfts` table. Result: these NFTs are invisible (hot `nfts` = 0) or, worse, partially
-captured with **wrong ownership** (the standard-shaped subset parses, the rest is dropped).
-This task makes the parser + classifier recognise this custom (non-SEP-50) ABI end-to-end.
+Real on-chain NFT collections with **non-standard (custom) ABIs** are missed by our pipeline on
+two independent layers: the **parser** drops event shapes it does not recognise, and the **WASM
+classifier** labels the contract `Other` so its rows never get promoted to the hot `nfts` table.
+This surfaced during 0306 (Staszek's reparse logged tripwire WARNs). This task makes the parser +
+classifier cover the custom families found on mainnet, and — crucially — turns the silent drop into
+a **never-silently-drop** path so future custom ABIs surface instead of vanishing.
 
-## Context
+## Context — what we actually know (chain-verified, not from our code/logs)
 
-Found while deep-diving an `xdr_parser::nft` tripwire WARN during an nft-reparse run
-(`NFT event symbol matched but no known arg shape parsed`). Every claim below was verified
-against **chain ground truth** (Soroban RPC + stellar.expert event archive + on-chain WASM
-interfaces) and official SEP-50/OpenZeppelin docs — NOT our repo/logs.
+**The documented universe is ALREADY handled (task 0296).** Per SEP-50 + OpenZeppelin source, a
+Soroban NFT emits `transfer`/`mint`/`approve`/`approve_for_all` (+ `burn`, + `consecutive_mint`
+range), in four data encodings — Shape A scalar, Shape B packed-vec, Shape C `map{token_id}`,
+consecutive-range. `nft.rs` already parses all four. token_id is variable-width (u32/u64/i128/bytes)
+— store as string.
 
-**The family (chain-verified):**
+**The misses are UNDOCUMENTED custom ABIs** — they exist in NO SEP / OZ / library, and the deep-
+research confirmed they **cannot be enumerated from docs**, only discovered empirically on-chain.
+So our CH census is the source of truth for the current miss-set.
 
-- **11 contracts** (our `soroban_events` discovery — see caveat), **4 wasm versions**
-  (`f84321e8`×4, `086b776c`×4, `297bfc31`×1, `f29c8762`×2; contracts UPGRADE — emit
-  `executable_update`/`upgraded`, `versions:2`). All 11 fetched from chain export NFT functions
-  `get_token_info`/`bulk_mint`/`freeze_collection`/`update_token_url`/`get_tokens`; **zero** fungible
-  markers (`decimals`/`allowance`/`total_supply`). Token identity is `token_id: u32` everywhere.
-- All 11 classified `contract_type = Other (1)` in `soroban_contracts`. hot `nfts` = 0;
-  `nfts_pending` = 140 rows for 3 of them (partial capture from the standard-shaped subset).
+**Census result (authoritative, clean SQL):**
 
-**Why double-missed:**
+- ~50 contracts / 34 wasm: working (classified `Nft`, in hot `nfts`).
+- **Parser-layer miss** — classified `Nft` but 0 rows because their event shapes are unhandled
+  (Staszek's "14 with events, 0 tokens").
+- **Classifier-layer miss** — real NFTs (have `mint` + `token_id`, no `decimals`/`allowance`) stuck
+  at `Other`, so never promoted. The `nft_reclassify` run already proved this is the dominant gap.
 
-1. **Parser** — the events use a non-SEP-50 inverted layout. SEP-50/OZ standard transfer is
-   `topics=[transfer, from, to]`, `data=token_id:u32` (addresses in topics, id in data). Our parser
-   correctly assumes the standard. This family does the reverse + lossy:
-   - `transfer`: `topics=[Symbol("transfer"), u32 token_id]`, `data=Address(to)` — only ONE address =
-     the recipient; `from` not emitted. **PROVEN data=`to`** (8/8 distinct recipients: stellar.expert
-     event archive `to` == RPC `get_token_info` owner, zero our-DB).
-   - `bulk_mint`: `topics=[Symbol("bulk_mint"), Address(to)]`, `data=vec[u32 token_id…]`.
-     `extract_args` (Shapes A/B/C) matches none → dropped + tripwired. Worse: **`bulk_mint` is not a
-     recognised symbol** (`nft.rs` match arms = `transfer|mint|burn|consecutive_mint`, then catch-all `_ => continue`)
-     → silently skipped with **no tripwire** — and it's the dominant event. The tripwire under-reports.
-2. **Classifier** — `classification.rs` is name-based: `Nft` iff the WASM exports a function named
-   `owner_of`/`token_uri`/`approve_for_all`/`get_approved`/`is_approved_for_all`. This family uses
-   systematic near-renames (`owner_of`→`get_token_info`, `token_uri`→`update_token_url`,
-   `approve_for_all`→`approve_all`); `token_uri` exists only as a `TokenInfo` field + `mint` arg, not a
-   function. So `Other` is **correct as written** — a coverage gap, not a bug. `Other`→`nfts_pending`,
-   and `nft_reclassify` promotes **only** `contract_type=2 (Nft)` → these are dead-ended.
+**Two example families:**
 
-Example contract: `CBMKSLJL6UFPKIE76ASSEKSP4H7ZWL3PCX6NGMWBARR5RH2GHB7U5QMJ`
-(i64 `4366918265184966584`, "8888 SKELETONS", `token_uri` → `https://8888skeletons.com/collection_json/<id>.json`).
+- **8888-style (clean):** `CBMKSLJL…` ("8888 SKELETONS") + ~10 siblings. Inverted shape — `transfer`
+  carries `[Symbol, U32 token_id]` in topics and `Address(to)` in data (token_id in TOPIC, single
+  address = recipient, NO `from`). Proven `data=to` 8/8 chain-on-chain. Main mint event is
+  `bulk_mint` (`[bulk_mint, Address to]` + `data=vec[u32…]`), which is not even a recognised symbol.
+- **`minted`-style (messy):** ~14 NFT-ish contracts use symbol `minted` with token_id as **bytes**
+  (a hash) in a topic and recipients in a data `vec` — a totally different encoding. Proof that the
+  custom tail is heterogeneous and unbounded.
 
 ## Implementation Plan
 
-### Step 1: Parser — new shapes + close the silent gap (`crates/xdr-parser/src/nft.rs`)
+### Step 1 — Parser: add the custom shapes (`crates/xdr-parser/src/nft.rs`)
 
-- Add inverted `transfer` shape: `topics=[transfer, u32 id]` + `data=Address` → `NftEvent{ token_id,
-to:Some, from:None }` (mint path already uses `from:None`).
-- Add `bulk_mint` symbol: `topics=[bulk_mint, Address(to)]` + `data=vec[u32…]` → one mint per id.
-- Make unrecognised mint-ish symbols **tripwire** instead of silent `_ => continue`, so the next
-  custom ABI surfaces instead of vanishing.
-- Guard against double-counting vs the existing standard-shaped events these contracts also emit.
+Clean tier (high value, well understood — the 8888 family):
 
-### Step 2: Classifier — recognise this ABI (`crates/xdr-parser/src/classification.rs`)
+- inverted `transfer`: topics `[transfer, U32 token_id]`, data `Address(to)` → `NftEvent{token_id, to:Some, from:None}`.
+- `bulk_mint` symbol: topics `[bulk_mint, Address to]`, data `vec[u32…]` → one mint per id. Guards: handle empty `vec[]` (no-op), cap element count (mirror `MAX_CONSECUTIVE_RANGE`, DoS guard).
+- inverted `mint`: topics `[mint, U32 token_id]`, data `Address(to)`.
 
-- Extend the `Nft` discriminator set (e.g. `get_token_info` + `bulk_mint` + `freeze_collection`
-  combination) OR classify by interface shape (a `transfer` taking `token_id:u32`, presence of
-  `bulk_mint`), NOT a wasm hash (4 versions, they upgrade). Be conservative to avoid false-positives.
-- Verify the relabel job (`contract_type_rebuild`) flips these `Other`→`Nft` so `nft_reclassify`
-  promotes the pending rows to hot.
+Messy tier (verify shape per family before adding): `minted` (bytes token_id + vec recipients),
+`identity_minted`, `transfer[2,vec]`, etc. — handle the clearly-NFT ones; the rest ride the tripwire.
 
-### Step 3: Backfill — re-derive, don't append
+### Step 2 — Never-silently-drop (the part that ends the re-run cycle)
 
-- Existing `nfts_pending` rows for these contracts are partial (transfers missing) → re-derive the
-  whole token set per contract via the fixed parser (nft-reparse covers the range). Confirm ownership
-  matches chain `get_token_info` for a sample after backfill.
+- Route EVERY unrecognised mint/transfer/burn-ish symbol **and** unparsed shape through the existing
+  `maybe_tripwire` (today `bulk_mint`/`minted` hit the catch-all `_ => continue` and vanish with NO
+  warning). After this, an un-handled NFT candidate is always **surfaced**, never silently lost.
+- Optional (small): make the tripwire durable/aggregable (count by contract/symbol) so new families
+  are noticed proactively, not by reading worker logs. NOT a new pending table — `nfts_pending` stays
+  the holding area for PARSED candidates; this is only for the not-yet-parsable ones.
+
+### Step 3 — Classifier (`crates/xdr-parser/src/classification.rs`)
+
+- Generalise the `Nft` rule to: **has `mint` + a `token_id` concept + NO fungible markers
+  (`decimals`/`allowance`/`total_supply`)**. On the current census this catches the custom families
+  with **0 fungible false-positives**. Keep it a COMBINATION (avoid single-name over-match); the WASM
+  classifier remains the authoritative gate (the data-map-key heuristic has rare FPs).
+- `[verify first]` confirm `classify_contract_from_wasm_spec` can read what the rule needs, and that
+  `contract_type_rebuild` (0283) actually re-runs over existing contracts (not only new uploads).
+
+### Step 4 — Ops sequence (already the 0306 order; correctness depends on it)
+
+Candidates FIRST, classify LAST: fixed parser + **reparse** (fills `nfts_pending`) →
+`contract_type_rebuild` / 0283 (sets `Nft`) → `nft_reclassify` (promotes pending → hot). Running
+reclassify before candidates exist cannot promote a contract that has no pending rows.
 
 ## Acceptance Criteria
 
-- [ ] Parser emits the inverted `transfer` (`to`/`from:None`) + `bulk_mint` shapes; unit tests with
-      real on-chain XDR (CBMKS family) as ground-truth fixtures.
-- [ ] Unrecognised mint/transfer/burn-ish symbols tripwire (no silent `_ => continue` drop).
-- [ ] Classifier returns `Nft` for the 11 family contracts across all 4 wasm versions; no regression
-      on existing SAC/SEP-41/SEP-50 fixtures (no false-positives).
-- [ ] After backfill, the family appears in hot `nfts`; ownership for a sampled set matches on-chain
-      `get_token_info`.
-- [ ] **Docs updated** — changes XDR parsing responsibilities + ingestion/classification; update the
-      relevant `docs/architecture/**` per [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
-- [ ] **API types regenerated** — `N/A` (no `crates/api/**`, `Cargo.{toml,lock}`, or `libs/api-types/**`
-      change expected; revisit if a handler/DTO is touched).
+- [ ] Parser emits the clean-tier shapes (inverted `transfer`/`mint`, `bulk_mint`) with real on-chain
+      XDR regression fixtures (CBMKS family). Empty-vec + element-cap guards covered.
+- [ ] No silent drop: every unrecognised candidate symbol/shape tripwires (no bare `_ => continue`).
+- [ ] Classifier returns `Nft` for the census miss-set across all wasm versions; **0 fungible false-
+      positives** on the full contract population.
+- [ ] After reparse → rebuild → reclassify, the missed families appear in hot `nfts`; ownership for a
+      sampled set matches on-chain `get_token_info`.
+- [ ] **Docs updated** — changes XDR parsing + classification; update `docs/architecture/**` per
+      [ADR 0032](../../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
+- [ ] **API types regenerated** — `N/A` (no `crates/api/**` / `Cargo.*` / `libs/api-types/**` change).
 
-## Open Risks & Hardening (devils-advocate, 2026-06-19)
+## Completeness — honest statement
 
-Shape assumptions were adversarially probed against chain/CH and **held**: the
-`transfer` shape (`[transfer, u32]` + `data:address`, `topic_count=2`) is uniform
-across all 4 wasm versions; `bulk_mint` data is always `vec<u32>` (never the
-`Vec<(u32,String)>` the function takes). Backfill supersede is sound:
-`nfts_pending` is `ReplacingMergeTree(current_owner_ledger)` keyed by
-`(contract_id, token_id)`, and a re-derived row sees a superset of events so its
-watermark is always ≥ the existing partial row → correct owner wins on merge. The
-residual risks below are the parts the plan must nail BEFORE coding:
+After this task + the 0306 ops sequence, **current mainnet NFTs are covered** (the census enumerated
+every shape that exists today). It does **not** prove "never miss again": the deep-research showed
+custom ABIs are heterogeneous and unbounded on a permissionless chain (`minted` alone uses a wholly
+different encoding). The **never-silently-drop tripwire (Step 2) is what breaks the re-run cycle** —
+new families land in a visible queue, drained incrementally, with no from-scratch reparse. A
+permanent, provable guarantee would need the deferred fundamental redesign (typed SEP-48 event specs
 
-1. **[blocking] Classifier false-positives.** `get_token_info`/`bulk_mint`/
-   `freeze_collection` are not NFT-exclusive names; a single-name match could
-   mislabel a fungible/game contract `Nft` and pollute hot `nfts`. Rule must
-   require a COMBINATION (≥2 family fns) AND absence of fungible markers
-   (`decimals`/`allowance`/`total_supply`); test against the whole contract
-   population, not just these 11.
-2. **[verify first] Shape-based classify feasibility.** The classifier is
-   name-only (`classification.rs:101-119`). "Classify by `transfer` taking
-   `token_id:u32`" needs arg-TYPE access — confirm `classify_contract_from_wasm_spec`
-   exposes types before choosing shape-based over name-list extension.
-3. **[verify first] Reclassify trigger.** `contract_type_rebuild` may only process
-   newly-observed wasm uploads; the 11 are already `Other` and won't auto-flip. Add
-   an explicit reclassify pass over the 4 affected hashes to the backfill.
-4. **bulk_mint guards.** Empty `vec[]` occurs on-chain (handle as no-op, no false
-   tripwire) and veclen reaches 20+ (add a MAX element cap mirroring
-   `MAX_CONSECUTIVE_RANGE` — DoS guard for the Lambda indexer).
-5. **Direction proven on 1 of 4 versions.** `data=to` is proven only on `086b776c`
-   (CBMKS). Structure is uniform across versions, so low risk — close it by running
-   the `get_token_info` cross-check on one contract each from `f84321e8`/`f29c8762`/
-   `297bfc31`.
-6. **Observability.** Add an aggregate counter / periodic query of unparsed-symbol
-   tripwire hits by contract, so the next custom ABI surfaces without log-eyeballing.
-7. **Optional interim unblock.** As a stopgap before the general fix, manually set
-   `contract_type=Nft` for the 4 known wasm hashes to surface these collections now
-   (accepting it won't cover future uploads/new hashes).
+- monitored-UNKNOWN total-function classifier — see auto-memory `reference-soroban-classification-seps`).
 
 ## Notes
 
-- **Disposition vs 0306:** [0306](0306_OPS_nft-surfacing-enrichment-prod-pipeline.md) is the NFT
-  surfacing/enrichment pipeline; this task is the upstream parser+classifier coverage that feeds it.
-- **Scope caveat (honest provenance):** the _nature_ of each of the 11 is chain-proven; the **count
-  "11" is discovery from our `soroban_events` scan** — there may be MORE family contracts (no chain
-  index by wasm-hash/ABI to enumerate exhaustively). A census step could widen coverage.
-- **Verification trail:** direction `data=to` proven 8/8 chain-on-chain (stellar.expert `bodyXdr` decode
-  vs RPC `get_token_info`); all 11 wasms fetched + interface-checked from chain; SEP-50/OZ confirm this
-  is non-standard. Full record in auto-memory `project-custom-abi-nft-class-missed`.
+- **Relation to other tasks:** [0296](../archive/0296_BUG_nft-event-extraction-completeness/README.md)
+  added the documented shapes; [0283](#) is `contract_type_rebuild`; [0306](0306_OPS_nft-surfacing-enrichment-prod-pipeline.md)
+  is the ops pipeline that runs reparse → rebuild → reclassify. This task is the upstream coverage fix.
+- **Devils-advocate residual risks:** classifier FP rule must be tested on the whole population;
+  confirm reclassify re-runs over existing contracts; `data=to` proven on 1 of 4 wasm versions
+  (structure uniform — close with a `get_token_info` cross-check on the other versions).
+- **Verification trail:** full record + numbers in auto-memory `project-custom-abi-nft-class-missed`.
