@@ -2,7 +2,7 @@
 id: '0308'
 title: 'Custom-ABI NFT coverage: parser shapes + classifier verdicts + never-silently-drop'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0306', '0296', '0283']
 tags:
@@ -22,6 +22,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from an nft-reparse tripwire during 0306. Scope set via empirical CH census + two adversarial deep-researches (SEP-50/OZ docs + on-chain RPC). All claims chain-verified.'
+  - date: 2026-06-19
+    status: active
+    who: karolkow
+    note: 'Activated to implement parser shapes + classifier rule (TDD). Research serialized to notes/; sibling design research split to 0309.'
 ---
 
 # Custom-ABI NFT coverage
