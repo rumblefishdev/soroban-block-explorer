@@ -527,7 +527,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             deployed_at_ledger: Some(deployed),
             contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
-            name: dep.name.clone(),
         });
     }
 
@@ -577,7 +576,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 deployed_at_ledger: None,
                 contract_type: Some(ContractType::Token as i16),
                 is_sac: true,
-                name: None,
             });
         }
     }
@@ -961,7 +959,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             asset_code: t.asset_code.clone().unwrap_or_default(),
             issuer_id,
             contract_id: contract_id_int,
-            name: t.name.clone(),
             total_supply: t
                 .total_supply
                 .as_deref()
@@ -989,7 +986,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code,
                 issuer_id,
                 contract_id: ids::contract_id(&dep.contract_id),
-                name: None,
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
@@ -1006,7 +1002,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             asset_code: String::new(),
             issuer_id: 0,
             contract_id: 0,
-            name: Some("Stellar Lumen".to_string()),
             total_supply: None,
             holder_count: None,
             icon_url: None,
@@ -1039,7 +1034,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code: String::new(),
                 issuer_id: 0,
                 contract_id,
-                name: None,
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
@@ -1404,7 +1398,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 deployed_at_ledger: None,
                 contract_type: None,
                 is_sac: false,
-                name: None,
             });
         }
     }

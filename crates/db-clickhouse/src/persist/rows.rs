@@ -79,7 +79,6 @@ pub struct AssetRow {
     pub asset_code: String,
     pub issuer_id: i64,
     pub contract_id: i64,
-    pub name: Option<String>,
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -127,7 +126,6 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
-    pub name: Option<String>,
 }
 
 /// `soroban_contract_metadata` — on-chain Soroban token metadata

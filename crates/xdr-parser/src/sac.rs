@@ -405,7 +405,6 @@ mod tests {
             asset_code: None,
             issuer_address: None,
             contract_id: None,
-            name: None,
             total_supply: None,
             holder_count: None,
         }
@@ -417,7 +416,6 @@ mod tests {
             asset_code: Some(code.to_string()),
             issuer_address: Some(issuer.to_string()),
             contract_id: None,
-            name: None,
             total_supply: None,
             holder_count: None,
         }
@@ -489,7 +487,6 @@ mod tests {
             asset_code: Some("USDC".into()),
             issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
             contract_id: Some("CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75".into()),
-            name: None,
             total_supply: None,
             holder_count: None,
         };
@@ -498,7 +495,6 @@ mod tests {
             asset_code: None,
             issuer_address: None,
             contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
-            name: None,
             total_supply: None,
             holder_count: None,
         };
@@ -521,7 +517,6 @@ mod tests {
             asset_code: None,
             issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
             contract_id: None,
-            name: None,
             total_supply: None,
             holder_count: None,
         };
@@ -530,7 +525,6 @@ mod tests {
             asset_code: Some("USDC".into()),
             issuer_address: None,
             contract_id: None,
-            name: None,
             total_supply: None,
             holder_count: None,
         };

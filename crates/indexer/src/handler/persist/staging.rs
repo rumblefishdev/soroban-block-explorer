@@ -180,7 +180,6 @@ pub(super) struct AssetRow {
     pub asset_code: Option<String>,
     pub issuer_str_key: Option<String>,
     pub contract_id: Option<String>,
-    pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
 }
@@ -198,12 +197,6 @@ pub(super) struct ContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: ContractType,
     pub is_sac: bool,
-    /// Per ADR 0042 — typed `name VARCHAR(256)` column. Always `None` now:
-    /// the `Symbol("name")` extraction path (parser second pass + retroactive
-    /// UPDATE) was chain-verified dead and removed (task 0297). On-chain token
-    /// name lands via instance-storage `METADATA` → `soroban_contract_metadata`
-    /// (task 0297). Field retained until the separate column-drop task.
-    pub name: Option<String>,
 }
 
 /// Either a native-XLM balance (all identifying cols NULL) or a credit-asset
@@ -595,7 +588,6 @@ impl Staged {
                 deployed_at_ledger: Some(i64::from(dep.deployed_at_ledger)),
                 contract_type,
                 is_sac: dep.is_sac,
-                name: dep.name.clone(),
             });
         }
         // Also register any contracts referenced by ops/events/invocations that
@@ -1012,7 +1004,6 @@ impl Staged {
                 asset_code: t.asset_code.clone(),
                 issuer_str_key: t.issuer_address.clone(),
                 contract_id: t.contract_id.clone(),
-                name: t.name.clone(),
                 total_supply: t.total_supply.clone(),
                 holder_count: t.holder_count,
             });

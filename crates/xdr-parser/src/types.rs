@@ -273,31 +273,29 @@ pub struct ExtractedLedgerEntryChange {
     /// Timestamp from parent ledger close time (Unix seconds).
     pub created_at: i64,
     /// Token metadata (`name` / `symbol` / `decimals`) recovered from the
-    /// instance-storage `Symbol("METADATA")` struct, when this change is a
+    /// instance-storage `Symbol("METADATA")` struct, for a **non-SAC**
     /// contract-instance entry that carries one; `None` for every other entry
-    /// type or change. Populated for entry-bearing changes (created / updated /
-    /// state / restored); consumers read it on `created` + `updated`.
+    /// type/change AND for SACs (skipped at extraction — a SAC's name/symbol/
+    /// decimals derive from the asset identity, so no row is stored). Populated
+    /// on entry-bearing changes (created / updated / state / restored); the
+    /// producer consumes it on created / updated / restored.
     ///
     /// Chain-verified location (task 0297) — distinct from, and replaces, the
     /// dead standalone `Symbol("name")` path. Derived in-memory only; NOT
     /// serialized into `data` JSON, so it does not bloat persisted entry rows.
     pub token_metadata: Option<crate::token_metadata::TokenMetadata>,
-    /// True when this change is a contract-instance entry whose executable is
-    /// the native Stellar Asset Contract. A **typed** signal (read off the XDR,
-    /// not the serialized `data` JSON), used by the metadata producer to skip
-    /// SACs. `false` for every non-SAC or non-contract-instance change.
-    pub is_sac: bool,
 }
 
 /// One token-metadata write for a contract, derived from a contract-instance
-/// `created`/`updated` change carrying a `Symbol("METADATA")` struct.
+/// `created` / `updated` / `restored` change carrying a `Symbol("METADATA")`
+/// struct.
 ///
 /// Maps to a `soroban_contract_metadata` side-table row (task 0297): a separate
 /// per-contract table, written by the indexer, composed at read time — never
 /// mixed into `soroban_contracts` (RMT whole-row clobber + different update
-/// clocks). SACs are excluded by the producer
-/// (`state::extract_contract_metadata_writes`) since their name/symbol/decimals
-/// are already derivable from the SAC identity.
+/// clocks). SACs never reach here — `entry_token_metadata` returns `None` for
+/// them at extraction (their name/symbol/decimals derive from the asset
+/// identity).
 #[derive(Debug, Clone)]
 pub struct ExtractedContractMetadata {
     pub contract_id: String,
@@ -321,13 +319,6 @@ pub struct ExtractedContractDeployment {
     /// but always set when the parser produces a deployment).
     pub contract_type: ContractType,
     pub is_sac: bool,
-    /// Always `None`. The former standalone `Symbol("name")` storage-entry
-    /// extraction was chain-verified dead (real tokens never write it) and
-    /// removed (task 0297); on-chain token name now lands via instance-storage
-    /// `METADATA` → `soroban_contract_metadata` (task 0297). Field retained
-    /// (maps to `soroban_contracts.name VARCHAR(256)`, ADR 0042) until the
-    /// separate column-drop task.
-    pub name: Option<String>,
     /// Task 0160 — SAC underlying asset identity resolved from
     /// `ContractIdPreimage::FromAsset` (top-level op OR auth-entry
     /// `CreateContractHostFn`), correlated by the preimage-derived
@@ -406,7 +397,6 @@ pub struct ExtractedAsset {
     pub asset_code: Option<String>,
     pub issuer_address: Option<String>,
     pub contract_id: Option<String>,
-    pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
 }

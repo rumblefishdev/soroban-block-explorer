@@ -135,54 +135,26 @@ fn extract_single_change(
     created_at: i64,
     change_index: u32,
 ) -> Option<ExtractedLedgerEntryChange> {
-    let (change_type, entry_type, key, data, token_metadata, is_sac) = match change {
+    let (change_type, entry_type, key, data, token_metadata) = match change {
         LedgerEntryChange::Created(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            (
-                "created",
-                et,
-                k,
-                Some(d),
-                entry_token_metadata(entry),
-                entry_is_sac(entry),
-            )
+            ("created", et, k, Some(d), entry_token_metadata(entry))
         }
         LedgerEntryChange::Updated(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            (
-                "updated",
-                et,
-                k,
-                Some(d),
-                entry_token_metadata(entry),
-                entry_is_sac(entry),
-            )
+            ("updated", et, k, Some(d), entry_token_metadata(entry))
         }
         LedgerEntryChange::Removed(ledger_key) => {
             let (et, k) = extract_key_info(ledger_key);
-            ("removed", et, k, None, None, false)
+            ("removed", et, k, None, None)
         }
         LedgerEntryChange::State(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            (
-                "state",
-                et,
-                k,
-                Some(d),
-                entry_token_metadata(entry),
-                entry_is_sac(entry),
-            )
+            ("state", et, k, Some(d), entry_token_metadata(entry))
         }
         LedgerEntryChange::Restored(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            (
-                "restored",
-                et,
-                k,
-                Some(d),
-                entry_token_metadata(entry),
-                entry_is_sac(entry),
-            )
+            ("restored", et, k, Some(d), entry_token_metadata(entry))
         }
     };
 
@@ -197,28 +169,26 @@ fn extract_single_change(
         ledger_sequence,
         created_at,
         token_metadata,
-        is_sac,
     })
 }
 
 /// Pull token metadata (`name`/`symbol`/`decimals`) from a contract-instance
-/// entry's stored value. Returns `None` for any non-`ContractData` entry, or a
-/// `ContractData` value that is not a contract instance carrying a `METADATA`
-/// struct. See `crate::token_metadata`.
+/// entry's stored value. Returns `None` for any non-`ContractData` entry, a
+/// value that is not a contract instance carrying a `METADATA` struct, OR a SAC
+/// instance.
+///
+/// SACs are skipped here on purpose: a SAC *does* carry METADATA on-chain, but
+/// its name (`CODE:ISSUER`) / symbol (= asset code) / decimals (= 7) derive from
+/// the asset identity, so we never store a `soroban_contract_metadata` row for
+/// it. Returning `None` is the single signal the producer
+/// (`state::extract_contract_metadata_writes`) keys off — no separate `is_sac`
+/// flag is threaded on the change. See `crate::token_metadata`.
 fn entry_token_metadata(entry: &LedgerEntry) -> Option<TokenMetadata> {
     match &entry.data {
-        LedgerEntryData::ContractData(cd) => extract_token_metadata(&cd.val),
+        LedgerEntryData::ContractData(cd) if !is_stellar_asset_instance(&cd.val) => {
+            extract_token_metadata(&cd.val)
+        }
         _ => None,
-    }
-}
-
-/// True when the entry is a contract instance whose executable is a SAC.
-/// Typed signal carried on the change so the metadata producer can skip SACs
-/// without re-deriving from serialized JSON. See [`is_stellar_asset_instance`].
-fn entry_is_sac(entry: &LedgerEntry) -> bool {
-    match &entry.data {
-        LedgerEntryData::ContractData(cd) => is_stellar_asset_instance(&cd.val),
-        _ => false,
     }
 }
 

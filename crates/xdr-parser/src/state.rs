@@ -111,16 +111,10 @@ pub fn extract_contract_deployments(
             deployed_at_ledger: change.ledger_sequence,
             contract_type,
             is_sac,
-            name: None,
             sac_asset,
         });
     }
 
-    // `name` stays `None` on every deployment: the standalone `Symbol("name")`
-    // storage entry was chain-verified never written by real tokens (task 0297),
-    // so the former constructor-pattern second pass was dead. On-chain token
-    // name/symbol/decimals now land via instance-storage `METADATA`
-    // (`extract_contract_metadata_writes` → `soroban_contract_metadata`).
     deployments
 }
 
@@ -136,10 +130,9 @@ pub fn extract_contract_deployments(
 ///   `state` (pre-image) and `removed` are ignored. `restored` matters because
 ///   an instance restored from archival is the first time live ingestion may
 ///   see a contract's METADATA — dropping it would leave a cold-start hole.
-/// - **SACs are skipped** — their name (`CODE:ISSUER`), symbol (= asset code)
-///   and decimals (= 7) are already derivable from the SAC identity, so a row
-///   here would be redundant and bloat the table. The skip reads the typed
-///   `change.is_sac` flag (off the XDR), not the serialized `data` JSON.
+/// - **SACs are skipped at extraction**: `entry_token_metadata` already returns
+///   `None` for SAC instances (their name/symbol/decimals derive from the asset
+///   identity), so a SAC change simply has no `token_metadata` to emit here.
 pub fn extract_contract_metadata_writes(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedContractMetadata> {
@@ -159,12 +152,11 @@ pub fn extract_contract_metadata_writes(
         if !is_contract_instance_key(&change.key) {
             continue;
         }
-        if change.is_sac {
-            continue;
-        }
         let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
             continue;
         };
+        // `None` for SACs (skipped at extraction) and for instances without a
+        // METADATA struct — both correctly drop out here.
         let Some(metadata) = change.token_metadata.clone() else {
             continue;
         };
@@ -776,10 +768,6 @@ pub fn detect_assets(
                 asset_code,
                 issuer_address,
                 contract_id: Some(deployment.contract_id.clone()),
-                // SAC assets do not carry an on-chain `Symbol("name")` storage
-                // entry (they wrap a classic asset; name is derived from
-                // `asset_code` / SEP-1 metadata). Leave NULL for SAC rows.
-                name: None,
                 total_supply: None,
                 holder_count: None,
             });
@@ -799,12 +787,6 @@ pub fn detect_assets(
                 asset_code: None,
                 issuer_address: None,
                 contract_id: Some(deployment.contract_id.clone()),
-                // `deployment.name` is always `None` (the `Symbol("name")`
-                // extraction path was chain-verified dead and removed, task
-                // 0297). On-chain token name now lands via instance-storage
-                // METADATA → `soroban_contract_metadata`. Field kept until the
-                // separate `assets.name` column-drop task.
-                name: deployment.name.clone(),
                 total_supply: None,
                 holder_count: None,
             });
@@ -902,7 +884,6 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
             asset_code: Some(code.to_string()),
             issuer_address: Some(issuer.to_string()),
             contract_id: None,
-            name: None,
             total_supply: None,
             holder_count: None,
         });
@@ -918,7 +899,7 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
 /// (`upsert_assets_native`) inserts via `WHERE NOT EXISTS` against
 /// `uidx_assets_native`, so every call after the first is a no-op.
 ///
-/// `name` / `total_supply` / `holder_count` are intentionally `None`
+/// `total_supply` / `holder_count` are intentionally `None`
 /// — the operator can backfill metadata via a manual seed if desired,
 /// but no on-chain producer surfaces these for native XLM.
 pub fn native_asset_singleton() -> ExtractedAsset {
@@ -927,7 +908,6 @@ pub fn native_asset_singleton() -> ExtractedAsset {
         asset_code: None,
         issuer_address: None,
         contract_id: None,
-        name: None,
         total_supply: None,
         holder_count: None,
     }
@@ -1112,7 +1092,6 @@ mod tests {
             ledger_sequence: 100,
             created_at: 1700000000,
             token_metadata: None,
-            is_sac: false,
         }
     }
 
@@ -1254,9 +1233,12 @@ mod tests {
                 json!({ "val": { "type": "contract_instance", "value": { "executable": exec } } }),
             ),
         );
-        c.token_metadata = Some(meta);
-        // Mirror the typed SAC signal `ledger_entry_changes` would set.
-        c.is_sac = executable_type == "stellar_asset";
+        // Mirror `entry_token_metadata`: a SAC instance yields no metadata.
+        c.token_metadata = if executable_type == "stellar_asset" {
+            None
+        } else {
+            Some(meta)
+        };
         c
     }
 
@@ -1970,7 +1952,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: Some(SacAssetIdentity::Credit {
                 code: "USDC".into(),
                 issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
@@ -2001,7 +1982,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: Some(SacAssetIdentity::Native),
         }];
 
@@ -2025,7 +2005,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Token,
             is_sac: true,
-            name: None,
             sac_asset: None,
         }];
 
@@ -2044,7 +2023,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Other,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
 
@@ -2063,7 +2041,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Fungible,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(
@@ -2077,7 +2054,6 @@ mod tests {
         assert_eq!(assets[0].contract_id.as_deref(), Some("CFUN001"));
         assert!(assets[0].asset_code.is_none());
         assert!(assets[0].issuer_address.is_none());
-        assert!(assets[0].name.is_none()); // deferred to 0124 enrichment
     }
 
     #[test]
@@ -2091,7 +2067,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Nft,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["owner_of", "token_uri", "transfer"])];
@@ -2112,7 +2087,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Other,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["execute", "admin", "init"])];
@@ -2134,7 +2108,6 @@ mod tests {
             deployed_at_ledger: 100,
             contract_type: ContractType::Nft,
             is_sac: false,
-            name: None,
             sac_asset: None,
         }];
         let interfaces = vec![iface(&wasm, &["owner_of", "decimals", "transfer"])];
@@ -2154,7 +2127,6 @@ mod tests {
                 deployed_at_ledger: 100,
                 contract_type: ContractType::Token,
                 is_sac: true,
-                name: None,
                 sac_asset: Some(SacAssetIdentity::Credit {
                     code: "USDC".into(),
                     issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
@@ -2167,7 +2139,6 @@ mod tests {
                 deployed_at_ledger: 100,
                 contract_type: ContractType::Fungible,
                 is_sac: false,
-                name: None,
                 sac_asset: None,
             },
         ];
@@ -2507,7 +2478,6 @@ mod tests {
             Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
         );
         assert!(assets[0].contract_id.is_none());
-        assert!(assets[0].name.is_none());
     }
 
     #[test]
@@ -2643,7 +2613,6 @@ mod tests {
         assert!(asset.asset_code.is_none());
         assert!(asset.issuer_address.is_none());
         assert!(asset.contract_id.is_none());
-        assert!(asset.name.is_none());
         assert!(asset.total_supply.is_none());
         assert!(asset.holder_count.is_none());
     }

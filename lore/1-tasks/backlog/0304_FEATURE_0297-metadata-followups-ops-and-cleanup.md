@@ -65,20 +65,39 @@ This task bundles the remaining non-implementation work.
 - [ ] Render amounts using `decimals` (e.g. "1.5 USDC") across asset/amount views.
 - [ ] Surface `symbol` / `name` where useful.
 
-### List endpoints (perf-deferred)
+### List endpoints
 
-- [ ] Contract LIST read-compose (`name`) — deferred behind JOIN-perf validation
-      (asset list already done in 0297).
+- [ ] Contract LIST name-search still hits the dead `sc.name` column (empty →
+      effectively contract_id-only). NOT repointed to the metadata side table:
+      the contract API doesn't surface a name (0297 #3), so name-search is low
+      value — decide drop-the-name-clause vs repoint. (The assets COALESCE
+      already reads `m.name` from the side table.)
 
-### Cleanup (code — deferred from 0297 due to entanglement)
+### Name-search / column-drop — BLOCKED on 0243 (search+assets → CH)
 
-- [ ] Fully un-thread the legacy `contract_name_writes` path:
-      `extract_contract_data_name_writes`, the deploy-time `Symbol("name")` second
-      pass + `ExtractedContractDeployment.name` / `detect_assets`, PG
-      `apply_contract_name_writes`, plumbing + tests (~20 sites, ~8 files). 0297
-      removed only the obsolete CH tripwire + dead loop.
-- [ ] DROP vestigial `soroban_contracts.name` / `assets.name` once read-compose
-      proven in prod.
+The legacy `name` columns (`soroban_contracts.name`, `assets.name`) have **no
+writer since 0297** (empty going forward) but cannot be DROPped yet because the
+new source (`soroban_contract_metadata`) is **CH-only** while these readers run
+on **Postgres**:
+
+- [ ] Repoint PG global-search label (`search/queries.rs` `COALESCE(sc.name,'')`)
+      — blocked: `search` is PG-only (no CH variant); needs search ported to CH
+      (task 0243) or it has no metadata source.
+- [ ] Repoint PG assets list `a.name` (`assets/queries.rs`) — same blocker.
+- [ ] Redefine PG `soroban_contracts.search_vector` (GENERATED from `name`, ADR 0042) so it no longer depends on the column.
+- [ ] After backfill + read-flip + the above: `ALTER TABLE … DROP COLUMN name`
+      on CH (`soroban_contracts`, `assets`) and the PG migration.
+
+(CH-side reads already repointed in the 0297 PR: assets COALESCE dropped
+`sc.name`; contract name-search uses the side table.)
+
+### Cleanup (code)
+
+- [x] Legacy `contract_name_writes` / `Symbol("name")` path fully un-threaded —
+      done in 0297 PR (`extract_contract_data_name_writes`, deploy second pass,
+      `ParseOutput.contract_name_writes`, PG `apply_contract_name_writes` + the
+      `assets.name` mirror, all plumbing + tests). `ExtractedContractDeployment.name`
+      kept (now always `None`) until the column drop above.
 
 ### Docs (ADR 0032)
 
