@@ -245,10 +245,7 @@ pub async fn fetch_native(
     client: &clickhouse::Client,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
     let sql = format!("{ASSET_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
-    let row = client
-        .query(&sql)
-        .fetch_optional::<AssetChRow>()
-        .await?;
+    let row = client.query(&sql).fetch_optional::<AssetChRow>().await?;
     Ok(row.map(map_ch_row))
 }
 
