@@ -75,3 +75,8 @@ webpki-roots = { version = "1", optional = true }
 # — small surface (one async HTTP call), so we avoid pulling another
 # HTTP client.
 reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Build raw `ScVal` METADATA fixtures in the live-CH metadata e2e so the test
+# exercises the full chain (parse → build_rows → write → read), not just write.
+stellar-xdr = { workspace = true }
