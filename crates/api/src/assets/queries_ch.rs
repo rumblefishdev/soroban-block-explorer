@@ -87,6 +87,12 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // readonly `api_reader` (`join_use_nulls = 0` fills a Nullable column with its
 // default, which is NULL), while a real 0-supply asset (has a row) reads 0 — no
 // sentinel needed. The table is refreshed on a cadence (eventually consistent).
+// Two intended semantics (matching the retired PG batch, not bugs):
+//   * a classic asset and its SAC wrap share one `(asset_code, issuer_id)`
+//     aggregate row, so both display the same supply/holders — a SAC IS the
+//     wrapped underlying asset; the join is 1:1 (no row multiplication).
+//   * a classic asset with no current trustlines has no aggregate row → NULL
+//     supply/holders (the batch wrote 0). NULL = "no balance data", deliberate.
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \

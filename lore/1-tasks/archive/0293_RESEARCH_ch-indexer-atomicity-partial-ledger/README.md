@@ -319,7 +319,10 @@ refresh runs.
 1. **Apply additive schema** (`init.sql`) → creates `asset_aggregates` + the
    refreshable MV (rest no-op).
 2. **Trigger the first refresh** — no manual backfill INSERT; the refresh computes
-   the whole table from `account_balances_current`:
+   the whole table from `account_balances_current`. **Required: the MV does NOT
+   populate on create — it waits for the first interval, so the table is EMPTY
+   until this runs. Skipping it = API serves NULL supply/holders for 100% of
+   assets** (worse than the 25% bug being fixed):
    ```sql
    SYSTEM REFRESH VIEW asset_aggregates_mv;
    SYSTEM WAIT VIEW    asset_aggregates_mv;  -- block until it finishes
@@ -332,7 +335,14 @@ refresh runs.
    small per-asset table, no read-time `GROUP BY` over holders (that heavy work is
    in the refresh, an admin job off the quota). Capture `read_rows` from
    `system.query_log`.
-5. **Flag flip** the assets module to `DataSource::Ch` (task 0243). Reversible —
+5. **HARD GATE before flag flip — assert the table is populated.** Do NOT flip
+   until this passes (≈315k classic assets in prod, 2026-06):
+   ```sql
+   SELECT count() FROM asset_aggregates;  -- MUST be > 300000, not 0
+   ```
+   Script this as a blocking check in the flip procedure, not a manual eyeball —
+   an empty table is the single biggest exposure (100%-NULL regression).
+6. **Flag flip** the assets module to `DataSource::Ch` (task 0243). Reversible —
    flip back to PG if the smoke or canary regresses; nothing destructive ran.
 
 **Freshness:** figures lag by up to `REFRESH EVERY` (2 min as written) —
