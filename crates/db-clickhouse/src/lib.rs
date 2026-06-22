@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 22 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 24.
+        // 23 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 25.
         // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
         // as schema-only landing zones (the CH writer does NOT yet stage/INSERT
         // into either — follow-up to PR #180); task 0231 (ADR 0050) added the
@@ -146,11 +146,12 @@ mod tests {
         // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
         // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
         // now served from `asset_aggregates`; the dead columns' drop is deferred
-        // to task 0310).
+        // to task 0310); task 0297 added the `soroban_contract_metadata` side
+        // table (on-chain token name/symbol/decimals).
         assert_eq!(
             stmts.len(),
-            24,
-            "expected 22 tables + 1 materialized view + 1 dictionary, got {}",
+            25,
+            "expected 23 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

@@ -224,7 +224,7 @@ impl PartitionWriterHandle<'_> {
                         nfts: &parsed.nfts,
                         nft_events: &parsed.nft_events,
                         lp_positions: &parsed.lp_positions,
-                        contract_name_writes: &parsed.contract_name_writes,
+                        contract_metadata_writes: &parsed.contract_metadata_writes,
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):

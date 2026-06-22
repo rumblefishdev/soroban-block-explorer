@@ -204,7 +204,6 @@ async fn rows_for_file(path: &Path, seq: u32) -> Result<LedgerWrite, Box<dyn std
         &parsed.nfts,
         &parsed.nft_events,
         &parsed.lp_positions,
-        &parsed.contract_name_writes,
     )?;
     let StagedLedger {
         op_rows,

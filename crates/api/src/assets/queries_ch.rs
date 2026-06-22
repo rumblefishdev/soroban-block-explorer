@@ -75,7 +75,9 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // name}` placeholders (dropped, task 0231 step 8). Per Option C the name has a
 // single owner per `asset_type`, composed disjointly at read:
 //   classic/SAC (1,2) → `asset_enrichment.name`
-//   soroban (3)       → `soroban_contracts.name` (on-chain `Symbol("name")`)
+//   soroban (3)       → `soroban_contract_metadata.name` (on-chain instance
+//                       `METADATA` struct; the legacy `soroban_contracts.name`
+//                       column is dead — no writer since task 0297)
 //   native (0)        → the `"Stellar Lumen"` literal
 // `asset_enrichment` is `ReplacingMergeTree(version)`; the `argMax(_, version)`
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
@@ -99,8 +101,10 @@ const ASSET_CH_SELECT: &str = "SELECT \
      nullIf(iss.account_id, '')   AS issuer, \
      nullIf(iss.home_domain, '')  AS issuer_home_domain, \
      nullIf(sc.contract_id, '')   AS contract_id, \
-     coalesce(nullIf(ae.name, ''), nullIf(sc.name, ''), \
+     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+     nullIf(m.symbol, '')         AS symbol, \
+     coalesce(m.decimals, 7)      AS decimals, \
      toString(agg.total_supply)   AS total_supply, \
      agg.holder_count             AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
@@ -110,6 +114,10 @@ const ASSET_CH_SELECT: &str = "SELECT \
      FROM assets a FINAL \
      LEFT JOIN accounts iss          ON iss.id = a.issuer_id \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
+     LEFT JOIN ( \
+         SELECT contract_id, name, symbol, decimals \
+         FROM soroban_contract_metadata FINAL \
+     ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
          AND agg.issuer_id = a.issuer_id \
      LEFT JOIN ( \
@@ -129,6 +137,8 @@ struct AssetChRow {
     issuer_home_domain: Option<String>,
     contract_id: Option<String>,
     name: Option<String>,
+    symbol: Option<String>,
+    decimals: u32,
     total_supply: Option<String>,
     holder_count: Option<i32>,
     deployed_at_ledger: Option<i64>,
@@ -145,6 +155,8 @@ fn map_ch_row(r: AssetChRow) -> AssetRow {
         issuer: r.issuer,
         contract_id: r.contract_id,
         name: r.name,
+        symbol: r.symbol,
+        decimals: r.decimals,
         total_supply: r.total_supply,
         holder_count: r.holder_count,
         icon_url: r.icon_url,

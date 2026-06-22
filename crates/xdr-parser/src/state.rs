@@ -12,8 +12,9 @@ use tracing::{instrument, warn};
 use crate::classification::{ContractClassification, classify_contract_from_wasm_spec};
 use crate::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
-    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent, SacAssetIdentity,
+    ExtractedContractMetadata, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent,
+    SacAssetIdentity,
 };
 use domain::{ContractType, NftEventType, TokenAssetType};
 
@@ -210,16 +211,6 @@ fn is_symbol_name_key(key: &Value, contract_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Pull the `contract` StrKey from a ContractData ledger key. Used by
-/// `extract_contract_data_name_writes` to dispatch storage writes to
-/// the right contract row when there is no enclosing deployment.
-fn extract_contract_id_from_key(key: &Value) -> Option<String> {
-    key.get("contract")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-}
-
 /// Decode `data.val` as a UTF-8 string for SCVal types that legally
 /// represent a name (`string`, `sym`, `bytes`).
 ///
@@ -245,6 +236,67 @@ fn decode_scval_string(data: &Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Extract token-metadata writes from contract-instance `created` / `updated`
+/// changes that carry a `Symbol("METADATA")` struct in instance storage.
+///
+/// Reads the typed `change.token_metadata` (populated in `ledger_entry_changes`,
+/// chain-verified location — task 0297) rather than re-decoding. Emits one
+/// [`ExtractedContractMetadata`] per qualifying change, for the
+/// `soroban_contract_metadata` side table (task 0297).
+///
+/// - `created` + `updated` + `restored` carry the current value and are kept;
+///   `state` (pre-image) and `removed` are ignored. `restored` matters because
+///   an instance restored from archival is the first time live ingestion may
+///   see a contract's METADATA — dropping it would leave a cold-start hole.
+/// - **SACs are skipped at extraction**: `entry_token_metadata` already returns
+///   `None` for SAC instances (their name/symbol/decimals derive from the asset
+///   identity), so a SAC change simply has no `token_metadata` to emit here.
+pub fn extract_contract_metadata_writes(
+    changes: &[ExtractedLedgerEntryChange],
+) -> Vec<ExtractedContractMetadata> {
+    let mut out = Vec::new();
+    for change in changes {
+        // Cheap structural guards first, so we never clone metadata for a
+        // change we then drop.
+        if change.entry_type != "contract_data" {
+            continue;
+        }
+        if !matches!(
+            change.change_type.as_str(),
+            "created" | "updated" | "restored"
+        ) {
+            continue;
+        }
+        if !is_contract_instance_key(&change.key) {
+            continue;
+        }
+        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
+            continue;
+        };
+        // `None` for SACs (skipped at extraction) and for instances without a
+        // METADATA struct — both correctly drop out here.
+        let Some(metadata) = change.token_metadata.clone() else {
+            continue;
+        };
+        out.push(ExtractedContractMetadata {
+            contract_id,
+            metadata,
+            ledger: change.ledger_sequence,
+        });
+    }
+    out
+}
+
+/// Pull the `contract` StrKey from a ContractData ledger key. Used by
+/// `extract_contract_metadata_writes` to dispatch instance-storage METADATA
+/// writes to the right contract row.
+fn extract_contract_id_from_key(key: &Value) -> Option<String> {
+    key.get("contract")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 fn is_contract_instance_key(key: &Value) -> bool {
@@ -978,7 +1030,7 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
 /// (`upsert_assets_native`) inserts via `WHERE NOT EXISTS` against
 /// `uidx_assets_native`, so every call after the first is a no-op.
 ///
-/// `name` / `total_supply` / `holder_count` are intentionally `None`
+/// `total_supply` / `holder_count` are intentionally `None`
 /// — the operator can backfill metadata via a manual seed if desired,
 /// but no on-chain producer surfaces these for native XLM.
 pub fn native_asset_singleton() -> ExtractedAsset {
@@ -1171,6 +1223,7 @@ mod tests {
             operation_index: None,
             ledger_sequence: 100,
             created_at: 1700000000,
+            token_metadata: None,
         }
     }
 
@@ -1285,235 +1338,133 @@ mod tests {
         assert!(deployments.is_empty());
     }
 
-    // -- Symbol("name") extraction tests (ADR 0042 / task 0156) --
+    // -- extract_contract_metadata_writes (task 0297 side-table source) --
 
-    /// Helper — build a `contract_data` change carrying a `Symbol("name")`
-    /// key and a string SCVal value. Mirrors the JSON intermediate shape
-    /// that `ledger_entry_changes::extract_ledger_entry_changes`
-    /// produces for the standard token-name storage entry.
-    fn make_name_change(
+    /// Helper: a contract-instance change with a given executable type and a
+    /// preset `token_metadata` (mirrors what `ledger_entry_changes` produces).
+    fn make_instance_meta_change(
         contract_id: &str,
         change_type: &str,
-        scval_type: &str,
-        scval_value: &serde_json::Value,
+        executable_type: &str,
+        meta: crate::token_metadata::TokenMetadata,
     ) -> ExtractedLedgerEntryChange {
-        make_change(
+        let exec = if executable_type == "wasm" {
+            json!({ "type": "wasm", "hash": "aa".repeat(32) })
+        } else {
+            json!({ "type": "stellar_asset" })
+        };
+        let mut c = make_change(
             "contract_data",
             change_type,
             json!({
                 "contract": contract_id,
-                "key":      { "type": "sym", "value": "name" },
-                "durability": "persistent",
-            }),
-            Some(json!({
-                "contract": contract_id,
-                "key":      { "type": "sym", "value": "name" },
-                "durability": "persistent",
-                "val":      { "type": scval_type, "value": scval_value },
-            })),
-        )
-    }
-
-    fn make_wasm_deploy_change(contract_id: &str) -> ExtractedLedgerEntryChange {
-        make_change(
-            "contract_data",
-            "created",
-            json!({
-                "contract": contract_id,
                 "key": { "type": "ledger_key_contract_instance", "value": null },
                 "durability": "persistent",
             }),
-            Some(json!({
-                "contract": contract_id,
-                "key": { "type": "ledger_key_contract_instance", "value": null },
-                "durability": "persistent",
-                "val": { "type": "contract_instance", "value": {
-                    "executable": { "type": "wasm", "hash": "aa".repeat(32) }
-                }},
-            })),
-        )
-    }
-
-    /// Constructor pattern — deploy and `Symbol("name")` storage init in
-    /// the same ledger. The deployment second pass should populate
-    /// `deployment.name` with the decoded String.
-    #[test]
-    fn extract_constructor_pattern_with_name() {
-        let changes = vec![
-            make_wasm_deploy_change("CABC123"),
-            make_name_change("CABC123", "created", "string", &json!("USD Coin")),
-        ];
-
-        let deployments =
-            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
-        assert_eq!(deployments.len(), 1);
-        assert_eq!(deployments[0].contract_id, "CABC123");
-        assert_eq!(deployments[0].name.as_deref(), Some("USD Coin"));
-    }
-
-    /// Constructor-pattern deploy without an accompanying `Symbol("name")`
-    /// entry — `deployment.name` should stay `None`. Frontend renders the
-    /// contract id then; the late-init pass may fill the column later.
-    #[test]
-    fn extract_constructor_pattern_without_name() {
-        let changes = vec![make_wasm_deploy_change("CABC123")];
-
-        let deployments =
-            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
-        assert_eq!(deployments.len(), 1);
-        assert!(deployments[0].name.is_none());
-    }
-
-    /// Cross-contract isolation — a `Symbol("name")` entry on a different
-    /// contract id must not leak into the deployment.
-    #[test]
-    fn extract_constructor_pattern_skips_other_contract_name() {
-        let changes = vec![
-            make_wasm_deploy_change("CABC123"),
-            // Name belongs to a DIFFERENT contract; should be ignored.
-            make_name_change("COTHER", "created", "string", &json!("Other Token")),
-        ];
-
-        let deployments =
-            extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
-        assert_eq!(deployments.len(), 1);
-        assert!(deployments[0].name.is_none());
-    }
-
-    /// Late-init pattern — contract was deployed in a prior ledger; only
-    /// the `Symbol("name")` storage entry lands in the current ledger.
-    /// `extract_contract_data_name_writes` returns the `(contract_id, name)`
-    /// pair so the indexer can apply a retroactive UPDATE.
-    #[test]
-    fn name_writes_late_init_created() {
-        let changes = vec![make_name_change(
-            "CABC123",
-            "created",
-            "string",
-            &json!("USD Coin"),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert_eq!(
-            writes,
-            vec![("CABC123".to_string(), "USD Coin".to_string())]
+            Some(
+                json!({ "val": { "type": "contract_instance", "value": { "executable": exec } } }),
+            ),
         );
+        // Mirror `entry_token_metadata`: a SAC instance yields no metadata.
+        c.token_metadata = if executable_type == "stellar_asset" {
+            None
+        } else {
+            Some(meta)
+        };
+        c
     }
 
-    /// Re-init pattern — an existing `Symbol("name")` storage entry is
-    /// updated post-deploy. `change_type == "updated"` must also be
-    /// captured so the indexer can overwrite the previous value.
     #[test]
-    fn name_writes_re_init_updated() {
-        let changes = vec![make_name_change(
-            "CABC123",
+    fn extract_metadata_writes_from_wasm_instance() {
+        let c = make_instance_meta_change(
+            "CWASMTOKEN",
+            "created",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("liquidFi bridge token".into()),
+                symbol: Some("lUSDC".into()),
+                decimals: Some(7),
+            },
+        );
+        let writes = extract_contract_metadata_writes(&[c]);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].contract_id, "CWASMTOKEN");
+        assert_eq!(
+            writes[0].metadata.name.as_deref(),
+            Some("liquidFi bridge token")
+        );
+        assert_eq!(writes[0].metadata.symbol.as_deref(), Some("lUSDC"));
+        assert_eq!(writes[0].metadata.decimals, Some(7));
+        assert_eq!(writes[0].ledger, 100);
+    }
+
+    #[test]
+    fn extract_metadata_writes_skips_sac() {
+        // SAC METADATA (name = CODE:ISSUER) is redundant with SAC identity → skip.
+        let c = make_instance_meta_change(
+            "CSAC",
+            "created",
+            "stellar_asset",
+            crate::token_metadata::TokenMetadata {
+                name: Some("USDC:GISSUER".into()),
+                symbol: Some("USDC".into()),
+                decimals: Some(7),
+            },
+        );
+        assert!(extract_contract_metadata_writes(&[c]).is_empty());
+    }
+
+    #[test]
+    fn extract_metadata_writes_includes_restored() {
+        // A contract instance restored from archival re-materializes the
+        // current value — its METADATA must be (re)written (closes the
+        // cold-start-after-eviction hole; task 0297 review).
+        let c = make_instance_meta_change(
+            "CRESTORED",
+            "restored",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("Restored Token".into()),
+                symbol: Some("RST".into()),
+                decimals: Some(7),
+            },
+        );
+        let w = extract_contract_metadata_writes(&[c]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].metadata.name.as_deref(), Some("Restored Token"));
+    }
+
+    #[test]
+    fn extract_metadata_writes_skips_state_preimage() {
+        let c = make_instance_meta_change(
+            "CWASM2",
+            "state",
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("old".into()),
+                symbol: None,
+                decimals: None,
+            },
+        );
+        assert!(extract_contract_metadata_writes(&[c]).is_empty());
+    }
+
+    #[test]
+    fn extract_metadata_writes_includes_updated_late_init() {
+        let c = make_instance_meta_change(
+            "CLATE",
             "updated",
-            "string",
-            &json!("Renamed Token"),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert_eq!(
-            writes,
-            vec![("CABC123".to_string(), "Renamed Token".to_string())]
+            "wasm",
+            crate::token_metadata::TokenMetadata {
+                name: Some("Late Init Token".into()),
+                symbol: Some("LI".into()),
+                decimals: Some(6),
+            },
         );
-    }
-
-    /// `Symbol("name")` written via Symbol SCVal (uncommon but legal —
-    /// some SDK builders emit short tokens this way). Helper must accept it.
-    #[test]
-    fn name_writes_decodes_symbol_scval() {
-        let changes = vec![make_name_change(
-            "CABC123",
-            "created",
-            "sym",
-            &json!("USDC"),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert_eq!(writes, vec![("CABC123".to_string(), "USDC".to_string())]);
-    }
-
-    /// `Symbol("name")` written via Bytes SCVal (UTF-8 encoded). Stellar
-    /// XDR JSON intermediate uses lowercase hex for binary payloads.
-    /// "USDC" → 55534443 hex.
-    #[test]
-    fn name_writes_decodes_bytes_scval_utf8() {
-        // "USDC" as UTF-8 bytes → hex.
-        let changes = vec![make_name_change(
-            "CABC123",
-            "created",
-            "bytes",
-            &json!("55534443"),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert_eq!(writes, vec![("CABC123".to_string(), "USDC".to_string())]);
-    }
-
-    /// Non-string SCVal variants (numeric, bool, vec, map) return `None`
-    /// without panicking. Misbehaving contracts should not poison the
-    /// parser.
-    #[test]
-    fn name_writes_rejects_non_string_scval_variants() {
-        let cases = vec![
-            ("u64", json!(42)),
-            ("bool", json!(true)),
-            ("vec", json!([1, 2, 3])),
-            ("map", json!({"a": 1})),
-        ];
-
-        for (ty, value) in cases {
-            let changes = vec![make_name_change("CABC123", "created", ty, &value)];
-            let writes = extract_contract_data_name_writes(&changes);
-            assert!(
-                writes.is_empty(),
-                "expected no writes for SCVal type {ty}, got {writes:?}"
-            );
-        }
-    }
-
-    /// `Symbol("name")` keys on `change_type = "deleted"` are NOT captured.
-    /// Deletion semantics for the name column are out of scope for 0156;
-    /// the existing value stays. (If a contract ever needs name removal,
-    /// a follow-up task can extend the helper.)
-    #[test]
-    fn name_writes_skips_deleted_changes() {
-        let changes = vec![make_name_change(
-            "CABC123",
-            "deleted",
-            "string",
-            &json!("USD Coin"),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert!(writes.is_empty());
-    }
-
-    /// Other Symbol(...) keys (decimals, symbol, etc.) on a contract are
-    /// not extracted by `extract_contract_data_name_writes` — the helper
-    /// is name-specific. A follow-up task adding `decimals` (etc.) would
-    /// introduce its own helper.
-    #[test]
-    fn name_writes_skips_non_name_symbol_keys() {
-        let changes = vec![make_change(
-            "contract_data",
-            "created",
-            json!({
-                "contract":  "CABC123",
-                "key":       { "type": "sym", "value": "decimals" },
-                "durability": "persistent",
-            }),
-            Some(json!({
-                "contract":  "CABC123",
-                "key":       { "type": "sym", "value": "decimals" },
-                "durability": "persistent",
-                "val":       { "type": "u32", "value": 7 },
-            })),
-        )];
-
-        let writes = extract_contract_data_name_writes(&changes);
-        assert!(writes.is_empty());
+        let w = extract_contract_metadata_writes(&[c]);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].metadata.name.as_deref(), Some("Late Init Token"));
+        assert_eq!(w[0].metadata.decimals, Some(6));
     }
 
     // -- Account State Tests --
@@ -2240,7 +2191,6 @@ mod tests {
         assert_eq!(assets[0].contract_id.as_deref(), Some("CFUN001"));
         assert!(assets[0].asset_code.is_none());
         assert!(assets[0].issuer_address.is_none());
-        assert!(assets[0].name.is_none()); // deferred to 0124 enrichment
     }
 
     #[test]
@@ -2670,7 +2620,6 @@ mod tests {
             Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
         );
         assert!(assets[0].contract_id.is_none());
-        assert!(assets[0].name.is_none());
     }
 
     #[test]
@@ -2806,7 +2755,6 @@ mod tests {
         assert!(asset.asset_code.is_none());
         assert!(asset.issuer_address.is_none());
         assert!(asset.contract_id.is_none());
-        assert!(asset.name.is_none());
         assert!(asset.total_supply.is_none());
         assert!(asset.holder_count.is_none());
     }

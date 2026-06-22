@@ -98,6 +98,11 @@ export type AssetDetailResponse = {
   asset_type_name?: string | null;
   contract_id?: string | null;
   /**
+   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+   * (Stellar classic precision). Load-bearing for amount rendering.
+   */
+  decimals: number;
+  /**
    * May be `null` / stale until task 0135 ships.
    */
   holder_count?: number | null;
@@ -114,6 +119,11 @@ export type AssetDetailResponse = {
   id: string;
   issuer?: string | null;
   name?: string | null;
+  /**
+   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * (use `asset_code`) and native.
+   */
+  symbol?: string | null;
   total_supply?: string | null;
 } & {
   /**
@@ -141,6 +151,11 @@ export type AssetItem = {
   asset_type_name?: string | null;
   contract_id?: string | null;
   /**
+   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+   * (Stellar classic precision). Load-bearing for amount rendering.
+   */
+  decimals: number;
+  /**
    * May be `null` / stale until task 0135 ships.
    */
   holder_count?: number | null;
@@ -157,6 +172,11 @@ export type AssetItem = {
   id: string;
   issuer?: string | null;
   name?: string | null;
+  /**
+   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * (use `asset_code`) and native.
+   */
+  symbol?: string | null;
   total_supply?: string | null;
 };
 
@@ -955,6 +975,11 @@ export type PaginatedAssetItem = {
     asset_type_name?: string | null;
     contract_id?: string | null;
     /**
+     * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
+     * (Stellar classic precision). Load-bearing for amount rendering.
+     */
+    decimals: number;
+    /**
      * May be `null` / stale until task 0135 ships.
      */
     holder_count?: number | null;
@@ -971,6 +996,11 @@ export type PaginatedAssetItem = {
     id: string;
     issuer?: string | null;
     name?: string | null;
+    /**
+     * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+     * (use `asset_code`) and native.
+     */
+    symbol?: string | null;
     total_supply?: string | null;
   }>;
   page: PageInfo;

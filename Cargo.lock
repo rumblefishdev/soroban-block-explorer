@@ -1445,6 +1445,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "stellar-xdr",
  "thiserror",
  "tokio",
  "tracing",

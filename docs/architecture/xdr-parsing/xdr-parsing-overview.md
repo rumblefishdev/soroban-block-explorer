@@ -270,6 +270,15 @@ entities:
   override map consumed by `extract_contract_deployments`. Task 0255
   Phase 1; pre-fix the parser stored the inner-tx source unconditionally
   and misattributed deploys with per-op overrides
+- contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
+  task 0297). `name` / `symbol` / `decimals` are read from the contract instance
+  entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
+  `token_metadata::extract_token_metadata`, collected by
+  `state::extract_contract_metadata_writes` on `created` + `updated` instance
+  changes (SACs skipped — derivable from the SAC identity). This corrects the
+  legacy assumption that token names are a standalone `Symbol("name")` entry —
+  they are not (that path matched 0 contracts); the name lives nested in METADATA
+  in instance storage, which `scval_to_typed_json` used to drop.
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA)
 - account state → `accounts` row + `account_balances_current` entries per

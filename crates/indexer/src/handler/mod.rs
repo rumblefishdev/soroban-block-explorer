@@ -398,7 +398,7 @@ async fn persist_with_retry(
                 &parsed.nfts,
                 &parsed.nft_events,
                 &parsed.lp_positions,
-                &parsed.contract_name_writes,
+                &parsed.contract_metadata_writes,
                 &parsed.sac_overrides,
                 classification_cache,
             )

@@ -134,6 +134,23 @@ pub struct SorobanContractRow {
     pub name: Option<String>,
 }
 
+/// `soroban_contract_metadata` — on-chain Soroban token metadata
+/// (name/symbol/decimals) from the instance-storage `Symbol("METADATA")`
+/// struct. RMT(version); `version` = observed ledger (latest wins). Per
+/// `contract_id`; SACs are excluded by the producer
+/// (`xdr_parser::extract_contract_metadata_writes`). Separate table — never
+/// columns on `soroban_contracts` — to dodge the RMT whole-row clobber across
+/// that table's many writers (deploy / rebuild EXCHANGE / stubs / db-merge).
+/// See task 0297.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanContractMetadataRow {
+    pub contract_id: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<u32>,
+    pub version: i64,
+}
+
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
 /// = (contract_id, token_id). No surrogate id.
 #[derive(Debug, Clone, Row, Serialize)]
