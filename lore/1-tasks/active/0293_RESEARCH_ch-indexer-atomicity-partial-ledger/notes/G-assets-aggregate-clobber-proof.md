@@ -1,6 +1,6 @@
 ---
 prefix: G
-title: 'Proof — assets aggregate clobber in prod (→ event-driven AggregatingMergeTree)'
+title: 'Proof — assets aggregate clobber in prod (→ pre-computed asset_aggregates via refreshable MV)'
 status: mature
 spawned_from: '0293'
 date: '2026-06-17'
@@ -78,60 +78,68 @@ WHERE asset_type IN (1,2) AND asset_code = 'yUSDC' AND issuer_id = 1796653227778
 `assets` serves `total_supply = NULL` for `yUSDC`, while it actually has **10,085
 holders** and **2,845,935.99 supply** right now. Knowable, and wrong.
 
-## The fix — event-driven AggregatingMergeTree (decided + implemented)
+## The fix — pre-computed per-asset table via a refreshable MV (decided + implemented)
 
 `total_supply`/`holder_count` are no longer served from `assets` (the columns are
-kept but DEAD — option A backward-compat) and become an **event-driven aggregate**
-maintained entirely inside ClickHouse:
+kept but DEAD — option A backward-compat) and become a **pre-computed per-asset
+table** maintained entirely inside ClickHouse:
 
-- New `account_asset_balance_state` (`AggregatingMergeTree`, ORDER BY
-  `(asset_code, issuer_id, account_id)`) holds
-  `argMaxState(balance, last_updated_ledger)` per holder. (No `asset_type` in the
-  key — it's fixed by the code's length, so functionally determined by
+- New `asset_aggregates` (plain `MergeTree`, ORDER BY `(asset_code, issuer_id)`) —
+  one row per classic/SAC asset with the FINAL `total_supply` / `holder_count`
+  ready to read. Columns are `Nullable` so a read-side LEFT-JOIN miss (native /
+  soroban — no row) decodes as NULL under the readonly `api_reader`
+  (`join_use_nulls = 0` fills a Nullable column with its default, which IS NULL),
+  while a real 0-supply asset (has a row) reads 0 — no sentinel, no `nullIf`. (No
+  `asset_type` in the key — fixed by the code's length, functionally determined by
   `asset_code`; the retired batch grouped by `(asset_code, issuer_id)` too.)
-- `account_asset_balance_state_mv` populates it incrementally on every
-  `account_balances_current` insert (`WHERE asset_type IN (1,2)`) — processes
-  only each ledger's delta, **no periodic full scan**, 100% CH-side.
-- Reads compute `total_supply = sum(argMaxMerge(latest_balance))` and
-  `holder_count = countIf(argMaxMerge(latest_balance) > 0)` per asset in a second
-  query scoped to exactly the page's assets
-  (`crates/api/src/assets/queries_ch.rs::fill_aggregates`).
+- `asset_aggregates_mv` is a **refreshable** MV (`REFRESH EVERY 2 MINUTE`) that
+  recomputes the whole table from `account_balances_current FINAL`
+  (`sum(balance)`, `countIf(balance > 0)`, `WHERE asset_type IN (1,2) GROUP BY
+  asset_code, issuer_id`). 100% CH-side. The refresh is a batch admin job, not
+  subject to the `api_reader` read quota.
+- Reads are a trivial 1:1 `LEFT JOIN asset_aggregates` in `ASSET_CH_SELECT`
+  (`crates/api/src/assets/queries_ch.rs`) — no read-time GROUP BY, exactly like
+  the `asset_enrichment` join.
 
-**Counted at most once per ledger by construction:** `argMaxState` is idempotent
-— re-inserting the same `(balance, last_updated_ledger)` after a crash / backfill
-re-run is a no-op (argMax keeps the highest ledger; identical states collapse).
-`sumState` would double-count a re-processed ledger; argMax does not. So the
-aggregate is correct regardless of how many times the MV fires.
+**Idempotent by construction:** each refresh is a full recompute-and-replace from
+the current `account_balances_current` state, so an indexer crash / backfill
+re-run can't corrupt the figures — the next refresh reflects whatever the balances
+now say. Tradeoff: eventual consistency — figures lag by up to the refresh
+interval (tunable).
 
-**Why not the alternatives:** a version column on `assets` works (`has_name=0`
-makes it cheap today) but keeps two writers fighting over one row and still needs
-a schedule for freshness; a refreshable MV is GA but does a periodic full scan.
-The AMT is event-driven (no interval, no full scan), CH-native and mature
-(argMax + AggregatingMergeTree are core engines), and replaces the retired
-one-shot `asset-aggregates` CLI outright (no fallback).
+**Why this over the alternatives:** an incremental per-asset sum can't be kept
+from an absolute current-state source without either (a) per-holder state + a
+read-time GROUP BY (an `AggregatingMergeTree` with `argMaxState` — correct + fresh
+to the ledger, but the read sums the page's holders), or (b) the indexer tracking
+balance deltas (read-modify-write, which breaks the absolute-state idempotency
+THIS task validated). The refreshable MV trades to-the-ledger freshness for the
+simplest correct read (a ready 1:1 join) plus a periodic batch recompute. It
+replaces the retired one-shot `asset-aggregates` CLI outright (no fallback).
 
 ## Prod migration (sequence matters)
 
-1. Apply the new schema: `account_asset_balance_state` + `account_asset_balance_state_mv`.
-2. Backfill the AMT from existing balances (create the MV FIRST so the overlap is
-   covered — idempotent via argMax):
+1. Apply the new schema: `asset_aggregates` + `asset_aggregates_mv`.
+2. Trigger the first refresh (the table is empty until the MV runs) — no manual
+   backfill INSERT; the refresh computes everything from `account_balances_current`:
    ```sql
-   INSERT INTO account_asset_balance_state
-   SELECT asset_code, issuer_id, account_id,
-          argMaxState(balance, last_updated_ledger)
-   FROM account_balances_current
-   WHERE asset_type IN (1,2)
-   GROUP BY asset_code, issuer_id, account_id;
+   SYSTEM REFRESH VIEW asset_aggregates_mv;
+   SYSTEM WAIT VIEW    asset_aggregates_mv;  -- block until it finishes
    ```
-3. Deploy the new API (reads via `fill_aggregates`). NOTE: `CREATE TABLE IF NOT
-   EXISTS` is a no-op on the existing `assets` table → the dead
-   `total_supply`/`holder_count` columns stay (option A, backward-compat).
-4. **Before the prod flag flip:** read-rows smoke on a mega-holder asset page —
-   the scoped AMT `GROUP BY` cost is unmeasured (same quota class as 0290/0198).
-5. **Cleanup task (deferred):** `ALTER TABLE assets DROP COLUMN total_supply,
+3. Deploy the new API (reads via the `asset_aggregates` LEFT JOIN). NOTE:
+   `CREATE TABLE IF NOT EXISTS` is a no-op on the existing `assets` table → the
+   dead `total_supply`/`holder_count` columns stay (option A, backward-compat).
+4. **Before the prod flag flip:** read-rows smoke on a mega-holder asset page.
+   Lower risk than an AMT — the read is a 1:1 join against a small per-asset table
+   (no read-time `GROUP BY` over holders); the heavy `GROUP BY` lives in the
+   refresh (an admin job, off the `api_reader` quota).
+5. **Cleanup task (deferred, 0310):** `ALTER TABLE assets DROP COLUMN total_supply,
    DROP COLUMN holder_count` + prod engine migration `wasm`/`ledgers`→RMT.
-5. Retire the `asset-aggregates` CLI (done in code; remove any cron / runbook ref).
+6. Retire the `asset-aggregates` CLI (kept through the develop merge; removal
+   moved to 0310).
 
-Verified: `cargo check` (lib + `--tests`) green across `db-clickhouse` /
-`backfill-runner` / `api`; `init_sql_parses_into_statements` passes (22
-statements = 20 tables + 1 MV + 1 dictionary).
+**Freshness note:** figures lag by up to `REFRESH EVERY` (2 min as written) —
+eventually consistent, not to-the-ledger. Tune the interval if needed (pure
+schema change).
+
+Verified: `cargo check --workspace --tests` green; `init_sql_parses_into_statements`
+passes (24 statements = 22 tables + 1 materialized view + 1 dictionary).

@@ -4,7 +4,7 @@ title: 'Indexer atomicity audit: partial-ledger crash recovery + backfill re-run
 type: RESEARCH
 status: active
 related_adr: []
-related_tasks: []
+related_tasks: ['0298', '0310', '0232']
 tags:
   [
     'phase-research',
@@ -268,3 +268,52 @@ overlapping backfill/live ranges or manual re-run. Resume membership /
   the code-change-mid-crash case; (2) read-side decision for the exposed
   non-`FINAL` `transactions` queries (accept per ADR 0044, or add `LIMIT 1 BY
   id`). Priority low — no correctness fix required today.
+- **Task 0310** — prod cleanup (destructive, deferred from this task): drop the
+  dead `assets.total_supply` / `holder_count` columns; rebuild `ledgers` /
+  `wasm_interface_metadata` as `ReplacingMergeTree`. Neither is applied by
+  `CREATE TABLE IF NOT EXISTS`; gated on the rollout below being verified in prod.
+
+## Deploy / Migration Runbook (assets-aggregate AMT fix)
+
+> The **additive** rollout of this task's assets-aggregate fix. Safe and
+> reversible — nothing here is destructive. The destructive cleanup (drop dead
+> columns, engine swaps) is **0310**, gated on this being verified in prod.
+
+**Why a runbook at all:** prod already has every table, so deploying the new
+`init.sql` is a no-op for them (`CREATE TABLE IF NOT EXISTS`). Only the two **new**
+objects — `asset_aggregates` (per-asset table) + `asset_aggregates_mv` (a
+**refreshable** MV `TO` it) — get created. The table is empty until the MV's first
+refresh runs.
+
+0. **Prerequisite — CH supports refreshable MVs. ✅ verified.** Prod CH is
+   `26.3.10.60` (checked 2026-06 via `chq`); `REFRESH EVERY` is GA since 24.10 and
+   `allow_experimental_refreshable_materialized_view` is on by default (value=1).
+   `system.view_refreshes` is present. No flag / version action needed.
+1. **Apply additive schema** (`init.sql`) → creates `asset_aggregates` + the
+   refreshable MV (rest no-op).
+2. **Trigger the first refresh** — no manual backfill INSERT; the refresh computes
+   the whole table from `account_balances_current`:
+   ```sql
+   SYSTEM REFRESH VIEW asset_aggregates_mv;
+   SYSTEM WAIT VIEW    asset_aggregates_mv;  -- block until it finishes
+   ```
+3. **Deploy the API** — reads aggregates via the trivial `asset_aggregates` 1:1
+   LEFT JOIN in `ASSET_CH_SELECT` (`crates/api/src/assets/queries_ch.rs`). No flag
+   flip yet.
+4. **Read-rows smoke** on a mega-holder asset page (e.g. yUSDC / USDC) as
+   `api_reader` (readonly): lower risk than an AMT — the read is a 1:1 join on a
+   small per-asset table, no read-time `GROUP BY` over holders (that heavy work is
+   in the refresh, an admin job off the quota). Capture `read_rows` from
+   `system.query_log`.
+5. **Flag flip** the assets module to `DataSource::Ch` (task 0243). Reversible —
+   flip back to PG if the smoke or canary regresses; nothing destructive ran.
+
+**Freshness:** figures lag by up to `REFRESH EVERY` (2 min as written) —
+eventually consistent, not to-the-ledger. Tune the interval if the supply/holder
+display needs to be tighter (pure schema change).
+
+**Develop merge (done):** this branch forked before develop's `asset_enrichment`
+join landed in `queries_ch.rs` (lore-0231, commit `b944c125`). develop has been
+merged in; `ASSET_CH_SELECT` now keeps the `asset_enrichment` (`ae`) join for
+icon/name **and** the `asset_aggregates` join for supply/holders, with the dead
+`a.total_supply` / `a.holder_count` reads removed.

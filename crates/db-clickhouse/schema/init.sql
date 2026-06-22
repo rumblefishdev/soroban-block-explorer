@@ -186,7 +186,7 @@ ORDER BY (contract_id);
 --
 -- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
 -- lore-0293: nothing reads them (the API serves the aggregate from
--- `account_asset_balance_state` below) and the indexer writes them NULL. They
+-- `asset_aggregates` below) and the indexer writes them NULL. They
 -- are a global rollup over every holder's balance; writing them into this
 -- per-ledger-rewritten row clobbered them (no-version RMT, last-write-wins →
 -- ~25% of classic assets served NULL in prod). Drop (`ALTER … DROP COLUMN`)
@@ -197,8 +197,8 @@ CREATE TABLE IF NOT EXISTS assets (
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
     name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → account_asset_balance_state
-    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → account_asset_balance_state
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
     icon_url        Nullable(String)
 )
 ENGINE = ReplacingMergeTree
@@ -228,6 +228,66 @@ CREATE TABLE IF NOT EXISTS asset_enrichment (
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- Pre-computed per-asset aggregates (lore-0293; replaces the one-shot
+-- `asset-aggregates` CLI). One row per classic-credit asset with the FINAL
+-- `total_supply` / `holder_count` ready to read — a trivial 1:1 LEFT JOIN, no
+-- read-time GROUP BY (cf. `asset_enrichment`). Maintained by a REFRESHABLE
+-- materialized view that recomputes the whole table from `account_balances_current`
+-- on a fixed cadence (the source is account-sorted, so a per-asset rollup can't be
+-- maintained incrementally without per-holder state; and an incremental sum can't
+-- be kept from an absolute current-state source without breaking the indexer's
+-- re-run idempotency — see this task's audit). The refresh is a batch admin job,
+-- not subject to the `api_reader` read quota (~1 s over 36 M rows, prod 2026-06).
+--
+-- ENGINE = MergeTree (NOT ReplacingMergeTree like the rest of the schema): a
+-- refreshable MV ATOMICALLY REPLACES the whole target every refresh (builds a
+-- fresh table, then `EXCHANGE`s it in), so duplicate keys never accumulate and the
+-- GROUP BY already emits one row per key — there is nothing for RMT to dedup, and
+-- MergeTree keeps reads FINAL-free. The other tables are RMT because they are
+-- APPEND targets (indexer / backfill re-insert the same keys and need merge-time
+-- dedup); this table is never appended to, only replaced.
+--
+-- TRADEOFF: figures lag by up to `REFRESH EVERY` (eventually consistent, not
+-- to-the-ledger). Fine for a slowly-changing supply/holder display.
+--
+-- `asset_type IN (1,2)` = classic credit (XDR CreditAlphanum4 + 12). NOT 0 or 3:
+--   * 0 = native (XLM): summing indexed account balances gives ~104.8 B (prod
+--     2026-06) — MORE than XLM's real total supply (~50 B), and FINAL collapses
+--     its holders 17.6 M → 12.3 M (heavy duplication). The native balance sum is
+--     not a trustworthy supply; XLM supply is a protocol value, not a trustline
+--     sum. Excluded (the retired batch excluded it too).
+--   * 3 = pool shares — DOES NOT EXIST in `account_balances_current` (0 rows).
+--     Soroban-token supply lives in contract storage, not trustlines → a separate
+--     feature, not derivable from this table.
+-- So classic credit (1,2) is the only slice where `total_supply = Σ trustline
+-- balances` is meaningful. GROUP BY `(asset_code, issuer_id)` — no `asset_type`
+-- in the key (fixed by code length, functionally determined by `asset_code`).
+--
+-- Columns are `Nullable` on purpose: under the readonly `api_reader`
+-- (`join_use_nulls = 0`) a LEFT-JOIN miss fills a Nullable column with its default
+-- — which IS NULL — so native/soroban (no row) read as NULL while a real 0-supply
+-- asset (has a row) reads as 0. Distinguishes miss from real-zero with no sentinel.
+CREATE TABLE IF NOT EXISTS asset_aggregates (
+    asset_code   LowCardinality(String),
+    issuer_id    Int64,
+    total_supply Nullable(Decimal128(7)),
+    holder_count Nullable(Int32)
+)
+ENGINE = MergeTree
+ORDER BY (asset_code, issuer_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS asset_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO asset_aggregates AS
+SELECT
+    asset_code,
+    issuer_id,
+    sum(balance)                  AS total_supply,
+    toInt32(countIf(balance > 0)) AS holder_count
+FROM account_balances_current FINAL
+WHERE asset_type IN (1, 2)
+GROUP BY asset_code, issuer_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,

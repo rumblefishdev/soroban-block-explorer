@@ -976,7 +976,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             issuer_id,
             contract_id: contract_id_int,
             name: t.name.clone(),
-            total_supply: None, // dead column (lore-0293) → account_asset_balance_state
+            total_supply: None, // dead column (lore-0293) → asset_aggregates
             holder_count: None,
             icon_url: None,
         };

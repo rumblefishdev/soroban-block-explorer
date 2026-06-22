@@ -74,9 +74,9 @@ pub struct AccountRow {
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
 /// `total_supply`/`holder_count` are DEAD columns (lore-0293): the indexer
-/// writes them `None`; the live value is served from
-/// `account_asset_balance_state` (AggregatingMergeTree via an MV). Kept for
-/// backward-compat; drop deferred to a cleanup task.
+/// writes them `None`; the live value is served from the pre-computed
+/// `asset_aggregates` table (refreshable MV). Kept for backward-compat; drop
+/// deferred to a cleanup task (0310).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,

@@ -105,12 +105,23 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- account_asset_balance_state (AMT) — the MV must have fired on the
-    // balance insert above (lore-0293, event-driven asset aggregates) -----
+    // ----- asset_aggregates — pre-computed per-asset table (lore-0293). The
+    // refreshable MV does NOT fire on insert (unlike a normal MV); force an
+    // out-of-schedule refresh, wait for it, then assert the computed row. -----
+    client
+        .query("SYSTEM REFRESH VIEW asset_aggregates_mv")
+        .execute()
+        .await
+        .expect("refresh asset_aggregates_mv");
+    client
+        .query("SYSTEM WAIT VIEW asset_aggregates_mv")
+        .execute()
+        .await
+        .expect("wait asset_aggregates_mv");
     assert_count(
         &client,
-        "account_asset_balance_state",
-        &format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER}"),
+        "asset_aggregates",
+        &format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER} AND holder_count = 1"),
         1,
     )
     .await;
