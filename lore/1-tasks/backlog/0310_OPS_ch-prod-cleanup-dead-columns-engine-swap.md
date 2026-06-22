@@ -5,7 +5,14 @@ type: OPS
 status: backlog
 related_adr: ['0044']
 related_tasks: ['0293', '0232', '0298', '0244']
-tags: ['phase-future', 'effort-medium', 'priority-medium', 'clickhouse', 'migration']
+tags:
+  [
+    'phase-future',
+    'effort-medium',
+    'priority-medium',
+    'clickhouse',
+    'migration',
+  ]
 history:
   - date: 2026-06-22
     status: backlog

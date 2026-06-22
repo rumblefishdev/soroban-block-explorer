@@ -105,8 +105,7 @@ preserved against any later write that might carry a different value.
 These columns are NOT monotone — they need recompute against the
 current balance state, on a schedule.
 
-> **RESOLVED by lore-0293 (2026-06) — Class B done (2 of 6 columns).**
-> `total_supply`/`holder_count` moved out of `assets` into a pre-computed
+> **RESOLVED by lore-0293 (2026-06) — Class B done (2 of 6 columns).** > `total_supply`/`holder_count` moved out of `assets` into a pre-computed
 > per-asset table `asset_aggregates` (`MergeTree`, `Nullable` cols, keyed
 > `(asset_code, issuer_id)`), maintained by a **refreshable** materialized view
 > `asset_aggregates_mv` (`REFRESH EVERY 2 MINUTE`) that recomputes the whole

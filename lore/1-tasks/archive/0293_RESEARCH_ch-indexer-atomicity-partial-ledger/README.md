@@ -266,7 +266,7 @@ overlapping backfill/live ranges or manual re-run. Resume membership /
    makes re-run idempotent; the only durable gap (Step 3 orphan) needs a deploy
    boundary to land inside a crash window. A heavyweight fix (experimental CH
    txns / per-ledger staging) is unjustified vs the blast radius.
-2a. **`DROP PARTITION` ruled out for single-ledger cleanup** — event-log tables
+   2a. **`DROP PARTITION` ruled out for single-ledger cleanup** — event-log tables
    `PARTITION BY intDiv(ledger_sequence, 500000)`, so a partition spans 500 k
    ledgers; only `ALTER … DELETE WHERE ledger_sequence = N` could isolate one
    (async/heavy) — deferred to 0298.
@@ -278,7 +278,7 @@ overlapping backfill/live ranges or manual re-run. Resume membership /
    Iterated the fix — single-query CTE → two-step `fill_aggregates` →
    `AggregatingMergeTree` → **final design B: a pre-computed per-asset
    `asset_aggregates` table maintained by a refreshable MV** (`REFRESH EVERY 2
-   MINUTE`), read via a trivial 1:1 LEFT JOIN. Picked B over the incremental AMT
+MINUTE`), read via a trivial 1:1 LEFT JOIN. Picked B over the incremental AMT
    (A) because the dominant constraint is the `api_reader` read quota (0290/0198):
    B's read is O(1) and off-quota, 115× smaller storage; the only cost is ≤2-min
    staleness (fine for a supply/holder display). `MergeTree` not RMT (refreshable
@@ -294,7 +294,7 @@ overlapping backfill/live ranges or manual re-run. Resume membership /
 - **Task 0298** — CH atomicity hardening: (1) backfill resume orphan guard for
   the code-change-mid-crash case; (2) read-side decision for the exposed
   non-`FINAL` `transactions` queries (accept per ADR 0044, or add `LIMIT 1 BY
-  id`). Priority low — no correctness fix required today.
+id`). Priority low — no correctness fix required today.
 - **Task 0310** — prod cleanup (destructive, deferred from this task): drop the
   dead `assets.total_supply` / `holder_count` columns; rebuild `ledgers` /
   `wasm_interface_metadata` as `ReplacingMergeTree`. Neither is applied by

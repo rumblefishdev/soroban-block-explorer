@@ -28,17 +28,18 @@ crash (or a backup) can catch the DB mid-write. Should we wrap the per-ledger
 write in a ClickHouse **transaction** so all 18 tables + the marker commit
 atomically (all-or-nothing)?
 
-**Recommendation: NO.** It is *technically possible* on our topology (single-node
+**Recommendation: NO.** It is _technically possible_ on our topology (single-node
 non-replicated is the only supported case), but:
+
 - ClickHouse transactions are **experimental** (4 years, roadmap parked),
-- **durability is not guaranteed by default** — a *committed* transaction can come
+- **durability is not guaranteed by default** — a _committed_ transaction can come
   back **partially applied** after a hard crash unless we enable fsync (a write
   throughput hit), so it re-introduces the very inconsistency we want to remove,
 - ClickHouse **closed the cross-table crash-durability request as WONTFIX**,
 - there are **open server-crash bugs in the commit path filed this month**,
 - it needs **ClickHouse Keeper** even on one node (we run none today),
 - our Rust client **can't drive transactions without a fork**, and
-- it gives atomic *visibility*, not deduplication — so it **doesn't even replace**
+- it gives atomic _visibility_, not deduplication — so it **doesn't even replace**
   the `ReplacingMergeTree` logic we already have.
 
 The current design already handles crashes safely by **idempotent replay**
@@ -94,46 +95,47 @@ cost** — §5.
 
 ## 4. What introducing them would require
 
-| Requirement | Detail |
-|---|---|
-| **ClickHouse Keeper** | The transaction commit log (CSN) lives in Keeper/ZooKeeper — **required even on a single node**. We run none today → a new mandatory stateful service to deploy, monitor, back up. |
-| **Server config + restart** | `allow_experimental_transactions = 1` (server-level setting). |
-| **Synchronous inserts only** | `async_insert` is **forbidden inside a transaction** (`NOT_IMPLEMENTED`). |
-| **fsync for durability** | Without `fsync_after_insert`, a committed txn can come back partially applied after a hard crash (see §5). Enabling fsync costs write throughput. |
+| Requirement                        | Detail                                                                                                                                                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ClickHouse Keeper**              | The transaction commit log (CSN) lives in Keeper/ZooKeeper — **required even on a single node**. We run none today → a new mandatory stateful service to deploy, monitor, back up.                                                                             |
+| **Server config + restart**        | `allow_experimental_transactions = 1` (server-level setting).                                                                                                                                                                                                  |
+| **Synchronous inserts only**       | `async_insert` is **forbidden inside a transaction** (`NOT_IMPLEMENTED`).                                                                                                                                                                                      |
+| **fsync for durability**           | Without `fsync_after_insert`, a committed txn can come back partially applied after a hard crash (see §5). Enabling fsync costs write throughput.                                                                                                              |
 | **A client fork / raw-HTTP layer** | The `clickhouse` crate 0.15.0 is HTTP-only, has **no transaction API**, and HTTP sessions are single-request-locked (can't hold 18 inserts open on one session). We'd hand-roll `BEGIN`/`COMMIT` over raw queries with a shared `session_id` + retry handling. |
-| **Rewrite the write path** | `writer.rs` would move from "18 independent inserts + marker-last" to "open txn → 18 sync inserts on one session → COMMIT", with rollback handling. |
+| **Rewrite the write path**         | `writer.rs` would move from "18 independent inserts + marker-last" to "open txn → 18 sync inserts on one session → COMMIT", with rollback handling.                                                                                                            |
 
 ---
 
 ## 5. The problems (why NOT to introduce them)
 
-| Problem | Detail | Source |
-|---|---|---|
-| **Durability not guaranteed by default** | A **committed** transaction can return **partially applied** after a hard crash unless fsync is on. This re-introduces the inconsistency we want gone, just at the storage layer. | CH transactional docs; meta-issue ClickHouse#48794 ("durability is not guaranteed (and probably will never be) with default settings") |
-| **Cross-table crash-durability = WONTFIX** | "multi-table INSERT not crash-durable as a cross-table operation … each per-table commit is atomic, but the chain isn't" — **closed as not planned** by ClickHouse. | ClickHouse#104661 |
-| **Open commit-path server crashes — this month** | Server abort / `LOGICAL_ERROR 'txn'` on cancelled-transaction commit, filed **2026-06-14** (v26.6); plus a `std::terminate()` in commit-finalize and a Keeper memory leak. | ClickHouse#107446, #85468, #106534 |
-| **Experimental 4 years, parked** | Introduced 22.4 (2022), still experimental; only roadmap item ("Replicated txns") unchecked 3 years running; meta-issue closed P3; not mentioned in the 2025 roundup. Docs warn "backward compatibility can be broken." | ClickHouse#22086, #58392/#74046/#93288, #48794 |
-| **Keeper operational burden** | New stateful quorum service even on one node; another thing that can wedge/leak/crash and gate ingestion. | CH transactional docs |
-| **Client can't drive it** | Crate 0.15.0 HTTP-only, no txn API, sessions single-request-locked → needs a fork + manual session/retry. | `Cargo.toml:43`; crate source |
-| **Throughput** | Forced synchronous inserts + fsync + a Keeper round-trip per commit → write-path regression for a high-volume indexer. | RFC ClickHouse#22086 |
-| **Doesn't replace RMT** | Transactions give atomic *visibility*, not deduplication — `ReplacingMergeTree` still dedups on merge independently. So we'd **add** a transaction layer on top, removing nothing. | — |
+| Problem                                          | Detail                                                                                                                                                                                                                  | Source                                                                                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Durability not guaranteed by default**         | A **committed** transaction can return **partially applied** after a hard crash unless fsync is on. This re-introduces the inconsistency we want gone, just at the storage layer.                                       | CH transactional docs; meta-issue ClickHouse#48794 ("durability is not guaranteed (and probably will never be) with default settings") |
+| **Cross-table crash-durability = WONTFIX**       | "multi-table INSERT not crash-durable as a cross-table operation … each per-table commit is atomic, but the chain isn't" — **closed as not planned** by ClickHouse.                                                     | ClickHouse#104661                                                                                                                      |
+| **Open commit-path server crashes — this month** | Server abort / `LOGICAL_ERROR 'txn'` on cancelled-transaction commit, filed **2026-06-14** (v26.6); plus a `std::terminate()` in commit-finalize and a Keeper memory leak.                                              | ClickHouse#107446, #85468, #106534                                                                                                     |
+| **Experimental 4 years, parked**                 | Introduced 22.4 (2022), still experimental; only roadmap item ("Replicated txns") unchecked 3 years running; meta-issue closed P3; not mentioned in the 2025 roundup. Docs warn "backward compatibility can be broken." | ClickHouse#22086, #58392/#74046/#93288, #48794                                                                                         |
+| **Keeper operational burden**                    | New stateful quorum service even on one node; another thing that can wedge/leak/crash and gate ingestion.                                                                                                               | CH transactional docs                                                                                                                  |
+| **Client can't drive it**                        | Crate 0.15.0 HTTP-only, no txn API, sessions single-request-locked → needs a fork + manual session/retry.                                                                                                               | `Cargo.toml:43`; crate source                                                                                                          |
+| **Throughput**                                   | Forced synchronous inserts + fsync + a Keeper round-trip per commit → write-path regression for a high-volume indexer.                                                                                                  | RFC ClickHouse#22086                                                                                                                   |
+| **Doesn't replace RMT**                          | Transactions give atomic _visibility_, not deduplication — `ReplacingMergeTree` still dedups on merge independently. So we'd **add** a transaction layer on top, removing nothing.                                      | —                                                                                                                                      |
 
 **The core trade:** we would swap a **known, bounded, self-healing** cost (marker
-+ RMT re-run reconciliation, which we control on stable code) for a **rare but
-severe, hard-to-debug** failure class (commit-path crashes, partial-apply-on-
-crash, Keeper failures) on an **experimental, unmaintained** code path. For a
-system whose goal is "no inconsistent data," that is a net **increase** in risk.
+
+- RMT re-run reconciliation, which we control on stable code) for a **rare but
+  severe, hard-to-debug** failure class (commit-path crashes, partial-apply-on-
+  crash, Keeper failures) on an **experimental, unmaintained** code path. For a
+  system whose goal is "no inconsistent data," that is a net **increase** in risk.
 
 ---
 
 ## 6. Options compared (transactions vs not)
 
-| Option | Atomic write? | Durable on hard crash? | New infra | Client change | Maturity | Verdict |
-|---|---|---|---|---|---|---|
-| **0. Keep as-is** — marker-last + RMT + idempotent replay | No (self-healing replay instead) | Yes (committed = on disk) | none | none | stable, proven | **Recommended** |
-| **1. Transactions, no fsync** | Visibility-atomic | **No** (can return partial) | Keeper | fork | experimental | Reject — defeats the purpose |
-| **2. Transactions + fsync** | Visibility-atomic | Yes (at a throughput cost) | Keeper | fork | experimental + open crash bugs | Reject — risk/cost ≫ benefit |
-| **3. Transactions, live-tail only** | Visibility-atomic (live path) | depends on fsync | Keeper | fork | experimental | Reject — same risks for a 1-ledger window that already self-heals |
+| Option                                                    | Atomic write?                    | Durable on hard crash?      | New infra | Client change | Maturity                       | Verdict                                                           |
+| --------------------------------------------------------- | -------------------------------- | --------------------------- | --------- | ------------- | ------------------------------ | ----------------------------------------------------------------- |
+| **0. Keep as-is** — marker-last + RMT + idempotent replay | No (self-healing replay instead) | Yes (committed = on disk)   | none      | none          | stable, proven                 | **Recommended**                                                   |
+| **1. Transactions, no fsync**                             | Visibility-atomic                | **No** (can return partial) | Keeper    | fork          | experimental                   | Reject — defeats the purpose                                      |
+| **2. Transactions + fsync**                               | Visibility-atomic                | Yes (at a throughput cost)  | Keeper    | fork          | experimental + open crash bugs | Reject — risk/cost ≫ benefit                                      |
+| **3. Transactions, live-tail only**                       | Visibility-atomic (live path)    | depends on fsync            | Keeper    | fork          | experimental                   | Reject — same risks for a 1-ledger window that already self-heals |
 
 Note: even Option 2 (the "done right" variant) inherits the open commit-path
 crash bugs (#107446) and the WONTFIX cross-table-durability stance (#104661), and
@@ -143,7 +145,8 @@ durable-cross-table; partition swaps are per-table only — #37783/#67646).
 
 **Industry check:** no blockchain indexer on ClickHouse uses CH transactions.
 Goldsky/CryptoHouse use exactly our approach (ReplacingMergeTree + at-least-once
-+ idempotent keys). So "keep as-is" is the standard, not a shortcut.
+
+- idempotent keys). So "keep as-is" is the standard, not a shortcut.
 
 ---
 
@@ -182,6 +185,7 @@ see task 0298 / the backup note.)
 **ClickHouse docs:** Transactional (ACID) support; ReplacingMergeTree.
 
 **ClickHouse GitHub issues:**
+
 - #22086 — transactions design RFC (single-node non-replicated; multi-table all-or-nothing).
 - #48794 — meta-issue; "durability not guaranteed … with default settings"; closed P3.
 - #104661 — multi-table INSERT not crash-durable as a cross-table operation — **WONTFIX**.
@@ -190,6 +194,7 @@ see task 0298 / the backup note.)
 - #37783, #67646 — no atomic multi-table swap (for context: even non-transaction atomicity isn't available).
 
 **Our code (worktree-relative):**
+
 - `crates/db-clickhouse/src/persist/writer.rs:130-318,40-48` — 18-insert + marker-last write path.
 - `crates/indexer/src/handler/mod.rs:204-220` — resume cursor (`max(sequence)`), self-heal on restart.
 - `crates/db-clickhouse/src/persist/{stage.rs:1113,ids.rs:61-109}` — absolute state + deterministic keys (idempotent replay).
