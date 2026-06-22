@@ -105,6 +105,23 @@ preserved against any later write that might carry a different value.
 These columns are NOT monotone — they need recompute against the
 current balance state, on a schedule.
 
+> **RESOLVED by lore-0293 (2026-06) — Class B done (2 of 6 columns).**
+> `total_supply`/`holder_count` moved out of `assets` into a pre-computed
+> per-asset table `asset_aggregates` (`MergeTree`, `Nullable` cols, keyed
+> `(asset_code, issuer_id)`), maintained by a **refreshable** materialized view
+> `asset_aggregates_mv` (`REFRESH EVERY 2 MINUTE`) that recomputes the whole
+> table from `account_balances_current FINAL` (`sum(balance)`,
+> `countIf(balance > 0)`). Reads are a trivial 1:1 LEFT JOIN — no read-time
+> aggregation. No clobber; idempotent (each refresh is a full recompute-replace,
+> immune to indexer re-runs). Tradeoff: eventually consistent — figures lag by up
+> to the refresh interval. (An incremental event-driven AMT was evaluated and
+> rejected — it keeps the read summing per-holder; an indexer-delta approach was
+> rejected for breaking absolute-state idempotency.) The old
+> `assets.{total_supply,holder_count}` columns are kept (dead) for backward compat
+> — their drop + prod engine migration is task 0310. Proof + design:
+> `0293_RESEARCH_ch-indexer-atomicity-partial-ledger/notes/G-assets-aggregate-clobber-proof.md`.
+> **Only Class A (the 5 monotone columns) remains in this task.**
+
 ## Options analysed
 
 ### Class A — three viable strategies
