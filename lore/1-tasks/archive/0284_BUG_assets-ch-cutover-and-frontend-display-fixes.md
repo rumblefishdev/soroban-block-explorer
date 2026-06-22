@@ -11,11 +11,11 @@ links: ['https://github.com/rumblefishdev/soroban-block-explorer/pull/257']
 history:
   - date: 2026-06-11
     status: active
-    who: karol
+    who: karolkow
     note: 'Task created — spawned mid-session to carry a cluster of small bug/display fixes found while triaging "assets list does not load" on dev.'
   - date: 2026-06-15
     status: completed
-    who: karol
+    who: karolkow
     note: >
       Shipped via PR #257. Original 5 items done (assets→CH, contract-type
       parity, identifier/copy, clickable domains, compact LP amounts). Scope

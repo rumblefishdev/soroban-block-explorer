@@ -127,6 +127,39 @@ pub struct StagedLedger {
     pub balance_rows: Vec<AccountBalanceRow>,
 }
 
+/// Named, borrowed inputs to [`prepare_with_sac_overrides`].
+///
+/// Replaces the former ~18 positional arguments: many are `&[T]` slices and a
+/// few share types, so a positional call could silently transpose two. Named
+/// fields make the call site readable and a wrong order a compile error. `Copy`
+/// (every field is a shared reference) so the stage body can destructure it
+/// back into locals with zero ceremony.
+#[derive(Clone, Copy)]
+pub struct StageInputs<'a> {
+    pub ledger: &'a ExtractedLedger,
+    pub transactions: &'a [ExtractedTransaction],
+    pub operations: &'a [(String, Vec<ExtractedOperation>)],
+    pub events: &'a [(String, Vec<ExtractedEvent>)],
+    pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
+    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub contract_deployments: &'a [ExtractedContractDeployment],
+    pub account_states: &'a [ExtractedAccountState],
+    pub liquidity_pools: &'a [ExtractedLiquidityPool],
+    pub pool_snapshots: &'a [ExtractedLiquidityPoolSnapshot],
+    pub assets: &'a [ExtractedAsset],
+    pub nfts: &'a [ExtractedNft],
+    pub nft_events: &'a [ExtractedNftEvent],
+    pub lp_positions: &'a [ExtractedLpPosition],
+    pub contract_name_writes: &'a [(String, String)],
+    /// Task 0220 Part 2 — SAC override re-insert rows. Empty for legacy callers.
+    pub sac_overrides: &'a [SacOverride],
+    /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
+    /// for legacy callers (behaves exactly as pre-0283).
+    pub prior_wasm_verdicts: &'a HashMap<[u8; 32], ContractType>,
+    /// Task 0283 live G9 — cross-ledger contract verdicts by `contract_id`.
+    pub prior_contract_verdicts: &'a HashMap<String, ContractType>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     ledger: &ExtractedLedger,
@@ -145,7 +178,9 @@ pub fn prepare(
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
 ) -> Result<StagedLedger, SchemaError> {
-    prepare_with_sac_overrides(
+    // Convenience wrapper: no SAC overrides, no cross-ledger verdicts (the
+    // legacy / test path). Behaves exactly as the pre-StageInputs `prepare`.
+    prepare_with_sac_overrides(&StageInputs {
         ledger,
         transactions,
         operations,
@@ -161,10 +196,10 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_name_writes,
-        &[],
-        &HashMap::new(),
-        &HashMap::new(),
-    )
+        sac_overrides: &[],
+        prior_wasm_verdicts: &HashMap::new(),
+        prior_contract_verdicts: &HashMap::new(),
+    })
 }
 
 /// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
@@ -212,27 +247,30 @@ pub fn build_metadata_rows(
 /// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
 /// override consults it as a fallback after the same-ledger map. Legacy
 /// callers via [`prepare`] pass an empty map and behave exactly as before.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_with_sac_overrides(
-    ledger: &ExtractedLedger,
-    transactions: &[ExtractedTransaction],
-    operations: &[(String, Vec<ExtractedOperation>)],
-    events: &[(String, Vec<ExtractedEvent>)],
-    invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
-    contract_deployments: &[ExtractedContractDeployment],
-    account_states: &[ExtractedAccountState],
-    liquidity_pools: &[ExtractedLiquidityPool],
-    pool_snapshots: &[ExtractedLiquidityPoolSnapshot],
-    assets: &[ExtractedAsset],
-    nfts: &[ExtractedNft],
-    nft_events: &[ExtractedNftEvent],
-    lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
-    sac_overrides: &[SacOverride],
-    prior_wasm_verdicts: &HashMap<[u8; 32], ContractType>,
-    prior_contract_verdicts: &HashMap<String, ContractType>,
-) -> Result<StagedLedger, SchemaError> {
+pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedger, SchemaError> {
+    // Destructure back into locals (StageInputs is `Copy`) so the body below is
+    // unchanged from the positional-argument era — every name matches.
+    let StageInputs {
+        ledger,
+        transactions,
+        operations,
+        events,
+        invocations,
+        contract_interfaces,
+        contract_deployments,
+        account_states,
+        liquidity_pools,
+        pool_snapshots,
+        assets,
+        nfts,
+        nft_events,
+        lp_positions,
+        contract_name_writes,
+        sac_overrides,
+        prior_wasm_verdicts,
+        prior_contract_verdicts,
+    } = *input;
+
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
     let ledger_closed_at_ms = ledger.closed_at.saturating_mul(1_000);

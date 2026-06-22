@@ -89,27 +89,26 @@ pub async fn persist_ledger_clickhouse(
     sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), SchemaError> {
-    // Task 0283 live G1: resolve cross-ledger WASM verdicts the pure stage
-    // can't see (upload + deploy are separate Soroban txs, almost always in
-    // different ledgers). Fail-open + gated to deploy-bearing ledgers — an
-    // empty map reproduces the pre-0283 behaviour exactly.
-    let prior_wasm_verdicts =
-        fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces).await;
-    // Task 0283 live G9: resolve verdicts for contracts that emit NFT
-    // rows/events THIS ledger but were deployed in an EARLIER one. The stage's
-    // `route_for` only sees this-ledger `contract_rows`, so without this a
-    // later transfer from an already-classified NFT routes to quarantine.
-    // Fail-open + gated to event-bearing ledgers; one batched lookup per
-    // ledger (Option (b) — a cross-invocation cache can wrap this later).
-    let prior_contract_verdicts = fetch_prior_contract_verdicts(
-        client,
-        nfts,
-        nft_events,
-        contract_deployments,
-        classification_cache,
-    )
-    .await;
-    let mut staged = stage::prepare_with_sac_overrides(
+    // Task 0283 live cross-ledger verdict resolution. Two independent lookups
+    // (different tables, different keys, neither consumes the other), so one
+    // `tokio::join!` pays a single round-trip latency on a ledger carrying both
+    // a deploy and a cross-ledger NFT event. Both fail open (empty map on error
+    // = exact pre-0283 behaviour):
+    // * G1 — verdict by `wasm_hash` from `wasm_interface_metadata` (the deploy
+    //   override; upload + deploy are separate Soroban txs / ledgers).
+    // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
+    //   for contracts deployed earlier), memoised by `classification_cache`.
+    let (prior_wasm_verdicts, prior_contract_verdicts) = tokio::join!(
+        fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
+        fetch_prior_contract_verdicts(
+            client,
+            nfts,
+            nft_events,
+            contract_deployments,
+            classification_cache,
+        ),
+    );
+    let mut staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -126,9 +125,9 @@ pub async fn persist_ledger_clickhouse(
         lp_positions,
         contract_name_writes,
         sac_overrides,
-        &prior_wasm_verdicts,
-        &prior_contract_verdicts,
-    )?;
+        prior_wasm_verdicts: &prior_wasm_verdicts,
+        prior_contract_verdicts: &prior_contract_verdicts,
+    })?;
     // ADR 0049: on-chain token metadata → its own side table, assigned here
     // (not threaded through `prepare`). SAC filtering already done upstream.
     staged.metadata_rows = stage::build_metadata_rows(contract_metadata_writes);
@@ -149,6 +148,22 @@ pub async fn persist_ledger_clickhouse(
 #[derive(serde::Deserialize)]
 struct WasmMetadata {
     functions: Vec<ContractFunction>,
+}
+
+/// Re-classify an already-persisted WASM from its stored
+/// `wasm_interface_metadata.metadata` JSON, returning a verdict **only** when
+/// it is decisive enough to override the parser default `Other` — i.e.
+/// `Nft`/`Fungible`. Anything else (parse failure, `Other`, `Token`) yields
+/// `None`.
+///
+/// Single source of the "parse the stored metadata JSON → classify → keep only
+/// the override-worthy verdicts" rule, shared by the live G1 prefetch here and
+/// the one-shot `contract-type-rebuild` maintenance pass in `backfill-runner`
+/// (which depends on this crate) so the policy lives in exactly one place.
+pub fn classify_wasm_metadata_json(metadata_json: &str) -> Option<ContractType> {
+    let meta = serde_json::from_str::<WasmMetadata>(metadata_json).ok()?;
+    let verdict: ContractType = classify_contract_from_wasm_spec(&meta.functions).into();
+    matches!(verdict, ContractType::Nft | ContractType::Fungible).then_some(verdict)
 }
 
 /// One `(hash, metadata)` row read from `wasm_interface_metadata` during the
@@ -183,6 +198,13 @@ struct WasmVerdictRow {
 ///   exactly as pre-0283 (`Other` → quarantine) and the batch backstop
 ///   (`nft-reclassify`) drains later. The lookup can only improve a verdict,
 ///   never block a write.
+///
+/// Known boundary (degrades safely): if the WASM upload and the deploy land in
+/// the SAME Lambda batch but DIFFERENT ledgers, and the upload's ledger has not
+/// yet committed when the deploy ledger is staged, the prefetch finds nothing
+/// and the deploy persists `Other` (and G2 emits no `assets` type-3 row). The
+/// batch backstop (`contract-type-rebuild` + `nft-reclassify`) recovers it —
+/// same fail-open contract, just deferred.
 async fn fetch_prior_wasm_verdicts(
     client: &Client,
     contract_deployments: &[ExtractedContractDeployment],
@@ -249,11 +271,7 @@ async fn query_wasm_verdicts(
         let Ok(hash) = <[u8; 32]>::try_from(bytes.as_slice()) else {
             continue;
         };
-        let Ok(meta) = serde_json::from_str::<WasmMetadata>(&row.metadata) else {
-            continue;
-        };
-        let verdict: ContractType = classify_contract_from_wasm_spec(&meta.functions).into();
-        if matches!(verdict, ContractType::Nft | ContractType::Fungible) {
+        if let Some(verdict) = classify_wasm_metadata_json(&row.metadata) {
             out.insert(hash, verdict);
         }
     }
@@ -289,6 +307,16 @@ struct ContractVerdictRow {
 /// `ClassificationCache` pattern) memoizes definitive verdicts, so the batched
 /// DB lookup fires only on the FIRST sighting of a contract (~9/day steady
 /// state) rather than once per event-bearing ledger (~80% of ledgers).
+///
+/// Known limitation (WASM upgrade): the cache keys on `contract_id` and never
+/// re-resolves a definitive verdict for the warm-container lifetime, so a
+/// contract upgraded from one decisive interface to another (e.g. Fungible →
+/// Nft) keeps its first verdict until the container recycles. This is benign
+/// today because the parser does not yet surface contract-instance `updated`
+/// entries (so an upgrade can't even be detected at write time) — closing it is
+/// gated on that parser work (task 0295). When `updated` lands, invalidate the
+/// affected `contract_id`s here before the snapshot. Classification is
+/// function-name based, so most upgrades preserve the interface and never flip.
 async fn fetch_prior_contract_verdicts(
     client: &Client,
     nfts: &[ExtractedNft],
@@ -300,13 +328,16 @@ async fn fetch_prior_contract_verdicts(
         .iter()
         .map(|d| d.contract_id.as_str())
         .collect();
-    let mut want: Vec<String> = nfts
+    // Borrow the ids (no per-row clone on the hot path) — `want` only feeds
+    // `missing`/`snapshot_for`, both of which take `&str`. Owned Strings are
+    // allocated once, lazily, only for the verdicts actually returned below.
+    let mut want: Vec<&str> = nfts
         .iter()
-        .map(|n| n.contract_id.clone())
-        .chain(nft_events.iter().map(|e| e.contract_id.clone()))
-        .filter(|c| !deployed_here.contains(c.as_str()))
+        .map(|n| n.contract_id.as_str())
+        .chain(nft_events.iter().map(|e| e.contract_id.as_str()))
+        .filter(|c| !deployed_here.contains(c))
         .collect();
-    want.sort();
+    want.sort_unstable();
     want.dedup();
     if want.is_empty() {
         return HashMap::new();
@@ -314,7 +345,7 @@ async fn fetch_prior_contract_verdicts(
 
     // Only the contracts not yet memoized hit the DB; `Other`/unknown are never
     // cached, so they re-resolve until they earn a definitive verdict.
-    let missing = cache.missing(want.iter().map(String::as_str));
+    let missing = cache.missing(want.iter().copied());
     if !missing.is_empty() {
         match query_contract_verdicts(client, &missing).await {
             Ok(fetched) => cache.extend_definitive(fetched),
@@ -329,7 +360,7 @@ async fn fetch_prior_contract_verdicts(
     }
     // `snapshot_for` borrows from `want`; copy to owned for the stage map.
     cache
-        .snapshot_for(want.iter().map(String::as_str))
+        .snapshot_for(want.iter().copied())
         .into_iter()
         .map(|(id, ty)| (id.to_string(), ty))
         .collect()

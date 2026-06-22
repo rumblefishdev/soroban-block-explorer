@@ -462,6 +462,42 @@ This extraction is part of the broader XDR/protocol decode pipeline because it
 turns deployment-related protocol artifacts into stable explorer-facing contract
 metadata.
 
+### 5.5 NFT Event Shapes (`detect_nft_events`)
+
+NFT mint/transfer/burn events are matched by their first topic Symbol
+(`transfer`/`mint`/`burn`, case-insensitive) and parsed by `detect_nft_events`
+(`crates/xdr-parser/src/nft.rs`). The `token_id` (vs a fungible `amount`) rides in
+one of three on-chain `data` encodings — all observed on mainnet — and each is handled:
+
+- **Shape A — scalar:** addresses in topics, bare scalar `token_id` in `data`
+  (`u32`/`u64`/`i128`); the SEP-41/SEP-50 `single-value` form.
+- **Shape B — packed vec:** topics carry only the event Symbol, `data = Vec[addr…,
+token_id]` (older ERC-721-port / pre-`#[contractevent]` contracts).
+- **Shape C — map:** addresses in topics, `data = map{ "token_id": uN }` — the
+  soroban-sdk `#[contractevent]` map-by-field default, i.e. the OpenZeppelin
+  reference-impl / SEP-50 shape (the dominant modern NFT encoding).
+
+`consecutive_mint` (OpenZeppelin Consecutive / EIP-2309) is a batch event: topics
+`[consecutive_mint, to]`, `data` a `[from_token_id, to_token_id]` range (map or vec),
+expanded into one mint per id and bounded by `MAX_CONSECUTIVE_RANGE` (over-cap or
+inverted ranges are dropped + tripwired).
+
+**Fungible disambiguation.** The same symbols + a `map` data shape are also used by
+SEP-41/SAC fungible events (`map{ amount, to_muxed_id }`, the CAP-67 muxed form). A map
+is treated as NFT **iff it carries a `token_id` key**; a map with `amount`/`to_muxed_id`
+and no `token_id` is fungible and skipped.
+
+**Silent-drop tripwire.** A recognised NFT symbol whose argument shape does not parse is
+dropped with a `tracing::warn!` tripwire (not silently), so unhandled future shapes
+surface instead of vanishing. The parser is deliberately permissive here; the
+authoritative NFT-vs-fungible-vs-other decision is the downstream WASM-spec classifier
+(`soroban_contracts.contract_type`): only `Nft`-classified contracts' rows reach the hot
+`nfts`/`nft_ownership` tables, `Fungible`/`Token` are dropped, and `Other`/`NULL` wait in
+the `nfts_pending` quarantine until a later WASM observation reclassifies them. A
+parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
+contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
+prod/RPC evidence behind these shapes.)
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR

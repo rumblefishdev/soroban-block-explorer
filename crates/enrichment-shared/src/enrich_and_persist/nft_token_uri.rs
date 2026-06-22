@@ -1,5 +1,5 @@
 //! `nft_enrichment` side-table fill from per-token `token_uri()` JSON
-//! metadata (task 0195 §2d / ADR 0048).
+//! metadata (task 0195 §2d / ADR 0050).
 //!
 //! Writes `(name, media_url, collection_name)` into the `nft_enrichment`
 //! side table — never the indexer-owned `nfts` table. These three are
@@ -142,13 +142,15 @@ fn extract_columns(json: &Value) -> (String, String, String) {
     // contracts that carry the image there instead (e.g. the CDA5FGE4 prototype,
     // whose token_uri JSON has the image CID under `url`, not `image` — the same
     // CID its separate `token_image()` entrypoint returns, so no extra RPC call
-    // is needed). `url` is non-standard / ambiguous (could be a website), but
-    // the `resolve_ipfs_to_https` + `is_safe_https_url` guards below still apply,
-    // and a wrong media_url is read-neutralised, not a correctness/security risk.
-    let image_raw = trimmed_string_bytes(
-        json.get("image").or_else(|| json.get("url")),
-        MAX_MEDIA_URL_BYTES,
-    );
+    // is needed). The fallback fires when `image` is absent OR present-but-empty
+    // (an empty/whitespace/non-string `image` is as useless as a missing one).
+    // `url` is non-standard / ambiguous (could be a website), but the
+    // `resolve_ipfs_to_https` + `is_safe_https_url` guards below still apply, and
+    // a wrong media_url is read-neutralised, not a correctness/security risk.
+    let mut image_raw = trimmed_string_bytes(json.get("image"), MAX_MEDIA_URL_BYTES);
+    if image_raw.is_empty() {
+        image_raw = trimmed_string_bytes(json.get("url"), MAX_MEDIA_URL_BYTES);
+    }
     let image_resolved = resolve_ipfs_to_https(&image_raw);
     let image = if image_resolved.is_empty() || super::is_safe_https_url(&image_resolved) {
         image_resolved

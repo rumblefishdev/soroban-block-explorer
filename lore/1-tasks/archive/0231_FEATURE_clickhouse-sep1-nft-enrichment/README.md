@@ -2,9 +2,9 @@
 id: '0231'
 title: 'FEATURE: ClickHouse SEP-1 + NFT token_uri enrichment (AWS Lambda/SQS → CH side tables)'
 type: FEATURE
-status: active
-related_adr: ['0044', '0045', '0047', '0048']
-related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243']
+status: completed
+related_adr: ['0044', '0045', '0047', '0050']
+related_tasks: ['0195', '0196', '0212', '0214', '0228', '0243', '0282', '0301']
 blocked_by: []
 tags:
   [
@@ -79,28 +79,27 @@ history:
       worker/indexer deploy (CDK env + GitHub auth blocked), prod drain (7),
       NFT read-join (4b — needs nfts→CH), full smoke (NFT RPC + clear-on-
       refresh), columns drop (8), async_insert (9).
-  - date: '2026-06-16'
-    status: active
+  - date: '2026-06-10'
+    status: completed
     who: karolkow
     note: >
-      Cross-finding from 0283 session-3 deep research (chain-validated, not yet
-      acted on here): NFT enrichment has a HARD CEILING at live-RPC liveness.
-      `token_uri`/name/image are fetched from LIVE Soroban RPC (the parser sets
-      nft metadata=None at mint — not carried in the event), so a contract whose
-      ContractInstance is archived/evicted (state-archival TTL — restorable but
-      not live) returns nothing on `getLedgerEntries` and is UN-enrichable even
-      after perfect classification. Empirical: a network-wide `getEvents` sample
-      found ~66% of recent transfer/mint/burn emitters ABSENT from live state.
-      So the reachable target is "all real NFTs still LIVE on mainnet", not
-      literally all. Implications: (a) the status / NULL-ratio metric must SPLIT
-      "un-enrichable-because-evicted (RPC absent)" from "not-yet-tried" — else a
-      high NFT NULL ratio is ambiguous; (b) sentinel-on-permanent-fail never
-      auto-retries, so a transient RPC outage at enrich time = permanent empty
-      until a forced retry — consider a restore-or-retry path; (c) the batch
-      enrich candidate source is hot `nfts` (empty until 0283 reclassify
-      promotes), so 0283 gates the BACKLOG drain; the live path enriches new
-      mints route-independently but is gated on worker deploy. See 0283
-      open-problems #7 (NFT event-shape, FIXED) + #1 (wasm-link).
+      CLOSED as "write-path implementation delivered" (NOT "live in prod" — the
+      feature has never been deployed; live rollout is split out). The enrichment
+      WRITE path is code-complete + committed on feat/0231: side tables, enrich_*
+      PG→CH, worker repoint, producer anti-join un-stub, batch runner, asset
+      read-join (4a), local seed+runbook smoke. This session added (9 commits):
+      is_transient SorobanRpc→permanent-by-default fix (DLQ-loop bug), the manual
+      --retry-sentinels re-enroll, status partials, per-failure reason= logging,
+      media_url image→url fallback, the persist.rs single write-surface, an
+      indicatif progress bar, and Step 10. Reviewed by 3 fresh-eye agents:
+      safe (writes only asset_enrichment/nft_enrichment, append-only; no
+      injection; retry can't clobber real), senior, no hallucinations, ~85%
+      appropriately scoped. ALL remaining work — deploy (blocked: GitHub auth +
+      worker CDK env), prod drain (7), NFT read-join (4b, CODE — nfts API still
+      PG-only), full prod smoke (10), drop dead columns (8), async_insert (9),
+      ADR-0032 docs — moved to **0301**. Also spawned 0282 (NFT media-url quality).
+      Docs/architecture (ADR 0032): N/A for the delivered code (refactor +
+      error-reclassification + operator CLI; no schema/endpoint/topology change).
 ---
 
 # FEATURE: ClickHouse SEP-1 + NFT `token_uri` enrichment
@@ -111,7 +110,7 @@ Populate the off-chain enrichment values on ClickHouse — asset **icon / name**
 (SEP-1 issuer TOML) and NFT **name / media_url / collection_name** (`token_uri()`
 
 - IPFS). Written into dedicated **side tables** (`asset_enrichment` /
-  `nft_enrichment`, ADR 0048) — never the indexer-owned `assets`/`nfts` — and
+  `nft_enrichment`, ADR 0050) — never the indexer-owned `assets`/`nfts` — and
   read-composed by the API (Option C: enrichment owns the off-chain values;
   on-chain soroban names come from `soroban_contracts`). The CH successor to the PG
   enrichment (PG retiring, ADR 0047).
@@ -350,29 +349,33 @@ collection_name}` — off-chain data the indexer can never derive.
 
 ## Acceptance Criteria
 
-- [ ] `asset_enrichment` / `nft_enrichment` created via **migration** (+ init.sql
-      mirror); column order pinned in tests.
+> **Closed 2026-06-10 as "write-path implementation delivered."** Every open item
+> below — deploy, prod drain, the NFT read path, docs, and the column drop — was
+> **deferred to [0301](../../backlog/0301_FEATURE_clickhouse-enrichment-rollout-finish.md)**
+> (rollout + finish). Nothing dropped silently; each maps to a 0301 step.
+
+- [x] `asset_enrichment` / `nft_enrichment` created in `init.sql` + column-order
+      pin tests. _(Prod migration runs at deploy → **0301**.)_
 - [x] `ch_enrichment_queue` **NOT** created — SQS is the queue.
 - [x] Fetchers reused verbatim; only the CH write path (side-table INSERT) is new.
 - [x] Live write path wired (code): worker repointed PG→CH; producer lookup
       **un-stubbed** — per-batch CH anti-join publishes only un-enriched keys
-      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy config/CDK +
-      the deploy itself still pending — GitHub auth blocked.)_
-- [~] Read: asset name/icon join **done** in `ASSET_CH_SELECT` (Step 4a —
-  `COALESCE(NULLIF(ae.name,''), sc.name, native-const)` +
-  `NULLIF(ae.icon_url,'')`). NFT meta read (`NULLIF(ne.col,'')` direct)
-  **pending** — the nfts API module is still PG-only (Step 4b).
-- [ ] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
-      re-enriches and can clear removed values.
-- [ ] Live integration test passes (USDC + NFT round-trip).
-- [ ] Production drain reported (NULL ratios, RPC quota, measured `nfts`
-      read-join cost).
-- [ ] **Docs updated** per ADR 0032 (enrichment write-up + the 0243 read-path
-      change). **API types** regenerated as a sanity check (shape unchanged).
-- [ ] (gated, LAST) Dead placeholder columns dropped — `assets.{name,icon_url}` +
-      `nfts.{name,media_url,collection_name}` (indexer always `None`) — via
-      operator ALTER + indexer stops emitting them, **after** the read path is
-      live. `soroban_contracts.name` retained. May be a follow-up task.
+      (assets + NFTs, fail-open). Batch CLI (CH-only) done. _(Deploy → **0301**.)_
+- [x] Replay-idempotent; sentinel breaks the retry loop; `--force-retry`
+      re-enriches; `--retry-sentinels` re-attempts only all-`''` rows (newer-
+      `version` INSERT, latest-wins). Exercised in `#[ignore]` CH tests + runbook.
+- [~] Read: asset name/icon join **done** (Step 4a, `ASSET_CH_SELECT`). NFT meta
+  read **→ deferred to 0301** (Step 4b — nfts API module still PG-only).
+- [ ] → **deferred to 0301**: Live integration test (USDC + NFT round-trip) —
+      local smoke done (`#[ignore]` + runbook); live SQS→worker→read is 0301 Step 10.
+- [ ] → **deferred to 0301**: Production drain reported (NULL ratios, RPC quota,
+      `nfts` read-join cost) — 0301 Step 7.
+- [ ] → **deferred to 0301**: **Docs per ADR 0032** — N/A for the delivered code
+      (refactor + error-reclass + CLI; no schema/endpoint/topology change); revisit
+      on the column drop / read-path change.
+- [ ] → **deferred to 0301** (gated, LAST): dead placeholder columns dropped —
+      `assets.{name,icon_url}` + `nfts.{name,media_url,collection_name}`, after the
+      indexer + backfill-runner stop emitting them. `soroban_contracts.name` kept.
 
 ## Notes
 
@@ -410,8 +413,11 @@ collection_name}` — off-chain data the indexer can never derive.
   - _Worker has no pre-check + producer lookup stubbed + SQS at-least-once_ →
     redundant third-party fetches possible; add a refresh-intent flag to the
     message before going live at scale.
-  - _Sentinels never auto-retry_ (`NOT IN` skips them forever) → a momentarily-
-    broken / late-published source stays empty; a sentinel-TTL re-enroll fixes it.
+  - _Sentinels never **auto**-retry_ (`NOT IN` skips them forever) → a momentarily-
+    broken / late-published source stays empty. **Manual re-enroll shipped:**
+    `--retry-sentinels` / `DrainMode::Sentinels` re-attempts only all-`''` rows,
+    leaving real + partial untouched. An **automatic** sentinel-TTL re-enroll
+    remains future (→ 0301 if wanted).
   - _`now_ms().unwrap_or(0)` + `DateTime64(3)` version_ — fine under latest-wins;
     revisit only if a version-priority scheme is ever adopted.
 

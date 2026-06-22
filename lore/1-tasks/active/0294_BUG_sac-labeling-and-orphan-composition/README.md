@@ -2,7 +2,7 @@
 id: '0294'
 title: 'BUG: SAC labeling + orphan composition — un-deployed SACs mislabeled is_sac=false; soroban_contracts registry pollution'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0283', '0221', '0218', '0259']
 tags:
@@ -25,6 +25,19 @@ history:
       problem (#1) with the SAC-skeleton root-derivation problem (#6) — a
       2026-06-16 chain-validated deep-dive proved they CONVERGE on the same
       SAC-handling gap. DB-gated.
+  - date: 2026-06-18
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. Red-team + blue-team chain verification (CAP-0067
+      spec, independent SHA256 SAC-id derivation, live mainnet getEvents, prod
+      ClickHouse re-count) CONFIRMED the core thesis: un-deployed SACs surfaced
+      via CAP-67 unified events are the dominant orphan cause; numbers reproduce
+      on prod today (4,310 orphans / 51,571,026 pending). 283's wasm_hash-JOIN
+      rebuild cannot touch these (wasm_hash NULL). Deferred to implementation:
+      skeleton counts are stale (294,963 was total-SAC, not the skeleton subset;
+      current ~307k split across deployed_at NULL + =0 sentinel — the NULL-only
+      predicate misses the =0 rows).
 ---
 
 # BUG: SAC labeling + orphan composition

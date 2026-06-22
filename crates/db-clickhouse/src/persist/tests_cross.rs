@@ -1193,26 +1193,26 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
     let prior: std::collections::HashMap<[u8; 32], ContractType> =
         std::collections::HashMap::from([([0x11u8; 32], ContractType::Nft)]);
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[], // contract_interfaces EMPTY — wasm not uploaded this ledger
-        std::slice::from_ref(&dep),
-        &[],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&nft),
-        std::slice::from_ref(&ev),
-        &[],
-        &[],
-        &[],
-        &prior,
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[], // EMPTY — wasm not uploaded this ledger
+        contract_deployments: std::slice::from_ref(&dep),
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: std::slice::from_ref(&nft),
+        nft_events: std::slice::from_ref(&ev),
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &prior,
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     // G1: contract row flipped to Nft from the cross-ledger verdict.
@@ -1354,26 +1354,26 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
     let prior: std::collections::HashMap<String, ContractType> =
         std::collections::HashMap::from([(contract.clone(), ContractType::Nft)]);
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        &[], // no deploy this ledger — contract deployed earlier
-        &[],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&nft),
-        std::slice::from_ref(&ev),
-        &[],
-        &[],
-        &[],
-        &std::collections::HashMap::new(),
-        &prior,
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[], // no deploy this ledger — contract deployed earlier
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: std::slice::from_ref(&nft),
+        nft_events: std::slice::from_ref(&ev),
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &prior,
+    })
     .expect("prepare_with_sac_overrides");
 
     assert_eq!(staged.nft_rows.len(), 1, "routed to hot via prior verdict");
@@ -1392,26 +1392,26 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
     let prior: std::collections::HashMap<String, ContractType> =
         std::collections::HashMap::from([(contract.clone(), ContractType::Token)]);
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&nft),
-        std::slice::from_ref(&ev),
-        &[],
-        &[],
-        &[],
-        &std::collections::HashMap::new(),
-        &prior,
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: std::slice::from_ref(&nft),
+        nft_events: std::slice::from_ref(&ev),
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &prior,
+    })
     .expect("prepare_with_sac_overrides");
 
     assert_eq!(staged.nft_rows.len(), 0, "SAC event dropped, not hot");
@@ -1432,26 +1432,26 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
     let nft = synthetic_nft(&contract, "tk1");
     let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&nft),
-        std::slice::from_ref(&ev),
-        &[],
-        &[],
-        &[],
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: std::slice::from_ref(&nft),
+        nft_events: std::slice::from_ref(&ev),
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     assert_eq!(staged.nft_rows.len(), 0);
@@ -1485,26 +1485,26 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
     let prior: std::collections::HashMap<[u8; 32], ContractType> =
         std::collections::HashMap::from([([0x11u8; 32], ContractType::Nft)]);
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&dep),
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &prior,
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: std::slice::from_ref(&dep),
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &prior,
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     let row = staged
@@ -1536,26 +1536,26 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         sac_asset: None,
     };
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&dep),
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: std::slice::from_ref(&dep),
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     let row = staged
@@ -1690,26 +1690,26 @@ fn prepare_emits_sac_override_contract_row_for_xlm_native() {
         identity: SacAssetIdentity::Native,
     }];
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &overrides,
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &overrides,
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     // Exactly one row for the SAC contract — the override; no
@@ -1754,26 +1754,26 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         identity: SacAssetIdentity::Native,
     }];
 
-    let staged = stage::prepare_with_sac_overrides(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&dep),
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &overrides,
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: std::slice::from_ref(&dep),
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_name_writes: &[],
+        sac_overrides: &overrides,
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+    })
     .expect("prepare_with_sac_overrides");
 
     let sac_rows: Vec<&_> = staged

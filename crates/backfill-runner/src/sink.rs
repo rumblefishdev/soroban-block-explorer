@@ -209,29 +209,31 @@ impl PartitionWriterHandle<'_> {
                 // the production wire-up the PR #186 description called
                 // out as a follow-up.
                 let mut staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
-                    &parsed.ledger,
-                    &parsed.transactions,
-                    &parsed.operations,
-                    &parsed.events,
-                    &parsed.invocations,
-                    &parsed.contract_interfaces,
-                    &parsed.contract_deployments,
-                    &parsed.account_states,
-                    &parsed.liquidity_pools,
-                    &parsed.pool_snapshots,
-                    &parsed.assets,
-                    &parsed.nfts,
-                    &parsed.nft_events,
-                    &parsed.lp_positions,
-                    &parsed.contract_name_writes,
-                    &parsed.sac_overrides,
-                    // Task 0283 live G1/G9 are for the live indexer path only.
-                    // Backfill stays as-is (empty maps = pre-0283 behaviour):
-                    // historical cross-ledger verdicts are reconstructed by
-                    // the batch `ch-maint contract-type-rebuild` + one-shot
-                    // `nft-reclassify`, not inline.
-                    &std::collections::HashMap::new(),
-                    &std::collections::HashMap::new(),
+                    &db_clickhouse::persist::stage::StageInputs {
+                        ledger: &parsed.ledger,
+                        transactions: &parsed.transactions,
+                        operations: &parsed.operations,
+                        events: &parsed.events,
+                        invocations: &parsed.invocations,
+                        contract_interfaces: &parsed.contract_interfaces,
+                        contract_deployments: &parsed.contract_deployments,
+                        account_states: &parsed.account_states,
+                        liquidity_pools: &parsed.liquidity_pools,
+                        pool_snapshots: &parsed.pool_snapshots,
+                        assets: &parsed.assets,
+                        nfts: &parsed.nfts,
+                        nft_events: &parsed.nft_events,
+                        lp_positions: &parsed.lp_positions,
+                        contract_name_writes: &parsed.contract_name_writes,
+                        sac_overrides: &parsed.sac_overrides,
+                        // Task 0283 live G1/G9 are for the live indexer path only.
+                        // Backfill stays as-is (empty maps = pre-0283 behaviour):
+                        // historical cross-ledger verdicts are reconstructed by
+                        // the batch `ch-maint contract-type-rebuild` + one-shot
+                        // `nft-reclassify`, not inline.
+                        prior_wasm_verdicts: &std::collections::HashMap::new(),
+                        prior_contract_verdicts: &std::collections::HashMap::new(),
+                    },
                 )?;
                 // ADR 0049: on-chain token metadata → its own side table.
                 staged.metadata_rows = db_clickhouse::persist::stage::build_metadata_rows(

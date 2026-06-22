@@ -141,9 +141,8 @@ mod tests {
         // 22 CREATE TABLE + 1 CREATE DICTIONARY = 23. 17-table base; task 0217
         // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
         // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
-        // to PR #180); task 0231 (ADR 0048) added the `asset_enrichment` +
-        // `nft_enrichment` enrichment side tables; task 0297 (ADR 0049) added
-        // `soroban_contract_metadata` (on-chain token name/symbol/decimals).
+        // to PR #180); task 0231 (ADR 0050) added the `asset_enrichment` +
+        // `nft_enrichment` enrichment side tables.
         assert_eq!(
             stmts.len(),
             23,
