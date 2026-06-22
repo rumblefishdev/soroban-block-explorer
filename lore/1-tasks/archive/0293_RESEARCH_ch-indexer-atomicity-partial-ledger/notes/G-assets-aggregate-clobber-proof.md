@@ -12,6 +12,7 @@ who: karolkow
 ## The bug
 
 `assets` is written by TWO paths:
+
 1. **Per-ledger indexer** (`crates/db-clickhouse/src/persist/stage.rs:869,897,914`)
    — emits the asset identity row with `total_supply = None, holder_count = None`
    on EVERY ledger that touches the asset (`asset_seen` HashSet is batch-local,
@@ -36,6 +37,7 @@ SELECT count() AS total,
        countIf(asset_type IN (1,2) AND total_supply IS NULL) AS null_supply
 FROM assets FINAL
 ```
+
 Result: `total = 319210`, `classic_sac = 319207`, `null_supply = 79207`.
 
 **Why this proves clobber:** for `asset_type IN (1,2)` the batch writes
@@ -65,6 +67,7 @@ INNER JOIN
 USING (asset_code, issuer_id)
 -- → 75816
 ```
+
 **75,816** of the 79,207 NULL-supply assets (96%) have active holders — their
 supply is computable from current balances yet served as NULL.
 
@@ -75,6 +78,7 @@ FROM account_balances_current FINAL
 WHERE asset_type IN (1,2) AND asset_code = 'yUSDC' AND issuer_id = 1796653227778802488
 -- → real_holders = 10085, real_supply = 2845935.987509
 ```
+
 `assets` serves `total_supply = NULL` for `yUSDC`, while it actually has **10,085
 holders** and **2,845,935.99 supply** right now. Knowable, and wrong.
 
@@ -95,7 +99,7 @@ table** maintained entirely inside ClickHouse:
 - `asset_aggregates_mv` is a **refreshable** MV (`REFRESH EVERY 2 MINUTE`) that
   recomputes the whole table from `account_balances_current FINAL`
   (`sum(balance)`, `countIf(balance > 0)`, `WHERE asset_type IN (1,2) GROUP BY
-  asset_code, issuer_id`). 100% CH-side. The refresh is a batch admin job, not
+asset_code, issuer_id`). 100% CH-side. The refresh is a batch admin job, not
   subject to the `api_reader` read quota.
 - Reads are a trivial 1:1 `LEFT JOIN asset_aggregates` in `ASSET_CH_SELECT`
   (`crates/api/src/assets/queries_ch.rs`) — no read-time GROUP BY, exactly like
@@ -133,7 +137,7 @@ replaces the retired one-shot `asset-aggregates` CLI outright (no fallback).
    (no read-time `GROUP BY` over holders); the heavy `GROUP BY` lives in the
    refresh (an admin job, off the `api_reader` quota).
 5. **Cleanup task (deferred, 0310):** `ALTER TABLE assets DROP COLUMN total_supply,
-   DROP COLUMN holder_count` + prod engine migration `wasm`/`ledgers`→RMT.
+DROP COLUMN holder_count` + prod engine migration `wasm`/`ledgers`→RMT.
 6. Retire the `asset-aggregates` CLI (kept through the develop merge; removal
    moved to 0310).
 

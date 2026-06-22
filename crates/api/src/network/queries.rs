@@ -15,15 +15,20 @@
 //! hot dashboard path. Reltuples is refreshed by autovacuum / ANALYZE
 //! and is well within the accuracy a "total accounts" UI cell needs.
 //!
-//! Repeat-call traffic is absorbed by the 30s in-process cache (see
-//! `cache.rs`); the DB sees one statement every ~30s per warm Lambda.
+//! Repeat-call traffic is absorbed by the version-keyed in-process cache (see
+//! `cache.rs`); the DB sees one statement per chain head (~1 / ledger).
 
 use sqlx::{PgPool, Row};
 
 use super::dto::NetworkStats;
 
 /// Run the canonical network-stats statement against `pool` and assemble
-/// the response DTO.
+/// the response DTO. `head` is the chain head the caller version-keys the
+/// cache on (`crate::common::head`); the statement **pins** the latest-ledger
+/// row to `WHERE sequence = head` rather than re-deriving "latest" itself, so
+/// the response's `latest_ledger_sequence` always equals the cache key (no
+/// TOCTOU between the head read and this query, and no divergence between
+/// `max(sequence)` and `ORDER BY closed_at DESC`).
 ///
 /// Returns `sqlx::Error` on any DB failure; the handler turns this into
 /// the canonical `db_error` envelope. Written in raw SQL (not the
@@ -31,23 +36,22 @@ use super::dto::NetworkStats;
 /// — consistent with `crates/api/src/transactions/queries.rs`.
 ///
 /// Field naming and semantics match canonical SQL one-for-one:
-/// `latest_ledger_closed_at` is the raw close-time of the newest
+/// `latest_ledger_closed_at` is the raw close-time of the head
 /// ledger; `generated_at` is `NOW()` at SELECT time. Frontend uses
 /// the pair to derive two distinct signals — indexer-health lag
 /// (`generated_at − latest_ledger_closed_at`) and cache staleness
 /// (`Date.now() − generated_at`) — without confusing them when the
-/// 30s in-process cache replays a stored response.
+/// version-keyed cache replays a stored response.
 ///
 /// `::float8` matches canonical SQL — TPS is a 0–1000 display metric
 /// with FE-side rounding, f64 has 14-digit headroom, and avoiding the
 /// `rust_decimal` dep keeps the cache-miss decode path native.
 ///
 /// Empty-`ledgers` case (cold-bootstrap cluster, no rows ingested yet):
-/// the canonical SELECT yields zero rows because the inner
-/// `ORDER BY closed_at DESC LIMIT 1` is empty. We map that to a
-/// zero-valued response with `latest_ledger_closed_at = None` and
-/// `generated_at = Utc::now()`.
-pub async fn fetch_stats(pool: &PgPool) -> Result<NetworkStats, sqlx::Error> {
+/// the caller passes `head = 0`, `WHERE sequence = 0` matches no row, the
+/// SELECT yields zero rows, and we map that to a zero-valued response with
+/// `latest_ledger_closed_at = None` and `generated_at = Utc::now()`.
+pub async fn fetch_stats(pool: &PgPool, head: i64) -> Result<NetworkStats, sqlx::Error> {
     let row_opt = sqlx::query(
         "SELECT \
             latest.sequence AS latest_ledger_sequence, \
@@ -69,19 +73,18 @@ pub async fn fetch_stats(pool: &PgPool) -> Result<NetworkStats, sqlx::Error> {
          FROM ( \
              SELECT sequence, closed_at \
              FROM ledgers \
-             ORDER BY closed_at DESC \
-             LIMIT 1 \
+             WHERE sequence = $1 \
          ) latest",
     )
+    .bind(head)
     .fetch_optional(pool)
     .await?;
 
     let Some(row) = row_opt else {
-        // Empty `ledgers` table — cold-bootstrap cluster. Sequence 0 is a
-        // safe sentinel (Stellar genesis is ledger 1); close-time is
-        // undefined when no ledger has been ingested. `generated_at`
-        // falls back to wall-clock now (microsecond-equivalent to the
-        // DB's `now()` call would have been).
+        // `head = 0` (empty cluster) or the head row vanished — no latest
+        // ledger to report. Sequence 0 is a safe sentinel (Stellar genesis is
+        // ledger 1); close-time is undefined. `generated_at` falls back to
+        // wall-clock now (microsecond-equivalent to the DB's `now()` call).
         return Ok(NetworkStats {
             tps_60s: 0.0,
             total_accounts: 0,

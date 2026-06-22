@@ -1,9 +1,12 @@
 //! Shared application state injected into every axum handler via `State<AppState>`.
 
+use std::sync::{Arc, RwLock};
+
 use sqlx::PgPool;
 
 use crate::contracts::cache::{ContractMetadataCache, new_contract_cache};
 use crate::network::cache::{NetworkStatsCache, new_network_cache};
+use crate::network::dto::NetworkStats;
 use crate::runtime_enrichment::RuntimeEnrichment;
 
 /// Application-wide state. All inner types are cheaply cloneable
@@ -20,8 +23,15 @@ pub struct AppState {
     pub runtime_enrichment: RuntimeEnrichment,
     /// Per-Lambda warm cache for contract detail responses (45 s TTL).
     pub contract_cache: ContractMetadataCache,
-    /// Per-Lambda warm cache for the `/v1/network/stats` singleton (30 s TTL).
+    /// Per-Lambda warm cache for `/v1/network/stats`, version-keyed on the
+    /// chain head (`latest_ledger_sequence`) — see `network/cache.rs`.
     pub network_cache: NetworkStatsCache,
+    /// Last successfully-computed network-stats snapshot, updated on every
+    /// cache miss. Serves as the availability fallback when the per-request
+    /// head read fails (so a transient DB/CH blip does not 500 a request the
+    /// warm cache could still answer). Written only on a miss; read only on a
+    /// head-read error — both rare, so a std `RwLock` is ample.
+    pub network_last_good: Arc<RwLock<Option<Arc<NetworkStats>>>>,
     /// `SHA256(STELLAR_NETWORK_PASSPHRASE)`. Required to align tx_set
     /// envelopes (hash-sorted) with `tx_processing` (apply order) when
     /// re-extracting heavy fields from archive XDR.
@@ -41,6 +51,7 @@ impl AppState {
             runtime_enrichment,
             contract_cache: new_contract_cache(),
             network_cache: new_network_cache(),
+            network_last_good: Arc::new(RwLock::new(None)),
             network_id,
         }
     }

@@ -32,6 +32,7 @@ indexer** (deployed task 0241). So a daily archive CAN capture a torn state:
 entity rows for ledger N present, `ledgers` marker for N absent.
 
 Confirmed facts:
+
 - CH `BACKUP` of multiple tables is **"partially consistent" by design** —
   ClickHouse#13953 (Milovidov): "not currently possible to ensure that their
   state correspond to a single point of time." Freezes are per-table, sequential.
@@ -61,6 +62,7 @@ ORDER BY (no version needed) — cheap (`ledgers` ~11M rows).
 ## CH transactions — REJECT (blue conceded)
 
 Blue (advocate) conceded the write-transaction path loses:
+
 - Durability not guaranteed by default — a committed txn can come back partially
   applied after a hard crash unless fsync is on (throughput hit). CH docs +
   meta-issue ClickHouse#48794.
@@ -73,7 +75,7 @@ Blue (advocate) conceded the write-transaction path loses:
 
 Red's kill shot: ClickHouse#104661 ("multi-table INSERT not crash-durable as a
 cross-table operation") **closed as WONTFIX**. ClickHouse itself states cross-table
-crash-durability is not coming. Transactions would *introduce* the inconsistency
+crash-durability is not coming. Transactions would _introduce_ the inconsistency
 the owner wants gone. Topology fits (single-node non-replicated is the supported
 case — correcting audit-1), but the feature is the wrong trade.
 
@@ -96,6 +98,7 @@ The single most-cited reason for wanting a "fundamental fix" — stop writing
   version collapse.
 
 **Fix = read model, not write atomicity.** Options:
+
 - `<final>1</final>` on the `read_only` profile (`profiles.xml:23-28`) — one line,
   retires ~55 guards, BUT blanket FINAL on the 3.6B-row `transactions` table
   worsens the `read_rows` quota blowups (live tasks 0290/0198). Both teams flagged
@@ -124,6 +127,7 @@ The single most-cited reason for wanting a "fundamental fix" — stop writing
 5. (round 2) orphan-guard DELETE on resume + `insert_deduplication_token` (live).
 
 ## Sources
+
 ClickHouse#13953, #4022, #104661 (WONTFIX), #107446, #85468, #106534, #48794,
 #37783, #67646; CH docs transactional / ReplacingMergeTree / backup overview /
 achieving-atomic-inserts / settings-query-level (final); Altinity backups +

@@ -14,8 +14,8 @@ who: karolkow
 The **commit-marker + `ReplacingMergeTree` (RMT)** design is **sound for the
 crash case it was built for**. The audit confirms the intended guarantee holds
 and there is **no latent data-corruption (double-apply) bug**. The gaps that
-exist are **LOW severity**: one needs a code/parser change to land *between* a
-crash and its re-run, the other is a *transient* read-side duplicate that
+exist are **LOW severity**: one needs a code/parser change to land _between_ a
+crash and its re-run, the other is a _transient_ read-side duplicate that
 disappears on the next background merge.
 
 Answers to the team's three questions:
@@ -27,8 +27,8 @@ Answers to the team's three questions:
    Pre-existing partial rows do **not** break the re-run.
 3. **The re-run REPLACES (collapses), it does not durably duplicate.** Re-insert
    produces deterministic surrogate keys → RMT merges old+new to one row. Two
-   caveats: a *transient* duplicate exists between insert and the next merge, and
-   a *narrow* orphan case survives if the emitted key set changes between
+   caveats: a _transient_ duplicate exists between insert and the next merge, and
+   a _narrow_ orphan case survives if the emitted key set changes between
    attempts (see Step 3).
 
 ---
@@ -71,7 +71,7 @@ whose `end()` already ACK'd remain persisted (the orphans).
   (`if completed.contains(&seq) { continue }`). A ledger with orphan entity rows
   but **no marker** is **re-processed**.
 - **Live tail:** `crates/indexer/src/handler/mod.rs:204` `SELECT max(sequence)
-  FROM ledgers`, resumes from `max+1` (`mod.rs:220`).
+FROM ledgers`, resumes from `max+1` (`mod.rs:220`).
 - **No "rows exist but no marker" guard exists anywhere** (grep for `orphan`
   finds only unrelated XDR-diag and LP-sentinel code).
 
@@ -81,7 +81,7 @@ transient errors (`retry_with_backoff`, `mod.rs:506-537`). On exhaustion
 `reconcile` returns `Err`, the doorbell is reported as a batch-item-failure
 (`mod.rs:171-184`) → SQS redelivers (→ DLQ after `maxReceiveCount`). The ledger
 is **never silently skipped**; the cursor stays at `max+1`. So the crash window
-is hit only on a sub-second outage that *also* falls between the first entity
+is hit only on a sub-second outage that _also_ falls between the first entity
 `end()` and the marker — rare, but non-zero.
 
 ---
@@ -93,6 +93,7 @@ is hit only on a sub-second outage that *also* falls between the first entity
 **verified**.
 
 ### Class A — event-log RMT, keyed by `(ledger, tx, …)`, NO version column (9)
+
 `transactions`, `transaction_hash_index`, `operations_appearances`,
 `transaction_participants`, `soroban_events`,
 `soroban_invocations_appearances`, `nft_ownership`, `nft_ownership_pending`,
@@ -104,6 +105,7 @@ old+new on merge. With no version column the "winner" is arbitrary, but since
 the rows are byte-identical that is harmless. **Idempotent. ✅**
 
 ### Class B — current-state RMT, keyed by entity, version = `last_*_ledger` (7)
+
 `accounts` (`last_seen_ledger`), `soroban_contracts`
 (`wasm_uploaded_at_ledger`), `account_balances_current` (`last_updated_ledger`),
 `nfts` (`current_owner_ledger`), `nfts_pending` (`current_owner_ledger`),
@@ -120,7 +122,7 @@ read-modify-write**, no in-memory balance carried across ledgers, no
   `balance = decimal7_string_to_i128(b.get("balance"))` — the absolute XDR
   balance. Removed trustlines emit an explicit `balance: 0` row
   (`stage.rs:1181-1188`), not a decrement. `last_updated_ledger = watermark =
-  st.last_seen_ledger`. In-ledger dedup keeps the max-watermark
+st.last_seen_ledger`. In-ledger dedup keeps the max-watermark
   (`stage.rs:1147-1157`).
 - `accounts`: same `extract_account_states` source; absolute post-state.
 - `lp_positions`: `shares` from the pool-share trustline `balance`
@@ -139,8 +141,9 @@ Re-running ledger N re-parses the identical `LedgerCloseMeta` → identical
 double-apply.**
 
 ### Class C — plain `MergeTree`, never dedups (2)
+
 `ledgers`, `wasm_interface_metadata`. A **duplicate `ledgers` marker row** is
-*not* produced by the normal crash→resume path (resume only re-runs when the
+_not_ produced by the normal crash→resume path (resume only re-runs when the
 marker is **absent**; if attempt 1 wrote the marker, resume skips). It can only
 arise from **overlapping backfill/live ranges or a manual re-run**. Impact if it
 happens: `resume` (`SELECT sequence …` membership) and `max(sequence)` are both
@@ -183,7 +186,7 @@ Which reads are exposed?
 
 - `account_balances_current` canonical query (task 0198):
   `crates/api/src/accounts/queries_ch.rs:213-246` — `account_balances_current
-  abc FINAL … LIMIT 1 BY (asset_type, asset_code, issuer_id)`. **Not exposed.**
+abc FINAL … LIMIT 1 BY (asset_type, asset_code, issuer_id)`. **Not exposed.**
 - Account list (`accounts/queries_ch.rs:121`, FINAL), asset list
   (`assets/queries_ch.rs:86`, FINAL), contract list
   (`contracts/queries_ch.rs:138`, FINAL), ledger transactions
@@ -211,18 +214,18 @@ Transient and rare. **Severity LOW.**
 
 ## Step 5 — Repair options weighed
 
-| Option | Verdict |
-|--------|---------|
-| **Keep current design** (leave-orphans + RMT) | **RECOMMENDED baseline.** Correct for the common crash case; gaps are LOW + transient. Cheapest. |
-| Explicit pre-insert cleanup (`ALTER … DELETE WHERE ledger_sequence = N`) | Targets the Step-3 orphan, but CH mutations are async + heavy; event-log tables `PARTITION BY intDiv(ledger_sequence, 500000)` so **`DROP PARTITION` cannot isolate one ledger** (partition = 500 k ledgers). Reserve for a guarded resume path only. |
-| Experimental CH transactions (`BEGIN … COMMIT`) | **REJECT.** Experimental + single-node / non-replicated only — incompatible with the Hetzner multi-node topology (tasks 0216, 0266). |
-| Two-phase staging + `MOVE/EXCHANGE PARTITION` | **REJECT.** Not on weight — on a **write-unit ≠ partition-unit mismatch**: backfill commits per 64k-ledger S3 unit, CH table partitions are 500k (`partition.rs:12` vs `init.sql:269`), ~8 writers per partition (parallel under task 0145). Atomic publish would need one writer to own a whole 500k partition + re-aligning the S3 layer. Live-tail (1 ledger) can't use it. See [R-fundamental-fix-deep-dive.md](R-fundamental-fix-deep-dive.md). |
-| Read-side `FINAL` / dedup-correct queries | Viable, cheap, scoped — add `LIMIT 1 BY id` to the exposed `transactions` queries **iff** the transient dup is judged user-visible; otherwise accept per ADR 0044. |
+| Option                                                                   | Verdict                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Keep current design** (leave-orphans + RMT)                            | **RECOMMENDED baseline.** Correct for the common crash case; gaps are LOW + transient. Cheapest.                                                                                                                                                                                                                                                                                                                                                     |
+| Explicit pre-insert cleanup (`ALTER … DELETE WHERE ledger_sequence = N`) | Targets the Step-3 orphan, but CH mutations are async + heavy; event-log tables `PARTITION BY intDiv(ledger_sequence, 500000)` so **`DROP PARTITION` cannot isolate one ledger** (partition = 500 k ledgers). Reserve for a guarded resume path only.                                                                                                                                                                                                |
+| Experimental CH transactions (`BEGIN … COMMIT`)                          | **REJECT.** Experimental + single-node / non-replicated only — incompatible with the Hetzner multi-node topology (tasks 0216, 0266).                                                                                                                                                                                                                                                                                                                 |
+| Two-phase staging + `MOVE/EXCHANGE PARTITION`                            | **REJECT.** Not on weight — on a **write-unit ≠ partition-unit mismatch**: backfill commits per 64k-ledger S3 unit, CH table partitions are 500k (`partition.rs:12` vs `init.sql:269`), ~8 writers per partition (parallel under task 0145). Atomic publish would need one writer to own a whole 500k partition + re-aligning the S3 layer. Live-tail (1 ledger) can't use it. See [R-fundamental-fix-deep-dive.md](R-fundamental-fix-deep-dive.md). |
+| Read-side `FINAL` / dedup-correct queries                                | Viable, cheap, scoped — add `LIMIT 1 BY id` to the exposed `transactions` queries **iff** the transient dup is judged user-visible; otherwise accept per ADR 0044.                                                                                                                                                                                                                                                                                   |
 
 **Recommendation:** keep the write path as-is; spawn **one** low-priority
 hardening follow-up (task **0298**) bundling (1) a backfill resume **orphan
 guard** for the Step-3 code-change case, and (2) a read-side decision for the
-exposed `transactions` queries. No fix is *required* for correctness today.
+exposed `transactions` queries. No fix is _required_ for correctness today.
 
 ---
 
@@ -249,15 +252,16 @@ sequence. This does not change any verdict but corrects the mental model.
 **Topology (gathered in the deep dive):** single-node, **non-replicated**,
 ClickHouse 26.3, local SSD. No `Replicated*`, no keeper. The "3 machines" of
 task 0266 are ephemeral parser workers, not replicas. This is what rules out the
-replication-dependent fixes and is *favourable* for partition swaps mechanically
+replication-dependent fixes and is _favourable_ for partition swaps mechanically
 (no replica races) — but the 64k≠500k mismatch rules those out anyway.
 
 **RMT dedup semantics (clarification, since the team asked).**
+
 - A re-run `INSERT` writes a **new immutable part**; old parts are untouched, so
   **both rows coexist** until a background **merge**. A plain `SELECT` sees both;
   `FINAL` hides the dup at read time.
 - On merge, for rows sharing the `ORDER BY` key, RMT **keeps the row with the
-  MAX version and drops the rest** — it is a *pick-one-winner*, NOT an arithmetic
+  MAX version and drops the rest** — it is a _pick-one-winner_, NOT an arithmetic
   merge and NOT "keep both". Max-version = newest ledger = correct for
   current-state (older-wins would serve stale state).
 - **Equal version (same ledger re-processed) or no version column → the surviving

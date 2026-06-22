@@ -7,9 +7,15 @@
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.2 + §7
 -- Schema:       ADR 0037
 -- Data sources: DB-only.
--- Inputs:       (none)
--- Indexes:      ledgers PK, ledgers.idx_ledgers_closed_at,
---               pg_class catalog (for reltuples).
+-- Inputs:       :head — the chain head (max ledger sequence) the API
+--               version-keys its cache on (crate::common::head). The latest
+--               row is PINNED to this sequence (WHERE sequence = :head) so the
+--               response's latest_ledger_sequence always equals the cache key;
+--               no TOCTOU vs the head read, no max(sequence)-vs-closed_at
+--               divergence. :head = 0 (empty cluster) matches no row -> the
+--               zero-valued empty response.
+-- Indexes:      ledgers PK (sequence), ledgers.idx_ledgers_closed_at (TPS
+--               window), pg_class catalog (for reltuples).
 -- Notes:
 --   • `latest_ledger_closed_at` powers the §7 "polling indicator — when
 --     data was last refreshed" UI element. It is the close time of the
@@ -30,14 +36,16 @@
 --     `::float8` is used (not `::numeric`) — TPS is a 0–1000 display metric
 --     with FE-side rounding, f64 has 14-digit headroom, and surfacing as
 --     `float8` keeps the API decode path native (no `rust_decimal` dep).
---   • `latest_ledger_sequence` and `latest_ledger_closed_at` come from a
---     shared LATERAL on the newest ledger row so the planner uses
---     idx_ledgers_closed_at exactly once, not twice.
+--   • `latest_ledger_sequence` and `latest_ledger_closed_at` come from the
+--     head ledger pinned by `WHERE sequence = :head` (a PK point read), not a
+--     re-derived "newest row" — so the pair is always the exact ledger the
+--     cache key names.
 --   • The remaining sub-selects are independent and run in parallel under
 --     the planner's executor; the whole statement is one round-trip.
---   • `generated_at` is `NOW()` evaluated at SELECT time. The API caches
---     the assembled response in-process (~30 s TTL); cache hits return
---     the original `generated_at`, so the frontend can split two
+--   • `generated_at` is `NOW()` evaluated at SELECT time. The API caches the
+--     assembled response in-process, version-keyed on :head (one compute per
+--     chain head; a 60 s backstop TTL bounds memory / a stalled head). Cache
+--     hits return the original `generated_at`, so the frontend can split two
 --     distinct signals without mixing them with cache age:
 --       - indexer-health lag = generated_at − latest_ledger_closed_at
 --       - data staleness ("info from N seconds ago") = Date.now() − generated_at
@@ -60,6 +68,5 @@ SELECT
 FROM (
     SELECT sequence, closed_at
     FROM ledgers
-    ORDER BY closed_at DESC
-    LIMIT 1
+    WHERE sequence = :head   -- pinned to the cache-key head (PK point read)
 ) latest;
