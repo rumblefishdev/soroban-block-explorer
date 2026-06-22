@@ -10,12 +10,11 @@
 #   (`!override` is mandatory — without it Compose appends the new
 #   bindings to the public ones from the base file).
 # - Replaces the dev named volume with bind mounts under `/srv/`
-#   so the data, logs, and backup-staging directories survive
-#   container recreation and are reachable for the Borg backup
-#   cron entry on the host.
+#   so the data and logs directories survive container recreation
+#   and the data dir (where FREEZE writes `shadow/`) is reachable
+#   for the Borg backup cron on the host.
 # - Layers in the production-only ClickHouse XML overrides
-#   (`config.d/memory.xml`, `config.d/prometheus.xml`,
-#   `config.d/backups.xml`).
+#   (`config.d/memory.xml`, `config.d/prometheus.xml`).
 # - Switches the schema sidecar to a shell-wrapped entrypoint that
 #   reads the prod password from the container env at runtime
 #   (keeps it out of the rendered Compose spec and `docker inspect`
@@ -90,6 +89,17 @@ services:
       start_period: 10s
 
   clickhouse:
+    # Cap container log size so an error loop can never fill the disk.
+    # Task 0236 incident: an ENOSPC logging spiral grew this container's
+    # json log to ~209 GiB because the running container predated the
+    # daemon.json default (and `live-restore` kept it across reloads).
+    # Setting it explicitly here guarantees bounded logs on recreate,
+    # independent of daemon.json timing.
+    logging:
+      driver: json-file
+      options:
+        max-size: '100m'
+        max-file: '5'
     # `!override` replaces the inherited port list from the base
     # file. Without this tag Compose APPENDS, which would silently
     # leave the public `0.0.0.0:8123` and `0.0.0.0:9000` bindings
@@ -116,7 +126,6 @@ services:
     volumes: !override
       - /srv/clickhouse-data:/var/lib/clickhouse
       - /srv/clickhouse-logs:/var/log/clickhouse-server
-      - /srv/backups:/backups
       # Read-only credentials file for clickhouse-client invocations
       # from the host-side backup script. Delivered by Ansible's
       # `app` role (not backup — must land before this compose
@@ -150,7 +159,6 @@ services:
       # Production-only overrides.
       - ./crates/db-clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       - ./crates/db-clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
-      - ./crates/db-clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
     environment:
       CLICKHOUSE_USER: default
       # Fail-fast pattern — Compose refuses to start if the env

@@ -2,7 +2,7 @@
 id: '0291'
 title: 'Version-keyed cache (latest_ledger_sequence) instead of TTL — zero staleness after a new ledger'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0290']
 tags:
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from the polling/fetching investigation (FETCHING_PLAN.md). The TTL cache serves data up to ~4s behind the DB after a new ledger; version-keying eliminates that window.'
+  - date: 2026-06-19
+    status: active
+    who: fmazur
+    note: 'Promoted to active to begin implementation.'
 ---
 
 # Version-keyed cache instead of TTL — zero staleness after a new ledger

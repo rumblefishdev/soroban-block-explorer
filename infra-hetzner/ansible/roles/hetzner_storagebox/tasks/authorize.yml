@@ -1,0 +1,416 @@
+---
+# Authorise the Borg cron SSH key on the Storage Box subaccount and
+# validate the first backup roundtrip.
+#
+# No Cloud API / Ansible module manages a subaccount's SSH public
+# keys, so we write its `~/.ssh/authorized_keys` directly over
+# SSH/SFTP. Every task delegates to the box because:
+#   * the box already holds the Borg pubkey (the `backup` role just
+#     generated /root/.ssh/borg_ed25519);
+#   * the box is inside Hetzner, so it reaches the subaccount even
+#     with `reachable_externally: false` (no laptop exposure);
+#   * the subaccount password therefore never leaves the box.
+#
+# Two paths:
+#   * BOOTSTRAP (key not yet authorised, incl. adopting the 0227
+#     manual subaccount) — reset the password to our known value via
+#     the Cloud API, then push authorized_keys over password-auth
+#     SFTP.
+#   * STEADY (key already works) — compare the remote authorized_keys
+#     to the declared set over key-auth and push only on drift. This
+#     is the idempotent no-op re-run, and the overwrite gives delta
+#     reconciliation (a rotated/removed key replaces the old one).
+
+- name: Resolve the box host and discovered Storage Box endpoint
+  ansible.builtin.set_fact:
+    sb_box: "{{ groups['ch_prod'][0] }}"
+    sb_user: "{{ hostvars[groups['ch_prod'][0]].storagebox_ssh_user | default('', true) }}"
+    sb_host: "{{ hostvars[groups['ch_prod'][0]].storagebox_ssh_host | default('', true) }}"
+    sb_port: '{{ storagebox_ssh_port }}'
+
+- name: Fail early if the SSH endpoint was not discovered
+  # The `storagebox` reconcile play must have run in this invocation
+  # (or the facts pinned in env) — without user/host there is nothing
+  # to connect to.
+  ansible.builtin.assert:
+    that:
+      - sb_user | length > 0
+      - sb_host | length > 0
+      - storagebox_effective_name is defined
+    fail_msg: |
+      No Storage Box subaccount SSH endpoint / name is known. The
+      `storagebox` reconcile play must run in the same invocation (it
+      discovers the endpoint and sets storagebox_effective_name) — run
+      the full playbook rather than this play in isolation.
+
+- name: Read the Borg cron public key from the box
+  ansible.builtin.slurp:
+    src: /root/.ssh/borg_ed25519.pub
+  delegate_to: '{{ sb_box }}'
+  become: true
+  register: sb_borg_pubkey
+
+- name: Compute the declared authorised_keys set
+  # The box's Borg pubkey is ALWAYS authorised (it is the backup
+  # identity); `storagebox_authorized_keys` adds any extra/break-glass
+  # keys on top. Sorted + de-duplicated so the steady-state comparison
+  # below does not churn on ordering. NOTE: emptying
+  # `storagebox_authorized_keys` does NOT revoke the box key — to cut
+  # the cron's access, set storagebox_subaccount_access.ssh_enabled
+  # false (reconcile disables SSH) or delete the subaccount. Removing
+  # an EXTRA key from the list IS reconciled away here (overwrite).
+  ansible.builtin.set_fact:
+    sb_desired_keys: >-
+      {{
+        ([ (sb_borg_pubkey.content | b64decode | trim) ] + storagebox_authorized_keys)
+        | map('trim') | reject('equalto', '') | unique | sort
+      }}
+
+- name: Probe whether the Borg key is already authorised
+  # BatchMode=yes forbids password fallback. The remote `true` is just a
+  # connection probe — a Storage Box restricted shell may reject it, so
+  # the NEXT task classifies by ssh's exit convention (rc 255 = ssh/auth
+  # failure; any other rc = auth succeeded), NOT by the command's own rc.
+  # Only an AUTH-DENIAL means "key not yet authorised" (bootstrap); a
+  # connectivity / host-key failure must NOT trigger a password reset.
+  # StrictHostKeyChecking=yes relies on the host key the `backup`
+  # role pinned in /root/.ssh/known_hosts.
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - /root/.ssh/borg_ed25519
+      - -p
+      - '{{ sb_port }}'
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ConnectTimeout=15
+      - '{{ sb_user }}@{{ sb_host }}'
+      - 'true'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  register: sb_key_probe
+  failed_when: false
+  changed_when: false
+  # Read-only SSH probe — run even under --check so the downstream
+  # classify/fail-fast have a real rc (else the registers are unset and
+  # error_on_undefined_vars aborts the dry-run). Mirrors site.yml's
+  # `id -u` check_mode:false.
+  check_mode: false
+
+- name: Classify the probe result (auth denial vs connectivity failure)
+  # `ssh` exits 255 ONLY for its own errors (connection refused, timeout,
+  # auth denial, host-key mismatch). When authentication SUCCEEDS it
+  # returns the REMOTE command's exit code instead. A Hetzner Storage Box
+  # subaccount has a RESTRICTED shell that rejects arbitrary commands
+  # (our `true` probe → rc 8 "Command not found"), so any non-255 rc
+  # proves the key authenticated even when the command itself was refused.
+  # Hence: rc != 255 → authorised (steady); rc == 255 with an auth-denial
+  # signature → bootstrap; rc == 255 otherwise → connectivity/host-key
+  # problem (fail-fast — never reset the password on a transient blip).
+  ansible.builtin.set_fact:
+    sb_key_authorised: '{{ sb_key_probe.rc != 255 }}'
+    sb_key_denied: >-
+      {{ sb_key_probe.rc == 255
+         and (sb_key_probe.stderr | default('')
+              is search('Permission denied|publickey|Too many authentication failures')) }}
+
+- name: Fail fast if the subaccount is unreachable for a non-auth reason
+  # rc!=0 without an auth-denial signature means timeout / refused / DNS
+  # / host-key mismatch — NOT a missing key. Resetting the password and
+  # re-pushing on such a transient failure would be a spurious,
+  # non-idempotent mutation (and on a host-key mismatch could hand the
+  # password to a MITM). Stop instead.
+  ansible.builtin.fail:
+    msg: |
+      Could not determine whether the Borg key is authorised on
+      {{ sb_user }}@{{ sb_host }}:{{ sb_port }} — SSH failed for a reason that
+      does not look like an authentication denial:
+
+        rc:     {{ sb_key_probe.rc }}
+        stderr: {{ sb_key_probe.stderr | default('') | trim }}
+
+      Likely a connectivity or host-key issue, not a missing key. Investigate
+      (network, known_hosts pin, Storage Box availability) before re-running —
+      the role will NOT reset the subaccount password on this path.
+  when:
+    - not (sb_key_authorised | bool)
+    - not (sb_key_denied | bool)
+
+- name: Stage the desired authorised_keys file on the box
+  # Public-key material (not secret); used as the scp/sftp source for
+  # both paths. Overwritten every run to reflect the declared set.
+  ansible.builtin.copy:
+    dest: /root/.ssh/borg_subaccount_authorized_keys
+    content: "{{ sb_desired_keys | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+  delegate_to: '{{ sb_box }}'
+  become: true
+
+# ---------------------------------------------------------------------
+# BOOTSTRAP path — key not yet authorised (server refused it)
+#
+# SECURITY NOTE: the password-auth login below trusts the Storage Box
+# host key that the `backup` role pinned via TOFU `ssh-keyscan` (no
+# out-of-band verification). A MITM present at first-scan time would
+# receive the subaccount password here. Run the FIRST deploy from a
+# trusted network, and verify the pinned Storage Box host-key
+# fingerprint against the Hetzner Console after the first run. Once the
+# key is authorised this branch never runs again (steady path takes
+# over with key auth and no password).
+# ---------------------------------------------------------------------
+
+- name: Reset the subaccount password to the known value (bootstrap only)
+  # Needed so the password-auth SFTP below can log in: a freshly
+  # created subaccount already has our password, but an adopted
+  # (0227 manual) one has an unknown password. reset_password is not
+  # idempotent, but this branch runs only when the server actively
+  # DENIED the key — thereafter the steady path takes over.
+  hetzner.hcloud.storage_box_subaccount:
+    api_token: '{{ hcloud_token }}'
+    storage_box: '{{ storagebox_id }}'
+    name: '{{ storagebox_effective_name }}'
+    password: '{{ storagebox_subaccount_password }}'
+    state: reset_password
+  no_log: true
+  when: sb_key_denied | bool
+
+- name: Ensure sshpass is present for the password-auth bootstrap
+  ansible.builtin.apt:
+    name: sshpass
+    state: present
+  delegate_to: '{{ sb_box }}'
+  become: true
+  when: sb_key_denied | bool
+
+- name: Ensure the subaccount .ssh directory exists (password auth)
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -e
+      - ssh
+      - -p
+      - '{{ sb_port }}'
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - PreferredAuthentications=password
+      - -o
+      - PubkeyAuthentication=no
+      - '{{ sb_user }}@{{ sb_host }}'
+      - 'mkdir -p .ssh && chmod 700 .ssh'
+  environment:
+    SSHPASS: '{{ storagebox_subaccount_password }}'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  no_log: true
+  changed_when: true
+  when: sb_key_denied | bool
+
+- name: Install authorised_keys on the subaccount (password auth)
+  ansible.builtin.command:
+    argv:
+      - sshpass
+      - -e
+      - scp
+      - -p
+      - -P
+      - '{{ sb_port }}'
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - PreferredAuthentications=password
+      - -o
+      - PubkeyAuthentication=no
+      - /root/.ssh/borg_subaccount_authorized_keys
+      - '{{ sb_user }}@{{ sb_host }}:.ssh/authorized_keys'
+  environment:
+    SSHPASS: '{{ storagebox_subaccount_password }}'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  no_log: true
+  changed_when: true
+  when: sb_key_denied | bool
+
+# ---------------------------------------------------------------------
+# STEADY path — key already authorised; reconcile the set idempotently
+# ---------------------------------------------------------------------
+
+- name: Read the current authorised_keys over key auth
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - /root/.ssh/borg_ed25519
+      - -p
+      - '{{ sb_port }}'
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ConnectTimeout=15
+      - '{{ sb_user }}@{{ sb_host }}'
+      - 'cat .ssh/authorized_keys'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  register: sb_current_keys
+  failed_when: false
+  changed_when: false
+  check_mode: false # read-only; keep the register populated under --check
+  when: sb_key_authorised | bool
+
+- name: Reconcile authorised_keys over key auth when drifted
+  # Push only when the remote set (normalised the same way as the
+  # desired set) differs — keeps re-runs a no-op while still
+  # overwriting to revoke removed keys.
+  ansible.builtin.command:
+    argv:
+      - scp
+      - -p
+      - -i
+      - /root/.ssh/borg_ed25519
+      - -P
+      - '{{ sb_port }}'
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - /root/.ssh/borg_subaccount_authorized_keys
+      - '{{ sb_user }}@{{ sb_host }}:.ssh/authorized_keys'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  changed_when: true
+  when:
+    - sb_key_authorised | bool
+    - sb_current_keys.rc == 0
+    - (sb_current_keys.stdout_lines | map('trim') | reject('equalto', '') | unique | sort | list) != (sb_desired_keys | list)
+
+# ---------------------------------------------------------------------
+# Post-authorisation: enforce authorized_keys mode (key authorised by
+# here on both paths). The drift-baseline fingerprint is recorded at
+# the very END, after first-run validation, so a failed roundtrip does
+# not leave a "known good" baseline behind.
+# ---------------------------------------------------------------------
+
+- name: Enforce 0600 on the subaccount authorised_keys (best-effort)
+  # `scp -p` above already preserves the staged file's 0600 mode, so
+  # this is belt-and-braces for scp implementations that ignore -p.
+  # failed_when:false so a transient SSH hiccup on this non-critical
+  # hardening step never aborts an otherwise idempotent no-op re-run.
+  # Not a content change → changed_when false.
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -i
+      - /root/.ssh/borg_ed25519
+      - -p
+      - '{{ sb_port }}'
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ConnectTimeout=15
+      - '{{ sb_user }}@{{ sb_host }}'
+      - 'chmod 600 .ssh/authorized_keys'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  changed_when: false
+  failed_when: false
+
+# ---------------------------------------------------------------------
+# First-run validation — full backup roundtrip (first run only)
+# ---------------------------------------------------------------------
+
+- name: Check whether the repo already holds a ch-* archive
+  # First-run gate: keeps routine re-runs a no-op (the full backup can
+  # be long on a large corpus). failed_when:false because the repo is
+  # not initialised yet on a fresh box (ch-backup inits it).
+  ansible.builtin.shell:
+    cmd: >-
+      BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
+      BORG_RSH="ssh -i /root/.ssh/borg_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3"
+      borg list --short
+      "ssh://{{ sb_user }}@{{ sb_host }}:{{ sb_port }}/{{ borg_repo_path }}"
+  delegate_to: '{{ sb_box }}'
+  become: true
+  register: sb_repo_before
+  failed_when: false
+  changed_when: false
+  # Skip the whole validation block under --check: a dry-run cannot run
+  # a real backup, and on a fresh box the repo would not exist yet.
+  when:
+    - storagebox_run_backup_validation | bool
+    - not ansible_check_mode
+
+- name: Decide whether a first-run validation backup is needed
+  # True only on the FIRST run (no ch-* archive yet), with validation
+  # enabled and outside --check. Gates the backup + confirm-list +
+  # assert together, so a converged steady re-run skips all three and
+  # is a true no-op (no second borg list, nothing to abort on a
+  # transient Storage Box blip).
+  ansible.builtin.set_fact:
+    sb_validate_now: >-
+      {{ (storagebox_run_backup_validation | bool)
+         and (not ansible_check_mode)
+         and ((sb_repo_before.stdout_lines | default([]) | select('match', '^ch-') | list | length) == 0) }}
+
+- name: Run a one-off backup to validate the end-to-end pathway (first run only)
+  # Exercises the same script cron runs. CH_BACKUP_NO_JITTER skips the
+  # 0–30 min randomised delay so the playbook does not block.
+  ansible.builtin.command:
+    cmd: /usr/local/bin/ch-backup
+  environment:
+    CH_BACKUP_NO_JITTER: '1'
+  delegate_to: '{{ sb_box }}'
+  become: true
+  changed_when: true
+  when: sb_validate_now | bool
+
+- name: List the Borg repository to confirm an archive is present
+  ansible.builtin.shell:
+    cmd: >-
+      BORG_PASSCOMMAND="cat /etc/soroban-backup/borg.passphrase"
+      BORG_RSH="ssh -i /root/.ssh/borg_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3"
+      borg list --short
+      "ssh://{{ sb_user }}@{{ sb_host }}:{{ sb_port }}/{{ borg_repo_path }}"
+  delegate_to: '{{ sb_box }}'
+  become: true
+  register: sb_borg_list
+  changed_when: false
+  when: sb_validate_now | bool
+
+- name: Assert the repository lists at least one ch-* archive
+  ansible.builtin.assert:
+    that:
+      - sb_borg_list.stdout_lines | select('match', '^ch-') | list | length > 0
+    fail_msg: |
+      The repository at
+      ssh://{{ sb_user }}@{{ sb_host }}:{{ sb_port }}/{{ borg_repo_path }}
+      lists no `ch-*` archive. Inspect /var/log/ch-backup.log on the box.
+    success_msg: 'Borg repository lists {{ sb_borg_list.stdout_lines | length }} archive(s).'
+  when: sb_validate_now | bool
+
+# ---------------------------------------------------------------------
+# Record the drift baseline LAST — only after the key is authorised and
+# (when enabled) the roundtrip validated, so a failed run never leaves a
+# "known good" fingerprint behind. Skipped under --check (mutating).
+# ---------------------------------------------------------------------
+- name: Record the authorised Borg key fingerprint as the drift baseline
+  # Written HERE (not in the `backup` role) so /etc/soroban-backup/borg.fp
+  # always reflects the key actually authorised on the subaccount. The
+  # backup role only warns/fails on drift. Mode 0640 matches the rest of
+  # /etc/soroban-backup/.
+  ansible.builtin.shell:
+    cmd: >-
+      ssh-keygen -lf /root/.ssh/borg_ed25519.pub > /etc/soroban-backup/borg.fp
+      && chmod 0640 /etc/soroban-backup/borg.fp
+  delegate_to: '{{ sb_box }}'
+  become: true
+  changed_when: false
