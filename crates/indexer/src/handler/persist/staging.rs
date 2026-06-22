@@ -180,6 +180,7 @@ pub(super) struct AssetRow {
     pub asset_code: Option<String>,
     pub issuer_str_key: Option<String>,
     pub contract_id: Option<String>,
+    pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
 }
@@ -197,6 +198,13 @@ pub(super) struct ContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: ContractType,
     pub is_sac: bool,
+    /// Per ADR 0042 — replaces previous `metadata: Option<Value>` JSONB
+    /// blob with a typed `name VARCHAR(256)` column. Populated by the
+    /// xdr-parser's constructor-pattern second pass (deploy + storage
+    /// init in the same ledger). Late-init / re-init updates land via
+    /// `extract_contract_data_name_writes` + a separate retroactive
+    /// UPDATE in the write path.
+    pub name: Option<String>,
 }
 
 /// Either a native-XLM balance (all identifying cols NULL) or a credit-asset
@@ -243,6 +251,13 @@ pub(super) struct Staged {
 
     pub wasm_rows: Vec<WasmRow>,
     pub contract_rows: Vec<ContractRow>,
+    /// Per ADR 0042 / task 0156 — late-init and re-init `Symbol("name")`
+    /// writes captured by `xdr_parser::extract_contract_data_name_writes`.
+    /// Each `(contract_id, name)` pair triggers a retroactive
+    /// `UPDATE soroban_contracts SET name = …` after the contract upsert,
+    /// covering the deploy-then-init pattern that the deployment
+    /// extraction's same-ledger second pass cannot see.
+    pub contract_name_writes: Vec<(String, String)>,
     /// Task 0118 Phase 2 — classification derived from every wasm spec
     /// observed this ledger. Keyed by `wasm_hash`. Non-`Other` values drive
     /// the post-wasm `soroban_contracts.contract_type` UPDATE and the
@@ -301,6 +316,7 @@ impl Staged {
         nfts: &[ExtractedNft],
         nft_events: &[ExtractedNftEvent],
         lp_positions: &[ExtractedLpPosition],
+        contract_name_writes: &[(String, String)],
         sac_overrides: &[SacOverride],
     ) -> Result<Self, HandlerError> {
         let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
@@ -588,6 +604,7 @@ impl Staged {
                 deployed_at_ledger: Some(i64::from(dep.deployed_at_ledger)),
                 contract_type,
                 is_sac: dep.is_sac,
+                name: dep.name.clone(),
             });
         }
         // Also register any contracts referenced by ops/events/invocations that
@@ -1004,6 +1021,7 @@ impl Staged {
                 asset_code: t.asset_code.clone(),
                 issuer_str_key: t.issuer_address.clone(),
                 contract_id: t.contract_id.clone(),
+                name: t.name.clone(),
                 total_supply: t.total_supply.clone(),
                 holder_count: t.holder_count,
             });
@@ -1208,6 +1226,7 @@ impl Staged {
             account_state_overrides,
             wasm_rows,
             contract_rows,
+            contract_name_writes: contract_name_writes.to_vec(),
             wasm_classification,
             sac_overrides,
             tx_rows,
@@ -1773,6 +1792,7 @@ mod tests {
             &[],
             &[],
             std::slice::from_ref(&nft_event),
+            &[],
             &[],
             &[],
         )

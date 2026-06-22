@@ -604,7 +604,7 @@ pub(super) async fn upsert_contracts_returning_id(
 ) -> Result<HashMap<String, i64>, HandlerError> {
     let mut out: HashMap<String, i64> = HashMap::new();
 
-    // Pass 1 — rich rows.
+    // Pass 1 — rich rows with name (per ADR 0042 typed column).
     for chunk in staged.contract_rows.chunks(CHUNK_SIZE) {
         let mut contract_ids: Vec<String> = Vec::with_capacity(chunk.len());
         let mut wasm_hashes: Vec<Option<Vec<u8>>> = Vec::with_capacity(chunk.len());
@@ -614,6 +614,7 @@ pub(super) async fn upsert_contracts_returning_id(
         // ADR 0031: contract_type is SMALLINT (Rust ContractType enum).
         let mut types: Vec<Option<ContractType>> = Vec::with_capacity(chunk.len());
         let mut sacs: Vec<bool> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(chunk.len());
 
         for r in chunk {
             contract_ids.push(r.contract_id.clone());
@@ -627,24 +628,26 @@ pub(super) async fn upsert_contracts_returning_id(
             deployed.push(r.deployed_at_ledger);
             types.push(Some(r.contract_type));
             sacs.push(r.is_sac);
+            names.push(r.name.clone());
         }
 
         let rows: Vec<(i64, String)> = sqlx::query_as(
             r#"
             INSERT INTO soroban_contracts (
                 contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id,
-                deployed_at_ledger, contract_type, is_sac
+                deployed_at_ledger, contract_type, is_sac, name
             )
             SELECT * FROM UNNEST(
                 $1::VARCHAR[], $2::BYTEA[], $3::BIGINT[], $4::BIGINT[],
-                $5::BIGINT[], $6::SMALLINT[], $7::BOOL[]
+                $5::BIGINT[], $6::SMALLINT[], $7::BOOL[], $8::VARCHAR[]
             )
             ON CONFLICT (contract_id) DO UPDATE SET
                 wasm_hash = COALESCE(EXCLUDED.wasm_hash, soroban_contracts.wasm_hash),
                 deployer_id = COALESCE(EXCLUDED.deployer_id, soroban_contracts.deployer_id),
                 deployed_at_ledger = COALESCE(EXCLUDED.deployed_at_ledger, soroban_contracts.deployed_at_ledger),
                 contract_type = COALESCE(EXCLUDED.contract_type, soroban_contracts.contract_type),
-                is_sac = soroban_contracts.is_sac OR EXCLUDED.is_sac
+                is_sac = soroban_contracts.is_sac OR EXCLUDED.is_sac,
+                name = COALESCE(EXCLUDED.name, soroban_contracts.name)
             RETURNING id, contract_id
             "#,
         )
@@ -655,6 +658,7 @@ pub(super) async fn upsert_contracts_returning_id(
         .bind(&deployed)
         .bind(&types)
         .bind(&sacs)
+        .bind(&names)
         .fetch_all(&mut **db_tx)
         .await?;
 
@@ -721,6 +725,86 @@ pub(super) async fn upsert_contracts_returning_id(
         }
     }
     Ok(out)
+}
+
+/// Apply late-init / re-init `Symbol("name")` storage writes to
+/// `soroban_contracts.name`.
+///
+/// Per ADR 0042 + task 0156, the constructor pattern (deploy + storage
+/// init in the same ledger) is handled by `extract_contract_deployments`
+/// populating `name` directly. This helper covers the orthogonal cases:
+///
+/// * **Late-init** — contract deployed in an earlier ledger, the
+///   `Symbol("name")` storage entry is created by a subsequent `init()`
+///   invocation. The contract row already exists with `name = NULL`.
+/// * **Re-init / name update** — a contract overwrites its previous
+///   `Symbol("name")` storage entry. The new value should win.
+///
+/// Both cases are handled by an unconditional SET (no `name IS NULL`
+/// guard), because the on-chain storage event IS the source of truth:
+/// if we observed a write, the chain wants that value persisted.
+///
+/// Contracts not present in the table (referenced-only StrKeys whose
+/// upsert ran in pass 2 of `upsert_contracts_returning_id` and produced
+/// a bare row, OR contracts that have not yet appeared at all) match
+/// the `WHERE sc.contract_id = c.contract_id` predicate the same way
+/// once their row exists; until then this UPDATE is a no-op for them.
+pub(super) async fn apply_contract_name_writes(
+    db_tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    name_writes: &[(String, String)],
+) -> Result<(), super::HandlerError> {
+    if name_writes.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in name_writes.chunks(CHUNK_SIZE) {
+        let mut contract_ids: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<String> = Vec::with_capacity(chunk.len());
+        for (cid, name) in chunk {
+            contract_ids.push(cid.clone());
+            names.push(name.clone());
+        }
+        // Pass 1 — `soroban_contracts.name`. Always applied; this is the
+        // primary target and the source for the GENERATED `search_vector`.
+        sqlx::query(
+            r#"
+            UPDATE soroban_contracts sc
+               SET name = c.name
+              FROM UNNEST($1::VARCHAR[], $2::VARCHAR[]) AS c(contract_id, name)
+             WHERE sc.contract_id = c.contract_id
+            "#,
+        )
+        .bind(&contract_ids)
+        .bind(&names)
+        .execute(&mut **db_tx)
+        .await?;
+
+        // Pass 2 — mirror the name onto `assets.name` for Soroban-native
+        // Fungible tokens (`asset_type = 3` per ADR 0031 / TokenAssetType).
+        // The asset row keys on the `soroban_contracts.id` surrogate FK
+        // (ADR 0030), so we resolve via the StrKey → id JOIN. SAC rows
+        // (`asset_type = 2`) and classic rows (0/1) carry name from
+        // `asset_code` or SEP-1 enrichment, not from on-chain
+        // `Symbol("name")` storage; the `asset_type = 3` filter excludes
+        // them. Same atomic transaction as Pass 1 — `assets.name` and
+        // `soroban_contracts.name` cannot diverge.
+        sqlx::query(
+            r#"
+            UPDATE assets a
+               SET name = c.name
+              FROM UNNEST($1::VARCHAR[], $2::VARCHAR[]) AS c(contract_id, name),
+                   soroban_contracts sc
+             WHERE sc.contract_id = c.contract_id
+               AND a.contract_id = sc.id
+               AND a.asset_type = 3
+            "#,
+        )
+        .bind(&contract_ids)
+        .bind(&names)
+        .execute(&mut **db_tx)
+        .await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1371,19 +1455,20 @@ async fn upsert_assets_native(
     }
     // Only one native asset can exist (uidx_assets_native). De-dup here so the
     // INSERT binds exactly one row.
-    let (total_supply, holder_count) = rows
+    let (name, total_supply, holder_count) = rows
         .first()
-        .map(|t| (t.total_supply.clone(), t.holder_count))
-        .unwrap_or((None, None));
+        .map(|t| (t.name.clone(), t.total_supply.clone(), t.holder_count))
+        .unwrap_or((None, None, None));
     // ADR 0031: assets.asset_type is SMALLINT — bind the enum, don't inline a literal.
     sqlx::query(
         r#"
-        INSERT INTO assets (asset_type, total_supply, holder_count)
-        SELECT $1, CASE WHEN $2 IS NULL THEN NULL ELSE $2::NUMERIC(28,7) END, $3
+        INSERT INTO assets (asset_type, name, total_supply, holder_count)
+        SELECT $1, $2, CASE WHEN $3 IS NULL THEN NULL ELSE $3::NUMERIC(28,7) END, $4
         WHERE NOT EXISTS (SELECT 1 FROM assets WHERE asset_type = $1)
         "#,
     )
     .bind(TokenAssetType::Native)
+    .bind(name)
     .bind(total_supply)
     .bind(holder_count)
     .execute(&mut **db_tx)
@@ -1412,6 +1497,7 @@ async fn upsert_assets_classic_like(
         let mut codes: Vec<String> = Vec::with_capacity(chunk.len());
         let mut issuers: Vec<i64> = Vec::with_capacity(chunk.len());
         let mut contracts: Vec<Option<i64>> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(chunk.len());
         let mut supplies: Vec<Option<String>> = Vec::with_capacity(chunk.len());
         let mut holders: Vec<Option<i32>> = Vec::with_capacity(chunk.len());
 
@@ -1430,6 +1516,7 @@ async fn upsert_assets_classic_like(
                 r.contract_id.as_deref(),
                 "asset.contract",
             )?);
+            names.push(r.name.clone());
             supplies.push(r.total_supply.clone());
             holders.push(r.holder_count);
         }
@@ -1450,16 +1537,17 @@ async fn upsert_assets_classic_like(
         // IS NULL). GREATEST is order-independent and parallel-safe.
         sqlx::query(
             r#"
-            INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, total_supply, holder_count)
-            SELECT $1, code, issuer_id, contract_id,
+            INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count)
+            SELECT $1, code, issuer_id, contract_id, name,
                    CASE WHEN supply IS NULL THEN NULL ELSE supply::NUMERIC(28,7) END, holder_count
-              FROM UNNEST($2::VARCHAR[], $3::BIGINT[], $4::BIGINT[], $5::TEXT[], $6::INTEGER[])
-                AS t(code, issuer_id, contract_id, supply, holder_count)
+              FROM UNNEST($2::VARCHAR[], $3::BIGINT[], $4::BIGINT[], $5::VARCHAR[], $6::TEXT[], $7::INTEGER[])
+                AS t(code, issuer_id, contract_id, name, supply, holder_count)
             ON CONFLICT (asset_code, issuer_id)
               WHERE asset_type IN (1, 2)  -- classic_credit, sac
               DO UPDATE SET
                 asset_type = GREATEST(EXCLUDED.asset_type, assets.asset_type),
                 contract_id = COALESCE(EXCLUDED.contract_id, assets.contract_id),
+                name = COALESCE(EXCLUDED.name, assets.name),
                 total_supply = COALESCE(EXCLUDED.total_supply, assets.total_supply),
                 holder_count = COALESCE(EXCLUDED.holder_count, assets.holder_count)
             "#,
@@ -1468,6 +1556,7 @@ async fn upsert_assets_classic_like(
         .bind(&codes)
         .bind(&issuers)
         .bind(&contracts)
+        .bind(&names)
         .bind(&supplies)
         .bind(&holders)
         .execute(&mut **db_tx)
@@ -1496,6 +1585,7 @@ async fn upsert_assets_contract_keyed(
     }
     for chunk in rows.chunks(CHUNK_SIZE) {
         let mut contracts: Vec<i64> = Vec::with_capacity(chunk.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(chunk.len());
         let mut supplies: Vec<Option<String>> = Vec::with_capacity(chunk.len());
         let mut holders: Vec<Option<i32>> = Vec::with_capacity(chunk.len());
 
@@ -1504,6 +1594,7 @@ async fn upsert_assets_contract_keyed(
                 continue;
             };
             contracts.push(resolve_contract_id(contract_ids, cid, "asset.contract")?);
+            names.push(r.name.clone());
             supplies.push(r.total_supply.clone());
             holders.push(r.holder_count);
         }
@@ -1520,11 +1611,11 @@ async fn upsert_assets_contract_keyed(
         // misclassification or backfill order swaps.
         sqlx::query(
             r#"
-            INSERT INTO assets (asset_type, contract_id, total_supply, holder_count)
-            SELECT $1, contract_id,
+            INSERT INTO assets (asset_type, contract_id, name, total_supply, holder_count)
+            SELECT $1, contract_id, name,
                    CASE WHEN supply IS NULL THEN NULL ELSE supply::NUMERIC(28,7) END, holder_count
-              FROM UNNEST($2::BIGINT[], $3::TEXT[], $4::INTEGER[])
-                AS t(contract_id, supply, holder_count)
+              FROM UNNEST($2::BIGINT[], $3::TEXT[], $4::TEXT[], $5::INTEGER[])
+                AS t(contract_id, name, supply, holder_count)
             ON CONFLICT (contract_id)
               WHERE asset_type IN (2, 3)  -- sac, soroban
               DO UPDATE SET
@@ -1532,12 +1623,14 @@ async fn upsert_assets_contract_keyed(
                     WHEN assets.asset_type = 2 OR EXCLUDED.asset_type = 2 THEN 2
                     ELSE EXCLUDED.asset_type
                 END,
+                name = COALESCE(EXCLUDED.name, assets.name),
                 total_supply = COALESCE(EXCLUDED.total_supply, assets.total_supply),
                 holder_count = COALESCE(EXCLUDED.holder_count, assets.holder_count)
             "#,
         )
         .bind(asset_type)
         .bind(&contracts)
+        .bind(&names)
         .bind(&supplies)
         .bind(&holders)
         .execute(&mut **db_tx)

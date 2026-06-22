@@ -302,6 +302,7 @@ mod tests {
             asset_code: code.map(String::from),
             issuer_address: issuer.map(String::from),
             contract_id: contract.map(String::from),
+            name: None,
             total_supply: None,
             holder_count: None,
         }

@@ -10,7 +10,8 @@
 -- Indexes:      soroban_contracts ORDER BY (id) — FINAL walk.
 --               wasm_interface_metadata ORDER BY (wasm_hash) — direct seek.
 -- CH Engine:    soroban_contracts — Replacing(wasm_uploaded_at_ledger) (FINAL).
---               wasm_interface_metadata — MergeTree (no FINAL).
+--               wasm_interface_metadata — ReplacingMergeTree, no version
+--                 (no FINAL — immutable per wasm_hash; was MergeTree, lore-0293).
 -- CH Pattern:   Single statement; LEFT JOIN tolerates SAC contracts (NULL
 --               wasm_hash).
 -- ADR 0044 §:   §4.5 (soroban_contracts state), §4.8 (wasm_interface_metadata

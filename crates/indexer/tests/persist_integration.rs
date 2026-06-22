@@ -140,6 +140,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -167,6 +168,39 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         "SUM(amount) must equal the ingested non-diagnostic event count (ADR 0033)"
     );
 
+    // Task 0156 / ADR 0042 — verify the typed `name` column landed
+    // on `soroban_contracts` from the deployment fixture and that the
+    // GENERATED `search_vector` recomputed so an FTS query matches.
+    // (Unit-level extraction paths — constructor, late-init, re-init,
+    // SCVal variants — are exercised in `state.rs` unit tests; this
+    // case verifies the indexer write path + the typed column +
+    // generated search_vector end-to-end on a real DB.)
+    let (sc_name,): (Option<String>,) =
+        sqlx::query_as("SELECT name FROM soroban_contracts WHERE contract_id = $1")
+            .bind(TOKEN_CONTRACT)
+            .fetch_one(&pool)
+            .await
+            .expect("soroban_contracts row missing for fixture token contract");
+    assert_eq!(
+        sc_name.as_deref(),
+        Some("TEST"),
+        "soroban_contracts.name must reflect deployment.name from the fixture"
+    );
+
+    let (fts_hits,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM soroban_contracts \
+         WHERE contract_id = $1 \
+           AND search_vector @@ to_tsquery('simple', 'TEST')",
+    )
+    .bind(TOKEN_CONTRACT)
+    .fetch_one(&pool)
+    .await
+    .expect("FTS query failed");
+    assert_eq!(
+        fts_hits, 1,
+        "GENERATED search_vector must match `to_tsquery('TEST')` on the typed name column \
+         (ADR 0042: search_vector reads `name` directly, not `metadata->>'name'`)"
+    );
     assert_eq!(
         counts_first.invocations, 1,
         "soroban_invocations_appearances row count — one (contract, tx, ledger) trio"
@@ -343,6 +377,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &nft_events,
         &lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -418,6 +453,7 @@ async fn synthetic_ledger_insert_and_replay_is_idempotent() {
         &[],
         &[],
         &[removal_state],
+        &[],
         &[],
         &[],
         &[],
@@ -684,6 +720,7 @@ async fn v4_per_op_events_land_in_appearance_index() {
         &[],
         &[],
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -857,6 +894,7 @@ async fn v4_diag_contract_mirror_does_not_inflate_amount() {
         &[tx],
         &[],
         &events,
+        &[],
         &[],
         &[],
         &[],
@@ -1061,6 +1099,7 @@ fn make_contract_deployment() -> ExtractedContractDeployment {
         deployed_at_ledger: TEST_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
+        name: Some("TEST".to_string()),
         // Task 0160: match the SAC asset row fixture (make_sac_asset) so
         // integration tests exercise a complete SAC identity end-to-end.
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Credit {
@@ -1120,6 +1159,7 @@ fn make_sac_asset() -> ExtractedAsset {
         asset_code: Some("USDC".to_string()),
         issuer_address: Some(ISSUER_STRKEY.to_string()),
         contract_id: Some(TOKEN_CONTRACT.to_string()),
+        name: Some("USDC".to_string()),
         total_supply: None,
         holder_count: None,
     }
@@ -1445,6 +1485,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         deployed_at_ledger: STUB_LEDGER_SEQ,
         contract_type: ContractType::Other,
         is_sac: false,
+        name: None,
         sac_asset: None,
     };
 
@@ -1479,6 +1520,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -1559,6 +1601,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -1688,6 +1731,7 @@ async fn nft_filter_drops_fungible_classified_contract() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -1781,6 +1825,7 @@ fn deploy_with(contract_id: &str, wasm_hash: &str) -> ExtractedContractDeploymen
         deployed_at_ledger: FILTER_LEDGER_SEQ,
         contract_type: ContractType::Other, // parser default; staging overrides
         is_sac: false,
+        name: None,
         sac_asset: None,
     }
 }
@@ -1910,6 +1955,7 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         deployed_at_ledger: OWN_LEDGER_SEQ,
         contract_type: ContractType::Other,
         is_sac: false,
+        name: None,
         sac_asset: None,
     }];
     let nfts = vec![ExtractedNft {
@@ -1987,6 +2033,7 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nfts,
         &nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2070,6 +2117,7 @@ async fn nft_ownership_populated_for_mint_transfer_burn() {
         &nfts,
         &nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2223,6 +2271,7 @@ async fn soroban_fungible_contract_produces_assets_row() {
         deployed_at_ledger: TK_LEDGER_SEQ_1,
         contract_type: ContractType::Other, // staging overrides via classifier
         is_sac: false,
+        name: None,
         sac_asset: None,
     }];
     // Drive the real parser → persist wiring end-to-end so a regression in
@@ -2265,6 +2314,7 @@ async fn soroban_fungible_contract_produces_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2364,6 +2414,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         deployed_at_ledger: LWU_LEDGER_SEQ_1,
         contract_type: ContractType::Other,
         is_sac: false,
+        name: None,
         sac_asset: None,
     }];
 
@@ -2398,6 +2449,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache,
     )
@@ -2470,6 +2522,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -2537,6 +2590,7 @@ async fn late_wasm_upload_backfills_assets_row() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &classification_cache2,
     )
@@ -2769,6 +2823,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         deployed_at_ledger: SAC160_XLM_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
+        name: None,
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Native),
     }];
     let assets = vec![ExtractedAsset {
@@ -2776,6 +2831,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         asset_code: None,
         issuer_address: None,
         contract_id: Some(derived_xlm_sac.clone()),
+        name: None,
         total_supply: None,
         holder_count: None,
     }];
@@ -2810,6 +2866,7 @@ async fn xlm_sac_deployment_lands_with_null_identity() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache,
     )
@@ -2913,6 +2970,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         deployed_at_ledger: SAC160_CREDIT_LEDGER_SEQ,
         contract_type: ContractType::Token,
         is_sac: true,
+        name: None,
         sac_asset: Some(xdr_parser::types::SacAssetIdentity::Credit {
             code: "USDC".to_string(),
             issuer: SAC160_ISSUER_STRKEY.to_string(),
@@ -2923,6 +2981,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         asset_code: Some("USDC".to_string()),
         issuer_address: Some(SAC160_ISSUER_STRKEY.to_string()),
         contract_id: Some(SAC160_CREDIT_CONTRACT.to_string()),
+        name: None,
         total_supply: None,
         holder_count: None,
     }];
@@ -2945,6 +3004,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nft_events,
         &no_lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -2958,6 +3018,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         asset_code: Some("USDC".to_string()),
         issuer_address: Some(SAC160_ISSUER_STRKEY.to_string()),
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     }];
@@ -2980,6 +3041,7 @@ async fn classic_to_sac_greatest_promotion_is_monotonic() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache2,
     )
@@ -3327,6 +3389,7 @@ async fn orphan_position_emits_sentinel_pool() {
         &Vec::new(),
         &lp_positions,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3443,6 +3506,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &lp_positions_t1,
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3491,6 +3555,7 @@ async fn sentinel_pool_upgraded_on_real_data() {
         &Vec::new(),
         &Vec::new(),
         &Vec::new(),
+        &[],
         &[],
         &cache,
     )
@@ -3585,6 +3650,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &[],
+        &[],
         &cache,
     )
     .await
@@ -3623,6 +3689,7 @@ async fn orphan_detection_skipped_when_pool_in_db() {
         &Vec::new(),
         &Vec::new(),
         &lp_positions_t2,
+        &[],
         &[],
         &cache,
     )
@@ -3779,6 +3846,7 @@ async fn application_order_preserves_apply_order_not_alphabetic() {
         &[],
         &[],
         &[],
+        &[],
         &ClassificationCache::new(),
     )
     .await
@@ -3893,6 +3961,7 @@ async fn application_order_min_fold_for_duplicate_identity() {
         &ledger,
         &[transaction],
         &operations,
+        &[],
         &[],
         &[],
         &[],
@@ -4067,6 +4136,7 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         /* nfts                */ &[],
         /* nft_events          */ &[],
         /* lp_positions        */ &[],
+        /* contract_name_writes*/ &[],
         &[],
         &classification_cache,
     )
@@ -4203,6 +4273,7 @@ async fn parse_error_transaction_persists_and_replays_idempotent() {
         &[],
         &[],
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -4314,6 +4385,7 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &[],
         &[],
         &[],
+        &[],
         &classification_cache,
     )
     .await
@@ -4339,6 +4411,7 @@ async fn parse_error_empty_source_persists_with_null_source_id() {
         &pool,
         &ledger,
         &[tx],
+        &[],
         &[],
         &[],
         &[],
@@ -4644,6 +4717,7 @@ fn deploy_quar(contract_id: &str, wasm_hash: &str) -> ExtractedContractDeploymen
         deployed_at_ledger: QUAR_LEDGER_SEQ_1,
         contract_type: ContractType::Other,
         is_sac: false,
+        name: None,
         sac_asset: None,
     }
 }
@@ -4700,6 +4774,7 @@ async fn persist_quar(
         nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache,
     )
@@ -4886,6 +4961,7 @@ async fn classic_credit_extracted_asset_lands_in_assets_table() {
         asset_code: Some(CC_TEST_ASSET_CODE.to_string()),
         issuer_address: Some(CC_TEST_ISSUER.to_string()),
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     };
@@ -4894,6 +4970,7 @@ async fn classic_credit_extracted_asset_lands_in_assets_table() {
         asset_code: None,
         issuer_address: None,
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     };
@@ -4916,6 +4993,7 @@ async fn classic_credit_extracted_asset_lands_in_assets_table() {
         &Vec::<ExtractedNft>::new(),
         &Vec::<ExtractedNftEvent>::new(),
         &Vec::<ExtractedLpPosition>::new(),
+        &[],
         &[],
         &cache,
     )
@@ -4978,6 +5056,7 @@ async fn native_singleton_idempotent_across_repeat_persist() {
         asset_code: None,
         issuer_address: None,
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     };
@@ -5040,6 +5119,7 @@ async fn native_singleton_idempotent_across_repeat_persist() {
             &Vec::<ExtractedNft>::new(),
             &Vec::<ExtractedNftEvent>::new(),
             &Vec::<ExtractedLpPosition>::new(),
+            &[],
             &[],
             &cache,
         )
@@ -5194,6 +5274,7 @@ async fn sac_override_flips_is_sac_for_pre_existing_skeleton() {
         asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
         issuer_address: Some(SAC_TEST_ISSUER.to_string()),
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     };
@@ -5229,6 +5310,7 @@ async fn sac_override_flips_is_sac_for_pre_existing_skeleton() {
         &no_nfts,
         &no_nft_events,
         &no_lp_positions,
+        &[],
         &[],
         &cache,
     )
@@ -5315,6 +5397,7 @@ async fn sac_override_leaves_already_is_sac_rows_alone() {
         asset_code: Some(SAC_TEST_ASSET_CODE.to_string()),
         issuer_address: Some(SAC_TEST_ISSUER.to_string()),
         contract_id: None,
+        name: None,
         total_supply: None,
         holder_count: None,
     };
@@ -5337,6 +5420,7 @@ async fn sac_override_leaves_already_is_sac_rows_alone() {
         &Vec::<ExtractedNft>::new(),
         &Vec::<ExtractedNftEvent>::new(),
         &Vec::<ExtractedLpPosition>::new(),
+        &[],
         &[],
         &cache,
     )

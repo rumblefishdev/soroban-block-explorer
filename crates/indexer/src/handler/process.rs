@@ -56,6 +56,10 @@ pub struct ParseOutput {
     pub nfts: Vec<ExtractedNft>,
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
+    /// Legacy `Symbol("name")` writes for the PG `soroban_contracts.name`
+    /// retroactive UPDATE path (ADR 0042 / task 0156). Full removal deferred
+    /// to task 0304; coexists with the metadata side table below.
+    pub contract_name_writes: Vec<(String, String)>,
     /// On-chain Soroban token metadata (name/symbol/decimals) from
     /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
     /// table (task 0297). SACs already excluded by the producer.
@@ -241,6 +245,7 @@ pub async fn process_ledger(
         &parsed.nfts,
         &parsed.nft_events,
         &parsed.lp_positions,
+        &parsed.contract_name_writes,
         &parsed.sac_overrides,
         classification_cache,
     )
@@ -407,6 +412,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         .collect();
 
     let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
+    let mut all_contract_name_writes: Vec<(String, String)> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
         let deployments = xdr_parser::extract_contract_deployments(
             changes,
@@ -436,6 +442,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         all_lp_positions.extend(lp_pos);
 
         all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
+        all_contract_name_writes.extend(xdr_parser::extract_contract_data_name_writes(changes));
     }
 
     all_assets.push(xdr_parser::native_asset_singleton());
@@ -468,6 +475,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nfts: all_nfts,
         nft_events,
         lp_positions: all_lp_positions,
+        contract_name_writes: all_contract_name_writes,
         contract_metadata_writes: all_contract_metadata_writes,
         operation_trees: all_operation_trees,
         parse_ms,

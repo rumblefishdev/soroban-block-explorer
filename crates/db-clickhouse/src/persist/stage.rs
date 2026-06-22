@@ -522,15 +522,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             deployed_at_ledger: Some(deployed),
             contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
+            name: dep.name.clone(),
         });
     }
 
     // (task 0297) On-chain token name/symbol/decimals → the dedicated
     // `soroban_contract_metadata` side table. A pure 1:1 map of the producer's
     // output (extraction + SAC-skip already done), built here like the other
-    // `out.*` rows rather than post-`prepare`. The legacy `Symbol("name")` path
-    // (parser `extract_contract_data_name_writes`, deploy second pass, PG
-    // `apply_contract_name_writes`) was chain-verified dead and removed (task 0297).
+    // `out.*` rows rather than post-`prepare`. This coexists with the legacy
+    // `Symbol("name")` path (parser `extract_contract_data_name_writes`, deploy
+    // second pass, `soroban_contracts.name`); full removal of that path is
+    // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
 
     // Task 0220 — SAC override re-insert. For every observed classic
@@ -571,6 +573,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 deployed_at_ledger: None,
                 contract_type: Some(ContractType::Token as i16),
                 is_sac: true,
+                name: None,
             });
         }
     }
@@ -954,12 +957,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             asset_code: t.asset_code.clone().unwrap_or_default(),
             issuer_id,
             contract_id: contract_id_int,
-            total_supply: t
-                .total_supply
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            holder_count: t.holder_count,
+            name: t.name.clone(),
+            total_supply: None, // dead column (lore-0293) → asset_aggregates
+            holder_count: None,
             icon_url: None,
         };
         push_asset(&mut out, &mut asset_seen, row);
@@ -981,6 +981,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code,
                 issuer_id,
                 contract_id: ids::contract_id(&dep.contract_id),
+                name: None,
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
@@ -997,6 +998,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             asset_code: String::new(),
             issuer_id: 0,
             contract_id: 0,
+            name: Some("Stellar Lumen".to_string()),
             total_supply: None,
             holder_count: None,
             icon_url: None,
@@ -1029,6 +1031,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code: String::new(),
                 issuer_id: 0,
                 contract_id,
+                name: None,
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
@@ -1393,6 +1396,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 deployed_at_ledger: None,
                 contract_type: None,
                 is_sac: false,
+                name: None,
             });
         }
     }

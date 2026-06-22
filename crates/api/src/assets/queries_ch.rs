@@ -83,18 +83,18 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
-//
-// On-chain token metadata (`soroban_contract_metadata` m, task 0297) is joined
-// via `sc.contract_id` — `assets` carries only the surrogate `a.contract_id`,
-// not the strkey, so the metadata key is resolved through `soroban_contracts`.
-// Consequence: a soroban asset whose `soroban_contracts` row is missing/stale
-// joins NULL metadata even when the side table holds it. Acceptable — the
-// deploy is always indexed before transfers create the asset row — but it is a
-// structural coupling, not an independent join. The subquery reads the metadata
-// table with `FINAL` (latest whole row per contract_id) — rows are whole-struct
-// snapshots at one ledger, so `FINAL` is the direct, frankenstein-proof way to
-// collapse the RMT vs a per-column `argMax`. Table is bounded (Soroban-native
-// tokens only, SACs skipped) so the read-time merge is cheap.
+// `total_supply` / `holder_count` come from the pre-computed `asset_aggregates`
+// table (lore-0293), a 1:1 LEFT JOIN like enrichment. Its columns are
+// `Nullable`, so a JOIN miss (native / soroban — no row) reads as NULL under the
+// readonly `api_reader` (`join_use_nulls = 0` fills a Nullable column with its
+// default, which is NULL), while a real 0-supply asset (has a row) reads 0 — no
+// sentinel needed. The table is refreshed on a cadence (eventually consistent).
+// Two intended semantics (matching the retired PG batch, not bugs):
+//   * a classic asset and its SAC wrap share one `(asset_code, issuer_id)`
+//     aggregate row, so both display the same supply/holders — a SAC IS the
+//     wrapped underlying asset; the join is 1:1 (no row multiplication).
+//   * a classic asset with no current trustlines has no aggregate row → NULL
+//     supply/holders (the batch wrote 0). NULL = "no balance data", deliberate.
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
@@ -105,8 +105,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     toString(a.total_supply)     AS total_supply, \
-     a.holder_count               AS holder_count, \
+     toString(agg.total_supply)   AS total_supply, \
+     agg.holder_count             AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -118,6 +118,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
          SELECT contract_id, name, symbol, decimals \
          FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
+     LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
+         AND agg.issuer_id = a.issuer_id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
@@ -215,7 +217,6 @@ pub async fn fetch_list(
     }
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
     let rows = query.bind(params.limit).fetch_all::<AssetChRow>().await?;
-
     Ok(rows.into_iter().map(map_ch_row).collect())
 }
 

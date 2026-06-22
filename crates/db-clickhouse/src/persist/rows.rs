@@ -73,12 +73,17 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
+/// `total_supply`/`holder_count` are DEAD columns (lore-0293): the indexer
+/// writes them `None`; the live value is served from the pre-computed
+/// `asset_aggregates` table (refreshable MV). Kept for backward-compat; drop
+/// deferred to a cleanup task (0310).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
     pub asset_code: String,
     pub issuer_id: i64,
     pub contract_id: i64,
+    pub name: Option<String>,
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -126,6 +131,7 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    pub name: Option<String>,
 }
 
 /// `soroban_contract_metadata` — on-chain Soroban token metadata

@@ -166,8 +166,8 @@ constructs ScVal directly, bypassing wire decode).
 Files: `crates/xdr-parser/src/nft.rs` (Shape A/B from stash + new Shape C
 `map{token_id}`, `try_parse_consecutive_mint` with range guard `MAX_CONSECUTIVE_RANGE`,
 `is_fungible_map` disambiguation, `maybe_tripwire`), `crates/xdr-parser/src/scval.rs`
-(CAP-67 rendering test, from stash). Tests added: map-shape + consecutive*mint edge
-cases + 3 real-mainnet-XDR regression tests (`detect_real_mainnet*\*`). Parser change
+(CAP-67 rendering test, from stash). Tests added: map-shape + `consecutive_mint` edge
+cases + 3 real-mainnet-XDR regression tests (`detect_real_mainnet_*`). Parser change
 only — downstream persist/0283 routing unchanged; verified green against indexer +
 db-clickhouse + backfill-runner. **Not committed.** (Throwaway RPC verifier scripts
 were kept OUT of the repo — the chq/RPC verification recipe lives in the S-note.)
@@ -198,8 +198,8 @@ artifact (retention is 7 days; the NFT tail is historical). Corrected plan:
   guard a map handler mis-ingests ~5,580 fungible contracts.
 - **New gap: `consecutive_mint`** (OZ Consecutive / EIP-2309) — `data=[from_id,to_id]`
   range, 8 contracts on prod, expand to N tokens. Not covered by stash or plan.
-- Exact split: 72 minters = 36 scalar-only (reach pending) + 14 map-only + 20 vec-only
-  - 2 mixed; 38 reach pending, 34 dropped (20 vec + 14 map), 1 classified, 0 hot.
+- Exact split: 72 minters = 36 scalar-only (reach pending) + 14 map-only + 20 vec-only +
+  2 mixed; 38 reach pending, 34 dropped (20 vec + 14 map), 1 classified, 0 hot.
 - token_id width: accept u32→u256, store as string.
 - CAP-67 scval address rendering is already correct (`stellar-xdr 26`) → test-only.
 
