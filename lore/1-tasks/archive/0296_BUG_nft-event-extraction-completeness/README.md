@@ -166,7 +166,7 @@ constructs ScVal directly, bypassing wire decode).
 Files: `crates/xdr-parser/src/nft.rs` (Shape A/B from stash + new Shape C
 `map{token_id}`, `try_parse_consecutive_mint` with range guard `MAX_CONSECUTIVE_RANGE`,
 `is_fungible_map` disambiguation, `maybe_tripwire`), `crates/xdr-parser/src/scval.rs`
-(CAP-67 rendering test, from stash). Tests added: map-shape + consecutive_mint edge
+(CAP-67 rendering test, from stash). Tests added: map-shape + `consecutive_mint` edge
 cases + 3 real-mainnet-XDR regression tests (`detect_real_mainnet_*`). Parser change
 only — downstream persist/0283 routing unchanged; verified green against indexer +
 db-clickhouse + backfill-runner. **Not committed.** (Throwaway RPC verifier scripts
@@ -198,13 +198,13 @@ artifact (retention is 7 days; the NFT tail is historical). Corrected plan:
   guard a map handler mis-ingests ~5,580 fungible contracts.
 - **New gap: `consecutive_mint`** (OZ Consecutive / EIP-2309) — `data=[from_id,to_id]`
   range, 8 contracts on prod, expand to N tokens. Not covered by stash or plan.
-- Exact split: 72 minters = 36 scalar-only (reach pending) + 14 map-only + 20 vec-only
-  + 2 mixed; 38 reach pending, 34 dropped (20 vec + 14 map), 1 classified, 0 hot.
+- Exact split: 72 minters = 36 scalar-only (reach pending) + 14 map-only + 20 vec-only +
+  2 mixed; 38 reach pending, 34 dropped (20 vec + 14 map), 1 classified, 0 hot.
 - token_id width: accept u32→u256, store as string.
 - CAP-67 scval address rendering is already correct (`stellar-xdr 26`) → test-only.
 
 **Dependency / what 0296 ALONE delivers (sharpened per devil's-advocate review):**
-the parser fix moves these events from *silently dropped* → `nfts_pending` quarantine.
+the parser fix moves these events from _silently dropped_ → `nfts_pending` quarantine.
 It does **not** make them user-visible. The hot `nfts` table (and the `/nfts` API) only
 receives rows whose contract is `contract_type = Nft`, and **all 24 recovered contracts
 are currently `Other`/`NULL` on prod** (only 1 contract chain-wide is `Nft`). So API
@@ -212,7 +212,7 @@ visibility needs, in order: **0296 (parser → pending) → `fix/0283` deployed 
 run (`Other`→`Nft`, promote pending→hot) → raw-S3 backfill** for historically-dropped
 rows. 0296 is upstream — promotion reads only from `*_pending`, which the parser never
 wrote for these shapes (proof: the lone `contract_type=2` contract `CBBVYBTC` emits only
-Shape-B events, 0 rows in every NFT table). The live classifier *would* verdict these
+Shape-B events, 0 rows in every NFT table). The live classifier _would_ verdict these
 `Nft` (they export `owner_of`/`token_uri`) — the `Other`/`NULL` is stale — but this PR
 does not run reclassify.
 

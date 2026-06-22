@@ -72,7 +72,8 @@
 --   - state tables             → ReplacingMergeTree(version_column) where
 --                                a natural NOT NULL ledger column exists
 --                                (otherwise plain ReplacingMergeTree)
---   - immutable lookup tables  → MergeTree
+--   - immutable lookup tables  → ReplacingMergeTree (collapse re-run /
+--                                parallel-merge duplicates; lore-0293)
 --
 -- Partitioning: every fact table uses `intDiv(ledger_sequence, 500000)`
 -- (~29 days at 5 s/ledger). State and immutable tables not partitioned.
@@ -81,9 +82,19 @@
 -- `CREATE DICTIONARY IF NOT EXISTS`); applying twice is a no-op.
 
 ----------------------------------------------------------------------
--- Immutable lookups (MergeTree)
+-- Immutable lookups (ReplacingMergeTree — collapse re-run / parallel-merge
+-- duplicates; were plain MergeTree until lore-0293)
 ----------------------------------------------------------------------
 
+-- ReplacingMergeTree (was plain MergeTree): the commit marker. A normal
+-- single-machine crash-resume never re-writes a marked ledger (resume keys on
+-- the ABSENT marker), but parallel-backfill merges / range overlap / manual
+-- re-index DO produce duplicate `sequence` rows that plain MergeTree never
+-- collapses — they double `ledgers` JOINs and needed a manual
+-- `OPTIMIZE … DEDUPLICATE BY sequence` (task 0228). RMT collapses them
+-- automatically on merge. Content is immutable per `sequence`, so no version
+-- column; cost is merge-time only and ~0 on a unique monotonic key; reads stay
+-- FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS ledgers (
     sequence          Int64,
     hash              FixedString(32),
@@ -92,15 +103,22 @@ CREATE TABLE IF NOT EXISTS ledgers (
     transaction_count Int32,
     base_fee          Int64
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(sequence, 500000)
 ORDER BY (sequence);
 
+-- ReplacingMergeTree (was plain MergeTree): written in the entity phase
+-- (before the `ledgers` commit marker), so a crash-resume / backfill re-run
+-- re-emits the same `(wasm_hash, metadata)` row. Plain MergeTree never dedups
+-- → permanent byte-identical duplicates that double `contracts/interface`
+-- JOINs and needed a manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
+-- Content is immutable per `wasm_hash`, so no version column — any duplicate is
+-- byte-identical and RMT collapses it on merge; reads stay FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
 
 ----------------------------------------------------------------------
@@ -165,14 +183,22 @@ ORDER BY (contract_id);
 -- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
 -- set, code/issuer optional. Soroban-native: contract_id set,
 -- code/issuer=empty/0.
+--
+-- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
+-- lore-0293: nothing reads them (the API serves the aggregate from
+-- `asset_aggregates` below) and the indexer writes them NULL. They
+-- are a global rollup over every holder's balance; writing them into this
+-- per-ledger-rewritten row clobbered them (no-version RMT, last-write-wins →
+-- ~25% of classic assets served NULL in prod). Drop (`ALTER … DROP COLUMN`)
+-- deferred to a cleanup task.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
     name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),
-    holder_count    Nullable(Int32),
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
     icon_url        Nullable(String)
 )
 ENGINE = ReplacingMergeTree
@@ -202,6 +228,44 @@ CREATE TABLE IF NOT EXISTS asset_enrichment (
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- Pre-computed per-asset aggregates (lore-0293; replaces the one-shot
+-- `asset-aggregates` CLI). One row per classic-credit asset, FINAL `total_supply`
+-- / `holder_count` ready to read via a 1:1 LEFT JOIN (cf. `asset_enrichment`). A
+-- REFRESHABLE MV recomputes the whole table from `account_balances_current` on a
+-- cadence — an incremental per-asset sum isn't possible without breaking the
+-- indexer's absolute-state idempotency (full rationale + prod evidence:
+-- notes/G-assets-aggregate-clobber-proof.md). Refresh is a batch admin job, off
+-- the `api_reader` read quota (~1 s over 36 M rows).
+-- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
+-- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
+-- stay FINAL-free). The other tables are RMT because they are APPEND targets.
+-- `asset_type IN (1,2)` = classic credit only; native (0) and pool-shares (3) are
+-- excluded (their balance-sum is not a trustworthy supply — see the note).
+-- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
+-- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
+-- distinguishing a JOIN miss from a real 0-supply with no sentinel.
+-- TRADEOFF: figures lag by up to `REFRESH EVERY` (eventually consistent).
+CREATE TABLE IF NOT EXISTS asset_aggregates (
+    asset_code   LowCardinality(String),
+    issuer_id    Int64,
+    total_supply Nullable(Decimal128(7)),
+    holder_count Nullable(Int32)
+)
+ENGINE = MergeTree
+ORDER BY (asset_code, issuer_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS asset_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO asset_aggregates AS
+SELECT
+    asset_code,
+    issuer_id,
+    sum(balance)                  AS total_supply,
+    toInt32(countIf(balance > 0)) AS holder_count
+FROM account_balances_current FINAL
+WHERE asset_type IN (1, 2)
+GROUP BY asset_code, issuer_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,

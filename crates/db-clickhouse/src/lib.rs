@@ -138,15 +138,19 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 21 CREATE TABLE + 1 CREATE DICTIONARY = 22. 17-table base; task 0217
-        // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
-        // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
-        // to PR #180); task 0231 (ADR 0050) added the `asset_enrichment` +
-        // `nft_enrichment` enrichment side tables.
+        // 22 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 24.
+        // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
+        // as schema-only landing zones (the CH writer does NOT yet stage/INSERT
+        // into either — follow-up to PR #180); task 0231 (ADR 0050) added the
+        // `asset_enrichment` + `nft_enrichment` side tables; lore-0293 added the
+        // `asset_aggregates` table + its refreshable `asset_aggregates_mv` for
+        // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
+        // now served from `asset_aggregates`; the dead columns' drop is deferred
+        // to task 0310).
         assert_eq!(
             stmts.len(),
-            22,
-            "expected 21 tables + 1 dictionary, got {}",
+            24,
+            "expected 22 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

@@ -399,7 +399,7 @@ can map Atomic-DB `store/<uuid>/` dirs back to table names.
       subaccount actually existed, so the CREATE + bootstrap-pubkey path ran.
 - [x] `ansible-playbook` against an existing subaccount adopts it —
       verified on every re-run (`Identify an already-present subaccount to
-    adopt` → ok, idempotent). Note: the exact "pubkey **missing** on an
+adopt` → ok, idempotent). Note: the exact "pubkey **missing** on an
       adopted subaccount" sub-case was not separately triggered (no
       pre-existing subaccount on first deploy; key present on re-runs).
 - [x] Re-running the playbook is idempotent — `--tags storagebox` re-run
