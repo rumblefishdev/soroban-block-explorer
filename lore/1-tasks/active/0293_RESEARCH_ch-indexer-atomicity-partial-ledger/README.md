@@ -23,6 +23,16 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active via /promote-task. Starting atomicity audit.'
+  - date: '2026-06-17'
+    status: active
+    who: karolkow
+    note: >
+      Audit complete. Verdict: commit-marker + RMT design is sound, NO
+      double-apply bug (current-state tables store absolute XDR post-image, not
+      deltas). Residual gaps LOW: orphan-that-never-dies only via code-change
+      mid-crash; transient read-side dup on non-FINAL transactions queries.
+      Recommend keep-as-is + narrow hardening. Converted to directory, added
+      notes/S-atomicity-audit-findings.md. Spawned 0298. Left active pending PR.
 ---
 
 # Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse
@@ -157,23 +167,36 @@ Spawn backlog tasks for any fix that emerges; do not leave as prose.
 
 ## Acceptance Criteria
 
-- [ ] Crash window documented: exact failure points in `commit()` that leave
-      orphan rows, with file:line.
-- [ ] Both resume paths verified to re-process a marker-less ledger.
-- [ ] Each RMT table class verified idempotent under re-run, OR flagged as
-      unsafe with reasoning.
-- [ ] **Current-state tables confirmed absolute-state (not delta-accumulated)**,
-      or flagged as a double-apply bug.
-- [ ] Orphan-that-never-dies scenario evaluated (possible? blast radius?).
-- [ ] "Dedup only on merge" read-side exposure assessed for count/sum queries.
-- [ ] Repair options weighed (keep-as-is, pre-insert cleanup, experimental CH
+- [x] Crash window documented: exact failure points in `commit()` that leave
+      orphan rows, with file:line. (`writer.rs:284-307` entity `end()`s,
+      `:312/314/316` ledgers, any panic/SIGKILL; marker is last at `:309-317`.)
+- [x] Both resume paths verified to re-process a marker-less ledger. (Backfill
+      `resume.rs:19` + `ingest.rs:171`; live tail `handler/mod.rs:204` `max+1`.
+      No orphan-detection guard exists.)
+- [x] Each RMT table class verified idempotent under re-run, OR flagged as
+      unsafe with reasoning. (Event-log A: byte-identical re-insert. State B:
+      absolute. `assets`: no version col but recomputed absolutely.)
+- [x] **Current-state tables confirmed absolute-state (not delta-accumulated)** —
+      ABSOLUTE, no double-apply bug. Values are XDR post-images
+      (`stage.rs:1113`, `state.rs:703/712`, nft owner from event `to`); no
+      read-modify-write anywhere.
+- [x] Orphan-that-never-dies scenario evaluated — possible **only** via
+      cross-attempt nondeterminism (code/parser change mid-crash); blast radius =
+      one crashed ledger. LOW.
+- [x] "Dedup only on merge" read-side exposure assessed — only the non-`FINAL`
+      `transactions` queries (Stmt A/B/C, `transactions/queries_ch.rs`) are
+      transiently exposed; balances canonical query (0198) + all other reads use
+      `FINAL`/`argMax` and are safe.
+- [x] Repair options weighed (keep-as-is, pre-insert cleanup, experimental CH
       transactions, staging+MOVE PARTITION, read-side `FINAL`) with a clear
-      recommendation + rationale.
-- [ ] Follow-up backlog tasks spawned for any required fix.
-- [ ] **Docs updated** — `N/A unless` audit changes the documented ingestion
-      pipeline shape; if a cleanup/guard is added, update
-      `docs/architecture/**` ingestion docs in the implementing PR.
-- [ ] **API types regenerated** — N/A — research task, no `crates/api/**` change.
+      recommendation + rationale. **Recommend keep-as-is + narrow hardening
+      (0298).** See `notes/S-atomicity-audit-findings.md` Step 5.
+- [x] Follow-up backlog tasks spawned for any required fix. (Task 0298 —
+      atomicity hardening; created on develop.)
+- [x] **Docs updated** — N/A. Audit found the documented ingestion shape is
+      accurate; no cleanup/guard landed in this task (deferred to 0298), so no
+      `docs/architecture/**` change required here.
+- [x] **API types regenerated** — N/A — research task, no `crates/api/**` change.
 
 ## Notes
 
@@ -186,3 +209,62 @@ Spawn backlog tasks for any fix that emerges; do not leave as prose.
   tables) — both touch the same current-state RMT tables.
 - Live-tail retry envelope: `crates/indexer/src/handler/mod.rs:113` (50/200/800ms
   backoff) — relevant to how often the crash window is actually hit in prod.
+
+## Findings
+
+Full audit with file:line evidence:
+[notes/S-atomicity-audit-findings.md](notes/S-atomicity-audit-findings.md).
+
+**Verdict:** the commit-marker + `ReplacingMergeTree` design is **sound**; **no
+double-apply / data-corruption bug**. Team's three questions: orphan rows are
+**left**; re-run is **safe** (backfill skips marker-present ledgers,
+re-processes marker-less ones); re-run **collapses** via deterministic keys
+(RMT), not durable duplication. Residual gaps are LOW severity (see Steps 3–4).
+
+`ledgers` duplicate-marker concern from Notes: **not** produced by the normal
+crash→resume path (resume only re-runs when the marker is absent); only from
+overlapping backfill/live ranges or manual re-run. Resume membership /
+`max(sequence)` tolerate it; sole cosmetic effect is network-TPS
+`sum(transaction_count)` over-count in its 200-ledger window.
+
+## Implementation Notes
+
+- Pure read-only audit — **no production code changed**. Deliverable is the
+  synthesis note + this README.
+- Evidence gathered via 4 parallel code-reading agents (write path, schema
+  classification, current-state computation, resume + read-side); the
+  highest-risk claims (commit ordering, absolute-state balances, `assets`
+  aggregate recompute) were re-verified by direct reads of
+  `writer.rs:279-334`, `stage.rs:1100-1199`, `asset_aggregates.rs`.
+- Schema confirmed: 19 tables, 17 RMT + 2 `MergeTree`. `assets` is the only RMT
+  table with no version column (safe — identity re-insert is byte-identical and
+  aggregates are recomputed absolutely).
+
+## Design Decisions
+
+### From Plan
+
+1. **Followed the 5-step audit plan** (crash window → per-class idempotency →
+   orphan-that-never-dies → read-side exposure → repair options).
+
+### Emerged
+
+2. **Recommend keep-as-is, not a write-side fix.** The absolute-state guarantee
+   makes re-run idempotent; the only durable gap (Step 3 orphan) needs a deploy
+   boundary to land inside a crash window. A heavyweight fix (experimental CH
+   txns / per-ledger staging) is unjustified vs the blast radius.
+2a. **`DROP PARTITION` ruled out for single-ledger cleanup** — event-log tables
+   `PARTITION BY intDiv(ledger_sequence, 500000)`, so a partition spans 500 k
+   ledgers; only `ALTER … DELETE WHERE ledger_sequence = N` could isolate one
+   (async/heavy) — deferred to 0298.
+3. **Bundled both hardening items into one follow-up (0298)** rather than two
+   micro-tasks, per task-scope convention.
+4. **Left task `active`, not archived.** Findings are uncommitted on branch
+   `research/0293_…`; archive + index regen should follow the PR merge.
+
+## Future Work
+
+- **Task 0298** — CH atomicity hardening: (1) backfill resume orphan guard for
+  the code-change-mid-crash case; (2) read-side decision for the exposed
+  non-`FINAL` `transactions` queries (accept per ADR 0044, or add `LIMIT 1 BY
+  id`). Priority low — no correctness fix required today.

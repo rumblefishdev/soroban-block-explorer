@@ -50,12 +50,13 @@ Every file must:
 
 | Table                                | Engine                                         | `FINAL` required?                                                                                                               |
 | ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `ledgers`                            | `MergeTree`                                    | no                                                                                                                              |
-| `liquidity_pools`                    | `MergeTree`                                    | no                                                                                                                              |
-| `wasm_interface_metadata`            | `MergeTree`                                    | no                                                                                                                              |
+| `ledgers`                            | `ReplacingMergeTree` (no version)              | no — unique/immutable per `sequence`; dedup-on-merge (lore-0293, was `MergeTree`)                                              |
+| `liquidity_pools`                    | `ReplacingMergeTree(last_updated_ledger)`      | **yes** (doc was stale: schema is RMT since task 0208)                                                                         |
+| `wasm_interface_metadata`            | `ReplacingMergeTree` (no version)              | no — immutable per `wasm_hash`; dedup-on-merge (lore-0293, was `MergeTree`)                                                    |
 | `transaction_hash_dict` (Dictionary) | `Dictionary`                                   | no (`dictGet` returns latest by Dict lifecycle)                                                                                 |
 | `accounts`                           | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                         |
-| `assets`                             | `ReplacingMergeTree` (no version)              | **yes** — last-write-wins by ORDER BY                                                                                           |
+| `assets`                             | `ReplacingMergeTree` (no version)              | **yes** — `total_supply`/`holder_count` columns kept but DEAD, served from `account_asset_balance_state` (lore-0293)           |
+| `account_asset_balance_state`        | `AggregatingMergeTree` (MV from balances)      | no — aggregate read via `argMaxMerge`; event-driven asset `total_supply`/`holder_count`, summed at read time (lore-0293)        |
 | `account_balances_current`           | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                         |
 | `soroban_contracts`                  | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                         |
 | `nfts`                               | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                         |

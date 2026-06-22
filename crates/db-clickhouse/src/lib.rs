@@ -138,18 +138,16 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 19 CREATE TABLE + 1 CREATE DICTIONARY = 20. Task 0217 added
-        // `nfts_pending` + `nft_ownership_pending` to the 17-table base
-        // as schema-only landing zones. The CH writer
-        // (`crates/db-clickhouse/src/persist/*`) does NOT yet stage or
-        // INSERT into either pending table — that parity work is a
-        // follow-up to PR #180 (different atomicity model required:
-        // no per-row UPDATE on RMT). Row structs + column-order tests
-        // for the pending tables will land alongside the writer work.
+        // 20 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 22.
+        // Task 0217 added `nfts_pending` + `nft_ownership_pending` as schema-only
+        // landing zones. lore-0293 added `account_asset_balance_state` (AMT) and
+        // `account_asset_balance_state_mv` for event-driven asset aggregates
+        // (replacing the retired `asset-aggregates` CLI). `assets.total_supply` /
+        // `holder_count` are kept but dead (served from the AMT; drop deferred).
         assert_eq!(
             stmts.len(),
-            20,
-            "expected 19 tables + 1 dictionary, got {}",
+            22,
+            "expected 20 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

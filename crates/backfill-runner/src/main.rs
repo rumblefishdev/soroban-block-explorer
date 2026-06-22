@@ -4,7 +4,6 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
-mod asset_aggregates;
 mod bootstrap;
 mod dashboard;
 mod error;
@@ -164,15 +163,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Recompute `assets.{holder_count, total_supply}` from current
-    /// `account_balances_current` state (task 0228 Phase 5,
-    /// CH analog of task 0194's PG `recompute_asset_aggregates`).
-    /// Staging + EXCHANGE TABLES. CH-only.
-    AssetAggregates {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -270,15 +260,6 @@ async fn main() {
                 stats.nfts_rows,
                 stats.nfts_pending_rows,
                 stats.soroban_contracts_rows,
-            );
-        }
-        Command::AssetAggregates { dry_run } => {
-            let stats = asset_aggregates::execute(&sink, dry_run)
-                .await
-                .expect("asset_aggregates failed");
-            println!(
-                "asset_aggregates completed (dry_run={}): assets_rows={}",
-                stats.dry_run, stats.assets_rows,
             );
         }
         Command::NftReclassify { dry_run } => {

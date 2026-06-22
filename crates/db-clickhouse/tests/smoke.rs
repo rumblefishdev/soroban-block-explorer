@@ -71,7 +71,7 @@ async fn smoke_inserts_and_reads_each_table() {
     client
         .query(
             "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
-             VALUES (1, 'USDC', ?, 0, 'USD Coin', toDecimal128('1000000.0', 7), 5, NULL)",
+             VALUES (1, 'USDC', ?, 0, 'USD Coin', NULL, NULL, NULL)",
         )
         .bind(SMOKE_LEDGER)
         .execute()
@@ -101,6 +101,16 @@ async fn smoke_inserts_and_reads_each_table() {
         &client,
         "account_balances_current",
         &format!("account_id = {SMOKE_LEDGER}"),
+        1,
+    )
+    .await;
+
+    // ----- account_asset_balance_state (AMT) — the MV must have fired on the
+    // balance insert above (lore-0293, event-driven asset aggregates) -----
+    assert_count(
+        &client,
+        "account_asset_balance_state",
+        &format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER}"),
         1,
     )
     .await;

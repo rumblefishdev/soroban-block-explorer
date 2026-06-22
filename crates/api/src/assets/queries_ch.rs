@@ -77,8 +77,6 @@ const ASSET_CH_SELECT: &str = "SELECT \
      nullIf(iss.home_domain, '')  AS issuer_home_domain, \
      nullIf(sc.contract_id, '')   AS contract_id, \
      a.name                       AS name, \
-     toString(a.total_supply)     AS total_supply, \
-     a.holder_count               AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      a.icon_url                   AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -95,8 +93,6 @@ struct AssetChRow {
     issuer_home_domain: Option<String>,
     contract_id: Option<String>,
     name: Option<String>,
-    total_supply: Option<String>,
-    holder_count: Option<i32>,
     deployed_at_ledger: Option<i64>,
     icon_url: Option<String>,
     issuer_id_key: i64,

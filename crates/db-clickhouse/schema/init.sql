@@ -72,7 +72,8 @@
 --   - state tables             → ReplacingMergeTree(version_column) where
 --                                a natural NOT NULL ledger column exists
 --                                (otherwise plain ReplacingMergeTree)
---   - immutable lookup tables  → MergeTree
+--   - immutable lookup tables  → ReplacingMergeTree (collapse re-run /
+--                                parallel-merge duplicates; lore-0293)
 --
 -- Partitioning: every fact table uses `intDiv(ledger_sequence, 500000)`
 -- (~29 days at 5 s/ledger). State and immutable tables not partitioned.
@@ -81,9 +82,19 @@
 -- `CREATE DICTIONARY IF NOT EXISTS`); applying twice is a no-op.
 
 ----------------------------------------------------------------------
--- Immutable lookups (MergeTree)
+-- Immutable lookups (ReplacingMergeTree — collapse re-run / parallel-merge
+-- duplicates; were plain MergeTree until lore-0293)
 ----------------------------------------------------------------------
 
+-- ReplacingMergeTree (was plain MergeTree): the commit marker. A normal
+-- single-machine crash-resume never re-writes a marked ledger (resume keys on
+-- the ABSENT marker), but parallel-backfill merges / range overlap / manual
+-- re-index DO produce duplicate `sequence` rows that plain MergeTree never
+-- collapses — they double `ledgers` JOINs and needed a manual
+-- `OPTIMIZE … DEDUPLICATE BY sequence` (task 0228). RMT collapses them
+-- automatically on merge. Content is immutable per `sequence`, so no version
+-- column; cost is merge-time only and ~0 on a unique monotonic key; reads stay
+-- FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS ledgers (
     sequence          Int64,
     hash              FixedString(32),
@@ -92,15 +103,22 @@ CREATE TABLE IF NOT EXISTS ledgers (
     transaction_count Int32,
     base_fee          Int64
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(sequence, 500000)
 ORDER BY (sequence);
 
+-- ReplacingMergeTree (was plain MergeTree): written in the entity phase
+-- (before the `ledgers` commit marker), so a crash-resume / backfill re-run
+-- re-emits the same `(wasm_hash, metadata)` row. Plain MergeTree never dedups
+-- → permanent byte-identical duplicates that double `contracts/interface`
+-- JOINs and needed a manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
+-- Content is immutable per `wasm_hash`, so no version column — any duplicate is
+-- byte-identical and RMT collapses it on merge; reads stay FINAL-free. (lore-0293)
 CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))
 )
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
 
 ----------------------------------------------------------------------
@@ -153,14 +171,22 @@ ORDER BY (contract_id);
 -- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
 -- set, code/issuer optional. Soroban-native: contract_id set,
 -- code/issuer=empty/0.
+--
+-- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
+-- lore-0293: nothing reads them (the API serves the aggregate from
+-- `account_asset_balance_state` below) and the indexer writes them NULL. They
+-- are a global rollup over every holder's balance; writing them into this
+-- per-ledger-rewritten row clobbered them (no-version RMT, last-write-wins →
+-- ~25% of classic assets served NULL in prod). Drop (`ALTER … DROP COLUMN`)
+-- deferred to a cleanup task.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
     name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),
-    holder_count    Nullable(Int32),
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → account_asset_balance_state
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → account_asset_balance_state
     icon_url        Nullable(String)
 )
 ENGINE = ReplacingMergeTree

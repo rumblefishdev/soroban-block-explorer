@@ -872,12 +872,8 @@ pub fn prepare_with_sac_overrides(
             issuer_id,
             contract_id: contract_id_int,
             name: t.name.clone(),
-            total_supply: t
-                .total_supply
-                .as_deref()
-                .map(decimal7_string_to_i128)
-                .transpose()?,
-            holder_count: t.holder_count,
+            total_supply: None, // dead column (lore-0293) → account_asset_balance_state
+            holder_count: None,
             icon_url: None,
         };
         push_asset(&mut out, &mut asset_seen, row);
