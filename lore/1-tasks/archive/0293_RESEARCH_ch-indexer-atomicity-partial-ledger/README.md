@@ -2,7 +2,7 @@
 id: '0293'
 title: 'Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse'
 type: RESEARCH
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0298', '0310', '0232']
 tags:
@@ -33,6 +33,19 @@ history:
       mid-crash; transient read-side dup on non-FINAL transactions queries.
       Recommend keep-as-is + narrow hardening. Converted to directory, added
       notes/S-atomicity-audit-findings.md. Spawned 0298. Left active pending PR.
+  - date: '2026-06-22'
+    status: completed
+    who: karolkow
+    note: >
+      Completed. The audit (LOW-severity verdict, keep-as-is + 0298) plus the
+      emergent assets-aggregate clobber fix found during it. Fix evolved
+      single-query CTE -> two-step -> AggregatingMergeTree -> final design B:
+      pre-computed per-asset `asset_aggregates` table maintained by a refreshable
+      MV (REFRESH EVERY 2 MINUTE), read via a trivial 1:1 LEFT JOIN. develop
+      merged in (128 commits; 4 conflicts resolved; kept develop's asset_enrichment
+      join). cargo --workspace --tests green; init_sql 24 statements; prod CH 26.3
+      verified to support refreshable MVs. Spawned 0310 (drop dead columns +
+      ledgers/wasm engine swap). Deploy runbook in this README.
 ---
 
 # Indexer atomicity audit: partial-ledger crash recovery + backfill re-run idempotency on ClickHouse
@@ -259,8 +272,22 @@ overlapping backfill/live ranges or manual re-run. Resume membership /
    (async/heavy) — deferred to 0298.
 3. **Bundled both hardening items into one follow-up (0298)** rather than two
    micro-tasks, per task-scope convention.
-4. **Left task `active`, not archived.** Findings are uncommitted on branch
-   `research/0293_…`; archive + index regen should follow the PR merge.
+4. **Emergent: fixed the assets-aggregate clobber found during the audit.**
+   `assets.total_supply`/`holder_count` were served NULL for ~25% of classic
+   assets (no-version RMT, the per-ledger indexer's `None` row beat the batch).
+   Iterated the fix — single-query CTE → two-step `fill_aggregates` →
+   `AggregatingMergeTree` → **final design B: a pre-computed per-asset
+   `asset_aggregates` table maintained by a refreshable MV** (`REFRESH EVERY 2
+   MINUTE`), read via a trivial 1:1 LEFT JOIN. Picked B over the incremental AMT
+   (A) because the dominant constraint is the `api_reader` read quota (0290/0198):
+   B's read is O(1) and off-quota, 115× smaller storage; the only cost is ≤2-min
+   staleness (fine for a supply/holder display). `MergeTree` not RMT (refreshable
+   MV replaces, never appends); `asset_type IN (1,2)` (native sum unreliable;
+   `chq` showed ~104.8B > real ~50B XLM supply). Drop of the dead columns + engine
+   swaps deferred to **0310**.
+5. **Merged develop (128 commits behind) before completing**, per user
+   direction — kept develop's `asset_enrichment` join, re-applied the aggregate
+   fix on top. Archived now (not deferred to PR merge) on user instruction.
 
 ## Future Work
 
