@@ -600,8 +600,9 @@ Caching operates at two levels:
 - **Backend in-memory caching** - frequently accessed reference data is cached in the
   Lambda execution environment to reduce database round-trips. Reference data
   (contract metadata) uses TTLs of 30-60 seconds; live-polled data (network stats)
-  must stay _below_ the ~5.8 s ledger cadence so each per-ledger frontend poll can
-  observe the new head. All in-process caches are built on the
+  is **version-keyed on the chain head** rather than a pure TTL, so a new ledger
+  is visible on the first request after it is written (see below). All
+  TTL-based in-process caches are built on the
   `moka` crate via the shared `crate::cache::ttl_cache` helper in
   `crates/api/src/cache.rs`, which fixes the TTL + `max_capacity` bound
   and yields lock-free reads, TinyLFU eviction and stampede protection
@@ -609,10 +610,27 @@ Caching operates at two levels:
   - `ContractMetadataCache` (`crates/api/src/contracts/cache.rs`,
     45 s TTL, 10 000 entries) — keyed by contract StrKey, populated on
     `GET /v1/contracts/{contract_id}`.
-  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`, 4 s TTL —
-    below the ledger cadence, see §6.4 "Live" tier — single-entry; uses
-    `moka::future::Cache::try_get_with` so concurrent cold-cache requests
-    deduplicate down to a single DB query).
+  - `NetworkStatsCache` (`crates/api/src/network/cache.rs`) — **version-keyed
+    on `latest_ledger_sequence`** (task 0291), not a pure TTL. Each request
+    first reads the head cheaply via `crate::common::head` (a single-row read
+    over the `ledgers` ordering key — PG `max(sequence)` over the PK, CH
+    `ORDER BY sequence DESC LIMIT 1`; see §6.4 "Live" tier) and looks the cache
+    up under that sequence: an unchanged head is a HIT, an advanced head misses
+    and recomputes once. This eliminates the up-to-TTL window where the
+    previous head was served, while `moka::future::Cache::try_get_with` still
+    collapses concurrent misses on the same head down to a single DB query. The
+    stats statement **pins** its latest-ledger row to the head it was keyed on
+    (`WHERE sequence = head`), so the response's `latest_ledger_sequence`
+    always equals the cache key (no TOCTOU / key-vs-body divergence) and the
+    head is read once per miss, not twice. A generous backstop `time_to_live`
+    (60 s) plus a small `max_capacity` only reclaim dead head keys — they are
+    not the freshness mechanism. Because the head read is now a hard dependency
+    in front of the cache (a warm HIT no longer means zero DB round-trips), a
+    head-read failure falls back to the **last good snapshot** (`AppState
+.network_last_good`, written on each miss) rather than a 500, preserving
+    the old "warm cache survives a transient DB/CH blip" property. The same
+    cheap head source is reused by the `ETag`/`304` conditional-GET layer
+    (task 0292).
     Every cache is a field of `AppState` and shared across handler
     invocations on the same warm Lambda container; cold starts begin with
     empty caches and rebuild on demand.

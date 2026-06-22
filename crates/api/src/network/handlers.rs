@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use crate::common::cache_control;
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
+use crate::common::head;
 use crate::openapi::schemas::ErrorEnvelope;
 use crate::state::AppState;
 
@@ -33,15 +34,22 @@ enum FetchStatsError {
 /// Reads the canonical single-statement network-stats query (latest
 /// ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
 /// estimates for accounts / contracts) and caches the assembled
-/// response for 4s in process memory (below the ledger cadence — see
-/// `network/cache.rs`). See the task 0045 spec and
+/// response **keyed on the chain head** (`latest_ledger_sequence`) in
+/// process memory — see `network/cache.rs`. See the task 0045 spec and
 /// `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
 /// for the full data-source mapping.
+///
+/// Per request we first read the head cheaply (`crate::common::head` —
+/// `SELECT max(sequence)`, a primary-key probe) and look up the cache
+/// under it: an unchanged head is a HIT (the new ledger has not landed),
+/// an advanced head is a MISS that recomputes once. So a new ledger is
+/// visible on the **first** request after it is written — there is no
+/// up-to-TTL window serving the previous head (task 0291).
 ///
 /// Concurrent cold-cache requests deduplicate via
 /// `moka::future::Cache::try_get_with` — the first task runs the
 /// async DB query and the rest wait on its result instead of fanning
-/// out N Postgres round-trips.
+/// out N round-trips.
 #[utoipa::path(
     get,
     path = "/network/stats",
@@ -53,24 +61,65 @@ enum FetchStatsError {
 )]
 pub async fn get_network_stats(State(state): State<AppState>) -> Response {
     let source = DataSource::for_module(Module::Network);
-    // `try_get_with` deduplicates concurrent cold-cache requests: only
-    // the first task runs the DB query, every other concurrent task on
-    // the same key waits for that task's result. Errors are propagated
-    // as `Arc<FetchStatsError>` so a single failed fetch is not cached
-    // and the next request retries cleanly.
+
+    // Cheap head read gates the cache: the head is the cache key, so a new
+    // ledger changes it and the next request misses + recomputes. The probe is
+    // a single-row read over the ledgers ordering key (PG `max(sequence)` over
+    // the PK; CH `ORDER BY sequence DESC LIMIT 1` — see `crate::common::head`),
+    // orders of magnitude cheaper than the stats statement it guards (task
+    // 0291).
+    let head = match source {
+        DataSource::Pg => head::latest_sequence_pg(&state.db)
+            .await
+            .map_err(FetchStatsError::from),
+        DataSource::Ch => head::latest_sequence_ch(state.ch())
+            .await
+            .map_err(FetchStatsError::from),
+    };
+    let head = match head {
+        Ok(head) => head,
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error reading head in get_network_stats: {e}");
+            // Availability: the head read is a new hard dependency in front of
+            // the cache (it did not exist under the old TTL design, where a
+            // warm HIT served with no DB round-trip). A transient head-read
+            // failure (DB blip, CH `read_rows` quota) must not 500 a request a
+            // warm cache could still answer — serve the last good snapshot if
+            // we have one (slightly stale but internally consistent).
+            return match state.network_last_good.read().unwrap().clone() {
+                Some(stats) => ok_response(stats),
+                None => errors::internal_error(
+                    errors::DB_ERROR,
+                    "Unable to retrieve network statistics.",
+                ),
+            };
+        }
+    };
+
+    // `try_get_with` deduplicates concurrent misses on the same head: only
+    // the first task runs the DB query, every other concurrent task on the
+    // same key waits for that task's result. Errors are propagated as
+    // `Arc<FetchStatsError>` so a single failed fetch is not cached and the
+    // next request retries cleanly. The stats statement pins its latest-ledger
+    // row to `head`, so the value stored under key `head` always reports
+    // `latest_ledger_sequence == head`.
     let result: Result<Arc<NetworkStats>, Arc<FetchStatsError>> = state
         .network_cache
-        .try_get_with((), async {
-            match source {
-                DataSource::Pg => queries::fetch_stats(&state.db)
+        .try_get_with(head, async {
+            let stats = match source {
+                DataSource::Pg => queries::fetch_stats(&state.db, head)
                     .await
-                    .map(Arc::new)
                     .map_err(FetchStatsError::from),
-                DataSource::Ch => queries_ch::fetch_stats(state.ch())
+                DataSource::Ch => queries_ch::fetch_stats(state.ch(), head)
                     .await
-                    .map(Arc::new)
                     .map_err(FetchStatsError::from),
             }
+            .map(Arc::new)?;
+            // Runs only on a miss (inside the initializer): record the freshest
+            // successfully-computed snapshot for the head-read failure fallback
+            // above. The std `RwLock` write is never held across an `.await`.
+            *state.network_last_good.write().unwrap() = Some(Arc::clone(&stats));
+            Ok(stats)
         })
         .await;
 

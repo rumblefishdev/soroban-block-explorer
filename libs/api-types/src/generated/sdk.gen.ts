@@ -326,15 +326,22 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
  * Reads the canonical single-statement network-stats query (latest
  * ledger row + `ledgers` 60s aggregate for TPS + `pg_class.reltuples`
  * estimates for accounts / contracts) and caches the assembled
- * response for 4s in process memory (below the ledger cadence — see
- * `network/cache.rs`). See the task 0045 spec and
+ * response **keyed on the chain head** (`latest_ledger_sequence`) in
+ * process memory — see `network/cache.rs`. See the task 0045 spec and
  * `docs/architecture/database-schema/endpoint-queries/01_get_network_stats.sql`
  * for the full data-source mapping.
+ *
+ * Per request we first read the head cheaply (`crate::common::head` —
+ * `SELECT max(sequence)`, a primary-key probe) and look up the cache
+ * under it: an unchanged head is a HIT (the new ledger has not landed),
+ * an advanced head is a MISS that recomputes once. So a new ledger is
+ * visible on the **first** request after it is written — there is no
+ * up-to-TTL window serving the previous head (task 0291).
  *
  * Concurrent cold-cache requests deduplicate via
  * `moka::future::Cache::try_get_with` — the first task runs the
  * async DB query and the rest wait on its result instead of fanning
- * out N Postgres round-trips.
+ * out N round-trips.
  */
 export const getNetworkStats = <ThrowOnError extends boolean = false>(
   options?: Options<GetNetworkStatsData, ThrowOnError>

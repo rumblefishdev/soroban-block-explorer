@@ -15,6 +15,7 @@ pub mod edge_lock;
 pub mod errors;
 pub mod extractors;
 pub mod filters;
+pub mod head;
 pub mod pagination;
 pub mod path;
 pub mod strkey;
