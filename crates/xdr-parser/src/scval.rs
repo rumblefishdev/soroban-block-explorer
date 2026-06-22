@@ -178,6 +178,35 @@ mod tests {
     }
 
     #[test]
+    fn cap67_addresses_render_as_strkeys_no_panic() {
+        // CAP-67 (Protocol 23) added MuxedAccount / ClaimableBalance /
+        // LiquidityPool ScAddress variants. A stale JS SDK CRASHED decoding
+        // these ("unknown ScAddressType member for value 4"), silently dropping
+        // whole event pages. This test guards that OUR parser (stellar-xdr 26 +
+        // its Display impl) renders every variant to a non-empty StrKey instead
+        // of panicking or producing an empty value — so CAP-67 SAC/muxed events
+        // are never dropped at the scval layer.
+        let variants = [
+            ScAddress::MuxedAccount(MuxedEd25519Account {
+                id: 12345,
+                ed25519: Uint256([0xAB; 32]),
+            }),
+            ScAddress::ClaimableBalance(ClaimableBalanceId::ClaimableBalanceIdTypeV0(Hash(
+                [0xCD; 32],
+            ))),
+            ScAddress::LiquidityPool(PoolId(Hash([0xEF; 32]))),
+        ];
+        for addr in variants {
+            let v = scval_to_typed_json(&ScVal::Address(addr));
+            assert_eq!(v["type"], "address");
+            assert!(
+                !v["value"].as_str().unwrap().is_empty(),
+                "CAP-67 address rendered empty",
+            );
+        }
+    }
+
+    #[test]
     fn error_value() {
         let e = ScError::Budget(ScErrorCode::ExceededLimit);
         let v = scval_to_typed_json(&ScVal::Error(e));

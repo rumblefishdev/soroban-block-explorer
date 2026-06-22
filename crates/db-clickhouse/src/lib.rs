@@ -138,16 +138,15 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 20 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 22.
-        // Task 0217 added `nfts_pending` + `nft_ownership_pending` as schema-only
-        // landing zones. lore-0293 added `account_asset_balance_state` (AMT) and
-        // `account_asset_balance_state_mv` for event-driven asset aggregates
-        // (replacing the retired `asset-aggregates` CLI). `assets.total_supply` /
-        // `holder_count` are kept but dead (served from the AMT; drop deferred).
+        // 21 CREATE TABLE + 1 CREATE DICTIONARY = 22. 17-table base; task 0217
+        // added `nfts_pending` + `nft_ownership_pending` as schema-only landing
+        // zones (the CH writer does NOT yet stage/INSERT into either — follow-up
+        // to PR #180); task 0231 (ADR 0050) added the `asset_enrichment` +
+        // `nft_enrichment` enrichment side tables.
         assert_eq!(
             stmts.len(),
             22,
-            "expected 20 tables + 1 materialized view + 1 dictionary, got {}",
+            "expected 21 tables + 1 dictionary, got {}",
             stmts.len()
         );
     }

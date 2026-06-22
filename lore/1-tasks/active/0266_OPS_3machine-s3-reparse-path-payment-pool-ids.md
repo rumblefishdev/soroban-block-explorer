@@ -97,6 +97,47 @@ history:
       old +2–5 % ignored that ~49 % of rows are atom-bearing and full tx
       folds get re-written) → OPTIMIZE FINAL per-partition + measure delta
       after partition 1.
+  - date: '2026-06-16'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      EXECUTED — step 2 of the 0281 maintenance window. Backfill ran on a
+      SINGLE machine (cyborg), not 3: the PR #255 worker re-parsed the full
+      range 50,457,424 → W on one box (running since 06-12) plus a top-up
+      pass [62,996,872 → W]. W pinned = 63,040,312.
+
+      Precondition corrected at kickoff — the 06-10 "0268 ALTERs applied on
+      Hetzner" audit was WRONG: prod still carried only the scalar pool_id.
+      Applied the 0268 Phase-1 ADDs on prod now — pool_ids
+      Array(FixedString(32)) with the 0268 DEFAULT (if pool_id IS NULL then
+      [] else [pool_id]) on operations_appearances, and gross_volume_a
+      Nullable(Decimal128(7)) on liquidity_pool_snapshots. Dropped the
+      oa_pool_seek projection + the dead skip indexes idx_oa_contract /
+      idx_oa_type. Fresh snapshot snapshot_pre_0281_20260615 (760.61 GiB)
+      created on Hetzner + copied off-site to HERO.
+
+      Transport = DIRECT INSERT over a zstd ssh-pipe (cyborg clickhouse-client
+      FORMAT Native | zstd | ssh prod | INSERT), NOT FREEZE/rsync/ATTACH
+      (ADR 0045). Emerged reason: schema mismatch — prod has the scalar
+      pool_id, cyborg parts have only pool_ids, so ATTACH would reject the
+      structurally-different part. INSERT maps columns by name; the prod-only
+      pool_id defaults to NULL on the inserted rows. Per-partition for oa
+      (100–126), per-500k-ledger chunk for snapshots.
+
+      Verify-gates passed: oa notEmpty(pool_ids) = 136.18M (134.7M re-parsed
+      + ~1.48M existing deposit/withdraw resolved via the DEFAULT); snapshots
+      gross_volume_a IS NOT NULL = 261.32M (was 0 pre-transport — a clean
+      signal since the ADD had no default). Path-payment types 2 and 13 now
+      carry pool_ids (were 0 — the 0261 bug). OPTIMIZE … PARTITION FINAL
+      per-partition, partitions 100–126 across both tables,
+      2026-06-16 15:36:48 → 16:13:53 (~37 min; oa ~35, snapshots ~2). Disk
+      held ~84 GiB free (96 % — tight; the new backup dominates /dev/md1,
+      reclaim after E20 green).
+
+      Still open: E20 re-validate (0267) — gated on the API read-path using
+      has(pool_ids, X) rather than the scalar pool_id; the endpoint_validation
+      artifact; then 0268 Phase 3 (MATERIALIZE → REMOVE DEFAULT → DROP
+      pool_id).
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
@@ -395,24 +436,26 @@ Preconditions (2026-06-10 audit):
 
 - [ ] 0261 Phase 1 parser fix merged to develop; commit SHA
       pinned in this task's history.
-- [ ] Preconditions met + recorded in history: 0268 ALTERs applied,
+- [x] Preconditions met + recorded in history: 0268 ALTERs applied,
       `oa_pool_seek` dropped, 0279 payload decision, fresh snapshot.
-- [ ] 3-machine split + per-machine ledger ranges documented in
-      task history.
-- [ ] Hetzner CH disk headroom verified before kickoff — margin sized
+- [x] 3-machine split + per-machine ledger ranges documented in
+      task history. (Ran single-machine — cyborg covered the full
+      range 50,457,424 → 63,040,312; see 2026-06-16 history.)
+- [x] Hetzner CH disk headroom verified before kickoff — margin sized
       from the first-partition delta measurement, NOT a flat 100 GiB
       (atom-bearing rows are ~49 % of the table; see Disk space risk).
-- [ ] All three machines complete their range; per-machine row
-      counts + timing captured.
-- [ ] Rows landed on Hetzner (direct INSERT default; ADR 0045
+- [x] All three machines complete their range; per-machine row
+      counts + timing captured. (Single machine; counts 136.18M /
+      261.32M + ~37 min OPTIMIZE in 2026-06-16 history.)
+- [x] Rows landed on Hetzner (direct INSERT default; ADR 0045
       transport fallback); verify-gates pass.
-- [ ] `OPTIMIZE TABLE operations_appearances FINAL` completed.
+- [x] `OPTIMIZE TABLE operations_appearances FINAL` completed.
 - [ ] Task 0267 (E20 re-validate) shows hash-set ratio ≥ 99 %
       (or 100 % if 0268 landed).
 - [ ] `endpoint_validation_<YYYYMMDD>.md` artifact updated with
       post-migration E20 verdict.
-- [ ] **Docs updated** — N/A (no schema or API contract change here).
-- [ ] **API types regenerated** — N/A.
+- [x] **Docs updated** — N/A (no schema or API contract change here).
+- [x] **API types regenerated** — N/A.
 
 ## Notes
 

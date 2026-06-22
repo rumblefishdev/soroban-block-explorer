@@ -2,7 +2,7 @@
 id: '0281'
 title: 'OPS: batched ClickHouse maintenance window — restart-gated + migration changes'
 type: OPS
-status: backlog
+status: active
 related_adr: ['0044', '0047']
 related_tasks: ['0221', '0243', '0261', '0266', '0268']
 tags:
@@ -35,6 +35,27 @@ history:
       so the window only carries the writer switch + projection swap); 0221
       SAC→nfts_pending routing fix + drain re-run listed as a rider on the
       indexer redeploy.
+  - date: '2026-06-17'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted to active for section C (read-path bounded seek). Sections A/B/D
+      already applied on prod during the live 0266 window (0268 ADDs, oa_pool_seek
+      + dead idx_oa_contract/idx_oa_type drops, idx_oa_pool_ids bloom skip index);
+      init.sql carries the end-state. C box-validated 2026-06-17: the
+      LP-transactions driver (has(pool_ids, X)) full-scanned 6.75B rows for a
+      popular pool — the inner subquery had no ORDER BY/LIMIT and the bloom cannot
+      prune a pool present in ~every granule. Fix needs no helper table /
+      projection: push read-in-order `ORDER BY ledger DESC` + `LIMIT` into the
+      inner so CH early-terminates — 6.75B -> 6.23M (~1000x) for the top pool.
+      `LIMIT 1 BY` blocked optimize_read_in_order (1.13B); plain LIMIT works.
+      Implemented in fetch_pool_transactions (queries_ch.rs) with an over-fetch
+      factor (limit*4) for the outer tx-dedup. Box-validation also caught the
+      SPARSE regime — a pool with fewer than over-fetch txs cannot early-terminate,
+      so the driver scans back to its old activity; at the default 0.025 bloom
+      that is ~155M rows (the 2.5 % FP floor). Tightened idx_oa_pool_ids to
+      `bloom_filter(0.001)` (0290 precedent) -> 5.28M. Both regimes now ~5-8M.
+      Net: read-in-order query change + index FP bump, no new table.
 ---
 
 # OPS: batched ClickHouse maintenance window

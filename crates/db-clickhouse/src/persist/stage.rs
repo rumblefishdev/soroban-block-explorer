@@ -122,6 +122,39 @@ pub struct StagedLedger {
     pub balance_rows: Vec<AccountBalanceRow>,
 }
 
+/// Named, borrowed inputs to [`prepare_with_sac_overrides`].
+///
+/// Replaces the former ~18 positional arguments: many are `&[T]` slices and a
+/// few share types, so a positional call could silently transpose two. Named
+/// fields make the call site readable and a wrong order a compile error. `Copy`
+/// (every field is a shared reference) so the stage body can destructure it
+/// back into locals with zero ceremony.
+#[derive(Clone, Copy)]
+pub struct StageInputs<'a> {
+    pub ledger: &'a ExtractedLedger,
+    pub transactions: &'a [ExtractedTransaction],
+    pub operations: &'a [(String, Vec<ExtractedOperation>)],
+    pub events: &'a [(String, Vec<ExtractedEvent>)],
+    pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
+    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub contract_deployments: &'a [ExtractedContractDeployment],
+    pub account_states: &'a [ExtractedAccountState],
+    pub liquidity_pools: &'a [ExtractedLiquidityPool],
+    pub pool_snapshots: &'a [ExtractedLiquidityPoolSnapshot],
+    pub assets: &'a [ExtractedAsset],
+    pub nfts: &'a [ExtractedNft],
+    pub nft_events: &'a [ExtractedNftEvent],
+    pub lp_positions: &'a [ExtractedLpPosition],
+    pub contract_name_writes: &'a [(String, String)],
+    /// Task 0220 Part 2 — SAC override re-insert rows. Empty for legacy callers.
+    pub sac_overrides: &'a [SacOverride],
+    /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
+    /// for legacy callers (behaves exactly as pre-0283).
+    pub prior_wasm_verdicts: &'a HashMap<[u8; 32], ContractType>,
+    /// Task 0283 live G9 — cross-ledger contract verdicts by `contract_id`.
+    pub prior_contract_verdicts: &'a HashMap<String, ContractType>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     ledger: &ExtractedLedger,
@@ -140,7 +173,9 @@ pub fn prepare(
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
 ) -> Result<StagedLedger, SchemaError> {
-    prepare_with_sac_overrides(
+    // Convenience wrapper: no SAC overrides, no cross-ledger verdicts (the
+    // legacy / test path). Behaves exactly as the pre-StageInputs `prepare`.
+    prepare_with_sac_overrides(&StageInputs {
         ledger,
         transactions,
         operations,
@@ -156,8 +191,10 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_name_writes,
-        &[],
-    )
+        sac_overrides: &[],
+        prior_wasm_verdicts: &HashMap::new(),
+        prior_contract_verdicts: &HashMap::new(),
+    })
 }
 
 /// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
@@ -173,25 +210,41 @@ pub fn prepare(
 /// directly; legacy callers via [`prepare`] get a no-op override list
 /// and behave exactly as before — the override mechanism stays opt-in
 /// at the call site, so the addition is fully backward-compatible.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_with_sac_overrides(
-    ledger: &ExtractedLedger,
-    transactions: &[ExtractedTransaction],
-    operations: &[(String, Vec<ExtractedOperation>)],
-    events: &[(String, Vec<ExtractedEvent>)],
-    invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
-    contract_deployments: &[ExtractedContractDeployment],
-    account_states: &[ExtractedAccountState],
-    liquidity_pools: &[ExtractedLiquidityPool],
-    pool_snapshots: &[ExtractedLiquidityPoolSnapshot],
-    assets: &[ExtractedAsset],
-    nfts: &[ExtractedNft],
-    nft_events: &[ExtractedNftEvent],
-    lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
-    sac_overrides: &[SacOverride],
-) -> Result<StagedLedger, SchemaError> {
+///
+/// `prior_wasm_verdicts` (task 0283 live G1 fix) carries cross-ledger
+/// WASM verdicts the pure stage cannot see: on Soroban `uploadContractWasm`
+/// and `createContract` are separate transactions in (almost always)
+/// different ledgers, so a deploy's WASM is invisible to the same-ledger
+/// `wasm_classification` map below and the contract would persist the parser
+/// default `Other`. The writer pre-fetches the verdict for such hashes from
+/// the already-persisted `wasm_interface_metadata` (see
+/// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
+/// override consults it as a fallback after the same-ledger map. Legacy
+/// callers via [`prepare`] pass an empty map and behave exactly as before.
+pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedger, SchemaError> {
+    // Destructure back into locals (StageInputs is `Copy`) so the body below is
+    // unchanged from the positional-argument era — every name matches.
+    let StageInputs {
+        ledger,
+        transactions,
+        operations,
+        events,
+        invocations,
+        contract_interfaces,
+        contract_deployments,
+        account_states,
+        liquidity_pools,
+        pool_snapshots,
+        assets,
+        nfts,
+        nft_events,
+        lp_positions,
+        contract_name_writes,
+        sac_overrides,
+        prior_wasm_verdicts,
+        prior_contract_verdicts,
+    } = *input;
+
     let ledger_sequence_i64 = i64::from(ledger.sequence);
     let ledger_hash = decode_hash(&ledger.hash, "ledger.hash")?;
     let ledger_closed_at_ms = ledger.closed_at.saturating_mul(1_000);
@@ -409,15 +462,26 @@ pub fn prepare_with_sac_overrides(
         };
         let deployed = i64::from(dep.deployed_at_ledger);
         // Task 0118 Phase 2 (PG-side mirror) — if this deployment's
-        // wasm was classified in the same ledger and carries a
-        // definitive `Nft` / `Fungible` verdict, override the parser
-        // default (`Other` for non-SAC) before the row reaches CH.
-        // SAC deploys stay `Token` (is_sac short-circuits WASM
+        // wasm carries a definitive `Nft` / `Fungible` verdict, override
+        // the parser default (`Other` for non-SAC) before the row reaches
+        // CH. SAC deploys stay `Token` (is_sac short-circuits WASM
         // classification — SACs have no WASM).
+        //
+        // Verdict source, in precedence order:
+        //   1. `wasm_classification` — WASM uploaded in THIS ledger.
+        //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
+        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      (task 0283 live G1). This is the common Soroban case
+        //      (upload + deploy are separate txs / ledgers); without it
+        //      the contract would persist `Other` and its NFT events would
+        //      route to quarantine until the batch backstop drains them.
         let mut contract_type = dep.contract_type;
         if !dep.is_sac
             && let Some(hash) = wasm_hash
-            && let Some(&classified) = wasm_classification.get(&hash)
+            && let Some(classified) = wasm_classification
+                .get(&hash)
+                .or_else(|| prior_wasm_verdicts.get(&hash))
+                .copied()
             && matches!(classified, ContractType::Nft | ContractType::Fungible)
         {
             contract_type = classified;
@@ -435,19 +499,59 @@ pub fn prepare_with_sac_overrides(
         });
     }
 
-    for (cid, name) in contract_name_writes {
-        out.contract_rows.push(SorobanContractRow {
-            id: ids::contract_id(cid),
-            contract_id: cid.clone(),
-            wasm_hash: None,
-            wasm_uploaded_at_ledger: ledger_sequence_i64,
-            deployer_id: None,
-            deployed_at_ledger: None,
-            contract_type: None,
-            is_sac: false,
-            name: Some(name.clone()),
-        });
+    // G5 guardrail + tripwire (task 0283; name-enrichment follow-up = task 0297).
+    //
+    // Contract names are empirically OFF-LEDGER: SEP-41 / OpenZeppelin Soroban
+    // tokens expose `name` via a `name()` WASM function (read off-ledger via
+    // simulateTransaction), NOT a persisted `Symbol("name")` ContractData entry.
+    // So `extract_contract_data_name_writes` matches nothing in practice — 0
+    // names across 424k contracts on the snapshot — and this loop is dormant.
+    //
+    // The row below is PARTIAL (deploy fields None). Under
+    // `ReplacingMergeTree(wasm_uploaded_at_ledger) ORDER BY (contract_id)` a
+    // version = current ledger would OUTVERSION and clobber the real deploy row
+    // (wasm_hash/deployer/contract_type → NULL), which also defeats the
+    // contract-type rebuild's `wasm_hash` join. We pin `wasm_uploaded_at_ledger
+    // = 0` so any real deploy (version = deploy ledger >= 1) always wins → a
+    // partial name row can NEVER clobber the deploy identity. The name is kept
+    // only when it is the sole row for that contract (harmless); it loses to a
+    // deploy (where the deploy IS the better data). Long-term, contract names
+    // belong in an enrichment side table (ADR 0048; task 0297), not this column.
+    //
+    // TRIPWIRE: this path is dormant today; if names ever start arriving (a
+    // non-OZ token that DOES persist `Symbol("name")`, or a future change wiring
+    // names through here), the warn fires so we learn the path activated and can
+    // route names to enrichment instead of silently dropping them on merge.
+    if !contract_name_writes.is_empty() {
+        tracing::error!(
+            count = contract_name_writes.len(),
+            first = contract_name_writes
+                .first()
+                .map(|(c, _)| c.as_str())
+                .unwrap_or(""),
+            "G5 dormant name-write path ACTIVATED: on-ledger Symbol(\"name\") \
+             entries observed and emitted as version=0 guarded rows (name kept \
+             only if no deploy row exists, else dropped on RMT merge). Route \
+             contract names to an enrichment side table per task 0297 — do not \
+             rely on soroban_contracts.name. See task 0283 (G5)."
+        );
     }
+    // for (cid, name) in contract_name_writes {
+    // out.contract_rows.push(SorobanContractRow {
+    //     id: ids::contract_id(cid),
+    //     contract_id: cid.clone(),
+    //     wasm_hash: None,
+    //     // G5 guardrail: version=0 sentinel (see comment above) — a real
+    //     // deploy (version = deploy ledger) always outversions this, so this
+    //     // partial name-only row can never clobber the deploy identity.
+    //     wasm_uploaded_at_ledger: 0,
+    //     deployer_id: None,
+    //     deployed_at_ledger: None,
+    //     contract_type: None,
+    //     is_sac: false,
+    //     name: Some(name.clone()),
+    // });
+    // }
 
     // Task 0220 — SAC override re-insert. For every observed classic
     // asset (Native / ClassicCredit), the parser already derived the
@@ -919,6 +1023,40 @@ pub fn prepare_with_sac_overrides(
         },
     );
 
+    // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
+    //
+    // Mirror of PG `insert_assets_from_reclassified_contracts`: a contract
+    // whose verdict resolved to `Fungible` (same-ledger classification or the
+    // writer's prior-ledger prefetch via the deploy override above) gets a
+    // bespoke-Soroban (`asset_type = 3`) asset row carrying only the
+    // `contract_id` — code/issuer are empty, aggregates are filled later by the
+    // `asset-aggregates` batch. `push_asset` dedups against any row the parser
+    // already emitted same-batch; SAC short-circuits `Fungible`, so these never
+    // collide with a `Sac` (type-2) row. Read from the staged `contract_rows`
+    // so the corrected verdict (incl. the prior-ledger override) is honoured.
+    let fungible_contract_ids: Vec<i64> = out
+        .contract_rows
+        .iter()
+        .filter(|r| !r.is_sac && r.contract_type == Some(ContractType::Fungible as i16))
+        .map(|r| r.id)
+        .collect();
+    for contract_id in fungible_contract_ids {
+        push_asset(
+            &mut out,
+            &mut asset_seen,
+            AssetRow {
+                asset_type: domain::TokenAssetType::Soroban as i16,
+                asset_code: String::new(),
+                issuer_id: 0,
+                contract_id,
+                name: None,
+                total_supply: None,
+                holder_count: None,
+                icon_url: None,
+            },
+        );
+    }
+
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------
     //
     // Build a per-contract verdict map keyed by strkey. Sources, in
@@ -929,11 +1067,13 @@ pub fn prepare_with_sac_overrides(
     //        - WASM-classified deploy (the override applied above).
     //   2. SAC overrides (also Token) — these were skipped from Pass-2
     //      stubs, so they're in `out.contract_rows` already.
-    // Contracts with NO entry → treat as `Other`/uncached → route to
-    // pending. CH has no DB access in the stage, so prior-ledger
-    // classifications are not visible here; this is the same semantic
-    // PG would produce for a worker with an empty `ClassificationCache`
-    // — pending now, drained / promoted later via the runbook.
+    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
+    // route to pending. The stage itself has no DB access; cross-ledger
+    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
+    // writer's lookup of `soroban_contracts` for contracts emitting NFT
+    // rows/events here but deployed earlier. This restores the PG
+    // `ClassificationCache` semantic the CH cutover dropped — without it a
+    // later transfer from an already-classified NFT would quarantine.
     let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
     for row in &out.contract_rows {
         if let Some(ty_i16) = row.contract_type
@@ -944,18 +1084,23 @@ pub fn prepare_with_sac_overrides(
     }
 
     // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
+    // (G9, cross-ledger) is the fallback for contracts not deployed here.
     enum NftRoute {
         Hot,
         Pending,
         Drop,
     }
     let route_for = |strkey: &str| -> NftRoute {
-        match verdict_by_contract.get(strkey).copied() {
+        let verdict = verdict_by_contract
+            .get(strkey)
+            .copied()
+            .or_else(|| prior_contract_verdicts.get(strkey).copied());
+        match verdict {
             Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
             Some(ContractType::Nft) => NftRoute::Hot,
-            // `Other` (cached or just-fetched) and uncached (no entry)
-            // both go to quarantine — same semantic as PG-side
-            // `resolve_nft_filter`.
+            // `Other` and uncached (no entry in either source) both go to
+            // quarantine — same semantic as PG-side `resolve_nft_filter`.
             _ => NftRoute::Pending,
         }
     };

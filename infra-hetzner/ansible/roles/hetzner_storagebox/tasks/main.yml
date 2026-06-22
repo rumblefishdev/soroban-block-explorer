@@ -1,0 +1,15 @@
+---
+# Canonical wiring for this role is the two `storagebox`-tagged plays
+# in site.yml: `reconcile` runs BEFORE the box play (so the discovered
+# SSH endpoint reaches the `backup` role) and `authorize` runs AFTER
+# it (so the Borg pubkey already exists). Splitting them is why
+# site.yml imports the task files directly via `tasks_from:`.
+#
+# This `main.yml` exists for a wholesale post-bootstrap re-run (the
+# box is already provisioned, the pubkey already present), where
+# running both halves back-to-back on the controller is safe.
+- name: Reconcile the subaccount and discover its SSH endpoint
+  ansible.builtin.import_tasks: reconcile.yml
+
+- name: Authorise the Borg key and validate the backup roundtrip
+  ansible.builtin.import_tasks: authorize.yml

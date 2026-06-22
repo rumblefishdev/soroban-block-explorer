@@ -140,7 +140,19 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- domains across tens of millions of accounts; the vast majority
     -- are NULL). LowCardinality dictionary-encodes the few unique
     -- values per block — strong compression on top of default LZ4.
-    home_domain       LowCardinality(Nullable(String))
+    home_domain       LowCardinality(Nullable(String)),
+    -- The table is ORDER BY account_id (StrKey -> id resolves on the PK), but
+    -- tx-list endpoints need the REVERSE: id (surrogate) -> account_id, to
+    -- project `source_account`. `id` is not the sort key, so that lookup
+    -- full-scans accounts (~23M rows, task 0290 — the ~35M/poll the polled
+    -- /transactions list read came from this join, NOT the partition scan).
+    -- A bloom_filter on `id` lets `WHERE id IN (page source_ids)` prune to a
+    -- handful of granules. FP 0.001 (tighter than the 0.025 default) because
+    -- the lookup tests N keys at once and per-key false positives compound
+    -- (1-(1-p)^N): at default 0.025 / 11 keys ~6M rows survived; at 0.001 ~1M.
+    -- Index is ~tens of MB. Applied to the live prod table via
+    -- ALTER ... ADD INDEX + MATERIALIZE INDEX (online, 2026-06-16).
+    INDEX idx_acc_id id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(last_seen_ledger)
 ORDER BY (account_id);
@@ -192,6 +204,31 @@ CREATE TABLE IF NOT EXISTS assets (
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
+-- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed byte-for-byte like
+-- `assets`, joined at read (`… FINAL`/`argMax`). Lives in a separate table
+-- because the live indexer re-writes whole `assets` rows (enrichment columns
+-- NULL) and would clobber it; `ReplacingMergeTree(version)` is order-safe under
+-- retries and lets the enricher CLEAR a value (re-insert NULL with a higher
+-- `version`). `version` = enricher processing timestamp (ms; non-nullable as
+-- RMT requires). NOTE: `assets.{icon_url,name}` stay — `icon_url` there is
+-- vestigial (always NULL; dropping it on the live table is a heavy ALTER, low
+-- value — deferred to a cleanup task), and `name` is still indexer-owned for
+-- soroban-native assets (read path does `COALESCE(asset_enrichment.name,
+-- assets.name)`). Full reasoning + measured evidence: lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS asset_enrichment (
+    asset_type   Int16,
+    asset_code   LowCardinality(String),
+    issuer_id    Int64,
+    contract_id  Int64,
+    icon_url     Nullable(String),
+    name         Nullable(String),
+    version      DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
     asset_type          Int16,
@@ -240,6 +277,27 @@ CREATE TABLE IF NOT EXISTS nfts_pending (
     current_owner_ledger  Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(current_owner_ledger)
+ORDER BY (contract_id, token_id);
+
+-- Off-chain `token_uri` enrichment for `nfts` (task 0231). Written by the
+-- enrichment-worker Lambda (NOT the indexer), keyed like `nfts`, joined at
+-- read. Separate table for the same reason as `asset_enrichment`: the live
+-- indexer re-writes whole `nfts` rows on every ownership change (metadata
+-- NULL) and the ownership clock (`current_owner_ledger`) is its RMT version —
+-- so enrichment in `nfts` would be clobbered AND has no safe version to claim.
+-- Here `version` is the enricher's own clock (ms), independent of ownership.
+-- `nfts.{name,media_url,collection_name}` stay vestigial (NULL; DROP deferred
+-- to a cleanup task). See lore task 0231,
+-- `notes/R-clickhouse-enrichment-write-strategy.md`.
+CREATE TABLE IF NOT EXISTS nft_enrichment (
+    contract_id      Int64,
+    token_id         String,
+    name             Nullable(String),
+    media_url        Nullable(String),
+    collection_name  Nullable(String),
+    version          DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (contract_id, token_id);
 
 -- liquidity_pools (task 0208 Path 2 folded inline): RMT(last_updated_ledger),
@@ -329,12 +387,15 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     amount            Int64,   -- fold count, see header comment
     ledger_sequence   Int64,
     -- Skip index for the `has(pool_ids, …)` pool filter (E20 /
-    -- liquidity-pools/:id/transactions). LP-touching ops are sparse, so a
-    -- bloom over the array prunes granules that hold no op for the queried
-    -- pool. This is the fresh-install / dev / E20 floor; the bounded
-    -- prod seek (the old scalar `oa_pool_seek` projection cannot serve array
-    -- membership) is redesigned in the 0281 window (task 0281 C).
-    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter GRANULARITY 1
+    -- liquidity-pools/:id/transactions; task 0281 C). The read driver
+    -- (fetch_pool_transactions) seeks via read-in-order `ORDER BY ledger DESC
+    -- LIMIT`, so a POPULAR pool early-terminates near the tip; this bloom bounds
+    -- the OTHER regime — a sparse pool whose last activity is far below the tip,
+    -- where the driver must scan back to reach it. `bloom_filter(0.001)` (not the
+    -- 0.025 default) keeps that scan's false-positive floor at ~0.1 % of the table
+    -- (~6 M rows) instead of ~2.5 % (~155 M, box-measured 2026-06-17); same
+    -- tight-FP rationale as the 0290 `idx_acc_id`.
+    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

@@ -70,20 +70,42 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 /// `issuer` / `contract_id` / `home_domain` / `deployed_at_ledger` decode to
 /// `None` on a JOIN miss via the `nullIf(...)` wraps (readonly-safe; no
 /// `SETTINGS join_use_nulls`).
+// Enrichment (icon_url + classic/SAC name) is read from the `asset_enrichment`
+// side table (ADR 0050 / task 0231), NOT the indexer-owned `assets.{icon_url,
+// name}` placeholders (dropped, task 0231 step 8). Per Option C the name has a
+// single owner per `asset_type`, composed disjointly at read:
+//   classic/SAC (1,2) → `asset_enrichment.name`
+//   soroban (3)       → `soroban_contracts.name` (on-chain `Symbol("name")`)
+//   native (0)        → the `"Stellar Lumen"` literal
+// `asset_enrichment` is `ReplacingMergeTree(version)`; the `argMax(_, version)`
+// sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
+// multiply asset rows on un-merged duplicates. `''` is the sentinel
+// ("tried, nothing"), neutralised with `nullIf`.
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
      nullIf(iss.account_id, '')   AS issuer, \
      nullIf(iss.home_domain, '')  AS issuer_home_domain, \
      nullIf(sc.contract_id, '')   AS contract_id, \
-     a.name                       AS name, \
+     coalesce(nullIf(ae.name, ''), nullIf(sc.name, ''), \
+              if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+     toString(a.total_supply)     AS total_supply, \
+     a.holder_count               AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
-     a.icon_url                   AS icon_url, \
+     nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key \
      FROM assets a FINAL \
      LEFT JOIN accounts iss          ON iss.id = a.issuer_id \
-     LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id";
+     LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
+     LEFT JOIN ( \
+         SELECT asset_type, asset_code, issuer_id, contract_id, \
+                argMax(icon_url, version) AS icon_url, \
+                argMax(name, version)     AS name \
+         FROM asset_enrichment \
+         GROUP BY asset_type, asset_code, issuer_id, contract_id \
+     ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
+         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id";
 
 #[derive(Debug, Row, Deserialize)]
 struct AssetChRow {
@@ -93,6 +115,8 @@ struct AssetChRow {
     issuer_home_domain: Option<String>,
     contract_id: Option<String>,
     name: Option<String>,
+    total_supply: Option<String>,
+    holder_count: Option<i32>,
     deployed_at_ledger: Option<i64>,
     icon_url: Option<String>,
     issuer_id_key: i64,

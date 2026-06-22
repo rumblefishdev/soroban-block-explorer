@@ -28,17 +28,25 @@
 //!   `PartitionWriter` directly via the runner's partition-writer
 //!   lifecycle.
 
+use std::collections::{HashMap, HashSet};
+
 use clickhouse::Client;
-use xdr_parser::SacOverride;
+use domain::ContractType;
+// Re-export the canonical (domain-owned) cache so `db_clickhouse::persist::
+// ClassificationCache` stays a valid path for callers + integration tests that
+// don't depend on `domain` directly (task 0283).
+pub use domain::ClassificationCache;
 use xdr_parser::types::{
-    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedTransaction,
+    ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
+    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
+    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
+    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
 };
+use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
 use crate::SchemaError;
 
+pub mod enrichment;
 pub mod ids;
 pub mod rows;
 pub mod stage;
@@ -78,8 +86,28 @@ pub async fn persist_ledger_clickhouse(
     lp_positions: &[ExtractedLpPosition],
     contract_name_writes: &[(String, String)],
     sac_overrides: &[SacOverride],
+    classification_cache: &ClassificationCache,
 ) -> Result<(), SchemaError> {
-    let staged = stage::prepare_with_sac_overrides(
+    // Task 0283 live cross-ledger verdict resolution. Two independent lookups
+    // (different tables, different keys, neither consumes the other), so one
+    // `tokio::join!` pays a single round-trip latency on a ledger carrying both
+    // a deploy and a cross-ledger NFT event. Both fail open (empty map on error
+    // = exact pre-0283 behaviour):
+    // * G1 — verdict by `wasm_hash` from `wasm_interface_metadata` (the deploy
+    //   override; upload + deploy are separate Soroban txs / ledgers).
+    // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
+    //   for contracts deployed earlier), memoised by `classification_cache`.
+    let (prior_wasm_verdicts, prior_contract_verdicts) = tokio::join!(
+        fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
+        fetch_prior_contract_verdicts(
+            client,
+            nfts,
+            nft_events,
+            contract_deployments,
+            classification_cache,
+        ),
+    );
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -96,13 +124,273 @@ pub async fn persist_ledger_clickhouse(
         lp_positions,
         contract_name_writes,
         sac_overrides,
-    )?;
+        prior_wasm_verdicts: &prior_wasm_verdicts,
+        prior_contract_verdicts: &prior_contract_verdicts,
+    })?;
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
         return Err(err);
     }
     pw.commit().await
+}
+
+/// Subset of `wasm_interface_metadata.metadata` we need to re-classify a
+/// WASM by its already-persisted function list. The column is the JSON
+/// written by [`stage`] as `{"functions": [...], "wasm_byte_len": N}`; we
+/// only read `functions` and feed it back through the canonical
+/// [`classify_contract_from_wasm_spec`] for exact parity with the deploy-time
+/// path (no rule duplication).
+#[derive(serde::Deserialize)]
+struct WasmMetadata {
+    functions: Vec<ContractFunction>,
+}
+
+/// Re-classify an already-persisted WASM from its stored
+/// `wasm_interface_metadata.metadata` JSON, returning a verdict **only** when
+/// it is decisive enough to override the parser default `Other` — i.e.
+/// `Nft`/`Fungible`. Anything else (parse failure, `Other`, `Token`) yields
+/// `None`.
+///
+/// Single source of the "parse the stored metadata JSON → classify → keep only
+/// the override-worthy verdicts" rule, shared by the live G1 prefetch here and
+/// the one-shot `contract-type-rebuild` maintenance pass in `backfill-runner`
+/// (which depends on this crate) so the policy lives in exactly one place.
+pub fn classify_wasm_metadata_json(metadata_json: &str) -> Option<ContractType> {
+    let meta = serde_json::from_str::<WasmMetadata>(metadata_json).ok()?;
+    let verdict: ContractType = classify_contract_from_wasm_spec(&meta.functions).into();
+    matches!(verdict, ContractType::Nft | ContractType::Fungible).then_some(verdict)
+}
+
+/// One `(hash, metadata)` row read from `wasm_interface_metadata` during the
+/// live G1 prefetch. `h` is the lower-case hex of the `FixedString(32)`
+/// `wasm_hash` (`lower(hex(...))` server-side) so it matches the hex the
+/// parser emits without binding raw bytes.
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct WasmVerdictRow {
+    h: String,
+    metadata: String,
+}
+
+/// Task 0283 live G1 — pre-fetch cross-ledger WASM verdicts for the deploys
+/// in this ledger.
+///
+/// The pure stage (`stage::prepare`) only sees WASM uploaded in the SAME
+/// ledger as a deploy. On Soroban `uploadContractWasm` and `createContract`
+/// are separate transactions in (almost always) different ledgers, so a
+/// deploy's WASM verdict is invisible to the stage and the contract would
+/// persist the parser default `Other` — its NFT events then route to the
+/// quarantine and the hot tables stay empty. This reads the verdict for those
+/// deploy hashes from the already-persisted `wasm_interface_metadata` (the
+/// upload landed in an earlier, already-committed ledger) and hands it to the
+/// stage's existing deploy override.
+///
+/// Gated + fail-open by construction:
+/// * No non-SAC deploy carrying a `wasm_hash` (≈99.8% of ledgers) → returns
+///   empty with **no** round trip.
+/// * Hashes already classified in THIS ledger are dropped from the lookup —
+///   the same-ledger map already covers them.
+/// * Any query / parse failure → empty map + `warn!`, so the writer behaves
+///   exactly as pre-0283 (`Other` → quarantine) and the batch backstop
+///   (`nft-reclassify`) drains later. The lookup can only improve a verdict,
+///   never block a write.
+///
+/// Known boundary (degrades safely): if the WASM upload and the deploy land in
+/// the SAME Lambda batch but DIFFERENT ledgers, and the upload's ledger has not
+/// yet committed when the deploy ledger is staged, the prefetch finds nothing
+/// and the deploy persists `Other` (and G2 emits no `assets` type-3 row). The
+/// batch backstop (`contract-type-rebuild` + `nft-reclassify`) recovers it —
+/// same fail-open contract, just deferred.
+async fn fetch_prior_wasm_verdicts(
+    client: &Client,
+    contract_deployments: &[ExtractedContractDeployment],
+    contract_interfaces: &[ExtractedContractInterface],
+) -> HashMap<[u8; 32], ContractType> {
+    let same_ledger: HashSet<String> = contract_interfaces
+        .iter()
+        .map(|i| i.wasm_hash.to_lowercase())
+        .collect();
+    let mut want: Vec<String> = contract_deployments
+        .iter()
+        .filter(|d| !d.is_sac)
+        .filter_map(|d| d.wasm_hash.as_deref())
+        .map(str::to_lowercase)
+        .filter(|h| !same_ledger.contains(h))
+        .collect();
+    want.sort();
+    want.dedup();
+    if want.is_empty() {
+        return HashMap::new();
+    }
+
+    match query_wasm_verdicts(client, &want).await {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "0283 live G1: wasm verdict prefetch failed — deploys persist as Other, batch backstop will drain"
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// Read + classify the verdicts for `hashes_hex_lower` from
+/// `wasm_interface_metadata`. Returns only `Nft` / `Fungible` verdicts — the
+/// deploy override ignores anything else, and `Other` is already the parser
+/// default, so there is nothing to override.
+async fn query_wasm_verdicts(
+    client: &Client,
+    hashes_hex_lower: &[String],
+) -> Result<HashMap<[u8; 32], ContractType>, clickhouse::error::Error> {
+    // The hashes are 64-char lower-case hex derived from parser output — no
+    // injection surface. Compared against `lower(hex(wasm_hash))` because CH
+    // `hex()` upper-cases while the parser / `hex::encode` produce lower-case.
+    let in_list = hashes_hex_lower
+        .iter()
+        .map(|h| format!("'{h}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT lower(hex(wasm_hash)) AS h, metadata \
+         FROM wasm_interface_metadata \
+         WHERE lower(hex(wasm_hash)) IN ({in_list})"
+    );
+
+    let rows = client.query(&sql).fetch_all::<WasmVerdictRow>().await?;
+
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let Ok(bytes) = hex::decode(&row.h) else {
+            continue;
+        };
+        let Ok(hash) = <[u8; 32]>::try_from(bytes.as_slice()) else {
+            continue;
+        };
+        if let Some(verdict) = classify_wasm_metadata_json(&row.metadata) {
+            out.insert(hash, verdict);
+        }
+    }
+    Ok(out)
+}
+
+/// One `(contract_id, contract_type)` row for the live G9 verdict lookup.
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct ContractVerdictRow {
+    contract_id: String,
+    contract_type: i16,
+}
+
+/// Task 0283 live G9 — resolve cross-ledger verdicts for contracts that emit
+/// NFT rows/events in this ledger but were deployed earlier.
+///
+/// `route_for` (stage) builds its verdict map only from THIS ledger's
+/// `contract_rows`, so a transfer from a contract deployed in a prior ledger
+/// has no verdict and routes to the quarantine. This reads the already-known
+/// verdict straight from `soroban_contracts` (populated at deploy time by G1)
+/// and hands it to `route_for` as a fallback, so the event routes correctly
+/// (Nft → hot, SAC/Fungible → drop) immediately.
+///
+/// Gated + fail-open:
+/// * No NFT row/event from a not-deployed-here contract → empty, **no** round
+///   trip. Contracts deployed THIS ledger are excluded — `contract_rows`
+///   already covers them.
+/// * Any query failure → empty map + `warn!`; routing falls back to
+///   quarantine exactly as pre-G9 and the one-shot `nft-reclassify` drain (or
+///   a re-run) recovers it. Can only improve routing, never block a write.
+///
+/// Option (c): a lazy per-(warm-container) [`ClassificationCache`] (the PG
+/// `ClassificationCache` pattern) memoizes definitive verdicts, so the batched
+/// DB lookup fires only on the FIRST sighting of a contract (~9/day steady
+/// state) rather than once per event-bearing ledger (~80% of ledgers).
+///
+/// Known limitation (WASM upgrade): the cache keys on `contract_id` and never
+/// re-resolves a definitive verdict for the warm-container lifetime, so a
+/// contract upgraded from one decisive interface to another (e.g. Fungible →
+/// Nft) keeps its first verdict until the container recycles. This is benign
+/// today because the parser does not yet surface contract-instance `updated`
+/// entries (so an upgrade can't even be detected at write time) — closing it is
+/// gated on that parser work (task 0295). When `updated` lands, invalidate the
+/// affected `contract_id`s here before the snapshot. Classification is
+/// function-name based, so most upgrades preserve the interface and never flip.
+async fn fetch_prior_contract_verdicts(
+    client: &Client,
+    nfts: &[ExtractedNft],
+    nft_events: &[ExtractedNftEvent],
+    contract_deployments: &[ExtractedContractDeployment],
+    cache: &ClassificationCache,
+) -> HashMap<String, ContractType> {
+    let deployed_here: HashSet<&str> = contract_deployments
+        .iter()
+        .map(|d| d.contract_id.as_str())
+        .collect();
+    // Borrow the ids (no per-row clone on the hot path) — `want` only feeds
+    // `missing`/`snapshot_for`, both of which take `&str`. Owned Strings are
+    // allocated once, lazily, only for the verdicts actually returned below.
+    let mut want: Vec<&str> = nfts
+        .iter()
+        .map(|n| n.contract_id.as_str())
+        .chain(nft_events.iter().map(|e| e.contract_id.as_str()))
+        .filter(|c| !deployed_here.contains(c))
+        .collect();
+    want.sort_unstable();
+    want.dedup();
+    if want.is_empty() {
+        return HashMap::new();
+    }
+
+    // Only the contracts not yet memoized hit the DB; `Other`/unknown are never
+    // cached, so they re-resolve until they earn a definitive verdict.
+    let missing = cache.missing(want.iter().copied());
+    if !missing.is_empty() {
+        match query_contract_verdicts(client, &missing).await {
+            Ok(fetched) => cache.extend_definitive(fetched),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "0283 live G9: contract verdict prefetch failed — events route to quarantine, drain recovers"
+                );
+                // Fail-open: don't populate; uncached contracts route to pending.
+            }
+        }
+    }
+    // `snapshot_for` borrows from `want`; copy to owned for the stage map.
+    cache
+        .snapshot_for(want.iter().copied())
+        .into_iter()
+        .map(|(id, ty)| (id.to_string(), ty))
+        .collect()
+}
+
+/// Read decisive verdicts (`Token` / `Nft` / `Fungible`; `Other`/NULL skipped
+/// — they route to quarantine anyway) for `contract_ids` from
+/// `soroban_contracts`. Including `Token` lets SAC-emitted events DROP at
+/// routing instead of leaking into pending (closes the 0221 write-time leak).
+async fn query_contract_verdicts(
+    client: &Client,
+    contract_ids: &[&str],
+) -> Result<HashMap<String, ContractType>, clickhouse::error::Error> {
+    // `contract_ids` are `C…` StrKeys from parser output (base32, no quote
+    // chars) — no injection surface.
+    let in_list = contract_ids
+        .iter()
+        .map(|c| format!("'{c}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT contract_id, contract_type FROM soroban_contracts FINAL \
+         WHERE contract_id IN ({in_list}) AND contract_type IN (0, 2, 3)"
+    );
+
+    let rows = client.query(&sql).fetch_all::<ContractVerdictRow>().await?;
+
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        if let Ok(verdict) = ContractType::try_from(row.contract_type) {
+            out.insert(row.contract_id, verdict);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -150,6 +438,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &ClassificationCache::new(),
         )
         .await;
         assert!(res.is_err(), "expected transport error, got: {res:?}");

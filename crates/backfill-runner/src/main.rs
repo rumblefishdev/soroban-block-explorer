@@ -4,11 +4,15 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
+mod asset_aggregates;
 mod bootstrap;
+mod ch_staging;
+mod contract_type_rebuild;
 mod dashboard;
 mod error;
 mod ingest;
 mod nft_reclassify;
+mod nft_reparse;
 mod partition;
 mod repair_tier1;
 mod resume;
@@ -18,7 +22,7 @@ mod sink;
 mod status;
 mod sync;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -59,6 +63,23 @@ struct Cli {
     /// are picked up by `db_clickhouse::Config::from_env()` as usual.
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
+
+    /// Client certificate (PEM) for mTLS to the Caddy-fronted ClickHouse
+    /// (`https://<CH_DOMAIN>`). When all of `--ch-cert` / `--ch-key` /
+    /// `--ch-ca` are set, the `--target clickhouse` sink connects over mTLS
+    /// (the cert CN maps to a CH user via Caddy's `CLICKHOUSE_CN_USER_MAP`)
+    /// instead of the plain HTTP client; `--clickhouse-url` / `CLICKHOUSE_URL`
+    /// must then be the https Caddy endpoint. All three absent → plain client.
+    #[arg(long, env = "CLICKHOUSE_CERT")]
+    ch_cert: Option<PathBuf>,
+
+    /// Client private key (PEM) — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_KEY")]
+    ch_key: Option<PathBuf>,
+
+    /// CA cert (PEM) that signed the client cert — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_CA")]
+    ch_ca: Option<PathBuf>,
 
     /// Soroban RPC endpoint (e.g.
     /// `https://soroban-rpc.mainnet.stellar.gateway.fm`). Used by the
@@ -163,6 +184,28 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Recompute `assets.{holder_count, total_supply}` from current
+    /// `account_balances_current` state (task 0228 Phase 5,
+    /// CH analog of task 0194's PG `recompute_asset_aggregates`).
+    /// Staging + EXCHANGE TABLES. CH-only.
+    AssetAggregates {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// One-shot rebuild of `soroban_contracts.contract_type` from
+    /// `wasm_interface_metadata` + `assets` type-3 backfill (task 0283).
+    /// Classifies every WASM in Rust (parity with the parser), rebuilds
+    /// `soroban_contracts` into staging and `EXCHANGE TABLES`-swaps it, then
+    /// inserts the missing Soroban-fungible `assets` rows. Must run BEFORE
+    /// `nft-reclassify` (which promotes `contract_type = 2`), with the indexer
+    /// STOPPED (whole-table swap). Idempotent; `--dry-run` reports verdict
+    /// transitions + would-be asset inserts without writing. CH-only.
+    ContractTypeRebuild {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -175,6 +218,26 @@ enum Command {
     /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
     /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
     NftReclassify {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Re-parse `soroban_events` through the task-0296 NFT parser and write
+    /// recovered candidates to `nfts_pending` / `nft_ownership_pending`
+    /// (CH-direct — no raw-S3 re-ingest; the dropped events are already stored
+    /// decoded). Scans only the shapes the old parser missed (map / packed-vec
+    /// / consecutive_mint); Shape-A scalars are already in pending. Writes
+    /// PENDING only — run `contract-type-rebuild` + `nft-reclassify` after to
+    /// promote/drop. Idempotent (ReplacingMergeTree). CH-only.
+    NftReparse {
+        /// First ledger sequence (inclusive).
+        #[arg(long)]
+        start: u32,
+
+        /// Last ledger sequence (inclusive).
+        #[arg(long)]
+        end: u32,
+
         #[arg(long)]
         dry_run: bool,
     },
@@ -212,6 +275,9 @@ async fn main() {
         cli.target,
         cli.database_url.as_deref(),
         cli.clickhouse_url.as_deref(),
+        cli.ch_cert.as_deref(),
+        cli.ch_key.as_deref(),
+        cli.ch_ca.as_deref(),
     );
 
     match cli.command {
@@ -262,6 +328,27 @@ async fn main() {
                 stats.soroban_contracts_rows,
             );
         }
+        Command::AssetAggregates { dry_run } => {
+            let stats = asset_aggregates::execute(&sink, dry_run)
+                .await
+                .expect("asset_aggregates failed");
+            println!(
+                "asset_aggregates completed (dry_run={}): assets_rows={}",
+                stats.dry_run, stats.assets_rows,
+            );
+        }
+        Command::ContractTypeRebuild { dry_run } => {
+            let stats = contract_type_rebuild::execute(&sink, dry_run).await.expect(
+                "contract_type_rebuild failed — if it failed AFTER the table \
+                     swap (e.g. during the assets backfill), simply re-run: the \
+                     pass is idempotent (re-flip is a no-op, assets insert is \
+                     NOT EXISTS-guarded)",
+            );
+            println!(
+                "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
+                stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
+            );
+        }
         Command::NftReclassify { dry_run } => {
             let stats = nft_reclassify::execute(&sink, dry_run)
                 .await
@@ -277,6 +364,27 @@ async fn main() {
                 stats.dropped_legacy_ownership,
             );
         }
+        Command::NftReparse {
+            start,
+            end,
+            dry_run,
+        } => {
+            let stats = nft_reparse::execute(&sink, start, end, dry_run)
+                .await
+                .expect("nft_reparse failed — idempotent, safe to re-run by range");
+            let verb = if stats.dry_run {
+                "would recover"
+            } else {
+                "recovered"
+            };
+            println!(
+                "nft_reparse completed (dry_run={}): events_scanned={} {verb} nft_pending_rows={} ownership_pending_rows={}",
+                stats.dry_run,
+                stats.events_scanned,
+                stats.nft_pending_rows,
+                stats.ownership_pending_rows,
+            );
+        }
     }
 }
 
@@ -288,10 +396,19 @@ async fn main() {
 /// database) via `db_clickhouse::Config::from_env`; the `--clickhouse-url`
 /// CLI flag already overrides `CLICKHOUSE_URL` for the URL field
 /// because clap is reading the same env var.
+///
+/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the CH
+/// sink instead connects over mTLS to the Caddy-fronted endpoint: the PEMs are
+/// read into an `MtlsBundle` and `client_with_mtls` presents the client cert
+/// (whose CN Caddy maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url`
+/// must be the https Caddy host; user/password are ignored on that path.
 fn build_sink(
     target: Target,
     database_url: Option<&str>,
     clickhouse_url: Option<&str>,
+    ch_cert: Option<&Path>,
+    ch_key: Option<&Path>,
+    ch_ca: Option<&Path>,
 ) -> sink::Sink {
     match target {
         Target::Postgres => {
@@ -306,7 +423,34 @@ fn build_sink(
             if let Some(url) = clickhouse_url {
                 cfg.url = url.to_string();
             }
-            sink::Sink::Clickhouse(db_clickhouse::client(&cfg))
+            match (ch_cert, ch_key, ch_ca) {
+                (Some(cert), Some(key), Some(ca)) => {
+                    let read = |p: &Path| {
+                        std::fs::read_to_string(p)
+                            .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
+                    };
+                    let bundle = db_clickhouse::mtls::MtlsBundle {
+                        cert_pem: read(cert),
+                        key_pem: read(key),
+                        ca_pem: read(ca),
+                    };
+                    // `client_with_mtls` prepends `https://`, so hand it the
+                    // bare host — strip any scheme / trailing slash from cfg.url.
+                    let domain = cfg
+                        .url
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                        .trim_end_matches('/');
+                    let client =
+                        db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
+                            .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
+                    sink::Sink::Clickhouse(client)
+                }
+                (None, None, None) => sink::Sink::Clickhouse(db_clickhouse::client(&cfg)),
+                _ => panic!(
+                    "--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted"
+                ),
+            }
         }
     }
 }

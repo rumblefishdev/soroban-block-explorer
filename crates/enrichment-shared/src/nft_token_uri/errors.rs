@@ -107,46 +107,56 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
                     .map(|s| s.is_server_error())
                     .unwrap_or(false)
         }
-        // Soroban RPC errors collapse a wide surface (network, 5xx,
-        // contract revert). Discriminate by error message content:
-        // some known patterns are fundamentally permanent (contract
-        // function signature mismatches, missing symbols) — these
-        // would burn SQS retry budget forever if classified as
-        // transient. Audit 2026-05-13 (Bug #6) identified the
-        // patterns below.
-        NftTokenUriError::SorobanRpc(msg) => !is_permanent_soroban_rpc_pattern(msg),
+        // Soroban RPC errors are **permanent by default** — see
+        // `is_transient_soroban_rpc_pattern`. A genuine network failure
+        // (connect / timeout / 5xx) surfaces as the `Http` variant above,
+        // NOT here: a `SorobanRpc(String)` only exists once the RPC already
+        // answered HTTP 200 with a JSON body carrying the error, so it is a
+        // contract- or request-level fault that retry cannot fix.
+        NftTokenUriError::SorobanRpc(msg) => is_transient_soroban_rpc_pattern(msg),
         _ => false,
     }
 }
 
-/// Heuristic — Soroban RPC error messages that are fundamentally
-/// permanent (function signature won't change, missing function won't
-/// appear, archived contract instance won't return). Adding patterns
-/// is safe and additive.
-fn is_permanent_soroban_rpc_pattern(msg: &str) -> bool {
-    // `Func(MismatchingParameterLen)` — function exists but arity mismatch.
-    // Real Soroban NFTs split between SEP-50 (1-arg `token_uri(token_id)`)
-    // and SEP-39 (0-arg `token_uri()`). Either signature is fixed once
-    // the contract is deployed.
-    msg.contains("MismatchingParameterLen")
-        // `"symbol not found in slice of strs"` — contract simply does
-        // not export the function we tried to call. Common for the
-        // Bug #3 false-positive NFTs (SAC contracts wrongly flagged).
-        || msg.contains("symbol not found in slice of strs")
-        // Generic "Error(WasmVm, UnexpectedSize)" — emitted alongside
-        // MismatchingParameterLen and similar permanent VM contract
-        // shape mismatches.
-        || msg.contains("Error(WasmVm, UnexpectedSize)")
-        // `Error(Storage, MissingValue)` —
-        // "trying to get non-existing value for contract instance".
-        // The contract instance entry has been pruned from live state
-        // and won't return without re-deployment. Treated as permanent:
-        // any future activity on that contract would push the instance
-        // back to live state, at which point a fresh enrichment trigger
-        // will run anyway. Retrying meanwhile is pure SQS retry budget
-        // waste. Audit 2026-05-13 measured 23/1000 transient-classified
-        // errors of this shape in the false-positive NFT population.
-        || msg.contains("Error(Storage, MissingValue)")
+/// `SorobanRpc` errors that are genuinely retryable (server-side, not
+/// contract/request-level). **Default is permanent** — only these escape to
+/// transient.
+///
+/// Inverts the pre-2026-06 deny-list (which defaulted `SorobanRpc` to
+/// *transient* and enumerated permanent patterns). That leaked any
+/// un-enumerated permanent shape to an infinite SQS retry → DLQ: e.g.
+/// `Error(WasmVm, MissingValue)` "trying to invoke non-existent contract
+/// function" (a contract that simply lacks `token_uri`) was classified
+/// transient because it was not on the list. Since a stringified
+/// `SorobanRpc` always means "the RPC responded" (network faults are the
+/// `Http` variant), permanent-by-default is the correct shape: the prior
+/// audit's permanent patterns (`MismatchingParameterLen`, `symbol not found
+/// in slice of strs`, `Error(WasmVm, UnexpectedSize)`, `Error(Storage,
+/// MissingValue)`, `Error(WasmVm, MissingValue)`) are now all permanent
+/// without enumeration. A misfire (a true transient phrased outside the
+/// allow-list → false sentinel) is recoverable with `--retry-sentinels`;
+/// the inverse (false transient → DLQ loop) is not.
+///
+/// The allow-list still errs narrow on purpose, but covers the common
+/// server/gateway 5xx phrasings a provider emits during an outage — left out,
+/// a provider's bad hour silently converts a chunk of the population to
+/// permanent sentinels (recoverable only by an operator running
+/// `--retry-sentinels`). Matching is case-insensitive.
+fn is_transient_soroban_rpc_pattern(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    // JSON-RPC server-side error codes — retryable.
+    m.contains("-32603")   // "Internal error"
+        || m.contains("-32000") // generic server error (execution/timeout)
+        // Rate-limiting / load-shedding phrasings.
+        || m.contains("rate limit")
+        || m.contains("try again")
+        || m.contains("overloaded")
+        // Gateway / upstream 5xx phrasings (LB/proxy in front of the RPC).
+        || m.contains("unavailable") // "service unavailable" / 503
+        || m.contains("bad gateway") // 502
+        || m.contains("gateway timeout") // 504
+        || m.contains("timeout")
+        || m.contains("deadline") // "context deadline exceeded"
 }
 
 #[cfg(test)]
@@ -173,8 +183,51 @@ mod tests {
     }
 
     #[test]
-    fn soroban_rpc_is_transient() {
-        assert!(is_transient(&NftTokenUriError::SorobanRpc("5xx".into())));
+    fn soroban_rpc_internal_error_is_transient() {
+        // JSON-RPC -32603 = server-side internal error → retryable.
+        assert!(is_transient(&NftTokenUriError::SorobanRpc(
+            "{\"code\":-32603,\"message\":\"Internal error\"}".into()
+        )));
+        assert!(is_transient(&NftTokenUriError::SorobanRpc(
+            "rate limit exceeded, try again".into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_gateway_5xx_is_transient() {
+        // Provider/LB outage phrasings (mixed case) — server-side, retryable.
+        for msg in [
+            "503 Service Unavailable",
+            "502 Bad Gateway",
+            "504 Gateway Timeout",
+            "upstream request timeout",
+            "context deadline exceeded",
+            "{\"code\":-32000,\"message\":\"execution timeout\"}",
+        ] {
+            assert!(
+                is_transient(&NftTokenUriError::SorobanRpc(msg.into())),
+                "{msg:?} should be transient"
+            );
+        }
+    }
+
+    #[test]
+    fn soroban_rpc_wasmvm_missing_value_is_permanent() {
+        // The reported bug: contract lacks the `token_uri` entrypoint. A retry
+        // can never make the function appear → permanent (was leaking transient
+        // → DLQ loop under the old deny-list).
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(WasmVm, MissingValue) … trying to invoke non-existent contract function, token_uri".into()
+        )));
+    }
+
+    #[test]
+    fn soroban_rpc_unknown_shape_defaults_permanent() {
+        // Any un-enumerated SorobanRpc error is permanent by default (the RPC
+        // answered → contract/request fault), not transient.
+        assert!(!is_transient(&NftTokenUriError::SorobanRpc(
+            "HostError: Error(Contract, #5)".into()
+        )));
     }
 
     #[test]
