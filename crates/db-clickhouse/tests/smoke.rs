@@ -107,24 +107,28 @@ async fn smoke_inserts_and_reads_each_table() {
 
     // ----- asset_aggregates — pre-computed per-asset table (lore-0293). The
     // refreshable MV does NOT fire on insert (unlike a normal MV); force an
-    // out-of-schedule refresh, wait for it, then assert the computed row. -----
+    // out-of-schedule refresh, then POLL the target. `SYSTEM WAIT VIEW` alone is
+    // racy — it returns early if the just-triggered refresh hasn't entered the
+    // 'Running' state yet — so poll for the computed row instead. -----
     client
         .query("SYSTEM REFRESH VIEW asset_aggregates_mv")
         .execute()
         .await
         .expect("refresh asset_aggregates_mv");
-    client
-        .query("SYSTEM WAIT VIEW asset_aggregates_mv")
-        .execute()
-        .await
-        .expect("wait asset_aggregates_mv");
-    assert_count(
-        &client,
-        "asset_aggregates",
-        &format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER} AND holder_count = 1"),
-        1,
-    )
-    .await;
+    let agg_where =
+        format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER} AND holder_count = 1");
+    let mut populated = false;
+    for _ in 0..50 {
+        if count_rows(&client, "asset_aggregates", &agg_where).await == 1 {
+            populated = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200)); // ~10s budget
+    }
+    assert!(
+        populated,
+        "asset_aggregates not populated after refresh (~10s): {agg_where}"
+    );
 
     // ----- soroban_contracts (state) -----
     client
@@ -404,18 +408,23 @@ async fn smoke_inserts_and_reads_each_table() {
     cleanup(&client).await;
 }
 
-/// Assert there is exactly `expected` rows in `table` matching `where_clause`.
+/// Count rows in `table` matching `where_clause`.
 ///
 /// No `FINAL`: plain `MergeTree` tables reject it, and the smoke test only
 /// inserts one row per (table, sentinel) combination so background
 /// `ReplacingMergeTree` dedup never hides anything.
-async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &str, expected: u64) {
+async fn count_rows(client: &clickhouse::Client, table: &str, where_clause: &str) -> u64 {
     let q = format!("SELECT count() FROM {table} WHERE {where_clause}");
-    let actual: u64 = client
+    client
         .query(&q)
         .fetch_one()
         .await
-        .unwrap_or_else(|e| panic!("count from {table}: {e}"));
+        .unwrap_or_else(|e| panic!("count from {table}: {e}"))
+}
+
+/// Assert there are exactly `expected` rows in `table` matching `where_clause`.
+async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &str, expected: u64) {
+    let actual = count_rows(client, table, where_clause).await;
     assert_eq!(
         actual, expected,
         "table {table} expected {expected} row(s) for `{where_clause}`, got {actual}"

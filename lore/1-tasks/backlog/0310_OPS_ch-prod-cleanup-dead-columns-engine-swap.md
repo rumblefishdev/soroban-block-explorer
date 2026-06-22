@@ -107,7 +107,23 @@ ALTER TABLE assets DROP COLUMN holder_count;
    the `crates/db-clickhouse/src/lib.rs` statement-count comment (count unchanged
    — still 22 — but the dead-column note goes).
 
-### 3. (Optional, separate) PG aggregate decommission
+### 3. Monitor the `asset_aggregates` refresh (lore-0293 follow-up)
+
+The refreshable MV degrades safely on a failed refresh — a failed run leaves the
+previous good table intact (stale, never empty) — but there is **no signal** if a
+refresh silently stalls (OOM/timeout/lock), so the figures would just age. Wire an
+alert on `system.view_refreshes`:
+
+```sql
+SELECT view, status, last_success_time, exception
+FROM system.view_refreshes
+WHERE view = 'asset_aggregates_mv';
+```
+
+Alert if `exception != ''` OR `now() - last_success_time > ~10 min` (a few missed
+2-minute cycles). Cheap; pairs with the existing CH monitoring.
+
+### 4. (Optional, separate) PG aggregate decommission
 
 Only once the PG assets path is formally retired (task 0244).
 `recompute_asset_aggregates` (PG) is **alive** today (API `DataSource::Pg` +
@@ -117,6 +133,8 @@ completeness.
 ## Acceptance Criteria
 
 - [ ] 0293 rollout confirmed live + verified in prod (prerequisite).
+- [ ] `asset_aggregates` refresh monitored (`system.view_refreshes` alert on
+      `exception` / stale `last_success_time`).
 - [ ] `ledgers` and `wasm_interface_metadata` are `ReplacingMergeTree`
       (`SELECT engine FROM system.tables WHERE name IN (...)`), row counts match
       pre-swap (modulo RMT dedup), no data gap at the swap boundary.
