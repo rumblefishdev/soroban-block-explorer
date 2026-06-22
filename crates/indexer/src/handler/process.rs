@@ -58,7 +58,7 @@ pub struct ParseOutput {
     pub lp_positions: Vec<ExtractedLpPosition>,
     /// On-chain Soroban token metadata (name/symbol/decimals) from
     /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
-    /// table (ADR 0049). SACs already excluded by the producer.
+    /// table (task 0297). SACs already excluded by the producer.
     pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
     /// Per-transaction operation tree JSON, collected by `extract_invocations`.
     /// Neither write path reads it today (CH writer skips it, PG flow

@@ -271,7 +271,7 @@ entities:
   Phase 1; pre-fix the parser stored the inner-tx source unconditionally
   and misattributed deploys with per-op overrides
 - contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
-  ADR 0049). `name` / `symbol` / `decimals` are read from the contract instance
+  task 0297). `name` / `symbol` / `decimals` are read from the contract instance
   entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
   `token_metadata::extract_token_metadata`, collected by
   `state::extract_contract_metadata_writes` on `created` + `updated` instance

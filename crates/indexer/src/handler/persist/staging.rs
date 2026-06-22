@@ -202,7 +202,7 @@ pub(super) struct ContractRow {
     /// the `Symbol("name")` extraction path (parser second pass + retroactive
     /// UPDATE) was chain-verified dead and removed (task 0297). On-chain token
     /// name lands via instance-storage `METADATA` → `soroban_contract_metadata`
-    /// (ADR 0049). Field retained until the separate column-drop task.
+    /// (task 0297). Field retained until the separate column-drop task.
     pub name: Option<String>,
 }
 

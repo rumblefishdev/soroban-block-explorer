@@ -23,7 +23,7 @@ history:
     who: karolkow
     note: >
       Spawned from 0297. 0297 ships the CODE (parser → soroban_contract_metadata
-      side table → API read-compose; ADR 0049). This task carries everything
+      side table → API read-compose; task 0297). This task carries everything
       that is NOT that core code implementation: backfill, deploy/flag-flip,
       perf validation, live tests, frontend amount rendering, and the legacy
       name-path cleanup that was too entangled to land safely inside 0297.
@@ -36,7 +36,7 @@ history:
 [Task 0297](0297_FEATURE_contract-name-enrichment-and-bytes-decode/README.md)
 implemented the on-chain Soroban token metadata pipeline in **code**
 (`soroban_contract_metadata` side table, parser extract → indexer write → API
-read-compose; [ADR 0049](../../2-adrs/0049_soroban-contract-metadata-onchain-side-table.md)).
+read-compose; task 0297).
 This task bundles the remaining non-implementation work.
 
 ## Scope

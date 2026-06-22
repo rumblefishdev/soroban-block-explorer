@@ -3,7 +3,7 @@ id: '0297'
 title: 'FEATURE: on-chain Soroban token metadata (name/symbol/decimals) → soroban_contract_metadata side table'
 type: FEATURE
 status: completed
-related_adr: ['0048', '0049']
+related_adr: ['0050']
 related_tasks: ['0283', '0231', '0304']
 tags: [clickhouse, enrichment, soroban, layer-data, priority-low, effort-medium]
 links: []
@@ -40,7 +40,7 @@ history:
     status: completed
     who: karolkow
     note: >
-      Code implementation done (option D / ADR 0049). Parser → side table →
+      Code implementation done (option D). Parser → side table →
       API read-compose. Tests: xdr-parser 257 lib (+ token_metadata/metadata-
       writes, incl. restored), db-clickhouse + api green; clippy + fmt clean;
       api-types regenerated. Then a 5-agent review (code-review + 2× simplify +
@@ -71,7 +71,7 @@ only the instance `executable`, never `inst.storage`), and the old path matched 
 standalone `Symbol("name")` entry that real tokens never write — hence
 `soroban_contracts.name` was an empirical zero. Chain-verified on mainnet (see
 note). Fix = the **parser recovers the METADATA struct** → a dedicated
-**`soroban_contract_metadata`** side table (ADR 0049) → API read-composes.
+**`soroban_contract_metadata`** side table → API read-composes.
 Off-chain RPC is only a fallback for NFTs (e.g. Bachini) that carry no on-ledger
 metadata — already served by the `nft_enrichment` / `token_uri` path.
 
@@ -90,7 +90,7 @@ go to a separate spawned task.
 
 1. **Schema** — `soroban_contract_metadata(contract_id, name, symbol, decimals,
 version)`, `RMT(version)`, `ORDER BY (contract_id)`; `version` = observed
-   ledger. A SEPARATE table (not columns on `soroban_contracts`) per ADR 0049:
+   ledger. A SEPARATE table (not columns on `soroban_contracts`), Option D:
    RMT whole-row replace + that table's many writers would clobber in-row
    metadata, and identity vs metadata update on different clocks.
 2. **Parser** — `token_metadata::extract_token_metadata` (METADATA struct →
@@ -108,7 +108,7 @@ version)`, `RMT(version)`, `ORDER BY (contract_id)`; `version` = observed
    METADATA `name` is a `String`, and `decode_scval_string` consumes a different
    JSON shape than `scval.rs:45` produces. Verify before "fixing".
 
-## Acceptance Criteria (revised — option D, [ADR 0049](../../../2-adrs/0049_soroban-contract-metadata-onchain-side-table.md))
+## Acceptance Criteria (revised — option D)
 
 - [x] Parser extracts `name`/`symbol`/`decimals` from instance-storage `METADATA` on `created` AND `updated` instance changes — `crates/xdr-parser/src/token_metadata.rs` + `ledger_entry_changes.rs` (6 unit tests).
 - [x] New `soroban_contract_metadata` side table (`RMT(version)`, key `contract_id`) in `init.sql`.
@@ -136,7 +136,7 @@ version)`, `RMT(version)`, `ORDER BY (contract_id)`; `version` = observed
 
 ### From Plan
 
-1. **Separate `soroban_contract_metadata` side table** (not columns on `soroban_contracts`) — RMT whole-row clobber + two independent update clocks (identity vs metadata). ADR 0049, chain-proven in `notes/G-two-writers-proof.md`.
+1. **Separate `soroban_contract_metadata` side table** (not columns on `soroban_contracts`) — RMT whole-row clobber + two independent update clocks (identity vs metadata). chain-proven in `notes/G-two-writers-proof.md`.
 2. **SACs skipped** — name/symbol/decimals derivable from SAC identity; a row would bloat + duplicate.
 
 ### Emerged (multi-agent review fixes, 2026-06-19)

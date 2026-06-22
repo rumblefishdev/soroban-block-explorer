@@ -82,14 +82,17 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
 //
-// On-chain token metadata (`soroban_contract_metadata` m, ADR 0049) is joined
+// On-chain token metadata (`soroban_contract_metadata` m, task 0297) is joined
 // via `sc.contract_id` — `assets` carries only the surrogate `a.contract_id`,
 // not the strkey, so the metadata key is resolved through `soroban_contracts`.
 // Consequence: a soroban asset whose `soroban_contracts` row is missing/stale
 // joins NULL metadata even when the side table holds it. Acceptable — the
 // deploy is always indexed before transfers create the asset row — but it is a
-// structural coupling, not an independent join. Unlike the detail point-lookup,
-// the list keeps the full-table `argMax` sub-aggregate (one row per contract).
+// structural coupling, not an independent join. The subquery reads the metadata
+// table with `FINAL` (latest whole row per contract_id) — rows are whole-struct
+// snapshots at one ledger, so `FINAL` is the direct, frankenstein-proof way to
+// collapse the RMT vs a per-column `argMax`. Table is bounded (Soroban-native
+// tokens only, SACs skipped) so the read-time merge is cheap.
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
@@ -110,12 +113,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
      LEFT JOIN accounts iss          ON iss.id = a.issuer_id \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
      LEFT JOIN ( \
-         SELECT contract_id, \
-                argMax(name, version)     AS name, \
-                argMax(symbol, version)   AS symbol, \
-                argMax(decimals, version) AS decimals \
-         FROM soroban_contract_metadata \
-         GROUP BY contract_id \
+         SELECT contract_id, name, symbol, decimals \
+         FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \

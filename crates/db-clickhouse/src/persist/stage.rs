@@ -99,7 +99,7 @@ pub struct StagedLedger {
     pub account_rows: Vec<AccountRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
-    /// On-chain Soroban token metadata side table (ADR 0049). Populated inside
+    /// On-chain Soroban token metadata side table (task 0297). Populated inside
     /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
     /// `StageInputs.contract_metadata_writes` slice.
     pub metadata_rows: Vec<SorobanContractMetadataRow>,
@@ -150,7 +150,7 @@ pub struct StageInputs<'a> {
     pub nfts: &'a [ExtractedNft],
     pub nft_events: &'a [ExtractedNftEvent],
     pub lp_positions: &'a [ExtractedLpPosition],
-    /// On-chain Soroban token metadata writes (ADR 0049). Threaded through to
+    /// On-chain Soroban token metadata writes (task 0297). Threaded through to
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
@@ -205,7 +205,7 @@ pub fn prepare(
 }
 
 /// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
-/// rows (ADR 0049). Called inside [`prepare_with_sac_overrides`] from the
+/// rows (task 0297). Called inside [`prepare_with_sac_overrides`] from the
 /// `StageInputs.contract_metadata_writes` slice. SAC filtering already happened
 /// in the producer (`xdr_parser::extract_contract_metadata_writes`); `version` =
 /// observed ledger.
@@ -278,7 +278,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     let mut out = StagedLedger {
         ledger_sequence: ledger_sequence_i64,
-        // ADR 0049: on-chain token metadata side table. Threaded through
+        // task 0297: on-chain token metadata side table. Threaded through
         // `StageInputs` (no longer assigned post-`prepare` by the CH write
         // callers). SAC filtering already happened in the producer
         // (`xdr_parser::extract_contract_metadata_writes`).
@@ -531,7 +531,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // (ADR 0049) On-chain token name/symbol/decimals land in the dedicated
+    // (task 0297) On-chain token name/symbol/decimals land in the dedicated
     // `soroban_contract_metadata` side table via
     // `build_metadata_rows(contract_metadata_writes)` (assigned into
     // `out.metadata_rows` above). The legacy `Symbol("name")` extraction path —

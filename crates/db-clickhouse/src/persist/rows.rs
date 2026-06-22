@@ -137,7 +137,7 @@ pub struct SorobanContractRow {
 /// (`xdr_parser::extract_contract_metadata_writes`). Separate table — never
 /// columns on `soroban_contracts` — to dodge the RMT whole-row clobber across
 /// that table's many writers (deploy / rebuild EXCHANGE / stubs / db-merge).
-/// See ADR 0049.
+/// See task 0297.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct SorobanContractMetadataRow {
     pub contract_id: String,

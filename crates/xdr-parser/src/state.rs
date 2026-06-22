@@ -130,7 +130,7 @@ pub fn extract_contract_deployments(
 /// Reads the typed `change.token_metadata` (populated in `ledger_entry_changes`,
 /// chain-verified location — task 0297) rather than re-decoding. Emits one
 /// [`ExtractedContractMetadata`] per qualifying change, for the
-/// `soroban_contract_metadata` side table (ADR 0049).
+/// `soroban_contract_metadata` side table (task 0297).
 ///
 /// - `created` + `updated` + `restored` carry the current value and are kept;
 ///   `state` (pre-image) and `removed` are ignored. `restored` matters because
@@ -1227,7 +1227,7 @@ mod tests {
         assert!(deployments.is_empty());
     }
 
-    // -- extract_contract_metadata_writes (ADR 0049 side-table source) --
+    // -- extract_contract_metadata_writes (task 0297 side-table source) --
 
     /// Helper: a contract-instance change with a given executable type and a
     /// preset `token_metadata` (mirrors what `ledger_entry_changes` produces).
@@ -1304,7 +1304,7 @@ mod tests {
     fn extract_metadata_writes_includes_restored() {
         // A contract instance restored from archival re-materializes the
         // current value — its METADATA must be (re)written (closes the
-        // cold-start-after-eviction hole; ADR 0049 / task 0297 review).
+        // cold-start-after-eviction hole; task 0297 review).
         let c = make_instance_meta_change(
             "CRESTORED",
             "restored",

@@ -172,14 +172,13 @@ ORDER BY (contract_id);
 -- rendered as 7 at read for classic/SAC.
 -- INVARIANT: every row is a WHOLE-struct snapshot at one ledger (name+symbol+
 -- decimals all set from the same METADATA at that version) — never a partial
--- single-column write. This is what makes the per-column `argMax(_, version)`
--- read safe: the three independent argMaxes can't stitch a Frankenstein row
--- from different versions. Read: `soroban_contracts sc LEFT JOIN (SELECT
--- contract_id, argMax(name,version), argMax(symbol,version),
--- argMax(decimals,version) FROM soroban_contract_metadata GROUP BY contract_id)
--- m ON m.contract_id = sc.contract_id`, `COALESCE(m.name, sc.name)`. Detail
--- (point lookup) pushes `WHERE contract_id = ?` into the sub-aggregate; the
--- list keeps it full-table. Full reasoning: ADR 0049, task 0297.
+-- single-column write. Read with `FINAL` (latest whole row per contract_id) —
+-- the direct, frankenstein-proof RMT collapse for a whole-row read; the table is
+-- bounded (Soroban-native tokens only) so the read-time merge is cheap. Read
+-- (assets list): `assets … LEFT JOIN (SELECT contract_id, name, symbol, decimals
+-- FROM soroban_contract_metadata FINAL) m ON m.contract_id = sc.contract_id`,
+-- `COALESCE(ae.name, m.name, sc.name, …)`. The contract detail endpoint does NOT
+-- read this table. Full reasoning: task 0297.
 CREATE TABLE IF NOT EXISTS soroban_contract_metadata (
     contract_id  String,
     name         Nullable(String),

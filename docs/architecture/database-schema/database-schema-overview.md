@@ -443,7 +443,7 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger      BIGINT,
     contract_type           SMALLINT,                                       -- ADR 0031, nullable
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
-    name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see ADR 0049
+    name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see task 0297
     search_vector           TSVECTOR GENERATED ALWAYS AS (
                                 to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
                             ) STORED,
@@ -456,7 +456,7 @@ CREATE INDEX idx_contracts_search ON soroban_contracts USING GIN (search_vector)
 CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern_ops);
 ```
 
-> **On-chain token metadata (ADR 0049, ClickHouse).** `name` / `symbol` /
+> **On-chain token metadata (task 0297, ClickHouse).** `name` / `symbol` /
 > `decimals` for Soroban tokens are on-ledger in the contract's instance storage
 > under `Symbol("METADATA")` (a `{decimal, name, symbol}` struct — NOT a
 > standalone `Symbol("name")` entry; the `name` column above is empirically

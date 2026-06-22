@@ -292,7 +292,7 @@ pub struct ExtractedLedgerEntryChange {
 /// One token-metadata write for a contract, derived from a contract-instance
 /// `created`/`updated` change carrying a `Symbol("METADATA")` struct.
 ///
-/// Maps to a `soroban_contract_metadata` side-table row (ADR 0049): a separate
+/// Maps to a `soroban_contract_metadata` side-table row (task 0297): a separate
 /// per-contract table, written by the indexer, composed at read time — never
 /// mixed into `soroban_contracts` (RMT whole-row clobber + different update
 /// clocks). SACs are excluded by the producer
@@ -324,7 +324,7 @@ pub struct ExtractedContractDeployment {
     /// Always `None`. The former standalone `Symbol("name")` storage-entry
     /// extraction was chain-verified dead (real tokens never write it) and
     /// removed (task 0297); on-chain token name now lands via instance-storage
-    /// `METADATA` → `soroban_contract_metadata` (ADR 0049). Field retained
+    /// `METADATA` → `soroban_contract_metadata` (task 0297). Field retained
     /// (maps to `soroban_contracts.name VARCHAR(256)`, ADR 0042) until the
     /// separate column-drop task.
     pub name: Option<String>,
