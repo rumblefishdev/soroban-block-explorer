@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use stellar_xdr::curr::*;
 
 use crate::scval::scval_to_typed_json;
-use crate::token_metadata::{TokenMetadata, extract_token_metadata, is_stellar_asset_instance};
+use crate::token_metadata::{
+    TokenMetadata, extract_token_metadata, has_metadata_key, is_stellar_asset_instance,
+};
 use crate::types::ExtractedLedgerEntryChange;
 
 /// Extract all ledger entry changes from a transaction's metadata.
@@ -184,11 +186,30 @@ fn extract_single_change(
 /// (`state::extract_contract_metadata_writes`) keys off — no separate `is_sac`
 /// flag is threaded on the change. See `crate::token_metadata`.
 fn entry_token_metadata(entry: &LedgerEntry) -> Option<TokenMetadata> {
-    match &entry.data {
-        LedgerEntryData::ContractData(cd) if !is_stellar_asset_instance(&cd.val) => {
-            extract_token_metadata(&cd.val)
+    let LedgerEntryData::ContractData(cd) = &entry.data else {
+        return None;
+    };
+    // SAC: carries METADATA on-chain, but name/symbol/decimals derive from the
+    // asset identity — skip silently (an expected non-store, not a miss).
+    if is_stellar_asset_instance(&cd.val) {
+        return None;
+    }
+    match extract_token_metadata(&cd.val) {
+        Some(md) => Some(md),
+        // A METADATA key is present but yielded nothing usable (non-Map struct,
+        // or name/symbol/decimals in a shape we don't decode). Surface the
+        // contract instead of silently dropping it — a non-standard token we'd
+        // otherwise never know we missed ("monitored UNKNOWN"). Broaden the
+        // decoder only once a real shape shows up here.
+        None if has_metadata_key(&cd.val) => {
+            tracing::warn!(
+                contract = %cd.contract,
+                "contract instance carries Symbol(\"METADATA\") but no usable \
+                 name/symbol/decimals decoded — non-standard shape, skipped"
+            );
+            None
         }
-        _ => None,
+        None => None,
     }
 }
 

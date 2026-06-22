@@ -80,6 +80,20 @@ pub fn is_stellar_asset_instance(val: &ScVal) -> bool {
     )
 }
 
+/// True when `val` is a contract instance whose storage carries a
+/// `Symbol("METADATA")` key — regardless of whether the struct under it decodes
+/// to anything usable. Lets callers distinguish "not a token / no metadata" from
+/// "a token whose METADATA we could not parse" (a non-standard shape worth a log
+/// rather than a silent drop).
+pub fn has_metadata_key(val: &ScVal) -> bool {
+    let ScVal::ContractInstance(inst) = val else {
+        return false;
+    };
+    inst.storage
+        .as_ref()
+        .is_some_and(|storage| storage.iter().any(|e| symbol_is(&e.key, "METADATA")))
+}
+
 /// True when `v` is exactly `Symbol(want)`.
 fn symbol_is(v: &ScVal, want: &str) -> bool {
     matches!(v, ScVal::Symbol(s) if s.0.as_slice() == want.as_bytes())
@@ -193,6 +207,26 @@ mod tests {
             storage: Some(scmap(vec![])),
         });
         assert_eq!(extract_token_metadata(&empty), None);
+    }
+
+    #[test]
+    fn has_metadata_key_distinguishes_present_but_undecodable() {
+        // METADATA key present but its value is NOT a Map → `extract` yields
+        // None, yet the key IS there. This is the "non-standard token, surface
+        // it" case the producer's warn keys off.
+        let weird = wasm_instance(vec![(sym("METADATA"), ScVal::U32(42))]);
+        assert_eq!(extract_token_metadata(&weird), None);
+        assert!(
+            has_metadata_key(&weird),
+            "METADATA key present though undecodable"
+        );
+
+        // No METADATA key → not a token, no signal.
+        let other = wasm_instance(vec![(sym("Admin"), ScVal::Void)]);
+        assert!(!has_metadata_key(&other));
+
+        // Non-instance → false.
+        assert!(!has_metadata_key(&ScVal::U32(7)));
     }
 
     #[test]
