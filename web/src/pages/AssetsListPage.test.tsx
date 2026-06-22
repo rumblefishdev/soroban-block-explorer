@@ -21,6 +21,7 @@ function makeAsset(overrides: Partial<AssetItem> = {}): AssetItem {
     asset_code: 'XLM',
     asset_type: 0,
     asset_type_name: 'native',
+    decimals: 7,
     issuer: null,
     contract_id: null,
     holder_count: 1_000_000,
