@@ -283,9 +283,6 @@ pub async fn get_contract(
         contract_type_name: contract.contract_type_name,
         contract_type: contract.contract_type,
         is_sac: contract.is_sac,
-        name: contract.name,
-        symbol: contract.symbol,
-        decimals: contract.decimals,
         stats: ContractStats {
             recent_invocations,
             recent_unique_callers,

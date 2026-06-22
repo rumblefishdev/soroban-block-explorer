@@ -64,15 +64,6 @@ pub struct ContractDetailResponse {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
-    /// Token name from the on-chain instance-storage `METADATA` struct
-    /// (ADR 0049), via the `soroban_contract_metadata` side table. `None` for
-    /// non-token contracts (SAC names derive from the asset code, not here).
-    pub name: Option<String>,
-    /// Token symbol (SEP-41 `METADATA`). `None` for non-token contracts.
-    pub symbol: Option<String>,
-    /// Token decimals (SEP-41 `METADATA`) — load-bearing for amount rendering.
-    /// `None` for non-token contracts.
-    pub decimals: Option<u32>,
     pub stats: ContractStats,
 }
 

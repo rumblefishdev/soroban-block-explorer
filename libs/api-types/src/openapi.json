@@ -2299,12 +2299,6 @@
           "contract_type_name": {
             "type": ["string", "null"]
           },
-          "decimals": {
-            "type": ["integer", "null"],
-            "format": "int32",
-            "description": "Token decimals (SEP-41 `METADATA`) — load-bearing for amount rendering.\n`None` for non-token contracts.",
-            "minimum": 0
-          },
           "deployed_at_ledger": {
             "type": ["integer", "null"],
             "format": "int64"
@@ -2315,16 +2309,8 @@
           "is_sac": {
             "type": "boolean"
           },
-          "name": {
-            "type": ["string", "null"],
-            "description": "Token name from the on-chain instance-storage `METADATA` struct\n(ADR 0049), via the `soroban_contract_metadata` side table. `None` for\nnon-token contracts (SAC names derive from the asset code, not here)."
-          },
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
-          },
-          "symbol": {
-            "type": ["string", "null"],
-            "description": "Token symbol (SEP-41 `METADATA`). `None` for non-token contracts."
           },
           "wasm_hash": {
             "type": ["string", "null"]

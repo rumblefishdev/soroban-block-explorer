@@ -208,7 +208,7 @@ impl PartitionWriterHandle<'_> {
                 // backwards-compat shim with empty overrides; this is
                 // the production wire-up the PR #186 description called
                 // out as a follow-up.
-                let mut staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
+                let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                     &db_clickhouse::persist::stage::StageInputs {
                         ledger: &parsed.ledger,
                         transactions: &parsed.transactions,
@@ -224,7 +224,7 @@ impl PartitionWriterHandle<'_> {
                         nfts: &parsed.nfts,
                         nft_events: &parsed.nft_events,
                         lp_positions: &parsed.lp_positions,
-                        contract_name_writes: &parsed.contract_name_writes,
+                        contract_metadata_writes: &parsed.contract_metadata_writes,
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):
@@ -235,10 +235,6 @@ impl PartitionWriterHandle<'_> {
                         prior_contract_verdicts: &std::collections::HashMap::new(),
                     },
                 )?;
-                // ADR 0049: on-chain token metadata → its own side table.
-                staged.metadata_rows = db_clickhouse::persist::stage::build_metadata_rows(
-                    &parsed.contract_metadata_writes,
-                );
                 pw.write_ledger(staged).await?;
                 Ok(())
             }

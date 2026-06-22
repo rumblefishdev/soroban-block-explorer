@@ -232,25 +232,10 @@ export type ContractDetailResponse = {
   contract_id: string;
   contract_type?: number | null;
   contract_type_name?: string | null;
-  /**
-   * Token decimals (SEP-41 `METADATA`) — load-bearing for amount rendering.
-   * `None` for non-token contracts.
-   */
-  decimals?: number | null;
   deployed_at_ledger?: number | null;
   deployer?: string | null;
   is_sac: boolean;
-  /**
-   * Token name from the on-chain instance-storage `METADATA` struct
-   * (ADR 0049), via the `soroban_contract_metadata` side table. `None` for
-   * non-token contracts (SAC names derive from the asset code, not here).
-   */
-  name?: string | null;
   stats: ContractStats;
-  /**
-   * Token symbol (SEP-41 `METADATA`). `None` for non-token contracts.
-   */
-  symbol?: string | null;
   wasm_hash?: string | null;
   wasm_uploaded_at_ledger?: number | null;
 };

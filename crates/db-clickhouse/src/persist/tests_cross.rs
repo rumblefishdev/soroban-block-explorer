@@ -417,7 +417,6 @@ fn prepare_empty_inputs_yields_ledger_and_native_asset() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
     assert_eq!(staged.ledger_rows.len(), 1);
@@ -445,7 +444,6 @@ fn prepare_surrogate_id_fk_consistency() {
         &ledger,
         std::slice::from_ref(&tx),
         &[(tx.hash.clone(), vec![])],
-        &[],
         &[],
         &[],
         &[],
@@ -528,7 +526,6 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -573,7 +570,6 @@ fn prepare_drops_diagnostic_events_and_orphans() {
         std::slice::from_ref(&tx),
         &[(tx.hash.clone(), vec![])],
         &events,
-        &[],
         &[],
         &[],
         &[],
@@ -631,7 +627,6 @@ fn prepare_folds_identical_operations() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -675,7 +670,6 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
         &ledger,
         std::slice::from_ref(&tx),
         &ops,
-        &[],
         &[],
         &[],
         &[],
@@ -754,7 +748,6 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -808,7 +801,6 @@ fn prepare_lp_deposit_single_element_pool_ids() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -851,7 +843,6 @@ fn prepare_offer_op_pool_ids_from_details() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -878,14 +869,12 @@ fn prepare_is_deterministic_across_runs() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("first run");
     let b = stage::prepare(
         &ledger,
         std::slice::from_ref(&tx),
         &[(tx.hash.clone(), vec![])],
-        &[],
         &[],
         &[],
         &[],
@@ -928,7 +917,6 @@ fn prepare_emits_stub_soroban_contract_rows_for_referenced_only() {
         std::slice::from_ref(&tx),
         &[(tx.hash.clone(), vec![])],
         &[(tx.hash.clone(), vec![event])],
-        &[],
         &[],
         &[],
         &[],
@@ -990,7 +978,6 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
         &[],
         &[],
         std::slice::from_ref(&dep),
-        &[],
         &[],
         &[],
         &[],
@@ -1135,7 +1122,6 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
         std::slice::from_ref(&nft),
         std::slice::from_ref(&ev),
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -1208,7 +1194,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         nfts: std::slice::from_ref(&nft),
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1260,7 +1246,6 @@ fn prepare_emits_soroban_asset_row_for_fungible_contract() {
         &[],
         std::slice::from_ref(&iface),
         std::slice::from_ref(&dep),
-        &[],
         &[],
         &[],
         &[],
@@ -1320,7 +1305,6 @@ fn prepare_no_soroban_asset_row_for_nft_contract() {
         &[],
         &[],
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -1369,7 +1353,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         nfts: std::slice::from_ref(&nft),
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
@@ -1407,7 +1391,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         nfts: std::slice::from_ref(&nft),
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
@@ -1447,7 +1431,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         nfts: std::slice::from_ref(&nft),
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1500,7 +1484,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         nfts: &[],
         nft_events: &[],
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1551,7 +1535,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         nfts: &[],
         nft_events: &[],
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1605,7 +1589,6 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
         std::slice::from_ref(&nft),
         std::slice::from_ref(&ev),
         &[],
-        &[],
     )
     .expect("prepare");
 
@@ -1648,7 +1631,6 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
         &[],
         std::slice::from_ref(&nft),
         std::slice::from_ref(&ev),
-        &[],
         &[],
     )
     .expect("prepare");
@@ -1705,7 +1687,7 @@ fn prepare_emits_sac_override_contract_row_for_xlm_native() {
         nfts: &[],
         nft_events: &[],
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1769,7 +1751,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         nfts: &[],
         nft_events: &[],
         lp_positions: &[],
-        contract_name_writes: &[],
+        contract_metadata_writes: &[],
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),

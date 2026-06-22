@@ -221,9 +221,6 @@ struct ContractHeaderChRow {
     deployed_at_ledger: Option<i64>,
     contract_type: Option<i16>,
     is_sac: bool,
-    name: Option<String>,
-    symbol: Option<String>,
-    decimals: Option<u32>,
 }
 
 pub async fn fetch_contract(
@@ -240,28 +237,12 @@ pub async fn fetch_contract(
                 nullIf(deployer.account_id, '')        AS deployer, \
                 sc.deployed_at_ledger                  AS deployed_at_ledger, \
                 sc.contract_type                       AS contract_type, \
-                sc.is_sac                              AS is_sac, \
-                nullIf(m.name, '')                     AS name, \
-                nullIf(m.symbol, '')                   AS symbol, \
-                m.decimals                             AS decimals \
+                sc.is_sac                              AS is_sac \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
-             LEFT JOIN ( \
-                 SELECT contract_id, \
-                        argMax(name, version)     AS name, \
-                        argMax(symbol, version)   AS symbol, \
-                        argMax(decimals, version) AS decimals \
-                 FROM soroban_contract_metadata \
-                 WHERE contract_id = ? \
-                 GROUP BY contract_id \
-             ) m ON m.contract_id = sc.contract_id \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
-        // Two binds, in SQL text order: the metadata subquery's point-lookup
-        // `WHERE contract_id = ?` (so a detail hit never aggregates the whole
-        // table), then the outer `WHERE sc.contract_id = ?`.
-        .bind(contract_id)
         .bind(contract_id)
         .fetch_optional::<ContractHeaderChRow>()
         .await?;
@@ -276,9 +257,6 @@ pub async fn fetch_contract(
         contract_type_name: r.contract_type.and_then(contract_type_name),
         contract_type: r.contract_type,
         is_sac: r.is_sac,
-        name: r.name,
-        symbol: r.symbol,
-        decimals: r.decimals,
     }))
 }
 

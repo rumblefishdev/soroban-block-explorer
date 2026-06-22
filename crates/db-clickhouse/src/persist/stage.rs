@@ -99,9 +99,9 @@ pub struct StagedLedger {
     pub account_rows: Vec<AccountRow>,
     pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
     pub contract_rows: Vec<SorobanContractRow>,
-    /// On-chain Soroban token metadata side table (ADR 0049). Populated by
-    /// the CH write callers via [`build_metadata_rows`], NOT by `prepare`
-    /// (metadata is orthogonal to deploy staging + arrives on its own clock).
+    /// On-chain Soroban token metadata side table (ADR 0049). Populated inside
+    /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
+    /// `StageInputs.contract_metadata_writes` slice.
     pub metadata_rows: Vec<SorobanContractMetadataRow>,
     pub transaction_rows: Vec<TransactionRow>,
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
@@ -150,7 +150,10 @@ pub struct StageInputs<'a> {
     pub nfts: &'a [ExtractedNft],
     pub nft_events: &'a [ExtractedNftEvent],
     pub lp_positions: &'a [ExtractedLpPosition],
-    pub contract_name_writes: &'a [(String, String)],
+    /// On-chain Soroban token metadata writes (ADR 0049). Threaded through to
+    /// `metadata_rows` via [`build_metadata_rows`] inside
+    /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
+    pub contract_metadata_writes: &'a [ExtractedContractMetadata],
     /// Task 0220 Part 2 — SAC override re-insert rows. Empty for legacy callers.
     pub sac_overrides: &'a [SacOverride],
     /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
@@ -176,7 +179,6 @@ pub fn prepare(
     nfts: &[ExtractedNft],
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
-    contract_name_writes: &[(String, String)],
 ) -> Result<StagedLedger, SchemaError> {
     // Convenience wrapper: no SAC overrides, no cross-ledger verdicts (the
     // legacy / test path). Behaves exactly as the pre-StageInputs `prepare`.
@@ -195,7 +197,7 @@ pub fn prepare(
         nfts,
         nft_events,
         lp_positions,
-        contract_name_writes,
+        contract_metadata_writes: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
@@ -203,11 +205,10 @@ pub fn prepare(
 }
 
 /// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
-/// rows (ADR 0049). Kept out of `prepare` on purpose: metadata is orthogonal to
-/// deploy staging and arrives on its own clock, so the CH write callers assign
-/// `staged.metadata_rows = build_metadata_rows(..)` instead of threading it
-/// through `prepare`'s signature. SAC filtering already happened in the producer
-/// (`xdr_parser::extract_contract_metadata_writes`); `version` = observed ledger.
+/// rows (ADR 0049). Called inside [`prepare_with_sac_overrides`] from the
+/// `StageInputs.contract_metadata_writes` slice. SAC filtering already happened
+/// in the producer (`xdr_parser::extract_contract_metadata_writes`); `version` =
+/// observed ledger.
 pub fn build_metadata_rows(
     writes: &[ExtractedContractMetadata],
 ) -> Vec<SorobanContractMetadataRow> {
@@ -265,7 +266,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nfts,
         nft_events,
         lp_positions,
-        contract_name_writes,
+        contract_metadata_writes,
         sac_overrides,
         prior_wasm_verdicts,
         prior_contract_verdicts,
@@ -277,6 +278,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     let mut out = StagedLedger {
         ledger_sequence: ledger_sequence_i64,
+        // ADR 0049: on-chain token metadata side table. Threaded through
+        // `StageInputs` (no longer assigned post-`prepare` by the CH write
+        // callers). SAC filtering already happened in the producer
+        // (`xdr_parser::extract_contract_metadata_writes`).
+        metadata_rows: build_metadata_rows(contract_metadata_writes),
         ..Default::default()
     };
 
@@ -525,15 +531,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // (ADR 0049) The legacy G5 name-write tripwire + dormant `Symbol("name")`
-    // version=0 row were removed here: on-chain token name/symbol/decimals now
-    // land in the dedicated `soroban_contract_metadata` side table via
-    // `build_metadata_rows(contract_metadata_writes)` — exactly the "route to a
-    // side table" the old tripwire pointed at. The legacy `contract_name_writes`
-    // plumbing is now vestigial; full un-threading (parser
-    // `extract_contract_data_name_writes`, the deploy-time `Symbol("name")`
-    // second pass, PG `apply_contract_name_writes`) is a tracked follow-up
-    // cleanup — see task 0297.
+    // (ADR 0049) On-chain token name/symbol/decimals land in the dedicated
+    // `soroban_contract_metadata` side table via
+    // `build_metadata_rows(contract_metadata_writes)` (assigned into
+    // `out.metadata_rows` above). The legacy `Symbol("name")` extraction path —
+    // parser `extract_contract_data_name_writes`, the deploy-time second pass,
+    // and PG `apply_contract_name_writes` — was chain-verified dead (real tokens
+    // never write a standalone `Symbol("name")` entry) and removed (task 0297).
 
     // Task 0220 — SAC override re-insert. For every observed classic
     // asset (Native / ClassicCredit), the parser already derived the
@@ -1332,9 +1336,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     {
         let mut emitted: HashSet<&str> = HashSet::new();
         for cid in &contract_seen {
-            emitted.insert(cid.as_str());
-        }
-        for (cid, _) in contract_name_writes {
             emitted.insert(cid.as_str());
         }
         // Task 0220 — exclude SAC-override contracts. The override row

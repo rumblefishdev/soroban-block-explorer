@@ -321,16 +321,12 @@ pub struct ExtractedContractDeployment {
     /// but always set when the parser produces a deployment).
     pub contract_type: ContractType,
     pub is_sac: bool,
-    /// Human-readable contract name extracted from the standard
-    /// `Symbol("name")` ContractData persistent storage entry, when
-    /// present in the same ledger as the deployment (constructor
-    /// pattern). For deploy-then-init contracts where storage writes
-    /// land in a later ledger, this is `None` at deployment time and
-    /// the indexer's retroactive UPDATE path
-    /// (`extract_contract_data_name_writes`) populates the column on
-    /// the next ledger that emits the storage entry.
-    ///
-    /// Maps to `soroban_contracts.name VARCHAR(256)` per ADR 0042.
+    /// Always `None`. The former standalone `Symbol("name")` storage-entry
+    /// extraction was chain-verified dead (real tokens never write it) and
+    /// removed (task 0297); on-chain token name now lands via instance-storage
+    /// `METADATA` → `soroban_contract_metadata` (ADR 0049). Field retained
+    /// (maps to `soroban_contracts.name VARCHAR(256)`, ADR 0042) until the
+    /// separate column-drop task.
     pub name: Option<String>,
     /// Task 0160 — SAC underlying asset identity resolved from
     /// `ContractIdPreimage::FromAsset` (top-level op OR auth-entry

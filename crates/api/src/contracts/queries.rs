@@ -24,12 +24,6 @@ pub struct ContractRow {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
-    /// Token name/symbol/decimals from the CH `soroban_contract_metadata` side
-    /// table (ADR 0049). `None` on the PG path (the table is CH-only) and for
-    /// non-token contracts.
-    pub name: Option<String>,
-    pub symbol: Option<String>,
-    pub decimals: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,10 +175,6 @@ pub async fn fetch_contract(
         contract_type_name: r.get("contract_type_name"),
         contract_type: r.get("contract_type"),
         is_sac: r.get("is_sac"),
-        // soroban_contract_metadata is CH-only (ADR 0049); PG path has none.
-        name: None,
-        symbol: None,
-        decimals: None,
     }))
 }
 
