@@ -80,13 +80,14 @@ Sources (no repo): SEP-41, SEP-50, CAP-46-6, CAP-67, OpenZeppelin
 Canonical NFT event = `topics = [Symbol(name), addresses…]`, `data` carries the
 `token_id`. The identifier appears in **three legitimate `data` encodings**:
 
-| `data` encoding | who emits it | standard? | our parser |
-| --- | --- | --- | --- |
-| `map{"token_id": uN}` | OpenZeppelin `stellar-contracts` (the de-facto NFT lib) + SEP-50; `#[contractevent]` **default** | **canonical** | ❌ dropped |
-| bare scalar `u32/u64` | contracts using `data_format="single-value"` | variant | ✅ handled |
-| `vec[addr…, token_id]` | hand-rolled ERC-721 ports (e.g. JamesBachini) | non-standard, real | ❌ dropped (stash handles) |
+| `data` encoding        | who emits it                                                                                     | standard?          | our parser                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------ | ------------------ | -------------------------- |
+| `map{"token_id": uN}`  | OpenZeppelin `stellar-contracts` (the de-facto NFT lib) + SEP-50; `#[contractevent]` **default** | **canonical**      | ❌ dropped                 |
+| bare scalar `u32/u64`  | contracts using `data_format="single-value"`                                                     | variant            | ✅ handled                 |
+| `vec[addr…, token_id]` | hand-rolled ERC-721 ports (e.g. JamesBachini)                                                    | non-standard, real | ❌ dropped (stash handles) |
 
 Other facts a correct parser needs:
+
 - **`consecutive_mint`** (OZ Consecutive / EIP-2309): `topics=[consecutive_mint, to]`,
   `data` = a `[from_id, to_id]` RANGE = many tokens in one event. Present on prod
   (8 contracts). Handled by no current plan.
@@ -131,12 +132,12 @@ populations by definition.
 Population: `soroban_contracts` ⋈ `wasm_interface_metadata` on `wasm_hash`, where
 `metadata LIKE '%owner_of%'` (contracts with an NFT interface).
 
-| bucket | n | source (table.field / filter) | bug/fix |
-| --- | --- | --- | --- |
-| total | **134** | the join above | — |
-| inactive | 82 | no mint/transfer/burn rows in `soroban_events` | not a bug |
-| Shape A → pending | 34 | present in `nfts_pending`/`nft_ownership_pending` | 0283 only |
-| parser dropped | 18 | emit in `soroban_events`, 0 rows in both `*_pending` | **0296** |
+| bucket            | n       | source (table.field / filter)                        | bug/fix   |
+| ----------------- | ------- | ---------------------------------------------------- | --------- |
+| total             | **134** | the join above                                       | —         |
+| inactive          | 82      | no mint/transfer/burn rows in `soroban_events`       | not a bug |
+| Shape A → pending | 34      | present in `nfts_pending`/`nft_ownership_pending`    | 0283 only |
+| parser dropped    | 18      | emit in `soroban_events`, 0 rows in both `*_pending` | **0296**  |
 
 82 + 34 + 18 = **134** ✓ (strict-case match; case-insensitive `lower(signature)`
 catches a 19th emitter). Dropped victims by shape, **exact mutually-exclusive**
@@ -150,14 +151,14 @@ Within this `owner_of` cohort map dominates (13 vs 5) — but that is a filter a
 `soroban_events`, `lower(signature)='mint'`, grouped by
 `JSONExtractString(data_xdr,'type')` (and map key):
 
-| `data` | events | contracts | class | parser |
-| --- | --- | --- | --- | --- |
-| `i128` | 256,454,593 | 170,889 | fungible (amount) | n/a |
-| `map` key `amount`/`to_muxed_id` | 147,942,815 | 5,580 | fungible (SAC muxed) | n/a |
-| `map` key `token_id` | 890 | **16** | **NFT** | ❌ dropped |
-| `u32`/`u64` scalar | 11,166 | **37** | **NFT** | ✅ handled |
-| `vec` | 362 | **20** | **NFT** packed | ❌ dropped |
-| `address`/`void` | 167 | 3 | odd | ❌ |
+| `data`                           | events      | contracts | class                | parser     |
+| -------------------------------- | ----------- | --------- | -------------------- | ---------- |
+| `i128`                           | 256,454,593 | 170,889   | fungible (amount)    | n/a        |
+| `map` key `amount`/`to_muxed_id` | 147,942,815 | 5,580     | fungible (SAC muxed) | n/a        |
+| `map` key `token_id`             | 890         | **16**    | **NFT**              | ❌ dropped |
+| `u32`/`u64` scalar               | 11,166      | **37**    | **NFT**              | ✅ handled |
+| `vec`                            | 362         | **20**    | **NFT** packed       | ❌ dropped |
+| `address`/`void`                 | 167         | 3         | odd                  | ❌         |
 
 → NFT-minting contracts (token_id-bearing, dedup): **72**, exact mutually-exclusive:
 **36 scalar-only + 14 map-only + 20 vec-only + 2 mixed = 72** (the table above is

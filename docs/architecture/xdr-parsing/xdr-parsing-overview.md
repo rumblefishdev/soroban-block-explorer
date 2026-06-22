@@ -463,7 +463,7 @@ one of three on-chain `data` encodings — all observed on mainnet — and each 
 - **Shape A — scalar:** addresses in topics, bare scalar `token_id` in `data`
   (`u32`/`u64`/`i128`); the SEP-41/SEP-50 `single-value` form.
 - **Shape B — packed vec:** topics carry only the event Symbol, `data = Vec[addr…,
-  token_id]` (older ERC-721-port / pre-`#[contractevent]` contracts).
+token_id]` (older ERC-721-port / pre-`#[contractevent]` contracts).
 - **Shape C — map:** addresses in topics, `data = map{ "token_id": uN }` — the
   soroban-sdk `#[contractevent]` map-by-field default, i.e. the OpenZeppelin
   reference-impl / SEP-50 shape (the dominant modern NFT encoding).
