@@ -278,11 +278,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     let mut out = StagedLedger {
         ledger_sequence: ledger_sequence_i64,
-        // task 0297: on-chain token metadata side table. Threaded through
-        // `StageInputs` (no longer assigned post-`prepare` by the CH write
-        // callers). SAC filtering already happened in the producer
-        // (`xdr_parser::extract_contract_metadata_writes`).
-        metadata_rows: build_metadata_rows(contract_metadata_writes),
         ..Default::default()
     };
 
@@ -530,13 +525,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // (task 0297) On-chain token name/symbol/decimals land in the dedicated
-    // `soroban_contract_metadata` side table via
-    // `build_metadata_rows(contract_metadata_writes)` (assigned into
-    // `out.metadata_rows` above). The legacy `Symbol("name")` extraction path —
-    // parser `extract_contract_data_name_writes`, the deploy-time second pass,
-    // and PG `apply_contract_name_writes` — was chain-verified dead (real tokens
-    // never write a standalone `Symbol("name")` entry) and removed (task 0297).
+    // (task 0297) On-chain token name/symbol/decimals → the dedicated
+    // `soroban_contract_metadata` side table. A pure 1:1 map of the producer's
+    // output (extraction + SAC-skip already done), built here like the other
+    // `out.*` rows rather than post-`prepare`. The legacy `Symbol("name")` path
+    // (parser `extract_contract_data_name_writes`, deploy second pass, PG
+    // `apply_contract_name_writes`) was chain-verified dead and removed (task 0297).
+    out.metadata_rows = build_metadata_rows(contract_metadata_writes);
 
     // Task 0220 — SAC override re-insert. For every observed classic
     // asset (Native / ClassicCredit), the parser already derived the

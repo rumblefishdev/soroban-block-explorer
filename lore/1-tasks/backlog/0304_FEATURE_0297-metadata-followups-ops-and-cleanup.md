@@ -3,7 +3,7 @@ id: '0304'
 title: 'FEATURE: 0297 metadata follow-ups — backfill, deploy/flip, validation, frontend amounts, cleanup'
 type: FEATURE
 status: backlog
-related_adr: ['0049']
+related_adr: ['0050']
 related_tasks: ['0297', '0231', '0243']
 tags:
   [
@@ -88,8 +88,9 @@ on **Postgres**:
 - [ ] After backfill + read-flip + the above: `ALTER TABLE … DROP COLUMN name`
       on CH (`soroban_contracts`, `assets`) and the PG migration.
 
-(CH-side reads already repointed in the 0297 PR: assets COALESCE dropped
-`sc.name`; contract name-search uses the side table.)
+(CH-side: the assets COALESCE already reads `m.name` from the side table.
+Contract name-search was NOT repointed — it stays on the dead `sc.name`
+column, see the List-endpoints item above.)
 
 ### Cleanup (code)
 
