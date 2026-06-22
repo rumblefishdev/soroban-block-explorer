@@ -2,7 +2,7 @@
 id: '0306'
 title: 'FEATURE: SNS fan-out on stellar-ledger-data (S3 → SNS → indexer queue + prices-api queue)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['infra', 'cdk', 'cross-team', 'phase-launch']
@@ -13,6 +13,27 @@ history:
     status: active
     who: fmazur
     note: 'Task created from cross-team handoff (prices-api team). Implements BE side of the SNS fan-out contract.'
+  - date: 2026-06-22
+    status: active
+    who: fmazur
+    note: >
+      Deployed Explorer-production-Compute to prod (cdk deploy, IAM-approved).
+      SNS fan-out live: S3→SNS→SQS, rawMessageDelivery=true, 5× /platform/
+      SSM keys. Verified prod: indexer still paused (concurrency 0, no ESM),
+      doorbells still landing in ledger-ingest via SNS (~103.6k backlog,
+      NotVisible 0). All BE acceptance criteria met except joint verification
+      with prices-api (their subscribe side). Stays active until that closes.
+  - date: 2026-06-22
+    status: completed
+    who: fmazur
+    note: >
+      BE side complete and shipped. Closing per operator: the BE deliverable
+      (topic + S3→SNS cutover + rawMessageDelivery subscription + 5× /platform
+      SSM keys) is deployed and verified on prod. The one remaining item —
+      joint verification with prices-api — depends on the other team's subscribe
+      side and is handled cross-team off-board (not tracked as a separate task,
+      per operator). One file changed (compute-stack.ts) + 2 architecture docs;
+      /code-review max corrected a false rawMessageDelivery invariant before merge.
 ---
 
 # FEATURE: SNS fan-out on `stellar-ledger-data`
@@ -30,13 +51,32 @@ shape; note the indexer reads only `messageId` and ignores the body, so this is
 not load-bearing for us — see Issues Encountered). Driven by the cross-team
 handoff `.temp/G-be-sns-fanout-handoff.md`.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** CDK change implemented on branch
-`feat/0306_sns-fanout-ledger-events` and verified locally (lint ✅,
-`tsc --noEmit` ✅). Architecture docs updated. **Not yet deployed** — cutover
-(non-prod first, then prod low-write window) and joint verification with
-prices-api remain.
+**Current state:** **DEPLOYED to production and verified** (2026-06-22). The
+cutover was done directly on prod _while the indexer is paused_
+(`indexerLambdaConcurrency = 0`) — the safest window, since there is no live
+consumer to disrupt and the reconcile-from-S3 backstop covers any doorbell lost
+during the near-atomic notification swap. Post-deploy verification all green
+(see Verification below). **Remaining:** joint verification with prices-api
+(their subscribe side) — then this task can close.
+
+### Verification (prod, 2026-06-22)
+
+- Indexer paused: `ReservedConcurrentExecutions = 0`, `list-event-source-mappings
+= []` → nothing drains the queue.
+- Doorbells still flow `S3 → SNS → SQS`: `ledger-ingest`
+  `ApproximateNumberOfMessages` rising (103,588 → 103,599 across reads),
+  `NotVisible = 0`. (NB: ~103.6k backlog accumulated during the pause; drains
+  via reconcile when the indexer is eventually resumed — content-free doorbells,
+  state from CH `max(sequence)` + S3, so no ledger lost even if old doorbells
+  expire at the 14-day retention.)
+- S3 notification swapped: `TopicConfigurations` → `production-ledger-events`,
+  suffix `.xdr.zst`, no `QueueConfigurations`.
+- Subscription `RawMessageDelivery = true`, endpoint = `ledger-ingest` queue.
+- 5× `/platform/production/*` SSM params present (ch-domain =
+  `ch.sorobanscan.rumblefish.dev`, topic ARN, bucket name/arn, network
+  passphrase).
 
 ## Context
 
@@ -118,15 +158,24 @@ BE-principal-only restriction is added. Same account → nothing to do.
 
 ## Acceptance Criteria
 
-- [ ] `{env}-ledger-events` SNS topic created, one per env.
-- [ ] S3 `ObjectCreated` (`.xdr.zst`) publishes to the topic (replaces direct
-      `S3 → SQS`).
-- [ ] `ingestQueue` re-subscribed with `rawMessageDelivery: true`; indexer ESM + parser unchanged; SQS body byte-identical to pre-change.
-- [ ] `/platform/{env}/*` SSM keys published (topic ARN, bucket name/arn,
-      ch-domain, network-passphrase) — or agreed namespace.
-- [ ] Non-prod cutover verified: indexer keeps processing, no parser errors.
+- [x] `{env}-ledger-events` SNS topic created, one per env. (prod:
+      `production-ledger-events`)
+- [x] S3 `ObjectCreated` (`.xdr.zst`) publishes to the topic (replaces direct
+      `S3 → SQS`). (verified: bucket `TopicConfigurations`, no
+      `QueueConfigurations`)
+- [x] `ingestQueue` re-subscribed with `rawMessageDelivery: true`; indexer ESM + parser unchanged; SQS body byte-identical to pre-change. (verified:
+      `RawMessageDelivery = true`)
+- [x] `/platform/{env}/*` SSM keys published (topic ARN, bucket name/arn,
+      ch-domain, network-passphrase). (verified: 5 params under
+      `/platform/production/`)
+- [~] ~~Non-prod cutover verified~~ → **N/A: no non-prod env exists**
+  (`production.json` is the only `EnvironmentConfig`). Cutover done on prod
+  while the indexer was paused (`concurrency = 0`) — the safest window.
+  "Indexer keeps processing" is moot (intentionally paused); instead verified
+  doorbells keep landing in SQS via SNS (see Verification).
 - [ ] Joint verification with prices-api: a new `.xdr.zst` PutObject delivers
-      to both queues independently.
+      to both queues independently. **(external — prices-api's subscribe side;
+      not a BE deliverable, not separately tracked)**
 - [ ] **Docs updated** — `docs/architecture/**` ingestion-pipeline topology
       updated to show S3 → SNS → (indexer queue | prices queue) per
       [ADR 0032](../2-adrs/0032_docs-architecture-evergreen-maintenance.md).
@@ -228,9 +277,11 @@ max`, CONFIRMED).** The handoff (and my first comment + doc edits) claimed
 
 ## Future Work
 
-- After deploy + joint verification, consider whether the `/platform/*`
-  namespace warrants its own ADR documenting the cross-team SSM contract
-  (spawn a backlog task if the contract grows beyond these five keys).
+- Joint verification with prices-api (their subscribe side; both queues receive
+  a single PutObject) — handled cross-team off-board, not tracked as a separate
+  task per operator.
+- If the `/platform/*` cross-team SSM contract grows beyond these five keys,
+  consider an ADR documenting it.
 
 ## Notes
 
