@@ -2,7 +2,7 @@
 id: '0292'
 title: 'ETag / 304 conditional GET on head + live lists — cheap idle polls, contract for external API'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0290', '0291']
 tags:
@@ -21,6 +21,10 @@ history:
     status: backlog
     who: fmazur
     note: 'Spawned from FETCHING_PLAN §4b. Conditional GET (ETag=latest_ledger_sequence) — short-circuit before the heavy query; protects external clients (0277).'
+  - date: 2026-06-22
+    status: active
+    who: fmazur
+    note: 'Promoted from backlog to active; set as current task.'
 ---
 
 # ETag / 304 conditional GET on head + live lists
