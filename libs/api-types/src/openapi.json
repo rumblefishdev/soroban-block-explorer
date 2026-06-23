@@ -882,6 +882,9 @@
               }
             }
           },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head (live first page only)"
+          },
           "400": {
             "description": "Invalid query parameter",
             "content": {
@@ -1421,6 +1424,9 @@
               }
             }
           },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head"
+          },
           "500": {
             "description": "Database error",
             "content": {
@@ -1816,6 +1822,9 @@
                 }
               }
             }
+          },
+          "304": {
+            "description": "Not Modified — `If-None-Match` matched the current chain head (live first page only)"
           },
           "400": {
             "description": "Invalid query parameter",
