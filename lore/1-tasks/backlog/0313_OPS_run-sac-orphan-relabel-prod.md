@@ -13,7 +13,7 @@ history:
     who: karolkow
     note: >
       Spawned from 0294. The CLI subcommand `sac-orphan-relabel` is built +
-      dry-run-validated read-only (4,824 crypto-confirmed / 0 false positives).
+      dry-run-validated read-only (5,558 crypto-confirmed / 0 false positives).
       Real run needs a write-capable CH cert (read-only `chq`/`dev_read` cannot
       INSERT) + the 0294 PR merged. Operational, so kept out of the 0294 code PR.
 ---
@@ -59,7 +59,7 @@ backfill-runner --target clickhouse \
   sac-orphan-relabel --dry-run
 ```
 
-Expected (read-only validation 2026-06-23): `crypto_confirmed ≈ 4824` of ~4,827
+Expected (read-only validation 2026-06-23): `crypto_confirmed ≈ 5,558` of 5,558
 SAC-event-emitting orphans (of ~5,607 total by predicate). If wildly different,
 STOP and investigate before the real run.
 
@@ -81,10 +81,10 @@ Run `nft-reclassify` (task 0303) after, to drop the now-SAC orphans' false-posit
 
 ## Acceptance Criteria
 
-- [ ] Dry-run executed; `crypto_confirmed` recorded (≈ 4,824 expected)
+- [ ] Dry-run executed; `crypto_confirmed` recorded (≈ 5,558 expected)
 - [ ] Real run executed; before/after orphan counts recorded
 - [ ] `nft-reclassify` run; false `nfts_pending` rows dropped
-- [ ] ~780 non-SAC-event orphans left untouched (documented separate bucket)
+- [ ] 49 non-SAC-event orphans left untouched (tiny residual)
 
 ## Docs updated
 
