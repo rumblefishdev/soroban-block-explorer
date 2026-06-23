@@ -29,6 +29,13 @@ in a ledger), filling only the columns it knows about that ledger and leaving
 the rest at `NULL`/`0`/default. Under RMT, a higher-version row carrying those
 defaults **overwrites** a correct value written by an earlier, lower-version row.
 
+The root limitation has two manifestations: **(a) clobber-on-reference** — a
+partial touch NULLs an existing value (this task's focus; `accounts.home_domain`
+below); and **(b) can't-cheaply-update-one-column** — e.g. revising
+`soroban_contracts.wasm_hash` on a WASM upgrade ([[0320]]). Both need the same
+read-modify-write remedy. This task is the conceptual home + DB-wide audit; 0320
+is the wasm-specific implementation.
+
 ## Evidence (confirmed on prod CH)
 
 `accounts.home_domain` for the USDC Circle issuer
@@ -111,9 +118,9 @@ one-shot EXCHANGE rebuild to repair the existing ~38,833. Read-side
 "last-non-null" is rejected — RMT background merges eventually discard the
 non-winning versions, so the original value is not recoverable at read.
 
-Note: same read-modify-write infrastructure as the 0295 bug-1 WASM-upgrade
-re-classify (swap one RMT column without clobbering the rest), so the two should
-share the staging pattern if the fetch-carry-forward option is chosen.
+Note: same read-modify-write infrastructure as the 0320 WASM-upgrade re-classify
+(swap one RMT column without clobbering the rest), so the two should share the
+staging pattern if the fetch-carry-forward option is chosen.
 
 ## Acceptance Criteria
 
