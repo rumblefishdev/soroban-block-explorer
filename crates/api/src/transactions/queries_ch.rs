@@ -395,6 +395,7 @@ pub async fn fetch_list(
     client: &clickhouse::Client,
     params: &ResolvedListParams,
     direction: Direction,
+    head: Option<i64>,
 ) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
     // Resolve StrKey filters to the CH surrogate ids up front. The writer's
     // `cityhash_102_128` surrogate is NOT bit-equivalent to CH's builtin
@@ -448,6 +449,25 @@ pub async fn fetch_list(
     let lim_over = params.limit * 4;
     let lim_peek = params.limit + 1;
 
+    // Head substitution (task 0292 §5/6). On the live first page (`cl` IS NULL)
+    // the partition prune and the `<= head` cap below otherwise each re-derive
+    // the head with a `(SELECT max(sequence) FROM ledgers)` subquery — work the
+    // caller has *already* done via `common::head` (the value compared for the
+    // 304 short-circuit). When that head is known we inline it as a literal:
+    // fewer subqueries in the heavy statement, and the candidate scan is capped
+    // at exactly the head the response is ETag'd with (so body == validator,
+    // closing the probe-vs-query race on this path). When `head` is `None`
+    // (cursored page — the head is irrelevant to the partition) we keep the
+    // subquery form. `head` is an `i64`, no injection surface.
+    let head_partition = head.map_or_else(
+        || "(SELECT intDiv(max(sequence), 500000) FROM ledgers)".to_string(),
+        |h| format!("intDiv({h}, 500000)"),
+    );
+    let head_max = head.map_or_else(
+        || "(SELECT max(sequence) FROM ledgers)".to_string(),
+        |h| h.to_string(),
+    );
+
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
@@ -468,7 +488,7 @@ pub async fn fetch_list(
                     "SELECT ledger_sequence, transaction_id FROM {table} \
                      WHERE contract_id = {cid} \
                        AND intDiv(ledger_sequence, 500000) \
-                           = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                           = ifNull(intDiv({cl}, 500000), {head_partition}) \
                        AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
                 )
             };
@@ -477,13 +497,13 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
                         {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
                     ) u \
-                    WHERE ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
+                    WHERE ledger_sequence <= {head_max} \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
                  ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
@@ -539,15 +559,15 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
                  ) t \
                  INNER JOIN ( \
                     SELECT DISTINCT ledger_sequence, transaction_id \
                     FROM operations_appearances \
                     WHERE type = {op_type} \
                       AND intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
                     ORDER BY ledger_sequence {order}, transaction_id {order} \
                     LIMIT {lim_over} \
@@ -623,8 +643,8 @@ pub async fn fetch_list(
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), (SELECT intDiv(max(sequence), 500000) FROM ledgers)) \
-                      AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
                       AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
                       AND ({src} IS NULL OR source_id = {src}) \
                     ORDER BY ledger_sequence {order}, application_order {order} \
