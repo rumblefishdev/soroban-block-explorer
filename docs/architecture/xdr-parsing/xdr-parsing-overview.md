@@ -296,6 +296,18 @@ entities:
   variants from observed contract deployments. Without the dedicated
   classic-credit producer, `account_balances_current` would carry the
   balances but the entity row never existed (Karol's pre-audit Bug #1).
+- **SAC overrides** → flip `soroban_contracts.is_sac=true` + `contract_type=Token`
+  for Stellar Asset Contracts whose `create_contract` happened before the indexed
+  window or was never deployed (a classic asset's deterministic SAC `contract_id`
+  surfaces via activity, not necessarily a deploy). Two crypto-derived sources,
+  both gated on `emitter == derive_sac(asset)` so a bespoke contract emitting a
+  SAC-shaped event is never mislabeled: observed classic/native assets
+  (`derive_sac_overrides_from_assets`, task 0218) and classic-asset SAC **events**
+  — `transfer`/`mint`/`burn`/`clawback`/`set_authorized` carrying `CODE:ISSUER` in
+  the trailing topic (`derive_sac_overrides_from_events`, task 0294). The event
+  path closes the gap where payment/transfer-only SACs (no trustline change)
+  persisted as `is_sac=false` orphans, whose i128 transfer amounts were then
+  mis-read as NFT token_ids.
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.
