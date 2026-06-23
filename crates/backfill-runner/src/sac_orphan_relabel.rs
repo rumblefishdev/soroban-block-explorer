@@ -6,9 +6,10 @@
 //! "Orphans" (`is_sac=false`, no deploy — `coalesce(deployed_at_ledger,0)=0` —
 //! and NULL `wasm_hash`) that emit SAC events are actually **un-deployed SACs**
 //! surfaced via direct SAC host-function invocation (Protocol 20+) and, post-
-//! P23, CAP-67 unified asset events. The live parser fix
-//! (`xdr_parser::derive_sac_overrides_from_events`) labels them going forward;
-//! this pass fixes the EXISTING history so the `nft-reclassify` step (task 0303)
+//! P23, CAP-67 unified asset events. The live parser fix (the task 0294 gate in
+//! `xdr_parser::detect_nft_events`) stops their amounts being minted as false
+//! NFT candidates going forward; this pass fixes the EXISTING history so the
+//! `nft-reclassify` step (task 0303)
 //! DROPS their false-positive `nfts_pending` rows (the i128 transfer amount
 //! mis-read as a token_id) instead of churning.
 //!

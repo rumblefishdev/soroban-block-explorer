@@ -11,6 +11,7 @@
 use serde_json::Value;
 use tracing::warn;
 
+use crate::sac::sac_override_from_event_topics;
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
@@ -21,7 +22,16 @@ use domain::ContractEventType;
 ///
 /// Returns detected `NftEvent` items. Events that don't match any
 /// NFT pattern are silently skipped.
-pub fn detect_nft_events(events: &[ExtractedEvent]) -> Vec<NftEvent> {
+///
+/// `net_id` (`network_id(passphrase)`) gates out classic-asset SAC events at
+/// their source (task 0294): a CAP-67 SAC `transfer`/`mint`/`burn` carries the
+/// SEP-11 asset string in its LAST topic and an i128 AMOUNT in `data`, so when
+/// `derive_sac(asset) == emitter` it is provably a fungible amount and can never
+/// be an NFT. Dropping it here stops the amount being mis-read as a token_id and
+/// minted as a false NFT candidate. The gate is false-negative-only — a bespoke
+/// contract (`derived != emitter`) or non-SAC signature returns `None`, so real
+/// NFTs are unaffected.
+pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<NftEvent> {
     let mut nft_events = Vec::new();
 
     for event in events {
@@ -44,6 +54,15 @@ pub fn detect_nft_events(events: &[ExtractedEvent]) -> Vec<NftEvent> {
             Some(t) if !t.is_empty() => t,
             _ => continue,
         };
+
+        // Task 0294 — drop crypto-proven classic-asset SAC events before they
+        // can be minted as false NFT candidates. `derive_sac(asset) == emitter`
+        // is cryptographic proof the i128 in `data` is a transfer AMOUNT, not an
+        // NFT token_id. `None` for bespoke contracts / non-SAC signatures, so
+        // real NFTs pass through (false-negative-only).
+        if sac_override_from_event_topics(contract_id, &event.topics, net_id).is_some() {
+            continue;
+        }
 
         let first_topic = topic_symbol_value(&topics[0]);
         let first_lower = first_topic.to_ascii_lowercase();
@@ -398,6 +417,17 @@ fn topic_address_value(topic: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mainnet-defaulting shadow of [`detect_nft_events`] so the existing
+    /// fixtures (all mainnet) keep their one-arg call shape after task 0294
+    /// added the `net_id` SAC gate. Shadows the glob-imported production fn;
+    /// the real two-arg fn stays reachable as `super::detect_nft_events`.
+    fn detect_nft_events(events: &[ExtractedEvent]) -> Vec<NftEvent> {
+        super::detect_nft_events(
+            events,
+            &crate::sac::network_id(crate::sac::MAINNET_PASSPHRASE),
+        )
+    }
     use serde_json::json;
 
     fn make_event(contract_id: &str, topics: Vec<Value>, data: Value) -> ExtractedEvent {
@@ -432,6 +462,29 @@ mod tests {
         assert_eq!(nft_events[0].from.as_deref(), Some("GFROM..."));
         assert_eq!(nft_events[0].to.as_deref(), Some("GTO..."));
         assert_eq!(nft_events[0].token_id["value"], 42);
+    }
+
+    #[test]
+    fn sac_transfer_is_gated_out_not_an_nft() {
+        // Task 0294 — a CAP-67 classic-asset SAC transfer: asset string in the
+        // LAST topic, i128 AMOUNT in data, emitter == derive_sac(asset). The
+        // gate proves it is a fungible amount and drops it before the i128 can
+        // be mis-read as an NFT token_id. (USDC mainnet SAC + issuer.)
+        const USDC_SAC: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+        let event = make_event(
+            USDC_SAC,
+            vec![
+                json!({"type": "sym", "value": "transfer"}),
+                json!({"type": "address", "value": "GFROM"}),
+                json!({"type": "address", "value": "GTO"}),
+                json!({"type": "string", "value": "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"}),
+            ],
+            json!({"type": "i128", "value": "8441727124"}),
+        );
+        assert!(
+            detect_nft_events(&[event]).is_empty(),
+            "a crypto-proven SAC transfer must never be detected as an NFT"
+        );
     }
 
     #[test]
