@@ -36,6 +36,13 @@ pub struct AppState {
     /// envelopes (hash-sorted) with `tx_processing` (apply order) when
     /// re-extracting heavy fields from archive XDR.
     pub network_id: [u8; 32],
+    /// Test-only counter incremented each time a list handler actually issues
+    /// its heavy list query (`fetch_list_for_source`). It exists so the
+    /// conditional-GET tests can assert the load-bearing invariant that a `304`
+    /// short-circuit returns **without** running the heavy query (task 0292).
+    /// Compiled out of release builds.
+    #[cfg(test)]
+    pub list_query_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AppState {
@@ -53,6 +60,8 @@ impl AppState {
             network_cache: new_network_cache(),
             network_last_good: Arc::new(RwLock::new(None)),
             network_id,
+            #[cfg(test)]
+            list_query_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 

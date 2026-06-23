@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
+use crate::common::conditional;
 use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::head;
@@ -56,10 +58,11 @@ enum FetchStatsError {
     tag = "network",
     responses(
         (status = 200, description = "Chain overview stats", body = NetworkStats),
+        (status = 304, description = "Not Modified — `If-None-Match` matched the current chain head"),
         (status = 500, description = "Database error",       body = ErrorEnvelope),
     ),
 )]
-pub async fn get_network_stats(State(state): State<AppState>) -> Response {
+pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let source = DataSource::for_module(Module::Network);
 
     // Cheap head read gates the cache: the head is the cache key, so a new
@@ -95,6 +98,18 @@ pub async fn get_network_stats(State(state): State<AppState>) -> Response {
             };
         }
     };
+
+    // Conditional GET (task 0292): the head IS the ETag, so an `If-None-Match`
+    // that already names it means the client's cached body is current — return
+    // `304 Not Modified` (empty body) BEFORE the heavy stats statement. The
+    // short-circuit sits after the cheap head read and before `try_get_with`,
+    // so an idle poll costs only the head probe. (On a head-read failure above
+    // we never reach here — that path serves the last-good snapshot.)
+    if conditional::if_none_match_satisfied(&headers, head) {
+        // Weak tag: the stats body is not byte-stable for a given head (it
+        // carries `generated_at`), so a strong validator would be incorrect.
+        return conditional::not_modified_weak(head);
+    }
 
     // `try_get_with` deduplicates concurrent misses on the same head: only
     // the first task runs the DB query, every other concurrent task on the
@@ -133,8 +148,19 @@ pub async fn get_network_stats(State(state): State<AppState>) -> Response {
 }
 
 fn ok_response(stats: Arc<NetworkStats>) -> Response {
+    // ETag is derived from the body's own head, not the separately-read head:
+    // the two are equal on the normal path (the stats statement pins its row to
+    // `head`, task 0291), and on the head-read-failure fallback the body is the
+    // last-good snapshot, so its `latest_ledger_sequence` is the head this
+    // response actually represents. This keeps the validator consistent with
+    // the bytes we send (task 0292).
+    let head = stats.latest_ledger_sequence;
     let mut resp = Json(stats).into_response();
     cache_control::attach(&mut resp, cache_control::LIVE);
+    // Weak tag (see the 304 path): same head can yield byte-different bodies
+    // (`generated_at`, cache recompute, last-good fallback), so a strong
+    // validator would violate RFC 7232 §2.1.
+    conditional::attach_weak_etag(&mut resp, head);
     resp
 }
 

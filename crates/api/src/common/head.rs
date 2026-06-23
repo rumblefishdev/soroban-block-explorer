@@ -48,6 +48,36 @@
 
 use sqlx::PgPool;
 
+use crate::common::datasource::DataSource;
+use crate::state::AppState;
+
+/// Non-fatal, datasource-aware head read for conditional GET on the live list
+/// endpoints (task 0292).
+///
+/// Unlike the network-stats path — where the head is the cache key and a
+/// read failure falls back to the last-good snapshot — a list handler that
+/// cannot read the head just skips the `ETag` and serves a fresh `200`. So a
+/// failed probe is swallowed (logged at `warn`) and returns `None`; the caller
+/// falls through to its normal query path. The probe itself is the cheap
+/// single-row read documented above.
+pub async fn current_head_opt(state: &AppState, source: DataSource) -> Option<i64> {
+    let head = match source {
+        DataSource::Pg => latest_sequence_pg(&state.db)
+            .await
+            .map_err(|e| e.to_string()),
+        DataSource::Ch => latest_sequence_ch(state.ch())
+            .await
+            .map_err(|e| e.to_string()),
+    };
+    match head {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::warn!(source = ?source, "head read failed; serving list without ETag: {e}");
+            None
+        }
+    }
+}
+
 /// Latest `ledgers.sequence` from Postgres (B-tree max over the PK).
 /// Returns `0` for an empty `ledgers` table (see module docs).
 pub async fn latest_sequence_pg(pool: &PgPool) -> Result<i64, sqlx::Error> {
