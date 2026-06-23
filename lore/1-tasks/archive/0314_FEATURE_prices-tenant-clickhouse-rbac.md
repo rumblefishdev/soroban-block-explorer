@@ -2,7 +2,7 @@
 id: '0314'
 title: 'Add prices tenant ClickHouse RBAC (prices_writer / prices_reader)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0240']
 tags:
@@ -21,6 +21,18 @@ history:
     status: active
     who: fmazur
     note: 'Task created — cross-repo request from prices-api (their task 0063, ADR 0007).'
+  - date: 2026-06-23
+    status: completed
+    who: fmazur
+    note: >
+      Repo-side work shipped in commit 87f24b76 on branch
+      feat/0314_prices-tenant-clickhouse-rbac (pushed). 4 files: services.xml
+      (+prices_writer/prices_reader, first inline <grants>), quotas.xml
+      (+prices_write/prices_read, +dev_read bump 50B→100B / 1TiB→2TiB),
+      clickhouse-rbac.md (ADR 0032 docs), task file. XML well-formed, prettier
+      clean, credential scan clean. Deferred (external): operator CN-map append
+      + ansible --tags app deploy, and reviewer confirmation that the box CH
+      version applies user-XML <grants> at startup (≥21.4).
 ---
 
 # Add prices tenant ClickHouse RBAC (prices_writer / prices_reader)
@@ -99,17 +111,60 @@ Append the prices CNs to `CLICKHOUSE_CN_USER_MAP`:
 
 ## Acceptance Criteria
 
-- [ ] `prices_writer` + `prices_reader` added to `services.xml` with inline `<grants>`
-- [ ] `prices_write` + `prices_read` added to `quotas.xml`
-- [ ] `dev_read` quota raised: `read_rows` 50B→100B, `read_bytes` 1TiB→2TiB
-- [ ] `profiles.xml` unchanged
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md` reflects the
+- [x] `prices_writer` + `prices_reader` added to `services.xml` with inline `<grants>`
+- [x] `prices_write` + `prices_read` added to `quotas.xml`
+- [x] `dev_read` quota raised: `read_rows` 50B→100B, `read_bytes` 1TiB→2TiB
+- [x] `profiles.xml` unchanged
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md` reflects the
       new users + quotas + CN convention (ADR 0032).
-- [ ] **API types regenerated** — N/A — no `crates/api/**`, `Cargo.*`, or
+- [x] **API types regenerated** — N/A — no `crates/api/**`, `Cargo.*`, or
       `libs/api-types/**` change.
 - [ ] Reviewer-confirmed: box's CH version applies user-XML `<grants>` at startup
       (supported since ~21.4). Fallback agreed if not: SQL `GRANT … ON prices.*`
-      via prices-api loopback admin init.
+      via prices-api loopback admin init. _(deferred — review/deploy-time, external)_
+
+## Implementation Notes
+
+- Commit `87f24b76`, branch `feat/0314_prices-tenant-clickhouse-rbac` (pushed to origin).
+- `services.xml`: `prices_writer` (`write_no_ddl` / `prices_write`, `GRANT SELECT,
+INSERT, OPTIMIZE ON prices.*`) + `prices_reader` (`read_only` / `prices_read`,
+  `GRANT SELECT ON prices.*`), both `<no_password/>` + loopback/`172.30.0.0/16` ACL.
+- `quotas.xml`: `prices_write` (= `high_write` caps), `prices_read` (= `api_throttle`
+  caps), plus `dev_read` raised to `read_rows` 100B / `read_bytes` 2 TiB.
+- `profiles.xml` untouched (reuse `write_no_ddl` + `read_only`).
+- Verification: both XML files parse clean (`xml.dom.minidom`), prettier clean on
+  the markdown, credential-pattern scan over the commit returned nothing.
+
+## Design Decisions
+
+### From Plan
+
+1. **Inline `<grants>` in XML over loopback-admin SQL fallback** (chosen with user):
+   deploy-reproducible and single-source — one checked-in file is the whole RBAC
+   truth, no out-of-band GRANT step to drift. The SQL fallback remains the agreed
+   contingency if the box CH version does not apply user-XML grants at startup.
+2. **Dedicated `prices_write`/`prices_read` quotas** (caps copied from
+   `high_write`/`api_throttle`) so prices traffic cannot draw down a BE service's
+   per-user budget — same isolation reasoning as the `dev_read` vs `api_throttle` split.
+
+### Emerged
+
+3. **`dev_read` bump bundled into this task/commit** (not its own task). The plan
+   was prices-only; a second dev separately asked to raise `dev_read` and the user
+   chose to ship it in the same commit. Same file (`quotas.xml`), but an unrelated
+   concern — flagged in the PR description so a reviewer can split if desired.
+4. **Bumped both `read_rows` AND `read_bytes`, not just `read_rows`.** A quota trips
+   on whichever cap is hit first; raising only the row cap would leave `read_bytes`
+   (1 TiB) as the binding limit and negate the bump. Moved both together (→100B / 2 TiB).
+5. **No `dev_read` entry added to the docs Quotas list.** The doc never documented
+   `dev_read` with numeric values, so the bump introduces no stale figure to fix;
+   adding a new row would be out-of-scope doc churn. Left as-is.
+
+## Issues Encountered
+
+- None. Pre-commit (`lint-staged` + `nx format:write`) and pre-push (`nx affected`)
+  hooks both passed; prettier reflowed the markdown table and task frontmatter on
+  the way through (intentional, no content change).
 
 ## Notes
 
