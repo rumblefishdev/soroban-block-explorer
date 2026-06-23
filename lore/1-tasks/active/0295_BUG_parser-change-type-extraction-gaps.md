@@ -2,7 +2,7 @@
 id: '0295'
 title: 'BUG: xdr-parser change-type extraction gaps — WASM-upgrade not reclassified + AccountMerge balance tombstone'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0283', '0228']
 tags:
@@ -17,6 +17,10 @@ history:
       extraction gaps with the IDENTICAL shape — the parser drops a
       LedgerEntryChange variant for a given entry type, leaving stale/missing
       derived state. Both low severity, not launch-blocking.
+  - date: 2026-06-23
+    status: active
+    who: karolkow
+    note: Activated for implementation.
 ---
 
 # BUG: xdr-parser change-type extraction gaps
