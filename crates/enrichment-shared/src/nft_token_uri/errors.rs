@@ -37,6 +37,15 @@ pub enum NftTokenUriError {
         source: reqwest::Error,
     },
 
+    /// Non-success HTTP status surfaced without an underlying
+    /// `reqwest::Error` — chiefly a **3xx redirect**. We run
+    /// `Policy::limited(0)` as an SSRF guard, so a redirecting gateway is
+    /// unusable; `reqwest`'s `error_for_status()` does NOT treat 3xx as an
+    /// error (only 4xx/5xx), so the old `.expect_err()` on it panicked.
+    /// Carries the numeric code for failover + transient classification.
+    #[error("metadata fetch ({host}): HTTP {status}")]
+    HttpStatus { host: String, status: u16 },
+
     /// Body exceeded the per-fetch cap before fully buffering.
     #[error("metadata body exceeded {limit} bytes")]
     BodyTooLarge { limit: usize },
@@ -104,8 +113,14 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
                 || source.is_connect()
                 || source
                     .status()
-                    .map(|s| s.is_server_error())
+                    .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
                     .unwrap_or(false)
+        }
+        // 3xx is permanent for an SQS retry (a persistent redirect is a
+        // gateway-config fault a same-endpoint retry can't fix); 429 / 5xx
+        // surfaced this way are retryable.
+        NftTokenUriError::HttpStatus { status, .. } => {
+            *status == 429 || (500..600).contains(status)
         }
         // Soroban RPC errors are **permanent by default** — see
         // `is_transient_soroban_rpc_pattern`. A genuine network failure
@@ -113,6 +128,38 @@ pub fn is_transient(err: &NftTokenUriError) -> bool {
         // NOT here: a `SorobanRpc(String)` only exists once the RPC already
         // answered HTTP 200 with a JSON body carrying the error, so it is a
         // contract- or request-level fault that retry cannot fix.
+        NftTokenUriError::SorobanRpc(msg) => is_transient_soroban_rpc_pattern(msg),
+        _ => false,
+    }
+}
+
+/// "Another endpoint might succeed" — drives the fetcher's RPC- and
+/// IPFS-gateway-pool failover (task 0311). Broader than [`is_transient`]: it
+/// also advances past a **3xx** (a redirecting gateway is unusable under our
+/// `Policy::limited(0)` guard → try the next one) and a **429** (rate-limited
+/// endpoint → another provider may have budget). Excludes deterministic
+/// content/contract faults (malformed JSON, unsupported content-type, arity
+/// mismatch, missing `token_uri`) — they repeat identically on every endpoint,
+/// so failover is pointless.
+pub fn is_endpoint_fault(err: &NftTokenUriError) -> bool {
+    match err {
+        NftTokenUriError::Http { source, .. } => {
+            source.is_timeout()
+                || source.is_connect()
+                // A redirect under our `Policy::limited(0)` SSRF guard surfaces
+                // as a `reqwest` error (not a 3xx response): the gateway is
+                // unusable, so advance to the next one.
+                || source.is_redirect()
+                || source
+                    .status()
+                    .map(|s| {
+                        s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    })
+                    .unwrap_or(false)
+        }
+        NftTokenUriError::HttpStatus { status, .. } => {
+            (300..400).contains(status) || *status == 429 || (500..600).contains(status)
+        }
         NftTokenUriError::SorobanRpc(msg) => is_transient_soroban_rpc_pattern(msg),
         _ => false,
     }
@@ -250,5 +297,29 @@ mod tests {
         assert!(!is_transient(&NftTokenUriError::SorobanRpc(
             "HostError: Error(Storage, MissingValue) … trying to get non-existing value for contract instance".into()
         )));
+    }
+
+    #[test]
+    fn http_status_3xx_is_failover_worthy_but_not_transient() {
+        // A redirecting gateway: advance to the next (failover), but a
+        // same-endpoint SQS retry won't help → not transient (task 0311).
+        let e = NftTokenUriError::HttpStatus {
+            host: "gw".into(),
+            status: 301,
+        };
+        assert!(is_endpoint_fault(&e));
+        assert!(!is_transient(&e));
+    }
+
+    #[test]
+    fn http_status_429_and_5xx_are_transient_and_failover() {
+        for code in [429u16, 500, 503] {
+            let e = NftTokenUriError::HttpStatus {
+                host: "gw".into(),
+                status: code,
+            };
+            assert!(is_transient(&e), "{code} should be transient");
+            assert!(is_endpoint_fault(&e), "{code} should be failover-worthy");
+        }
     }
 }

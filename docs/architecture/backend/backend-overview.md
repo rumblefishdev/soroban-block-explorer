@@ -542,6 +542,71 @@ The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
 clamps to its configured floor); raising above 10s would expose stale data
 past one Stellar ledger cycle (~5s).
 
+#### Conditional GET — `ETag` / `304` on the Live tier (task 0292)
+
+The Live tier already carries `must-revalidate`, so every poll round-trips to
+the origin. Task 0292 makes those round-trips cheap with a conditional GET
+keyed on the chain head, implemented in
+[`crates/api/src/common/conditional.rs`](../../../crates/api/src/common/conditional.rs):
+
+- **`ETag` value is the chain head** (`latest_ledger_sequence`) from
+  `crate::common::head` — the same cheap single-row probe the version-keyed
+  cache uses (see §8.1). Emitted on `200` by `GET /network/stats` and the
+  **live first page** of `GET /transactions` and `GET /ledgers`. Two validator
+  strengths (`crate::common::conditional`):
+  - **Lists → strong** (`"<head>"`). The list envelope is byte-stable for a
+    given head, so a strong tag is correct. It is derived from the **returned
+    body** (the newest row's `ledger_sequence`/`sequence`), not the pre-query
+    head, so the validator always equals the bytes sent even if a ledger lands
+    between the head probe and the query.
+  - **`/network/stats` → weak** (`W/"<head>"`). The stats body carries a
+    per-SELECT `generated_at` wall-clock, so two `200`s at the same head can
+    differ byte-for-byte (also via a cache recompute or the last-good
+    fallback); a strong validator would violate RFC 7232 §2.1. `If-None-Match`
+    uses weak comparison regardless, so the `304` short-circuit is identical.
+- **`If-None-Match` short-circuits to `304 Not Modified` _before_ the heavy
+  query.** On a request whose `If-None-Match` already names the current head,
+  the handler returns an empty-body `304` after only the cheap head probe — the
+  35M-row list / stats statement never runs. This is the load-bearing
+  condition: if the tag were computed by running the query, only egress would
+  be saved, not the warehouse read. An idle poll therefore costs one head probe
+  and nothing else, and external API clients (task 0277), whose polling we do
+  not control, stop re-reading the warehouse every tick.
+- **Scope — live first page only.** The head is a valid validator only for a
+  response that is a pure function of the latest ledger: `GET /network/stats`,
+  and the lists when there is **no cursor** (for `GET /ledgers`, additionally
+  only newest-first — `?order=asc` returns the immutable oldest page). Cursored
+  (historical) pages are head-independent, so a head-keyed `ETag` would just
+  revalidate to `200` on every poll; they are excluded and keep their existing
+  behaviour, and the extra head probe is paid only on the polled live request.
+  Filtered first pages are included — a filter narrows the rows but they still
+  change only when a new ledger lands, so head-keying is never stale.
+- **`304` is not an error.** It carries the same `ETag` and the `LIVE`
+  `Cache-Control` the matching `200` would, and is explicitly exempted from the
+  `enforce_no_store_on_errors` middleware (which otherwise stamps `no-store` on
+  every non-2xx) — stamping `no-store` on a `304` would break the
+  conditional-GET contract.
+- **Edge passthrough.** Cloudflare (edge auth, task 0277) and API Gateway
+  (proxy integration) forward `If-None-Match` / `ETag` / `304` untouched — the
+  edge only injects `X-Edge-Secret` and does not strip cache validators.
+- **Shared caches never store the `304`.** The `304` carries
+  `Cache-Control: public, max-age=0, must-revalidate`, so a compliant shared
+  cache (CDN / API Gateway stage cache) never stores it, and an RFC 7234 cache
+  never serves a stored `304` to a request lacking matching validators. This
+  matters because the gateway cache key is path+query only (no `Vary` on
+  `If-None-Match` / `Authorization`; see
+  [`api-gateway-cache-spec.md`](./api-gateway-cache-spec.md)) — `max-age=0`
+  plus the spec's defensive "cache-only-200" guidance keeps an empty-body
+  `304` from ever being replayed to another client. Cross-tenant safety does
+  not rely on this anyway: the list/stats bodies are chain-wide public data
+  with no per-caller content, so `public` is data-correct even behind the auth
+  gate. (A future change that puts any per-caller data in these bodies MUST
+  drop `public` or add `Vary`.)
+- **Not a replacement for 0290.** Conditional GET cuts _how often_ a client
+  fetches, not the cost of one fetch: when a client must fetch (new ledger,
+  first paint), the list statement still reads its rows. The load-bearing
+  warehouse-query fix remains task 0290.
+
 Cache-key requirements (consumed by CDK task 0097): full path + every query
 parameter, including `cursor`. Different filter combinations produce
 distinct cache entries. See
