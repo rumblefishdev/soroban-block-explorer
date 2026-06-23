@@ -82,6 +82,39 @@ clobbered value is what users see.
      columns on a real entity-entry change), or
    - read-modify-write carry-forward at staging.
 
+## Measured scale (prod CH, 2026-06-23)
+
+`accounts.home_domain`: 1,111,049 accounts had a non-null value in some version;
+only 1,072,216 survive in `FINAL` → **~38,833 clobbered to NULL** (3.5%),
+concentrated on high-traffic issuers (USDC `GA5ZSEJY…` = circle.com, proven).
+Likely mirrored on `sequence_number` / `first_seen_ledger`.
+
+Clobber source is the **participant touch-path** (NOT merge): any account in
+`account_keys` (tx source / op source / participant / asset issuer / contract
+caller) gets a full `accounts` row staged that ledger; if its own `AccountEntry`
+wasn't created/updated that ledger, the row carries `home_domain=None`,
+`sequence=0`, `first_seen=current`. Under `RMT(last_seen_ledger)` whole-row
+replace, the higher-ledger NULL/0 row wins. Alive, constantly-referenced issuers
+are the main victims — the AccountMerge work that spun off this task is unrelated
+to the clobber population, it just surfaced the mechanism.
+
+## Fix options — with in-project precedents
+
+| Option                                                           | In-project precedent                                                                    |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Side-table per write-once column, join at read                   | 0297 `soroban_contract_metadata`                                                        |
+| Fetch-from-DB carry-forward at staging (read-modify-write)       | `fetch_prior_contract_verdicts` (reads prior CH state at staging); 0214/0228 RPC top-up |
+| EXCHANGE one-shot rebuild (`argMax` last-non-null → temp → swap) | 0283 `contract_type_rebuild`, `repair_tier1`, `asset_aggregates`                        |
+
+Recommendation: a forward-fix (side-table or fetch carry-forward) **plus** a
+one-shot EXCHANGE rebuild to repair the existing ~38,833. Read-side
+"last-non-null" is rejected — RMT background merges eventually discard the
+non-winning versions, so the original value is not recoverable at read.
+
+Note: same read-modify-write infrastructure as the 0295 bug-1 WASM-upgrade
+re-classify (swap one RMT column without clobbering the rest), so the two should
+share the staging pattern if the fetch-carry-forward option is chosen.
+
 ## Acceptance Criteria
 
 - [ ] Inventory of RMT tables + clobber-candidate columns
