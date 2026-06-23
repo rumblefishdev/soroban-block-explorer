@@ -674,7 +674,6 @@ export type NftDetailResponse = {
    * Contract C-StrKey resolved via `soroban_contracts` join.
    */
   contract_id: string;
-  id: number;
   /**
    * Most recent ledger where ownership state changed
    * (`nfts.current_owner_ledger`).
@@ -703,6 +702,12 @@ export type NftDetailResponse = {
  * One NFT row. Same shape on `GET /v1/nfts` list rows and as the
  * flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
  * to canonical SQL `15_get_nfts_list.sql` for the column projection.
+ *
+ * The numeric surrogate `id` was dropped (task 0243 NFT slice): the
+ * external NFT identity is the composite `(contract_id, token_id)` per
+ * task 0264 Phase 8a, and ClickHouse — the production datastore — has no
+ * surrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This
+ * mirrors the assets `:id`-surrogate drop (PR #175).
  */
 export type NftItem = {
   collection_name?: string | null;
@@ -710,7 +715,6 @@ export type NftItem = {
    * Contract C-StrKey resolved via `soroban_contracts` join.
    */
   contract_id: string;
-  id: number;
   /**
    * Most recent ledger where ownership state changed
    * (`nfts.current_owner_ledger`).
@@ -1163,7 +1167,6 @@ export type PaginatedNftItem = {
      * Contract C-StrKey resolved via `soroban_contracts` join.
      */
     contract_id: string;
-    id: number;
     /**
      * Most recent ledger where ownership state changed
      * (`nfts.current_owner_ledger`).

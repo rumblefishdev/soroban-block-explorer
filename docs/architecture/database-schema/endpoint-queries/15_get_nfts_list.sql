@@ -30,6 +30,25 @@
 --     change to ILIKE only after adding a trigram index in task 0132.
 --   • `name` filter wraps in `%...%` to leverage the trigram GIN; leading
 --     `%` is required for trigram coverage.
+--
+-- ClickHouse read path (task 0243 — MIGRATED; see crates/api/src/nfts/queries_ch.rs):
+--   • CH is the production datastore. The query below is the PG (local-dev)
+--     shape; the CH path diverges as follows.
+--   • `nfts.{name,media_url,collection_name}` are VESTIGIAL NULL on CH (the
+--     indexer re-writes whole rows on every ownership change with metadata
+--     NULL). Real metadata is read from the `nft_enrichment` side table via
+--     `argMax(_, version) GROUP BY (contract_id, token_id)` — a LEFT JOIN that
+--     collapses RMT(version) so it can't multiply base rows. WITHOUT this
+--     join CH NFTs read NULL names despite enrichment being populated.
+--   • No surrogate `nfts.id` on CH. The keyset is `(minted_at_ledger,
+--     contract_id, token_id) DESC` (recency lead key + the `nfts` PK suffix),
+--     replacing `id DESC`. The PG path above orders on the same tuple so the
+--     opaque cursor round-trips across a datasource flip.
+--   • `filter[name]` → `positionCaseInsensitive(nft_enrichment.name, ?)` (CH
+--     has no trigram); `filter[collection]` matches the enriched collection.
+--   • owner_id Int64 → G-StrKey via a restricted `accounts` CTE
+--     (`WHERE id IN (page ids) GROUP BY id`, no FINAL) — never `accounts FINAL`
+--     over ~23M rows.
 
 WITH ct AS (
     SELECT id

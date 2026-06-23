@@ -327,8 +327,8 @@ export class ComputeStack extends cdk.Stack {
         // Network (pilot, PR #221), Ledgers (PR #226), Transactions
         // (PR #235), Accounts (PR #236), Contracts (PR #237), LiquidityPools
         // (task 0243; PRs #246/#248/#250 — all 5 LP endpoints on CH, validated
-        // live on prod). The remaining modules (Assets, NFTs, Search) have no
-        // CH path yet.
+        // live on prod), Assets (task 0243; PR #260), NFTs (task 0243; PR #274).
+        // The remaining module (Search) has no CH path yet.
         //
         // PRECONDITIONS before this deploy goes live (see PR checklist):
         //   1. Hetzner CH is live-ingesting at chain head (not frozen) —
@@ -354,6 +354,11 @@ export class ComputeStack extends cdk.Stack {
         // CH read-rows smoke (per `queries_ch.rs` header) before relying on
         // this in prod.
         API_DATASOURCE_ASSETS: 'ch',
+        // NFTs read path (task 0243 NFT slice, PR #274). Same precondition as
+        // Assets: prod CH must carry `nft_enrichment` (else NULL name/media —
+        // ~84% enriched per task 0306) and the operator CH read-rows smoke must
+        // pass (`nfts/queries_ch.rs`) before relying on this in prod.
+        API_DATASOURCE_NFTS: 'ch',
       },
     });
     this.apiFunction = apiFunction;
