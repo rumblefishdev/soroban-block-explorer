@@ -449,12 +449,22 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let all_nfts = xdr_parser::detect_nfts(&all_nft_events);
 
-    // Derive SAC overrides from the SAME network passphrase as
-    // `network_id` above (not a hard-coded mainnet constant) — on a
-    // non-mainnet stack a mainnet-pinned passphrase would compute
-    // wrong SAC contract_ids and corrupt SAC identity fixing.
-    let sac_overrides =
-        xdr_parser::derive_sac_overrides_from_assets(&all_assets, network_passphrase());
+    // Derive SAC overrides from the SAME network passphrase as `network_id`
+    // above (not a hard-coded mainnet constant) — on a non-mainnet stack a
+    // mainnet-pinned passphrase would compute wrong SAC contract_ids and
+    // corrupt SAC identity fixing. Two crypto-derived sources merged here: the
+    // asset path (task 0218, trustline-observed assets) and the event path
+    // (task 0294 — un-deployed SACs that surface ONLY as classic-asset SAC
+    // events, never a trustline change, so the asset path misses them and they
+    // persist as `is_sac=false` orphans). Both are crypto-match gated, and
+    // downstream dedups by contract_id, so overlap is harmless.
+    let passphrase = network_passphrase();
+    let mut sac_overrides = xdr_parser::derive_sac_overrides_from_assets(&all_assets, passphrase);
+    for (_tx_hash, tx_events) in &all_events {
+        sac_overrides.extend(xdr_parser::derive_sac_overrides_from_events(
+            tx_events, passphrase,
+        ));
+    }
 
     let parse_ms = parse_timer.elapsed().as_millis();
 
