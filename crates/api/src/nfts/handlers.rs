@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::common::cache_control;
 use crate::common::cursor;
+use crate::common::datasource::{DataSource, Module};
 use crate::common::errors;
 use crate::common::extractors::Pagination;
 use crate::common::filters;
@@ -17,11 +18,37 @@ use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
 use super::dto::{
-    ListParams, NftDetailResponse, NftIdCursor, NftItem, NftTransferCursor, NftTransferItem,
+    ListParams, NftDetailResponse, NftItem, NftListCursor, NftTransferCursor, NftTransferItem,
 };
-use super::queries::{
-    ResolvedListParams, fetch_by_composite, fetch_list, fetch_transfers, nft_exists_by_composite,
-};
+use super::queries::{self, NftRow, ResolvedListParams};
+use super::queries_ch;
+
+/// Unified per-call fetch error so the handlers dispatch between PG (`sqlx`)
+/// and CH (`clickhouse`) without leaking driver types up the call stack —
+/// mirrors `assets::handlers::AssetFetchError`. Only `Display` is observed
+/// (forwarded to the canonical `db_error` envelope + tracing).
+#[derive(Debug, thiserror::Error)]
+enum NftFetchError {
+    #[error("pg: {0}")]
+    Pg(sqlx::Error),
+    #[error("ch: {0}")]
+    Ch(clickhouse::error::Error),
+}
+
+/// Map the datasource-agnostic [`NftRow`] to the wire [`NftItem`] (drops the
+/// internal `contract_surrogate` cursor tiebreak).
+fn map_item(r: NftRow) -> NftItem {
+    NftItem {
+        contract_id: r.contract_id,
+        token_id: r.token_id,
+        collection_name: r.collection_name,
+        name: r.name,
+        media_url: r.media_url,
+        minted_at_ledger: r.minted_at_ledger,
+        owner_account: r.owner_account,
+        last_seen_ledger: r.last_seen_ledger,
+    }
+}
 
 /// Validate the composite `(:contract_id, :token_id)` NFT path parameter.
 ///
@@ -81,7 +108,7 @@ fn parse_nft_path(
 )]
 pub async fn list_nfts(
     State(state): State<AppState>,
-    pagination: Pagination<NftIdCursor>,
+    pagination: Pagination<NftListCursor>,
     Query(params): Query<ListParams>,
 ) -> Response {
     if let Err(resp) = filters::strkey_opt(params.filter_contract_id.as_deref(), 'C', "contract_id")
@@ -103,10 +130,19 @@ pub async fn list_nfts(
         filter_name: params.filter_name,
     };
 
-    let mut rows = match fetch_list(&state.db, &resolved, direction).await {
+    let source = DataSource::for_module(Module::Nfts);
+    let fetched: Result<Vec<NftRow>, NftFetchError> = match source {
+        DataSource::Pg => queries::fetch_list(&state.db, &resolved, direction)
+            .await
+            .map_err(NftFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_list(state.ch(), &resolved, direction)
+            .await
+            .map_err(NftFetchError::Ch),
+    };
+    let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("DB error in list_nfts: {e}");
+            tracing::error!(source = ?source, "DB error in list_nfts: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -116,10 +152,20 @@ pub async fn list_nfts(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&NftIdCursor { id: r.id }, dir),
+        |dir, r| {
+            cursor::encode(
+                &NftListCursor {
+                    minted_at_ledger: r.minted_at_ledger.unwrap_or(0),
+                    contract_surrogate: r.contract_surrogate,
+                    token_id: r.token_id.clone(),
+                },
+                dir,
+            )
+        },
     );
+    let data: Vec<NftItem> = rows.into_iter().map(map_item).collect();
 
-    let mut resp = Json(into_envelope(rows, page)).into_response();
+    let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
@@ -150,11 +196,21 @@ pub async fn get_nft(
         Err(resp) => return resp,
     };
 
-    let row = match fetch_by_composite(&state.db, &contract_id, &token_id).await {
+    let source = DataSource::for_module(Module::Nfts);
+    let fetched: Result<Option<NftItem>, NftFetchError> = match source {
+        DataSource::Pg => queries::fetch_by_composite(&state.db, &contract_id, &token_id)
+            .await
+            .map_err(NftFetchError::Pg),
+        DataSource::Ch => queries_ch::fetch_by_composite(state.ch(), &contract_id, &token_id)
+            .await
+            .map_err(NftFetchError::Ch),
+    };
+    let row = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
             tracing::error!(
+                source = ?source,
                 contract_id = %contract_id,
                 token_id = %token_id,
                 "DB error fetching nft: {e}"
@@ -251,39 +307,59 @@ pub async fn list_nft_transfers(
         Err(resp) => return resp,
     };
 
-    // Resolve composite identity → internal `nfts.id i32` surrogate up
-    // front. The transfers query joins on `nft_ownership.nft_id`, and the
-    // cursor payload carries the surrogate for stable keyset pagination
-    // — keeping the surrogate internal here means the wire URL stays
-    // composite even though storage / cursor stays integer.
-    let nft_id = match nft_exists_by_composite(&state.db, &contract_id, &token_id).await {
-        Ok(Some(id)) => id,
-        Ok(None) => return errors::not_found("nft not found"),
-        Err(e) => {
-            tracing::error!(
-                contract_id = %contract_id,
-                token_id = %token_id,
-                "DB error in nft_exists_by_composite: {e}"
-            );
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
     let fetch_limit = pagination.fetch_limit();
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
-    let mut rows = match fetch_transfers(
-        &state.db,
-        nft_id,
-        pagination.cursor.as_ref(),
-        fetch_limit,
-        direction,
-    )
-    .await
-    {
-        Ok(r) => r,
+    let source = DataSource::for_module(Module::Nfts);
+
+    // Existence first (404-vs-empty disambiguation), then the page — both per
+    // source. PG resolves the composite to the internal `nfts.id i32` surrogate
+    // and joins `nft_ownership.nft_id`; CH keys `nft_ownership` on
+    // `(contract_id, token_id)` directly, so the surrogate indirection is gone.
+    // `Ok(None)` = the NFT does not exist → 404.
+    let fetched: Result<Option<Vec<NftTransferItem>>, NftFetchError> = match source {
+        DataSource::Pg => {
+            match queries::nft_exists_by_composite(&state.db, &contract_id, &token_id).await {
+                Ok(Some(nft_id)) => queries::fetch_transfers(
+                    &state.db,
+                    nft_id,
+                    pagination.cursor.as_ref(),
+                    fetch_limit,
+                    direction,
+                )
+                .await
+                .map(Some)
+                .map_err(NftFetchError::Pg),
+                Ok(None) => Ok(None),
+                Err(e) => Err(NftFetchError::Pg(e)),
+            }
+        }
+        DataSource::Ch => match queries_ch::nft_exists(state.ch(), &contract_id, &token_id).await {
+            Ok(true) => queries_ch::fetch_transfers(
+                state.ch(),
+                &contract_id,
+                &token_id,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+            .map(Some)
+            .map_err(NftFetchError::Ch),
+            Ok(false) => Ok(None),
+            Err(e) => Err(NftFetchError::Ch(e)),
+        },
+    };
+    let mut rows = match fetched {
+        Ok(Some(r)) => r,
+        Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
-            tracing::error!("DB error in fetch_transfers({nft_id}): {e}");
+            tracing::error!(
+                source = ?source,
+                contract_id = %contract_id,
+                token_id = %token_id,
+                "DB error in nft transfers: {e}"
+            );
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };

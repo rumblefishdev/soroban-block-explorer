@@ -202,6 +202,14 @@ The backend serves data from the block explorer's own database, adding:
   the natural identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`,
   which is why `/assets/:id` and the list cursor use the composite token /
   composite keyset rather than the dropped `assets.id`.
+  The `nfts` table on ClickHouse is likewise **surrogate-free** (keyed on
+  `(contract_id, token_id)`): the wire `NftItem.id` is dropped, the list cursor
+  keys on `(minted_at_ledger, contract_id, token_id)`, and the transfers
+  timeline keys on `(contract_id, token_id)` directly (no `nft_id`). NFT
+  `name` / `media_url` / `collection_name` are read from the `nft_enrichment`
+  side table (`argMax(_, version)`), since the indexer-owned `nfts.*` copies are
+  vestigial NULL on CH; full enrichment coverage is a prod-flip prerequisite,
+  the same gate as `assets` ↔ task 0231.
 
 ### 4.2 What the Backend Must Not Do
 
