@@ -72,12 +72,38 @@ Caddy does not know the password to forge Basic Auth.
 | `galexie`          | `write_no_ddl`  | `high_write`   | INSERT only on ingestion tables                                 | Galexie ECS task                                       |
 | `api_reader`       | `read_only`     | `api_throttle` | SELECT on `default.*`                                           | Lambda API (read-heavy)                                |
 | `ingestion_writer` | `write_no_ddl`  | `high_write`   | INSERT on tables Galexie does not touch                         | Lambda Ingestion                                       |
+| `prices_writer`    | `write_no_ddl`  | `prices_write` | SELECT, INSERT, OPTIMIZE on `prices.*` only (inline `<grants>`) | prices-api ingestion (separate service, task 0063)     |
+| `prices_reader`    | `read_only`     | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                   | prices-api / BE LP-analytics `price_usd_series` JOIN   |
 | `dict_reader`      | `read_only_lan` | n/a (loopback) | SELECT inside container (loopback only)                         | Dictionary SOURCE clause                               |
 
 > `migration_admin` + `partition_admin` were removed in task 0241 (from
 > `crates/db-clickhouse/users.d/services.xml`) together with the PG-era
 > migration + partition Lambdas — CH applies its schema box-side via the
 > `db-clickhouse-init` sidecar and auto-creates partitions on insert.
+
+### `prices` tenant (multi-tenant, task 0314)
+
+`prices_writer` / `prices_reader` were added (task 0314) for **prices-api**, a
+separate service that lands per-source OHLCV candles into a dedicated `prices`
+database in this same cluster (their task 0063, their ADR 0007). This is the
+second tenant alongside BE's `default` data. Two properties differ from the
+other service users:
+
+- **First inline `<grants>`.** BE's own service users are unscoped (implicit
+  all-database access — correct while `default` is the only DB). The prices
+  users carry an inline `<grants>` block (`GRANT … ON prices.*`), which both
+  scopes them to `prices.*` and flips them into explicit-grant mode, so
+  `prices_writer` is denied `default.*` and cannot run DDL. Inline user-XML
+  grants apply at startup (CH ≥ 21.4).
+- **Tenant boundary is one-directional.** The prices certs are confined to
+  `prices.*` and cannot touch `default.*`. The reverse is **not** enforced:
+  BE's own unscoped service users (`ingestion_writer`, etc.) can still reach
+  `prices.*`. That is inside BE's trust boundary and expected — the isolation
+  that matters is confining the externally-issued prices certs.
+
+The `prices` database and its schema are created and owned by prices-api over
+loopback admin (`db-clickhouse-init` on their side), **not** in this repo. This
+repo provides only the access-control config those certs map onto.
 
 ## Caddy CN → CH user mapping
 
@@ -90,6 +116,8 @@ the full list. Convention:
 | `galexie-<environment>`          | `galexie`          |
 | `lambda-api-<environment>`       | `api_reader`       |
 | `lambda-ingestion-<environment>` | `ingestion_writer` |
+| `prices-ingestion`               | `prices_writer`    |
+| `prices-api`                     | `prices_reader`    |
 | `<firstname>-laptop`             | `dev_shared`       |
 
 > `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
@@ -123,6 +151,10 @@ returns as 403 before any backend hop.
   read_bytes, 1000 s execution_time.
 - `high_write` — unbounded queries / read, 1 PB written_bytes
   ceiling (sanity cap, not a real throttle).
+- `prices_write` — caps copied verbatim from `high_write`; a dedicated
+  name so prices ingestion never draws down a BE service's budget.
+- `prices_read` — caps copied verbatim from `api_throttle`; dedicated
+  name for the same isolation reason.
 
 ## Known limitations
 

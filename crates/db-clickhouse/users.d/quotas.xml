@@ -70,15 +70,23 @@
              30s/4GB per-query cap remains the real per-query guard. Still
              isolated from the API. queries/errors/execution_time left at 0
              (unbounded): never throttle a human on query count, and `errors`
-             as a throttle is a footgun (see api_throttle). -->
+             as a throttle is a footgun (see api_throttle).
+
+             read_rows 50B→100B, read_bytes 1TiB→2TiB (2026-06-23, task 0314):
+             doubled on dev request — devs hit the 50B aggregate on heavier
+             multi-scan sessions. Both fields raised together so read_bytes
+             (the real IO ceiling) does not become the binding cap and negate
+             the row bump. Still per-user and fully isolated from api_throttle
+             (the 0290 failure mode cannot be reintroduced by a dev_read bump);
+             the read_only 30s/4GB per-query cap remains the real guard. -->
         <dev_read>
             <interval>
                 <duration>3600</duration>
                 <queries>0</queries>
                 <errors>0</errors>
                 <result_rows>0</result_rows>
-                <read_rows>50000000000</read_rows>
-                <read_bytes>1099511627776</read_bytes>
+                <read_rows>100000000000</read_rows>
+                <read_bytes>2199023255552</read_bytes>
                 <execution_time>0</execution_time>
             </interval>
         </dev_read>
@@ -98,6 +106,34 @@
                 <written_bytes>1125899906842624</written_bytes>
             </interval>
         </high_write>
+
+        <!-- prices tenant (prices-api task 0063, BE task 0314). Caps copied
+             verbatim from high_write / api_throttle; dedicated names so prices
+             traffic can never draw down a BE service's per-user budget — same
+             isolation reasoning behind the dev_read vs api_throttle split. -->
+        <prices_write>   <!-- mirrors high_write -->
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+                <written_bytes>1125899906842624</written_bytes>
+            </interval>
+        </prices_write>
+
+        <prices_read>    <!-- mirrors api_throttle -->
+            <interval>
+                <duration>3600</duration>
+                <queries>10000</queries>
+                <errors>0</errors>
+                <result_rows>10000000000</result_rows>
+                <read_rows>50000000000</read_rows>
+                <read_bytes>1099511627776</read_bytes>
+                <execution_time>1000</execution_time>
+            </interval>
+        </prices_read>
 
         <!-- low_volume quota removed in task 0241 — its only consumers
              (migration_admin + partition_admin) were removed with the
