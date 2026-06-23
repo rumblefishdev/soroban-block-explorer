@@ -2952,8 +2952,8 @@
         "allOf": [
           {
             "type": "object",
-            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-            "required": ["id", "contract_id", "token_id"],
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+            "required": ["contract_id", "token_id"],
             "properties": {
               "collection_name": {
                 "type": ["string", "null"]
@@ -2961,10 +2961,6 @@
               "contract_id": {
                 "type": "string",
                 "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-              },
-              "id": {
-                "type": "integer",
-                "format": "int32"
               },
               "last_seen_ledger": {
                 "type": ["integer", "null"],
@@ -3005,8 +3001,8 @@
       },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-        "required": ["id", "contract_id", "token_id"],
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+        "required": ["contract_id", "token_id"],
         "properties": {
           "collection_name": {
             "type": ["string", "null"]
@@ -3014,10 +3010,6 @@
           "contract_id": {
             "type": "string",
             "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-          },
-          "id": {
-            "type": "integer",
-            "format": "int32"
           },
           "last_seen_ledger": {
             "type": ["integer", "null"],
@@ -3668,8 +3660,8 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.",
-              "required": ["id", "contract_id", "token_id"],
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+              "required": ["contract_id", "token_id"],
               "properties": {
                 "collection_name": {
                   "type": ["string", "null"]
@@ -3677,10 +3669,6 @@
                 "contract_id": {
                   "type": "string",
                   "description": "Contract C-StrKey resolved via `soroban_contracts` join."
-                },
-                "id": {
-                  "type": "integer",
-                  "format": "int32"
                 },
                 "last_seen_ledger": {
                   "type": ["integer", "null"],

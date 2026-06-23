@@ -112,7 +112,7 @@ All in `crates/enrichment-shared/src/nft_token_uri/client.rs` (call sites
       unset → identical to today (single SDF RPC). Worker + runner inherit via
       `new()` (no call-site change — blast-radius grep confirmed).
 - [x] Unit tests green (**75 pass / 0 fail**, +7 new); `cargo clippy
-    -p enrichment-shared --all-targets` clean; rustfmt clean.
+-p enrichment-shared --all-targets` clean; rustfmt clean.
 - [x] On-box small batch shows 429-recovery vs the single-RPC baseline.
       **VALIDATED 2026-06-22:** a `--retry-sentinels --limit 100 --concurrency 8`
       batch produced **0 RPC-429** (vs the single-RPC wall) — RPC errors are now

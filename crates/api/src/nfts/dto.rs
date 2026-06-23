@@ -7,7 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 
 /// `filter[...]` query parameters for `GET /v1/nfts`.
 ///
-/// `limit` / `cursor` are read by a sibling `Pagination<NftIdCursor>`
+/// `limit` / `cursor` are read by a sibling `Pagination<NftListCursor>`
 /// extractor and are intentionally absent here.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ListParams {
@@ -28,9 +28,14 @@ pub struct ListParams {
 /// One NFT row. Same shape on `GET /v1/nfts` list rows and as the
 /// flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
 /// to canonical SQL `15_get_nfts_list.sql` for the column projection.
+///
+/// The numeric surrogate `id` was dropped (task 0243 NFT slice): the
+/// external NFT identity is the composite `(contract_id, token_id)` per
+/// task 0264 Phase 8a, and ClickHouse — the production datastore — has no
+/// surrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This
+/// mirrors the assets `:id`-surrogate drop (PR #175).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NftItem {
-    pub id: i32,
     /// Contract C-StrKey resolved via `soroban_contracts` join.
     pub contract_id: String,
     pub token_id: String,
@@ -91,12 +96,23 @@ pub struct NftTransferItem {
     pub event_order: i16,
 }
 
-/// Cursor payload for `GET /v1/nfts`. The `nfts` table has a SERIAL
-/// surrogate PK and the canonical SQL orders by `id DESC` — `TsIdCursor`
-/// does not fit because there's no `created_at` column on `nfts`.
+/// Cursor payload for `GET /v1/nfts`. Replaces the old `NftIdCursor{id}`
+/// (the SERIAL surrogate was dropped — see [`NftItem`]). The list orders
+/// by `(minted_at_ledger DESC, contract_id DESC, token_id DESC)` — a total
+/// keyset that maps to the CH `nfts` PK suffix `(contract_id, token_id)`
+/// with `minted_at_ledger` (recency, "newest mint first") as the lead key.
+/// `contract_id` here is the internal Int64 surrogate (opaque per ADR 0008,
+/// a pure cursor tiebreak), NOT the wire C-StrKey. Datasource-agnostic: the
+/// PG path orders on the same tuple so the cursor round-trips across a flag
+/// flip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NftIdCursor {
-    pub id: i32,
+pub struct NftListCursor {
+    /// `ifNull(minted_at_ledger, 0)` — lead key (DESC).
+    pub minted_at_ledger: i64,
+    /// Internal contract surrogate (PK suffix tiebreak; opaque).
+    pub contract_surrogate: i64,
+    /// `token_id` PK suffix tiebreak.
+    pub token_id: String,
 }
 
 /// Cursor payload for `GET /v1/nfts/:id/transfers`. The natural keyset
