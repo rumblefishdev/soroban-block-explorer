@@ -14,12 +14,10 @@
 //!
 //! ## Scope (read-only prod measurement, 2026-06-23)
 //!
-//! Of ~5,607 orphans by the predicate above, **only the ~4,827 that emit a
-//! SAC-control event are in scope** — the crypto gate confirmed 4,824 of them as
-//! un-deployed SACs with **zero** false positives (the gate rejected nothing
-//! real). The remaining ~780 emit no SAC-control event, so they are not provably
-//! SACs and this pass intentionally leaves them untouched (a separate bucket —
-//! likely non-SAC stubs; needs its own classification, tracked in the task).
+//! Of 5,607 orphans by the predicate above, **5,558 emit a SAC-control event and
+//! ALL 5,558 crypto-confirm** as un-deployed SACs — the gate rejected **zero** (no
+//! false positives). Only 49 emit no SAC-control event; they are not provably SACs
+//! and this pass intentionally leaves them untouched (a tiny separate residual).
 //!
 //! ## Mechanism
 //!

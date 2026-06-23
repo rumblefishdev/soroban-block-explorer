@@ -27,14 +27,16 @@ the SAME shared gate locally. Result:
 | metric                                                               | value     |
 | -------------------------------------------------------------------- | --------- |
 | orphans by predicate (`is_sac=false`, deploy 0/null, wasm_hash null) | **5,607** |
-| emit a SAC-control event (in batch scope)                            | **4,827** |
-| **crypto_confirmed** (`derive_sac(asset) == emitter`)                | **4,824** |
+| emit a SAC-control event (in batch scope)                            | **5,558** |
+| **crypto_confirmed** (`derive_sac(asset) == emitter`)                | **5,558** |
 | **rejected by gate**                                                 | **0**     |
-| unparseable export rows                                              | 3         |
+| emit no SAC-control event (left untouched)                           | 49        |
 
 **Reads:** zero false positives — every SAC-event-emitting orphan is a real
-un-deployed SAC. The earlier "5,607/5,607" claim was an overclaim: ~780 orphans emit
-no SAC-control event and are intentionally left untouched (separate bucket).
+un-deployed SAC, and ALL 5,558 confirm (the original "5,607/5,607" estimate was
+essentially right). Only 49 emit no SAC-control event and are left untouched (tiny
+residual). NB: a first pass under-counted (4,824) due to a truncated chunked
+export — re-run with smaller chunks gave the correct 5,558.
 
 ## Fixes found during validation
 
