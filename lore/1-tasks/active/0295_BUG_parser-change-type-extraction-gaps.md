@@ -69,6 +69,6 @@ On a `removed` account change, emit a `balance=0` native row at the merge ledger
 
 ## Acceptance Criteria
 
-- [ ] Upgraded contracts re-classify (verdict reflects the post-upgrade wasm), no deploy-row clobber
-- [ ] Merged accounts show balance 0 (no stale row, no inflated native aggregate)
-- [ ] Unit tests for both (re-parse-recoverable; validate against a known upgrade + a known AccountMerge)
+- [ ] ~~Upgraded contracts re-classify~~ — **deferred to [[0320]]** (WASM-upgrade is the same RMT whole-row class; needs read-modify-write writer, split out of 0295)
+- [x] Merged accounts show balance 0 — parser `removed` tombstone done (fix-forward); existing ~522k ghosts backfill **deferred to [[0321]]**
+- [x] Unit test for the AccountMerge tombstone — `removed_account_emits_zero_native_tombstone` (the WASM-upgrade unit tests move with [[0320]])
