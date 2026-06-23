@@ -1,5 +1,5 @@
 ---
-id: '0313'
+id: '0315'
 title: 'OPS: run sac-orphan-relabel batch on prod CH (flip un-deployed-SAC orphans)'
 type: OPS
 status: backlog
@@ -16,6 +16,13 @@ history:
       dry-run-validated read-only (5,558 crypto-confirmed / 0 false positives).
       Real run needs a write-capable CH cert (read-only `chq`/`dev_read` cannot
       INSERT) + the 0294 PR merged. Operational, so kept out of the 0294 code PR.
+  - date: 2026-06-23
+    status: backlog
+    who: karolkow
+    note: >
+      Renumbered 0313 → 0315 on develop merge: origin already published a
+      different 0313 (FEATURE verify-304-frontend-transparency). This OPS task
+      was local-only, so it gets the new id per the collision-fix convention.
 ---
 
 # OPS: run sac-orphan-relabel batch on prod CH
