@@ -52,46 +52,81 @@ Scope note: only Soroban-era (ledger ≥ 50457424, 2024-02-20) merges are
 ingested. Accounts merged before that window never appear at all — out of
 scope here.
 
+## Decisions (locked 2026-06-24)
+
+1. **Backend: ClickHouse only.** Prod serves accounts from CH
+   (`API_DATASOURCE_ACCOUNTS: 'ch'` in infra/compute-stack). Code default is
+   `Pg`, used only as dev/fallback. Implement the derive in
+   `queries_ch.rs`; PG path returns the default (`deleted=false`) with a
+   ponytail note — not worth dual maintenance.
+2. **Derive at query time, no schema change** — but see anchoring below; the
+   naive rule is catastrophic, the anchored one is free.
+3. **Rule verified** on `GAP7STAM…` → `deleted=true`, `merged_into=GA4N7346…`.
+4. **Response surface: bare `deleted: bool` (A)** — dropped `merged_into` /
+   `deleted_at_ledger` (decided against the earlier B; keep the contract
+   minimal). Single `argMax` over the anchored granule (last op in last-seen
+   ledger is a merge-as-source).
+5. **Detail endpoint only** (`/accounts/{id}`). No list badging.
+   (Earlier claim that stellar.expert badges in lists was unverified/retracted.)
+
 ## Implementation Plan
 
-### Step 1: Derive `deleted` (no schema change for MVP)
+### Step 1: Derive — two-step, anchored on `last_seen_ledger`
 
-An account is `deleted` ⟺ it is the `source_id` of a `type=8` op AND that
-merge is its latest lifecycle event (handle key re-creation: a merged key can
-be funded again later → NOT deleted).
-
-Minimal correct rule:
+An account is `deleted` ⟺ its **last op in its last-seen ledger** is a
+`type=8` (account_merge) where it is the `source`. Since
+`last_seen_ledger = GREATEST(all appearances)`, any deleting merge sits in that
+ledger; `argMax` over `(transaction_id, application_order)` picks the
+chronologically-last op _within_ the ledger, so a same-ledger re-create (merge
+then `create_account` at higher app order) correctly yields `false`.
 
 ```
-deleted = (max ledger_sequence where type=8 AND source_id = a.id)
-          >= a.last_seen_ledger
+deleted ⟺ argMax(type = 8 AND source_id = <id>, (transaction_id, application_order))
+          over operations_appearances
+          WHERE ledger_sequence = <last_seen_ledger>
+            AND (source_id = <id> OR destination_id = <id>)
 ```
 
-i.e. no activity after the last merge. Compute on-the-fly in the account
-lookup query via a join/subquery on `operations_appearances`.
+Measured on prod (6.2B ops): cross-ledger reopen is common (1.57M pairs,
+handled correctly — `last_seen` advances past the merge); **same-ledger**
+merge-then-recreate = **0** occurrences, but the app-order anchor closes that
+theoretical gap at the same 1-granule cost.
 
-ponytail: derive at query time, NO new column / migration. Add a materialized
-`deleted` flag (or `deleted_at_ledger`) on `accounts` only if this query
-measurably slows the account endpoint.
+**Critical — must be a SEPARATE query with `last_seen_ledger` as a literal
+bind, NOT a JOIN.** `operations_appearances` is `PARTITION BY
+intDiv(ledger_sequence, 500000)`, ORDER BY `(ledger_sequence, transaction_id,
+application_order)` — no sort key on `source_id`/`type`. Partition pruning only
+fires when `ledger_sequence` is a constant. Measured (`EXPLAIN ESTIMATE`, prod):
 
-### Step 2: API
+| variant                         | rows read                      |
+| ------------------------------- | ------------------------------ |
+| anchored (literal ledger)       | **8 192** (1 granule)          |
+| naive (`source_id`+`type` only) | **6 199 823 062** (full table) |
 
-- `crates/api/src/accounts/queries.rs` — add the derived `deleted` (and
-  optionally `merged_into` account_id + `deleted_at_ledger`) to the account
-  lookup.
-- `crates/api/src/accounts/handlers.rs` — add field(s) to the response DTO.
+The JOIN form (anchor = column from `accounts`) cannot prune → blew the 3.73 GiB
+query memory limit. So: `fetch_account` already returns `id` + `last_seen_ledger`;
+a 3rd query `fetch_deleted_status(id, last_seen_ledger)` does the anchored lookup.
+
+ponytail: query time, no column/migration. Materialize only if the extra
+8192-row granule read ever matters (it won't).
+
+### Step 2: API (CH path)
+
+- `crates/api/src/accounts/queries_ch.rs` — add `fetch_deleted_status`
+  (anchored `argMax` over last-op-in-ledger, literal binds) → `bool`.
+- `crates/api/src/accounts/dto.rs` — add `deleted: bool` to `AccountDetailResponse`.
+- `crates/api/src/accounts/handlers.rs` — call after `fetch_account`, fill DTO.
+  PG branch returns `false`.
 - Regenerate API types: `npx nx run @rumblefish/api-types:generate`, commit
   `libs/api-types/src/{openapi.json,generated/}` (CI gate `API types freshness`).
 
 ### Step 3: Frontend
 
-- Account page — render a `deleted` badge when `deleted=true`, ideally with
-  "merged into <account>" link. Match stellar.expert affordance.
+- Account detail page — render a `deleted` badge when `deleted=true`.
 
 ### Step 4: Docs
 
-- Update `docs/architecture/**` if the account API contract is described there
-  (per ADR 0032).
+- Update `docs/architecture/**` account API contract (per ADR 0032).
 
 ## Acceptance Criteria
 

@@ -1950,7 +1950,8 @@
           "sequence_number",
           "balances",
           "first_seen_ledger",
-          "last_seen_ledger"
+          "last_seen_ledger",
+          "deleted"
         ],
         "properties": {
           "account_id": {
@@ -1961,6 +1962,10 @@
             "items": {
               "$ref": "#/components/schemas/AccountBalance"
             }
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "`true` when the account was removed from the ledger via `account_merge`\nand never re-funded (its last lifecycle event is the merge). Derived,\nnot stored. CH-only — the PG fallback always reports `false`."
           },
           "first_seen_ledger": {
             "type": "integer",

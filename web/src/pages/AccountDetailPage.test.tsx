@@ -46,6 +46,12 @@ const SAMPLE: AccountDetailResponse = {
   first_seen_ledger: 50,
   last_seen_ledger: 200,
   sequence_number: 99_123_456,
+  deleted: false,
+};
+
+const DELETED_SAMPLE: AccountDetailResponse = {
+  ...SAMPLE,
+  deleted: true,
 };
 
 function mockDetail(value: unknown): void {
@@ -127,6 +133,40 @@ describe('AccountDetailPage', () => {
       'href',
       `/assets/${encodeURIComponent(`USDC-${USDC_ISSUER}`)}`
     );
+  });
+
+  it('shows a Deleted badge for a merged account', () => {
+    mockDetail({
+      data: DELETED_SAMPLE,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Deleted')).toBeInTheDocument();
+  });
+
+  it('omits the Deleted badge for a live account', () => {
+    mockDetail({
+      data: SAMPLE,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.queryByText('Deleted')).not.toBeInTheDocument();
   });
 
   it('renders NotFoundState when the detail query 404s', () => {
