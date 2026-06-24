@@ -270,6 +270,20 @@ entities:
   override map consumed by `extract_contract_deployments`. Task 0255
   Phase 1; pre-fix the parser stored the inner-tx source unconditionally
   and misattributed deploys with per-op overrides
+- contract WASM upgrade → re-emitted `soroban_contracts` row (task 0320).
+  `extract_contract_deployments` records `wasm_hash` only on the `created`
+  instance, so a later executable swap on an `updated` ContractInstance was
+  dropped and the row kept its stale deploy-time hash + verdict forever.
+  `state::extract_contract_wasm_upgrades` scans `updated` instances for the new
+  `wasm_hash` (SACs carry no hash → skipped). The CH writer does a
+  read-modify-write: it pre-fetches the prior row's identity
+  (`persist::fetch_prior_contract_rows`) and re-emits a full row with the new
+  `wasm_hash`, `wasm_uploaded_at_ledger` bumped to the upgrade ledger (wins the
+  RMT `ORDER BY (contract_id)` collapse), the verdict re-derived from the new
+  hash, and deployer / deploy-ledger / name carried forward unchanged — so the
+  whole-row RMT replace never clobbers deploy identity (the naive filter-flip
+  rejected in 0283). The classification cache is evicted for upgraded
+  `contract_id`s so the new verdict takes effect.
 - contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
   task 0297). `name` / `symbol` / `decimals` are read from the contract instance
   entry's `Symbol("METADATA")` struct (`{decimal, name, symbol}`) via
