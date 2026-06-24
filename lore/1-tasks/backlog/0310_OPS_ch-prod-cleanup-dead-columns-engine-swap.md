@@ -18,6 +18,17 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0293. Destructive prod cleanup deferred by 0293 (option A backward-compat): drop the now-dead assets.total_supply/holder_count and rebuild ledgers/wasm_interface_metadata as RMT. Neither is applied by CREATE TABLE IF NOT EXISTS, so each needs explicit migration. The additive 0293 rollout runbook lives in 0293 itself; this task is cleanup only, gated on that rollout being verified in prod.'
+  - date: 2026-06-24
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Engine-swap half DONE in prod (out of band, during SAC-redrain backup
+      prep). ledgers + wasm_interface_metadata MergeTree -> ReplacingMergeTree
+      via create-copy-EXCHANGE-OPTIMIZE FINAL-drop, guarded by a uniqExact
+      distinct-key gate. wasm 3760->3720 (40 byte-identical dups collapsed);
+      ledgers 12,582,889 unchanged (no dup sequences). snapshot_d backup taken
+      first. Remaining: dead-columns drop + asset_aggregates refresh monitoring
+      + docs. Task stays open (backlog).
 ---
 
 # CH prod cleanup — drop dead assets columns + engine swap (spawned from 0293)
@@ -142,9 +153,13 @@ completeness.
 - [ ] 0293 rollout confirmed live + verified in prod (prerequisite).
 - [ ] `asset_aggregates` refresh monitored (`system.view_refreshes` alert on
       `exception` / stale `last_success_time`).
-- [ ] `ledgers` and `wasm_interface_metadata` are `ReplacingMergeTree`
+- [x] `ledgers` and `wasm_interface_metadata` are `ReplacingMergeTree`
       (`SELECT engine FROM system.tables WHERE name IN (...)`), row counts match
       pre-swap (modulo RMT dedup), no data gap at the swap boundary.
+      **DONE 2026-06-24:** both RMT; wasm 3760->3720 (40 byte-identical dups
+      collapsed), ledgers 12,582,889 unchanged (no dup sequences); create-copy-
+      `EXCHANGE`-`OPTIMIZE FINAL`-drop with a `uniqExact` distinct-key gate;
+      snapshot_d backup taken first.
 - [ ] Indexer no longer references `assets.total_supply` / `holder_count`;
       `ALTER ... DROP COLUMN` applied; `init.sql` + `lib.rs` updated.
 - [ ] **Docs updated** — `docs/architecture/database-schema/**` reflects the three
