@@ -73,10 +73,14 @@ add a parser-side instance diff at all.
 - **D3 — Cache: self-healing.** `contracts/cache.rs` is moka with a fixed **45s TTL**
   (Lambda, per-instance). Backfill/live RMW propagate within 45s — no explicit
   invalidation needed.
-- **D4 — Sequencing: option C (locked by human).** 0320 ships its RMW with
-  carry-forward discipline + the audit invariant tripwire; as part of 0320, audit the
-  other CH `soroban_contracts` writers so each carries `wasm_hash` forward (narrow
-  slice of 0316). Rejected: B (clobber-then-fix — never ship a known-broken version)
-  and A (block on the full 0316 audit — unrelated scope). The broad 0316 stays separate.
+- **D4 — Sequencing: option C, refined (locked by human).** 0320 ships only its OWN
+  write correctly: a sibling prefetch (`stage.rs` has verdicts, not full rows → SELECT
+  deployer/deployed_at/name/is_sac for upgraded contract_ids, same shape as
+  `fetch_prior_contract_verdicts`) → carry-forward → write full row, + the audit
+  invariant tripwire. The other-writer clobber audit, the engine change
+  (`CoalescingMergeTree` / `SimpleAggregateFunction` to drop read-first everywhere),
+  and **removing 0320's prefetch-read** all move to **0316** — gated by its Phase-0
+  "is it even worth it" recon (only 1–2 cases → keep read-modify-write, no migration).
+  Rejected: B (ship known clobber) and A (block on full 0316).
 - **D5 — Priority: normal** (was low). Confirmed. Justified by user-visible stale
   code-hash + interface on the most-viewed contracts.

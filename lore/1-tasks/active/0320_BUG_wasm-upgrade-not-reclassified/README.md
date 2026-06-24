@@ -59,6 +59,16 @@ history:
       audit; reject clobber-then-fix and 0316-first). Rare class-flip handling +
       verify-real-vs-parse-artifact spun out to 0325. 0320 scope now = update
       wasm_hash + verdict only.
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: >
+      C refined (C'): 0320 only does its OWN write correctly via a sibling prefetch
+      (stage.rs has verdicts, not full rows → SELECT deployer/deployed_at/name/is_sac
+      for upgraded contract_ids, like fetch_prior_contract_verdicts). Other-writer
+      clobber audit + engine change (CoalescingMergeTree/SimpleAggregateFunction) +
+      removing this prefetch-read all moved to 0316 (its Phase-0 recon gates whether
+      the big engine change is worth it vs keeping read-modify-write).
 ---
 
 # BUG: WASM-upgrade leaves stale wasm_hash (+ interface + classification)
@@ -143,6 +153,13 @@ is **backfillable in-CH (no S3 re-parse)**.
    `prior_wasm_verdicts[new_hash]` (the existing 0283 live-G1 map). Class **flips**
    (verdict differs across the upgrade) → **[[0325]]**; current data never flips net,
    so 0320 just writes the new hash + verdict.
+   - **Where the carry-forward values come from:** `stage.rs` currently only has
+     prior _verdicts_ (`prior_wasm_verdicts` / `prior_contract_verdicts`), NOT the
+     full row. Add a **sibling prefetch** for the upgraded contract_ids —
+     `SELECT deployer_id, deployed_at_ledger, name, is_sac FROM soroban_contracts
+FINAL WHERE contract_id IN (…)` — idiomatic, same shape as
+     `fetch_prior_contract_verdicts`. Cheap: only contracts with an `executable_update`
+     in the batch (rare). This read is 0320's stop-gap; 0316 may remove it (see below).
 2. **Backfill (backfill-runner subcommand, CH-only)** — per upgraded contract, take
    the latest `executable_update.new_hash`, RMW as above. ~1,362 contracts, all
    data already in CH. No S3 re-parse (unlike 0321).
@@ -156,13 +173,15 @@ is **backfillable in-CH (no S3 re-parse)**.
 - **Backend scope = ClickHouse** (D1). The approach rests on `soroban_events` +
   `stage.rs prior_wasm_verdicts` (CH). The PG reclassify path (`write.rs:240`) is
   separate and has no events table; PG is retired by **0243** — out of scope.
-- **0316 coupling (D4) — clobber-back is the real hazard.** `soroban_contracts` is
+- **0316 owns the systematic part (D4).** `soroban_contracts` is
   `RMT(wasm_uploaded_at_ledger)` with ≥5 writers; a co-writer that rewrites an
   already-upgraded row carrying the old `wasm_hash` would silently regress it.
-  Chosen path: ship 0320's RMW **with full carry-forward discipline** + the audit
-  invariant as a tripwire — do NOT ship a known clobber to "fix later". The broad
-  0316 audit (home_domain etc.) stays separate; the invariant tells us if a
-  specific co-writer bites, which then feeds 0316.
+  **0320 does NOT audit/fix the other writers** — that, plus the engine question
+  (`CoalescingMergeTree` / `SimpleAggregateFunction` to drop read-first everywhere)
+  and **removing 0320's stop-gap prefetch**, all move to **0316** (gated by its
+  Phase-0 "is it even worth it" recon). 0320 only guarantees _its own_ write is
+  correct (carry-forward) and ships the **invariant as a tripwire** — if a co-writer
+  clobbers an upgraded row, it goes red and feeds 0316.
 
 ## Decisions (resolved 2026-06-24)
 
@@ -172,10 +191,12 @@ is **backfillable in-CH (no S3 re-parse)**.
   Immutability (hard negative) stays deferred. ✓
 - **D3 — Cache self-heals.** `contracts/cache.rs` = moka, fixed **45s TTL** (Lambda,
   per-instance). No explicit invalidation needed; ≤45s staleness after backfill. ✓
-- **D4 — Sequencing: option C (locked).** 0320 ships its RMW with full carry-forward
-  - audit invariant tripwire; as part of 0320, audit the other CH `soroban_contracts`
-    writers and make each carry `wasm_hash` forward (narrow slice of 0316's discipline).
-    No throwaway-clobber (rejected B); no blocking on the full 0316 audit (rejected A). ✓
+- **D4 — Sequencing: option C (locked, refined).** 0320 ships its own RMW correctly
+  (sibling prefetch → carry-forward → write full row) + the audit-invariant tripwire.
+  It does **not** touch the other writers. The systematic clobber audit, the engine
+  change, and removing 0320's prefetch-read all belong to **0316** (its Phase-0 recon
+  decides if the engine change is even worth it; if only 1–2 cases, read-modify-write
+  stays the permanent answer). Rejected B (ship known clobber) and A (block on full 0316). ✓
 - **D5 — Priority: normal** (was low). ✓
 
 See [notes/S-event-based-decision.md](notes/S-event-based-decision.md) for rationale
