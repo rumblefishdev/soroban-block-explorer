@@ -41,6 +41,16 @@ history:
       `updated` ContractInstance entries). Measured prevalence: 1,362 contracts
       upgraded (4,691 events), all non-SAC. Severity raised low→normal (wasm_hash
       + interface are user-visible). Open decisions for human listed below.
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: >
+      Converted to directory; serialized research into notes/R + notes/S.
+      Class-change measured: 0 net across 1,362 contracts (2 transitions on one
+      round-trip contract) → fix is "update wasm_hash field", quarantine path is
+      dead-code for real data. Decisions D1-D5 resolved (CH-only, ship history,
+      cache self-heals @45s TTL, 0320-right+invariant over 0316-first, priority
+      normal).
 ---
 
 # BUG: WASM-upgrade leaves stale wasm_hash (+ interface + classification)
@@ -96,6 +106,16 @@ all match exactly). **0 of 1,362** upgraded contracts have a current wasm missin
 from `wasm_interface_metadata` → reclassification has the data it needs; no
 "upgrade → Other" regression.
 
+**Class never net-changes (the scope-defining measurement).** Classified every
+wasm in all upgrade chains (production rule, computed in CH, full coverage):
+across **4,691 transitions, only 2 changed class** — `Other→Fungible` then
+`Fungible→Other` on a single contract (`CDCN2D4O…`, 37 upgrades) that reverted.
+**Per-contract net deploy→current: 0 class changes** (922 Other, 426 Fungible,
+14 Nft). **0 NFT/asset flips ever.** ⇒ at current state the fix is "update the
+`wasm_hash` field" for 1,362/1,362; the NFT quarantine promote/drop path is
+dead-code for real data (implement defensively, gates nothing). See
+[notes/R-soroban-upgrade-research.md](notes/R-soroban-upgrade-research.md).
+
 **Caveats the research could NOT confirm** (so we do NOT depend on them): the exact
 `LedgerEntryChange` variant on upgrade (single `updated` vs `state`+`updated` pair)
 was never empirically pinned — the original parser plan depended on it. The
@@ -124,40 +144,43 @@ is **backfillable in-CH (no S3 re-parse)**.
 
 ## Dependencies / coupling
 
-- **0316 is a hard dependency, not a sibling.** `soroban_contracts` is
-  `RMT(wasm_uploaded_at_ledger)` with ≥5 writers. Mutate-in-place silently regresses
-  unless every writer carries `wasm_hash` forward (the 0316 whole-row-clobber
-  discipline). Do not ship step 1/2 without it.
-- **Backend scope = ClickHouse.** The approach rests on `soroban_events` +
+- **Backend scope = ClickHouse** (D1). The approach rests on `soroban_events` +
   `stage.rs prior_wasm_verdicts` (CH). The PG reclassify path (`write.rs:240`) is
-  separate and has no events table; treat PG contracts as retired by **0243** (PG↔CH
-  migration) — confirm before relying on it.
+  separate and has no events table; PG is retired by **0243** — out of scope.
+- **0316 coupling (D4) — clobber-back is the real hazard.** `soroban_contracts` is
+  `RMT(wasm_uploaded_at_ledger)` with ≥5 writers; a co-writer that rewrites an
+  already-upgraded row carrying the old `wasm_hash` would silently regress it.
+  Chosen path: ship 0320's RMW **with full carry-forward discipline** + the audit
+  invariant as a tripwire — do NOT ship a known clobber to "fix later". The broad
+  0316 audit (home_domain etc.) stays separate; the invariant tells us if a
+  specific co-writer bites, which then feeds 0316.
 
-## Open decisions (need human)
+## Decisions (resolved 2026-06-24)
 
-- **D1 — Backend.** Confirm CH is the contracts source of truth and PG path is
-  out of scope (retired by 0243). If PG must also be fixed, that's a separate
-  instance-diff approach.
-- **D2 — History surface.** `soroban_events` already retains the full old→new
-  upgrade chain. Ship "upgrade history / upgradeable: yes" on the contract page from
-  events (finding #4), or defer? (Cheap positive; immutability detection stays
-  deferred either way.)
-- **D3 — Cache.** Backfill writes CH directly, bypassing the API cache
-  (`contracts/cache.rs`). Self-healing via TTL, or explicit invalidation/restart
-  after backfill? Need to confirm the cache's TTL behaviour.
-- **D4 — Priority.** Re-rated low→normal here (user-visible interface staleness on
-  top contracts). Confirm.
+- **D1 — Backend: ClickHouse only.** PG retired (0243). ✓
+- **D2 — Ship upgrade history + "upgradeable: yes".** Source = `soroban_events`
+  chain (count + old→new list); "upgradeable" = emitted ≥1 `executable_update`.
+  Immutability (hard negative) stays deferred. ✓
+- **D3 — Cache self-heals.** `contracts/cache.rs` = moka, fixed **45s TTL** (Lambda,
+  per-instance). No explicit invalidation needed; ≤45s staleness after backfill. ✓
+- **D4 — Sequencing: 0320 done right + invariant tripwire** (see above); full 0316
+  separate. ✓
+- **D5 — Priority: normal** (was low). ✓
+
+See [notes/S-event-based-decision.md](notes/S-event-based-decision.md) for rationale
+and the wasm-row data-model (interfaces append-only, pointer overwritten, history in events).
 
 ## Acceptance Criteria
 
 - [ ] Live: an `executable_update` event RMWs `soroban_contracts.wasm_hash` +
-      contract_type, preserving deploy identity (no clobber); verdict flips re-run
-      the NFT quarantine promote/drop
+      contract_type (carry-forward all identity columns, no clobber); verdict flips
+      re-run the NFT quarantine promote/drop (defensive — never hit by current data)
 - [ ] Backfill: all 1,362 existing upgraded contracts corrected in-CH (no S3 re-parse)
 - [ ] Audit-harness invariant: `wasm_hash == latest executable_update.new_hash` for
-      every contract emitting one — green
-- [ ] Validate ≥20 contracts' corrected hash against Soroban RPC ground-truth
-- [ ] 0316 writer discipline confirmed (no co-writer clobber-back)
+      every contract emitting one — green (also the clobber-back tripwire)
+- [ ] Validate ≥20 contracts' corrected hash against Soroban RPC ground-truth (done in
+      research: 28/28 — re-run post-fix)
+- [ ] D2: contract page shows upgrade history + upgradeable flag from events
 
 ## Superseded notes
 
