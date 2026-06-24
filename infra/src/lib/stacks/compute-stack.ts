@@ -359,6 +359,16 @@ export class ComputeStack extends cdk.Stack {
         // ~84% enriched per task 0306) and the operator CH read-rows smoke must
         // pass (`nfts/queries_ch.rs`) before relying on this in prod.
         API_DATASOURCE_NFTS: 'ch',
+        // Search read path (task 0318) — the last PG-only module. On PG the
+        // endpoint 504'd (~29s) since PG was disabled in prod (ADR 0047).
+        // `search/queries_ch.rs` fires classification-gated, concurrent
+        // per-entity buckets (no full-table hash joins → no CH Code 241).
+        // Preconditions before relying on this in prod: prod CH must carry
+        // `soroban_contract_metadata` + `nft_enrichment` (else contract/NFT
+        // name search returns empty, not an error), and the operator CH
+        // read-rows/memory smoke must pass (bounded full-scans: asset_code
+        // substring + contract-name/nft metadata).
+        API_DATASOURCE_SEARCH: 'ch',
       },
     });
     this.apiFunction = apiFunction;
