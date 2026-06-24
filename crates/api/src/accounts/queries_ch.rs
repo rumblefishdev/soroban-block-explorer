@@ -57,7 +57,15 @@ struct AccountListChRow {
     last_seen_ledger: i64,
     first_seen_ledger: i64,
     home_domain: Option<String>,
-    xlm_balance: Option<String>,
+}
+
+/// Step-2 resolve row: `accounts.id` (surrogate) → native (`asset_type=0`) XLM
+/// `balance` as text. Keyed on `account_balances_current.account_id`, which is
+/// the same surrogate as `accounts.id` (task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct AccountListBalanceRow {
+    account_id: i64,
+    balance: String,
 }
 
 /// CH equivalent of the PG `queries::fetch_list` (task 0274). Same response
@@ -110,37 +118,63 @@ pub async fn fetch_list(
         ""
     };
 
-    let sql = format!(
+    // Step 1: page the accounts — NO native-balance join (task 0319). The old
+    // `LEFT JOIN (… account_balances_current FINAL WHERE asset_type=0)` built
+    // the join side from EVERY account's native balance (~1.5M of the 2.09M
+    // rows this query read), driving the ~2.2s prod TTFB. (The `accounts FINAL`
+    // + non-PK `last_seen_ledger` scan+sort still costs — that needs a
+    // projection, deliberately out of scope here.)
+    let page_sql = format!(
         "SELECT \
             a.id                AS id, \
             a.account_id        AS account_id, \
             a.last_seen_ledger  AS last_seen_ledger, \
             a.first_seen_ledger AS first_seen_ledger, \
-            a.home_domain       AS home_domain, \
-            if(abc.matched = 1, toString(abc.balance), NULL) AS xlm_balance \
+            a.home_domain       AS home_domain \
          FROM accounts a FINAL \
-         LEFT JOIN ( \
-             SELECT account_id, balance, 1 AS matched \
-             FROM account_balances_current FINAL \
-             WHERE asset_type = 0 \
-         ) abc ON abc.account_id = a.id \
          WHERE 1{cursor_clause}{domain_filter} \
          ORDER BY a.last_seen_ledger {order}, a.id {order} \
          LIMIT ?"
     );
 
     let rows = client
-        .query(&sql)
+        .query(&page_sql)
         .bind(params.limit)
         .fetch_all::<AccountListChRow>()
         .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Step 2: resolve the native (asset_type=0) XLM balance for the page's
+    // account ids by a PK-prefix key-seek. `account_balances_current` is
+    // ORDER BY (account_id, asset_type, …), so `account_id IN (…)` seeks the
+    // prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is i64
+    // surrogates (no injection surface), bounded by the page limit.
+    let ids = {
+        let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+    };
+    let balances: HashMap<i64, String> = client
+        .query(&format!(
+            "SELECT account_id AS account_id, toString(balance) AS balance \
+             FROM account_balances_current FINAL \
+             WHERE account_id IN ({ids}) AND asset_type = 0"
+        ))
+        .fetch_all::<AccountListBalanceRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.account_id, r.balance))
+        .collect();
 
     Ok(rows
         .into_iter()
         .map(|r| AccountListRow {
+            xlm_balance: balances.get(&r.id).cloned(),
             id: r.id,
             account_id: r.account_id,
-            xlm_balance: r.xlm_balance,
             last_seen_ledger: r.last_seen_ledger,
             first_seen_ledger: r.first_seen_ledger,
             home_domain: r.home_domain,

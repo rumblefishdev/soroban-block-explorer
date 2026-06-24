@@ -66,7 +66,9 @@ struct ContractListChRow {
     contract_id: String,
     contract_type: Option<i16>,
     is_sac: bool,
-    deployer: Option<String>,
+    /// `accounts` surrogate of the deployer (`Nullable(Int64)`); resolved to the
+    /// StrKey in step 2 (task 0319). `NULL` / `0` / no match ⇒ no deployer.
+    deployer_id: Option<i64>,
     deployed_at_ledger: Option<i64>,
 }
 
@@ -74,6 +76,14 @@ struct ContractListChRow {
 struct InvocationCountChRow {
     contract_id: i64,
     recent_invocations: u64,
+}
+
+/// Step-2 resolve row: `accounts.id` (surrogate) → `account_id` StrKey, via the
+/// `idx_acc_id` bloom-pruned key-seek (task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct ContractDeployerRow {
+    id: i64,
+    account_id: String,
 }
 
 /// CH equivalent of the PG `queries::fetch_contract_list` (task 0275). Same
@@ -127,16 +137,18 @@ pub async fn fetch_contract_list(
         ""
     };
 
+    // Deployer is NOT joined here (task 0319): `LEFT JOIN accounts` built the
+    // hash side from the whole `accounts` table (~18M rows on prod) — the
+    // reverse-id lookup is resolved per-page below by a bloom-pruned key-seek.
     let list_sql = format!(
         "SELECT \
             sc.id                           AS id, \
             sc.contract_id                  AS contract_id, \
             sc.contract_type                AS contract_type, \
             sc.is_sac                       AS is_sac, \
-            nullIf(deployer.account_id, '') AS deployer, \
+            sc.deployer_id                  AS deployer_id, \
             sc.deployed_at_ledger           AS deployed_at_ledger \
          FROM soroban_contracts sc FINAL \
-         LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
          WHERE 1{cursor_clause}{type_clause}{q_clause} \
          ORDER BY sc.id {order} \
          LIMIT ?"
@@ -192,16 +204,54 @@ pub async fn fetch_contract_list(
         .map(|r| (r.contract_id, r.recent_invocations as i64))
         .collect();
 
+    // Resolve the page's deployer surrogates → StrKeys by a bloom-pruned
+    // key-seek (`accounts.idx_acc_id`), replacing the full-table `accounts`
+    // join (task 0319). `deployer_id = 0` means no deployer → skip.
+    let deployers: HashMap<i64, String> = {
+        let deployer_ids = list_rows
+            .iter()
+            .filter_map(|r| r.deployer_id)
+            .filter(|&d| d != 0)
+            .collect::<BTreeSet<_>>();
+        if deployer_ids.is_empty() {
+            HashMap::new()
+        } else {
+            let in_list = deployer_ids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            client
+                .query(&format!(
+                    // `LIMIT 1 BY id`: one row per surrogate (accounts has
+                    // un-merged ReplacingMergeTree versions). `account_id` is
+                    // immutable across versions, so no ordering is needed here
+                    // (review 0319; mirrors the transactions resolve pattern).
+                    "SELECT id AS id, account_id AS account_id \
+                     FROM accounts WHERE id IN ({in_list}) LIMIT 1 BY id"
+                ))
+                .fetch_all::<ContractDeployerRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.id, r.account_id))
+                .collect()
+        }
+    };
+
     Ok(list_rows
         .into_iter()
         .map(|r| ContractListRow {
             recent_invocations: counts.get(&r.id).copied().unwrap_or(0),
             contract_type_name: r.contract_type.and_then(contract_type_name),
+            deployer: r
+                .deployer_id
+                .and_then(|d| deployers.get(&d))
+                .filter(|s| !s.is_empty())
+                .cloned(),
             id: r.id,
             contract_id: r.contract_id,
             contract_type: r.contract_type,
             is_sac: r.is_sac,
-            deployer: r.deployer,
             deployed_at_ledger: r.deployed_at_ledger,
         })
         .collect())
