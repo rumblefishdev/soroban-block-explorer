@@ -1,5 +1,5 @@
 ---
-id: '0323'
+id: '0324'
 title: 'Account "deleted" badge for merged accounts'
 type: FEATURE
 status: backlog
@@ -12,7 +12,7 @@ history:
   - date: 2026-06-24
     status: backlog
     who: karolkow
-    note: 'Task created — explorer keeps merged-account rows but does not flag them deleted like stellar.expert.'
+    note: 'Renumbered 0323 -> 0324 (0323 taken by undeployed-sac task). Task created — explorer keeps merged-account rows but does not flag them deleted like stellar.expert.'
 ---
 
 # Account "deleted" badge for merged accounts
