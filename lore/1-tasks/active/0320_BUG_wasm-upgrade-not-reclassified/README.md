@@ -4,7 +4,7 @@ title: 'BUG: soroban_contracts keeps stale wasm_hash after WASM-upgrade — stal
 type: BUG
 status: active
 related_adr: []
-related_tasks: ['0295', '0316', '0283', '0243']
+related_tasks: ['0295', '0316', '0283', '0243', '0325']
 tags:
   [
     xdr-parser,
@@ -51,6 +51,14 @@ history:
       dead-code for real data. Decisions D1-D5 resolved (CH-only, ship history,
       cache self-heals @45s TTL, 0320-right+invariant over 0316-first, priority
       normal).
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: >
+      D4 locked = option C (0320-right + invariant + narrow wasm_hash carry-forward
+      audit; reject clobber-then-fix and 0316-first). Rare class-flip handling +
+      verify-real-vs-parse-artifact spun out to 0325. 0320 scope now = update
+      wasm_hash + verdict only.
 ---
 
 # BUG: WASM-upgrade leaves stale wasm_hash (+ interface + classification)
@@ -112,8 +120,9 @@ across **4,691 transitions, only 2 changed class** — `Other→Fungible` then
 `Fungible→Other` on a single contract (`CDCN2D4O…`, 37 upgrades) that reverted.
 **Per-contract net deploy→current: 0 class changes** (922 Other, 426 Fungible,
 14 Nft). **0 NFT/asset flips ever.** ⇒ at current state the fix is "update the
-`wasm_hash` field" for 1,362/1,362; the NFT quarantine promote/drop path is
-dead-code for real data (implement defensively, gates nothing). See
+`wasm_hash` field" for 1,362/1,362. The rare class-flip handling (reclassify +
+NFT quarantine promote/drop) and verifying that one flip is real vs a parse
+artifact are **deferred to [[0325]]** — out of scope here. See
 [notes/R-soroban-upgrade-research.md](notes/R-soroban-upgrade-research.md).
 
 **Caveats the research could NOT confirm** (so we do NOT depend on them): the exact
@@ -131,9 +140,9 @@ is **backfillable in-CH (no S3 re-parse)**.
    contract, RMW `soroban_contracts`: write a new row with the new `wasm_hash`,
    `wasm_uploaded_at_ledger = upgrade_ledger` (higher RMT version → wins the merge),
    **carry forward** deployer/deployed_at/name/is_sac, and set `contract_type` from
-   `prior_wasm_verdicts[new_hash]` (the existing 0283 live-G1 map). On a verdict
-   **flip**, re-run the NFT quarantine promote/drop (`reclassify_contracts_from_wasm`
-   companion) — the original task omitted this.
+   `prior_wasm_verdicts[new_hash]` (the existing 0283 live-G1 map). Class **flips**
+   (verdict differs across the upgrade) → **[[0325]]**; current data never flips net,
+   so 0320 just writes the new hash + verdict.
 2. **Backfill (backfill-runner subcommand, CH-only)** — per upgraded contract, take
    the latest `executable_update.new_hash`, RMW as above. ~1,362 contracts, all
    data already in CH. No S3 re-parse (unlike 0321).
@@ -163,8 +172,10 @@ is **backfillable in-CH (no S3 re-parse)**.
   Immutability (hard negative) stays deferred. ✓
 - **D3 — Cache self-heals.** `contracts/cache.rs` = moka, fixed **45s TTL** (Lambda,
   per-instance). No explicit invalidation needed; ≤45s staleness after backfill. ✓
-- **D4 — Sequencing: 0320 done right + invariant tripwire** (see above); full 0316
-  separate. ✓
+- **D4 — Sequencing: option C (locked).** 0320 ships its RMW with full carry-forward
+  - audit invariant tripwire; as part of 0320, audit the other CH `soroban_contracts`
+    writers and make each carry `wasm_hash` forward (narrow slice of 0316's discipline).
+    No throwaway-clobber (rejected B); no blocking on the full 0316 audit (rejected A). ✓
 - **D5 — Priority: normal** (was low). ✓
 
 See [notes/S-event-based-decision.md](notes/S-event-based-decision.md) for rationale
@@ -173,8 +184,7 @@ and the wasm-row data-model (interfaces append-only, pointer overwritten, histor
 ## Acceptance Criteria
 
 - [ ] Live: an `executable_update` event RMWs `soroban_contracts.wasm_hash` +
-      contract_type (carry-forward all identity columns, no clobber); verdict flips
-      re-run the NFT quarantine promote/drop (defensive — never hit by current data)
+      contract_type (carry-forward all identity columns, no clobber). Class flips → [[0325]]
 - [ ] Backfill: all 1,362 existing upgraded contracts corrected in-CH (no S3 re-parse)
 - [ ] Audit-harness invariant: `wasm_hash == latest executable_update.new_hash` for
       every contract emitting one — green (also the clobber-back tripwire)

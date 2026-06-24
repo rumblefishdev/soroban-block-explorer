@@ -42,7 +42,7 @@ executable_update.new_hash`.
   `db2c14` both present). We never delete or replace a wasm's interface.
 - **`soroban_contracts` (keyed by contract_id, RMT) holds only the CURRENT pointer.**
   The RMW overwrites the contract's `wasm_hash` (RMT collapses to one row per
-  contract_id). The _previous pointer_ is not kept in this table.
+  contract*id). The \_previous pointer* is not kept in this table.
 - **Pointer history lives in `soroban_events`** — the full old→new chain per
   contract is queryable there (this is what powers D2's "upgrade history").
 
@@ -53,9 +53,10 @@ the chain itself (the ledger mutates the instance entry in place, same contract_
 ## Class-change → scope (the important one)
 
 0 net class changes across 1,362 contracts (see [[R-soroban-upgrade-research]]).
-The fix is "update `wasm_hash`" for 100% of current state. The NFT quarantine
-promote/drop is dead-code for real data; implement it defensively (a future
-upgrade _could_ flip), but it gates nothing.
+The fix is "update `wasm_hash`" for 100% of current state. The rare class-flip
+handling (reclassify + NFT quarantine promote/drop) and verifying the one observed
+flip is real vs an interface-extraction artifact are **deferred to [[0325]]** —
+out of 0320 scope.
 
 ## `executable_update` usage
 
@@ -72,10 +73,10 @@ add a parser-side instance diff at all.
 - **D3 — Cache: self-healing.** `contracts/cache.rs` is moka with a fixed **45s TTL**
   (Lambda, per-instance). Backfill/live RMW propagate within 45s — no explicit
   invalidation needed.
-- **D4 — 0316 sequencing.** Recommendation: do **0320 right (with carry-forward
-  discipline) + the audit invariant**; do NOT ship a known clobber to fix later.
-  Full 0316 (broad home_domain etc. audit) stays separate; the invariant is the
-  tripwire that says if a co-writer clobbers an upgraded row. See README "Open
-  decisions" for the final call.
+- **D4 — Sequencing: option C (locked by human).** 0320 ships its RMW with
+  carry-forward discipline + the audit invariant tripwire; as part of 0320, audit the
+  other CH `soroban_contracts` writers so each carries `wasm_hash` forward (narrow
+  slice of 0316). Rejected: B (clobber-then-fix — never ship a known-broken version)
+  and A (block on the full 0316 audit — unrelated scope). The broad 0316 stays separate.
 - **D5 — Priority: normal** (was low). Confirmed. Justified by user-visible stale
   code-hash + interface on the most-viewed contracts.
