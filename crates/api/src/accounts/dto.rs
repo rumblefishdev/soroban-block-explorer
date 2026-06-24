@@ -67,6 +67,10 @@ pub struct AccountDetailResponse {
     pub home_domain: Option<String>,
     pub first_seen_ledger: i64,
     pub last_seen_ledger: i64,
+    /// `true` when the account was removed from the ledger via `account_merge`
+    /// and never re-funded (its last lifecycle event is the merge). Derived,
+    /// not stored. CH-only — the PG fallback always reports `false`.
+    pub deleted: bool,
 }
 
 /// Slim — `inner_tx_hash` / `contract_ids[]` live on `/v1/transactions` only.

@@ -17,8 +17,11 @@
 -- ADR 0044 §:   §4.5 (accounts, account_balances_current Replacing state).
 --               No partition predicate — state tables not partitioned.
 -- Notes:
---   • Two statements, same shape as PG E06. The API threads `account.id`
---     (Int64) from A into B.
+--   • Three statements. The API threads `account.id` (Int64) from A into B
+--     and C, and `account.last_seen_ledger` into C.
+--   • Statement C derives the `deleted` flag (account_merge) — task 0324.
+--     CH-only (prod serves accounts from CH); the PG fallback reports
+--     `deleted = false`.
 --   • CH has no `token_asset_type_name`/`asset_type_name` SQL helper —
 --     project raw SMALLINT (Int16) and decode in the API layer (Rust enum,
 --     same source of truth as PG).
@@ -57,3 +60,28 @@ FROM account_balances_current abc FINAL
 LEFT JOIN accounts iss FINAL ON iss.id = abc.issuer_id
 WHERE abc.account_id = $1
 ORDER BY abc.asset_type, abc.asset_code, iss.account_id;
+
+-- @@ split @@
+
+-- ============================================================================
+-- C. Derived `deleted` flag (account_merge) — task 0324.
+--    Inputs: $1 = account.id (Int64, from A); $2 = account.last_seen_ledger.
+--
+--    `deleted` ⟺ the account's LAST op in its last-seen ledger is an
+--    account_merge (type = 8) where it was the `source`. Since last_seen_ledger
+--    = GREATEST(all appearances), any deleting merge sits in that ledger;
+--    argMax over (transaction_id, application_order) picks the account's
+--    chronologically-last op within it, so a same-ledger re-create (merge then
+--    create_account at a higher application order) correctly yields `false`.
+--
+--    `ledger_sequence = $2` as a LITERAL is load-bearing: operations_appearances
+--    is PARTITION BY intDiv(ledger_sequence, 500000) with no sort key on
+--    source_id/type, so anchoring on the (already-known) last_seen_ledger
+--    prunes to a single granule (~8K rows). Without it the planner scans the
+--    whole ~6.2B-row table and trips the query memory limit — hence a
+--    dedicated 3rd query keyed by the literal, never a join on `accounts`.
+-- ============================================================================
+SELECT argMax(type = 8 AND source_id = $1, (transaction_id, application_order))
+FROM operations_appearances
+WHERE ledger_sequence = $2
+  AND (source_id = $1 OR destination_id = $1);

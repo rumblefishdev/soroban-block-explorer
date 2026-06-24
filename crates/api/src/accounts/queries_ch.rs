@@ -230,6 +230,51 @@ pub async fn fetch_account(
 }
 
 // ---------------------------------------------------------------------------
+// Derived `deleted` status (account_merge) — task 0324
+// ---------------------------------------------------------------------------
+
+/// `true` ⟺ the account's **last** operation in its last-seen ledger is an
+/// `account_merge` (`type=8`) where it was the `source` — i.e. its final
+/// lifecycle event removed it from the ledger. Because `last_seen_ledger` is
+/// the `GREATEST` of every appearance, any deleting merge sits in exactly that
+/// ledger; `argMax(…, (transaction_id, application_order))` then picks the
+/// account's chronologically-last op *within* that ledger, so a same-ledger
+/// re-create (merge then `create_account`, higher application order) correctly
+/// reports `false`. (Measured zero such cases across 6.2B ops, but the
+/// app-order anchor closes the gap for free.)
+///
+/// The `ledger_sequence = ?` literal is load-bearing: `operations_appearances`
+/// is `PARTITION BY intDiv(ledger_sequence, 500000)` with no sort key on
+/// `source_id`/`type`, so anchoring on the (already-known) `last_seen_ledger`
+/// prunes to a single granule (~8K rows, measured). Without it the planner
+/// scans the whole 6.2B-row table and trips the query memory limit. Hence a
+/// dedicated second query keyed by the literal, never a join on `accounts`.
+pub async fn fetch_deleted_status(
+    client: &clickhouse::Client,
+    account_surrogate_id: i64,
+    last_seen_ledger: i64,
+) -> Result<bool, clickhouse::error::Error> {
+    // `argMax` over the empty set (account somehow absent from its own
+    // last-seen ledger) defaults to 0 → `false`, the safe answer.
+    let deleted = client
+        .query(
+            "SELECT argMax(type = 8 AND source_id = ?, \
+                           (transaction_id, application_order)) \
+             FROM operations_appearances \
+             WHERE ledger_sequence = ? \
+               AND (source_id = ? OR destination_id = ?)",
+        )
+        .bind(account_surrogate_id)
+        .bind(last_seen_ledger)
+        .bind(account_surrogate_id)
+        .bind(account_surrogate_id)
+        .fetch_one::<u8>()
+        .await?;
+
+    Ok(deleted != 0)
+}
+
+// ---------------------------------------------------------------------------
 // Detail balances — canonical 06 Statement B
 // ---------------------------------------------------------------------------
 
