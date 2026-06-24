@@ -31,6 +31,14 @@ history:
     status: active
     who: stkrolikiewicz
     note: Promoted from backlog to active.
+  - date: 2026-06-24
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Backfill bin slice: added
+      crates/backfill-runner/src/bin/metadata-backfill.rs (decision: re-parse the
+      archive, not an RPC dump). Code + xhigh review done; prod run pending the
+      0281 window. See Implementation Notes.
 ---
 
 # 0297 metadata follow-ups (ops / validation / frontend / cleanup)
@@ -109,6 +117,59 @@ column, see the List-endpoints item above.)
 - [ ] Finish sync: `backend/backend-overview.md`, and the reference SQL snapshots
       (`11_get_contracts_by_id`, `08`/`09_get_assets*`) in both `endpoint-queries`
       sets. (0297 did `database-schema-overview` + `xdr-parsing-overview`.)
+
+## Implementation Notes
+
+### Backfill bin (2026-06-24) — code done, prod run pending
+
+Decision for the "re-parse vs RPC dump" choice above: **re-parse the archive**.
+RPC `getLedgerEntries` can't reach archived/evicted instances (~7-day retention);
+re-parse is the established codebase pattern.
+
+Added `crates/backfill-runner/src/bin/metadata-backfill.rs` — a targeted-write
+worker modeled on `pool-ids-backfill` (task 0266):
+
+- Per ledger: `parse_ledger` →
+  `stage::build_metadata_rows(&parsed.contract_metadata_writes)` (skips the full
+  staging fold) → `StagedLedger { metadata_rows, ..Default::default() }` → the
+  existing `PartitionWriter`, so **only** `soroban_contract_metadata` is written
+  (other tables' inserts never open — `writer.rs` early-returns on empty vecs).
+- Safe vs current data: table is `ReplacingMergeTree(version)`, `version =
+observed ledger`; a re-parsed observation can only lose to a newer live row or
+  fill a gap → idempotent, re-runnable. Runs in the **0281 window with live
+  ingest stopped**, so there are no concurrent writes at all.
+- Resume via a `--watermark` file (own marker, not the `ledgers` table). 8-way
+  parallel on disjoint `--start/--end` ranges (1 insert/worker → trivial CH load).
+
+Verified: `cargo check` / `clippy -D warnings` / unit test green. Reviewed at
+`/code-review xhigh`; fixes applied (Emerged below).
+
+### Design Decisions — Emerged (review-driven)
+
+1. `--dry-run` no longer advances the `--watermark` file — the documented
+   "dry-run then real run on the same watermark" flow would otherwise mark the
+   range done and make the real run a silent no-op.
+2. `--start` is required (no genesis default) so 8-way parallel can't silently
+   overlap ranges on a forgotten flag.
+3. Missing-file path: warn-skip + freeze the watermark; a run with any skip now
+   exits non-zero so the 0281 runbook can't read a partial run as success.
+4. Malformed-file check returns `Err` (graceful partition abort) instead of
+   `assert!`-panicking past the writer cleanup mid-run.
+5. `--end` upper-bound assert keeps the partition-loop u32 arithmetic in range.
+
+### Still pending (this slice)
+
+- Prod run in the 0281 window: `--dry-run` one partition for a measured
+  per-partition time → extrapolate → 8 workers over 0266's synced `--local-dir`,
+  `--start 50457424 --end <L_stop>`.
+- Pre-run: confirm prod CH `users.d/timeouts.xml` raises `http_receive_timeout`
+  (sparse-table insert held open across a partition).
+- Validation: created-vs-updated on a galexie deploy; cross-check
+  decimals/symbol/name against an independent source.
+
+The rest of the bundle (perf validation, read-flip — entangled with 0243,
+frontend amounts, name-search cleanup + column drop, ADR-0032 docs sync) is
+untouched.
 
 ## Acceptance Criteria
 
