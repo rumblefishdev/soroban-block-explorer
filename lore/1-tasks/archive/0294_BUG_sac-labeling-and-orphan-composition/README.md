@@ -2,7 +2,7 @@
 id: '0294'
 title: 'BUG: SAC labeling + orphan composition — un-deployed SACs mislabeled is_sac=false; soroban_contracts registry pollution'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0283', '0221', '0218', '0259']
 tags:
@@ -39,6 +39,18 @@ history:
       skeleton counts are stale (294,963 was total-SAC, not the skeleton subset;
       current ~307k split across deployed_at NULL + =0 sentinel — the NULL-only
       predicate misses the =0 rows).
+  - date: 2026-06-24
+    status: completed
+    who: karolkow
+    note: >
+      PR #272 merged (2026-06-24). Shipped the false-NFT fix at source: a
+      detection-stage SAC gate in detect_nft_events + CAP-67 event-path SAC
+      override derivation (test sac_transfer_is_gated_out_not_an_nft). Orphan
+      composition sized: 5,558 crypto-confirmed SAC, phantom=1, WASM=0. 0221
+      event-leak re-validated at source. Deferred scope spawned to follow-ups:
+      registry depollution → 0323, classifier → 0317, prod rollout → 0315/0303,
+      WASM-orphan forward-fix → 0295. Closed late: work merged but task left in
+      active/.
 ---
 
 # BUG: SAC labeling + orphan composition
