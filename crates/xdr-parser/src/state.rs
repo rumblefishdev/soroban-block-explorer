@@ -377,15 +377,11 @@ pub fn extract_account_states(
         }
 
         // AccountMerge tombstone (task 0295): a `removed` account entry is the
-        // only way an account is deleted on Stellar. Without this the stale
-        // native balance row survives and inflates the native aggregate. Emit
-        // native balance=0 at the merge ledger so the prior row is superseded
-        // (the balances table is RMT keyed on the higher ledger). account_id
-        // comes from the change key — removed entries carry no data. We set only
-        // the native balance; the accounts identity row (home_domain, sequence,
-        // first_seen) is written by the separate participant path and is
-        // untouched here. (That path has a known RMT whole-row clobber of those
-        // columns — pre-existing, separate concern, not caused by this tombstone.)
+        // only way an account is deleted on Stellar. Emit native balance=0 at
+        // the merge ledger so the stale balance row is superseded (the balances
+        // table is RMT keyed on the higher ledger). account_id comes from the
+        // change key — removed entries carry no data. Identity columns are not
+        // set here; the separate RMT whole-row clobber is tracked in lore-0316.
         if change.change_type == "removed" {
             let account_id = change
                 .key
@@ -1572,10 +1568,8 @@ mod tests {
 
     #[test]
     fn removed_account_emits_zero_native_tombstone() {
-        // AccountMerge (task 0295) is the only way an account entry is removed
-        // on Stellar. Without a tombstone the stale native balance row survives
-        // and inflates the native aggregate. Emit native balance=0 at the merge
-        // ledger; account_id comes from the change key (removed carries no data).
+        // AccountMerge: a `removed` account ⇒ native balance=0 tombstone at the
+        // merge ledger, account_id from the key (removed carries no data).
         let changes = vec![make_change(
             "account",
             "removed",
