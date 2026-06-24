@@ -375,6 +375,39 @@ pub fn extract_account_states(
         if change.entry_type != "account" {
             continue;
         }
+
+        // AccountMerge tombstone (task 0295): a `removed` account entry is the
+        // only way an account is deleted on Stellar. Emit native balance=0 at
+        // the merge ledger so the stale balance row is superseded (the balances
+        // table is RMT keyed on the higher ledger). account_id comes from the
+        // change key — removed entries carry no data. Identity columns are not
+        // set here; the separate RMT whole-row clobber is tracked in lore-0316.
+        if change.change_type == "removed" {
+            let account_id = change
+                .key
+                .get("account_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if account_id.is_empty() {
+                continue;
+            }
+            let entry = map.entry(account_id).or_insert_with(|| AccountAccum {
+                native_balance: None,
+                sequence_number: None,
+                home_domain: None,
+                is_creation: false,
+                ledger_sequence: change.ledger_sequence,
+                created_at: change.created_at,
+                trustline_balances: Vec::new(),
+                removed_trustlines: Vec::new(),
+            });
+            entry.native_balance = Some(0);
+            entry.ledger_sequence = change.ledger_sequence;
+            entry.created_at = change.created_at;
+            continue;
+        }
+
         if !matches!(
             change.change_type.as_str(),
             "created" | "updated" | "restored"
@@ -1519,19 +1552,40 @@ mod tests {
     }
 
     #[test]
-    fn skip_state_and_removed_accounts() {
-        let changes = vec![
-            make_change(
-                "account",
-                "state",
-                json!({}),
-                Some(json!({"account_id": "G1", "balance": 0, "seq_num": 0})),
-            ),
-            make_change("account", "removed", json!({}), None),
-        ];
+    fn skip_state_only_account() {
+        // `state` is a read-only pre-image snapshot; account state is derived
+        // only from created/updated/restored (plus the removed tombstone
+        // below). A lone `state` change yields nothing.
+        let changes = vec![make_change(
+            "account",
+            "state",
+            json!({}),
+            Some(json!({"account_id": "G1", "balance": 0, "seq_num": 0})),
+        )];
+
+        assert!(extract_account_states(&changes).is_empty());
+    }
+
+    #[test]
+    fn removed_account_emits_zero_native_tombstone() {
+        // AccountMerge: a `removed` account ⇒ native balance=0 tombstone at the
+        // merge ledger, account_id from the key (removed carries no data).
+        let changes = vec![make_change(
+            "account",
+            "removed",
+            json!({ "account_id": "GMERGED" }),
+            None,
+        )];
 
         let accounts = extract_account_states(&changes);
-        assert!(accounts.is_empty());
+        assert_eq!(accounts.len(), 1);
+        let a = &accounts[0];
+        assert_eq!(a.account_id, "GMERGED");
+        assert_eq!(a.last_seen_ledger, 100); // merge ledger
+        assert!(a.first_seen_ledger.is_none()); // not a creation
+        assert_eq!(a.sequence_number, -1); // no seq on removal — must not clobber
+        assert_eq!(a.balances[0]["asset_type"], "native");
+        assert_eq!(a.balances[0]["balance"], "0.0000000");
     }
 
     // -- Trustline Balance Tests (0119) --

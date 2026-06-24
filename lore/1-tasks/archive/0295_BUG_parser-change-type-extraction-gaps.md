@@ -2,9 +2,9 @@
 id: '0295'
 title: 'BUG: xdr-parser change-type extraction gaps — WASM-upgrade not reclassified + AccountMerge balance tombstone'
 type: BUG
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0283', '0228']
+related_tasks: ['0283', '0228', '0316', '0320', '0321']
 tags:
   [xdr-parser, extraction-completeness, layer-data, priority-low, effort-small]
 links: []
@@ -21,6 +21,16 @@ history:
     status: active
     who: karolkow
     note: Activated for implementation.
+  - date: 2026-06-23
+    status: completed
+    who: karolkow
+    note: >
+      Bug-2 (AccountMerge native tombstone) shipped — PR #276, 268 xdr-parser
+      lib tests green, 5-agent review (correctness/simplify/adversarial/senior)
+      no correctness issues. Scope split during impl: bug-1 (WASM-upgrade
+      re-classify) → 0320, broader RMT whole-row clobber → 0316, existing-ghost
+      backfill → 0321. Native ghost impact measured ~12.4M XLM / ~522k accounts
+      (prod CH + Horizon 404).
 ---
 
 # BUG: xdr-parser change-type extraction gaps
@@ -72,3 +82,26 @@ On a `removed` account change, emit a `balance=0` native row at the merge ledger
 - [ ] ~~Upgraded contracts re-classify~~ — **deferred to [[0320]]** (WASM-upgrade is the same RMT whole-row class; needs read-modify-write writer, split out of 0295)
 - [x] Merged accounts show balance 0 — parser `removed` tombstone done (fix-forward); existing ~522k ghosts backfill **deferred to [[0321]]**
 - [x] Unit test for the AccountMerge tombstone — `removed_account_emits_zero_native_tombstone` (the WASM-upgrade unit tests move with [[0320]])
+
+## Implementation Notes
+
+- Added a `removed` arm to pass-1 of `extract_account_states` (`crates/xdr-parser/src/state.rs`): on a `removed` account `LedgerEntryChange` (the only delete path on Stellar = AccountMerge), emit an `ExtractedAccountState` with native `balance=0` at the merge ledger; `account_id` from `change.key` (removed entries carry no `data`). Touches only the native balance.
+- The balances table is `ReplacingMergeTree(last_updated_ledger)`, so the zero stamped at the (higher) merge ledger supersedes the stale positive row.
+- Tests: split `skip_state_and_removed_accounts` → `skip_state_only_account` + new `removed_account_emits_zero_native_tombstone`. 268 lib tests green.
+- PR #276.
+
+## Design Decisions
+
+### From Plan
+
+1. **Native balance=0 tombstone at the merge ledger** — exactly Step 2 of the plan; the parser-side rework of the 0228 "skeleton floor".
+
+### Emerged
+
+2. **Scope split: bug-1 → 0320, clobber → 0316, backfill → 0321.** The original task bundled bug-1 (WASM-upgrade) + bug-2. During impl, bug-1's correct fix needs a CH read-modify-write writer (the naive filter-flip clobbers deploy identity, rejected in 0283), so it was deferred to **0320**. While verifying the tombstone doesn't clobber identity columns, found a broader pre-existing RMT whole-row clobber (`accounts.home_domain` etc., ~38.8k accounts) → spawned umbrella **0316**. Fix-forward only; the ~522k existing native ghosts need a one-shot backfill → **0321** (DB-only `backfill-runner` subcommand, no S3 re-parse).
+3. **Touch only the native balance; leave identity columns to the existing participant path.** The tombstone carries `sequence=-1`/`home_domain=None` (guarded on PG; on CH the pre-existing whole-row clobber is the 0316 concern, not introduced here).
+
+## Issues Encountered
+
+- **`operations_appearances` includes failed-tx ops** (no success flag in that table). A failed AccountMerge leaves a type=8 op but the account stays alive — so merge/create detection from that table has false positives. The native-ghost query is robust because the `last_updated <= merge_ledger` filter screens alive accounts (they keep transacting), and 9/9 sampled strict ghosts were Horizon 404; flagged a `successful=1` join as the bulletproof option for 0321. The parser tombstone itself is immune — a failed tx produces no `removed` ledger change.
+- **home_domain clobber discovery** — proven on prod (USDC issuer `circle.com` → NULL across RMT versions); tracked in 0316, not in scope here.
