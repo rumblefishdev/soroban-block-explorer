@@ -535,6 +535,35 @@ struct EventChRow {
     created_at: i64,
 }
 
+/// Step-1 page row: the event payload off `soroban_events` alone (no joins).
+/// `transaction_hash` / `successful` / `created_at` are resolved in step 2 (task
+/// 0317).
+#[derive(Debug, Row, Deserialize)]
+struct EventPageRow {
+    ledger_sequence: i64,
+    transaction_id: i64,
+    event_index: i16,
+    event_type: i16,
+    topics_xdr: String,
+    data_xdr: String,
+}
+
+/// Step-2 resolve row: `transactions.id` → `(hash, successful)`.
+#[derive(Debug, Row, Deserialize)]
+struct EventTxRow {
+    id: i64,
+    /// Already `lower(hex())` in the query.
+    hash: String,
+    successful: bool,
+}
+
+/// Step-2 resolve row: `ledgers.sequence` → `closed_at` (millis).
+#[derive(Debug, Row, Deserialize)]
+struct EventLedgerRow {
+    sequence: i64,
+    closed_at: i64,
+}
+
 /// A decoded event row + its `event_index` (the cursor tie-break, which is not
 /// carried on the `EventItem` wire). The handler finalises the page over these,
 /// builds the `EventCursor::Ch` from the boundary row, then maps to `EventItem`.
@@ -610,35 +639,115 @@ pub async fn fetch_events(
         _ => String::new(),
     };
 
-    let sql = format!(
+    // Step 1: page the events via the `contract_id` PK seek — NO joins (task
+    // 0317). The previous form `JOIN transactions t` / `INNER JOIN ledgers l`
+    // made ClickHouse build the join hash side from the WHOLE `transactions`
+    // table (billions of rows) → `MEMORY_LIMIT_EXCEEDED` (Code 241).
+    //
+    // `FINAL` is also DROPPED here — and that is load-bearing, not cosmetic. On a
+    // hot contract (millions of events across many parts) `FINAL` merges the
+    // whole per-contract range, reading the heavy `topics_xdr`/`data_xdr`
+    // columns, and OOMs (Code 241) under the prod `api_reader` 4 GB cap
+    // (reproduced: FINAL OOMs at 500 MB–2 GB, only barely survives 4 GB). The
+    // full-key `LIMIT 1 BY (ledger_sequence, transaction_id, event_index)`
+    // already collapses re-ingest duplicates, and every projected column is
+    // immutable across ReplacingMergeTree versions, so a non-FINAL read returns
+    // identical rows — the read-in-order page then short-circuits at `LIMIT`
+    // instead of merging the whole contract. Same rationale as transactions
+    // Statement A (task 0290).
+    let page_sql = format!(
         "SELECT \
             se.ledger_sequence              AS ledger_sequence, \
             se.transaction_id               AS transaction_id, \
             se.event_index                  AS event_index, \
             se.event_type                   AS event_type, \
             se.topics_xdr                   AS topics_xdr, \
-            se.data_xdr                     AS data_xdr, \
-            lower(hex(t.hash))              AS transaction_hash, \
-            t.successful                    AS successful, \
-            l.closed_at                     AS created_at \
-         FROM soroban_events se FINAL \
-         JOIN transactions t \
-              ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence \
-         INNER JOIN ledgers l ON l.sequence = se.ledger_sequence \
+            se.data_xdr                     AS data_xdr \
+         FROM soroban_events se \
          WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
          ORDER BY se.ledger_sequence {order}, se.transaction_id {order}, se.event_index {order} \
          LIMIT 1 BY se.ledger_sequence, se.transaction_id, se.event_index \
          LIMIT ?"
     );
 
-    let rows = client
-        .query(&sql)
+    let raw = client
+        .query(&page_sql)
         .bind(contract_surrogate_id)
         .bind(limit)
-        .fetch_all::<EventChRow>()
+        .fetch_all::<EventPageRow>()
         .await?;
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    Ok(rows.into_iter().map(map_event_row).collect())
+    // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
+    // with PK-prefix key-seeks instead of full-table hash joins (mirrors
+    // `transactions::queries_ch::resolve_source_and_closed_at`, task 0290).
+    // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
+    // the handful of ledgers on this page, then filters `id IN (...)`; no
+    // `FINAL` (a transaction is immutable, so a dup version is identical).
+    // `ledgers WHERE sequence IN (...)` is a plain PK seek.
+    let in_list = |vals: &[i64]| {
+        vals.iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let dedup = |f: fn(&EventPageRow) -> i64| -> Vec<i64> {
+        let mut v: Vec<i64> = raw.iter().map(f).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let ledger_seqs = dedup(|r| r.ledger_sequence);
+    let tx_ids = dedup(|r| r.transaction_id);
+
+    let txs: std::collections::HashMap<i64, (String, bool)> = client
+        .query(&format!(
+            "SELECT id AS id, lower(hex(hash)) AS hash, successful AS successful \
+             FROM transactions WHERE ledger_sequence IN ({}) AND id IN ({}) LIMIT 1 BY id",
+            in_list(&ledger_seqs),
+            in_list(&tx_ids),
+        ))
+        .fetch_all::<EventTxRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, (r.hash, r.successful)))
+        .collect();
+
+    let closed_ats: std::collections::HashMap<i64, i64> = client
+        .query(&format!(
+            "SELECT sequence AS sequence, closed_at AS closed_at FROM ledgers WHERE sequence IN ({})",
+            in_list(&ledger_seqs),
+        ))
+        .fetch_all::<EventLedgerRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.sequence, r.closed_at))
+        .collect();
+
+    // Rebuild full event rows in page order, then map. A missing tx/ledger
+    // lookup defaults rather than drops the row, so the page count (and the
+    // peek `+1` next-page detection) is preserved.
+    Ok(raw
+        .into_iter()
+        .map(|r| {
+            let (transaction_hash, successful) =
+                txs.get(&r.transaction_id).cloned().unwrap_or_default();
+            let created_at = closed_ats.get(&r.ledger_sequence).copied().unwrap_or(0);
+            map_event_row(EventChRow {
+                ledger_sequence: r.ledger_sequence,
+                transaction_id: r.transaction_id,
+                event_index: r.event_index,
+                event_type: r.event_type,
+                topics_xdr: r.topics_xdr,
+                data_xdr: r.data_xdr,
+                transaction_hash,
+                successful,
+                created_at,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]

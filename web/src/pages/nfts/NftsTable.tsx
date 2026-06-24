@@ -67,7 +67,7 @@ export function NftsTable({ rows }: NftsTableProps) {
     <ExplorerTable
       columns={columns}
       rows={rows}
-      rowKey={(row) => String(row.id)}
+      rowKey={(row) => `${row.contract_id}:${row.token_id}`}
     />
   );
 }

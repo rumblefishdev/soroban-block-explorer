@@ -2,7 +2,7 @@
 id: '0304'
 title: 'FEATURE: 0297 metadata follow-ups — backfill, deploy/flip, validation, frontend amounts, cleanup'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0050']
 related_tasks: ['0297', '0231', '0243']
 tags:
@@ -27,6 +27,10 @@ history:
       that is NOT that core code implementation: backfill, deploy/flag-flip,
       perf validation, live tests, frontend amount rendering, and the legacy
       name-path cleanup that was too entangled to land safely inside 0297.
+  - date: 2026-06-23
+    status: active
+    who: stkrolikiewicz
+    note: Promoted from backlog to active.
 ---
 
 # 0297 metadata follow-ups (ops / validation / frontend / cleanup)

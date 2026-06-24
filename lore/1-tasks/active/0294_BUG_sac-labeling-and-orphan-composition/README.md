@@ -15,7 +15,8 @@ tags:
     priority-low,
     effort-medium,
   ]
-links: []
+links:
+  - 'docs/runbooks/0294_ch_drain_orphans_from_pending.md'
 history:
   - date: 2026-06-16
     status: backlog

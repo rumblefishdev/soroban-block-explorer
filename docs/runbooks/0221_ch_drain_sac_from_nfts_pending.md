@@ -156,21 +156,38 @@ Math checks: 1,288,888 - 331,273 = 957,615 ✓ exact.
   current pilot). Mirror SQL for that table is not included; if a
   future regression seeds the hot bucket with SACs, copy this runbook
   and swap `nfts_pending` → `nfts`.
-- **`nft_ownership_pending`** — same 0220 routing path emits ownership
-  events through `route_for`. Verify whether it carries the same leak
-  with:
+- **`nft_ownership_pending` mirror** — the same 0220 `route_for` path emits
+  ownership events, so this table carries the **same SAC/Fungible leak**.
+  Confirmed un-drained and growing: 143M (2026-06-18) → **332.74M (2026-06-23)**
+  while `nfts_pending` got the 0306 reclassify-delete and this mirror did not.
+  Run the full procedure with the table swapped, but use the **OOM-safe verify**
+  below — a `nft_ownership_pending FINAL ⋈ soroban_contracts FINAL` JOIN OOMs at
+  the 6 GB `max_memory_usage` cap; an `IN`-subquery against the small contracts
+  side does not:
 
   ```sql
-  SELECT
-      count() AS pending_total,
-      countIf(sc.is_sac = true OR sc.contract_type IN (0, 3))
-          AS leaked_drop_candidates
-  FROM nft_ownership_pending nop FINAL
-  LEFT JOIN soroban_contracts sc FINAL ON sc.id = nop.contract_id;
+  -- pre/post verify (replaces the Step 1/5 JOIN form for this big table)
+  SELECT count() AS pending_total,
+         countIf(contract_id IN (
+             SELECT id FROM soroban_contracts FINAL
+             WHERE is_sac = true OR contract_type IN (0, 3)
+         )) AS leaked_drop_candidates
+  FROM nft_ownership_pending;
+
+  -- drain (async; no restart; safe during live ingestion)
+  ALTER TABLE nft_ownership_pending
+  DELETE WHERE contract_id IN (
+      SELECT id FROM soroban_contracts FINAL
+      WHERE is_sac = true OR contract_type IN (0, 3)
+  );
+  OPTIMIZE TABLE nft_ownership_pending FINAL;
   ```
 
-  If `leaked_drop_candidates > 0`, repeat Steps 1–5 with
-  `nfts_pending` → `nft_ownership_pending` in the DDL.
+  To drain the SAC/Fungible leak **and** the 0294 orphan mass in one pass
+  (recommended — the orphan clause is the bulk of `nft_ownership_pending`), use
+  the combined predicate in
+  [`0294_ch_drain_orphans_from_pending.md`](0294_ch_drain_orphans_from_pending.md)
+  instead of the SAC/Fungible-only predicate above.
 
 - **Postgres side** — PG has DB-lookup via `ClassificationCache` in
   `resolve_nft_filter` (`crates/indexer/src/handler/persist/write.rs:1436-1500`)

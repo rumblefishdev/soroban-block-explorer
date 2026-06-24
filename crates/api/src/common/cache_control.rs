@@ -42,9 +42,16 @@ pub fn attach(resp: &mut Response, value: HeaderValue) {
 /// response. Catches handler-side errors (`errors::*`), extractor
 /// rejections, and axum's bare 404-on-unmatched-route — none of which
 /// should ever be cached.
+///
+/// `304 Not Modified` is exempt: it is a successful conditional-GET response
+/// (task 0292), not an error, and carries its own `Cache-Control` (the `LIVE`
+/// tier of the matching `200`). Stamping `no-store` on it would contradict the
+/// conditional-GET contract — the client must keep its cached body and keep
+/// revalidating. See [`crate::common::conditional`].
 pub async fn enforce_no_store_on_errors(req: Request, next: Next) -> Response {
+    use axum::http::StatusCode;
     let mut resp = next.run(req).await;
-    if !resp.status().is_success() {
+    if !resp.status().is_success() && resp.status() != StatusCode::NOT_MODIFIED {
         resp.headers_mut().insert(header::CACHE_CONTROL, NO_STORE);
     }
     resp
@@ -107,6 +114,32 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(cc(&resp).as_deref(), Some("public, max-age=10"));
+    }
+
+    #[tokio::test]
+    async fn middleware_exempts_304_from_no_store() {
+        // A conditional-GET 304 carries its own LIVE cache-control; the
+        // no-store sweep must leave it intact (task 0292).
+        let app = Router::new()
+            .route(
+                "/cond",
+                get(|| async {
+                    let mut r = StatusCode::NOT_MODIFIED.into_response();
+                    attach(&mut r, LIVE);
+                    r
+                }),
+            )
+            .layer(axum::middleware::from_fn(enforce_no_store_on_errors));
+
+        let resp = app
+            .oneshot(Request::builder().uri("/cond").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            cc(&resp).as_deref(),
+            Some("public, max-age=0, must-revalidate")
+        );
     }
 
     #[tokio::test]

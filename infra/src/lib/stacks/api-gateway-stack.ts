@@ -94,6 +94,15 @@ export class ApiGatewayStack extends cdk.Stack {
         // are non-safelisted request headers — without them the preflight is
         // rejected and the armed SPA cannot send a Bearer / partner key.
         allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
+        // Cache the preflight so the browser does NOT re-`OPTIONS` before every
+        // `/v1` request (task 0317). Each `/v1` call carries `Authorization`, a
+        // non-safelisted header, so without `Access-Control-Max-Age` Chrome
+        // re-runs the preflight on every request — an extra edge round-trip per
+        // call. The preflight is answered here by API Gateway's MOCK
+        // integration (not the Lambda), so the max-age MUST be set on the
+        // gateway, not on the axum `CorsLayer`. 1h is within Chromium's 2h cap;
+        // CORS config rarely changes, so a stale cached preflight is low-risk.
+        maxAge: cdk.Duration.hours(1),
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });

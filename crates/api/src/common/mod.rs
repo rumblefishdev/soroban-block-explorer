@@ -9,6 +9,7 @@
 
 pub mod cache_control;
 pub mod ch;
+pub mod conditional;
 pub mod cursor;
 pub mod datasource;
 pub mod edge_lock;

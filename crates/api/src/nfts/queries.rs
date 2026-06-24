@@ -15,20 +15,52 @@ use sqlx::{PgPool, Row};
 
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
-use super::dto::{NftIdCursor, NftItem, NftTransferCursor, NftTransferItem};
+use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
 
 pub struct ResolvedListParams {
     pub limit: i64,
-    pub cursor: Option<NftIdCursor>,
+    pub cursor: Option<NftListCursor>,
     pub filter_collection: Option<String>,
     pub filter_contract_id: Option<String>,
     /// Raw substring (no `%` / `_` from caller). SQL composes `%...%`.
     pub filter_name: Option<String>,
 }
 
+/// Datasource-agnostic NFT list row: the wire [`NftItem`] fields plus the
+/// internal `contract_surrogate` the composite cursor needs for its PK-suffix
+/// tiebreak (not on the wire). Both the PG path here and `queries_ch` return
+/// this so the handler stays backend-agnostic after the fetch (same shape as
+/// the assets `AssetRow`).
+pub struct NftRow {
+    pub contract_id: String,
+    pub token_id: String,
+    pub collection_name: Option<String>,
+    pub name: Option<String>,
+    pub media_url: Option<String>,
+    pub minted_at_ledger: Option<i64>,
+    pub owner_account: Option<String>,
+    pub last_seen_ledger: Option<i64>,
+    /// Internal `soroban_contracts.id` (PG `BIGINT` / CH `Int64`) surrogate —
+    /// cursor tiebreak only, never serialized.
+    pub contract_surrogate: i64,
+}
+
+fn map_nft_row(r: &PgRow) -> NftRow {
+    NftRow {
+        contract_id: r.get("contract_id"),
+        token_id: r.get("token_id"),
+        collection_name: r.get("collection_name"),
+        name: r.get("name"),
+        media_url: r.get("media_url"),
+        minted_at_ledger: r.get("minted_at_ledger"),
+        owner_account: r.get("owner_account"),
+        last_seen_ledger: r.get("last_seen_ledger"),
+        contract_surrogate: r.get("contract_surrogate"),
+    }
+}
+
 fn map_nft_item(r: &PgRow) -> NftItem {
     NftItem {
-        id: r.get("id"),
         contract_id: r.get("contract_id"),
         token_id: r.get("token_id"),
         collection_name: r.get("collection_name"),
@@ -42,25 +74,36 @@ fn map_nft_item(r: &PgRow) -> NftItem {
 
 /// `GET /v1/nfts` — paginated list with optional filters.
 ///
+/// Ordered by `(minted_at_ledger DESC, contract_id DESC, token_id DESC)` —
+/// a total keyset matching the CH `nfts` PK suffix `(contract_id, token_id)`
+/// with `minted_at_ledger` (recency) as the lead key. The old `id DESC`
+/// order is gone with the surrogate (task 0243 NFT slice); this PG path
+/// orders on the same tuple as `queries_ch::fetch_list` so the opaque
+/// cursor round-trips across a datasource flip.
+///
 /// The contract-id resolve uses a CTE so it runs once even when the
 /// planner materialises `idx_nfts_collection` / `idx_nfts_name_trgm`.
 ///
-/// `filter_name` is wrapped in `'%' || $5 || '%'` for the trigram match.
+/// `filter_name` is wrapped in `'%' || $4 || '%'` for the trigram match.
 /// We do NOT add an `ESCAPE` clause here: the upstream handler rejects
 /// values containing literal `%` / `_` with a 400 envelope (mirrors the
-/// `assets` handler convention, see `assets/handlers.rs`). Keeping the
-/// reject at the handler boundary keeps the SQL plan textually identical
-/// to canonical `15_get_nfts_list.sql` and avoids the maintenance burden
-/// of carrying an escape character through every callsite. If a future
-/// caller bypasses the handler, the worst-case impact is a wider trigram
-/// match — not SQL injection (the value is always bound, never
-/// concatenated).
+/// `assets` handler convention). The value is always bound, never
+/// concatenated, so the worst case of a bypass is a wider trigram match,
+/// not SQL injection.
 pub async fn fetch_list(
     pool: &PgPool,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<NftItem>, sqlx::Error> {
-    let cur_id: Option<i32> = params.cursor.as_ref().map(|c| c.id);
+) -> Result<Vec<NftRow>, sqlx::Error> {
+    let (cur_minted, cur_contract, cur_token): (Option<i64>, Option<i64>, Option<String>) =
+        match &params.cursor {
+            Some(c) => (
+                Some(c.minted_at_ledger),
+                Some(c.contract_surrogate),
+                Some(c.token_id.clone()),
+            ),
+            None => (None, None, None),
+        };
     let (op, order) = keyset_sql_desc(direction);
 
     // Static query plan per direction. SQL fragments `{op}` and `{order}`
@@ -70,11 +113,10 @@ pub async fn fetch_list(
         WITH ct AS (
             SELECT id
             FROM soroban_contracts
-            WHERE $4::varchar IS NOT NULL
-              AND contract_id = $4
+            WHERE $3::varchar IS NOT NULL
+              AND contract_id = $3
         )
         SELECT
-            n.id,
             sc.contract_id        AS contract_id,
             n.token_id,
             n.collection_name,
@@ -82,30 +124,34 @@ pub async fn fetch_list(
             n.media_url,
             n.minted_at_ledger,
             own.account_id        AS owner_account,
-            n.current_owner_ledger AS last_seen_ledger
+            n.current_owner_ledger AS last_seen_ledger,
+            n.contract_id         AS contract_surrogate
         FROM nfts n
         JOIN      soroban_contracts sc  ON sc.id = n.contract_id
         LEFT JOIN accounts          own ON own.id = n.current_owner_id
         WHERE
-            ($2::int     IS NULL OR n.id {op} $2)
-            AND ($3::varchar IS NULL OR n.collection_name = $3)
-            AND ($4::varchar IS NULL OR n.contract_id = (SELECT id FROM ct))
-            AND ($5::text    IS NULL OR n.name ILIKE '%' || $5 || '%')
-        ORDER BY n.id {order}
+            ($2::varchar IS NULL OR n.collection_name = $2)
+            AND ($3::varchar IS NULL OR n.contract_id = (SELECT id FROM ct))
+            AND ($4::text    IS NULL OR n.name ILIKE '%' || $4 || '%')
+            AND ($5::bigint  IS NULL
+                 OR (COALESCE(n.minted_at_ledger, 0), n.contract_id, n.token_id) {op} ($5, $6, $7))
+        ORDER BY COALESCE(n.minted_at_ledger, 0) {order}, n.contract_id {order}, n.token_id {order}
         LIMIT $1
         "#
     );
 
     let rows = sqlx::query(&sql)
         .bind(params.limit)
-        .bind(cur_id)
         .bind(&params.filter_collection)
         .bind(&params.filter_contract_id)
         .bind(&params.filter_name)
+        .bind(cur_minted)
+        .bind(cur_contract)
+        .bind(cur_token)
         .fetch_all(pool)
         .await?;
 
-    Ok(rows.iter().map(map_nft_item).collect())
+    Ok(rows.iter().map(map_nft_row).collect())
 }
 
 /// `GET /v1/nfts/:contract_id/:token_id` — composite lookup.
@@ -124,7 +170,6 @@ pub async fn fetch_by_composite(
     let raw: Option<PgRow> = sqlx::query(
         r#"
         SELECT
-            n.id,
             sc.contract_id        AS contract_id,
             n.token_id,
             n.collection_name,

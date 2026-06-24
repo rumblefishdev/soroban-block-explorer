@@ -1,5 +1,5 @@
 ---
-id: '0311'
+id: '0322'
 title: 'CH atomicity hardening: orphan guard, insert-dedup token, ledgers/wasm RMT, read-side dedup'
 type: FEATURE
 status: backlog
@@ -19,6 +19,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0293 future work. Two LOW-severity hardening items the atomicity audit surfaced; no correctness fix required today.'
+  - date: '2026-06-23'
+    status: backlog
+    who: karolkow
+    note: 'Renumbered 0311 → 0322 to resolve an id collision: the active, merged 0311 (FEATURE enrichment multi-provider RPC, PR #270) keeps the id; this not-yet-started backlog task takes the new id. No external references pointed here.'
 ---
 
 # CH atomicity hardening: backfill orphan guard + read-side transactions dedup decision
