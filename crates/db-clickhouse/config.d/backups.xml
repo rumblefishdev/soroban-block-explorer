@@ -1,0 +1,33 @@
+<!--
+  Local backup disk for ad-hoc operational snapshots via
+  `BACKUP DATABASE default TO Disk('backups', '<name>')`.
+
+  This is the MANUAL, pre-op checkpoint path (e.g. before a destructive
+  redrain / backfill / engine swap) — distinct from the maintained weekly
+  off-box backup (Borg → Hetzner Storage Box, see
+  infra-hetzner/ansible/roles/backup). It writes a full local copy, so it
+  needs free disk >= dataset size; only use it when the host has the room.
+
+  Container path `/backups/` is bind-mounted to host `/srv/backups`
+  (see docker-compose.prod.yml). The path is intentionally NOT under
+  `/var/lib/clickhouse` — a backup disk nested in the main data path
+  fails CH startup.
+
+  Mounted only in docker-compose.prod.yml (prod has the /srv/backups host
+  mount); dev does not load this file. Previously configured by hand on the
+  box, which a container recreate silently dropped — pinning it here makes
+  the disk survive deploys.
+-->
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <backups>
+                <type>local</type>
+                <path>/backups/</path>
+            </backups>
+        </disks>
+    </storage_configuration>
+    <backups>
+        <allowed_disk>backups</allowed_disk>
+    </backups>
+</clickhouse>
