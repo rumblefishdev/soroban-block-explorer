@@ -296,6 +296,21 @@ entities:
   variants from observed contract deployments. Without the dedicated
   classic-credit producer, `account_balances_current` would carry the
   balances but the entity row never existed (Karol's pre-audit Bug #1).
+- **SAC overrides** → flip `soroban_contracts.is_sac=true` + `contract_type=Token`
+  for Stellar Asset Contracts whose `create_contract` happened before the indexed
+  window or was never deployed (a classic asset's deterministic SAC `contract_id`
+  surfaces via activity, not necessarily a deploy). Derived from observed
+  classic/native assets (`derive_sac_overrides_from_assets`, task 0218), gated on
+  `emitter == derive_sac(asset)` so a bespoke contract is never mislabeled.
+- **SAC event gate at NFT detection** (task 0294) → a CAP-67 classic-asset SAC
+  emits `transfer`/`mint`/`burn` under its deterministic `contract_id` carrying
+  the SEP-11 asset `CODE:ISSUER` in the LAST topic and an i128 **amount** in data.
+  `detect_nft_events` runs the shared `sac_override_from_event_topics` gate first
+  (`emitter == derive_sac(asset)`); a crypto-proven SAC event is **skipped before
+  it can be minted as an NFT candidate**, so a payment/transfer-only un-deployed
+  SAC's amount is never mis-read as an NFT token_id. Stateless and per-event (no
+  prior-row / no quarantine needed for this class). The gate returns `None` for
+  bespoke emitters, so genuine NFTs are unaffected (false-negative-only).
 
 This stage is where low-level ledger changes are translated into query-oriented
 explorer records.

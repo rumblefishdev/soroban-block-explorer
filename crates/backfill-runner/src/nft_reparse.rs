@@ -232,8 +232,10 @@ fn parse_batch(
         });
     }
 
-    // One batched parse — same call shape as the live indexer.
-    let nft_events = detect_nft_events(&events);
+    // One batched parse — same call shape as the live indexer. Mainnet-only
+    // stack, so the SAC gate derives ids against the mainnet passphrase.
+    let net_id = xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE);
+    let nft_events = detect_nft_events(&events, &net_id);
 
     // Ownership rows: `event_order` straight from the parser; ids decoded from
     // the carriers.
