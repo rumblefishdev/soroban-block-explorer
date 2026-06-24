@@ -17,7 +17,6 @@ mod repair_tier1;
 mod resume;
 mod rpc_snapshot;
 mod run;
-mod sac_orphan_relabel;
 mod sink;
 mod status;
 mod sync;
@@ -213,20 +212,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0294 — one-shot batch relabel of un-deployed-SAC "orphan" rows
-    /// (`is_sac=false`, no deploy, NULL `wasm_hash`, yet emitting SAC events).
-    /// Reads one sample SAC event per orphan, crypto-match-gates in Rust
-    /// (`emitter == derive_sac(asset)`, shared with the live path), and
-    /// re-INSERTs a corrected `is_sac=true, contract_type=Token` row (RMT
-    /// `version=0` override — wins over the skeleton, loses to a real deploy).
-    /// Lets `nft-reclassify` (task 0303) drop their false-positive
-    /// `nfts_pending` rows. Idempotent (a flipped row is no longer an orphan);
-    /// `--dry-run` reports the crypto-confirmed count without writing. CH-only.
-    SacOrphanRelabel {
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Re-parse `soroban_events` through the task-0296 NFT parser and write
     /// recovered candidates to `nfts_pending` / `nft_ownership_pending`
     /// (CH-direct — no raw-S3 re-ingest; the dropped events are already stored
@@ -358,23 +343,6 @@ async fn main() {
                 stats.dropped_pending_ownership,
                 stats.dropped_legacy_nfts,
                 stats.dropped_legacy_ownership,
-            );
-        }
-        Command::SacOrphanRelabel { dry_run } => {
-            // Stack is mainnet-only. A wrong passphrase would just derive
-            // different SAC ids, the crypto-match gate would reject every
-            // orphan, and the pass becomes a safe no-op — so there is no
-            // network knob to get wrong.
-            let stats = sac_orphan_relabel::execute(&sink, dry_run, xdr_parser::MAINNET_PASSPHRASE)
-                .await
-                .expect(
-                    "sac_orphan_relabel failed — the pass is idempotent (RMT \
-                     version=0 override; a flipped row is no longer an orphan), \
-                     so a re-run is safe",
-                );
-            println!(
-                "sac_orphan_relabel completed (dry_run={}): orphans_scanned={} crypto_confirmed={} rows_inserted={}",
-                stats.dry_run, stats.orphans_scanned, stats.crypto_confirmed, stats.rows_inserted,
             );
         }
         Command::NftReparse {
