@@ -2,7 +2,7 @@
 id: '0324'
 title: 'Account "deleted" badge for merged accounts'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['phase-future', 'effort-small', 'priority-medium', 'api', 'frontend']
@@ -17,6 +17,15 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active to begin implementation.'
+  - date: 2026-06-24
+    status: completed
+    who: karolkow
+    note: >
+      Implemented CH-only derived `deleted` flag (argMax last-op-in-ledger,
+      anchored on last_seen_ledger → 1 granule) + red `Chip` badge on account
+      detail. DTO: bare `deleted: bool`. 2 new web tests (91 green), 18 api
+      tests green, types regenerated, docs Statement C added. Recovered from a
+      wrong-worktree commit that hit shared develop (rewound + force-pushed).
 ---
 
 # Account "deleted" badge for merged accounts
@@ -74,10 +83,10 @@ scope here.
 ### Step 1: Derive — two-step, anchored on `last_seen_ledger`
 
 An account is `deleted` ⟺ its **last op in its last-seen ledger** is a
-`type=8` (account_merge) where it is the `source`. Since
+`type=8` (account*merge) where it is the `source`. Since
 `last_seen_ledger = GREATEST(all appearances)`, any deleting merge sits in that
 ledger; `argMax` over `(transaction_id, application_order)` picks the
-chronologically-last op _within_ the ledger, so a same-ledger re-create (merge
+chronologically-last op \_within* the ledger, so a same-ledger re-create (merge
 then `create_account` at higher app order) correctly yields `false`.
 
 ```
@@ -130,14 +139,66 @@ ponytail: query time, no column/migration. Materialize only if the extra
 
 ## Acceptance Criteria
 
-- [ ] API `/accounts/{id}` returns `deleted` for merged accounts (validated on
-      `GAP7STAMLIHYLII6VXZ5VF3G6WKEEILEKNTACWLSTVCJPBW2TMRHI4LW` → `deleted=true`).
-- [ ] Re-created (funded-after-merge) accounts return `deleted=false`.
-- [ ] Frontend shows a `deleted` badge on merged accounts.
-- [ ] **Docs updated** — account API contract docs under `docs/architecture/**`
-      if described there; else `N/A — reason`.
-- [ ] **API types regenerated** — touches `crates/api/**` → run
-      `npx nx run @rumblefish/api-types:generate`, commit the diff.
+- [x] API `/accounts/{id}` returns `deleted` for merged accounts (validated on
+      `GAP7STAMLIHYLII6VXZ5VF3G6WKEEILEKNTACWLSTVCJPBW2TMRHI4LW` → `deleted=true`
+      against prod CH).
+- [x] Re-created (funded-after-merge) accounts return `deleted=false` (validated
+      on the merge destination `GA4N7346…` → `deleted=0`).
+- [x] Frontend shows a `deleted` badge on merged accounts (red `error` Chip,
+      verified via local stub render — screenshot in PR).
+- [x] **Docs updated** — `docs/architecture/database-schema/endpoint-queries-clickhouse/06_get_accounts_by_id.sql`
+      gains Statement C (the derived flag).
+- [x] **API types regenerated** — `openapi.json` + `generated/` carry `deleted`.
+
+## Implementation Notes
+
+- **CH-only**, one new query `queries_ch::fetch_deleted_status(id, last_seen)`
+  → `bool`. PG `fetch_deleted_for_source` branch returns `false` (prod = CH).
+- Rule: `argMax(type=8 AND source_id=id, (transaction_id, application_order))`
+  over `operations_appearances WHERE ledger_sequence = last_seen AND (source_id
+= id OR destination_id = id)`. Anchored on the literal `last_seen_ledger` →
+  1 partition granule (~8K rows) vs a 6.2B-row full scan (measured).
+- DTO: single `deleted: bool` on `AccountDetailResponse`.
+- Frontend: shared `Chip color="error" dot size="sm"` (same primitive as the
+  Failed-status chip), rendered beside the "Account" title.
+- Tests: 2 added (`AccountDetailPage.test.tsx`) — badge shown when deleted,
+  hidden when live. 91 web tests green; 18 api tests green.
+
+## Design Decisions
+
+### From Plan
+
+1. **Derive at query time, no schema/migration** — the cost concern is solved
+   by anchoring on `last_seen_ledger`, not by materializing a column.
+2. **CH-only** — prod serves accounts from CH; PG path stubs `false`.
+
+### Emerged
+
+3. **Bare `deleted: bool`** (dropped the planned `merged_into` /
+   `deleted_at_ledger`) — user trimmed the contract mid-task. Query simplified
+   accordingly.
+4. **`argMax` last-op-in-ledger rule** (replaced the simpler `count()` EXISTS)
+   — closes the same-ledger merge-then-recreate edge at identical 1-granule
+   cost. Measured zero such cases across 6.2B ops, but free to be correct.
+5. **Reused the design-system `Chip`** rather than a bespoke badge — no Figma
+   exists for this; `error` palette = same red as the Failed-status chip.
+
+## Issues Encountered
+
+- **Wrong worktree.** Implemented + committed in the main (`develop`) worktree
+  instead of the feature worktree; the feature commit landed on shared
+  `develop` (local + remote). Recovered: moved the commit to
+  `feat/0324_account-deleted-badge`, `git reset --hard` + `--force-with-lease`
+  rewound `develop` to `1bcb2822`, then PR'd properly. No other branch had
+  pulled the bad commit.
+- **CH JOIN memory blow-up.** Anchoring the derive via a JOIN on `accounts`
+  (`ledger_sequence = a.last_seen_ledger`) cannot partition-prune (anchor is a
+  column from the other table) → scanned 6.2B rows, tripped the 3.73 GiB query
+  memory limit. Fixed by a dedicated 2nd query with the literal bind.
+- **Local backend can't run.** API CH client reads its mTLS cert from the AWS
+  Secrets Manager Lambda Extension (Lambda-only). For the local screenshot the
+  API was stubbed (real DTO shape); the `deleted` value itself was verified
+  against prod CH separately.
 
 ## Notes
 
