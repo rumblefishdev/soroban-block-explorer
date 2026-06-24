@@ -2,7 +2,7 @@
 id: '0318'
 title: 'FEATURE: /search CH read path — last PG-only module (504 on prod)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0047']
 related_tasks: ['0243', '0271']
 tags:
@@ -25,6 +25,11 @@ history:
       and PG is disabled in prod (DATABASE_URL=disabled), so every call hangs
       and returns 504 after ~29s. Confirmed live: smoke + 504 timing. Search is
       one of the two modules (with NFTs) never migrated to CH.
+  - date: 2026-06-24
+    status: active
+    who: fmazur
+    note: >
+      Promoted to active. Starting CH read-path implementation for /search.
 ---
 
 # FEATURE: /search CH read path
