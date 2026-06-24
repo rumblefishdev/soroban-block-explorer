@@ -2,7 +2,7 @@
 id: '0320'
 title: 'BUG: xdr-parser drops WASM-upgrade — upgraded contracts keep stale wasm_hash + classification'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0295', '0316', '0283']
 tags:
@@ -23,6 +23,10 @@ history:
       Split out of 0295 (was "bug-1" there). Parser + CH writer deferred to this
       task. Shares the read-modify-write writer pattern with 0316 (the RMT
       whole-row limitation class).
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: Activated to start implementation.
 ---
 
 # BUG: WASM-upgrade not re-classified
