@@ -161,8 +161,21 @@ new deploys can never become orphans; existing → re-parse.
 
 ## Acceptance Criteria
 
-- [ ] Orphan composition sized (SAC / phantom / WASM shares)
-- [ ] Un-deployed-SAC orphans correctly `is_sac=true`
-- [ ] `/v1/contracts` no longer polluted by skeleton placeholders
-- [ ] 0221 event-leak re-validated (pre-window SAC verdicts intact)
-- [ ] Forward-fix prevents new WASM orphans; phantom bucket resolved
+> **Re-scoped 2026-06-23 (PR #272).** Deep-dives reframed the original 5-step plan.
+> The shipped scope is the **false-NFT fix at its source** (a detection-stage SAC gate)
+>
+> - the batch history-repair; the registry-model half, the classifier, and the prod run
+>   are spawned to dedicated follow-ups (0323, 0317, 0315/0303, 0295) rather than bundled.
+
+- [x] Orphan composition sized (SAC / phantom / WASM) — 5,558 crypto-confirmed SAC, 0
+      rejected, phantom = 1, WASM = 0 (read-only prod, validated)
+- [x] Un-deployed-SAC false NFTs stopped at source — **detection-stage gate** in
+      `detect_nft_events` (supersedes the original "is_sac=true relabel" framing; the
+      batch `sac-orphan-relabel` repairs history). Prod flip → **0315 / 0303**.
+- [→] `/v1/contracts` no longer polluted — **un-deployed SAC = asset, not contract**;
+  spawned to **0323** (writer skip + LEFT-join; not a side-table). NOT in this PR.
+- [x] 0221 event-leak re-validated — the detection gate prevents the SAC→pending leak at
+      source (test `sac_transfer_is_gated_out_not_an_nft`); side-table verdict carrying
+      no longer needed.
+- [→] WASM-orphan forward-fix + phantom — phantom = 1 (resolved, empty); WASM-orphan
+  prevention is a separate latent gap (0 today) → **0295**.

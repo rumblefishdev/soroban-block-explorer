@@ -227,13 +227,22 @@ pub fn sac_override_from_event_topics(
     if topics.len() < 2 {
         return None;
     }
-    let signature = topic_symbol_value(&topics[0]).to_ascii_lowercase();
-    if !SAC_CONTROL_EVENT_SIGNATURES.contains(&signature.as_str()) {
+    let signature = topic_symbol_value(&topics[0]);
+    if !SAC_CONTROL_EVENT_SIGNATURES
+        .iter()
+        .any(|s| signature.eq_ignore_ascii_case(s))
+    {
         return None;
     }
     // The SEP-11 asset string rides in the LAST topic across every SAC event
-    // shape (transfer/mint/burn/clawback/set_authorized) — both the pre-P23
-    // direct-invocation form and the post-P23 CAP-67 form.
+    // shape — CAP-67 §"Unified Asset Events" defines transfer/mint/burn/clawback/
+    // set_authorized all as `[sym, …, sep0011_asset]` (asset last; the i128 is in
+    // `data`, never a topic). This is the load-bearing invariant: the gate keys
+    // off the last topic being the asset string, so a (hypothetical) SAC event
+    // that ever omitted the asset topic would NOT be gated and could re-open the
+    // false-NFT path. Spec-verified + mainnet-confirmed (every sampled SAC event
+    // carries it); a non-SAC contract's last topic is an address/scalar, so it
+    // returns None below and is unaffected.
     let asset_str = topics.last().and_then(topic_string_value)?;
     let asset = parse_sac_asset_string(&asset_str)?;
     let preimage = ContractIdPreimage::Asset(asset.clone());
@@ -258,7 +267,8 @@ const SAC_CONTROL_EVENT_SIGNATURES: &[&str] =
     &["transfer", "mint", "burn", "clawback", "set_authorized"];
 
 /// Extract an `ScVal::Symbol` string from a tagged JSON topic (`type: "sym"`).
-fn topic_symbol_value(topic: &serde_json::Value) -> String {
+/// Shared with NFT detection (`crate::nft`) — one canonical copy.
+pub(crate) fn topic_symbol_value(topic: &serde_json::Value) -> String {
     if topic.get("type").and_then(|v| v.as_str()) == Some("sym")
         && let Some(s) = topic.get("value").and_then(|v| v.as_str())
     {

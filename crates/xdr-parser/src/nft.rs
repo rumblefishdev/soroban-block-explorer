@@ -11,7 +11,7 @@
 use serde_json::Value;
 use tracing::warn;
 
-use crate::sac::sac_override_from_event_topics;
+use crate::sac::{sac_override_from_event_topics, topic_symbol_value};
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
@@ -382,20 +382,6 @@ fn extract_args(
     }
 
     None
-}
-
-/// Extract a symbol string from a tagged ScVal JSON topic.
-///
-/// Only matches topics with `"type": "sym"` to avoid false positives
-/// from other topic types that happen to have string values.
-fn topic_symbol_value(topic: &Value) -> String {
-    let type_str = topic.get("type").and_then(|v| v.as_str());
-    if type_str == Some("sym")
-        && let Some(s) = topic.get("value").and_then(|v| v.as_str())
-    {
-        return s.to_string();
-    }
-    String::new()
 }
 
 /// Extract an address string from a tagged ScVal JSON topic.
