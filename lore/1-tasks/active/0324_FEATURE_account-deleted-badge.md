@@ -2,7 +2,7 @@
 id: '0324'
 title: 'Account "deleted" badge for merged accounts'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: ['phase-future', 'effort-small', 'priority-medium', 'api', 'frontend']
@@ -13,6 +13,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Renumbered 0323 -> 0324 (0323 taken by undeployed-sac task). Task created — explorer keeps merged-account rows but does not flag them deleted like stellar.expert.'
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: 'Promoted to active to begin implementation.'
 ---
 
 # Account "deleted" badge for merged accounts
