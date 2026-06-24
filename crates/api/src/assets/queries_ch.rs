@@ -147,6 +147,71 @@ struct AssetChRow {
     contract_id_key: i64,
 }
 
+/// List-only SELECT (task 0319): identical to [`ASSET_CH_SELECT`] **minus** the
+/// `LEFT JOIN accounts iss` and the two `issuer` columns it produced. That join
+/// built its hash side from the whole `accounts` table (~18M rows on prod) — the
+/// dominant cost of the ~1.35s `/assets` list. The issuer StrKey + home_domain
+/// are resolved per-page below by a bloom-pruned key-seek. The detail paths keep
+/// the joined `ASSET_CH_SELECT` (they filter on `iss.account_id`), so they are
+/// untouched.
+const ASSET_LIST_CH_SELECT: &str = "SELECT \
+     a.asset_type                 AS asset_type, \
+     nullIf(a.asset_code, '')     AS asset_code, \
+     nullIf(sc.contract_id, '')   AS contract_id, \
+     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
+              if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
+     nullIf(m.symbol, '')         AS symbol, \
+     coalesce(m.decimals, 7)      AS decimals, \
+     toString(agg.total_supply)   AS total_supply, \
+     agg.holder_count             AS holder_count, \
+     nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
+     nullIf(ae.icon_url, '')      AS icon_url, \
+     a.issuer_id                  AS issuer_id_key, \
+     a.contract_id                AS contract_id_key \
+     FROM assets a FINAL \
+     LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
+     LEFT JOIN ( \
+         SELECT contract_id, name, symbol, decimals \
+         FROM soroban_contract_metadata FINAL \
+     ) m ON m.contract_id = sc.contract_id \
+     LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
+         AND agg.issuer_id = a.issuer_id \
+     LEFT JOIN ( \
+         SELECT asset_type, asset_code, issuer_id, contract_id, \
+                argMax(icon_url, version) AS icon_url, \
+                argMax(name, version)     AS name \
+         FROM asset_enrichment \
+         GROUP BY asset_type, asset_code, issuer_id, contract_id \
+     ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
+         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id";
+
+/// List row: [`AssetChRow`] minus the join-resolved `issuer` / `issuer_home_domain`
+/// (resolved per-page, task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct AssetListChRow {
+    asset_type: i16,
+    asset_code: Option<String>,
+    contract_id: Option<String>,
+    name: Option<String>,
+    symbol: Option<String>,
+    decimals: u32,
+    total_supply: Option<String>,
+    holder_count: Option<i32>,
+    deployed_at_ledger: Option<i64>,
+    icon_url: Option<String>,
+    issuer_id_key: i64,
+    contract_id_key: i64,
+}
+
+/// Step-2 resolve row: `accounts.id` (surrogate) → issuer `account_id` StrKey +
+/// `home_domain`, via the `idx_acc_id` bloom-pruned key-seek (task 0319).
+#[derive(Debug, Row, Deserialize)]
+struct AssetIssuerRow {
+    id: i64,
+    account_id: String,
+    home_domain: Option<String>,
+}
+
 fn map_ch_row(r: AssetChRow) -> AssetRow {
     AssetRow {
         asset_type: r.asset_type,
@@ -197,7 +262,7 @@ pub async fn fetch_list(
     };
 
     let sql = format!(
-        "{ASSET_CH_SELECT} \
+        "{ASSET_LIST_CH_SELECT} \
          WHERE 1{type_clause}{code_clause}{cursor_clause} \
          ORDER BY a.asset_type {order}, a.asset_code {order}, \
                   a.issuer_id {order}, a.contract_id {order} \
@@ -216,8 +281,70 @@ pub async fn fetch_list(
             .bind(c.contract_id);
     }
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
-    let rows = query.bind(params.limit).fetch_all::<AssetChRow>().await?;
-    Ok(rows.into_iter().map(map_ch_row).collect())
+    let rows = query
+        .bind(params.limit)
+        .fetch_all::<AssetListChRow>()
+        .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Resolve the page's issuer surrogates → (StrKey, home_domain) by a
+    // bloom-pruned key-seek (`accounts.idx_acc_id`), replacing the full-table
+    // `accounts iss` join (task 0319). `issuer_id = 0` (e.g. native XLM) ⇒ no
+    // issuer. i64 IN-list, bounded by the page limit, no injection surface.
+    let issuers: std::collections::HashMap<i64, (String, Option<String>)> = {
+        let ids = rows
+            .iter()
+            .map(|r| r.issuer_id_key)
+            .filter(|&i| i != 0)
+            .collect::<BTreeSet<_>>();
+        if ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            client
+                .query(&format!(
+                    // `ORDER BY last_seen_ledger DESC LIMIT 1 BY id`: `accounts`
+                    // is ReplacingMergeTree(last_seen_ledger) and we read without
+                    // FINAL, so pick the latest version per id deterministically
+                    // — `home_domain` is mutable (SET_OPTIONS), so an arbitrary
+                    // version would be non-deterministic (review 0319).
+                    "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
+                     FROM accounts WHERE id IN ({in_list}) \
+                     ORDER BY last_seen_ledger DESC LIMIT 1 BY id"
+                ))
+                .fetch_all::<AssetIssuerRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.id, (r.account_id, r.home_domain)))
+                .collect()
+        }
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let iss = issuers.get(&r.issuer_id_key);
+            AssetRow {
+                asset_type: r.asset_type,
+                asset_type_name: asset_type_name(r.asset_type),
+                asset_code: r.asset_code,
+                issuer: iss.map(|(acc, _)| acc.clone()).filter(|s| !s.is_empty()),
+                contract_id: r.contract_id,
+                name: r.name,
+                symbol: r.symbol,
+                decimals: r.decimals,
+                total_supply: r.total_supply,
+                holder_count: r.holder_count,
+                icon_url: r.icon_url,
+                deployed_at_ledger: r.deployed_at_ledger,
+                issuer_home_domain: iss.and_then(|(_, hd)| hd.clone()).filter(|s| !s.is_empty()),
+                issuer_id: r.issuer_id_key,
+                contract_surrogate_id: r.contract_id_key,
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
