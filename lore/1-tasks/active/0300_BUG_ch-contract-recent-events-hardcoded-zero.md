@@ -32,6 +32,17 @@ history:
     status: active
     who: karolkow
     note: 'Promoted to active; starting implementation.'
+  - date: '2026-06-25'
+    status: active
+    who: karolkow
+    note: >
+      Implemented: CH recent_events = count() over soroban_events in-window
+      (replaces merge-stub 0). Switched uniqExact -> count() after measuring OOM
+      on the 76M-event hot contract. Parity verified exact on live CH (no
+      diagnostics in soroban_events). DTO doc + openapi regenerated; offline
+      SQL-shape test added. AC 1-3 done; AC 4 (live now64() verify) blocked on
+      ingest catch-up (galexie 0286, ~10d stale — escalated). Root cause traced
+      to merge commit cdf67709, not a typo.
 ---
 
 # BUG: CH contract detail `recent_events` hardcoded to 0
@@ -69,9 +80,82 @@ served from CH.
 
 ## Acceptance Criteria
 
-- [ ] CH `recent_events` returns the real windowed event count (no hardcoded
-      `0`); matches the PG value for the same contract + window.
-- [ ] DTO doc for `ContractStats.recent_events` accurate for both backends.
-- [ ] Test covering the CH path.
-- [ ] Verified before the contracts module's `API_DATASOURCE_CONTRACTS=ch`
-      prod flip.
+- [x] CH `recent_events` returns the real windowed event count (no hardcoded
+      `0`); `count()` over `soroban_events` in the same window. Parity logic
+      validated on live CH (data-anchored window): events 1.27M vs invocations
+      12.9K on a sample contract — coherent, non-zero.
+- [x] DTO doc for `ContractStats.recent_events` accurate for both backends
+      (PG `SUM(amount)` / CH `count()`; both non-diagnostic; not the `/events`
+      full history).
+- [x] Test covering the CH path — offline SQL-shape regression
+      (`stats_sql_computes_recent_events_from_events_table`); no CH
+      integration harness exists in the repo (PG-only `tests_integration.rs`).
+- [ ] **(blocked)** End-to-end verify against the live `now64()` window —
+      currently impossible: CH ingest is ~10 days behind chain head (see
+      Issues), so the wall-clock 7-day window is empty and the whole stats
+      trio returns 0. Re-runnable once ingest catches up (gated on
+      [[0286]] galexie disk-full). NOTE: the original "verified before the
+      `API_DATASOURCE_CONTRACTS=ch` prod flip" wording is stale — the flip
+      already shipped (`infra/.../compute-stack.ts`, `CONTRACTS: 'ch'`,
+      `DATABASE_URL` disabled → PG path is dead code).
+
+## Implementation Notes
+
+- `crates/api/src/contracts/queries_ch.rs`: `StatsChRow` gains `recent_events`;
+  SQL extracted to a testable `contract_stats_sql(days, ledger_floor)` builder;
+  scalar subquery `SELECT count() FROM soroban_events se ...` in the same window
+  (two `?` binds: events subquery, then outer invocations seek); return tuple
+  3rd element now `row.recent_events` (was literal `0`).
+- `crates/api/src/contracts/dto.rs`: `ContractStats.recent_events` doc corrected
+  for both backends.
+- `libs/api-types/{openapi.json,generated/types.gen.ts}`: regenerated (the DTO
+  doc flows into the OpenAPI `description`; CI `API types freshness` gate).
+- Test: `stats_sql_tests::stats_sql_computes_recent_events_from_events_table`
+  (offline SQL-shape regression: asserts the events subquery exists, no literal,
+  window parity, two binds).
+
+## Design Decisions
+
+### Emerged
+
+1. **Root cause was a merge stub, not a typo.** The `0` entered in commit
+   `cdf67709` "fix(merge): resolve compile errors after merging develop": the CH
+   `fetch_contract_stats` returned a 3-tuple (events deferred, PR #237) while
+   develop's handler expected the PG 4-tuple with `recent_events`; the merge fix
+   plugged `0` to satisfy tuple arity. Events later shipped
+   (`soroban_events`/`fetch_events`, task 0317) but the stub was never wired.
+
+2. **`count()`, not `uniqExact`.** First implementation used
+   `uniqExact((ledger_sequence, transaction_id, event_index))` for re-ingest
+   dedup. It **OOMs** on the hottest contract (~76M events / 7d) — measured Code
+   241 at the 3.73 GiB `read_only` cap. Switched to plain `count()`: measured
+   ~99.5M rows / 1.39 GiB / 0.24 s / 89 MiB peak — safe. Dedup is unnecessary:
+   `count() == count() FINAL` and `count() == uniqExact` on every sampled
+   contract (1.2M–76M events), i.e. no re-ingest duplicates in practice.
+
+3. **No `FINAL`.** `FINAL`-on-`soroban_events` is the documented OOM path
+   (`fetch_events` header); the count needs no dedup (decision 2), so it is
+   omitted. Mirrors the cheap-streaming intent of the `recent_invocations` path.
+
+4. **Parity is exact, not approximate.** CH `soroban_events` holds only
+   non-diagnostic contract events (parser drops diagnostics, ADR 0033; measured:
+   recent slice is 100% `event_type = 1`), the same population PG's
+   `soroban_events_appearances.amount` folds. So CH `count()` == PG `SUM(amount)`
+   by construction.
+
+5. **Window-staleness left as-is (out of scope).** The `now64()` window zeros
+   the whole stats trio (and network `tps_60s`) when ingest lag exceeds the
+   window. Inherited from `recent_invocations`, correct under healthy ingest —
+   flagged for a separate staleness-aware-window task, not fixed here.
+
+## Issues Encountered
+
+- **Live `0` is currently NOT this bug.** CH ingest is ~10 days behind chain
+  head (head `closed_at = 2026-06-15`; last `system.parts` write ~22 h before
+  probe), so the wall-clock 7-day window is empty and _all three_ stats read 0
+  regardless of the fix. Consistent with the unfixed galexie disk-full bug
+  [[0286]] recurring (escalated separately). This blocks AC #4 and means the fix
+  has no observable effect until ingest recovers.
+- **No CH integration test harness.** `tests_integration.rs` is PG-only
+  (`DATABASE_URL`); building a seeded-CH harness was out of proportion for a
+  one-tuple-element fix, hence the offline SQL-shape test.
