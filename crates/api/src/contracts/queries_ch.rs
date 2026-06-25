@@ -178,12 +178,9 @@ pub async fn fetch_contract_list(
         .map(|r| r.id.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let days: i64 = STATS_WINDOW
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
+    // List recent_invocations only; recent_events is detail-only (the list DTO
+    // has no events field), so this path keeps the single windowed count.
+    let (days, ledger_floor) = stats_window_bounds(STATS_WINDOW);
     let count_sql = format!(
         "SELECT \
             sia.contract_id                  AS contract_id, \
@@ -320,6 +317,21 @@ pub async fn fetch_contract(
 /// history is never scanned for the 7-day stat.
 const LEDGERS_PER_DAY: i64 = 17_280;
 
+/// Parse a stats-window label (e.g. `"7 days"`) into `(days, ledger_floor)`. The
+/// leading integer is the day count (default 7 for a malformed label);
+/// `ledger_floor = days * LEDGERS_PER_DAY` widens the `(contract_id,
+/// ledger_sequence)` seek to ~that many days of ledgers before the exact
+/// `closed_at` predicate refines it. Shared by the list and detail stat paths so
+/// their windows can never drift apart.
+fn stats_window_bounds(window: &str) -> (i64, i64) {
+    let days: i64 = window
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(7);
+    (days, days.saturating_mul(LEDGERS_PER_DAY))
+}
+
 #[derive(Debug, Row, Deserialize)]
 struct StatsChRow {
     recent_invocations: u64,
@@ -364,13 +376,7 @@ pub async fn fetch_contract_stats(
     contract_surrogate_id: i64,
     window: &str,
 ) -> Result<(i64, i64, i64, String), clickhouse::error::Error> {
-    let days: i64 = window
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
-
+    let (days, ledger_floor) = stats_window_bounds(window);
     let sql = contract_stats_sql(days, ledger_floor);
     let row = client
         .query(&sql)
@@ -414,7 +420,16 @@ fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
 
 #[cfg(test)]
 mod stats_sql_tests {
-    use super::contract_stats_sql;
+    use super::{LEDGERS_PER_DAY, contract_stats_sql, stats_window_bounds};
+
+    #[test]
+    fn stats_window_bounds_parses_label_and_falls_back() {
+        assert_eq!(stats_window_bounds("7 days"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds("30 days"), (30, 30 * LEDGERS_PER_DAY));
+        // Malformed / empty label → default 7-day window, never a panic.
+        assert_eq!(stats_window_bounds("garbage"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds(""), (7, 7 * LEDGERS_PER_DAY));
+    }
 
     // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
     // The stats SQL MUST select a real windowed event count off `soroban_events`
