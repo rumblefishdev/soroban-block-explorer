@@ -37,7 +37,7 @@ use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{EventCursor, EventItem};
+use super::dto::{ContractStats, EventCursor, EventItem};
 use super::queries::{
     ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
     ResolvedContractsListParams, STATS_WINDOW,
@@ -375,7 +375,7 @@ pub async fn fetch_contract_stats(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, i64, String), clickhouse::error::Error> {
+) -> Result<ContractStats, clickhouse::error::Error> {
     let (days, ledger_floor) = stats_window_bounds(window);
     let sql = contract_stats_sql(days, ledger_floor);
     let row = client
@@ -385,12 +385,12 @@ pub async fn fetch_contract_stats(
         .fetch_one::<StatsChRow>()
         .await?;
 
-    Ok((
-        row.recent_invocations as i64,
-        row.recent_unique_callers as i64,
-        row.recent_events as i64,
-        window.to_string(),
-    ))
+    Ok(ContractStats {
+        recent_invocations: row.recent_invocations as i64,
+        recent_unique_callers: row.recent_unique_callers as i64,
+        recent_events: row.recent_events as i64,
+        stats_window: window.to_string(),
+    })
 }
 
 /// SQL for [`fetch_contract_stats`]. `days` / `ledger_floor` derive from the
