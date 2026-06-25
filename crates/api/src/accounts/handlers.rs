@@ -184,6 +184,16 @@ pub async fn get_account(
         }
     };
 
+    let deleted = match fetch_deleted_for_source(&state, source, header.id, header.last_seen_ledger)
+        .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error deriving deleted status for {account_id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
     let body = AccountDetailResponse {
         account_id: header.account_id,
         sequence_number: header.sequence_number,
@@ -191,6 +201,7 @@ pub async fn get_account(
         home_domain: header.home_domain,
         first_seen_ledger: header.first_seen_ledger,
         last_seen_ledger: header.last_seen_ledger,
+        deleted,
     };
 
     let mut resp = Json(body).into_response();
@@ -343,6 +354,25 @@ async fn fetch_account_for_source(
         DataSource::Ch => queries_ch::fetch_account(state.ch(), account_strkey)
             .await
             .map_err(AcctFetchError::Ch),
+    }
+}
+
+/// Derived `deleted` status (task 0324). CH-only: prod serves accounts from
+/// CH, so the PG branch returns `false` rather than carrying a duplicate
+/// derivation. See `queries_ch::fetch_deleted_status`.
+async fn fetch_deleted_for_source(
+    state: &AppState,
+    source: DataSource,
+    account_surrogate_id: i64,
+    last_seen_ledger: i64,
+) -> Result<bool, AcctFetchError> {
+    match source {
+        DataSource::Pg => Ok(false),
+        DataSource::Ch => {
+            queries_ch::fetch_deleted_status(state.ch(), account_surrogate_id, last_seen_ledger)
+                .await
+                .map_err(AcctFetchError::Ch)
+        }
     }
 }
 

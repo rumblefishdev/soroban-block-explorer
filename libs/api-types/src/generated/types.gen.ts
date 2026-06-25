@@ -28,6 +28,12 @@ export type AccountBalance = {
 export type AccountDetailResponse = {
   account_id: string;
   balances: Array<AccountBalance>;
+  /**
+   * `true` when the account was removed from the ledger via `account_merge`
+   * and never re-funded (its last lifecycle event is the merge). Derived,
+   * not stored. CH-only — the PG fallback always reports `false`.
+   */
+  deleted: boolean;
   first_seen_ledger: number;
   home_domain?: string | null;
   last_seen_ledger: number;

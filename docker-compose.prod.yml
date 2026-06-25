@@ -126,6 +126,15 @@ services:
     volumes: !override
       - /srv/clickhouse-data:/var/lib/clickhouse
       - /srv/clickhouse-logs:/var/log/clickhouse-server
+      # Local backup disk target for ad-hoc operational snapshots
+      # (`BACKUP … TO Disk('backups', …)`) — the manual pre-op checkpoint
+      # path, distinct from the maintained weekly Borg→Storage Box backup.
+      # /backups is bind-mounted to the host so a snapshot survives a
+      # container recreate; the `backups` disk itself is defined in
+      # config.d/backups.xml (mounted just below). Prod-only: dev has no
+      # /srv/backups host path.
+      - /srv/backups:/backups
+      - ./crates/db-clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
       # Read-only credentials file for clickhouse-client invocations
       # from the host-side backup script. Delivered by Ansible's
       # `app` role (not backup — must land before this compose

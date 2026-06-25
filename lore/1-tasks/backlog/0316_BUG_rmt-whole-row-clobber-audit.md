@@ -4,7 +4,7 @@ title: 'BUG: RMT whole-row clobber — correct column values overwritten by NULL
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0295', '0297']
+related_tasks: ['0295', '0297', '0320']
 tags:
   [layer-data, clickhouse-rmt, data-correctness, priority-medium, effort-medium]
 links: []
@@ -16,6 +16,16 @@ history:
       Spawned during 0295 (AccountMerge balance tombstone) deep dive. Found a
       broader, pre-existing class bug while investigating whether the merge
       tombstone clobbers identity columns.
+  - date: 2026-06-24
+    status: backlog
+    who: karolkow
+    note: >
+      Expanded from 0320 research/decision. Added Phase 0 "is it even worth it?"
+      recon as the FIRST step (maybe only 1-2 cases → just keep read-modify-write,
+      skip the big engine change). Added CoalescingMergeTree as an engine candidate
+      alongside SimpleAggregateFunction. Added: if the engine change is adopted,
+      0316 must REMOVE 0320's stop-gap read-first prefetch (the read becomes
+      unnecessary). Added redundancy reconnaissance to scope.
 ---
 
 # BUG: RMT whole-row clobber on partial-row insert
@@ -35,6 +45,34 @@ below); and **(b) can't-cheaply-update-one-column** — e.g. revising
 `soroban_contracts.wasm_hash` on a WASM upgrade ([[0320]]). Both need the same
 read-modify-write remedy. This task is the conceptual home + DB-wide audit; 0320
 is the wasm-specific implementation.
+
+## Phase 0 — is it even worth it? (reconnaissance FIRST, gates everything)
+
+**Do this before committing to any big engine change.** The fundamental fixes
+below (engine swap, side-tables) are large, with data migration. They are only
+worth it if the clobber problem is broad. If it turns out to be just 1–2
+columns/cases, the lazy correct answer is to **keep the simple per-write
+read-modify-write** (read the affected row(s) at staging, carry forward) and
+**not** migrate engines at all.
+
+Recon questions to answer first:
+
+1. **Breadth** — how many RMT tables × conditionally-populated columns actually
+   suffer measurable clobber? (Extend the `home_domain` measurement query across
+   all candidates.) A handful → stay with read-modify-write; many → engine change
+   pays off.
+2. **Redundancy recon** — where do we already issue read-before-write fetches
+   (`fetch_prior_wasm_verdicts`, `fetch_prior_contract_verdicts`, 0320's upgrade
+   prefetch), and could one engine change make a whole class of those reads
+   redundant? Quantify the reads we'd delete.
+3. **Engine fit + availability** — does our ClickHouse version ship
+   `CoalescingMergeTree` (keeps last non-null per column on merge — purpose-built
+   for partial updates, no read needed)? If not, can `AggregatingMergeTree` +
+   `SimpleAggregateFunction(anyLast/argMax)` achieve the same? Migration cost +
+   query-side changes (`FINAL`, aggregate read syntax) vs the reads it removes.
+4. **Decision gate** — only if (1)+(2) show broad benefit do we adopt an engine
+   change. Otherwise: document "read-modify-write is sufficient", close the
+   engine question, done.
 
 ## Evidence (confirmed on prod CH)
 
@@ -80,14 +118,24 @@ clobbered value is what users see.
    pattern. Known: task 0297 moved Soroban token metadata to a separate
    `soroban_contract_metadata` side-table precisely to dodge RMT whole-row
    clobber from many writers.
-4. **Fundamental fix** — choose a class-level remedy and apply to the affected
-   columns:
+4. **Fundamental fix** (only if Phase 0 says it's worth it) — choose a class-level
+   remedy and apply to the affected columns:
+   - `CoalescingMergeTree` — keeps the **last non-null per column** on merge, so a
+     writer can emit a **partial row (NULLs for unknown columns) without reading
+     the existing row first**. The cleanest fit for "update one column"; verify it
+     exists in our CH version (Phase 0 q3), or
+   - `AggregatingMergeTree` / `SimpleAggregateFunction(anyLast, ...)` — same
+     independent-column-merge effect via aggregate columns, or
    - side-table per write-once column (the 0297 pattern), or
-   - `AggregatingMergeTree` / `SimpleAggregateFunction(anyLast, ...)` so columns
-     merge independently instead of whole-row replace, or
    - stop emitting full rows for reference-only touches (only write identity
      columns on a real entity-entry change), or
-   - read-modify-write carry-forward at staging.
+   - read-modify-write carry-forward at staging (the stop-gap; see below).
+5. **Remove 0320's stop-gap read** — 0320 ships a read-first RMW (prefetch the
+   upgraded contract's row, carry deployer/name/etc forward) precisely because the
+   current RMT engine can't update one column. If 0316 adopts `CoalescingMergeTree`
+   / `SimpleAggregateFunction`, that read becomes **unnecessary** — 0316 must rip it
+   out (write only the changed column) so we don't keep a redundant DB read forever.
+   If Phase 0 says "not worth it", 0320's read-first stays as the permanent answer.
 
 ## Measured scale (prod CH, 2026-06-23)
 
@@ -107,11 +155,13 @@ to the clobber population, it just surfaced the mechanism.
 
 ## Fix options — with in-project precedents
 
-| Option                                                           | In-project precedent                                                                    |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Side-table per write-once column, join at read                   | 0297 `soroban_contract_metadata`                                                        |
-| Fetch-from-DB carry-forward at staging (read-modify-write)       | `fetch_prior_contract_verdicts` (reads prior CH state at staging); 0214/0228 RPC top-up |
-| EXCHANGE one-shot rebuild (`argMax` last-non-null → temp → swap) | 0283 `contract_type_rebuild`, `repair_tier1`, `asset_aggregates`                        |
+| Option                                                           | In-project precedent                                                                                           |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `CoalescingMergeTree` (last-non-null per column, no read needed) | none yet — new engine; verify CH-version availability (Phase 0)                                                |
+| `AggregatingMergeTree` + `SimpleAggregateFunction(anyLast)`      | none yet — column-independent merge                                                                            |
+| Side-table per write-once column, join at read                   | 0297 `soroban_contract_metadata`                                                                               |
+| Fetch-from-DB carry-forward at staging (read-modify-write)       | `fetch_prior_contract_verdicts` (reads prior CH state at staging); 0214/0228 RPC top-up; 0320 upgrade prefetch |
+| EXCHANGE one-shot rebuild (`argMax` last-non-null → temp → swap) | 0283 `contract_type_rebuild`, `repair_tier1`, `asset_aggregates`                                               |
 
 Recommendation: a forward-fix (side-table or fetch carry-forward) **plus** a
 one-shot EXCHANGE rebuild to repair the existing ~38,833. Read-side
@@ -124,8 +174,13 @@ staging pattern if the fetch-carry-forward option is chosen.
 
 ## Acceptance Criteria
 
+- [ ] **Phase 0 worth-it gate decided**: breadth measured + redundant-read recon +
+      CoalescingMergeTree availability → explicit "engine change" vs "keep
+      read-modify-write" decision (don't migrate engines for 1–2 cases)
 - [ ] Inventory of RMT tables + clobber-candidate columns
 - [ ] Per-column measured scale of clobbered rows (with queries)
 - [ ] Catalogue of already-fixed cases + the pattern used
 - [ ] Architectural decision on the fundamental fix (ADR if warranted)
 - [ ] Fix applied to `accounts.home_domain` (+ sequence/first_seen) as the first target
+- [ ] If engine change adopted: 0320's stop-gap read-first prefetch removed (write
+      partial column only); else: documented that read-modify-write is the permanent answer
