@@ -2,7 +2,7 @@
 id: '0327'
 title: 'FEATURE: contract Upgradeable/Immutable badge — WASM-import mutability detection + API field + FE chip'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0320', '0325']
 tags: [xdr-parser, soroban, classification, api, frontend, contract-detail]
@@ -19,6 +19,10 @@ history:
       is NO on-ledger immutability flag — the only signal is the import set. This
       task surfaces that as a user-visible badge on the contract page. Kept
       separate from 0320 (which was scoped down to the data-correctness fix).
+  - date: 2026-06-25
+    status: active
+    who: karolkow
+    note: Promoted to active to begin implementation.
 ---
 
 # FEATURE: contract Upgradeable / Immutable badge
