@@ -67,9 +67,10 @@ add a parser-side instance diff at all.
 ## Decisions (D1-D5)
 
 - **D1 — Backend: ClickHouse only.** PG retired (0243). Confirmed by human.
-- **D2 — Ship history + "upgradeable: yes".** Confirmed by human. Source =
-  `soroban_events` chain (count + old→new list); "upgradeable" positive = "emitted
-  ≥1 `executable_update`". Immutability (the hard negative) stays deferred.
+- **D2 — Ship the `upgradeable` boolean only (for now).** Confirmed by human.
+  "upgradeable" positive = emitted ≥1 `executable_update` (light CH existence check).
+  Full upgrade-history list deferred (data is in `soroban_events`). Immutability (the
+  hard negative) stays deferred.
 - **D3 — Cache: self-healing.** `contracts/cache.rs` is moka with a fixed **45s TTL**
   (Lambda, per-instance). Backfill/live RMW propagate within 45s — no explicit
   invalidation needed.

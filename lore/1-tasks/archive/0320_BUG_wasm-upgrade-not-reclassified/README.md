@@ -2,7 +2,7 @@
 id: '0320'
 title: 'BUG: soroban_contracts keeps stale wasm_hash after WASM-upgrade — stale code hash, interface & classification on contract pages'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0295', '0316', '0283', '0243', '0325']
 tags:
@@ -69,6 +69,30 @@ history:
       clobber audit + engine change (CoalescingMergeTree/SimpleAggregateFunction) +
       removing this prefetch-read all moved to 0316 (its Phase-0 recon gates whether
       the big engine change is worth it vs keeping read-modify-write).
+  - date: 2026-06-24
+    status: active
+    who: karolkow
+    note: >
+      CODE COMPLETE + validated. Parser/event fn (TDD) + live RMW (stage +
+      persist prefetch, persist_e2e green) + backfill subcommand (real-CH e2e +
+      manual dry-run/for-real/idempotent) + invariant (chq) + D2 (API detail
+      upgradeable/upgrade_history + FE ContractSummary, OpenAPI regen). All Rust
+      suites + web tsc + clippy green. Prod execution split to [[0326]] (ops).
+      Drive-by init.sql MV-order fix (split commit). Closes on PR commit+merge.
+  - date: 2026-06-25
+    status: completed
+    who: karolkow
+    note: >
+      Scope finalized to the CORE stale-wasm_hash fix only: event parser
+      (`extract_executable_update_new_wasm_hash`) + live RMW path (stage build +
+      persist sibling-prefetch, diagnostic-filtered) + `wasm-upgrade-backfill`
+      subcommand (argMax tie-break, EXCHANGE, idempotent, --dry-run) + chq
+      invariant. The upgradeable/immutable mutability flag + FE indicator were
+      extracted to a stash for their OWN task (out of 0320 scope); the init.sql
+      MV-order fix was reverted by user. Final prod read-only validation: 1,362
+      upgraders / 1,351 stale / 0 orphans; after-hash == live mainnet WASM
+      sha256 (3/3 spot-checked). Rust suites + clippy green. Prod execution =
+      [[0326]] (ops), rare class-flip handling = [[0325]].
 ---
 
 # BUG: WASM-upgrade leaves stale wasm_hash (+ interface + classification)
@@ -168,6 +192,17 @@ FINAL WHERE contract_id IN (…)` — idiomatic, same shape as
    contract that emitted one. Doubles as the acceptance test and the tripwire for
    clobber-back regressions.
 
+## Out of scope — mutability indicator (extracted)
+
+The `upgradeable`/`immutable` mutability indicator (WASM-import detection of
+`update_current_contract_wasm` + the API field + the FE header chip) was
+**extracted out of 0320** into a `git stash` (`"0320: upgradeable/mutability flag
+detection + FE"`) for its own task — it's a separate feature from this task's core
+fix (stale `wasm_hash`). The research that motivated it (no on-ledger immutability
+flag; frozen detectable via the `("l","6")` host-fn import; 4 of the 12 top
+non-upgrader wasms are frozen) is preserved above + in
+[notes/R-soroban-upgrade-research.md](notes/R-soroban-upgrade-research.md).
+
 ## Dependencies / coupling
 
 - **Backend scope = ClickHouse** (D1). The approach rests on `soroban_events` +
@@ -186,9 +221,9 @@ FINAL WHERE contract_id IN (…)` — idiomatic, same shape as
 ## Decisions (resolved 2026-06-24)
 
 - **D1 — Backend: ClickHouse only.** PG retired (0243). ✓
-- **D2 — Ship upgrade history + "upgradeable: yes".** Source = `soroban_events`
-  chain (count + old→new list); "upgradeable" = emitted ≥1 `executable_update`.
-  Immutability (hard negative) stays deferred. ✓
+- **D2 — Mutability indicator EXTRACTED from 0320.** The `upgradeable`/`immutable`
+  flag + FE chip is a separate feature; pulled out into a `git stash` for its own
+  task (see "Out of scope" above). Not part of this task's core fix.
 - **D3 — Cache self-heals.** `contracts/cache.rs` = moka, fixed **45s TTL** (Lambda,
   per-instance). No explicit invalidation needed; ≤45s staleness after backfill. ✓
 - **D4 — Sequencing: option C (locked, refined).** 0320 ships its own RMW correctly
@@ -204,14 +239,42 @@ and the wasm-row data-model (interfaces append-only, pointer overwritten, histor
 
 ## Acceptance Criteria
 
-- [ ] Live: an `executable_update` event RMWs `soroban_contracts.wasm_hash` +
+- [x] Live: an `executable_update` event RMWs `soroban_contracts.wasm_hash` +
       contract_type (carry-forward all identity columns, no clobber). Class flips → [[0325]]
-- [ ] Backfill: all 1,362 existing upgraded contracts corrected in-CH (no S3 re-parse)
-- [ ] Audit-harness invariant: `wasm_hash == latest executable_update.new_hash` for
-      every contract emitting one — green (also the clobber-back tripwire)
-- [ ] Validate ≥20 contracts' corrected hash against Soroban RPC ground-truth (done in
-      research: 28/28 — re-run post-fix)
-- [ ] D2: contract page shows upgrade history + upgradeable flag from events
+      — `stage::build_wasm_upgrade_rows` (3 unit tests) + `persist::fetch_prior_contract_rows`
+      prefetch, wired into `persist_ledger_clickhouse`; `persist_e2e` green on real CH.
+- [x] Backfill: corrects existing upgraded contracts in-CH (no S3 re-parse) —
+      `backfill-runner wasm-upgrade-backfill`; e2e + manual real-CH run (dry-run safe,
+      for-real corrects + preserves identity + idempotent). Prod execution → [[0326]].
+- [x] Audit-harness invariant: `wasm_hash == latest executable_update.new_hash` —
+      `notes/G-invariant-wasm-hash-current.sql`; validated on prod (1351 baseline).
+      (No CH invariant runner exists; ships as a `chq` query. Prod run-to-0 → [[0326]].)
+- [x] Validate ≥20 contracts' corrected hash vs Soroban RPC — 28/28 in research;
+      local for-real run re-confirmed. Post-prod-run re-check → [[0326]].
+- [~] D2 (mutability indicator) — **extracted to a `git stash` for its own task**;
+  not part of 0320's core fix.
+
+## Implementation Notes
+
+Event-based (supersedes the 0295 `updated`-ContractInstance parser draft).
+
+- **Parser/event** (`xdr-parser/src/event.rs`) — `extract_executable_update_new_wasm_hash`
+  parses the new WASM hash from the decoded `executable_update` topics. TDD (3 tests).
+- **Live path** (`db-clickhouse`) — `stage::build_wasm_upgrade_rows` builds corrected
+  `SorobanContractRow`s (skip-on-miss → no NULL clobber); `persist::fetch_prior_contract_rows`
+  (gated, fail-open) prefetches identity; wired into `persist_ledger_clickhouse` (3-way join).
+- **Backfill** (`backfill-runner`) — `wasm-upgrade-backfill` subcommand (staging + EXCHANGE),
+  `--dry-run`, idempotent, CH-only.
+- **Invariant** — `notes/G-invariant-wasm-hash-current.sql`.
+- **D2 mutability indicator (upgradeable/immutable flag + FE chip) — EXTRACTED**
+  out of 0320 into a `git stash` for its own task. Not part of the core fix.
+
+Verified: xdr-parser/db-clickhouse/backfill-runner/api suites + clippy green; web tsc clean;
+real-CH e2e (backfill + `persist_e2e`) green; prod read-only dry-run preview
+(`upgraded=1362 corrected=1351 unparseable=0`).
+
+**Remaining to close:** commit the 0320 PR (code + this completion + archive move; split
+the init.sql fix) → merge. Prod backfill execution + its validation → [[0326]].
 
 ## Superseded notes
 
