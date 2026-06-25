@@ -52,6 +52,8 @@ use xdr_parser::types::{
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
 
+use xdr_parser::event::extract_executable_update_new_wasm_hash;
+
 use super::ids;
 use super::rows::*;
 use crate::SchemaError;
@@ -161,6 +163,11 @@ pub struct StageInputs<'a> {
     pub prior_wasm_verdicts: &'a HashMap<[u8; 32], ContractType>,
     /// Task 0283 live G9 — cross-ledger contract verdicts by `contract_id`.
     pub prior_contract_verdicts: &'a HashMap<String, ContractType>,
+    /// Task 0320 live WASM-upgrade — prior `soroban_contracts` rows (read back
+    /// in full) for the contracts that emit an `executable_update` this ledger,
+    /// so [`build_wasm_upgrade_rows`] can carry identity forward when it rewrites
+    /// `wasm_hash`. Empty map for legacy callers (no upgrade rows emitted).
+    pub prior_contract_rows: &'a HashMap<String, SorobanContractRow>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,7 +208,67 @@ pub fn prepare(
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
+        prior_contract_rows: &HashMap::new(),
     })
+}
+
+/// Build corrected `soroban_contracts` rows for contracts that emitted an
+/// `executable_update` SYSTEM event this ledger (task 0320, live path).
+///
+/// Per `executable_update` event with a parseable new WASM hash AND a known
+/// prior row, emit a full row that **overrides** `wasm_hash` +
+/// `wasm_uploaded_at_ledger` (= the upgrade ledger, the RMT version that wins
+/// the merge) and **carries forward** the identity columns. `contract_type` is
+/// carried forward unchanged — the class never net-changes on upgrade for
+/// current data; the rare flip is task 0325.
+///
+/// Events without a parseable hash, without a contract address, or **without a
+/// prior row are skipped** — emitting a partial row would clobber the identity
+/// columns to NULL under RMT. Multiple upgrades of one contract in the same
+/// ledger collapse to the last (on-chain application order).
+pub fn build_wasm_upgrade_rows(
+    events: &[(String, Vec<ExtractedEvent>)],
+    prior: &HashMap<String, SorobanContractRow>,
+    ledger_sequence: i64,
+) -> Vec<SorobanContractRow> {
+    // Keyed by contract_id so multiple upgrades of one contract in the same
+    // ledger collapse to the last seen (= on-chain application order).
+    let mut by_contract: HashMap<String, SorobanContractRow> = HashMap::new();
+    for (_tx_hash, evs) in events {
+        for ev in evs {
+            // Only consensus events drive state. The diagnostic container holds
+            // byte-identical copies of consensus events AND events from FAILED
+            // transactions (an upgrade that never applied) — acting on those would
+            // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
+            // staging guard (this is the same population the backfill reads, post-drop).
+            if is_diagnostic(ev.source) {
+                continue;
+            }
+            let Some(addr) = ev.contract_id.as_deref() else {
+                continue;
+            };
+            // `extract_…` returns `Some` only for a well-formed executable_update.
+            let Some(new_hash) = extract_executable_update_new_wasm_hash(&ev.topics) else {
+                continue;
+            };
+            // Skip-on-miss: without the prior row we cannot carry identity
+            // columns forward, and a partial row would NULL them under RMT.
+            let Some(prior_row) = prior.get(addr) else {
+                continue;
+            };
+            // Carry the prior row forward verbatim, overriding only what the
+            // upgrade actually changes: the new WASM hash and the RMT version
+            // (= upgrade ledger, so it wins the merge). `id` / `contract_id` /
+            // deployer / name / contract_type / is_sac all ride along from the
+            // read-back row — matching the backfill SQL, which also passes
+            // `is_sac` through (no upgrader is a mislabeled SAC on current data).
+            let mut row = prior_row.clone();
+            row.wasm_hash = Some(new_hash);
+            row.wasm_uploaded_at_ledger = ledger_sequence;
+            by_contract.insert(addr.to_string(), row);
+        }
+    }
+    by_contract.into_values().collect()
 }
 
 /// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
@@ -270,6 +337,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         sac_overrides,
         prior_wasm_verdicts,
         prior_contract_verdicts,
+        prior_contract_rows,
     } = *input;
 
     let ledger_sequence_i64 = i64::from(ledger.sequence);
@@ -1400,6 +1468,20 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             });
         }
     }
+
+    // ---- Task 0320 live path: WASM-upgrade row rewrites ----
+    // Appended last (after deploy / SAC-override / skeleton rows) so a contract
+    // upgraded this ledger gets a full row overriding `wasm_hash` +
+    // `wasm_uploaded_at_ledger` (RMT version = upgrade ledger, wins the merge)
+    // while carrying its identity forward. `prior_contract_rows` is empty for
+    // every caller except the live indexer, so this is a no-op elsewhere. A
+    // contract that both deploys and upgrades in one ledger is impossible (the
+    // WASM upload must precede the upgrade in an earlier tx).
+    out.contract_rows.extend(build_wasm_upgrade_rows(
+        events,
+        prior_contract_rows,
+        ledger_sequence_i64,
+    ));
 
     Ok(out)
 }

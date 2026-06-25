@@ -3,6 +3,7 @@
 //! Extracts contract, system, and diagnostic events from `SorobanTransactionMeta`.
 //! Each event is decoded into an `ExtractedEvent` with ScVal-decoded topics and data.
 
+use base64::Engine;
 use serde_json::{Value, json};
 use stellar_xdr::curr::*;
 
@@ -158,9 +159,102 @@ fn extract_single_event(
     }
 }
 
+/// Extract the NEW executable WASM hash from a decoded `executable_update`
+/// system-event `topics` array (the typed-JSON stored in
+/// `soroban_events.topics_xdr`).
+///
+/// Per CAP-0046-05 a WASM upgrade emits a system event whose topics are
+/// `[Symbol("executable_update"), <old executable>, <new executable>]`, where
+/// each executable is `vec[Symbol("Wasm"), Bytes(hash)]`. Returns the new
+/// 32-byte hash, or `None` if the shape doesn't match — wrong topic name,
+/// a non-`Wasm` executable (e.g. a SAC `StellarAsset`, which never upgrades),
+/// or a hash that isn't exactly 32 bytes.
+pub fn extract_executable_update_new_wasm_hash(topics: &Value) -> Option<[u8; 32]> {
+    let arr = topics.as_array()?;
+    // topic[0] is the event-name symbol.
+    if arr.first()?.get("value")?.as_str()? != "executable_update" {
+        return None;
+    }
+    // topic[2] is the NEW executable: vec[Symbol("Wasm"), Bytes(hash)].
+    let new_exec = arr.get(2)?.get("value")?.as_array()?;
+    if new_exec.first()?.get("value")?.as_str()? != "Wasm" {
+        return None; // e.g. a StellarAsset executable — SACs never upgrade.
+    }
+    let b64 = new_exec.get(1)?.get("value")?.as_str()?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    bytes.try_into().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real mainnet `executable_update` topics from contract CCABO2IQ… (first
+    /// upgrade, ledger 55363489): old `8b89f74f…`, new `55827b34…`. The fn must
+    /// return the NEW hash.
+    #[test]
+    fn extracts_new_wasm_hash_from_executable_update_topics() {
+        let topics: Value = serde_json::from_str(
+            r#"[{"type":"sym","value":"executable_update"},{"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"i4n3TxyvZkB6DzwJPtmvBXoW5c9VvuVtd56kVKbDCxw="}]},{"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"VYJ7NLoW/zBUeWZF4L0xpQ6HGUzBI9zdjg8i56LMnZg="}]}]"#,
+        )
+        .unwrap();
+        let got = extract_executable_update_new_wasm_hash(&topics).expect("new wasm hash");
+        let got_hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            got_hex,
+            "55827b34ba16ff3054796645e0bd31a50e87194cc123dcdd8e0f22e7a2cc9d98"
+        );
+    }
+
+    #[test]
+    fn ignores_non_executable_update_event() {
+        // A `transfer` event must never yield a hash — guards the backfill from
+        // mis-firing on the ~9.25B non-upgrade events.
+        let topics: Value = serde_json::from_str(
+            r#"[{"type":"sym","value":"transfer"},{"type":"address","value":"GAHWFCCYCDSSEYZRVV4446KBDP6X2JR2T56TG4OGANS3AS3NCILOCGU5"}]"#,
+        )
+        .unwrap();
+        assert_eq!(extract_executable_update_new_wasm_hash(&topics), None);
+    }
+
+    #[test]
+    fn ignores_non_wasm_executable() {
+        // Defensive: a StellarAsset (SAC) executable carries no wasm hash.
+        let topics: Value = serde_json::from_str(
+            r#"[{"type":"sym","value":"executable_update"},{"type":"vec","value":[{"type":"sym","value":"StellarAsset"}]},{"type":"vec","value":[{"type":"sym","value":"StellarAsset"}]}]"#,
+        )
+        .unwrap();
+        assert_eq!(extract_executable_update_new_wasm_hash(&topics), None);
+    }
+
+    /// Round-trip through the REAL `scval_to_typed_json` encoder (not a
+    /// hand-written base64 literal) so the parser stays pinned to how the
+    /// indexer actually serializes `Bytes`/`Vec`/`Symbol` topics — a future
+    /// change to that encoding breaks this test in CI instead of silently
+    /// regressing upgrade detection to "unparseable".
+    #[test]
+    fn extracts_new_hash_via_real_scval_encoding() {
+        use crate::scval::scval_to_typed_json;
+        let sym = |s: &str| ScVal::Symbol(ScSymbol::try_from(s.as_bytes().to_vec()).unwrap());
+        let exec = |b: u8| {
+            ScVal::Vec(Some(
+                ScVec::try_from(vec![
+                    sym("Wasm"),
+                    ScVal::Bytes(ScBytes::try_from(vec![b; 32]).unwrap()),
+                ])
+                .unwrap(),
+            ))
+        };
+        let topics = serde_json::json!([
+            scval_to_typed_json(&sym("executable_update")),
+            scval_to_typed_json(&exec(0x11)),
+            scval_to_typed_json(&exec(0x99)),
+        ]);
+        assert_eq!(
+            extract_executable_update_new_wasm_hash(&topics),
+            Some([0x99u8; 32])
+        );
+    }
 
     #[test]
     fn extract_contract_event() {
