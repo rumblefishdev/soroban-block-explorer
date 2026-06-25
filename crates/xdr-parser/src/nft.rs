@@ -11,7 +11,7 @@
 use serde_json::Value;
 use tracing::warn;
 
-use crate::sac::{sac_override_from_event_topics, topic_symbol_value};
+use crate::sac::{SacOverride, sac_override_from_event_topics, topic_symbol_value};
 use crate::types::{EventSource, ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
@@ -97,6 +97,45 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
     }
 
     nft_events
+}
+
+/// Crypto-proven un-deployed-SAC overrides for the ledger's events (task 0323).
+///
+/// An un-deployed SAC emits a CAP-67 unified event under its reserved C… address
+/// without ever being deployed. [`sac_override_from_event_topics`] proves
+/// `emitter == derive_sac(asset)`. We collect those overrides (deduped by contract
+/// id) so staging models them as ASSETS, not `soroban_contracts` rows: the override
+/// id suppresses the Pass-2 FK stub, and its `identity` seeds the `assets` row.
+/// Replaces the trustline-sourced `derive_sac_overrides_from_assets` — an
+/// un-deployed SAC matters once it has activity (an event), not at the trustline.
+//
+// ponytail: re-runs the SAC gate already evaluated in `detect_nft_events`; the
+// expensive SHA256 only fires for genuine SAC-shaped events (last topic parses as
+// a SEP-11 asset), so the double-cost is bounded. Fold the collect into
+// `detect_nft_events` if profiling shows it hot.
+pub fn detect_undeployed_sac_overrides(
+    events: &[(String, Vec<ExtractedEvent>)],
+    net_id: &[u8; 32],
+) -> Vec<SacOverride> {
+    let mut by_cid: std::collections::HashMap<String, SacOverride> =
+        std::collections::HashMap::new();
+    for (_tx_hash, evs) in events {
+        for ev in evs {
+            if ev.source == EventSource::Diagnostic {
+                continue;
+            }
+            let Some(cid) = &ev.contract_id else {
+                continue;
+            };
+            if by_cid.contains_key(cid) {
+                continue;
+            }
+            if let Some(ov) = sac_override_from_event_topics(cid, &ev.topics, net_id) {
+                by_cid.insert(cid.clone(), ov);
+            }
+        }
+    }
+    by_cid.into_values().collect()
 }
 
 /// Try to parse a transfer event as an NFT transfer.
@@ -428,6 +467,69 @@ mod tests {
             ledger_sequence: 100,
             created_at: 1700000000,
         }
+    }
+
+    // ---- task 0323: detect_undeployed_sac_overrides ----
+
+    const USDC_SAC: &str = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
+    // SEP-11 asset string whose SAC derives to USDC_SAC on mainnet.
+    const USDC_ASSET: &str = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+    fn sac_event(emitter: &str, signature: &str) -> ExtractedEvent {
+        make_event(
+            emitter,
+            vec![
+                json!({"type": "sym", "value": signature}),
+                json!({"type": "address", "value": "GFROM"}),
+                json!({"type": "address", "value": "GTO"}),
+                json!({"type": "string", "value": USDC_ASSET}),
+            ],
+            json!({"type": "i128", "value": "1000000"}),
+        )
+    }
+
+    #[test]
+    fn undeployed_sac_overrides_collects_and_dedups() {
+        let net = crate::sac::network_id(crate::sac::MAINNET_PASSPHRASE);
+        // tx1: two crypto-proven USDC-SAC events (transfer + mint) → ONE override.
+        // tx2: a bespoke transfer whose last topic is an address, not a SEP-11
+        // asset → the gate rejects it (no override).
+        let bespoke = make_event(
+            "CBESPOKE",
+            vec![
+                json!({"type": "sym", "value": "transfer"}),
+                json!({"type": "address", "value": "GFROM"}),
+                json!({"type": "address", "value": "GTO"}),
+            ],
+            json!({"type": "u32", "value": 42}),
+        );
+        let events = vec![
+            (
+                "tx1".to_string(),
+                vec![sac_event(USDC_SAC, "transfer"), sac_event(USDC_SAC, "mint")],
+            ),
+            ("tx2".to_string(), vec![bespoke]),
+        ];
+        let mut ovs = super::detect_undeployed_sac_overrides(&events, &net);
+        assert_eq!(ovs.len(), 1, "one override, deduped across two SAC events");
+        let ov = ovs.pop().unwrap();
+        assert_eq!(ov.contract_id, USDC_SAC);
+        assert!(
+            matches!(ov.identity, crate::types::SacAssetIdentity::Credit { ref code, .. } if code == "USDC"),
+            "identity carries the classic asset for the AC#3 assets row",
+        );
+    }
+
+    #[test]
+    fn undeployed_sac_overrides_skips_diagnostic() {
+        let net = crate::sac::network_id(crate::sac::MAINNET_PASSPHRASE);
+        let mut diag = sac_event(USDC_SAC, "transfer");
+        diag.source = EventSource::Diagnostic;
+        let events = vec![("tx".to_string(), vec![diag])];
+        assert!(
+            super::detect_undeployed_sac_overrides(&events, &net).is_empty(),
+            "diagnostic-container SAC events are skipped (byte-identical mirrors)",
+        );
     }
 
     #[test]

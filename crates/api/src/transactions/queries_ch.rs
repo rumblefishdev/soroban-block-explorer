@@ -818,7 +818,7 @@ pub async fn fetch_event_appearances(
                 toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
              FROM soroban_events se FINAL \
-             JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id \
              JOIN ledgers l ON l.sequence = se.ledger_sequence \
              WHERE se.transaction_id = ? \
                AND se.ledger_sequence = ? \
@@ -848,7 +848,7 @@ pub async fn fetch_invocation_appearances(
                 sia.amount, \
                 l.closed_at AS created_at \
              FROM soroban_invocations_appearances sia FINAL \
-             JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
+             LEFT JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id \
              LEFT JOIN accounts caller FINAL ON caller.id = sia.caller_id \
              INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
              WHERE sia.transaction_id = ? \

@@ -274,7 +274,7 @@ pub async fn fetch_by_composite(
                    nullIf(own.account_id, '')        AS owner_account, \
                    nullIf(n.current_owner_ledger, 0) AS last_seen_ledger \
                FROM nfts n FINAL \
-               INNER JOIN soroban_contracts sc ON sc.id = n.contract_id \
+               LEFT JOIN soroban_contracts sc ON sc.id = n.contract_id \
                LEFT JOIN  accounts          own ON own.id = n.current_owner_id \
                LEFT JOIN ( \
                    SELECT contract_id, token_id, \

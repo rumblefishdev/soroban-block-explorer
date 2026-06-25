@@ -36,7 +36,7 @@ pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_pa
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
-pub use nft::detect_nft_events;
+pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
 pub use operation::{extract_operations, tx_op_results};
 pub use sac::{

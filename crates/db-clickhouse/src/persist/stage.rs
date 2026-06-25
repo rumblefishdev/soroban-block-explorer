@@ -610,48 +610,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
 
-    // Task 0220 — SAC override re-insert. For every observed classic
-    // asset (Native / ClassicCredit), the parser already derived the
-    // SAC contract_id (see `xdr_parser::derive_sac_overrides_from_assets`).
-    // Re-insert a corrected `SorobanContractRow` with
-    // `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0` so
-    // RMT collapses by `ORDER BY (contract_id)` keeping the override
-    // version when the original deploy lived outside our backfill
-    // window and persisted as `is_sac=false`. Skips contracts already
-    // emitted from `contract_deployments` (no point in writing twice
-    // in the same partition).
-    {
-        let mut override_seen: HashSet<&str> = HashSet::new();
-        for cid in &contract_seen {
-            override_seen.insert(cid.as_str());
-        }
-        for ov in sac_overrides {
-            if !override_seen.insert(ov.contract_id.as_str()) {
-                continue;
-            }
-            out.contract_rows.push(SorobanContractRow {
-                id: ids::contract_id(&ov.contract_id),
-                contract_id: ov.contract_id.clone(),
-                wasm_hash: None,
-                // RMT version = 0 sentinel: every real deploy (which
-                // carries `wasm_uploaded_at_ledger = deployed_at_ledger
-                // >= window_start`) wins over this override, so a
-                // future in-window deploy of the same contract won't
-                // be downgraded back to a stub. But the override
-                // _does_ win over the existing `is_sac=false` skeleton
-                // RMT-merged from referenced-only Pass-2 emits which
-                // also carry `wasm_uploaded_at_ledger = 0` — the new
-                // row dedupes by `(contract_id)` ORDER BY and the
-                // freshly-written `is_sac=true` is the one kept.
-                wasm_uploaded_at_ledger: 0,
-                deployer_id: None,
-                deployed_at_ledger: None,
-                contract_type: Some(ContractType::Token as i16),
-                is_sac: true,
-                name: None,
-            });
-        }
-    }
+    // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
+    // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
+    // here are removed. `sac_overrides` (now the crypto-proven event emitters
+    // from `detect_undeployed_sac_overrides`) instead (a) suppress the Pass-2 FK
+    // stub below so no contract row is written, and (b) seed a SAC `assets` row
+    // in the asset-emission pass. A real deploy still writes its contract row
+    // from `contract_deployments` (site above).
 
     // ---- transactions + transaction_hash_index ----
     let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
@@ -1056,6 +1021,34 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_code,
                 issuer_id,
                 contract_id: ids::contract_id(&dep.contract_id),
+                name: None,
+                total_supply: None,
+                holder_count: None,
+                icon_url: None,
+            },
+        );
+    }
+
+    // Un-deployed-SAC assets (task 0323 AC#3). The crypto-proven event emitters
+    // in `sac_overrides` (see `detect_undeployed_sac_overrides`) get NO contract
+    // row (suppressed in Pass-2 below); model each as a SAC `assets` row so its
+    // activity has a home. `identity` carries the classic asset; the C… strkey is
+    // re-derivable from it (the surrogate `id` here is the one-way hash). A
+    // deployed SAC (e.g. USDC) that also emits is harmless — `push_asset` dedupes
+    // and its real deploy row already exists.
+    for ov in sac_overrides {
+        let (asset_code, issuer_id) = match &ov.identity {
+            SacAssetIdentity::Native => (String::new(), 0),
+            SacAssetIdentity::Credit { code, issuer } => (code.clone(), ids::account_id(issuer)),
+        };
+        push_asset(
+            &mut out,
+            &mut asset_seen,
+            AssetRow {
+                asset_type: domain::TokenAssetType::Sac as i16,
+                asset_code,
+                issuer_id,
+                contract_id: ids::contract_id(&ov.contract_id),
                 name: None,
                 total_supply: None,
                 holder_count: None,
