@@ -98,7 +98,10 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
             value: (
               <SupplyValue
                 supply={asset.total_supply}
-                code={asset.asset_code}
+                // Soroban-native tokens have no classic `asset_code`; fall back
+                // to the on-chain SEP-41 `symbol` so supply reads e.g. "1.5 USDC"
+                // instead of an unlabelled number (task 0304).
+                code={asset.asset_code ?? asset.symbol}
               />
             ),
           },
