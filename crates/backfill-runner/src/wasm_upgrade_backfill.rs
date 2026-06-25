@@ -140,11 +140,16 @@ async fn collect_latest_upgrades(
             // Tie-break within a ledger by event_index so two upgrades in the
             // same ledger pick the LAST-applied (matches the live path's
             // application-order collapse), not an arbitrary tied row.
+            // `event_type = 0` = SYSTEM (domain::ContractEventType::System). Only
+            // the host emits `executable_update`, always as a System event; a
+            // contract could emit a Contract-typed (event_type = 1) event with
+            // the same topic shape, so restrict to System to avoid a spoofed
+            // wasm_hash. Mirrors the live path's guard.
             "SELECT contract_id, \
                     argMax(topics_xdr, (ledger_sequence, event_index)) AS topics_xdr, \
                     max(ledger_sequence) AS upgrade_ledger \
              FROM soroban_events \
-             WHERE signature = 'executable_update' \
+             WHERE signature = 'executable_update' AND event_type = 0 \
              GROUP BY contract_id",
         )
         .fetch_all::<LatestUpgradeEventRow>()

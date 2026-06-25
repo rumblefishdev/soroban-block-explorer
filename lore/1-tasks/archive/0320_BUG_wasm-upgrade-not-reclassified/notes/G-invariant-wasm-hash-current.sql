@@ -23,11 +23,17 @@ FROM (
            JSONExtractString(JSONExtractRaw(argMax(topics_xdr, (ledger_sequence, event_index)), 3), 'value', 2, 'value')
          ))) AS chain_hash
   FROM soroban_events
-  WHERE signature = 'executable_update'
+  -- `event_type = 0` = SYSTEM: only the host emits `executable_update`, always as
+  -- a System event. A contract can emit a Contract-typed (event_type = 1) event
+  -- with the same topic shape; restrict to System so a spoof can't skew chain_hash.
+  WHERE signature = 'executable_update' AND event_type = 0
   GROUP BY contract_id
 ) ev
-INNER JOIN (SELECT id, lower(hex(wasm_hash)) AS stored FROM soroban_contracts FINAL) sc
+-- LEFT JOIN (not INNER): a contract with an upgrade event but NO `soroban_contracts`
+-- row is itself a violation — INNER would silently drop it and mask the anomaly.
+LEFT JOIN (SELECT id, lower(hex(wasm_hash)) AS stored FROM soroban_contracts FINAL) sc
   ON sc.id = ev.contract_id
--- `stored IS NULL` is a violation too (clobbered-to-NULL, the 0316 hazard):
--- `NULL != x` is NULL (not TRUE), so it would otherwise slip through.
-WHERE sc.stored IS NULL OR sc.stored != ev.chain_hash;
+-- Violations: no current row at all (`sc.id IS NULL`), a clobbered-to-NULL hash
+-- (`sc.stored IS NULL`, the 0316 hazard — `NULL != x` is NULL, would slip through),
+-- or a stored hash that differs from the chain-current hash.
+WHERE sc.id IS NULL OR sc.stored IS NULL OR sc.stored != ev.chain_hash;
