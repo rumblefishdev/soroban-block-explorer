@@ -1916,6 +1916,29 @@ fn build_wasm_upgrade_rows_ignores_diagnostic_source() {
 }
 
 #[test]
+fn build_wasm_upgrade_rows_ignores_non_system_event_type() {
+    // A Contract-typed event with executable_update-shaped topics is a spoof —
+    // only host-emitted System events may rewrite wasm_hash.
+    let addr = "C".to_string() + &"Z".repeat(55);
+    let mut ev = executable_update_event(&addr);
+    ev.event_type = ContractEventType::Contract;
+    let events = vec![("abcd".to_string(), vec![ev])];
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        prior_contract_row(
+            &addr,
+            Some(7),
+            Some(100),
+            Some(1),
+            false,
+            Some("foo".into()),
+        ),
+    );
+    assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
+}
+
+#[test]
 fn build_wasm_upgrade_rows_carries_is_sac_from_prior() {
     // is_sac rides along from the read-back row (matches the backfill SQL, which
     // also passes it through). No upgrader is a mislabeled SAC on current data,

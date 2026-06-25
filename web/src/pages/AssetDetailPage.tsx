@@ -43,7 +43,9 @@ export default function AssetDetailPage() {
   }
 
   const data = asset.data;
-  const code = data?.asset_code ?? 'Asset';
+  // Soroban-native tokens have no classic asset_code; fall back to the on-chain
+  // SEP-41 symbol for the title + breadcrumb before the generic label (0304).
+  const code = data?.asset_code ?? data?.symbol ?? 'Asset';
   const meta = data ? assetTypeMeta(data.asset_type_name) : null;
 
   let summary: ReactNode = null;

@@ -21,6 +21,9 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     header: 'Token',
     cell: (row) => {
       const meta = assetTypeMeta(row.asset_type_name);
+      // Soroban-native tokens have no classic asset_code; fall back to the
+      // on-chain SEP-41 symbol as the token label (task 0304).
+      const label = row.asset_code ?? row.symbol;
       return (
         <Stack
           direction="row"
@@ -31,9 +34,9 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
           <AssetIcon code={row.asset_code} iconUrl={row.icon_url} />
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              {row.asset_code ? (
+              {label ? (
                 <IdentifierDisplay
-                  value={row.asset_code}
+                  value={label}
                   type="asset"
                   truncate={false}
                   href={routes.asset(row.id)}
@@ -72,21 +75,26 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'supply',
     header: 'Total supply',
     align: 'right',
-    cell: (row) => (
-      <Stack sx={{ alignItems: 'flex-end' }}>
-        <Typography variant="bodySmRegular">
-          {formatAmount(row.total_supply)}
-        </Typography>
-        {row.asset_code && (
-          <Typography
-            variant="bodyXsRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
-          >
-            {row.asset_code}
+    cell: (row) => {
+      // Supply unit: classic asset_code, else the Soroban SEP-41 symbol so
+      // the amount reads e.g. "1.5 USDC" instead of bare (task 0304).
+      const unit = row.asset_code ?? row.symbol;
+      return (
+        <Stack sx={{ alignItems: 'flex-end' }}>
+          <Typography variant="bodySmRegular">
+            {formatAmount(row.total_supply)}
           </Typography>
-        )}
-      </Stack>
-    ),
+          {unit && (
+            <Typography
+              variant="bodyXsRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              {unit}
+            </Typography>
+          )}
+        </Stack>
+      );
+    },
   },
   {
     id: 'holders',
