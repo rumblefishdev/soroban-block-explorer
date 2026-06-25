@@ -376,6 +376,15 @@ carries no composite identity). The response `id` field echoes that same canonic
 (contract StrKey → else `CODE-ISSUER` → else `native`), so a client routes by echoing it
 verbatim. A bare numeric is rejected with `400 invalid_id`.
 
+The displayed `name`, `symbol`, and `decimals` are **read-composed from side
+tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
+(classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
+SEP-41 `METADATA`, task 0297) → `'Stellar Lumen'` for native; `symbol` /
+`decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
+classic/SAC). The Postgres read path still reads the legacy `assets.name` and
+surfaces no symbol/decimals until the assets module ports to ClickHouse (task
+0243). See `endpoint-queries-clickhouse/{08,09}_get_assets*.sql`.
+
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).
 
@@ -390,7 +399,7 @@ Soroban-native assets while still serving all through a unified explorer API.
 the same window as the contract-detail stats). Filters: `filter[type]` (token | other |
 nft | fungible) and `filter[q]` (full-text over name + contract_id).
 
-**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped.
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with typed `name VARCHAR(256)` consumed only by the search query (`COALESCE(sc.name, '')` in `22_get_search.sql`); the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has itself had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts) and is dropped pending the 0243 CH cutover.
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).

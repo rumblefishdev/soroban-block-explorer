@@ -2,6 +2,7 @@ import { Box } from '@mui/material';
 import type { AssetTransactionItem } from '@rumblefish/api-types';
 import {
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
@@ -9,7 +10,6 @@ import {
   QueryErrorState,
   StatusChip,
   TableEmptyState,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -25,11 +25,13 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
     id: 'hash',
     header: 'Hash',
+    width: 160,
     cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
   },
   {
     id: 'ledger',
     header: 'Ledger',
+    width: 120,
     cell: (row) => (
       <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
     ),
@@ -37,6 +39,7 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
     id: 'source',
     header: 'Source account',
+    width: 160,
     cell: (row) =>
       row.source_account ? (
         <IdentifierDisplay value={row.source_account} type="account" />
@@ -47,16 +50,19 @@ const columns: ExplorerTableColumn<AssetTransactionItem>[] = [
   {
     id: 'operation',
     header: 'Operation',
+    width: 190,
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
   {
     id: 'status',
     header: 'Status',
+    width: 120,
     cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'time',
     header: 'Time',
+    width: 210,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -72,10 +78,8 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
     resetKey: assetId,
   });
 
-  const { data, isLoading, isError, error, refetch } = useAssetTransactions(
-    assetId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useAssetTransactions(assetId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -85,15 +89,29 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
-    body = <TableSkeleton rows={8} columns={columns.length} />;
+  if (isLoading || isPlaceholderData) {
+    body = (
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => row.hash}
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
+    );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
     body = <TableEmptyState kind="transactions" py={6} />;
   } else {
     body = (
-      <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.hash}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
     );
   }
 

@@ -33,10 +33,8 @@ export default function AssetsListPage() {
     return filters;
   }, [code, type]);
 
-  const { data, isLoading, isError, error, refetch } = useAssetsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useAssetsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -71,11 +69,15 @@ export default function AssetsListPage() {
         }
         columnCount={ASSET_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <AssetsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <AssetsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="tokens"
         emptyNoun="assets"

@@ -37,7 +37,7 @@ use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
-use super::dto::{EventCursor, EventItem};
+use super::dto::{ContractStats, EventCursor, EventItem};
 use super::queries::{
     ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
     ResolvedContractsListParams, STATS_WINDOW,
@@ -178,12 +178,9 @@ pub async fn fetch_contract_list(
         .map(|r| r.id.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let days: i64 = STATS_WINDOW
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
+    // List recent_invocations only; recent_events is detail-only (the list DTO
+    // has no events field), so this path keeps the single windowed count.
+    let (days, ledger_floor) = stats_window_bounds(STATS_WINDOW);
     let count_sql = format!(
         "SELECT \
             sia.contract_id                  AS contract_id, \
@@ -345,52 +342,156 @@ fn map_upgradeable(has_wasm: bool, has_key: u8, val: u8) -> Option<bool> {
 /// history is never scanned for the 7-day stat.
 const LEDGERS_PER_DAY: i64 = 17_280;
 
+/// Parse a stats-window label (e.g. `"7 days"`) into `(days, ledger_floor)`. The
+/// leading integer is the day count (default 7 for a malformed label);
+/// `ledger_floor = days * LEDGERS_PER_DAY` widens the `(contract_id,
+/// ledger_sequence)` seek to ~that many days of ledgers before the exact
+/// `closed_at` predicate refines it. Shared by the list and detail stat paths so
+/// their windows can never drift apart.
+fn stats_window_bounds(window: &str) -> (i64, i64) {
+    let days: i64 = window
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(7);
+    (days, days.saturating_mul(LEDGERS_PER_DAY))
+}
+
 #[derive(Debug, Row, Deserialize)]
 struct StatsChRow {
     recent_invocations: u64,
     recent_unique_callers: u64,
+    recent_events: u64,
 }
 
 /// `window` is the echoed label (e.g. `"7 days"`); its leading integer is the
 /// day count. CH `soroban_invocations_appearances` has no `created_at`, so the
 /// window is applied via a JOIN to `ledgers.closed_at`, bounded first by a
 /// `ledger_sequence` floor so the seek stays on the primary-key prefix.
+///
+/// `recent_events` is computed as a scalar subquery over `soroban_events` in the
+/// SAME window. Parity with PG is by construction, NOT by event-type filtering:
+/// both `soroban_events` (CH) and `soroban_events_appearances` (PG) are written
+/// from the one parser `ExtractedEvent` stream, which drops `diagnostic_events`
+/// at parse time (`xdr-parser::types`; ADR 0033) but keeps System + Contract
+/// events. CH unfolds one row per event (no appearance-fold `amount` on CH), so a
+/// plain `count()` equals PG's `SUM(amount)` over the same population — measured
+/// global mix is ~9.25B Contract (`event_type = 1`) + ~4.7K System (`= 0`), zero
+/// Diagnostic. Do NOT add an `event_type = 1` filter here: PG counts System too,
+/// so filtering would break parity rather than tighten it.
+///
+/// `count()` (not `uniqExact` over the event key) is load-bearing: the hottest
+/// contract has ~76M events in the 7-day window, and `uniqExact` builds a hash
+/// set of every key → blows the `api_reader` per-query cap (Code 241, measured
+/// OOM at 3.73 GiB). `count()` streams: measured on that contract it reads
+/// ~99.5M rows / 1.39 GiB in 0.24 s at 89 MiB peak — far under the `read_only`
+/// 30 s / 4 GB per-query cap, and the 45 s detail-response cache bounds the
+/// `api_throttle` 50 B-rows/h aggregate draw. We also skip `FINAL` — re-ingest
+/// duplicates are absent in practice (`count()` and `count() FINAL` agree, and
+/// `count() == uniqExact` on every sampled contract from 1.2M to 4.8M events)
+/// and `FINAL`-on-`soroban_events` is the documented OOM path ([`fetch_events`]).
+//
+// ponytail: `now64()` window zeros out the whole stats trio when ingest lag
+// exceeds the window (inherited from recent_invocations); a staleness-aware
+// window is a separate concern, not fixed here.
+// ponytail: plain count() can over-count a re-ingested ledger range; swap to a
+// deduped subquery (or FINAL) only if a re-ingest ever skews the 7-day figure.
 pub async fn fetch_contract_stats(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, i64, String), clickhouse::error::Error> {
-    let days: i64 = window
-        .split_whitespace()
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(7);
-    let ledger_floor = days.saturating_mul(LEDGERS_PER_DAY);
+) -> Result<ContractStats, clickhouse::error::Error> {
+    let (days, ledger_floor) = stats_window_bounds(window);
+    let sql = contract_stats_sql(days, ledger_floor);
+    let row = client
+        .query(&sql)
+        .bind(contract_surrogate_id)
+        .bind(contract_surrogate_id)
+        .fetch_one::<StatsChRow>()
+        .await?;
 
-    // `days` / `ledger_floor` are derived from the operator-controlled window
-    // label, not user input — safe to interpolate.
-    let sql = format!(
+    Ok(ContractStats {
+        recent_invocations: row.recent_invocations as i64,
+        recent_unique_callers: row.recent_unique_callers as i64,
+        recent_events: row.recent_events as i64,
+        stats_window: window.to_string(),
+    })
+}
+
+/// SQL for [`fetch_contract_stats`]. `days` / `ledger_floor` derive from the
+/// operator-controlled window label (not user input) — safe to interpolate.
+/// Two `?` placeholders bind `contract_surrogate_id` (events subquery, then the
+/// outer invocations seek), in source order.
+fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
+    format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
-            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers \
+            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers, \
+            ( \
+                SELECT toUInt64(count()) \
+                FROM soroban_events se \
+                INNER JOIN ledgers le ON le.sequence = se.ledger_sequence \
+                WHERE se.contract_id = ? \
+                  AND se.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
+                  AND le.closed_at >= now64() - INTERVAL {days} DAY \
+            )                                       AS recent_events \
          FROM soroban_invocations_appearances sia FINAL \
          INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
          WHERE sia.contract_id = ? \
            AND sia.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
            AND l.closed_at >= now64() - INTERVAL {days} DAY"
-    );
-    let row = client
-        .query(&sql)
-        .bind(contract_surrogate_id)
-        .fetch_one::<StatsChRow>()
-        .await?;
+    )
+}
 
-    Ok((
-        row.recent_invocations as i64,
-        row.recent_unique_callers as i64,
-        0,
-        window.to_string(),
-    ))
+#[cfg(test)]
+mod stats_sql_tests {
+    use super::{LEDGERS_PER_DAY, contract_stats_sql, stats_window_bounds};
+
+    #[test]
+    fn stats_window_bounds_parses_label_and_falls_back() {
+        assert_eq!(stats_window_bounds("7 days"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds("30 days"), (30, 30 * LEDGERS_PER_DAY));
+        // Malformed / empty label → default 7-day window, never a panic.
+        assert_eq!(stats_window_bounds("garbage"), (7, 7 * LEDGERS_PER_DAY));
+        assert_eq!(stats_window_bounds(""), (7, 7 * LEDGERS_PER_DAY));
+    }
+
+    // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
+    // The stats SQL MUST select a real windowed event count off `soroban_events`
+    // (parity with PG's appearance-fold SUM), not a literal.
+    #[test]
+    fn stats_sql_computes_recent_events_from_events_table() {
+        let sql = contract_stats_sql(7, 7 * 17_280);
+
+        assert!(
+            sql.contains("AS recent_events"),
+            "recent_events column missing: {sql}"
+        );
+        assert!(
+            sql.contains("FROM soroban_events se"),
+            "recent_events must read soroban_events: {sql}"
+        );
+        // The bug shape: a bare literal aliased to recent_events. Collapse
+        // whitespace first so the guard is alignment-independent.
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            !normalized.contains("0 AS recent_events"),
+            "recent_events still hardcoded to a literal: {sql}"
+        );
+        // Window parity: both the invocations seek and the events subquery
+        // apply the same ledger floor + INTERVAL N DAY bound.
+        assert_eq!(
+            sql.matches("INTERVAL 7 DAY").count(),
+            2,
+            "events window must mirror the invocations window: {sql}"
+        );
+        // Two binds: events-subquery contract_id, then outer contract_id.
+        assert_eq!(
+            sql.matches("contract_id = ?").count(),
+            2,
+            "expected two `contract_id = ?` binds: {sql}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -265,14 +265,13 @@ pub async fn get_contract(
         }
     };
 
-    let (recent_invocations, recent_unique_callers, recent_events, stats_window) =
-        match fetch_stats_for_source(&state, source, contract.id, STATS_WINDOW).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(source = ?source, "DB error fetching stats for {contract_id}: {e}");
-                return errors::internal_error(errors::DB_ERROR, "database error");
-            }
-        };
+    let stats = match fetch_stats_for_source(&state, source, contract.id, STATS_WINDOW).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(source = ?source, "DB error fetching stats for {contract_id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
 
     // Task 0327 — mutability, 3-state (CH-only; None/Unknown on the retired PG
     // path). Resolved in `fetch_contract` from the joined WASM interface
@@ -289,12 +288,7 @@ pub async fn get_contract(
         contract_type: contract.contract_type,
         is_sac: contract.is_sac,
         upgradeable,
-        stats: ContractStats {
-            recent_invocations,
-            recent_unique_callers,
-            recent_events,
-            stats_window,
-        },
+        stats,
     });
 
     state
@@ -709,7 +703,7 @@ async fn fetch_stats_for_source(
     source: DataSource,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, i64, String), CtrFetchError> {
+) -> Result<ContractStats, CtrFetchError> {
     match source {
         DataSource::Pg => fetch_contract_stats(&state.db, contract_surrogate_id, window)
             .await

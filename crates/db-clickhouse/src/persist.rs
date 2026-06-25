@@ -31,7 +31,7 @@
 use std::collections::{HashMap, HashSet};
 
 use clickhouse::Client;
-use domain::ContractType;
+use domain::{ContractEventType, ContractType};
 // Re-export the canonical (domain-owned) cache so `db_clickhouse::persist::
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
@@ -424,8 +424,10 @@ async fn fetch_prior_contract_rows(
         .flat_map(|(_, evs)| evs.iter())
         // Consensus events only — drop the diagnostic container (byte-identical
         // copies + failed-tx events). Must match `build_wasm_upgrade_rows`'s
-        // filter so the prefetch covers exactly the contracts it will rewrite.
+        // filters so the prefetch covers exactly the contracts it will rewrite:
+        // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
         .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
+        .filter(|ev| ev.event_type == ContractEventType::System)
         .filter(|ev| extract_executable_update_new_wasm_hash(&ev.topics).is_some())
         .filter_map(|ev| ev.contract_id.as_deref())
         .collect();

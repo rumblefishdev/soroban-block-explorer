@@ -1,6 +1,7 @@
 import { Box, Typography } from '@mui/material';
 import type { AccountTransactionItem } from '@rumblefish/api-types';
 import {
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatFee,
   IdentifierDisplay,
@@ -10,7 +11,6 @@ import {
   type SortDirection,
   StatusChip,
   TableEmptyState,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -26,11 +26,13 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'hash',
     header: 'Hash',
+    width: 160,
     cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
   },
   {
     id: 'ledger',
     header: 'Ledger',
+    width: 120,
     cell: (row) => (
       <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
     ),
@@ -38,17 +40,20 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
   {
     id: 'operation',
     header: 'Operation',
+    width: 190,
     cell: (row) => <OperationCell types={row.operation_types} />,
   },
   {
     id: 'status',
     header: 'Status',
+    width: 120,
     cell: (row) => <StatusChip successful={row.successful} />,
   },
   {
     id: 'fee',
     header: 'Fee',
     align: 'right',
+    width: 140,
     cell: (row) => (
       <Typography
         component="span"
@@ -63,6 +68,7 @@ const columns: ExplorerTableColumn<AccountTransactionItem>[] = [
     id: 'time',
     header: 'Time',
     sortable: true,
+    width: 210,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -90,11 +96,8 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
     [setSort]
   );
 
-  const { data, isLoading, isError, error, refetch } = useAccountTransactions(
-    accountId,
-    cursor,
-    sortDir
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useAccountTransactions(accountId, cursor, sortDir);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -104,8 +107,17 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
-    body = <TableSkeleton rows={8} columns={columns.length} />;
+  if (isLoading || isPlaceholderData) {
+    body = (
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => row.hash}
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
+    );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
@@ -119,6 +131,7 @@ export function AccountTransactions({ accountId }: { accountId: string }) {
         sortBy="time"
         sortDir={sortDir}
         onSortChange={handleSortChange}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
       />
     );
   }

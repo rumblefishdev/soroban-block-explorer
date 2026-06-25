@@ -41,7 +41,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use domain::{AssetType, ContractType, OperationType};
+use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::SacOverride;
@@ -242,6 +242,13 @@ pub fn build_wasm_upgrade_rows(
             // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
             // staging guard (this is the same population the backfill reads, post-drop).
             if is_diagnostic(ev.source) {
+                continue;
+            }
+            // Only the host emits `executable_update`, and always as a SYSTEM
+            // event. A contract can emit a Contract-typed event with the same
+            // topic shape; requiring System blocks that spoof of its own
+            // `wasm_hash` (and never drops a real upgrade — all are System).
+            if ev.event_type != ContractEventType::System {
                 continue;
             }
             let Some(addr) = ev.contract_id.as_deref() else {

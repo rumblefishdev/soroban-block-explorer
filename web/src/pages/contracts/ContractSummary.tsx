@@ -27,11 +27,11 @@ export function ContractSummary({
     <Stack spacing={3}>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3}>
         <KpiCell
-          label="Total invocations"
+          label={`Invocations (last ${stats.stats_window})`}
           value={formatAmount(stats.recent_invocations)}
         />
         <KpiCell
-          label="Unique callers"
+          label={`Unique callers (last ${stats.stats_window})`}
           value={formatAmount(stats.recent_unique_callers)}
         />
       </Stack>

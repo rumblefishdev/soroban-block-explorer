@@ -2446,7 +2446,7 @@
           "recent_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Sum of `soroban_events_appearances.amount` over the same window\nas `recent_invocations`. One appearance row can represent multiple\nactual events (`amount > 1`) so we sum rather than COUNT(*) — the\nfigure matches what `GET /v1/contracts/:id/events` would return\nover the window."
+            "description": "Event count in the same window as `recent_invocations` (NOT the full\n`/events` history — that endpoint pages all events with no time bound).\nPG sums `soroban_events_appearances.amount` (one appearance row folds\nmultiple events, `amount > 1`); CH has no appearance-fold table, so it\n`count()`s the unfolded `soroban_events` (one row per event). Both tables\nare written from the same parser event stream (diagnostics dropped at\nparse, System + Contract kept), so the two figures match by construction."
           },
           "recent_invocations": {
             "type": "integer",

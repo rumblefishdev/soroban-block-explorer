@@ -48,10 +48,8 @@ export default function TransactionsListPage() {
     return filters;
   }, [q, op]);
 
-  const { data, isLoading, isError, error, refetch } = useTransactionsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useTransactionsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -86,11 +84,15 @@ export default function TransactionsListPage() {
         }
         columnCount={TRANSACTION_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
         rows={rows}
         renderTable={(visibleRows) => <TransactionsTable rows={visibleRows} />}
+        renderSkeleton={() => (
+          <TransactionsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        )}
         hasActiveFilters={hasFilters}
         emptyKind="transactions"
         emptyNoun="transactions"

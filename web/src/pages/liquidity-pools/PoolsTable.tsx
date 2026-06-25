@@ -2,6 +2,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
   formatCompactAmount,
@@ -66,6 +67,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'pool',
     header: 'Pool',
+    width: 260,
     cell: (row) => {
       const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
         row.asset_b
@@ -98,11 +100,13 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
   {
     id: 'fee',
     header: 'Fee',
+    width: 120,
     cell: (row) => <FeePill raw={row.fee_percent} />,
   },
   {
     id: 'reserves',
     header: 'Reserves',
+    width: 150,
     cell: (row) => {
       // Stale pools (no fresh snapshot) come back with null reserves —
       // render an em-dash rather than "0".
@@ -136,6 +140,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     // unit label below.
     header: 'Total shares',
     align: 'right',
+    width: 150,
     cell: (row) => {
       if (row.total_shares == null) return <Dash />;
       return (
@@ -160,6 +165,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     id: 'participants',
     header: 'Participants',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography
         variant="bodySmMedium"
@@ -173,6 +179,8 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
 
 interface PoolsTableProps {
   rows: readonly PoolItem[];
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 /**
@@ -181,12 +189,15 @@ interface PoolsTableProps {
  * truncated id) / Fee (success pill) / Reserves (per-leg) / Total
  * shares (right-aligned, unit label) / Participants.
  */
-export function PoolsTable({ rows }: PoolsTableProps) {
+export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (
     <ExplorerTable
       columns={columns}
       rows={rows}
       rowKey={(row) => row.pool_id}
+      rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }

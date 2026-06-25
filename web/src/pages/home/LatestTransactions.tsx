@@ -1,21 +1,17 @@
-import { Box, Card, Typography } from '@mui/material';
+import { Box, Card, Skeleton, Typography } from '@mui/material';
 import {
   LiveNowProvider,
   PollingIndicator,
   QueryErrorState,
   TableEmptyState,
   TableSectionHeader,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
 import { useLatestTransactions } from '../../api/index.js';
 import { routes } from '../../router/routes.js';
 
-import {
-  LATEST_TX_COLUMN_COUNT,
-  LatestTransactionsTable,
-} from './LatestTransactionsTable.js';
+import { LatestTransactionsTable } from './LatestTransactionsTable.js';
 import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
@@ -35,7 +31,7 @@ export function LatestTransactions() {
 
   let body: ReactNode;
   if (isLoading) {
-    body = <TableSkeleton rows={10} columns={LATEST_TX_COLUMN_COUNT} />;
+    body = <LatestTransactionsTable rows={[]} loading skeletonRows={10} />;
   } else if (isError) {
     body = (
       <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
@@ -59,7 +55,10 @@ export function LatestTransactions() {
         action={<ViewAllLink to={routes.transactions} />}
       />
       <Box>{body}</Box>
-      {rows.length > 0 && (
+      {/* Footer is rendered during loading too (with a skeleton count) so its
+          height is reserved — otherwise the card jumps when the "N latest
+          records" row appears with the data. */}
+      {(rows.length > 0 || isLoading) && (
         <Box
           sx={{
             px: 2,
@@ -68,13 +67,17 @@ export function LatestTransactions() {
             backgroundColor: (theme) => theme.palette.surface.grayMainAlt,
           }}
         >
-          <Typography
-            component="span"
-            variant="bodySmRegular"
-            sx={(theme) => ({ color: theme.palette.text.tertiary })}
-          >
-            {rows.length} latest records
-          </Typography>
+          {isLoading ? (
+            <Skeleton variant="text" width={120} />
+          ) : (
+            <Typography
+              component="span"
+              variant="bodySmRegular"
+              sx={(theme) => ({ color: theme.palette.text.tertiary })}
+            >
+              {rows.length} latest records
+            </Typography>
+          )}
         </Box>
       )}
     </Card>
