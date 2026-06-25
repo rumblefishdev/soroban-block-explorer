@@ -2,7 +2,7 @@
 id: '0300'
 title: 'BUG: CH contract detail `recent_events` hardcoded to 0 (PG parity gap)'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0047']
 related_tasks: ['0243']
 tags:
@@ -28,6 +28,10 @@ history:
       user-visible regression once the contracts module flips to CH.
       Pre-existing on develop (stkrolikiewicz's CH contracts-stats), not
       introduced by 0243; spawned as its own task.
+  - date: '2026-06-25'
+    status: active
+    who: karolkow
+    note: 'Promoted to active; starting implementation.'
 ---
 
 # BUG: CH contract detail `recent_events` hardcoded to 0

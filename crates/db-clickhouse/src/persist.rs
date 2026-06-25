@@ -31,16 +31,17 @@
 use std::collections::{HashMap, HashSet};
 
 use clickhouse::Client;
-use domain::ContractType;
+use domain::{ContractEventType, ContractType};
 // Re-export the canonical (domain-owned) cache so `db_clickhouse::persist::
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
+use xdr_parser::event::extract_executable_update_new_wasm_hash;
 use xdr_parser::types::{
-    ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
-    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
+    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
+    ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition,
+    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -97,7 +98,9 @@ pub async fn persist_ledger_clickhouse(
     //   override; upload + deploy are separate Soroban txs / ledgers).
     // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
     //   for contracts deployed earlier), memoised by `classification_cache`.
-    let (prior_wasm_verdicts, prior_contract_verdicts) = tokio::join!(
+    // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
+    // All three are independent reads; one `join!` pays a single round-trip.
+    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
         fetch_prior_contract_verdicts(
             client,
@@ -106,7 +109,12 @@ pub async fn persist_ledger_clickhouse(
             contract_deployments,
             classification_cache,
         ),
+        fetch_prior_contract_rows(client, events),
     );
+    // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
+    // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
+    // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
+    // this ledger — no post-prepare mutation.
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
@@ -126,6 +134,7 @@ pub async fn persist_ledger_clickhouse(
         sac_overrides,
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
+        prior_contract_rows: &prior_contract_rows,
     })?;
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
@@ -391,6 +400,74 @@ async fn query_contract_verdicts(
         }
     }
     Ok(out)
+}
+
+/// Task 0320 live path — prefetch the prior `soroban_contracts` rows (in full) for
+/// the contracts that emit an `executable_update` SYSTEM event this ledger, so
+/// [`stage::build_wasm_upgrade_rows`] can carry deployer / deployed_at / name /
+/// contract_type / is_sac forward when it rewrites `wasm_hash` (the RMT whole-row
+/// replace would otherwise NULL them — the clobber class owned by task 0316).
+/// The row is read back as the same [`rows::SorobanContractRow`] it will be
+/// written as, so no projection DTO is needed — the upgrade build just clones it
+/// and overrides the three columns the upgrade changes.
+///
+/// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
+/// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
+/// upgrade row is simply not emitted this ledger; the in-CH `wasm-upgrade-backfill`
+/// maintenance pass recovers it.
+async fn fetch_prior_contract_rows(
+    client: &Client,
+    events: &[(String, Vec<ExtractedEvent>)],
+) -> HashMap<String, rows::SorobanContractRow> {
+    let mut want: Vec<&str> = events
+        .iter()
+        .flat_map(|(_, evs)| evs.iter())
+        // Consensus events only — drop the diagnostic container (byte-identical
+        // copies + failed-tx events). Must match `build_wasm_upgrade_rows`'s
+        // filters so the prefetch covers exactly the contracts it will rewrite:
+        // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
+        .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
+        .filter(|ev| ev.event_type == ContractEventType::System)
+        .filter(|ev| extract_executable_update_new_wasm_hash(&ev.topics).is_some())
+        .filter_map(|ev| ev.contract_id.as_deref())
+        .collect();
+    want.sort_unstable();
+    want.dedup();
+    if want.is_empty() {
+        return HashMap::new();
+    }
+
+    // `want` are `C…` StrKeys from parser output (base32, no quote chars).
+    let in_list = want
+        .iter()
+        .map(|c| format!("'{c}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Column order MUST match `rows::SorobanContractRow` field order (RowBinary is
+    // positional).
+    let sql = format!(
+        "SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
+                deployed_at_ledger, contract_type, is_sac, name \
+         FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
+    );
+
+    match client
+        .query(&sql)
+        .fetch_all::<rows::SorobanContractRow>()
+        .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| (r.contract_id.clone(), r))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, wasm-upgrade-backfill recovers"
+            );
+            HashMap::new()
+        }
+    }
 }
 
 #[cfg(test)]

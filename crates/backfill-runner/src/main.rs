@@ -20,6 +20,7 @@ mod run;
 mod sink;
 mod status;
 mod sync;
+mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -196,6 +197,19 @@ enum Command {
         dry_run: bool,
     },
 
+    /// One-shot backfill of `soroban_contracts.wasm_hash` for contracts that
+    /// upgraded their WASM (task 0320). Reads the latest `executable_update`
+    /// SYSTEM event per contract from `soroban_events` (already ingested — no
+    /// S3 re-parse), parses the new wasm hash, and overrides
+    /// `wasm_hash` + `wasm_uploaded_at_ledger` via staging + `EXCHANGE TABLES`.
+    /// `contract_type` is left as-is (class never net-changes on upgrade; the
+    /// rare flip is task 0325). Run with the indexer STOPPED. Idempotent.
+    /// `--dry-run` reports the would-be corrections without writing. CH-only.
+    WasmUpgradeBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -328,6 +342,16 @@ async fn main() {
             println!(
                 "contract_type_rebuild completed (dry_run={}): flipped_nft={} flipped_fungible={} assets_inserted={}",
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
+            );
+        }
+        Command::WasmUpgradeBackfill { dry_run } => {
+            let stats = wasm_upgrade_backfill::execute(&sink, dry_run).await.expect(
+                "wasm_upgrade_backfill failed — the pass is idempotent, safe to re-run \
+                     (staging + EXCHANGE; re-run corrects nothing already-correct)",
+            );
+            println!(
+                "wasm_upgrade_backfill completed (dry_run={}): upgraded_contracts={} corrected={} unparseable={}",
+                stats.dry_run, stats.upgraded_contracts, stats.corrected, stats.unparseable,
             );
         }
         Command::NftReclassify { dry_run } => {

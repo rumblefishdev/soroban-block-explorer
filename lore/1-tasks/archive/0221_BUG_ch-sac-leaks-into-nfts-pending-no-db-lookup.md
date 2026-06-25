@@ -2,9 +2,9 @@
 id: '0221'
 title: 'BUG: CH stage routes NFT candidates of pre-classified SAC contracts to nfts_pending (no DB lookup)'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
-related_tasks: ['0118', '0217', '0220']
+related_tasks: ['0118', '0217', '0220', '0323']
 tags:
   [
     'clickhouse',
@@ -31,6 +31,14 @@ history:
       inflates quarantine volume. Drain runbook committed +
       empirically executed on the 64k pilot (1,288,888 → 957,615 rows).
       512k pilot confirmed leak is structural (26.75% at scale).
+  - date: 2026-06-24
+    status: completed
+    who: karolkow
+    note: >
+      Superseded and fully resolved by task 0323 (T3). In-stage topics-extractor
+      classifies event-emitting SAC contracts as Token at write-time (no DB lookup required),
+      blocking new leaks. Existing leaked rows in pending tables are dropped via
+      the 0323 cleanup pass.
 ---
 
 # BUG: CH stage routes NFT candidates of pre-classified SAC contracts to nfts_pending (no DB lookup)

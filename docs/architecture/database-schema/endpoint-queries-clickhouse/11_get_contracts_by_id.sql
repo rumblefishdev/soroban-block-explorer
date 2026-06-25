@@ -1,7 +1,8 @@
 -- Endpoint:     GET /contracts/:contract_id
--- Purpose:      Contract detail: header (deployer, WASM hash, type, SAC flag,
---               name) + lightweight stats (recent invocations and unique
---               callers in the last N days, NOT a full-history count).
+-- Purpose:      Contract detail: header (deployer, WASM hash, type, SAC flag)
+--               + lightweight stats (recent invocations and unique callers in
+--               the last N days, NOT a full-history count). No name field —
+--               the contract API surfaces none (task 0297 #3).
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.10
 -- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037 + ADR 0042/0156
 -- Data sources: DB-only.
@@ -24,7 +25,10 @@
 -- Notes:
 --   • Two statements, mirroring PG E11.
 --   • Statement A: same shape as PG, minus the legacy `metadata JSONB`
---     column (already absent post-ADR-0042/0156 in PG too).
+--     (gone post-ADR-0042/0156) and the typed `name` column — `sc.name` has no
+--     writer since task 0297 and is not surfaced by contract detail. On-chain
+--     token metadata lives in the `soroban_contract_metadata` side table and is
+--     surfaced via /assets, not /contracts.
 --   • Statement B: PG uses `created_at >= NOW() - INTERVAL`. CH-side
 --     `soroban_invocations_appearances` has no closed_at (§5.2). We JOIN
 --     `ledgers` on `ledger_sequence` and filter on `ledgers.closed_at`.
@@ -40,18 +44,21 @@
 -- A. Contract header.
 -- ============================================================================
 SELECT
-    sc.id                              AS contract_pk,
+    sc.id                                  AS contract_pk,
     sc.contract_id,
-    lower(hex(sc.wasm_hash))           AS wasm_hash_hex,
-    sc.wasm_uploaded_at_ledger,
-    deployer.account_id                AS deployer,
+    lower(hex(sc.wasm_hash))               AS wasm_hash_hex,
+    nullIf(sc.wasm_uploaded_at_ledger, 0)  AS wasm_uploaded_at_ledger,
+    nullIf(deployer.account_id, '')        AS deployer,
     sc.deployed_at_ledger,
-    sc.contract_type                   AS contract_type,
-    sc.is_sac,
-    sc.name
+    sc.contract_type                       AS contract_type,
+    sc.is_sac
+    -- NO `sc.name`: contract detail surfaces no name (task 0297 #3). The dead
+    -- `soroban_contracts.name` is read only by the CH name-search substring
+    -- fallback in the contracts LIST, never composed here.
 FROM soroban_contracts sc FINAL
-LEFT JOIN accounts deployer FINAL ON deployer.id = sc.deployer_id
-WHERE sc.contract_id = $1;
+LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id
+WHERE sc.contract_id = $1
+LIMIT 1;
 
 -- @@ split @@
 
