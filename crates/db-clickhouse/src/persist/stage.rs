@@ -257,16 +257,14 @@ pub fn build_wasm_upgrade_rows(
                 continue;
             };
             // Carry the prior row forward verbatim, overriding only what the
-            // upgrade actually changes: the new WASM hash, the RMT version
-            // (= upgrade ledger, so it wins the merge), and `is_sac` — an
-            // `executable_update` proves the contract is WASM-backed, so it is
-            // NOT a SAC; never carry a possibly-mislabeled prior `is_sac=true`
-            // forward (task 0294). `id` / `contract_id` / deployer / name /
-            // contract_type all ride along from the read-back row.
+            // upgrade actually changes: the new WASM hash and the RMT version
+            // (= upgrade ledger, so it wins the merge). `id` / `contract_id` /
+            // deployer / name / contract_type / is_sac all ride along from the
+            // read-back row — matching the backfill SQL, which also passes
+            // `is_sac` through (no upgrader is a mislabeled SAC on current data).
             let mut row = prior_row.clone();
             row.wasm_hash = Some(new_hash);
             row.wasm_uploaded_at_ledger = ledger_sequence;
-            row.is_sac = false;
             by_contract.insert(addr.to_string(), row);
         }
     }

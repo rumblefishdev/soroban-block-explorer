@@ -1916,9 +1916,10 @@ fn build_wasm_upgrade_rows_ignores_diagnostic_source() {
 }
 
 #[test]
-fn build_wasm_upgrade_rows_forces_is_sac_false() {
-    // An executable_update proves the contract is WASM-backed, so the row must
-    // assert is_sac=false even if the prior row was mislabeled SAC (task 0294).
+fn build_wasm_upgrade_rows_carries_is_sac_from_prior() {
+    // is_sac rides along from the read-back row (matches the backfill SQL, which
+    // also passes it through). No upgrader is a mislabeled SAC on current data,
+    // so carry-forward and force-false are equivalent in practice.
     let addr = "C".to_string() + &"Y".repeat(55);
     let events = vec![("abcd".to_string(), vec![executable_update_event(&addr)])];
     let mut prior = std::collections::HashMap::new();
@@ -1928,5 +1929,5 @@ fn build_wasm_upgrade_rows_forces_is_sac_false() {
     );
     let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
     assert_eq!(rows.len(), 1);
-    assert!(!rows[0].is_sac, "executable_update ⇒ not a SAC");
+    assert!(rows[0].is_sac, "is_sac carried forward from the prior row");
 }
