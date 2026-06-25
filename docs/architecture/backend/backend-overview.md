@@ -377,8 +377,7 @@ carries no composite identity). The response `id` field echoes that same canonic
 verbatim. A bare numeric is rejected with `400 invalid_id`.
 
 The displayed `name`, `symbol`, and `decimals` are **read-composed from side
-tables**, not from the `assets` row — `assets.name` has had no writer since task
-0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
+tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
 (classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
 SEP-41 `METADATA`, task 0297) → `'Stellar Lumen'` for native; `symbol` /
 `decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
