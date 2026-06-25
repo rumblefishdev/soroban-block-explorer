@@ -244,13 +244,13 @@ Precondition: the indexer build being redeployed contains the Phase-1 writer ski
 
 1. **Stop ingest** (window does this) → **redeploy indexer** with Phase-1 code.
 2. **Pre-flight guard** (do NOT skip): confirm `coalesce(deployed_at_ledger,0)=0
-   AND wasm_hash IS NULL` catches ZERO real pre-window-deployed SACs — the count
+AND wasm_hash IS NULL` catches ZERO real pre-window-deployed SACs — the count
    of `<predicate> AND deployed_at_ledger>0` must be 0; spot-check USDC excluded.
 3. **AC#3 first — assets present BEFORE the delete** (order matters, else a window
    where the SAC is in neither table): one-time insert pass for the un-deployed-SAC
    assets (asset_type=2), or confirm the redeployed code re-derives them.
 4. **AC#6 — delete contract ghosts**: `ALTER TABLE soroban_contracts DELETE WHERE
-   coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL` (~311k rows: ~307k
+coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL` (~311k rows: ~307k
    is_sac=true skeletons + ~4.3k orphan stubs + ~1.3k residual; registry 424k →
    ~111k). Small table → cheap mutation.
 5. **AC#7 — drop ~87M false pending**: `nfts_pending` + `nft_ownership_pending` for
