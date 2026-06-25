@@ -2442,7 +2442,7 @@
           "recent_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Non-diagnostic contract-event count in the same window as\n`recent_invocations` (NOT the full `/events` history — that endpoint\npages all events with no time bound). PG sums\n`soroban_events_appearances.amount` (one appearance row folds multiple\nevents, `amount > 1`); CH has no appearance-fold table, so it `count()`s\nthe unfolded `soroban_events` (one row per event) — the parser drops\ndiagnostic events before write (ADR 0033), so both count the same\nnon-diagnostic population."
+            "description": "Event count in the same window as `recent_invocations` (NOT the full\n`/events` history — that endpoint pages all events with no time bound).\nPG sums `soroban_events_appearances.amount` (one appearance row folds\nmultiple events, `amount > 1`); CH has no appearance-fold table, so it\n`count()`s the unfolded `soroban_events` (one row per event). Both tables\nare written from the same parser event stream (diagnostics dropped at\nparse, System + Contract kept), so the two figures match by construction."
           },
           "recent_invocations": {
             "type": "integer",

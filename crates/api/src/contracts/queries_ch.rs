@@ -333,12 +333,15 @@ struct StatsChRow {
 /// `ledger_sequence` floor so the seek stays on the primary-key prefix.
 ///
 /// `recent_events` is computed as a scalar subquery over `soroban_events` in the
-/// SAME window. CH unfolds one row per event (no appearance-fold `amount` table
-/// exists on CH) and the parser drops diagnostic events before write (ADR 0033,
-/// so `soroban_events` holds only non-diagnostic contract events — measured: the
-/// recent slice is 100% `event_type = 1`), so a plain `count()` equals PG's
-/// `SUM(amount)` over `soroban_events_appearances` (whose `amount` likewise folds
-/// non-diagnostic events) — the parity figure.
+/// SAME window. Parity with PG is by construction, NOT by event-type filtering:
+/// both `soroban_events` (CH) and `soroban_events_appearances` (PG) are written
+/// from the one parser `ExtractedEvent` stream, which drops `diagnostic_events`
+/// at parse time (`xdr-parser::types`; ADR 0033) but keeps System + Contract
+/// events. CH unfolds one row per event (no appearance-fold `amount` on CH), so a
+/// plain `count()` equals PG's `SUM(amount)` over the same population — measured
+/// global mix is ~9.25B Contract (`event_type = 1`) + ~4.7K System (`= 0`), zero
+/// Diagnostic. Do NOT add an `event_type = 1` filter here: PG counts System too,
+/// so filtering would break parity rather than tighten it.
 ///
 /// `count()` (not `uniqExact` over the event key) is load-bearing: the hottest
 /// contract has ~76M events in the 7-day window, and `uniqExact` builds a hash
@@ -428,10 +431,11 @@ mod stats_sql_tests {
             sql.contains("FROM soroban_events se"),
             "recent_events must read soroban_events: {sql}"
         );
-        // The bug shape: a bare literal aliased to recent_events.
+        // The bug shape: a bare literal aliased to recent_events. Collapse
+        // whitespace first so the guard is alignment-independent.
+        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            !sql.contains("0 AS recent_events")
-                && !sql.contains("0                                       AS recent_events"),
+            !normalized.contains("0 AS recent_events"),
             "recent_events still hardcoded to a literal: {sql}"
         );
         // Window parity: both the invocations seek and the events subquery
