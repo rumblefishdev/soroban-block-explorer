@@ -73,6 +73,8 @@ export {
 
 export {
   ExplorerTable,
+  EXPLORER_TABLE_ROW_HEIGHT,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   PaginationControls,
   TableSectionHeader,
   TableEmptyState,

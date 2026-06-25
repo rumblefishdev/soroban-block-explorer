@@ -19,7 +19,9 @@ export const useNftTransfers = (
   useQuery({
     ...listNftTransfersOptions({
       path: { contract_id: contractId, token_id: tokenId },
-      query: cursor ? { cursor } : undefined,
+      // Explicit page size (matches every other paginated list) so a full page
+      // is 20 rows — keeps the loading skeleton (also 20 rows) the same height.
+      query: { limit: 20, ...(cursor ? { cursor } : {}) },
     }),
     ...listPolicy,
     enabled: enabled && contractId !== '' && tokenId !== '',
