@@ -2,7 +2,7 @@
 id: '0323'
 title: 'FEATURE: model un-deployed SACs as assets, not soroban_contracts rows (registry depollution / T3)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0294', '0218', '0283']
 tags:
@@ -25,6 +25,26 @@ history:
       /v1/contracts ("T3"): an un-deployed SAC is an ASSET, not a contract, so it
       must not get a soroban_contracts row. Mainnet-verified (Soroban RPC) that
       the orphans genuinely have no on-ledger contract instance.
+  - date: '2026-06-25'
+    status: active
+    who: claude
+    note: >
+      Promoted to active + runbook added (sequencing for the next 0281-style
+      maintenance window). Blockers re-confirmed clear: related 0294/0218/0283
+      all archived; skip-gate proven on prod cohorts (556/556 deployed,
+      5,558/5,558 orphan, 0/52 real-NFT loss). Code not yet written (all ACs
+      open) → Phase 1 (PR) precedes any prod data-pass. See ## Runbook.
+  - date: '2026-06-25'
+    status: active
+    who: claude
+    note: >
+      Phase 1 (code) implemented + PR #286: writer skip + skeleton removal
+      (event-sourced detect_undeployed_sac_overrides), AC#3 SAC asset emission,
+      3 INNER→LEFT joins, dead derive_sac_overrides_from_assets + 7 tests removed;
+      unit + stage-regression tests green (xdr-parser 269 / db-clickhouse 59),
+      clippy clean; ADR-0032 docs synced. Phase-1 ACs checked. Remaining is Phase 2
+      (window data-pass): prod-count verify + ~87M nfts_pending drop, gated on #286
+      merge + indexer redeploy.
 ---
 
 # FEATURE: model un-deployed SACs as assets, not soroban_contracts rows
@@ -164,22 +184,91 @@ NULL` — un-deployed SACs that emit NO SAC-control event (not gate-confirmable)
 
 ## Acceptance Criteria
 
-- [ ] Writer no longer creates `soroban_contracts` rows for un-deployed SACs (Pass-2 skip + skeleton removal); unit-tested (a SAC-event-only ledger writes no contract row for it)
-- [ ] `/v1/contracts` returns only deployed instances (no un-deployed-SAC rows) — verified
-      on prod counts. **Cleanup predicate is `coalesce(deployed_at_ledger,0)=0`, NOT
+- [x] Writer no longer creates `soroban_contracts` rows for un-deployed SACs (Pass-2 skip + skeleton removal); unit-tested (a SAC-event-only ledger writes no contract row for it) — PR #286.
+- [ ] **(Phase 2 — prod verify)** `/v1/contracts` returns only deployed instances
+      (forward-fixed in PR #286; existing ~311k ghosts deleted in the Phase-2 pass) —
+      verified on prod counts. **Cleanup predicate is `coalesce(deployed_at_ledger,0)=0`, NOT
       `IS NULL`** — `IS NULL` misses the ~235k `=0`-sentinel skeleton rows.
-- [ ] The 3 INNER joins are LEFT; a tx/event/NFT referencing a row-less contract no longer
-      vanishes (regression test)
-- [ ] Un-deployed-SAC assets present in `assets`
-- [ ] Deployed SACs (e.g. USDC) unaffected — still listed with `is_sac=true` + deploy
-- [ ] Historical cleanup decided (delete existing un-deployed-SAC rows — guard the predicate
-      against pre-window-deployed real SACs; or leave + let them age out)
-- [ ] **~87M false `nfts_pending` + `nft_ownership_pending` rows for crypto-proven-SAC
-      contracts dropped** (the batch that drained them is gone; the gate only stops new ones)
-- [ ] **Dead `sac_overrides` plumbing removed** (or `identity` repurposed for the assets AC) —
-      no orphaned `derive_sac_overrides_from_assets` chain left behind
+- [x] The 3 INNER joins are LEFT (PR #286); a tx/event/NFT referencing a row-less contract
+      no longer vanishes. (Appearance-vanish regression is CH-integration / live tests.)
+- [x] Un-deployed-SAC assets present in `assets` — AC#3 emits a SAC asset row per
+      event-emitting override (PR #286, regression-tested); existing orphans fill as they emit.
+- [x] Deployed SACs (e.g. USDC) unaffected — still listed with `is_sac=true` + deploy
+      (dedup test `prepare_skips_sac_override_when_contract_deployed_same_ledger`, PR #286).
+- [x] Historical cleanup decided — **delete** existing un-deployed-SAC rows in the Phase-2
+      window pass (predicate `coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL`,
+      guarded vs pre-window deploys); NOT age-out. See ## Runbook.
+- [ ] **(Phase 2)** **~87M false `nfts_pending` + `nft_ownership_pending` rows for
+      crypto-proven-SAC contracts dropped** (the PR #286 gate only stops NEW ones; the drop
+      is the window data-pass).
+- [x] **Dead `sac_overrides` plumbing removed** — `derive_sac_overrides_from_assets` + its 7
+      tests + export deleted; `sac_overrides` repurposed to event-derived (PR #286).
 
 ## Docs updated
 
 - `docs/architecture/database-schema/*` (soroban_contracts = deployed instances) and
   `docs/architecture/xdr-parsing/*` (no contract row for un-deployed SACs) — when implemented.
+
+## Runbook — code → PR → window data-pass
+
+**Two phases. Phase 1 (code) ships as a normal PR. Phase 2 (prod data-pass) runs
+ONLY in a maintenance window with ingest STOPPED, AFTER the Phase-1 indexer is
+redeployed — else deleted ghosts regrow on the next live ledger.**
+
+### Phase 1 — code (normal PR, not in a window)
+
+1. **Writer skip** (`persist/stage.rs`): build the crypto-proven-SAC emitter set
+   for the ledger — preferred at DETECTION (`process.rs`, where topics-JSON +
+   `net_id` exist) → pass `HashSet<strkey>` via `StageInputs`. Skip those cids in
+   the Pass-2 FK stub (~1390). Remove the asset-override skeleton (553-578).
+   Replace the 1340 suppression + stale 1333-39 comment with the same gate.
+2. **3 INNER → LEFT** (latent-bug fix — a ref to a row-less contract must not drop
+   the row): `transactions/queries_ch.rs:821` (events), `:851` (invocations),
+   `nfts/queries_ch.rs:277` (NFT detail) + regression tests.
+3. **AC#3 — assets home**: ensure the un-deployed SAC's asset lands in `assets`
+   (today 0/orphans are there). Decide: repurpose `sac_overrides.identity`, OR
+   source the asset from the event topic and DELETE the dead `sac_overrides` chain
+   (`derive_sac_overrides_from_assets`, `ParseOutput`/`StageInputs.sac_overrides`,
+   collapse `prepare`/`prepare_with_sac_overrides`).
+4. **Unit test**: a SAC-event-only ledger writes NO `soroban_contracts` row; a
+   deployed SAC (USDC) still gets its deploy row.
+5. **Docs (ADR 0032)**: `database-schema/*` (soroban_contracts = deployed only),
+   `xdr-parsing/*` (no contract row for un-deployed SAC).
+6. **API-types**: only if a `crates/api` DTO/openapi shape changes (the LEFT joins
+   alone don't change response shape → likely N/A; verify).
+   → PR, CI green, **merge to develop**. Stops NEW ghosts; existing ones remain.
+
+### Phase 2 — prod data-pass (maintenance window, ingest STOPPED)
+
+Precondition: the indexer build being redeployed contains the Phase-1 writer skip.
+
+1. **Stop ingest** (window does this) → **redeploy indexer** with Phase-1 code.
+2. **Pre-flight guard** (do NOT skip): confirm `coalesce(deployed_at_ledger,0)=0
+AND wasm_hash IS NULL` catches ZERO real pre-window-deployed SACs — the count
+   of `<predicate> AND deployed_at_ledger>0` must be 0; spot-check USDC excluded.
+3. **AC#3 first — assets present BEFORE the delete** (order matters, else a window
+   where the SAC is in neither table): one-time insert pass for the un-deployed-SAC
+   assets (asset_type=2), or confirm the redeployed code re-derives them.
+4. **AC#6 — delete contract ghosts**: `ALTER TABLE soroban_contracts DELETE WHERE
+coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL` (~311k rows: ~307k
+   is_sac=true skeletons + ~4.3k orphan stubs + ~1.3k residual; registry 424k →
+   ~111k). Small table → cheap mutation.
+5. **AC#7 — drop ~87M false pending**: `nfts_pending` + `nft_ownership_pending` for
+   the crypto-proven-SAC contracts (the drain batch is gone; the gate only stops
+   new). THIS is the heavy op — check part size + mutation cost; run when the 0304
+   backfill has freed disk.
+6. **Validate**: `/v1/contracts` = deployed only; un-deployed-SAC assets present in
+   `/v1/assets` (`deployed_at_ledger`=NULL — correct — + blank `C…` strkey, accepted
+   option-a degradation); USDC unaffected (is_sac=true + deploy); a tx/event/NFT
+   referencing a row-less contract no longer vanishes.
+7. **Resume ingest.**
+
+### Coupling / gotchas
+
+- **Not a one-line DELETE.** Steps 3-5 are coupled: delete-only (no AC#3) → SACs
+  vanish from the explorer; delete-only (no AC#7) → 87M stranded pending rows.
+- **Disjoint from the 0304 metadata backfill** (different tables) → can coexist, but
+  slot the 87M-row AC#7 drop AFTER the backfill frees disk (box ~95% during it).
+- **strkey degradation is intentional** (option a): surrogate id is one-way → the
+  C… address goes blank on the un-deployed-SAC asset + the 3 LEFT refs. Re-deriving
+  from the asset (option c) is a separate future task — surface, do not auto-spawn.

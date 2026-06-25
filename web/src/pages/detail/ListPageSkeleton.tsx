@@ -17,9 +17,13 @@ import { TableSkeleton } from '@rumblefish/soroban-block-explorer-ui';
 export function ListPageSkeleton({
   columns = 5,
   showFilters = true,
+  rowHeight,
 }: {
   columns?: number;
   showFilters?: boolean;
+  /** Match the mounted page's table `rowHeight` (tall tables: NFTs / pools /
+   *  ledgers) so phase A → phase B has no height jump. */
+  rowHeight?: number;
 }) {
   return (
     <Stack spacing={3}>
@@ -64,8 +68,10 @@ export function ListPageSkeleton({
           </Box>
         )}
 
-        {/* Table body — same flush TableSkeleton DataListCard renders in phase B */}
-        <TableSkeleton rows={10} columns={columns} />
+        {/* Table body — same flush TableSkeleton DataListCard renders in phase B
+            (row count == DataListCard's `skeletonRows` default = a full
+            PAGE_SIZE page, so phase A → phase B has no height jump). */}
+        <TableSkeleton rows={20} columns={columns} rowHeight={rowHeight} />
 
         {/* Pagination placeholder */}
         <Box

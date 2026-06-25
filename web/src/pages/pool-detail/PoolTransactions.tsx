@@ -5,12 +5,12 @@ import {
   Chip,
   type ChipProps,
   EmptyState,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
   RelativeTimestamp,
-  TableSkeleton,
   useCursorPagination,
   usePageHandlers,
   type ExplorerTableColumn,
@@ -70,6 +70,7 @@ const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
   {
     id: 'event',
     header: 'Event',
+    width: 120,
     cell: (row) => {
       const { label, color } = classifyLpTx(row.operation_types);
       return <Chip size="sm" color={color} label={label} />;
@@ -78,11 +79,13 @@ const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
   {
     id: 'hash',
     header: 'Hash',
+    width: 160,
     cell: (row) => <IdentifierWithCopy value={row.hash} type="transaction" />,
   },
   {
     id: 'account',
     header: 'Account',
+    width: 160,
     cell: (row) => (
       <IdentifierWithCopy value={row.source_account} type="account" />
     ),
@@ -90,6 +93,7 @@ const columns: ExplorerTableColumn<PoolTransactionItem>[] = [
   {
     id: 'time',
     header: 'Time',
+    width: 210,
     cell: (row) => (
       <Stack spacing={0}>
         <RelativeTimestamp timestamp={row.created_at} />
@@ -124,10 +128,8 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
     resetKey: poolId,
   });
 
-  const { data, isLoading, isError, error, refetch } = usePoolTransactions(
-    poolId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    usePoolTransactions(poolId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -137,8 +139,17 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
-    body = <TableSkeleton rows={6} columns={columns.length} />;
+  if (isLoading || isPlaceholderData) {
+    body = (
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row) => row.hash}
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
+    );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
@@ -151,7 +162,12 @@ export function PoolTransactions({ poolId }: PoolTransactionsProps) {
     );
   } else {
     body = (
-      <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.hash} />
+      <ExplorerTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.hash}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
     );
   }
 

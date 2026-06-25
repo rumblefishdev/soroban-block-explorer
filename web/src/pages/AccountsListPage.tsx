@@ -38,10 +38,8 @@ export default function AccountsListPage() {
     return filters;
   }, [withDomain, sortDir]);
 
-  const { data, isLoading, isError, error, refetch } = useAccountsList(
-    cursor,
-    queryFilters
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useAccountsList(cursor, queryFilters);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -76,6 +74,7 @@ export default function AccountsListPage() {
         }
         columnCount={ACCOUNT_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
@@ -86,6 +85,9 @@ export default function AccountsListPage() {
             sortDir={sortDir}
             onSortChange={handleSortChange}
           />
+        )}
+        renderSkeleton={() => (
+          <AccountsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="accounts"

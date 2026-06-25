@@ -1,6 +1,7 @@
 import type { LedgerListItem } from '@rumblefish/api-types';
 import {
   Chip,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatInteger,
   IdentifierDisplay,
@@ -18,6 +19,8 @@ interface LedgersTableProps {
   sortDir?: SortDirection;
   /** `(columnId, direction)` — forwarded straight from the sorted column. */
   onSortChange?: (id: string, dir: SortDirection) => void;
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
@@ -26,6 +29,7 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
       id: 'sequence',
       header: 'Sequence',
       sortable,
+      width: 120,
       cell: (row) => (
         <IdentifierDisplay
           value={String(row.sequence)}
@@ -37,25 +41,27 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
     {
       id: 'hash',
       header: 'Hash',
-
+      width: 160,
       cell: (row) => (
         <IdentifierWithCopy
           value={row.hash}
           type="ledger"
           linked={false}
           truncation={{ prefix: 4, suffix: 4 }}
+          mono
         />
       ),
     },
     {
       id: 'closed_at',
       header: 'Closed at',
+      width: 210,
       cell: (row) => <TransactionTime createdAt={row.closed_at} />,
     },
     {
       id: 'protocol',
       header: 'Protocol',
-
+      width: 120,
       cell: (row) => (
         <Chip size="sm" color="neutral" label={String(row.protocol_version)} />
       ),
@@ -64,6 +70,7 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
       id: 'tx_count',
       header: 'TX Count',
       align: 'right',
+      width: 110,
       cell: (row) => (
         <Typography component="span" variant="bodySmRegular">
           {formatInteger(row.transaction_count)}
@@ -84,6 +91,8 @@ export function LedgersTable({
   rows,
   sortDir,
   onSortChange,
+  loading,
+  skeletonRows,
 }: LedgersTableProps) {
   const sortable = sortDir != null && onSortChange != null;
   const columns = makeColumns(sortable);
@@ -92,6 +101,9 @@ export function LedgersTable({
       columns={columns}
       rows={rows}
       rowKey={(row) => String(row.sequence)}
+      rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      loading={loading}
+      skeletonRows={skeletonRows}
       {...(sortable
         ? {
             sortBy: 'sequence',

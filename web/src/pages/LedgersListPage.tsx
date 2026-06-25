@@ -18,10 +18,8 @@ export default function LedgersListPage() {
   // `setSort`, so it survives reload / deep links and stays paired with
   // the cursor.
   const sortDir = state.sortDir;
-  const { data, isLoading, isError, error, refetch } = useLedgersList(
-    cursor,
-    sortDir
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useLedgersList(cursor, sortDir);
 
   const handleSortChange = useCallback(
     // Column id comes from the table; `setSort` writes `?sort=&dir=` and
@@ -46,6 +44,7 @@ export default function LedgersListPage() {
       <DataListCard
         columnCount={LEDGER_COLUMN_COUNT}
         isLoading={isLoading}
+        isReloading={isPlaceholderData}
         isError={isError}
         error={error}
         onRetry={() => void refetch()}
@@ -56,6 +55,9 @@ export default function LedgersListPage() {
             sortDir={sortDir}
             onSortChange={handleSortChange}
           />
+        )}
+        renderSkeleton={() => (
+          <LedgersTable rows={[]} loading skeletonRows={20} />
         )}
         emptyKind="ledgers"
         emptyNoun="ledgers"

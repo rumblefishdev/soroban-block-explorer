@@ -15,6 +15,9 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
   {
     id: 'account',
     header: 'Account',
+    // Wider than a plain identifier: this cell also carries the home-domain
+    // chip (e.g. "lobstr.co") next to the address + copy button.
+    width: 240,
     cell: (row) => (
       <Stack
         direction="row"
@@ -51,6 +54,7 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
     id: 'xlm',
     header: 'XLM Balance',
     align: 'right',
+    width: 165,
     cell: (row) =>
       row.xlm_balance != null ? (
         <Typography component="span" variant="bodySmMedium">
@@ -65,6 +69,7 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
     header: 'Last Seen',
     align: 'right',
     sortable: true,
+    width: 180,
     cell: (row) => (
       <IdentifierDisplay value={String(row.last_seen_ledger)} type="ledger" />
     ),
@@ -73,6 +78,7 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
     id: 'first_seen',
     header: 'First Seen',
     align: 'right',
+    width: 180,
     cell: (row) => (
       <IdentifierDisplay value={String(row.first_seen_ledger)} type="ledger" />
     ),
@@ -81,15 +87,19 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
 
 interface AccountsTableProps {
   rows: readonly AccountListItem[];
-  sortDir: SortDirection;
+  sortDir?: SortDirection;
   /** `(columnId, direction)` — forwarded straight from the sorted column. */
-  onSortChange: (id: string, dir: SortDirection) => void;
+  onSortChange?: (id: string, dir: SortDirection) => void;
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 export function AccountsTable({
   rows,
   sortDir,
   onSortChange,
+  loading,
+  skeletonRows,
 }: AccountsTableProps) {
   return (
     <ExplorerTable
@@ -99,6 +109,8 @@ export function AccountsTable({
       sortBy="last_seen"
       sortDir={sortDir}
       onSortChange={onSortChange}
+      loading={loading}
+      skeletonRows={skeletonRows}
     />
   );
 }

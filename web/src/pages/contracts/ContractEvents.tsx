@@ -3,12 +3,12 @@ import type { PaginatedEventItem } from '@rumblefish/api-types';
 import {
   Chip,
   type ChipProps,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
   PaginationControls,
   QueryErrorState,
   TableEmptyState,
-  TableSkeleton,
   truncateMiddle,
   useCursorPagination,
   usePageHandlers,
@@ -125,21 +125,25 @@ const columns: ExplorerTableColumn<EventRow>[] = [
   {
     id: 'type',
     header: 'Type',
+    width: 120,
     cell: (row) => <EventTypeBadge type={row.event_type} />,
   },
   {
     id: 'topics',
     header: 'Topics',
+    width: 200,
     cell: (row) => <TopicsCell topics={row.topics} />,
   },
   {
     id: 'data',
     header: 'Data',
+    width: 200,
     cell: (row) => <DataCell data={row.data} />,
   },
   {
     id: 'ledger',
     header: 'Ledger',
+    width: 120,
     cell: (row) => (
       <IdentifierDisplay value={String(row.ledger_sequence)} type="ledger" />
     ),
@@ -147,6 +151,7 @@ const columns: ExplorerTableColumn<EventRow>[] = [
   {
     id: 'time',
     header: 'Time',
+    width: 210,
     cell: (row) => <TransactionTime createdAt={row.created_at} />,
   },
 ];
@@ -165,10 +170,8 @@ export function ContractEvents({ contractId }: { contractId: string }) {
     resetKey: contractId,
   });
 
-  const { data, isLoading, isError, error, refetch } = useContractEvents(
-    contractId,
-    cursor
-  );
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
+    useContractEvents(contractId, cursor);
 
   const rows = data?.data ?? [];
   const { canPrev, canNext, handlePrev, handleNext } = usePageHandlers(
@@ -178,8 +181,17 @@ export function ContractEvents({ contractId }: { contractId: string }) {
   );
 
   let body: ReactNode;
-  if (isLoading) {
-    body = <TableSkeleton rows={8} columns={columns.length} />;
+  if (isLoading || isPlaceholderData) {
+    body = (
+      <ExplorerTable
+        columns={columns}
+        rows={[]}
+        rowKey={(row, index) => `${row.transaction_hash}-${index}`}
+        loading
+        skeletonRows={20}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      />
+    );
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
@@ -197,6 +209,7 @@ export function ContractEvents({ contractId }: { contractId: string }) {
         columns={columns}
         rows={rows}
         rowKey={(row, index) => `${row.transaction_hash}-${index}`}
+        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
       />
     );
   }
