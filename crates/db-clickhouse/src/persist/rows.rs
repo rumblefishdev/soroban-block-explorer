@@ -38,7 +38,7 @@
 //! - `DateTime64(3, 'UTC')` → `i64` ms since Unix epoch
 
 use clickhouse::Row;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// `ledgers` — immutable lookup, MergeTree, partitioned.
 #[derive(Debug, Clone, Row, Serialize)]
@@ -121,7 +121,12 @@ pub struct AccountBalanceRow {
 /// `soroban_contracts` — state hub, RMT(wasm_uploaded_at_ledger).
 /// Surrogate `id`; `wasm_uploaded_at_ledger = 0` is the stub sentinel
 /// (Pass 2 stub-rowing for referenced-but-not-deployed contracts).
-#[derive(Debug, Clone, Row, Serialize)]
+///
+/// Also read back (not just written): the task-0320 live WASM-upgrade prefetch
+/// (`persist::fetch_prior_contract_rows`) reads the prior row in full so
+/// `build_wasm_upgrade_rows` can carry the identity columns forward — hence
+/// `Deserialize`.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct SorobanContractRow {
     pub id: i64,
     pub contract_id: String,

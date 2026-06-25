@@ -111,7 +111,11 @@ pub async fn persist_ledger_clickhouse(
         ),
         fetch_prior_contract_rows(client, events),
     );
-    let mut staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+    // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
+    // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
+    // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
+    // this ledger — no post-prepare mutation.
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -130,17 +134,8 @@ pub async fn persist_ledger_clickhouse(
         sac_overrides,
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
+        prior_contract_rows: &prior_contract_rows,
     })?;
-    // Task 0320 live path: rewrite `soroban_contracts.wasm_hash` for contracts
-    // that upgraded their WASM this ledger (carry identity forward; RMT version =
-    // upgrade ledger so it wins the merge). Appended after the deploy/skeleton
-    // rows; a contract that both deploys and upgrades in one ledger is impossible
-    // (WASM upload must precede the upgrade in an earlier tx).
-    staged.contract_rows.extend(stage::build_wasm_upgrade_rows(
-        events,
-        &prior_contract_rows,
-        i64::from(ledger.sequence),
-    ));
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -407,22 +402,14 @@ async fn query_contract_verdicts(
     Ok(out)
 }
 
-/// Prior `soroban_contracts` row read during the task-0320 live upgrade prefetch.
-#[derive(clickhouse::Row, serde::Deserialize)]
-struct PriorContractRowCh {
-    contract_id: String,
-    deployer_id: Option<i64>,
-    deployed_at_ledger: Option<i64>,
-    contract_type: Option<i16>,
-    is_sac: bool,
-    name: Option<String>,
-}
-
-/// Task 0320 live path — prefetch the prior `soroban_contracts` identity rows for
+/// Task 0320 live path — prefetch the prior `soroban_contracts` rows (in full) for
 /// the contracts that emit an `executable_update` SYSTEM event this ledger, so
 /// [`stage::build_wasm_upgrade_rows`] can carry deployer / deployed_at / name /
 /// contract_type / is_sac forward when it rewrites `wasm_hash` (the RMT whole-row
 /// replace would otherwise NULL them — the clobber class owned by task 0316).
+/// The row is read back as the same [`rows::SorobanContractRow`] it will be
+/// written as, so no projection DTO is needed — the upgrade build just clones it
+/// and overrides the three columns the upgrade changes.
 ///
 /// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
 /// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
@@ -431,7 +418,7 @@ struct PriorContractRowCh {
 async fn fetch_prior_contract_rows(
     client: &Client,
     events: &[(String, Vec<ExtractedEvent>)],
-) -> HashMap<String, stage::PriorContractRow> {
+) -> HashMap<String, rows::SorobanContractRow> {
     let mut want: Vec<&str> = events
         .iter()
         .flat_map(|(_, evs)| evs.iter())
@@ -454,26 +441,22 @@ async fn fetch_prior_contract_rows(
         .map(|c| format!("'{c}'"))
         .collect::<Vec<_>>()
         .join(", ");
+    // Column order MUST match `rows::SorobanContractRow` field order (RowBinary is
+    // positional).
     let sql = format!(
-        "SELECT contract_id, deployer_id, deployed_at_ledger, contract_type, is_sac, name \
+        "SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
+                deployed_at_ledger, contract_type, is_sac, name \
          FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
     );
 
-    match client.query(&sql).fetch_all::<PriorContractRowCh>().await {
+    match client
+        .query(&sql)
+        .fetch_all::<rows::SorobanContractRow>()
+        .await
+    {
         Ok(rows) => rows
             .into_iter()
-            .map(|r| {
-                (
-                    r.contract_id,
-                    stage::PriorContractRow {
-                        deployer_id: r.deployer_id,
-                        deployed_at_ledger: r.deployed_at_ledger,
-                        contract_type: r.contract_type,
-                        is_sac: r.is_sac,
-                        name: r.name,
-                    },
-                )
-            })
+            .map(|r| (r.contract_id.clone(), r))
             .collect(),
         Err(e) => {
             tracing::warn!(

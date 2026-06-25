@@ -1197,6 +1197,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1356,6 +1357,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1394,6 +1396,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1434,6 +1437,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1487,6 +1491,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1538,6 +1543,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1690,6 +1696,7 @@ fn prepare_emits_sac_override_contract_row_for_xlm_native() {
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1754,6 +1761,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -1793,6 +1801,30 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
     }
 }
 
+/// A prior `soroban_contracts` row for the upgrade-prefetch map. Only the
+/// identity columns are meaningful here; `wasm_hash` / `wasm_uploaded_at_ledger`
+/// are the pre-upgrade values that `build_wasm_upgrade_rows` overrides.
+fn prior_contract_row(
+    addr: &str,
+    deployer_id: Option<i64>,
+    deployed_at_ledger: Option<i64>,
+    contract_type: Option<i16>,
+    is_sac: bool,
+    name: Option<String>,
+) -> SorobanContractRow {
+    SorobanContractRow {
+        id: ids::contract_id(addr),
+        contract_id: addr.to_string(),
+        wasm_hash: Some([0x11u8; 32]),
+        wasm_uploaded_at_ledger: deployed_at_ledger.unwrap_or(0),
+        deployer_id,
+        deployed_at_ledger,
+        contract_type,
+        is_sac,
+        name,
+    }
+}
+
 #[test]
 fn build_wasm_upgrade_rows_carries_identity_and_overrides_hash() {
     let addr = "C".to_string() + &"U".repeat(55);
@@ -1801,13 +1833,14 @@ fn build_wasm_upgrade_rows_carries_identity_and_overrides_hash() {
     let mut prior = std::collections::HashMap::new();
     prior.insert(
         addr.clone(),
-        stage::PriorContractRow {
-            deployer_id: Some(7),
-            deployed_at_ledger: Some(100),
-            contract_type: Some(1),
-            is_sac: false,
-            name: Some("foo".into()),
-        },
+        prior_contract_row(
+            &addr,
+            Some(7),
+            Some(100),
+            Some(1),
+            false,
+            Some("foo".into()),
+        ),
     );
 
     let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
@@ -1846,13 +1879,14 @@ fn build_wasm_upgrade_rows_ignores_non_upgrade_events() {
     let mut prior = std::collections::HashMap::new();
     prior.insert(
         addr.clone(),
-        stage::PriorContractRow {
-            deployer_id: Some(7),
-            deployed_at_ledger: Some(100),
-            contract_type: Some(1),
-            is_sac: false,
-            name: Some("foo".into()),
-        },
+        prior_contract_row(
+            &addr,
+            Some(7),
+            Some(100),
+            Some(1),
+            false,
+            Some("foo".into()),
+        ),
     );
     assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
 }
@@ -1869,13 +1903,14 @@ fn build_wasm_upgrade_rows_ignores_diagnostic_source() {
     let mut prior = std::collections::HashMap::new();
     prior.insert(
         addr.clone(),
-        stage::PriorContractRow {
-            deployer_id: Some(7),
-            deployed_at_ledger: Some(100),
-            contract_type: Some(1),
-            is_sac: false,
-            name: Some("foo".into()),
-        },
+        prior_contract_row(
+            &addr,
+            Some(7),
+            Some(100),
+            Some(1),
+            false,
+            Some("foo".into()),
+        ),
     );
     assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
 }
@@ -1889,13 +1924,7 @@ fn build_wasm_upgrade_rows_forces_is_sac_false() {
     let mut prior = std::collections::HashMap::new();
     prior.insert(
         addr.clone(),
-        stage::PriorContractRow {
-            deployer_id: None,
-            deployed_at_ledger: None,
-            contract_type: Some(1),
-            is_sac: true,
-            name: None,
-        },
+        prior_contract_row(&addr, None, None, Some(1), true, None),
     );
     let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
     assert_eq!(rows.len(), 1);
