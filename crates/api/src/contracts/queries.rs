@@ -8,6 +8,8 @@ use sqlx::{PgPool, Row};
 
 use crate::common::cursor::{Direction, TsIdCursor, keyset_sql_desc};
 
+use super::dto::ContractStats;
+
 /// Recent-activity window shared by the detail stats (`fetch_contract_stats`)
 /// and the list's `recent_invocations` column, so both compute the count
 /// over the SAME period. Single source — they cannot drift.
@@ -189,7 +191,7 @@ pub async fn fetch_contract_stats(
     pool: &PgPool,
     contract_surrogate_id: i64,
     window: &str,
-) -> Result<(i64, i64, i64, String), sqlx::Error> {
+) -> Result<ContractStats, sqlx::Error> {
     let row: PgRow = sqlx::query(
         "SELECT COUNT(*)::BIGINT                              AS recent_invocations, \
                 COUNT(DISTINCT caller_id)::BIGINT             AS recent_unique_callers, \
@@ -209,12 +211,12 @@ pub async fn fetch_contract_stats(
     .fetch_one(pool)
     .await?;
 
-    Ok((
-        row.get("recent_invocations"),
-        row.get("recent_unique_callers"),
-        row.get("recent_events"),
-        row.get("stats_window"),
-    ))
+    Ok(ContractStats {
+        recent_invocations: row.get("recent_invocations"),
+        recent_unique_callers: row.get("recent_unique_callers"),
+        recent_events: row.get("recent_events"),
+        stats_window: row.get("stats_window"),
+    })
 }
 
 #[derive(Debug)]
