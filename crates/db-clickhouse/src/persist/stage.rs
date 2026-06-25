@@ -52,6 +52,8 @@ use xdr_parser::types::{
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
 };
 
+use xdr_parser::event::extract_executable_update_new_wasm_hash;
+
 use super::ids;
 use super::rows::*;
 use crate::SchemaError;
@@ -202,6 +204,86 @@ pub fn prepare(
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
     })
+}
+
+/// Prior `soroban_contracts` identity columns, carried forward when a WASM
+/// upgrade rewrites the row (task 0320). Prefetched by the indexer for the
+/// contracts that emit an `executable_update` event in the batch, so the live
+/// RMW does not clobber deployer / name / etc with NULLs under the RMT
+/// whole-row replace.
+#[derive(Debug, Clone)]
+pub struct PriorContractRow {
+    pub deployer_id: Option<i64>,
+    pub deployed_at_ledger: Option<i64>,
+    pub contract_type: Option<i16>,
+    pub is_sac: bool,
+    pub name: Option<String>,
+}
+
+/// Build corrected `soroban_contracts` rows for contracts that emitted an
+/// `executable_update` SYSTEM event this ledger (task 0320, live path).
+///
+/// Per `executable_update` event with a parseable new WASM hash AND a known
+/// prior row, emit a full row that **overrides** `wasm_hash` +
+/// `wasm_uploaded_at_ledger` (= the upgrade ledger, the RMT version that wins
+/// the merge) and **carries forward** the identity columns. `contract_type` is
+/// carried forward unchanged — the class never net-changes on upgrade for
+/// current data; the rare flip is task 0325.
+///
+/// Events without a parseable hash, without a contract address, or **without a
+/// prior row are skipped** — emitting a partial row would clobber the identity
+/// columns to NULL under RMT. Multiple upgrades of one contract in the same
+/// ledger collapse to the last (on-chain application order).
+pub fn build_wasm_upgrade_rows(
+    events: &[(String, Vec<ExtractedEvent>)],
+    prior: &HashMap<String, PriorContractRow>,
+    ledger_sequence: i64,
+) -> Vec<SorobanContractRow> {
+    // Keyed by contract_id so multiple upgrades of one contract in the same
+    // ledger collapse to the last seen (= on-chain application order).
+    let mut by_contract: HashMap<String, SorobanContractRow> = HashMap::new();
+    for (_tx_hash, evs) in events {
+        for ev in evs {
+            // Only consensus events drive state. The diagnostic container holds
+            // byte-identical copies of consensus events AND events from FAILED
+            // transactions (an upgrade that never applied) — acting on those would
+            // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
+            // staging guard (this is the same population the backfill reads, post-drop).
+            if is_diagnostic(ev.source) {
+                continue;
+            }
+            let Some(addr) = ev.contract_id.as_deref() else {
+                continue;
+            };
+            // `extract_…` returns `Some` only for a well-formed executable_update.
+            let Some(new_hash) = extract_executable_update_new_wasm_hash(&ev.topics) else {
+                continue;
+            };
+            // Skip-on-miss: without the prior row we cannot carry identity
+            // columns forward, and a partial row would NULL them under RMT.
+            let Some(p) = prior.get(addr) else {
+                continue;
+            };
+            by_contract.insert(
+                addr.to_string(),
+                SorobanContractRow {
+                    id: ids::contract_id(addr),
+                    contract_id: addr.to_string(),
+                    wasm_hash: Some(new_hash),
+                    wasm_uploaded_at_ledger: ledger_sequence,
+                    deployer_id: p.deployer_id,
+                    deployed_at_ledger: p.deployed_at_ledger,
+                    contract_type: p.contract_type,
+                    // An `executable_update` is proof the contract is WASM-backed,
+                    // so it is NOT a SAC — assert that rather than carrying a
+                    // possibly-mislabeled prior `is_sac=true` forward (task 0294).
+                    is_sac: false,
+                    name: p.name.clone(),
+                },
+            );
+        }
+    }
+    by_contract.into_values().collect()
 }
 
 /// Map parser-extracted token-metadata writes to `soroban_contract_metadata`

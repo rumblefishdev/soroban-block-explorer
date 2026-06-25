@@ -36,11 +36,12 @@ use domain::ContractType;
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
+use xdr_parser::event::extract_executable_update_new_wasm_hash;
 use xdr_parser::types::{
-    ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
-    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
+    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
+    ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition,
+    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -97,7 +98,9 @@ pub async fn persist_ledger_clickhouse(
     //   override; upload + deploy are separate Soroban txs / ledgers).
     // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
     //   for contracts deployed earlier), memoised by `classification_cache`.
-    let (prior_wasm_verdicts, prior_contract_verdicts) = tokio::join!(
+    // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
+    // All three are independent reads; one `join!` pays a single round-trip.
+    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
         fetch_prior_contract_verdicts(
             client,
@@ -106,8 +109,9 @@ pub async fn persist_ledger_clickhouse(
             contract_deployments,
             classification_cache,
         ),
+        fetch_prior_contract_rows(client, events),
     );
-    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+    let mut staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -127,6 +131,16 @@ pub async fn persist_ledger_clickhouse(
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
     })?;
+    // Task 0320 live path: rewrite `soroban_contracts.wasm_hash` for contracts
+    // that upgraded their WASM this ledger (carry identity forward; RMT version =
+    // upgrade ledger so it wins the merge). Appended after the deploy/skeleton
+    // rows; a contract that both deploys and upgrades in one ledger is impossible
+    // (WASM upload must precede the upgrade in an earlier tx).
+    staged.contract_rows.extend(stage::build_wasm_upgrade_rows(
+        events,
+        &prior_contract_rows,
+        i64::from(ledger.sequence),
+    ));
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -391,6 +405,84 @@ async fn query_contract_verdicts(
         }
     }
     Ok(out)
+}
+
+/// Prior `soroban_contracts` row read during the task-0320 live upgrade prefetch.
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct PriorContractRowCh {
+    contract_id: String,
+    deployer_id: Option<i64>,
+    deployed_at_ledger: Option<i64>,
+    contract_type: Option<i16>,
+    is_sac: bool,
+    name: Option<String>,
+}
+
+/// Task 0320 live path — prefetch the prior `soroban_contracts` identity rows for
+/// the contracts that emit an `executable_update` SYSTEM event this ledger, so
+/// [`stage::build_wasm_upgrade_rows`] can carry deployer / deployed_at / name /
+/// contract_type / is_sac forward when it rewrites `wasm_hash` (the RMT whole-row
+/// replace would otherwise NULL them — the clobber class owned by task 0316).
+///
+/// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
+/// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
+/// upgrade row is simply not emitted this ledger; the in-CH `wasm-upgrade-backfill`
+/// maintenance pass recovers it.
+async fn fetch_prior_contract_rows(
+    client: &Client,
+    events: &[(String, Vec<ExtractedEvent>)],
+) -> HashMap<String, stage::PriorContractRow> {
+    let mut want: Vec<&str> = events
+        .iter()
+        .flat_map(|(_, evs)| evs.iter())
+        // Consensus events only — drop the diagnostic container (byte-identical
+        // copies + failed-tx events). Must match `build_wasm_upgrade_rows`'s
+        // filter so the prefetch covers exactly the contracts it will rewrite.
+        .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
+        .filter(|ev| extract_executable_update_new_wasm_hash(&ev.topics).is_some())
+        .filter_map(|ev| ev.contract_id.as_deref())
+        .collect();
+    want.sort_unstable();
+    want.dedup();
+    if want.is_empty() {
+        return HashMap::new();
+    }
+
+    // `want` are `C…` StrKeys from parser output (base32, no quote chars).
+    let in_list = want
+        .iter()
+        .map(|c| format!("'{c}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT contract_id, deployer_id, deployed_at_ledger, contract_type, is_sac, name \
+         FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
+    );
+
+    match client.query(&sql).fetch_all::<PriorContractRowCh>().await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.contract_id,
+                    stage::PriorContractRow {
+                        deployer_id: r.deployer_id,
+                        deployed_at_ledger: r.deployed_at_ledger,
+                        contract_type: r.contract_type,
+                        is_sac: r.is_sac,
+                        name: r.name,
+                    },
+                )
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, wasm-upgrade-backfill recovers"
+            );
+            HashMap::new()
+        }
+    }
 }
 
 #[cfg(test)]

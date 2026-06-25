@@ -1770,3 +1770,134 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         "real deploy carries the deploy ledger as version"
     );
 }
+
+// ---- Task 0320: live WASM-upgrade row (build_wasm_upgrade_rows) ----
+
+fn executable_update_event(contract: &str) -> ExtractedEvent {
+    // topics = [Symbol("executable_update"), vec[Symbol("Wasm"), Bytes(old=0x11)],
+    //                                        vec[Symbol("Wasm"), Bytes(new=0x22)]]
+    ExtractedEvent {
+        transaction_hash: "abcd".into(),
+        event_type: ContractEventType::System,
+        source: EventSource::TxLevel,
+        contract_id: Some(contract.to_string()),
+        topics: serde_json::json!([
+            {"type":"sym","value":"executable_update"},
+            {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"ERERERERERERERERERERERERERERERERERERERERERE="}]},
+            {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI="}]}
+        ]),
+        data: serde_json::json!({"type":"vec","value":[]}),
+        event_index: 0,
+        ledger_sequence: 555,
+        created_at: 1_700_000_000,
+    }
+}
+
+#[test]
+fn build_wasm_upgrade_rows_carries_identity_and_overrides_hash() {
+    let addr = "C".to_string() + &"U".repeat(55);
+    let events = vec![("abcd".to_string(), vec![executable_update_event(&addr)])];
+
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        stage::PriorContractRow {
+            deployer_id: Some(7),
+            deployed_at_ledger: Some(100),
+            contract_type: Some(1),
+            is_sac: false,
+            name: Some("foo".into()),
+        },
+    );
+
+    let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
+    assert_eq!(rows.len(), 1, "one upgrade row");
+    let r = &rows[0];
+    assert_eq!(r.contract_id, addr);
+    assert_eq!(r.id, ids::contract_id(&addr));
+    assert_eq!(r.wasm_hash, Some([0x22u8; 32]), "overridden to NEW hash");
+    assert_eq!(
+        r.wasm_uploaded_at_ledger, 555,
+        "RMT version = upgrade ledger"
+    );
+    assert_eq!(r.deployer_id, Some(7), "deployer carried forward");
+    assert_eq!(r.deployed_at_ledger, Some(100), "deploy ledger carried");
+    assert_eq!(r.name.as_deref(), Some("foo"), "name carried forward");
+    assert_eq!(r.contract_type, Some(1), "verdict carried (no flip)");
+    assert!(!r.is_sac);
+}
+
+#[test]
+fn build_wasm_upgrade_rows_skips_when_no_prior_row() {
+    // No prior row → must NOT emit: a partial row would clobber identity
+    // columns to NULL under RMT whole-row replace.
+    let addr = "C".to_string() + &"V".repeat(55);
+    let events = vec![("abcd".to_string(), vec![executable_update_event(&addr)])];
+    let prior = std::collections::HashMap::new();
+    assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
+}
+
+#[test]
+fn build_wasm_upgrade_rows_ignores_non_upgrade_events() {
+    let addr = "C".to_string() + &"W".repeat(55);
+    let mut ev = executable_update_event(&addr);
+    ev.topics = serde_json::json!([{"type":"sym","value":"transfer"}]);
+    let events = vec![("abcd".to_string(), vec![ev])];
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        stage::PriorContractRow {
+            deployer_id: Some(7),
+            deployed_at_ledger: Some(100),
+            contract_type: Some(1),
+            is_sac: false,
+            name: Some("foo".into()),
+        },
+    );
+    assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
+}
+
+#[test]
+fn build_wasm_upgrade_rows_ignores_diagnostic_source() {
+    // A diagnostic-container copy (or a failed-tx event) must NOT drive a write —
+    // it can carry a hash the chain never applied. Mirrors the soroban_events
+    // staging guard + the backfill's already-filtered source table.
+    let addr = "C".to_string() + &"X".repeat(55);
+    let mut ev = executable_update_event(&addr);
+    ev.source = EventSource::Diagnostic;
+    let events = vec![("abcd".to_string(), vec![ev])];
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        stage::PriorContractRow {
+            deployer_id: Some(7),
+            deployed_at_ledger: Some(100),
+            contract_type: Some(1),
+            is_sac: false,
+            name: Some("foo".into()),
+        },
+    );
+    assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
+}
+
+#[test]
+fn build_wasm_upgrade_rows_forces_is_sac_false() {
+    // An executable_update proves the contract is WASM-backed, so the row must
+    // assert is_sac=false even if the prior row was mislabeled SAC (task 0294).
+    let addr = "C".to_string() + &"Y".repeat(55);
+    let events = vec![("abcd".to_string(), vec![executable_update_event(&addr)])];
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        stage::PriorContractRow {
+            deployer_id: None,
+            deployed_at_ledger: None,
+            contract_type: Some(1),
+            is_sac: true,
+            name: None,
+        },
+    );
+    let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].is_sac, "executable_update ⇒ not a SAC");
+}
