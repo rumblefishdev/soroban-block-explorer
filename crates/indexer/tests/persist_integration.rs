@@ -1088,6 +1088,7 @@ fn make_contract_interface() -> ExtractedContractInterface {
         wasm_hash: WASM_HASH.to_string(),
         functions: Vec::new(),
         wasm_byte_len: 256,
+        upgradeable: false,
     }
 }
 
@@ -1581,6 +1582,7 @@ async fn stub_wasm_unblocks_unknown_hash_and_real_upload_upgrades_it() {
         wasm_hash: STUB_WASM_HASH.to_string(),
         functions: Vec::new(),
         wasm_byte_len: 512,
+        upgradeable: false,
     };
     let no_deployments: Vec<ExtractedContractDeployment> = Vec::new();
 
@@ -1814,6 +1816,7 @@ fn iface_with(wasm_hash: &str, fn_names: &[&str]) -> ExtractedContractInterface 
             })
             .collect(),
         wasm_byte_len: 1024,
+        upgradeable: false,
     }
 }
 

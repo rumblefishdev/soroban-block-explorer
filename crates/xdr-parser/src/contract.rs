@@ -75,11 +75,13 @@ fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedContra
 
     let spec_bytes = extract_custom_section(wasm_bytes, "contractspecv0")?;
     let functions = parse_spec_entries(&spec_bytes);
+    let upgradeable = wasm_imports_upgrade_fn(wasm_bytes);
 
     Some(ExtractedContractInterface {
         wasm_hash,
         functions,
         wasm_byte_len,
+        upgradeable,
     })
 }
 
@@ -266,9 +268,196 @@ fn spec_type_to_string(t: &ScSpecTypeDef) -> String {
     }
 }
 
+/// True iff the WASM imports the Soroban host function
+/// `update_current_contract_wasm` — the "ledger" host module (export `"l"`),
+/// function export `"6"`.
+///
+/// A contract can only upgrade itself by calling this host fn, so importing it
+/// is a near-definitive signal the contract has a self-upgrade path. Its
+/// **absence** means the contract cannot upgrade itself — it is effectively
+/// **immutable / frozen** (there is no on-ledger immutability flag; CAP-0046-05).
+///
+/// ## The `("l","6")` mapping is host-defined and version-pinned
+///
+/// These export strings are assigned by `rs-soroban-env`'s
+/// `soroban-env-common/env.json`, not by the contract — a contract cannot
+/// redefine what `("l","6")` does, nor reimplement self-upgrade by any other
+/// name (replacing on-ledger code is a privileged host op). The mapping is
+/// stable but **versioned per protocol**: a future env that renumbers host-fn
+/// exports could shift `"6"`. Verified against env.json as of **protocol 23**
+/// (mainnet, 2026-06): `ledger`→`"l"`, `update_current_contract_wasm`→`"6"`.
+/// Drift is caught in CI by `tests/upgradeable_real_wasm.rs` (real mainnet
+/// WASM fixtures), which fails if the mapping ever stops matching reality.
+///
+/// We walk all four WASM import-descriptor kinds (func/table/mem/global), not
+/// just host-fn imports, so a non-func import ordered before `("l","6")` can't
+/// make us bail early and false-negative.
+pub fn wasm_imports_upgrade_fn(wasm: &[u8]) -> bool {
+    imports_upgrade_inner(wasm).unwrap_or(false)
+}
+
+fn imports_upgrade_inner(wasm: &[u8]) -> Option<bool> {
+    if wasm.len() < 8 || &wasm[0..4] != b"\x00asm" {
+        return Some(false);
+    }
+    let mut pos = 8; // skip magic + version
+    while pos < wasm.len() {
+        let section_id = *wasm.get(pos)?;
+        pos = pos.checked_add(1)?;
+        let (section_size, br) = read_leb128(wasm.get(pos..)?)?;
+        pos = pos.checked_add(br)?;
+        let section_end = pos.checked_add(section_size as usize)?;
+        if section_id == 2 {
+            // Import section.
+            let body = wasm.get(pos..section_end.min(wasm.len()))?;
+            return Some(import_section_has_upgrade(body));
+        }
+        pos = section_end;
+    }
+    Some(false)
+}
+
+fn import_section_has_upgrade(body: &[u8]) -> bool {
+    let Some((count, mut pos)) = read_leb128(body) else {
+        return false;
+    };
+    for _ in 0..count {
+        let Some((mlen, br)) = read_leb128(body.get(pos..).unwrap_or_default()) else {
+            return false;
+        };
+        pos += br;
+        // `checked_add` so a crafted huge `mlen`/`flen` (u32) can't overflow
+        // `usize` on a 32-bit target before the slice bounds-check.
+        let Some(module) = pos
+            .checked_add(mlen as usize)
+            .and_then(|end| body.get(pos..end))
+        else {
+            return false;
+        };
+        pos += mlen as usize;
+        let Some((flen, br)) = read_leb128(body.get(pos..).unwrap_or_default()) else {
+            return false;
+        };
+        pos += br;
+        let Some(field) = pos
+            .checked_add(flen as usize)
+            .and_then(|end| body.get(pos..end))
+        else {
+            return false;
+        };
+        pos += flen as usize;
+        if module == b"l" && field == b"6" {
+            return true;
+        }
+        // Skip the import descriptor. Soroban contracts import only host
+        // functions in practice, but we walk every import-desc kind so a
+        // non-func import ordered *before* the upgrade import can't make us
+        // bail early and false-negative (report a real upgradeable contract as
+        // immutable). Kinds per WASM core spec: 0=func, 1=table, 2=mem, 3=global.
+        match body.get(pos) {
+            Some(0x00) => {
+                // func: typeidx (uleb)
+                pos += 1;
+                let Some((_, br)) = read_leb128(body.get(pos..).unwrap_or_default()) else {
+                    return false;
+                };
+                pos += br;
+            }
+            Some(0x01) => {
+                // table: reftype byte + limits
+                pos += 2; // kind + reftype
+                let Some(np) = skip_limits(body, pos) else {
+                    return false;
+                };
+                pos = np;
+            }
+            Some(0x02) => {
+                // mem: limits
+                pos += 1; // kind
+                let Some(np) = skip_limits(body, pos) else {
+                    return false;
+                };
+                pos = np;
+            }
+            Some(0x03) => {
+                // global: valtype byte + mutability byte
+                pos += 3; // kind + valtype + mut
+            }
+            _ => return false, // truncated or unknown kind — can't safely walk
+        }
+    }
+    false
+}
+
+/// Advance past a WASM `limits`: flag byte (0 = min only, 1 = min+max) followed
+/// by the min (and optional max) as ULEB128. Returns the new position.
+fn skip_limits(body: &[u8], mut pos: usize) -> Option<usize> {
+    let flag = *body.get(pos)?;
+    pos += 1;
+    let (_, br) = read_leb128(body.get(pos..)?)?;
+    pos += br;
+    if flag == 0x01 {
+        let (_, br) = read_leb128(body.get(pos..)?)?;
+        pos += br;
+    }
+    Some(pos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_import_present_is_upgradeable() {
+        // ("l","6") = update_current_contract_wasm
+        assert!(wasm_imports_upgrade_fn(&wasm_with_imports(&[(b"l", b"6")])));
+    }
+
+    #[test]
+    fn no_upgrade_import_is_frozen() {
+        // ("l","7") = extend_contract_data_ttl — not the upgrade fn
+        assert!(!wasm_imports_upgrade_fn(&wasm_with_imports(&[(
+            b"l", b"7"
+        )])));
+    }
+
+    /// Minimal WASM: magic + version + an import section of `(module, field)`
+    /// func imports. Covers the single- and multi-import (descriptor-skip) cases.
+    fn wasm_with_imports(imports: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut body = vec![imports.len() as u8]; // import count
+        for (module, field) in imports {
+            body.push(module.len() as u8);
+            body.extend_from_slice(module);
+            body.push(field.len() as u8);
+            body.extend_from_slice(field);
+            body.extend_from_slice(&[0x00, 0x00]); // kind=func(0), typeidx=0
+        }
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(b"\x00asm");
+        wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        wasm.push(0x02); // import section id
+        wasm.push(body.len() as u8); // section size
+        wasm.extend_from_slice(&body);
+        wasm
+    }
+
+    #[test]
+    fn upgrade_import_not_first_is_found() {
+        let wasm = wasm_with_imports(&[(b"l", b"_"), (b"x", b"0"), (b"l", b"6")]);
+        assert!(wasm_imports_upgrade_fn(&wasm));
+    }
+
+    #[test]
+    fn many_imports_without_upgrade_is_frozen() {
+        let wasm = wasm_with_imports(&[(b"l", b"_"), (b"l", b"7"), (b"d", b"0")]);
+        assert!(!wasm_imports_upgrade_fn(&wasm));
+    }
+
+    #[test]
+    fn non_wasm_is_not_upgradeable() {
+        assert!(!wasm_imports_upgrade_fn(b"not a wasm"));
+        assert!(!wasm_imports_upgrade_fn(&[]));
+    }
 
     #[test]
     fn read_leb128_single_byte() {

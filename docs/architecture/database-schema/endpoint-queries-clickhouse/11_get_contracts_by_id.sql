@@ -38,6 +38,11 @@
 
 -- ============================================================================
 -- A. Contract header.
+--    `upgradeable` (task 0327) is resolved here, not in a separate query: a
+--    LEFT JOIN to wasm_interface_metadata exposes the parsed mutability bit.
+--    JSONHas distinguishes a frozen contract (key present, false) from a row
+--    predating the flag (key absent → Unknown/null → no chip). SAC / no-WASM
+--    rows have no metadata match and are mapped to Immutable in the handler.
 -- ============================================================================
 SELECT
     sc.id                              AS contract_pk,
@@ -48,9 +53,12 @@ SELECT
     sc.deployed_at_ledger,
     sc.contract_type                   AS contract_type,
     sc.is_sac,
-    sc.name
+    sc.name,
+    toUInt8(JSONHas(wim.metadata, 'upgradeable'))        AS upgradeable_has,
+    toUInt8(JSONExtractBool(wim.metadata, 'upgradeable')) AS upgradeable_val
 FROM soroban_contracts sc FINAL
 LEFT JOIN accounts deployer FINAL ON deployer.id = sc.deployer_id
+LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash
 WHERE sc.contract_id = $1;
 
 -- @@ split @@

@@ -73,8 +73,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use stellar_xdr::curr::{
-    AccountId, LedgerEntryData, LedgerKey, LedgerKeyAccount, LedgerKeyTrustLine, Limits, PublicKey,
-    ReadXdr, TrustLineAsset, Uint256, WriteXdr,
+    AccountId, Hash, LedgerEntryData, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+    LedgerKeyTrustLine, Limits, PublicKey, ReadXdr, TrustLineAsset, Uint256, WriteXdr,
 };
 use tracing::warn;
 
@@ -258,6 +258,15 @@ pub fn account_ledger_key(strkey: &str) -> Option<LedgerKey> {
     };
     let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
     Some(LedgerKey::Account(LedgerKeyAccount { account_id }))
+}
+
+/// Build a `LedgerKey::ContractCode` from a 32-byte WASM hash (task 0327).
+/// Used by the `upgradeable-backfill` pass to fetch a contract's current WASM
+/// bytecode from Soroban RPC and re-derive its mutability bit.
+pub fn contract_code_ledger_key(wasm_hash: [u8; 32]) -> LedgerKey {
+    LedgerKey::ContractCode(LedgerKeyContractCode {
+        hash: Hash(wasm_hash),
+    })
 }
 
 /// Build a `LedgerKey::Trustline` for the given account / asset.

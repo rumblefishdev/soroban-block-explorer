@@ -2326,6 +2326,10 @@
           "stats": {
             "$ref": "#/components/schemas/ContractStats"
           },
+          "upgradeable": {
+            "type": ["boolean", "null"],
+            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag\n(none exists). ClickHouse-sourced; always `None` on the retired PG path."
+          },
           "wasm_hash": {
             "type": ["string", "null"]
           },

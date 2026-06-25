@@ -63,16 +63,50 @@ chip (task 0324).
 
 ## Acceptance criteria
 
-- [ ] Parser returns `upgradeable` for a WASM with/without the import (unit test
-      with a real upgradeable + a real frozen mainnet WASM).
-- [ ] API contract detail returns the 3-state field; OpenAPI + api-types regen'd.
-- [ ] FE shows Upgradeable/Immutable chip; nothing on Unknown.
-- [ ] A spot-check sample of mainnet contracts matches their real import set.
-- [ ] Flag stays correct across a WASM upgrade (re-resolves on new `wasm_hash`).
+- [x] Parser returns `upgradeable` for a WASM with/without the import — unit tests
+      (synthetic + multi-import skip) plus a real upgradeable + real frozen mainnet
+      WASM fixture (`crates/xdr-parser/tests/upgradeable_real_wasm.rs`).
+- [x] API contract detail returns the 3-state field; OpenAPI + api-types regen'd.
+- [x] FE shows the mutability chip; nothing on Unknown. Labels are
+      **"Self-upgradeable" / "No self-upgrade"** (not "Upgradeable/Immutable") —
+      they state exactly what the import scan proves and avoid overclaiming
+      immutability for proxy/delegate or renounced-admin contracts.
+- [x] Spot-check sample of mainnet contracts matches their real import set — 50 top
+      WASMs fetched live from Soroban RPC, shipped parser vs an independent scanner:
+      0/50 disagreements (covers ~95% of WASM contracts).
+- [x] Flag stays correct across a WASM upgrade — keyed by `wasm_hash`, re-resolves
+      on the new hash; the API-side per-hash lookup is covered by
+      `queries_ch::map_upgradeable` and the across-upgrade flip by
+      `tests/upgradeable_real_wasm.rs::upgrade_reresolves_flag_on_new_wasm`.
+      HARD DEPENDENCY: 0320's prod backfill (ops task 0326) must run first, else
+      ~1,351 already-upgraded contracts read the flag off their stale
+      (deploy-time) `wasm_hash`.
+
+## Backfill (scope item 5)
+
+`wasm_interface_metadata` is `ReplacingMergeTree` keyed by `wasm_hash`; existing
+rows lack the `upgradeable` key → read as Unknown (no chip). The bit is NOT
+derivable from current CH data — adversarial deep-dive (devils-advocate) measured
+every CH-only proxy and all fail: `executable_update` event history misses 69% of
+upgradeable contracts (capability ≠ history); function-name heuristics cap at ~92%
+(structural floor: obfuscated ABIs + governance/factory false-positives);
+`ContractCodeEntryExt.nImports` is a non-discriminating count and isn't persisted.
+Only the raw WASM import set works → backfill must re-read the bytecode.
+
+Backfill = `backfill-runner upgradeable-backfill`: read rows missing the key,
+**scoped to wasm_hashes that are the current code of a live contract** (the only
+ones a contract page reads; all RPC-resolvable), fetch the WASM per `wasm_hash`
+from Soroban RPC (`getLedgerEntries` / `LedgerKey::ContractCode`), run the shipped
+parser, re-INSERT the merged JSON (Replacing dedups). **Hard-failing**: writes the
+resolved rows then errors if ANY target WASM couldn't be resolved (or any bad hex),
+rather than silently leaving gaps; idempotent re-run retries only the still-missing.
+Validated: all 2,673 in-use WASMs resolve on RPC (0 missing), shipped parser vs an
+independent scanner = 0 disagreements. Code lands in this PR; the prod run is a
+separate ops step (mirrors 0320 → 0326).
 
 ## Docs updated (ADR 0032)
 
-- [ ] `docs/architecture/api/**` — new contract-detail field — _or N/A_
-- [ ] `docs/architecture/xdr-parsing/**` — import-scan responsibility — _or N/A_
-- [ ] `docs/architecture/schema/**` — if a new column/table stores the flag — _or N/A_
-- [ ] frontend data contract — _or N/A_
+- [x] `docs/architecture/backend/backend-overview.md` — `GET /contracts/:id` documents the 3-state `upgradeable` field + its CH-JOIN derivation.
+- [x] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` §5.4 — import-scan / mutability-bit responsibility added.
+- [x] `docs/architecture/database-schema/endpoint-queries-clickhouse/11_get_contracts_by_id.sql` — header query LEFT JOINs `wasm_interface_metadata`, projects `upgradeable_has`/`upgradeable_val`. No new column/table (reuses `metadata` JSON).
+- [x] frontend data contract — `libs/api-types` regenerated (`upgradeable?: boolean | null`); chip in `web/src/pages/ContractDetailPage.tsx`.

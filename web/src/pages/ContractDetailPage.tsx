@@ -94,6 +94,16 @@ export default function ContractDetailPage() {
           {contract.data?.is_sac === true && (
             <Chip size="md" color="accent" label="Stellar Asset Contract" />
           )}
+          {/* Task 0327 — mutability, 3-state; null/undefined (Unknown) → no chip.
+              Label states exactly what the WASM import scan proves ("self-
+              upgrade path present/absent"), not the broader "immutable" — a
+              static scan can't see proxy/delegate or renounced-admin patterns. */}
+          {contract.data?.upgradeable === true && (
+            <Chip size="md" color="emerald" label="Self-upgradeable" />
+          )}
+          {contract.data?.upgradeable === false && (
+            <Chip size="md" color="neutral" label="No self-upgrade" />
+          )}
         </Stack>
         {/* Truncated under-title identity (full id stays in the summary
             card below); the special identifier component carries the copy

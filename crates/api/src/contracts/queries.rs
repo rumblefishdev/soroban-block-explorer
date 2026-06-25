@@ -24,6 +24,9 @@ pub struct ContractRow {
     pub contract_type_name: Option<String>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// Task 0327 — contract mutability, 3-state (`None` = Unknown). Populated
+    /// only on the ClickHouse path; the retired PG path always sets `None`.
+    pub upgradeable: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +178,9 @@ pub async fn fetch_contract(
         contract_type_name: r.get("contract_type_name"),
         contract_type: r.get("contract_type"),
         is_sac: r.get("is_sac"),
+        // Task 0327 — mutability lives in the CH wasm_interface_metadata JSON;
+        // the retired PG path has no equivalent → Unknown.
+        upgradeable: None,
     }))
 }
 

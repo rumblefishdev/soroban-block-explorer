@@ -534,9 +534,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let classification = xdr_parser::classify_contract_from_wasm_spec(&iface.functions);
         wasm_classification.insert(hash, classification.into());
 
+        // Task 0327: persist the mutability bit so the API can surface the
+        // Upgradeable/Immutable badge. Read back via
+        // `JSONExtractBool(metadata,'upgradeable')`; rows written before this
+        // (no key) read as Unknown → chip renders nothing.
         let metadata = serde_json::json!({
             "functions": iface.functions,
             "wasm_byte_len": iface.wasm_byte_len,
+            "upgradeable": iface.upgradeable,
         });
         out.wasm_rows.push(WasmInterfaceMetadataRow {
             wasm_hash: hash,

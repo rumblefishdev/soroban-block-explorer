@@ -274,6 +274,11 @@ pub async fn get_contract(
             }
         };
 
+    // Task 0327 — mutability, 3-state (CH-only; None/Unknown on the retired PG
+    // path). Resolved in `fetch_contract` from the joined WASM interface
+    // metadata; no extra round-trip.
+    let upgradeable = contract.upgradeable;
+
     let response = Arc::new(ContractDetailResponse {
         contract_id: contract.contract_id,
         wasm_hash: contract.wasm_hash,
@@ -283,6 +288,7 @@ pub async fn get_contract(
         contract_type_name: contract.contract_type_name,
         contract_type: contract.contract_type,
         is_sac: contract.is_sac,
+        upgradeable,
         stats: ContractStats {
             recent_invocations,
             recent_unique_callers,
