@@ -1654,23 +1654,20 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 0220 — SAC override re-insert (Option A)
+// Task 0323 — un-deployed SAC modelled as asset (was task 0220 re-insert)
 // ---------------------------------------------------------------------------
 
-/// SAC override emits a corrected `SorobanContractRow` with
-/// `is_sac=true, contract_type=Token, wasm_uploaded_at_ledger=0`. The
-/// matching Pass-2 stub for the same contract_id (would otherwise
-/// arrive via the `assets[].contract_id` reference) is suppressed so
-/// RMT doesn't tie-break nondeterministically on equal version.
+/// Task 0323 — an un-deployed SAC (in `sac_overrides`, not deployed this
+/// ledger) is modelled as an ASSET, not a contract: NO `soroban_contracts`
+/// row is written for it (the Pass-2 FK stub is suppressed), and a SAC
+/// `assets` row is seeded from its identity. (Was the task-0220 skeleton.)
 #[test]
-fn prepare_emits_sac_override_contract_row_for_xlm_native() {
+fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0xA0);
 
-    // XLM SAC contract_id is the well-known mainnet address; we don't
-    // need to derive it inside the test — `prepare_with_sac_overrides`
-    // receives it ready-made (as the production parse_ledger step
-    // does via `xdr_parser::derive_sac_overrides_from_assets`).
+    // XLM SAC contract_id (well-known mainnet address). Production feeds these
+    // ready-made from `detect_undeployed_sac_overrides` over the ledger's events.
     let xlm_sac = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
     let overrides = vec![SacOverride {
         contract_id: xlm_sac.to_string(),
@@ -1700,21 +1697,24 @@ fn prepare_emits_sac_override_contract_row_for_xlm_native() {
     })
     .expect("prepare_with_sac_overrides");
 
-    // Exactly one row for the SAC contract — the override; no
-    // duplicate Pass-2 stub with the same contract_id.
-    let sac_rows: Vec<&_> = staged
-        .contract_rows
-        .iter()
-        .filter(|r| r.contract_id == xlm_sac)
-        .collect();
-    assert_eq!(sac_rows.len(), 1, "exactly one row emitted for the SAC");
-    let row = sac_rows[0];
-    assert!(row.is_sac, "is_sac flipped to true via override");
-    assert_eq!(row.contract_type, Some(ContractType::Token as i16));
-    assert_eq!(
-        row.wasm_uploaded_at_ledger, 0,
-        "version 0 sentinel — real deploys later win over the stub"
+    // No soroban_contracts row for the un-deployed SAC — it is an asset now.
+    assert!(
+        !staged
+            .contract_rows
+            .iter()
+            .any(|r| r.contract_id == xlm_sac),
+        "un-deployed SAC override writes NO contract row",
     );
+    // Instead, exactly one SAC asset row seeded from the override identity
+    // (native XLM SAC → empty code, issuer 0).
+    let sac_assets: Vec<&_> = staged
+        .asset_rows
+        .iter()
+        .filter(|a| a.asset_type == domain::TokenAssetType::Sac as i16)
+        .collect();
+    assert_eq!(sac_assets.len(), 1, "one SAC asset row for the override");
+    assert_eq!(sac_assets[0].asset_code, "");
+    assert_eq!(sac_assets[0].issuer_id, 0);
 }
 
 /// When the same contract is deployed in the current ledger (real
