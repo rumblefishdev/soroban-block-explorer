@@ -3,6 +3,7 @@ import type { AssetItem } from '@rumblefish/api-types';
 import {
   Chip,
   Dash,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   formatAmount,
   IdentifierDisplay,
@@ -19,6 +20,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'token',
     header: 'Token',
+    width: 240,
     cell: (row) => {
       const meta = assetTypeMeta(row.asset_type_name);
       return (
@@ -59,6 +61,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   {
     id: 'issuer',
     header: 'Issuer / Contract ID',
+    width: 160,
     cell: (row) =>
       row.contract_id ? (
         <IdentifierWithCopy value={row.contract_id} type="contract" />
@@ -72,6 +75,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'supply',
     header: 'Total supply',
     align: 'right',
+    width: 150,
     cell: (row) => (
       <Stack sx={{ alignItems: 'flex-end' }}>
         <Typography variant="bodySmRegular">
@@ -92,6 +96,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'holders',
     header: 'Holders',
     align: 'right',
+    width: 110,
     cell: (row) => (
       <Typography variant="bodySmRegular">
         {formatAmount(row.holder_count)}
@@ -105,11 +110,20 @@ export const ASSET_COLUMN_COUNT = columns.length;
 
 interface AssetsTableProps {
   rows: readonly AssetItem[];
+  loading?: boolean;
+  skeletonRows?: number;
 }
 
 /** The assets list table — token, issuer/contract, supply and holder count. */
-export function AssetsTable({ rows }: AssetsTableProps) {
+export function AssetsTable({ rows, loading, skeletonRows }: AssetsTableProps) {
   return (
-    <ExplorerTable columns={columns} rows={rows} rowKey={(row) => row.id} />
+    <ExplorerTable
+      columns={columns}
+      rows={rows}
+      rowKey={(row) => row.id}
+      rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+      loading={loading}
+      skeletonRows={skeletonRows}
+    />
   );
 }

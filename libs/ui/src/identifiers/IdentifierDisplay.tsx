@@ -74,6 +74,14 @@ export interface IdentifierDisplayProps {
    * its own size.
    */
   fontSize?: number | string;
+  /**
+   * Force the monospace font on/off, overriding the type-driven default. Needed
+   * when an entity's `type` doesn't match the value shape — e.g. a ledger's
+   * HASH cell uses `type="ledger"` (no link/route) but must render mono like
+   * every other hash so the truncated `XXXX…XXXX` is fixed-width (copy buttons
+   * line up). Defaults to the per-type heuristic.
+   */
+  mono?: boolean;
   className?: string;
   'aria-label'?: string;
 }
@@ -94,6 +102,7 @@ export function IdentifierDisplay({
   href,
   tone = 'default',
   fontSize = 14,
+  mono,
   className,
   'aria-label': ariaLabel,
 }: IdentifierDisplayProps) {
@@ -102,7 +111,7 @@ export function IdentifierDisplay({
   // "ids" are human ticker codes (USDC, AQUA) and ledger ids are plain
   // sequence numbers — both read in the body font like the value beside
   // them (matches Figma). Ledger stays a link, just not mono.
-  const isMono = type !== 'asset' && type !== 'ledger';
+  const isMono = mono ?? (type !== 'asset' && type !== 'ledger');
   const cfg = truncation ?? getDefaultTruncation(type);
   const formatted = formatForDisplay(type, value);
   const displayText = truncate ? truncateMiddle(formatted, cfg) : formatted;

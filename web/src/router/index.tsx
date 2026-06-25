@@ -1,7 +1,10 @@
 import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 
-import { DetailSkeleton } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  DetailSkeleton,
+  EXPLORER_TABLE_ROW_HEIGHT_TALL,
+} from '@rumblefish/soroban-block-explorer-ui';
 import { AccountDetailSkeleton } from '../pages/accounts/AccountDetailSkeleton.js';
 import { AssetDetailSkeleton } from '../pages/assets/AssetDetailSkeleton.js';
 import { ContractDetailSkeleton } from '../pages/contracts/ContractDetailSkeleton.js';
@@ -57,7 +60,10 @@ export const router = createBrowserRouter([
         path: 'ledgers',
         element: page(
           () => import('../pages/LedgersListPage.js'),
-          <ListPageSkeleton showFilters={false} />
+          <ListPageSkeleton
+            showFilters={false}
+            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+          />
         ),
       },
       {
@@ -87,7 +93,7 @@ export const router = createBrowserRouter([
         path: 'assets',
         element: page(
           () => import('../pages/AssetsListPage.js'),
-          <ListPageSkeleton />
+          <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {
@@ -117,7 +123,7 @@ export const router = createBrowserRouter([
         path: 'nfts',
         element: page(
           () => import('../pages/NftsListPage.js'),
-          <ListPageSkeleton />
+          <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {
@@ -132,7 +138,7 @@ export const router = createBrowserRouter([
         path: 'liquidity-pools',
         element: page(
           () => import('../pages/LiquidityPoolsListPage.js'),
-          <ListPageSkeleton />
+          <ListPageSkeleton rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL} />
         ),
       },
       {

@@ -1,14 +1,17 @@
 import { Box, Card, Divider, Skeleton, Stack } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
+  PollingIndicator,
   TableSectionHeader,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
+import type { ReactNode } from 'react';
 
 import { routes } from '../../router/routes.js';
 import { KpiCell } from '../detail/KpiCell.js';
+import { LedgersTable } from '../ledgers/LedgersTable.js';
 
 import { HomeHero } from './HomeHero.js';
+import { LatestTransactionsTable } from './LatestTransactionsTable.js';
 import { LiveIndicator } from './LiveIndicator.js';
 import { ViewAllLink } from './ViewAllLink.js';
 
@@ -84,17 +87,34 @@ function ChainOverviewSkeleton() {
   );
 }
 
-function TableCardSkeleton({ title, to }: { title: string; to: string }) {
+function TableCardSkeleton({
+  title,
+  to,
+  description,
+  table,
+}: {
+  title: string;
+  to: string;
+  /** Match the mounted card's header description line exactly (Latest
+   *  transactions has the PollingIndicator line; Latest Ledgers does not) so
+   *  the header height — and the whole card — doesn't jump on mount. */
+  description?: ReactNode;
+  /** The REAL table in `loading` mode, so the skeleton rows match the mounted
+   *  table's columns + row height pixel-for-pixel. */
+  table: ReactNode;
+}) {
   return (
     <Card>
       {/* Same header as the loaded section (LiveIndicator badge + View All
-          link) so the skeleton header isn't missing those vs the real card. */}
+          link + optional PollingIndicator description) so the skeleton header
+          isn't missing those vs the real card. */}
       <TableSectionHeader
         title={title}
         badge={<LiveIndicator />}
+        description={description}
         action={<ViewAllLink to={to} />}
       />
-      <TableSkeleton rows={10} columns={5} />
+      {table}
       <Box
         sx={{
           px: 2,
@@ -118,8 +138,16 @@ export function HomeSkeleton() {
         <TableCardSkeleton
           title="Latest transactions"
           to={routes.transactions}
+          description={<PollingIndicator />}
+          table={
+            <LatestTransactionsTable rows={[]} loading skeletonRows={10} />
+          }
         />
-        <TableCardSkeleton title="Latest Ledgers" to={routes.ledgers} />
+        <TableCardSkeleton
+          title="Latest Ledgers"
+          to={routes.ledgers}
+          table={<LedgersTable rows={[]} loading skeletonRows={10} />}
+        />
       </Stack>
     </>
   );
