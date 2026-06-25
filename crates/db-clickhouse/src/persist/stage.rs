@@ -156,7 +156,10 @@ pub struct StageInputs<'a> {
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
-    /// Task 0220 Part 2 — SAC override re-insert rows. Empty for legacy callers.
+    /// Crypto-proven un-deployed-SAC overrides for this ledger's events
+    /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
+    /// suppresses the Pass-2 FK stub (no contract row) + seeds a SAC `assets`
+    /// row. Empty for legacy callers.
     pub sac_overrides: &'a [SacOverride],
     /// Task 0283 live G1 — cross-ledger WASM verdicts by `wasm_hash`. Empty map
     /// for legacy callers (behaves exactly as pre-0283).
@@ -298,13 +301,12 @@ pub fn build_metadata_rows(
         .collect()
 }
 
-/// Same as [`prepare`] but also re-emits SAC-override `ContractRow`s
-/// for every `(contract_id, identity)` pair in `sac_overrides` (task
-/// 0220 Part 2). Each override row carries `is_sac=true,
-/// contract_type=Token, wasm_uploaded_at_ledger=0` so RMT collapses by
-/// `ORDER BY (contract_id)` keeping the SAC-flagged version over the
-/// `is_sac=false` Pass-2 stub that would otherwise be emitted for the
-/// same contract.
+/// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
+/// un-deployed-SAC emitters for this ledger (task 0323). An un-deployed SAC is
+/// modelled as an ASSET, not a contract: each override (a) suppresses the
+/// Pass-2 FK stub so NO `soroban_contracts` row is written for it, and (b)
+/// seeds a SAC `assets` row from its `identity`. (Replaces the task-0220
+/// `is_sac=true` skeleton re-insert, which wrote a contract row instead.)
 ///
 /// Production callers that have a `ParseOutput.sac_overrides` slice
 /// (PG-side bridge for task 0218 + the CH backfill path) call this
@@ -1398,13 +1400,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         for cid in &contract_seen {
             emitted.insert(cid.as_str());
         }
-        // Task 0220 — exclude SAC-override contracts. The override row
-        // (emitted earlier with `is_sac=true`) and a Pass-2 stub
-        // (`is_sac=false`) would both carry `wasm_uploaded_at_ledger=0`;
-        // CH RMT tie-breaks nondeterministically on equal version, so
-        // emitting both could clobber the override on merge. Suppress
-        // the stub here — the override carries enough fields
-        // (`contract_id`, `id`) to satisfy the FK-by-id read path.
+        // Task 0323 — suppress the Pass-2 FK stub for SAC-override contracts.
+        // `sac_overrides` are crypto-proven un-deployed SACs (modelled as
+        // ASSETS, not contracts) plus deployed SACs that emit this ledger
+        // (already carrying a real deploy row). Neither should get an
+        // `is_sac=false` stub: un-deployed SACs get an `assets` row instead,
+        // and for a deployed SAC a stub at `wasm_uploaded_at_ledger=0` could
+        // clobber its real deploy row on the equal-version RMT merge.
         for ov in sac_overrides {
             emitted.insert(ov.contract_id.as_str());
         }

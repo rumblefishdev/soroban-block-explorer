@@ -813,7 +813,7 @@ pub async fn fetch_event_appearances(
     let rows = client
         .query(
             "SELECT \
-                sc.contract_id, \
+                any(sc.contract_id) AS contract_id, \
                 se.ledger_sequence, \
                 toInt64(count()) AS amount, \
                 any(l.closed_at) AS created_at \
@@ -823,8 +823,8 @@ pub async fn fetch_event_appearances(
              WHERE se.transaction_id = ? \
                AND se.ledger_sequence = ? \
                AND intDiv(se.ledger_sequence, 500000) = intDiv(?, 500000) \
-             GROUP BY sc.contract_id, se.ledger_sequence \
-             ORDER BY se.ledger_sequence, sc.contract_id",
+             GROUP BY se.contract_id, se.ledger_sequence \
+             ORDER BY se.ledger_sequence, contract_id",
         )
         .bind(transaction_id)
         .bind(ledger_sequence)
