@@ -9,6 +9,10 @@ tags: ['frontend', 'ux', 'layer-web', 'priority-low']
 links:
   - web/src/search/SearchResultRow.tsx
   - web/src/pages/SearchResultsPage.tsx
+  - web/src/search/GlobalSearchBar.tsx
+  - libs/ui/src/layout/SearchInput.tsx
+  - libs/ui/src/layout/TopNav.tsx
+  - web/src/router/AppShell.tsx
 history:
   - date: 2026-06-25
     status: active
@@ -26,6 +30,23 @@ history:
       SearchResultsPage; rows stay transparent on top of it so the found data
       reads as one block, header + rows on the same surface. typecheck + lint
       (web) pass. 2 files touched.
+  - date: 2026-06-25
+    status: completed
+    who: fmazur
+    note: >
+      Follow-up: thinned the nav-bar search dropdown (GlobalSearchBar) border
+      from 2px to 1px, keeping the yellow accent color (stroke.action). 1 file
+      touched.
+  - date: 2026-06-25
+    status: completed
+    who: fmazur
+    note: >
+      Follow-up: re-focusing the nav search field while it already holds a query
+      now re-opens the results dropdown (it stayed dismissed after a click-away
+      even though the text remained). Added SearchInput onFocus +
+      data-search-input marker, plumbed onSearchFocus through TopNav to AppShell,
+      and guarded GlobalSearchBar's ClickAwayListener so the focusing click
+      doesn't immediately close the dropdown. 4 files touched.
 ---
 
 # FEATURE: search page UX tweaks

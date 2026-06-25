@@ -140,6 +140,13 @@ export function AppShell() {
     setSearchOpen(false);
   };
 
+  // Re-focusing the search field while it already holds a query should bring
+  // the results dropdown back (it stays dismissed after a click-away even
+  // though the text remains).
+  const handleSearchFocus = () => {
+    if (searchValue.trim().length > 0) setSearchOpen(true);
+  };
+
   const showSearchOverlay = searchOpen && searchValue.trim().length > 0;
 
   const handleNavClick = (item: NavItem) => {
@@ -187,6 +194,7 @@ export function AppShell() {
             onSearchChange={handleSearchChange}
             onSearchSubmit={handleSearchSubmit}
             onSearchClear={handleSearchClear}
+            onSearchFocus={handleSearchFocus}
             searchOverlaySlot={
               showSearchOverlay ? (
                 <GlobalSearchBar

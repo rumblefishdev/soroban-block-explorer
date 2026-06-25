@@ -31,6 +31,7 @@ export interface TopNavProps {
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
   onSearchClear?: () => void;
+  onSearchFocus?: () => void;
   searchOverlaySlot?: ReactNode;
 }
 
@@ -99,6 +100,7 @@ export function TopNav({
   onSearchChange,
   onSearchSubmit,
   onSearchClear,
+  onSearchFocus,
   searchOverlaySlot,
 }: TopNavProps) {
   return (
@@ -205,6 +207,7 @@ export function TopNav({
             onChange={onSearchChange}
             onSubmit={onSearchSubmit}
             onClear={onSearchClear}
+            onFocus={onSearchFocus}
           />
           {searchOverlaySlot && (
             <Box

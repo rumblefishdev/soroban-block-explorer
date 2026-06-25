@@ -76,15 +76,26 @@ export function GlobalSearchBar({
     [state.hitsForActiveTab.length, onDismiss]
   );
 
+  const handleClickAway = (event: MouseEvent | TouchEvent) => {
+    // A click on the search input itself must NOT dismiss the dropdown — the
+    // same click also focuses the input, which re-opens the dropdown; without
+    // this guard the click-away would fire on mouse-up and close it again.
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-search-input]')) {
+      return;
+    }
+    onDismiss();
+  };
+
   return (
-    <ClickAwayListener onClickAway={onDismiss}>
+    <ClickAwayListener onClickAway={handleClickAway}>
       <Box onKeyDown={handleKeyDown} role="listbox">
         <Paper
           variant="outlined"
           elevation={0}
           sx={(theme) => ({
             borderColor: theme.palette.stroke.action,
-            borderWidth: 2,
+            borderWidth: 1,
             backgroundColor: theme.palette.surface.grayMain,
             overflow: 'hidden',
           })}
