@@ -2,7 +2,7 @@
 id: '0300'
 title: 'BUG: CH contract detail `recent_events` hardcoded to 0 (PG parity gap)'
 type: BUG
-status: active
+status: completed
 related_adr: ['0047']
 related_tasks: ['0243']
 tags:
@@ -43,6 +43,24 @@ history:
       SQL-shape test added. AC 1-3 done; AC 4 (live now64() verify) blocked on
       ingest catch-up (galexie 0286, ~10d stale — escalated). Root cause traced
       to merge commit cdf67709, not a typo.
+  - date: '2026-06-25'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in PR #283 (6 commits). Code: CH recent_events = count() over
+      soroban_events; parity documented as a shared-source invariant (both
+      tables fed by the same parser ExtractedEvent stream — verified global mix
+      9.25B Contract + 4.7K System [all executable_update WASM upgrades] + 0
+      Diagnostic); extracted stats_window_bounds() (list/detail share one
+      window); fetch_contract_stats now returns the named ContractStats struct
+      (PG + CH) instead of a positional 4-tuple, so the merge-stub bug class
+      (silently plugging 0 into an unnamed slot) is now a compile error. 211/211
+      api lib tests green + 2 offline SQL/window tests. Reviewed by 4 agents
+      (/review, /simplify, devils-advocate red+blue, senior checklist) — all
+      ship. AC 1-3 met; AC 4 (live now64() verify) deferred to follow-up,
+      gated on 0286 ingest recovery. Docs/architecture: N/A (value-correctness,
+      no shape change). Completed per /pr convention (task archived in the
+      implementation PR).
 ---
 
 # BUG: CH contract detail `recent_events` hardcoded to 0
@@ -90,7 +108,7 @@ served from CH.
 - [x] Test covering the CH path — offline SQL-shape regression
       (`stats_sql_computes_recent_events_from_events_table`); no CH
       integration harness exists in the repo (PG-only `tests_integration.rs`).
-- [ ] **(blocked)** End-to-end verify against the live `now64()` window —
+- [ ] **(deferred to [[0328]], gated on [[0286]])** End-to-end verify against the live `now64()` window —
       currently impossible: CH ingest is ~10 days behind chain head (see
       Issues), so the wall-clock 7-day window is empty and the whole stats
       trio returns 0. Re-runnable once ingest catches up (gated on
