@@ -324,11 +324,14 @@ export type ContractListItem = {
 
 export type ContractStats = {
   /**
-   * Sum of `soroban_events_appearances.amount` over the same window
-   * as `recent_invocations`. One appearance row can represent multiple
-   * actual events (`amount > 1`) so we sum rather than COUNT(*) — the
-   * figure matches what `GET /v1/contracts/:id/events` would return
-   * over the window.
+   * Non-diagnostic contract-event count in the same window as
+   * `recent_invocations` (NOT the full `/events` history — that endpoint
+   * pages all events with no time bound). PG sums
+   * `soroban_events_appearances.amount` (one appearance row folds multiple
+   * events, `amount > 1`); CH has no appearance-fold table, so it `count()`s
+   * the unfolded `soroban_events` (one row per event) — the parser drops
+   * diagnostic events before write (ADR 0033), so both count the same
+   * non-diagnostic population.
    */
   recent_events: number;
   recent_invocations: number;

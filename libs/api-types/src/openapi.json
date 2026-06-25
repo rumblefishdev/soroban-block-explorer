@@ -2442,7 +2442,7 @@
           "recent_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Sum of `soroban_events_appearances.amount` over the same window\nas `recent_invocations`. One appearance row can represent multiple\nactual events (`amount > 1`) so we sum rather than COUNT(*) — the\nfigure matches what `GET /v1/contracts/:id/events` would return\nover the window."
+            "description": "Non-diagnostic contract-event count in the same window as\n`recent_invocations` (NOT the full `/events` history — that endpoint\npages all events with no time bound). PG sums\n`soroban_events_appearances.amount` (one appearance row folds multiple\nevents, `amount > 1`); CH has no appearance-fold table, so it `count()`s\nthe unfolded `soroban_events` (one row per event) — the parser drops\ndiagnostic events before write (ADR 0033), so both count the same\nnon-diagnostic population."
           },
           "recent_invocations": {
             "type": "integer",
