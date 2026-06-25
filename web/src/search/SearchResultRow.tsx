@@ -41,6 +41,9 @@ export function SearchResultRow({
         padding: '12px 16px',
         textDecoration: 'none',
         color: 'inherit',
+        // Rows are transparent — the surrounding surface (the `Paper` wrapper
+        // in `GlobalSearchBar` / `SearchResultsPage`) provides the background;
+        // hover / keyboard-highlight lift to `grayHover`.
         backgroundColor: highlighted
           ? theme.palette.surface.grayHover
           : 'transparent',
