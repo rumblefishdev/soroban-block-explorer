@@ -422,19 +422,25 @@ pub async fn fetch_contract_stats(
 /// operator-controlled window label (not user input) — safe to interpolate.
 /// Two `?` placeholders bind `contract_surrogate_id` (events subquery, then the
 /// outer invocations seek), in source order.
+///
+/// The `recent_events` scalar subquery is wrapped in `ifNull(…, 0)`:
+/// ClickHouse types a `(SELECT …)` scalar as `Nullable(UInt64)`, which
+/// mismatches the non-nullable `u64` in `StatsChRow` and fails RowBinary decode
+/// → `db_error` 500 on every contract detail. `count()` never actually yields
+/// NULL, so the `0` branch is unreachable; it only fixes the static type.
 fn contract_stats_sql(days: i64, ledger_floor: i64) -> String {
     format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
             toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers, \
-            ( \
+            ifNull(( \
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \
                 INNER JOIN ledgers le ON le.sequence = se.ledger_sequence \
                 WHERE se.contract_id = ? \
                   AND se.ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {ledger_floor} \
                   AND le.closed_at >= now64() - INTERVAL {days} DAY \
-            )                                       AS recent_events \
+            ), 0)                                   AS recent_events \
          FROM soroban_invocations_appearances sia FINAL \
          INNER JOIN ledgers l ON l.sequence = sia.ledger_sequence \
          WHERE sia.contract_id = ? \
@@ -490,6 +496,13 @@ mod stats_sql_tests {
             sql.matches("contract_id = ?").count(),
             2,
             "expected two `contract_id = ?` binds: {sql}"
+        );
+        // The scalar subquery MUST be `ifNull(…, 0)`-wrapped: CH types a bare
+        // `(SELECT …)` as Nullable(UInt64), which fails the non-nullable `u64`
+        // decode → 500 on every contract detail.
+        assert!(
+            normalized.contains("ifNull(( SELECT toUInt64(count())"),
+            "recent_events subquery must be ifNull-wrapped: {sql}"
         );
     }
 }
