@@ -20,6 +20,7 @@ mod run;
 mod sink;
 mod status;
 mod sync;
+mod upgradeable_backfill;
 mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
@@ -210,6 +211,18 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0327 — backfill the `upgradeable` mutability bit into
+    /// `wasm_interface_metadata.metadata` for WASMs ingested before 0327.
+    /// Fetches each WASM's current bytecode from Soroban RPC by `wasm_hash`,
+    /// runs the import-scan parser, and re-INSERTs the merged metadata row
+    /// (ReplacingMergeTree dedups). Requires `--soroban-rpc-url`. Idempotent
+    /// (only touches rows still missing the key). `--dry-run` reports without
+    /// writing. CH-only.
+    UpgradeableBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -352,6 +365,23 @@ async fn main() {
             println!(
                 "wasm_upgrade_backfill completed (dry_run={}): upgraded_contracts={} corrected={} unparseable={}",
                 stats.dry_run, stats.upgraded_contracts, stats.corrected, stats.unparseable,
+            );
+        }
+        Command::UpgradeableBackfill { dry_run } => {
+            // rpc_url is required only on the ClickHouse path; `execute` enforces
+            // that after the Postgres no-op short-circuits, so pass it through.
+            let stats =
+                upgradeable_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                    .await
+                    .expect("upgradeable_backfill failed — idempotent, safe to re-run");
+            println!(
+                "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={}",
+                stats.dry_run,
+                stats.scanned,
+                stats.resolved,
+                stats.upgradeable,
+                stats.frozen,
+                stats.missing_on_rpc,
             );
         }
         Command::NftReclassify { dry_run } => {

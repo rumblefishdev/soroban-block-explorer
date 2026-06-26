@@ -310,12 +310,15 @@ entities:
   variants from observed contract deployments. Without the dedicated
   classic-credit producer, `account_balances_current` would carry the
   balances but the entity row never existed (Karol's pre-audit Bug #1).
-- **SAC overrides** → flip `soroban_contracts.is_sac=true` + `contract_type=Token`
-  for Stellar Asset Contracts whose `create_contract` happened before the indexed
-  window or was never deployed (a classic asset's deterministic SAC `contract_id`
-  surfaces via activity, not necessarily a deploy). Derived from observed
-  classic/native assets (`derive_sac_overrides_from_assets`, task 0218), gated on
-  `emitter == derive_sac(asset)` so a bespoke contract is never mislabeled.
+- **Un-deployed SACs → assets, not contracts** (task 0323) → a classic asset's
+  deterministic SAC `contract_id` can surface via a CAP-67 event with no on-chain
+  deploy. `detect_undeployed_sac_overrides` collects these crypto-proven emitters per
+  ledger (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
+  contract is never mislabeled); on the CH path each suppresses the Pass-2 FK stub
+  (**no `soroban_contracts` row**) and seeds a SAC `assets` row from its identity, so
+  `soroban_contracts` holds **deployed instances only**. The legacy PG path still flips
+  `is_sac=true` on pre-window SAC skeletons (`apply_sac_overrides_for_skeleton_contracts`,
+  task 0218) — being deprecated with PG.
 - **SAC event gate at NFT detection** (task 0294) → a CAP-67 classic-asset SAC
   emits `transfer`/`mint`/`burn` under its deterministic `contract_id` carrying
   the SEP-11 asset `CODE:ISSUER` in the LAST topic and an i128 **amount** in data.
@@ -471,6 +474,19 @@ archive is the authoritative source.
 Public function signatures are extracted from contract WASM at deployment time
 and stored in `wasm_interface_metadata.metadata` (keyed by `wasm_hash BYTEA(32)`),
 deduplicated across every contract instance that shares the same WASM.
+
+The same pass also derives the **mutability** bit (task 0327): the parser scans
+the WASM's import section for the `update_current_contract_wasm` host fn (Soroban
+env import module `"l"`, field `"6"`) and stores `metadata.upgradeable: bool`. A
+contract can only replace its own code by calling that host fn, so importing it is
+the authoritative "self-upgradeable" signal; its absence means the contract is
+effectively immutable/frozen (there is no on-ledger immutability flag — CAP-0046).
+Because the bit is keyed by `wasm_hash`, it re-resolves correctly after an upgrade
+swaps a contract's `wasm_hash` (task 0320). The import-section walker is a small
+hand-rolled LEB128 scan in `crates/xdr-parser/src/contract.rs`
+(`wasm_imports_upgrade_fn`), reusing the same `read_leb128` reader as the custom-
+section parser; it is validated against real mainnet WASM in
+`crates/xdr-parser/tests/upgradeable_real_wasm.rs`.
 
 `soroban_contracts.name VARCHAR(256)` (per
 [ADR 0042](../../../lore/2-adrs/0042_soroban-contracts-typed-name-column.md))

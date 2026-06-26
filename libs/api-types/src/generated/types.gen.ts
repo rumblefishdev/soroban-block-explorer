@@ -242,6 +242,20 @@ export type ContractDetailResponse = {
   deployer?: string | null;
   is_sac: boolean;
   stats: ContractStats;
+  /**
+   * Task 0327: contract mutability, 3-state.
+   * - `Some(true)` → **Upgradeable**: the current WASM imports
+   * `update_current_contract_wasm` (a self-upgrade path).
+   * - `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC
+   * has no WASM and is always `Some(false)`).
+   * - `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /
+   * pre-0327 row) — the frontend renders no chip.
+   *
+   * Derived from the WASM at parse time
+   * (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
+   * (none exists). ClickHouse-sourced; always `None` on the retired PG path.
+   */
+  upgradeable?: boolean | null;
   wasm_hash?: string | null;
   wasm_uploaded_at_ledger?: number | null;
 };
