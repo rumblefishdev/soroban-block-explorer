@@ -75,30 +75,47 @@ Arc<LedgerCloseMeta>` (or `tx_hash → Arc<E3HeavyFields>` to also skip the
 
 ## Acceptance Criteria
 
-- [x] Repeat E3 requests for the same tx (warm Lambda) skip the S3 GET + XDR parse (cache hit) — `transactions::cache` (per-hash heavy, `try_get_with` single-flight).
-- [x] S3 fetch runs concurrently with the DB detail/operations queries — `tokio::join!` in `handlers::get_transaction`.
+- [~] ~~Repeat E3 requests for the same tx (warm Lambda) skip the S3 GET + XDR parse (cache hit)~~ — **DROPPED**: the per-Lambda `moka` cache was implemented + reviewed, but production measurement showed **0 hit rate** (137 sequential same-hash requests, all ~2.4s, no warm hits). Per-instance caching cannot help user-facing latency on a scaled Lambda fleet (request scatter + likely `moka::future` not committing in a frozen Lambda env). Cache **removed**; real lever is edge/DB caching (see Production Validation).
+- [x] S3 fetch runs concurrently with the DB detail/operations queries — `tokio::join!` in `handlers::get_transaction` (kept).
 - [x] Transaction detail UI shows the sent amount + asset for payment-type operations — `humanizeOp.ts` + `formatTokenAmount`.
-- [x] Graceful fallback when `heavy_fields_status = "unavailable"` (no amount, old text) — covered by `humanizeOp` test + only-successes-cached.
-- [x] **Docs updated** — `docs/architecture/backend/backend-overview.md` notes the new E3 warm cache + cross-region context.
-- [x] **API types regenerated** — `N/A`: `nx run @rumblefish/api-types:generate` produced **no diff** (response shape unchanged; cache/overlap internal, UI reads existing `heavy.details` fields).
+- [x] Graceful fallback when `heavy_fields_status = "unavailable"` (no amount, old text) — covered by `humanizeOp` test.
+- [x] **Docs updated** — `docs/architecture/backend/backend-overview.md` (cache paragraph removed; cross-region read-path context retained).
+- [x] **API types regenerated** — `N/A`: response shape unchanged (overlap/spawn_blocking internal; UI reads existing `heavy.details` fields).
 
 ## Implementation Notes
 
 **API (`crates/api`):**
 
-- `transactions/cache.rs` — new `TxHeavyCache` (`moka::future::Cache<String, Arc<E3HeavyFields>>`), 30-min TTL, **byte-bounded** via a `weigher` (12 MB budget, `approx_heavy_bytes`). The weigher charges `JSON_NODE_BYTES` (~24 B) **per value node** plus content length, so the weight tracks real resident RAM of the `serde_json::Value` tree (not just serialized length). `try_get_with` gives stampede protection; only `Ok(Some(heavy))` is cached.
-- `state.rs` — `AppState.tx_heavy_cache` field, built in `new()` (so `for_tests` is unchanged).
-- `handlers.rs::get_transaction` — extracted `compute_heavy_cached()` (cache + ADR 0029 read path + lore-0046 parse_error skip + out-of-range degrade; the single-flight initialiser borrows `state`/`hash` so only the cache key is allocated), and `tokio::join!`-ed it with `fetch_operations_for_source` to overlap the DB ops query under the archive latency.
-- `runtime_enrichment/stellar_archive/mod.rs::fetch_ledger` — the synchronous zstd decompress + full-batch XDR deserialize now runs on `tokio::task::spawn_blocking` so it does not stall the async worker (and genuinely overlaps the co-`join!`ed DB query).
+- ~~`transactions/cache.rs` / `AppState.tx_heavy_cache`~~ — **removed** after production validation (moved to `.trash/0330-cache.rs`). The per-hash `moka` warm cache (byte-bounded weigher etc.) was built + double-reviewed, but measured 0 prod hit rate — see Production Validation.
+- `handlers.rs::get_transaction` — `compute_heavy()` (ADR 0029 read path + lore-0046 parse_error skip + out-of-range degrade) is `tokio::join!`-ed with `fetch_operations_for_source` to overlap the DB ops query under the archive latency. **Kept.**
+- `runtime_enrichment/stellar_archive/mod.rs::fetch_ledger` — the synchronous zstd decompress + full-batch XDR deserialize runs on `tokio::task::spawn_blocking` so it does not stall the async worker. **Kept.** (`FetchError::Join` for a parse-task panic.)
 
 **Frontend:**
 
 - `libs/ui/src/format/stroops.ts` — extracted private `stroopsToDecimal()` (BigInt, accepts string for large-value precision), refactored `formatFee` onto it (behaviour identical), added exported `formatTokenAmount(stroops, assetCode?)`.
 - `web/.../normal/humanizeOp.ts` — payment/path-payment/create-account arms now read the amount from `heavy.details` (`amount` / `sendAmount` / `destAmount` / `startingBalance`) and the unit from the details asset (`native`→XLM, `CODE:ISSUER`→CODE), falling back to the prior asset-only label when heavy is absent.
 
-**Tests:** `stroops.test.ts` (6), `humanizeOp.test.ts` (9), `cache.rs` (4). All green; lint/typecheck/rustfmt/prettier clean.
+**Tests:** `stroops.test.ts` (6), `humanizeOp.test.ts` (9). (`cache.rs` tests removed with the cache.) All green; lint/typecheck/rustfmt/prettier clean.
+
+## Production Validation — cache removed
+
+Deployed to prod and measured `GET /v1/transactions/:hash` directly (live API, Bearer auth):
+
+- `network/stats` / tx-list (no archive) ≈ **0.2 s** (DB+network floor).
+- tx-detail (archive): **137 sequential requests on the same warm tx → all HTTP 200, all ~2.4 s, 0 fast (cache-hit) responses**, `min = 2.351 s`. The cache code **is** deployed (verified: the `FetchError::Join` string literal from this branch is present in the prod Lambda binary) and **works locally** (warm = 0.08 s) — but in production the hit rate is **0**.
+
+Why per-instance caching fails here: (1) Lambda behind API Gateway does not pin sequential requests to one container — under real traffic the fleet has many warm instances and requests **scatter**, each cold for a given hash; (2) likely `moka::future::Cache` does not commit its deferred write in the **frozen** Lambda execution environment between invocations. Either way a per-instance in-process cache is the wrong tool for user-facing latency on this endpoint.
+
+The "feels faster on the 2nd click" in the app is **client-side** caching (React Query `staleTime` + browser `max-age=300`), independent of the Lambda cache.
+
+**Decision:** remove the per-hash cache; keep the overlap + `spawn_blocking` (cheap, correct, no downside) and the amount-sent feature (the real user-facing deliverable). The actual server-side latency lever is **edge caching of E3 on Cloudflare** (the response is already `public, max-age=300` but currently served `cf-cache-status: DYNAMIC` = not cached at the edge) or **persisting a minimal heavy subset in the DB** — see Future Work / spawn a follow-up.
 
 ## Review (5-agent parallel review, `/code-review`-style)
+
+> **Note:** much of this section (weigher / `CACHE_WEIGHT_BUDGET` / `JSON_NODE_BYTES`)
+> reviewed the per-Lambda cache that was **later removed** (see Production Validation).
+> Retained as historical review record. A separate 3-agent review validated the
+> cache **removal** itself as clean + behavior-preserving.
 
 Five subagents reviewed the diff (Rust correctness, data-leak/security, DB-query performance, cache memory/concurrency, frontend/precision). No Critical/High. Security: APPROVE (cache key = full normalized lowercase hash → no collision / wrong-tx serve; React auto-escapes the label). Findings addressed in-task:
 
@@ -121,16 +138,22 @@ Doc-drift on the budget (24→12 MB) reflects the first-pass fix and is intentio
 
 ## Design Decisions
 
+> **⚠️ Decisions 1–4 are SUPERSEDED — the per-Lambda cache was removed after
+> production validation (0% hit rate; see Production Validation).** They are
+> kept below as the historical record of what was built + reviewed. Only the
+> overlap/`spawn_blocking` and decision **5** (amount unit) shipped. The real
+> latency lever (edge-cache / DB-persist) is in Future Work.
+
 ### From Plan
 
-1. **Per-Lambda moka warm cache + `tokio::join!` overlap** — as scoped in the plan.
+1. _(superseded — cache removed)_ **Per-Lambda moka warm cache + `tokio::join!` overlap** — as scoped in the plan. The overlap shipped; the cache did not.
 
 ### Emerged
 
-2. **Cache keyed by tx hash → `E3HeavyFields`, NOT ledger_sequence → `LedgerCloseMeta`.** The plan left this open. The API Lambda is **256 MB** (`infra/envs/production.json`); a parsed ledger is ~1.5 MB decompressed, so caching whole ledgers would blow the budget at a handful of entries. The extracted per-tx heavy block is a few KB–tens of KB, is memory-safe, AND skips the re-parse too. Trade-off: two distinct txs in the same ledger each fetch once — accepted, since the hot pattern is repeat views of the _same_ tx.
-3. **Byte-bounded cache (moka `weigher`), not a fixed entry count.** Heavy blocks span orders of magnitude (plain payment ~few KB; Soroban tx with full event topics/data ~hundreds of KB), so an entry cap would let a burst of large detail views push the 256 MB Lambda toward OOM. The `weigher` (`approx_heavy_bytes`) caps the cache by **12 MB** and charges `JSON_NODE_BYTES` (~24 B) **per `serde_json::Value` node** in addition to content length — so a scalar/many-key-dominated tree (near-zero serialized length but allocation-heavy in RAM) is weighted by its real footprint, not under-counted (review fix). Large entries evict more small ones; overflow → TinyLFU eviction → fallback to the normal archive fetch (never an error).
-4. **Only successful extractions are cached.** `try_get_with` returns `Err(())` on archive failure / tx-not-in-ledger and moka does not cache `Err`, so a degraded `unavailable` response stays retryable — matching the existing `SHORT` cache-control. `parse_error` rows are short-circuited before the cache.
-5. **Unit derived from `heavy.details` asset, not solely `light.asset_code`.** For path payments `light.asset_code` is ambiguous (send vs dest); reading `sendAsset`/`destAsset` from heavy keeps the unit correct, with `asset_code` as fallback.
+2. _(superseded — cache removed)_ **Cache keyed by tx hash → `E3HeavyFields`, NOT ledger_sequence → `LedgerCloseMeta`.** The plan left this open. The API Lambda is **256 MB** (`infra/envs/production.json`); a parsed ledger is ~1.5 MB decompressed, so caching whole ledgers would blow the budget at a handful of entries. The extracted per-tx heavy block is a few KB–tens of KB, is memory-safe, AND skips the re-parse too. Trade-off: two distinct txs in the same ledger each fetch once — accepted, since the hot pattern is repeat views of the _same_ tx.
+3. _(superseded — cache removed)_ **Byte-bounded cache (moka `weigher`), not a fixed entry count.** Heavy blocks span orders of magnitude (plain payment ~few KB; Soroban tx with full event topics/data ~hundreds of KB), so an entry cap would let a burst of large detail views push the 256 MB Lambda toward OOM. The `weigher` (`approx_heavy_bytes`) caps the cache by **12 MB** and charges `JSON_NODE_BYTES` (~24 B) **per `serde_json::Value` node** in addition to content length — so a scalar/many-key-dominated tree (near-zero serialized length but allocation-heavy in RAM) is weighted by its real footprint, not under-counted (review fix). Large entries evict more small ones; overflow → TinyLFU eviction → fallback to the normal archive fetch (never an error).
+4. _(superseded — cache removed)_ **Only successful extractions are cached.** `try_get_with` returns `Err(())` on archive failure / tx-not-in-ledger and moka does not cache `Err`, so a degraded `unavailable` response stays retryable — matching the existing `SHORT` cache-control. `parse_error` rows are short-circuited before the cache.
+5. **Unit derived from `heavy.details` asset, not solely `light.asset_code`.** (Shipped.) For path payments `light.asset_code` is ambiguous (send vs dest); reading `sendAsset`/`destAsset` from heavy keeps the unit correct, with `asset_code` as fallback.
 
 ## Future Work
 

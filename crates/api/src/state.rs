@@ -8,7 +8,6 @@ use crate::contracts::cache::{ContractMetadataCache, new_contract_cache};
 use crate::network::cache::{NetworkStatsCache, new_network_cache};
 use crate::network::dto::NetworkStats;
 use crate::runtime_enrichment::RuntimeEnrichment;
-use crate::transactions::cache::{TxHeavyCache, new_tx_heavy_cache};
 
 /// Application-wide state. All inner types are cheaply cloneable
 /// (`Arc`-backed; both `moka::sync::Cache` and `moka::future::Cache`
@@ -27,11 +26,6 @@ pub struct AppState {
     /// Per-Lambda warm cache for `/v1/network/stats`, version-keyed on the
     /// chain head (`latest_ledger_sequence`) — see `network/cache.rs`.
     pub network_cache: NetworkStatsCache,
-    /// Per-Lambda warm cache for the E3 (`/v1/transactions/:hash`) heavy block,
-    /// keyed by tx hash. A finalized tx's heavy fields are immutable, so this
-    /// skips the uncached cross-region archive fetch + XDR parse on repeat
-    /// views — see `transactions/cache.rs` (task 0330).
-    pub tx_heavy_cache: TxHeavyCache,
     /// Last successfully-computed network-stats snapshot, updated on every
     /// cache miss. Serves as the availability fallback when the per-request
     /// head read fails (so a transient DB/CH blip does not 500 a request the
@@ -64,7 +58,6 @@ impl AppState {
             runtime_enrichment,
             contract_cache: new_contract_cache(),
             network_cache: new_network_cache(),
-            tx_heavy_cache: new_tx_heavy_cache(),
             network_last_good: Arc::new(RwLock::new(None)),
             network_id,
             #[cfg(test)]

@@ -7,8 +7,6 @@
 //! and the cursor wire format are datasource-agnostic; only the row
 //! fetches differ.
 
-use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -315,14 +313,14 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         }
     };
 
-    // Overlap the DB operations query with the heavy fetch/cache (task 0330).
+    // Overlap the DB operations query with the heavy archive fetch (task 0330).
     // Both depend only on `tx` (resolved above) and are independent of each
     // other; the heavy path is the dominant cost (cross-region archive fetch +
-    // XDR parse on a cold cache), so running the ops query concurrently hides
-    // its round-trip under the heavy latency instead of paying both serially.
+    // XDR parse), so running the ops query concurrently hides its round-trip
+    // under the archive latency instead of paying both serially.
     let (op_rows_res, heavy) = tokio::join!(
         fetch_operations_for_source(&state, source, &tx),
-        compute_heavy_cached(&state, &hash, &tx),
+        compute_heavy(&state, &hash, &tx),
     );
     let op_rows: Vec<OpRow> = match op_rows_res {
         Ok(r) => r,
@@ -409,12 +407,10 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     resp
 }
 
-/// Resolve the E3 heavy block for `tx`, served from the per-Lambda
-/// `tx_heavy_cache` when warm (task 0330). On a cold miss it runs the ADR 0029
-/// read path unchanged — fetch the parent ledger from the public Stellar
-/// archive, then `extract_e3_heavy` — and caches only successful extractions
-/// (an archive failure stays retryable; see `transactions::cache`). Concurrent
-/// misses on the same hash collapse to one fetch via `try_get_with`.
+/// Resolve the E3 heavy block for `tx` via the ADR 0029 read path: fetch the
+/// parent ledger from the public Stellar archive, then `extract_e3_heavy`. Kept
+/// as its own future so the handler can `tokio::join!` it with the DB ops query
+/// (the overlap hides the ops round-trip under the archive latency).
 ///
 /// Returns `None` (→ `heavy_fields_status: "unavailable"`, graceful
 /// degradation per ADR 0029) for:
@@ -422,14 +418,10 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
 ///     XDR (lore-0190); re-fetching could mask the historical flag or emit an
 ///     `ok` status with NULL fields, violating the lore-0046/0044 contract
 ///     that such rows serve `heavy: null`. Skipping it also saves the S3
-///     round-trip and never pollutes the cache;
+///     round-trip;
 ///   - an out-of-u32-range `ledger_sequence` (cannot address the archive);
 ///   - an archive fetch failure or a ledger that does not contain the tx.
-async fn compute_heavy_cached(
-    state: &AppState,
-    hash: &str,
-    tx: &TxDetailRow,
-) -> Option<E3HeavyFields> {
+async fn compute_heavy(state: &AppState, hash: &str, tx: &TxDetailRow) -> Option<E3HeavyFields> {
     if tx.parse_error {
         tracing::debug!(
             tx_hash = %hash,
@@ -449,34 +441,18 @@ async fn compute_heavy_cached(
         }
     };
 
-    // The single-flight initialiser borrows from this frame (`state`, `hash`);
-    // it is awaited inline below, never spawned, so no `'static`/owned clones
-    // are needed. Only the cache key is allocated (one `to_owned`).
-    //
-    // `try_get_with` caches only the `Ok` arm; `Err(())` (fetch failed or the
-    // ledger lacks the tx) is not cached, so a degraded response stays
-    // retryable — matching the `SHORT` cache-control the handler attaches.
-    state
-        .tx_heavy_cache
-        .try_get_with(hash.to_owned(), async {
-            match state
-                .runtime_enrichment
-                .stellar_archive
-                .fetch_ledger(seq)
-                .await
-            {
-                Ok(meta) => extract_e3_heavy(&meta, hash, &state.network_id)
-                    .map(Arc::new)
-                    .ok_or(()),
-                Err(e) => {
-                    tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
-                    Err(())
-                }
-            }
-        })
+    match state
+        .runtime_enrichment
+        .stellar_archive
+        .fetch_ledger(seq)
         .await
-        .ok()
-        .map(|arc| (*arc).clone())
+    {
+        Ok(meta) => extract_e3_heavy(&meta, hash, &state.network_id),
+        Err(e) => {
+            tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+            None
+        }
+    }
 }
 
 fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {

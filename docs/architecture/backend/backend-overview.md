@@ -163,12 +163,13 @@ The backend serves data from the block explorer's own database, adding:
     and E14 `/contracts/:id/events` (full event detail). List endpoints never
     call the archive and answer from typed summary columns + appearance indexes only.
     The S3 GET is **cross-region** (the API Lambda runs in eu-central-1; the
-    public archive bucket is in us-east-2), so for E3 the extracted heavy block
-    is memoised in a per-Lambda warm cache keyed by tx hash
-    (`transactions::cache`, task 0330): a finalized tx's heavy fields are
-    immutable, so repeat views are served without re-fetching/re-parsing the
-    ledger. Only successful extractions are cached — a degraded
-    (`heavy_fields_status = unavailable`) result stays retryable.
+    public archive bucket is in us-east-2), which dominates E3 latency (~2–3 s).
+    For E3 the zstd-decompress + XDR parse runs on `spawn_blocking` and overlaps
+    the DB ops query (`tokio::join!`); a per-Lambda in-process cache of the heavy
+    block was trialled (task 0330) but **removed** after it showed a 0% hit rate
+    in production (request scatter across the Lambda fleet). The remaining
+    server-side latency lever is edge caching (the response is already
+    `public, max-age=300`).
   - **`runtime_enrichment::sep1`** — issues HTTPS GETs to
     `https://{issuer.home_domain}/.well-known/stellar.toml`, parses the SEP-1
     schema, and merges `[[CURRENCIES]]` per-token fields plus
