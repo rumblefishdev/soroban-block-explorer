@@ -77,6 +77,13 @@ pub enum FetchError {
 
     #[error("empty batch returned for ledger {seq}")]
     EmptyBatch { seq: u32 },
+
+    #[error("ledger {seq} parse task failed to join: {source}")]
+    Join {
+        seq: u32,
+        #[source]
+        source: tokio::task::JoinError,
+    },
 }
 
 /// Fetches raw `.xdr.zst` ledger files from the public Stellar archive.
@@ -103,16 +110,30 @@ impl StellarArchiveFetcher {
         let key = format!("{PUBLIC_ARCHIVE_PREFIX}/{}", build_s3_key(seq));
 
         let compressed = self.download(seq, &key).await?;
-        let xdr_bytes = xdr_parser::decompress_zstd(compressed.as_ref())
-            .map_err(|source| FetchError::Decompress { seq, source })?;
-        let batch = xdr_parser::deserialize_batch(&xdr_bytes)
-            .map_err(|source| FetchError::Deserialize { seq, source })?;
 
-        let metas: Vec<LedgerCloseMeta> = batch.ledger_close_metas.into();
-        metas
-            .into_iter()
-            .next()
-            .ok_or(FetchError::EmptyBatch { seq })
+        // zstd decompress (~1.5 MB) + full-batch XDR deserialize is synchronous
+        // CPU work; offload it to the blocking pool so it does not monopolise
+        // the async worker thread during the parse (which would block the
+        // reactor — including any co-`join!`ed future on the caller side, see
+        // `transactions::handlers::get_transaction`).
+        tokio::task::spawn_blocking(move || {
+            let xdr_bytes = xdr_parser::decompress_zstd(compressed.as_ref())
+                .map_err(|source| FetchError::Decompress { seq, source })?;
+            let batch = xdr_parser::deserialize_batch(&xdr_bytes)
+                .map_err(|source| FetchError::Deserialize { seq, source })?;
+
+            let metas: Vec<LedgerCloseMeta> = batch.ledger_close_metas.into();
+            metas
+                .into_iter()
+                .next()
+                .ok_or(FetchError::EmptyBatch { seq })
+        })
+        .await
+        // A `JoinError` here means the parse closure panicked (the task is never
+        // cancelled): surface it honestly as `Join`, not as an S3/IO error.
+        // Upstream this degrades to `heavy_fields_status = unavailable` like any
+        // other fetch failure rather than unwinding the request.
+        .map_err(|source| FetchError::Join { seq, source })?
     }
 
     /// Fetch multiple ledgers concurrently. Results are returned in input order.
