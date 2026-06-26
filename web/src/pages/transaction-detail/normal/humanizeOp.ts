@@ -85,6 +85,11 @@ function offerLine(
   if (amount == null) return null;
   const own = assetUnit(details?.[ownAssetKey]);
   const other = assetUnit(details?.[otherAssetKey]);
+  // amount 0 deletes/cancels the offer — show that, not "0 ASSET".
+  if (amount === 0) {
+    const pair = own != null && other != null ? ` (${own}/${other})` : '';
+    return `Cancelled ${label.toLowerCase()}${pair}`;
+  }
   const price = priceDecimal(details?.price);
   let line = `${label}: ${formatStroopAmount(amount, own ?? '')}`;
   if (other != null) line += ` for ${other}`;

@@ -11,23 +11,12 @@ interface OperationJsonDetailProps {
   heavy: XdrOperationDto | null;
 }
 
-function pickDetailValue(
-  details: unknown,
-  key: string
-): { present: boolean; value: unknown } {
-  if (
-    details != null &&
+function detailEntries(details: unknown): [string, unknown][] {
+  return details != null &&
     typeof details === 'object' &&
-    !Array.isArray(details) &&
-    key in (details as Record<string, unknown>)
-  ) {
-    return { present: true, value: (details as Record<string, unknown>)[key] };
-  }
-  return { present: false, value: undefined };
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
+    !Array.isArray(details)
+    ? Object.entries(details as Record<string, unknown>)
+    : [];
 }
 
 function MonoText({ children }: { children: ReactNode }) {
@@ -95,6 +84,13 @@ function inlineScalar(value: unknown): ReactNode {
   return null;
 }
 
+/** Scalars as a chip / mono text; objects & arrays as highlighted JSON. */
+function renderValue(value: unknown): ReactNode {
+  if (value === null) return <MonoText>null</MonoText>;
+  if (typeof value === 'object') return <HighlightedJson value={value} />;
+  return inlineScalar(value) ?? <MonoText>{String(value)}</MonoText>;
+}
+
 function HeavyUnavailable() {
   return (
     <EmptyState
@@ -114,12 +110,7 @@ export function OperationJsonDetail({
   if (heavy == null) return <HeavyUnavailable />;
 
   const opType = heavy.op_type ?? light.type_name.toLowerCase();
-  const details = heavy.details;
-
-  const fnName = asString(pickDetailValue(details, 'function_name').value);
-  const argsField = pickDetailValue(details, 'arguments');
-  const returnField = pickDetailValue(details, 'return_value');
-  const authField = pickDetailValue(details, 'auth');
+  const entries = detailEntries(heavy.details);
 
   return (
     <Box
@@ -137,34 +128,9 @@ export function OperationJsonDetail({
           value={<MonoText>{light.contract_id}</MonoText>}
         />
       )}
-      {fnName != null && (
-        <AdvancedRow
-          label="function_name"
-          value={<Chip size="sm" color="neutral" label={fnName} />}
-        />
-      )}
-      {argsField.present && (
-        <AdvancedRow
-          label="arguments"
-          value={<HighlightedJson value={argsField.value} />}
-        />
-      )}
-      {returnField.present && (
-        <AdvancedRow
-          label="return_value"
-          value={
-            inlineScalar(returnField.value) ?? (
-              <HighlightedJson value={returnField.value} />
-            )
-          }
-        />
-      )}
-      {authField.present && (
-        <AdvancedRow
-          label="auth"
-          value={<HighlightedJson value={authField.value} />}
-        />
-      )}
+      {entries.map(([key, value]) => (
+        <AdvancedRow key={key} label={key} value={renderValue(value)} />
+      ))}
     </Box>
   );
 }

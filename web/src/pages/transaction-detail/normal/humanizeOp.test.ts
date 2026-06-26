@@ -139,6 +139,20 @@ describe('humanizeOp — amount on other operation types', () => {
     expect(line).toBe('Sell offer: 100 XLM for USDC @ 0.5');
   });
 
+  it('MANAGE_SELL_OFFER with amount 0 reads as a cancellation', () => {
+    const line = humanizeOp(
+      light({ type_name: 'MANAGE_SELL_OFFER' }),
+      heavy({
+        amount: 0,
+        selling: `POOL:${DEST}`,
+        buying: 'native',
+        offerId: 1844659947,
+        price: { n: 9997979, d: 10000001 },
+      })
+    );
+    expect(line).toBe('Cancelled sell offer (POOL/XLM)');
+  });
+
   it('MANAGE_BUY_OFFER reads buyAmount and the buying asset', () => {
     const line = humanizeOp(
       light({ type_name: 'MANAGE_BUY_OFFER' }),
