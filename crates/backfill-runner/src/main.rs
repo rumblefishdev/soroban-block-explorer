@@ -368,12 +368,12 @@ async fn main() {
             );
         }
         Command::UpgradeableBackfill { dry_run } => {
-            let rpc_url = cli.soroban_rpc_url.as_deref().unwrap_or_else(|| {
-                panic!("upgradeable-backfill requires --soroban-rpc-url (or SOROBAN_RPC_URL env)")
-            });
-            let stats = upgradeable_backfill::execute(&sink, rpc_url, dry_run)
-                .await
-                .expect("upgradeable_backfill failed — idempotent, safe to re-run");
+            // rpc_url is required only on the ClickHouse path; `execute` enforces
+            // that after the Postgres no-op short-circuits, so pass it through.
+            let stats =
+                upgradeable_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                    .await
+                    .expect("upgradeable_backfill failed — idempotent, safe to re-run");
             println!(
                 "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={}",
                 stats.dry_run,

@@ -65,19 +65,30 @@ struct MissingRow {
 
 pub async fn execute(
     sink: &Sink,
-    rpc_url: &str,
+    rpc_url: Option<&str>,
     dry_run: bool,
 ) -> Result<UpgradeableBackfillStats, BackfillError> {
     let client = match sink {
         Sink::Clickhouse(c) => c,
         Sink::Postgres(_) => {
-            info!(
-                "upgradeable_backfill: CH-only (the flag lives in the CH \
-                 wasm_interface_metadata JSON); Postgres target is a no-op"
-            );
-            return Ok(UpgradeableBackfillStats::default());
+            // No-op (the flag lives only in the CH metadata JSON). Short-circuit
+            // BEFORE the rpc_url check so a Postgres run never needs it.
+            info!("upgradeable_backfill: CH-only; Postgres target is a no-op");
+            return Ok(UpgradeableBackfillStats {
+                dry_run,
+                ..Default::default()
+            });
         }
     };
+
+    // CH path needs RPC to fetch the WASM bytecode. Required only here, after the
+    // Postgres no-op has had its chance to return.
+    let rpc_url = rpc_url.ok_or_else(|| {
+        BackfillError::Incomplete(
+            "ClickHouse upgradeable-backfill requires --soroban-rpc-url (or SOROBAN_RPC_URL)"
+                .to_string(),
+        )
+    })?;
 
     let missing = read_missing(client).await?;
     let mut stats = UpgradeableBackfillStats {
@@ -193,6 +204,12 @@ async fn read_missing(
     // they need no badge and their code entries are the ones most likely archived
     // (which would otherwise trip the hard-fail for no user-visible benefit).
     // Also require a real `functions` key to skip pre-insert stub rows.
+    //
+    // By design this CANNOT cover a contract whose wasm_hash has NO
+    // `wasm_interface_metadata` row at all (never parsed — a handful exist): such
+    // a hash is never selected, so it stays Unknown (no chip). That's an ingest/
+    // parse coverage gap, not this backfill's job — and Unknown is the honest
+    // state for an unparsed WASM, never a wrong badge.
     client
         .query(
             "SELECT lower(hex(w.wasm_hash)) AS wasm_hash, w.metadata \

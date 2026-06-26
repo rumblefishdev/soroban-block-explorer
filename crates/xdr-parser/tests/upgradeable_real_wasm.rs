@@ -8,6 +8,13 @@
 //!   `update_current_contract_wasm` (module `"l"`, field `"6"`) → Upgradeable.
 //! - `frozen_mainnet.wasm` — wasm_hash `0a41411f…969781`. Does NOT import it →
 //!   Immutable / frozen.
+//!
+//! These fixtures are the drift guard for the host-defined `("l","6")` mapping
+//! (`wasm_imports_upgrade_fn`): if a future Soroban protocol renumbers host-fn
+//! exports, the upgradeable fixture stops importing `("l","6")` and this test
+//! goes red. **On a protocol bump that fails these, re-verify the export numbers
+//! against the new `rs-soroban-env` env.json and re-fetch fresh fixtures — do
+//! NOT just bump the assertions.**
 
 use xdr_parser::contract::wasm_imports_upgrade_fn;
 

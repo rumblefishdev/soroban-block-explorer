@@ -43,10 +43,12 @@
 -- ============================================================================
 -- A. Contract header.
 --    `upgradeable` (task 0327) is resolved here, not in a separate query: a
---    LEFT JOIN to wasm_interface_metadata exposes the parsed mutability bit.
---    JSONHas distinguishes a frozen contract (key present, false) from a row
---    predating the flag (key absent → Unknown/null → no chip). SAC / no-WASM
---    rows have no metadata match and are mapped to Immutable in the handler.
+--    LEFT JOIN to wasm_interface_metadata exposes the parsed mutability bit as
+--    a tri-state Int8 — 1 = self-upgradeable, 0 = frozen, -1 = Unknown. The
+--    `if(JSONHas(...), JSONExtractBool(...), -1)` is what splits a frozen
+--    contract (key present → 0) from a row predating the flag (key absent →
+--    -1 → no chip). SAC / no-WASM rows have no metadata match (→ -1) but the
+--    handler maps `wasm_hash IS NULL` to Immutable regardless.
 -- ============================================================================
 SELECT
     sc.id                                  AS contract_pk,
@@ -60,11 +62,15 @@ SELECT
     -- NO `sc.name`: contract detail surfaces no name (task 0297 #3). The dead
     -- `soroban_contracts.name` is read only by the CH name-search substring
     -- fallback in the contracts LIST, never composed here.
-    toUInt8(JSONHas(wim.metadata, 'upgradeable'))        AS upgradeable_has,
-    toUInt8(JSONExtractBool(wim.metadata, 'upgradeable')) AS upgradeable_val
+    toInt8(if(JSONHas(wim.metadata, 'upgradeable'),
+              JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable
 FROM soroban_contracts sc FINAL
 LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id
-LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash
+-- `wim FINAL`: wasm_interface_metadata is ReplacingMergeTree with no version
+-- column, so the upgradeable-backfill re-INSERT leaves two parts per wasm_hash
+-- until a background merge. FINAL collapses them so the read can't transiently
+-- pick the old (keyless) part and flash Unknown. The table is tiny (~3.7k rows).
+LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash
 WHERE sc.contract_id = $1
 LIMIT 1;
 

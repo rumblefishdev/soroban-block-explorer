@@ -98,11 +98,16 @@ export default function ContractDetailPage() {
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a
               static scan can't see proxy/delegate or renounced-admin patterns. */}
-          {contract.data?.upgradeable === true && (
-            <Chip size="md" color="emerald" label="Self-upgradeable" />
-          )}
-          {contract.data?.upgradeable === false && (
-            <Chip size="md" color="neutral" label="No self-upgrade" />
+          {contract.data?.upgradeable != null && (
+            <Chip
+              size="md"
+              color={contract.data.upgradeable ? 'emerald' : 'neutral'}
+              label={
+                contract.data.upgradeable
+                  ? 'Self-upgradeable'
+                  : 'No self-upgrade'
+              }
+            />
           )}
         </Stack>
         {/* Truncated under-title identity (full id stays in the summary

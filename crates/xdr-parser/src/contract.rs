@@ -308,7 +308,12 @@ fn imports_upgrade_inner(wasm: &[u8]) -> Option<bool> {
         pos = pos.checked_add(br)?;
         let section_end = pos.checked_add(section_size as usize)?;
         if section_id == 2 {
-            // Import section.
+            // Import section. Fail-closed bias: if the section is truncated
+            // (`section_end` past the buffer) and the `("l","6")` import happens
+            // to sit in the missing tail, the walker returns `false` ("no
+            // self-upgrade") rather than panic. That's the safe direction — we
+            // only ever parse well-formed bytecode straight from the ledger/RPC,
+            // and a corrupt blob under-claiming upgradeability beats over-claiming.
             let body = wasm.get(pos..section_end.min(wasm.len()))?;
             return Some(import_section_has_upgrade(body));
         }
@@ -346,17 +351,19 @@ fn import_section_has_upgrade(body: &[u8]) -> bool {
             return false;
         };
         pos += flen as usize;
-        if module == b"l" && field == b"6" {
-            return true;
-        }
-        // Skip the import descriptor. Soroban contracts import only host
-        // functions in practice, but we walk every import-desc kind so a
-        // non-func import ordered *before* the upgrade import can't make us
-        // bail early and false-negative (report a real upgradeable contract as
-        // immutable). Kinds per WASM core spec: 0=func, 1=table, 2=mem, 3=global.
+        // Read the import-descriptor kind and skip it so we land on the next
+        // import. We walk every kind (not just func) so a non-func import
+        // ordered *before* the upgrade import can't make us bail early and
+        // false-negative. Kinds per WASM core spec: 0=func, 1=table, 2=mem,
+        // 3=global. The `("l","6")` match counts ONLY for a func import — the
+        // upgrade host fn is imported as a function, so a table/mem/global that
+        // happens to share those names is something else and must not match.
         match body.get(pos) {
             Some(0x00) => {
-                // func: typeidx (uleb)
+                // func: the upgrade host fn — match here, then skip its typeidx.
+                if module == b"l" && field == b"6" {
+                    return true;
+                }
                 pos += 1;
                 let Some((_, br)) = read_leb128(body.get(pos..).unwrap_or_default()) else {
                     return false;
@@ -421,14 +428,32 @@ mod tests {
         )])));
     }
 
+    /// Unsigned LEB128 encoder — used so the test builder emits correct 2-byte
+    /// lengths for names / sections ≥ 128 bytes (exercises the multi-byte
+    /// `read_leb128` path, not just the single-byte happy case).
+    fn leb(mut v: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+        out
+    }
+
     /// Minimal WASM: magic + version + an import section of `(module, field)`
-    /// func imports. Covers the single- and multi-import (descriptor-skip) cases.
+    /// func imports. LEB128-correct for any name / section length, so it covers
+    /// single-, multi-import (descriptor-skip), and ≥128-byte-name cases.
     fn wasm_with_imports(imports: &[(&[u8], &[u8])]) -> Vec<u8> {
-        let mut body = vec![imports.len() as u8]; // import count
+        let mut body = leb(imports.len() as u32); // import count
         for (module, field) in imports {
-            body.push(module.len() as u8);
+            body.extend_from_slice(&leb(module.len() as u32));
             body.extend_from_slice(module);
-            body.push(field.len() as u8);
+            body.extend_from_slice(&leb(field.len() as u32));
             body.extend_from_slice(field);
             body.extend_from_slice(&[0x00, 0x00]); // kind=func(0), typeidx=0
         }
@@ -436,7 +461,7 @@ mod tests {
         wasm.extend_from_slice(b"\x00asm");
         wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
         wasm.push(0x02); // import section id
-        wasm.push(body.len() as u8); // section size
+        wasm.extend_from_slice(&leb(body.len() as u32)); // section size
         wasm.extend_from_slice(&body);
         wasm
     }
@@ -450,6 +475,35 @@ mod tests {
     #[test]
     fn many_imports_without_upgrade_is_frozen() {
         let wasm = wasm_with_imports(&[(b"l", b"_"), (b"l", b"7"), (b"d", b"0")]);
+        assert!(!wasm_imports_upgrade_fn(&wasm));
+    }
+
+    #[test]
+    fn non_func_import_named_l6_is_not_upgrade() {
+        // A GLOBAL import literally named ("l","6") is NOT the upgrade host fn
+        // (which is a func import) — must not be flagged self-upgradeable.
+        let mut body = vec![0x01]; // 1 import
+        body.extend_from_slice(&[0x01, b'l']); // module "l"
+        body.extend_from_slice(&[0x01, b'6']); // field "6"
+        body.extend_from_slice(&[0x03, 0x7f, 0x00]); // kind=global, valtype i32, immutable
+        let mut wasm = Vec::new();
+        wasm.extend_from_slice(b"\x00asm");
+        wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        wasm.push(0x02);
+        wasm.push(body.len() as u8);
+        wasm.extend_from_slice(&body);
+        assert!(!wasm_imports_upgrade_fn(&wasm));
+    }
+
+    #[test]
+    fn multibyte_import_name_is_walked_and_upgrade_found() {
+        // A ≥128-byte module name forces a 2-byte LEB length; the walker must
+        // consume it correctly and still find the ("l","6") import after it.
+        let long_name = vec![b'a'; 200];
+        let wasm = wasm_with_imports(&[(&long_name, b"fn"), (b"l", b"6")]);
+        assert!(wasm_imports_upgrade_fn(&wasm));
+        // …and without the upgrade import it stays frozen (length-skip is exact).
+        let wasm = wasm_with_imports(&[(&long_name, b"fn"), (b"l", b"7")]);
         assert!(!wasm_imports_upgrade_fn(&wasm));
     }
 

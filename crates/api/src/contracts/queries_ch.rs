@@ -268,11 +268,10 @@ struct ContractHeaderChRow {
     deployed_at_ledger: Option<i64>,
     contract_type: Option<i16>,
     is_sac: bool,
-    // Task 0327 — mutability, read from the joined WASM interface metadata.
-    // `has` (JSONHas) tells a frozen contract (key present, false) apart from a
-    // row predating the flag (key absent → Unknown); see `map_upgradeable`.
-    upgradeable_has: u8,
-    upgradeable_val: u8,
+    // Task 0327 — mutability as a tri-state Int8 from the joined WASM metadata:
+    // 1 = self-upgradeable, 0 = frozen, -1 = Unknown (no key / no row). See the
+    // SQL expression in `fetch_contract` and `map_upgradeable`.
+    upgradeable: i8,
 }
 
 pub async fn fetch_contract(
@@ -290,11 +289,11 @@ pub async fn fetch_contract(
                 sc.deployed_at_ledger                  AS deployed_at_ledger, \
                 sc.contract_type                       AS contract_type, \
                 sc.is_sac                              AS is_sac, \
-                toUInt8(JSONHas(wim.metadata, 'upgradeable'))        AS upgradeable_has, \
-                toUInt8(JSONExtractBool(wim.metadata, 'upgradeable')) AS upgradeable_val \
+                toInt8(if(JSONHas(wim.metadata, 'upgradeable'), \
+                          JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -303,7 +302,7 @@ pub async fn fetch_contract(
         .await?;
 
     Ok(row.map(|r| ContractRow {
-        upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable_has, r.upgradeable_val),
+        upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
         wasm_hash: r.wasm_hash,
@@ -316,18 +315,19 @@ pub async fn fetch_contract(
     }))
 }
 
-/// Task 0327 — collapse the `(JSONHas, JSONExtractBool)` pair into the 3-state
-/// `upgradeable`:
-/// - no WASM (SAC / `wasm_hash IS NULL`) → `Some(false)` (cannot self-upgrade).
-/// - metadata has the key → `Some(value)` (Upgradeable / Immutable).
-/// - key absent (no metadata row, or a row predating task 0327) → `None`
-///   (Unknown → the frontend renders no chip).
-fn map_upgradeable(has_wasm: bool, has_key: u8, val: u8) -> Option<bool> {
+/// Task 0327 — map the tri-state Int8 from `fetch_contract` into `upgradeable`:
+/// - no WASM (SAC / `wasm_hash IS NULL`) → `Some(false)` (cannot self-upgrade),
+///   regardless of the join (SAC has no metadata row).
+/// - `1` → `Some(true)` (self-upgradeable), `0` → `Some(false)` (frozen).
+/// - `-1` → `None` (Unknown: no metadata row, or a row predating task 0327 →
+///   the frontend renders no chip).
+fn map_upgradeable(has_wasm: bool, code: i8) -> Option<bool> {
     if !has_wasm {
         return Some(false);
     }
-    match has_key {
-        1 => Some(val == 1),
+    match code {
+        1 => Some(true),
+        0 => Some(false),
         _ => None,
     }
 }
@@ -941,14 +941,14 @@ mod tests {
 
     #[test]
     fn map_upgradeable_three_state() {
-        // SAC / no WASM → Immutable regardless of the JSON columns.
-        assert_eq!(map_upgradeable(false, 0, 0), Some(false));
-        assert_eq!(map_upgradeable(false, 1, 1), Some(false));
-        // WASM present, key present → exact value.
-        assert_eq!(map_upgradeable(true, 1, 1), Some(true));
-        assert_eq!(map_upgradeable(true, 1, 0), Some(false));
-        // WASM present, key absent (no metadata row / pre-0327) → Unknown.
-        assert_eq!(map_upgradeable(true, 0, 0), None);
+        // SAC / no WASM → Immutable regardless of the join code.
+        assert_eq!(map_upgradeable(false, -1), Some(false));
+        assert_eq!(map_upgradeable(false, 1), Some(false));
+        // WASM present: 1 → upgradeable, 0 → frozen.
+        assert_eq!(map_upgradeable(true, 1), Some(true));
+        assert_eq!(map_upgradeable(true, 0), Some(false));
+        // WASM present, -1 (no metadata row / pre-0327 key absent) → Unknown.
+        assert_eq!(map_upgradeable(true, -1), None);
     }
 
     fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
