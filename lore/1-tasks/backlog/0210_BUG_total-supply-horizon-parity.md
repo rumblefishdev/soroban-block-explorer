@@ -4,7 +4,7 @@ title: 'BUG: assets.total_supply Horizon parity — extend MVP sum to 4 sources'
 type: BUG
 status: backlog
 related_adr: ['0043']
-related_tasks: ['0194', '0197']
+related_tasks: ['0194', '0197', '0331']
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
 milestone: 2
@@ -176,6 +176,14 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
   scope; would need product decision + ADR.
 
 ## Notes
+
+- **Event-fold mechanism for Phase 3 (NEW, 2026-06-26, task 0331).** Phase 3 (SAC
+  contract holdings) can read balances from the standardised SEP-41
+  `transfer`/`mint`/`burn` events in `soroban_events` (validated in 0331:
+  `Σmint − Σburn` = on-chain `total_supply()`, 6/6 sample) instead of a
+  `contract_data` storage scan — sidesteps the non-standard storage-key layouts
+  that scoped out 0138. Coordinate if 0331 lands first; 0331 owns the type-3
+  (bespoke Soroban) supply+holders that this task leaves out of scope.
 
 - **0194 deliberately deferred this.** From 0194 closing history (2026-05-XX):
   "Full Horizon-parity total_supply (LP reserves + claimable_balances + SAC
