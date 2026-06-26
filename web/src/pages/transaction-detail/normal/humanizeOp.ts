@@ -19,6 +19,20 @@ function detailsObject(
     : null;
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 /** `"native"` → `XLM`; `"CODE:ISSUER"` → `CODE`; otherwise the raw string. */
 function assetUnit(asset: unknown): string | null {
   if (typeof asset !== 'string' || asset.length === 0) return null;
@@ -26,17 +40,14 @@ function assetUnit(asset: unknown): string | null {
   return asset.split(':')[0] ?? null;
 }
 
-/**
- * Per-op `(amount, asset)` detail keys, by operation type. Payment carries
- * `amount`/`asset`; the path payments carry the moved value under
- * `destAmount`/`destAsset` (strict-receive: exact delivered) and
- * `sendAmount`/`sendAsset` (strict-send: exact sent).
- */
-const TRANSFER_FIELDS: Record<string, readonly [string, string]> = {
-  PAYMENT: ['amount', 'asset'],
-  PATH_PAYMENT_STRICT_RECEIVE: ['destAmount', 'destAsset'],
-  PATH_PAYMENT_STRICT_SEND: ['sendAmount', 'sendAsset'],
-};
+/** Stellar `price` is an exact `{n, d}` rational; render it as a decimal. */
+function priceDecimal(price: unknown): string | null {
+  const p = asObject(price);
+  const n = num(p?.n);
+  const d = num(p?.d);
+  if (n == null || d == null || d === 0) return null;
+  return String(Number((n / d).toPrecision(6)));
+}
 
 /**
  * `Sent 12.5 USDC to GA5X…` for a payment / path payment, reading the per-op
@@ -44,37 +55,65 @@ const TRANSFER_FIELDS: Record<string, readonly [string, string]> = {
  * and drops the amount — task 0329). Null when the heavy amount is
  * unavailable so the caller can fall back to the asset/destination-only line.
  */
-function sentLineFromHeavy(
+function sentLine(
   light: OperationItem,
-  heavy: XdrOperationDto | null,
+  details: Record<string, unknown> | null,
   amountKey: string,
   assetKey: string
 ): string | null {
-  const details = detailsObject(heavy);
-  const amount = details?.[amountKey];
-  if (typeof amount !== 'number') return null;
+  const amount = num(details?.[amountKey]);
+  if (amount == null) return null;
   const unit = assetUnit(details?.[assetKey]) ?? light.asset_code ?? 'XLM';
   const valued = formatStroopAmount(amount, unit);
-  const dest =
-    (typeof details?.destination === 'string' && details.destination) ||
-    light.destination_account;
+  const dest = str(details?.destination) ?? light.destination_account;
   return dest != null ? `Sent ${valued} to ${shortId(dest)}` : `Sent ${valued}`;
 }
 
+/**
+ * Offer summary, e.g. `Sell offer: 100 XLM for USDC @ 0.5`. `ownAssetKey` is
+ * the asset whose `amountKey` is denominated; `otherAssetKey` is the
+ * counter-asset. Null when the amount is unavailable.
+ */
+function offerLine(
+  details: Record<string, unknown> | null,
+  amountKey: string,
+  ownAssetKey: string,
+  otherAssetKey: string,
+  label: string
+): string | null {
+  const amount = num(details?.[amountKey]);
+  if (amount == null) return null;
+  const own = assetUnit(details?.[ownAssetKey]);
+  const other = assetUnit(details?.[otherAssetKey]);
+  const price = priceDecimal(details?.price);
+  let line = `${label}: ${formatStroopAmount(amount, own ?? '')}`;
+  if (other != null) line += ` for ${other}`;
+  if (price != null) line += ` @ ${price}`;
+  return line;
+}
+
+/** Fallback `Sent ASSET to DEST` (no amount) from light fields. */
+function assetDestFallback(light: OperationItem): string | null {
+  if (light.destination_account == null) return null;
+  return `Sent ${light.asset_code ?? 'XLM'} to ${shortId(
+    light.destination_account
+  )}`;
+}
+
 function fnNameFromHeavy(heavy: XdrOperationDto | null): string | null {
-  const fn = detailsObject(heavy)?.function_name;
-  return typeof fn === 'string' && fn.length > 0 ? fn : null;
+  return str(detailsObject(heavy)?.function_name);
 }
 
 function summaryFromHeavy(heavy: XdrOperationDto | null): string | null {
-  const details = heavy?.details;
-  if (details && typeof details === 'object' && !Array.isArray(details)) {
-    const value = (details as { summary?: unknown }).summary;
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return null;
+  return str(detailsObject(heavy)?.summary);
 }
 
+/**
+ * One-line human summary of an operation for the Result node. Amounts come
+ * from the heavy XDR overlay (`details`) — the folded light rows carry no
+ * token amount (task 0329). Falls back to a light-only line, then to
+ * `<Type> processed`, when heavy is unavailable.
+ */
 export function humanizeOp(
   light: OperationItem,
   heavy: XdrOperationDto | null
@@ -82,26 +121,88 @@ export function humanizeOp(
   const explicit = summaryFromHeavy(heavy);
   if (explicit != null) return explicit;
 
+  const details = detailsObject(heavy);
   const opLabel = formatOperationType(light.type_name);
-
-  const transfer = TRANSFER_FIELDS[light.type_name];
-  if (transfer != null) {
-    const withAmount = sentLineFromHeavy(
-      light,
-      heavy,
-      transfer[0],
-      transfer[1]
-    );
-    if (withAmount != null) return withAmount;
-    // Heavy unavailable: asset code + destination only, no amount.
-    if (light.destination_account != null) {
-      const asset = light.asset_code ?? 'XLM';
-      return `Sent ${asset} to ${shortId(light.destination_account)}`;
-    }
-    return `${opLabel} processed`;
-  }
+  const processed = `${opLabel} processed`;
 
   switch (light.type_name) {
+    case 'PAYMENT':
+      return (
+        sentLine(light, details, 'amount', 'asset') ??
+        assetDestFallback(light) ??
+        processed
+      );
+    case 'PATH_PAYMENT_STRICT_RECEIVE':
+      return (
+        sentLine(light, details, 'destAmount', 'destAsset') ??
+        assetDestFallback(light) ??
+        processed
+      );
+    case 'PATH_PAYMENT_STRICT_SEND':
+      return (
+        sentLine(light, details, 'sendAmount', 'sendAsset') ??
+        assetDestFallback(light) ??
+        processed
+      );
+    case 'CREATE_ACCOUNT': {
+      const dest = str(details?.destination) ?? light.destination_account;
+      if (dest == null) break;
+      const balance = num(details?.startingBalance);
+      return balance != null
+        ? `Created account ${shortId(dest)} with ${formatStroopAmount(
+            balance,
+            'XLM'
+          )}`
+        : `Created account ${shortId(dest)}`;
+    }
+    case 'CLAWBACK': {
+      const amount = num(details?.amount);
+      if (amount == null) break;
+      const valued = formatStroopAmount(
+        amount,
+        assetUnit(details?.asset) ?? 'XLM'
+      );
+      const from = str(details?.from);
+      return from != null
+        ? `Clawed back ${valued} from ${shortId(from)}`
+        : `Clawed back ${valued}`;
+    }
+    case 'CREATE_CLAIMABLE_BALANCE': {
+      const amount = num(details?.amount);
+      if (amount == null) break;
+      const unit = assetUnit(details?.asset) ?? 'XLM';
+      return `Created claimable balance of ${formatStroopAmount(amount, unit)}`;
+    }
+    case 'MANAGE_SELL_OFFER':
+      return (
+        offerLine(details, 'amount', 'selling', 'buying', 'Sell offer') ??
+        processed
+      );
+    case 'CREATE_PASSIVE_SELL_OFFER':
+      return (
+        offerLine(details, 'amount', 'selling', 'buying', 'Passive sell') ??
+        processed
+      );
+    case 'MANAGE_BUY_OFFER':
+      return (
+        offerLine(details, 'buyAmount', 'buying', 'selling', 'Buy offer') ??
+        processed
+      );
+    case 'LIQUIDITY_POOL_DEPOSIT': {
+      // No asset codes in the deposit op — bare 7-decimal amounts.
+      const a = num(details?.maxAmountA);
+      const b = num(details?.maxAmountB);
+      if (a == null || b == null) break;
+      return `Deposited up to ${formatStroopAmount(
+        a,
+        ''
+      )} / ${formatStroopAmount(b, '')}`;
+    }
+    case 'LIQUIDITY_POOL_WITHDRAW': {
+      const shares = num(details?.amount);
+      if (shares == null) break;
+      return `Withdrew ${formatStroopAmount(shares, 'pool shares')}`;
+    }
     case 'INVOKE_HOST_FUNCTION': {
       const fn = fnNameFromHeavy(heavy);
       if (fn != null && light.contract_id != null) {
@@ -113,12 +214,7 @@ export function humanizeOp(
       }
       break;
     }
-    case 'CREATE_ACCOUNT':
-      if (light.destination_account != null) {
-        return `Created account ${shortId(light.destination_account)}`;
-      }
-      break;
   }
 
-  return `${opLabel} processed`;
+  return processed;
 }

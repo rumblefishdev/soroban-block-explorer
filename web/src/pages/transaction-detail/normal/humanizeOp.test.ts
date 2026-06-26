@@ -90,3 +90,87 @@ describe('humanizeOp — payment amount from heavy.details', () => {
     expect(line).toBe('Custom summary');
   });
 });
+
+describe('humanizeOp — amount on other operation types', () => {
+  it('CREATE_ACCOUNT shows the starting balance in XLM', () => {
+    const line = humanizeOp(
+      light({ type_name: 'CREATE_ACCOUNT' }),
+      heavy({ destination: DEST, startingBalance: 250_000_000 })
+    );
+    expect(line).toContain('Created account');
+    expect(line).toContain('with 25 XLM');
+  });
+
+  it('CREATE_ACCOUNT without heavy still names the account, no amount', () => {
+    const line = humanizeOp(
+      light({ type_name: 'CREATE_ACCOUNT', destination_account: DEST }),
+      null
+    );
+    expect(line).toContain('Created account');
+    expect(line).not.toContain('with');
+  });
+
+  it('CLAWBACK shows amount + asset + source', () => {
+    const line = humanizeOp(
+      light({ type_name: 'CLAWBACK' }),
+      heavy({ amount: 50_000_000, asset: `USDC:${DEST}`, from: DEST })
+    );
+    expect(line).toContain('Clawed back 5 USDC from');
+  });
+
+  it('CREATE_CLAIMABLE_BALANCE shows amount + asset', () => {
+    const line = humanizeOp(
+      light({ type_name: 'CREATE_CLAIMABLE_BALANCE' }),
+      heavy({ amount: 1_000_000_000, asset: `AQUA:${DEST}` })
+    );
+    expect(line).toContain('Created claimable balance of 100 AQUA');
+  });
+
+  it('MANAGE_SELL_OFFER shows amount, counter-asset and price', () => {
+    const line = humanizeOp(
+      light({ type_name: 'MANAGE_SELL_OFFER' }),
+      heavy({
+        amount: 1_000_000_000,
+        selling: 'native',
+        buying: `USDC:${DEST}`,
+        price: { n: 1, d: 2 },
+      })
+    );
+    expect(line).toBe('Sell offer: 100 XLM for USDC @ 0.5');
+  });
+
+  it('MANAGE_BUY_OFFER reads buyAmount and the buying asset', () => {
+    const line = humanizeOp(
+      light({ type_name: 'MANAGE_BUY_OFFER' }),
+      heavy({
+        buyAmount: 30_000_000,
+        selling: 'native',
+        buying: `USDC:${DEST}`,
+        price: { n: 2, d: 1 },
+      })
+    );
+    expect(line).toBe('Buy offer: 3 USDC for XLM @ 2');
+  });
+
+  it('LIQUIDITY_POOL_DEPOSIT shows both max amounts (no asset codes)', () => {
+    const line = humanizeOp(
+      light({ type_name: 'LIQUIDITY_POOL_DEPOSIT' }),
+      heavy({ maxAmountA: 100_000_000, maxAmountB: 50_000_000 })
+    );
+    expect(line).toBe('Deposited up to 10 / 5');
+  });
+
+  it('LIQUIDITY_POOL_WITHDRAW shows the pool-share amount', () => {
+    const line = humanizeOp(
+      light({ type_name: 'LIQUIDITY_POOL_WITHDRAW' }),
+      heavy({ amount: 70_000_000, minAmountA: 1, minAmountB: 1 })
+    );
+    expect(line).toContain('Withdrew 7 pool shares');
+  });
+
+  it('falls back to "<Type> processed" when heavy is absent', () => {
+    expect(humanizeOp(light({ type_name: 'MANAGE_SELL_OFFER' }), null)).toBe(
+      'Manage Sell Offer processed'
+    );
+  });
+});
