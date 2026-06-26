@@ -233,40 +233,54 @@ pub async fn fetch_account(
 // Derived `deleted` status (account_merge) — task 0324
 // ---------------------------------------------------------------------------
 
-/// `true` ⟺ the account's **last** operation in its last-seen ledger is an
-/// `account_merge` (`type=8`) where it was the `source` — i.e. its final
-/// lifecycle event removed it from the ledger. Because `last_seen_ledger` is
-/// the `GREATEST` of every appearance, any deleting merge sits in exactly that
-/// ledger; `argMax(…, (transaction_id, application_order))` then picks the
-/// account's chronologically-last op *within* that ledger, so a same-ledger
-/// re-create (merge then `create_account`, higher application order) correctly
-/// reports `false`. (Measured zero such cases across 6.2B ops, but the
-/// app-order anchor closes the gap for free.)
+/// `true` ⟺ the account was the `source` of a **successful** `account_merge`
+/// (`type = 8`) in its last-seen ledger — its ledger entry was merged into
+/// another account and removed. `last_seen_ledger` is the `GREATEST` of every
+/// appearance, so a deleting merge necessarily sits in that ledger and nothing
+/// follows it: a later re-create would push `last_seen_ledger` higher and this
+/// query would find no merge there → `false`. That makes the check a plain
+/// EXISTS — no chronological "last op" ordering needed.
 ///
-/// The `ledger_sequence = ?` literal is load-bearing: `operations_appearances`
-/// is `PARTITION BY intDiv(ledger_sequence, 500000)` with no sort key on
-/// `source_id`/`type`, so anchoring on the (already-known) `last_seen_ledger`
-/// prunes to a single granule (~8K rows, measured). Without it the planner
-/// scans the whole 6.2B-row table and trips the query memory limit. Hence a
-/// dedicated second query keyed by the literal, never a join on `accounts`.
+/// Two corrections over the original derivation (both were live bugs):
+/// - **`successful` filter (join `transactions`).** `operations_appearances`
+///   carries failed-tx ops too (no status column of its own); a *failed*
+///   `account_merge` does NOT delete the account. The join restricts to
+///   `t.successful`, which the single-table query could not express.
+/// - **No `argMax` over `transaction_id`.** `transaction_id` is a cityhash
+///   surrogate, NOT chronological, so ordering by it never picked the real last
+///   op (and returned `Nullable(UInt8)`, which mismatched the `u8` decode → the
+///   original 500). EXISTS sidesteps ordering and nullability entirely.
+///
+/// The `ledger_sequence = ?` literal on BOTH tables is load-bearing: both are
+/// `PARTITION BY intDiv(ledger_sequence, 500000)` and key on `ledger_sequence`,
+/// so the equality prunes each side to that one ledger (~hundreds of tx rows,
+/// ~1 matching op). Without it the planner scans the 6.2B + 3.6B-row tables and
+/// trips the query memory limit.
+///
+/// ponytail: drops the same-ledger merge-then-`create_account` re-create case
+/// (merged out then recreated within the SAME ledger → still live, but EXISTS
+/// reports deleted). Measured zero across 6.2B ops. To close it, anchor on the
+/// real chronological key `(t.application_order, oa.application_order)` via
+/// `argMax` instead of EXISTS.
 pub async fn fetch_deleted_status(
     client: &clickhouse::Client,
     account_surrogate_id: i64,
     last_seen_ledger: i64,
 ) -> Result<bool, clickhouse::error::Error> {
-    // `argMax` over the empty set (account somehow absent from its own
-    // last-seen ledger) defaults to 0 → `false`, the safe answer.
     let deleted = client
         .query(
-            "SELECT argMax(type = 8 AND source_id = ?, \
-                           (transaction_id, application_order)) \
-             FROM operations_appearances \
-             WHERE ledger_sequence = ? \
-               AND (source_id = ? OR destination_id = ?)",
+            "SELECT count() > 0 \
+             FROM operations_appearances oa \
+             INNER JOIN transactions t \
+               ON t.id = oa.transaction_id AND t.ledger_sequence = oa.ledger_sequence \
+             WHERE oa.ledger_sequence = ? \
+               AND t.ledger_sequence = ? \
+               AND oa.type = 8 \
+               AND oa.source_id = ? \
+               AND t.successful",
         )
-        .bind(account_surrogate_id)
         .bind(last_seen_ledger)
-        .bind(account_surrogate_id)
+        .bind(last_seen_ledger)
         .bind(account_surrogate_id)
         .fetch_one::<u8>()
         .await?;
