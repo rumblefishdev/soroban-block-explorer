@@ -2,7 +2,7 @@
 id: '0330'
 title: 'tx-detail: cut E3 latency (cache + overlap archive fetch) + show amount sent in UI'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0029']
 related_tasks: []
 tags:
@@ -20,6 +20,17 @@ history:
     status: active
     who: fmazur
     note: 'Task created — prod GET /v1/transactions/:hash up to 3.37s; review asks to show amount sent.'
+  - date: 2026-06-26
+    status: completed
+    who: fmazur
+    note: >
+      Merged to develop. Shipped: amount-sent UI (humanizeOp + formatTokenAmount,
+      stroops.test.ts 6 / humanizeOp.test.ts 9), tokio::join! overlap of the DB ops
+      query with the archive fetch, and spawn_blocking for the zstd/XDR parse
+      (FetchError::Join). The per-Lambda heavy cache was built + double-reviewed but
+      REMOVED after production validation (0% hit rate, 137 sequential same-hash
+      requests all ~2.4s) — per-instance caching can't help on a scaled Lambda fleet.
+      Real latency lever (edge-cache E3 / DB-persist heavy subset) left as Future Work.
 ---
 
 # tx-detail: cut E3 latency (cache + overlap archive fetch) + show amount sent in UI
