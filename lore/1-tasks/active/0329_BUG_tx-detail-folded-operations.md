@@ -2,7 +2,7 @@
 id: '0329'
 title: 'Transaction detail shows only 1 of N operations (folded operations_appearances)'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: []
 tags: ['frontend', 'transaction-detail', 'effort-small']
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Task created — bug found while exploring multi-operation transaction display.'
+  - date: 2026-06-26
+    status: active
+    who: stkrolikiewicz
+    note: 'Promoted to active — starting frontend fix.'
 ---
 
 # Transaction detail shows only 1 of N operations (folded operations_appearances)
