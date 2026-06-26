@@ -2,7 +2,7 @@
 id: '0331'
 title: 'FEATURE: bespoke Soroban-token total_supply + holder_count via event-fold MV'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0043', '0044']
 related_tasks: ['0304', '0194', '0210', '0138', '0243']
 tags: [clickhouse, soroban, assets, enrichment, effort-medium, milestone-2]
@@ -22,6 +22,10 @@ history:
       reproduces on-chain total_supply() exactly (6/6 sample). New angle vs the
       scoped-out 0138 (storage-scan); covers the type-3 gap that 0194 (types 1,2)
       and 0210 (classic parity) leave open.
+  - date: '2026-06-26'
+    status: active
+    who: karolkow
+    note: Promoted to active to start implementation.
 ---
 
 # FEATURE: bespoke Soroban-token total_supply + holder_count via event-fold MV
