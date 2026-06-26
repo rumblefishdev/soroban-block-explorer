@@ -25,7 +25,7 @@ use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::strkey::pool_id_hex_to_strkey;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
-use crate::runtime_enrichment::stellar_archive::dto::HeavyFieldsStatus;
+use crate::runtime_enrichment::stellar_archive::dto::{E3HeavyFields, HeavyFieldsStatus};
 use crate::runtime_enrichment::stellar_archive::extractors::extract_e3_heavy;
 use crate::runtime_enrichment::stellar_archive::merge::merge_e3_response;
 use crate::state::AppState;
@@ -313,63 +313,20 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
         }
     };
 
-    let op_rows: Vec<OpRow> = match fetch_operations_for_source(&state, source, &tx).await {
+    // Overlap the DB operations query with the heavy archive fetch (task 0330).
+    // Both depend only on `tx` (resolved above) and are independent of each
+    // other; the heavy path is the dominant cost (cross-region archive fetch +
+    // XDR parse), so running the ops query concurrently hides its round-trip
+    // under the archive latency instead of paying both serially.
+    let (op_rows_res, heavy) = tokio::join!(
+        fetch_operations_for_source(&state, source, &tx),
+        compute_heavy(&state, &hash, &tx),
+    );
+    let op_rows: Vec<OpRow> = match op_rows_res {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(source = ?source, "DB error fetching operations: {e}");
             return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    // ADR 0029 read path: fetch the parent ledger from the public Stellar
-    // archive. On upstream failure → graceful degradation: heavy = None,
-    // merge_e3_response sets heavy_fields_status = "unavailable" while still
-    // returning the light slice from DB. Out-of-range BIGINT → u32 also
-    // degrades to heavy = None rather than wrapping silently.
-    //
-    // Task 0190: when `tx.parse_error = true` in the DB, the indexer
-    // already failed to parse the XDR for this transaction. Re-fetching
-    // and re-parsing from the public archive can either (a) succeed and
-    // produce fresh heavy fields, masking the historical DB flag, or
-    // (b) fail again with the same conditions, in which case
-    // `extract_e3_heavy` returns an `E3HeavyFields` struct with mostly
-    // empty values via `filter(!is_empty)` — which serializes as
-    // `heavy_fields_status: "ok"` with NULL XDR fields, violating the
-    // lore-0046 / lore-0044 contract that parse_error transactions
-    // serve `heavy: null` + `heavy_fields_status: "unavailable"`.
-    //
-    // The DB flag is the ground-truth signal of "we know this tx had
-    // an XDR parsing problem"; surfacing it explicitly via the
-    // `unavailable` status preserves that signal end-to-end and saves
-    // the S3 round-trip on degraded rows.
-    let heavy = if tx.parse_error {
-        tracing::debug!(
-            tx_hash = %hash,
-            "skipping archive fetch for parse_error transaction; \
-             surfacing heavy_fields_status = unavailable per lore-0046 contract"
-        );
-        None
-    } else {
-        match u32::try_from(tx.ledger_sequence) {
-            Ok(seq) => match state
-                .runtime_enrichment
-                .stellar_archive
-                .fetch_ledger(seq)
-                .await
-            {
-                Ok(meta) => extract_e3_heavy(&meta, &hash, &state.network_id),
-                Err(e) => {
-                    tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
-                    None
-                }
-            },
-            Err(_) => {
-                tracing::warn!(
-                    "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
-                    tx.ledger_sequence
-                );
-                None
-            }
         }
     };
 
@@ -448,6 +405,54 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     let mut resp = Json(body).into_response();
     cache_control::attach(&mut resp, cache_value);
     resp
+}
+
+/// Resolve the E3 heavy block for `tx` via the ADR 0029 read path: fetch the
+/// parent ledger from the public Stellar archive, then `extract_e3_heavy`. Kept
+/// as its own future so the handler can `tokio::join!` it with the DB ops query
+/// (the overlap hides the ops round-trip under the archive latency).
+///
+/// Returns `None` (→ `heavy_fields_status: "unavailable"`, graceful
+/// degradation per ADR 0029) for:
+///   - `tx.parse_error` rows: the indexer already failed to parse this tx's
+///     XDR (lore-0190); re-fetching could mask the historical flag or emit an
+///     `ok` status with NULL fields, violating the lore-0046/0044 contract
+///     that such rows serve `heavy: null`. Skipping it also saves the S3
+///     round-trip;
+///   - an out-of-u32-range `ledger_sequence` (cannot address the archive);
+///   - an archive fetch failure or a ledger that does not contain the tx.
+async fn compute_heavy(state: &AppState, hash: &str, tx: &TxDetailRow) -> Option<E3HeavyFields> {
+    if tx.parse_error {
+        tracing::debug!(
+            tx_hash = %hash,
+            "skipping archive fetch for parse_error transaction; \
+             surfacing heavy_fields_status = unavailable per lore-0046 contract"
+        );
+        return None;
+    }
+    let seq = match u32::try_from(tx.ledger_sequence) {
+        Ok(seq) => seq,
+        Err(_) => {
+            tracing::warn!(
+                "out-of-u32-range ledger_sequence {} for tx detail; degrading to heavy = unavailable",
+                tx.ledger_sequence
+            );
+            return None;
+        }
+    };
+
+    match state
+        .runtime_enrichment
+        .stellar_archive
+        .fetch_ledger(seq)
+        .await
+    {
+        Ok(meta) => extract_e3_heavy(&meta, hash, &state.network_id),
+        Err(e) => {
+            tracing::warn!("failed to fetch ledger {seq} for tx detail: {e}");
+            None
+        }
+    }
 }
 
 fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
