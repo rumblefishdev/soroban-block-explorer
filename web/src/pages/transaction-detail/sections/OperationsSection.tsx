@@ -1,11 +1,13 @@
 import type { E3ResponseTransactionDetailLight } from '@rumblefish/api-types';
 import { Box, Grid } from '@mui/material';
+import { useMemo } from 'react';
 
 import { SectionCard } from '../../detail/SectionCard.js';
 import { AdvancedRightPanel } from '../advanced/AdvancedRightPanel.js';
 import { NormalRightPanel } from '../normal/NormalRightPanel.js';
 import type { DetailMode } from '../useDetailMode.js';
 
+import { buildOperationEntries } from './operationEntries.js';
 import { OperationPicker } from './OperationPicker.js';
 
 interface OperationsSectionProps {
@@ -21,16 +23,14 @@ export function OperationsSection({
   selectedIndex,
   onSelect,
 }: OperationsSectionProps) {
-  const ops = tx.operations;
-  const count = ops.length;
-  const heavyOps = tx.heavy?.operations ?? [];
-  const selectedLightOp = ops[selectedIndex] ?? ops[0];
-  const selectedHeavyOp =
-    selectedLightOp != null
-      ? heavyOps.find(
-          (h) => h.application_order === selectedLightOp.application_order
-        ) ?? null
-      : null;
+  const entries = useMemo(() => buildOperationEntries(tx), [tx]);
+  const rows = useMemo(() => entries.map((e) => e.row), [entries]);
+  // Header count from operation_count (always present, never folded) — the
+  // picker list (rows) may be shorter when heavy is unavailable (task 0329).
+  const count = tx.operation_count;
+  const selected = entries[selectedIndex] ?? entries[0];
+  const selectedLightOp = selected?.light;
+  const selectedHeavyOp = selected?.heavy ?? null;
 
   const rightPanel =
     mode === 'normal' ? (
@@ -52,7 +52,7 @@ export function OperationsSection({
         <Grid container spacing={2}>
           <Grid size={{ xs: 12, md: 6 }}>
             <OperationPicker
-              operations={ops}
+              operations={rows}
               selectedIndex={selectedIndex}
               onSelect={onSelect}
             />
