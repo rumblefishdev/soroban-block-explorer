@@ -27,19 +27,33 @@ function assetUnit(asset: unknown): string | null {
 }
 
 /**
- * `Sent 12.5 USDC to GA5X…` for a PAYMENT, reading the per-op amount + asset
- * from the heavy XDR overlay (`operations_appearances` folds and drops the
- * amount — task 0329). Null when the heavy amount is unavailable so the
- * caller can fall back to the asset/destination-only line.
+ * Per-op `(amount, asset)` detail keys, by operation type. Payment carries
+ * `amount`/`asset`; the path payments carry the moved value under
+ * `destAmount`/`destAsset` (strict-receive: exact delivered) and
+ * `sendAmount`/`sendAsset` (strict-send: exact sent).
  */
-function paymentLineFromHeavy(
+const TRANSFER_FIELDS: Record<string, readonly [string, string]> = {
+  PAYMENT: ['amount', 'asset'],
+  PATH_PAYMENT_STRICT_RECEIVE: ['destAmount', 'destAsset'],
+  PATH_PAYMENT_STRICT_SEND: ['sendAmount', 'sendAsset'],
+};
+
+/**
+ * `Sent 12.5 USDC to GA5X…` for a payment / path payment, reading the per-op
+ * amount + asset from the heavy XDR overlay (`operations_appearances` folds
+ * and drops the amount — task 0329). Null when the heavy amount is
+ * unavailable so the caller can fall back to the asset/destination-only line.
+ */
+function sentLineFromHeavy(
   light: OperationItem,
-  heavy: XdrOperationDto | null
+  heavy: XdrOperationDto | null,
+  amountKey: string,
+  assetKey: string
 ): string | null {
   const details = detailsObject(heavy);
-  const amount = details?.amount;
+  const amount = details?.[amountKey];
   if (typeof amount !== 'number') return null;
-  const unit = assetUnit(details?.asset) ?? light.asset_code ?? 'XLM';
+  const unit = assetUnit(details?.[assetKey]) ?? light.asset_code ?? 'XLM';
   const valued = formatStroopAmount(amount, unit);
   const dest =
     (typeof details?.destination === 'string' && details.destination) ||
@@ -70,25 +84,24 @@ export function humanizeOp(
 
   const opLabel = formatOperationType(light.type_name);
 
-  switch (light.type_name) {
-    case 'PAYMENT': {
-      const withAmount = paymentLineFromHeavy(light, heavy);
-      if (withAmount != null) return withAmount;
-      if (light.destination_account != null) {
-        const asset = light.asset_code ?? 'XLM';
-        return `Sent ${asset} to ${shortId(light.destination_account)}`;
-      }
-      break;
+  const transfer = TRANSFER_FIELDS[light.type_name];
+  if (transfer != null) {
+    const withAmount = sentLineFromHeavy(
+      light,
+      heavy,
+      transfer[0],
+      transfer[1]
+    );
+    if (withAmount != null) return withAmount;
+    // Heavy unavailable: asset code + destination only, no amount.
+    if (light.destination_account != null) {
+      const asset = light.asset_code ?? 'XLM';
+      return `Sent ${asset} to ${shortId(light.destination_account)}`;
     }
-    // ponytail: path payments carry their amount under destAmount/sendAmount,
-    // not `amount` — left on the asset-only line; wire them up when needed.
-    case 'PATH_PAYMENT_STRICT_RECEIVE':
-    case 'PATH_PAYMENT_STRICT_SEND':
-      if (light.destination_account != null) {
-        const asset = light.asset_code ?? 'XLM';
-        return `Sent ${asset} to ${shortId(light.destination_account)}`;
-      }
-      break;
+    return `${opLabel} processed`;
+  }
+
+  switch (light.type_name) {
     case 'INVOKE_HOST_FUNCTION': {
       const fn = fnNameFromHeavy(heavy);
       if (fn != null && light.contract_id != null) {

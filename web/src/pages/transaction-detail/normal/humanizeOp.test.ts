@@ -38,6 +38,44 @@ describe('humanizeOp — payment amount from heavy.details', () => {
     expect(line).toContain('Sent 5 USDC to');
   });
 
+  it('renders a strict-receive path payment from destAmount/destAsset', () => {
+    const line = humanizeOp(
+      light({
+        type_name: 'PATH_PAYMENT_STRICT_RECEIVE',
+        destination_account: DEST,
+      }),
+      {
+        application_order: 1,
+        op_type: 'path_payment_strict_receive',
+        details: {
+          destAmount: 73_500_000,
+          destAsset: `AQUA:${DEST}`,
+          destination: DEST,
+        },
+      }
+    );
+    expect(line).toContain('Sent 7.35 AQUA to');
+  });
+
+  it('renders a strict-send path payment from sendAmount/sendAsset', () => {
+    const line = humanizeOp(
+      light({
+        type_name: 'PATH_PAYMENT_STRICT_SEND',
+        destination_account: DEST,
+      }),
+      {
+        application_order: 1,
+        op_type: 'path_payment_strict_send',
+        details: {
+          sendAmount: 100_000_000,
+          sendAsset: 'native',
+          destination: DEST,
+        },
+      }
+    );
+    expect(line).toContain('Sent 10 XLM to');
+  });
+
   it('falls back to asset/destination only when heavy amount is absent', () => {
     const line = humanizeOp(light({ destination_account: DEST }), null);
     expect(line).toContain('Sent XLM to');
