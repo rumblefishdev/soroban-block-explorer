@@ -2126,6 +2126,7 @@ mod tests {
                 })
                 .collect(),
             wasm_byte_len: 0,
+            upgradeable: false,
         }
     }
 

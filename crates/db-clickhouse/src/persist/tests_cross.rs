@@ -1064,6 +1064,7 @@ fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
             outputs: vec!["Address".into()],
         }],
         wasm_byte_len: 256,
+        upgradeable: false,
     }
 }
 
@@ -1079,6 +1080,7 @@ fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterf
             outputs: vec!["u32".into()],
         }],
         wasm_byte_len: 256,
+        upgradeable: false,
     }
 }
 

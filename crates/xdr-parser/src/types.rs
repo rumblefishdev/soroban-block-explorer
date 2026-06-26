@@ -201,6 +201,10 @@ pub struct ExtractedContractInterface {
     pub functions: Vec<ContractFunction>,
     /// Raw WASM byte length (informational).
     pub wasm_byte_len: usize,
+    /// Task 0327: the WASM imports `update_current_contract_wasm` (a self-upgrade
+    /// path). See `wasm_imports_upgrade_fn` for how, and the API
+    /// `ContractDetailResponse::upgradeable` for the user-facing 3-state.
+    pub upgradeable: bool,
 }
 
 /// A single public function signature extracted from a contract's WASM spec.

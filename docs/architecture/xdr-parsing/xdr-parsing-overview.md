@@ -475,6 +475,19 @@ Public function signatures are extracted from contract WASM at deployment time
 and stored in `wasm_interface_metadata.metadata` (keyed by `wasm_hash BYTEA(32)`),
 deduplicated across every contract instance that shares the same WASM.
 
+The same pass also derives the **mutability** bit (task 0327): the parser scans
+the WASM's import section for the `update_current_contract_wasm` host fn (Soroban
+env import module `"l"`, field `"6"`) and stores `metadata.upgradeable: bool`. A
+contract can only replace its own code by calling that host fn, so importing it is
+the authoritative "self-upgradeable" signal; its absence means the contract is
+effectively immutable/frozen (there is no on-ledger immutability flag — CAP-0046).
+Because the bit is keyed by `wasm_hash`, it re-resolves correctly after an upgrade
+swaps a contract's `wasm_hash` (task 0320). The import-section walker is a small
+hand-rolled LEB128 scan in `crates/xdr-parser/src/contract.rs`
+(`wasm_imports_upgrade_fn`), reusing the same `read_leb128` reader as the custom-
+section parser; it is validated against real mainnet WASM in
+`crates/xdr-parser/tests/upgradeable_real_wasm.rs`.
+
 `soroban_contracts.name VARCHAR(256)` (per
 [ADR 0042](../../../lore/2-adrs/0042_soroban-contracts-typed-name-column.md))
 carries the human-readable contract name extracted from the standard

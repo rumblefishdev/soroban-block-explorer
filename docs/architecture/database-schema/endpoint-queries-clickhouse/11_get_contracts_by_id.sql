@@ -42,6 +42,13 @@
 
 -- ============================================================================
 -- A. Contract header.
+--    `upgradeable` (task 0327) is resolved here, not in a separate query: a
+--    LEFT JOIN to wasm_interface_metadata exposes the parsed mutability bit as
+--    a tri-state Int8 — 1 = self-upgradeable, 0 = frozen, -1 = Unknown. The
+--    `if(JSONHas(...), JSONExtractBool(...), -1)` is what splits a frozen
+--    contract (key present → 0) from a row predating the flag (key absent →
+--    -1 → no chip). SAC / no-WASM rows have no metadata match (→ -1) but the
+--    handler maps `wasm_hash IS NULL` to Immutable regardless.
 -- ============================================================================
 SELECT
     sc.id                                  AS contract_pk,
@@ -50,13 +57,20 @@ SELECT
     nullIf(sc.wasm_uploaded_at_ledger, 0)  AS wasm_uploaded_at_ledger,
     nullIf(deployer.account_id, '')        AS deployer,
     sc.deployed_at_ledger,
-    sc.contract_type                       AS contract_type,
-    sc.is_sac
+    sc.contract_type                   AS contract_type,
+    sc.is_sac,
     -- NO `sc.name`: contract detail surfaces no name (task 0297 #3). The dead
     -- `soroban_contracts.name` is read only by the CH name-search substring
     -- fallback in the contracts LIST, never composed here.
+    toInt8(if(JSONHas(wim.metadata, 'upgradeable'),
+              JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable
 FROM soroban_contracts sc FINAL
 LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id
+-- `wim FINAL`: wasm_interface_metadata is ReplacingMergeTree with no version
+-- column, so the upgradeable-backfill re-INSERT leaves two parts per wasm_hash
+-- until a background merge. FINAL collapses them so the read can't transiently
+-- pick the old (keyless) part and flash Unknown. The table is tiny (~3.7k rows).
+LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash
 WHERE sc.contract_id = $1
 LIMIT 1;
 
