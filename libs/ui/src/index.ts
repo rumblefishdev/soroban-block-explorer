@@ -31,6 +31,7 @@ export {
   formatCompactAmount,
   formatFee,
   formatStroops,
+  formatStroopAmount,
   formatInteger,
   formatTps,
   formatPercent,
