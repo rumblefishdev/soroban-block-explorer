@@ -87,11 +87,6 @@ pub struct ParseOutput {
 }
 
 static NETWORK_ID: OnceLock<[u8; 32]> = OnceLock::new();
-/// Trimmed passphrase string behind `NETWORK_ID`. Cached alongside the
-/// hash so SAC-override derivation (which takes the passphrase string,
-/// not the hash) uses the SAME network source as `network_id`, instead
-/// of a hard-coded mainnet constant.
-static NETWORK_PASSPHRASE: OnceLock<String> = OnceLock::new();
 
 /// Error returned by [`init_network_id`] when the
 /// `STELLAR_NETWORK_PASSPHRASE` env var is missing or empty. Mirrors
@@ -146,34 +141,9 @@ pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
     let id = xdr_parser::network_id(trimmed);
     // `set` may race with another thread that beat us; either way the
     // value is identical (same env), so we discard the race-loser
-    // result and return the actually-installed one. Cache the trimmed
-    // passphrase string too, so `network_passphrase()` and `network_id`
-    // always describe the same network.
-    let _ = NETWORK_PASSPHRASE.set(trimmed.to_string());
+    // result and return the actually-installed one.
     let _ = NETWORK_ID.set(id);
     Ok(NETWORK_ID.get().expect("just set"))
-}
-
-/// Trimmed network passphrase string from `STELLAR_NETWORK_PASSPHRASE`
-/// — the source of truth for SAC contract_id derivation. Mirrors
-/// [`network_id`]'s lazy fallback so non-Lambda callers (tests, dev
-/// tools) that skipped `init_network_id` still resolve it from the
-/// same env value, trimmed identically. Production pre-inits via
-/// `init_network_id`, so the lazy branch is dead in the hot path.
-fn network_passphrase() -> &'static str {
-    NETWORK_PASSPHRASE
-        .get_or_init(|| {
-            std::env::var("STELLAR_NETWORK_PASSPHRASE")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "STELLAR_NETWORK_PASSPHRASE env not set; call \
-                         `init_network_id()` from the binary's cold-start path \
-                         before any `parse_ledger` invocation."
-                    )
-                })
-        })
-        .as_str()
 }
 
 /// Network identifier hash. Falls back to lazy init from
@@ -449,14 +419,15 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
     let all_nfts = xdr_parser::detect_nfts(&all_nft_events);
 
-    // Derive SAC overrides for trustline-observed classic assets (task 0218).
-    // Uses the SAME network passphrase as `network_id` above (not a hard-coded
-    // mainnet constant) so a non-mainnet stack computes the right SAC ids.
-    // NB: un-deployed SACs that surface ONLY as classic-asset events (never a
-    // trustline change) are handled at NFT detection (the task 0294 gate in
-    // `detect_nft_events`), so no event-path override is written here.
-    let sac_overrides =
-        xdr_parser::derive_sac_overrides_from_assets(&all_assets, network_passphrase());
+    // Un-deployed-SAC overrides, sourced from the ledger's EVENTS (task 0323).
+    // An un-deployed SAC emits a CAP-67 unified event under its reserved C…
+    // address; the crypto gate (`derive_sac(asset) == emitter`) proves it, and
+    // staging then models it as an ASSET, not a `soroban_contracts` row (the
+    // override id suppresses the Pass-2 FK stub; its identity seeds the assets
+    // row). Replaces the trustline-sourced `derive_sac_overrides_from_assets`:
+    // an un-deployed SAC matters once it has activity (an event), not at the
+    // trustline — and trustline-only SACs keep their classic-credit asset row.
+    let sac_overrides = xdr_parser::detect_undeployed_sac_overrides(&all_events, net_id);
 
     let parse_ms = parse_timer.elapsed().as_millis();
 

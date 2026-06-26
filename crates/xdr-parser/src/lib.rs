@@ -36,13 +36,12 @@ pub use event_filters::{Transfer, is_transfer_event, parse_transfer, transfer_pa
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
 pub use ledger_entry_changes::extract_ledger_entry_changes;
-pub use nft::detect_nft_events;
+pub use nft::{detect_nft_events, detect_undeployed_sac_overrides};
 pub use op_source::extract_op_source_per_contract;
 pub use operation::{extract_operations, tx_op_results};
 pub use sac::{
     MAINNET_PASSPHRASE, SacOverride, TESTNET_PASSPHRASE, derive_sac_contract_id,
-    derive_sac_overrides_from_assets, extract_sac_identities, network_id, passphrase_for,
-    sac_override_from_event_topics,
+    extract_sac_identities, network_id, passphrase_for, sac_override_from_event_topics,
 };
 pub use scval::scval_to_typed_json;
 pub use state::{

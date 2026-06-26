@@ -19,7 +19,6 @@
 
 use core::str::FromStr;
 
-use domain::TokenAssetType;
 use sha2::{Digest, Sha256};
 use stellar_xdr::curr::{
     AccountId, AlphaNum4, AlphaNum12, Asset, AssetCode4, AssetCode12, ContractId,
@@ -27,11 +26,10 @@ use stellar_xdr::curr::{
     HashIdPreimageContractId, HostFunction, Limits, OperationBody, ScAddress,
     SorobanAuthorizedFunction, SorobanAuthorizedInvocation, WriteXdr,
 };
-use tracing::{instrument, warn};
 
 use crate::envelope::InnerTxRef;
 use crate::error::{ParseError, ParseErrorKind};
-use crate::types::{ExtractedAsset, SacAssetIdentity};
+use crate::types::SacAssetIdentity;
 
 pub const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
@@ -81,13 +79,13 @@ pub fn derive_sac_contract_id(
     Ok(ScAddress::Contract(ContractId(Hash(digest))).to_string())
 }
 
-/// Forward-derived SAC `(contract_id, identity)` pair (task 0218).
+/// Crypto-proven un-deployed-SAC `(contract_id, identity)` pair (task 0323).
 ///
-/// Produced by [`derive_sac_overrides_from_assets`] for every observed
-/// classic-credit / native asset; consumed by the indexer persist path
-/// to flip `is_sac=true` + `sac_asset` on pre-existing SAC contracts
-/// whose `create_contract` op happened before the indexed window and
-/// therefore left the row as a skeleton.
+/// Produced by `detect_undeployed_sac_overrides` for every event-emitting
+/// un-deployed SAC in a ledger (the `sac_override_from_event_topics` gate).
+/// On the CH path each (a) suppresses the Pass-2 FK stub (no contract row) and
+/// (b) seeds a SAC `assets` row from its identity. (The legacy PG persist path
+/// still consumes them to flip `is_sac=true` on pre-window SAC skeletons.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SacOverride {
     /// Derived SAC `C…` StrKey for the asset.
@@ -95,115 +93,6 @@ pub struct SacOverride {
     /// Asset identity carried into `assets.asset_code` / `.issuer_id`
     /// for the corresponding `assets` row.
     pub identity: SacAssetIdentity,
-}
-
-/// Derive the SAC `contract_id` for every observed classic / native asset.
-///
-/// Native and classic-credit assets each have a single deterministic SAC
-/// contract_id (per network). The derivation is the same as
-/// [`derive_sac_contract_id`] applied to `ContractIdPreimage::Asset(...)`;
-/// this helper just walks the asset list and emits one [`SacOverride`]
-/// per derivable entry.
-///
-/// `TokenAssetType::Sac` and `TokenAssetType::Soroban` assets are skipped:
-///
-/// - `Sac` already carries the observed `contract_id` from the
-///   in-window `create_contract` op (and its `soroban_contracts` row is
-///   already `is_sac=true`).
-/// - `Soroban` is a bespoke contract token with no SAC mapping.
-///
-/// Derivation errors (malformed issuer StrKey, XDR serialize failure)
-/// are `warn!`-logged and skipped — they must not fail the persist tx.
-#[instrument(skip(assets), fields(asset_count = assets.len()))]
-pub fn derive_sac_overrides_from_assets(
-    assets: &[ExtractedAsset],
-    network_passphrase: &str,
-) -> Vec<SacOverride> {
-    let net_id = network_id(network_passphrase);
-    let mut out: Vec<SacOverride> = Vec::new();
-
-    for asset in assets {
-        match asset.asset_type {
-            TokenAssetType::Native => {
-                let preimage = ContractIdPreimage::Asset(Asset::Native);
-                match derive_sac_contract_id(&preimage, &net_id) {
-                    Ok(contract_id) => out.push(SacOverride {
-                        contract_id,
-                        identity: SacAssetIdentity::Native,
-                    }),
-                    Err(e) => warn!(
-                        target: "xdr_parser::sac",
-                        error = %e.message,
-                        "SAC derive failed for native asset",
-                    ),
-                }
-            }
-            TokenAssetType::ClassicCredit => {
-                let Some(code) = asset.asset_code.as_ref() else {
-                    warn!(
-                        target: "xdr_parser::sac",
-                        "classic_credit asset missing asset_code; skipping SAC derive",
-                    );
-                    continue;
-                };
-                let Some(issuer) = asset.issuer_address.as_ref() else {
-                    warn!(
-                        target: "xdr_parser::sac",
-                        code = %code,
-                        "classic_credit asset missing issuer; skipping SAC derive",
-                    );
-                    continue;
-                };
-                let issuer_acct = match AccountId::from_str(issuer) {
-                    Ok(acct) => acct,
-                    Err(_) => {
-                        warn!(
-                            target: "xdr_parser::sac",
-                            code = %code,
-                            issuer = %issuer,
-                            "invalid issuer StrKey; skipping SAC derive",
-                        );
-                        continue;
-                    }
-                };
-                let xdr_asset = match build_credit_asset(code, issuer_acct) {
-                    Ok(a) => a,
-                    Err(()) => {
-                        warn!(
-                            target: "xdr_parser::sac",
-                            code = %code,
-                            "asset_code too long for AlphaNum12; skipping SAC derive",
-                        );
-                        continue;
-                    }
-                };
-                let preimage = ContractIdPreimage::Asset(xdr_asset);
-                match derive_sac_contract_id(&preimage, &net_id) {
-                    Ok(contract_id) => out.push(SacOverride {
-                        contract_id,
-                        identity: SacAssetIdentity::Credit {
-                            code: code.clone(),
-                            issuer: issuer.clone(),
-                        },
-                    }),
-                    Err(e) => warn!(
-                        target: "xdr_parser::sac",
-                        code = %code,
-                        issuer = %issuer,
-                        error = %e.message,
-                        "SAC derive failed for classic_credit asset",
-                    ),
-                }
-            }
-            // SAC contracts already carry their observed contract_id from the
-            // in-window create_contract op; no forward derivation needed.
-            TokenAssetType::Sac => {}
-            // Soroban-native tokens are bespoke contracts with no SAC mapping.
-            TokenAssetType::Soroban => {}
-        }
-    }
-
-    out
 }
 
 /// Crypto-match-gated SAC override for a single event's `(emitter, topics)`.
@@ -489,169 +378,6 @@ mod tests {
             cid,
             "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
         );
-    }
-
-    // ----------------------------------------------------------------------
-    // Task 0218 — `derive_sac_overrides_from_assets`
-    // ----------------------------------------------------------------------
-
-    fn native_asset_input() -> ExtractedAsset {
-        ExtractedAsset {
-            asset_type: TokenAssetType::Native,
-            asset_code: None,
-            issuer_address: None,
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        }
-    }
-
-    fn classic_credit_asset_input(code: &str, issuer: &str) -> ExtractedAsset {
-        ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: Some(code.to_string()),
-            issuer_address: Some(issuer.to_string()),
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        }
-    }
-
-    #[test]
-    fn overrides_native_xlm_maps_to_mainnet_sac() {
-        let overrides =
-            derive_sac_overrides_from_assets(&[native_asset_input()], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-        assert_eq!(
-            overrides[0].contract_id,
-            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
-        );
-        assert_eq!(overrides[0].identity, SacAssetIdentity::Native);
-    }
-
-    #[test]
-    fn overrides_usdc_classic_credit_maps_to_mainnet_sac() {
-        let usdc = classic_credit_asset_input(
-            "USDC",
-            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-        );
-        let overrides = derive_sac_overrides_from_assets(&[usdc], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-        assert_eq!(
-            overrides[0].contract_id,
-            "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75"
-        );
-        assert_eq!(
-            overrides[0].identity,
-            SacAssetIdentity::Credit {
-                code: "USDC".into(),
-                issuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn overrides_alphanum12_code_uses_credit_alphanum12_path() {
-        // Codes 5–12 bytes select `CreditAlphanum12`. Compare against a
-        // direct `derive_sac_contract_id` call with the same XDR shape to
-        // pin down the wrapper's behaviour.
-        let issuer_strkey = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        let asset = classic_credit_asset_input("LONGCODE", issuer_strkey);
-        let overrides = derive_sac_overrides_from_assets(&[asset], MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 1);
-
-        let issuer = AccountId::from_str(issuer_strkey).unwrap();
-        let mut padded = [0u8; 12];
-        padded[..8].copy_from_slice(b"LONGCODE");
-        let direct = derive_sac_contract_id(
-            &ContractIdPreimage::Asset(Asset::CreditAlphanum12(AlphaNum12 {
-                asset_code: AssetCode12(padded),
-                issuer,
-            })),
-            &network_id(MAINNET_PASSPHRASE),
-        )
-        .unwrap();
-        assert_eq!(overrides[0].contract_id, direct);
-    }
-
-    #[test]
-    fn overrides_sac_and_soroban_assets_are_skipped() {
-        // SAC already carries its observed contract_id; Soroban-native
-        // has no SAC mapping. Both contribute zero overrides.
-        let sac = ExtractedAsset {
-            asset_type: TokenAssetType::Sac,
-            asset_code: Some("USDC".into()),
-            issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            contract_id: Some("CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75".into()),
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let soroban = ExtractedAsset {
-            asset_type: TokenAssetType::Soroban,
-            asset_code: None,
-            issuer_address: None,
-            contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let overrides = derive_sac_overrides_from_assets(&[sac, soroban], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_classic_credit_with_invalid_issuer_strkey_is_skipped() {
-        // Malformed issuer must not panic the derive; warn-log + skip.
-        let asset = classic_credit_asset_input("USDC", "not-a-valid-strkey");
-        let overrides = derive_sac_overrides_from_assets(&[asset], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_classic_credit_missing_code_or_issuer_is_skipped() {
-        let no_code = ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: None,
-            issuer_address: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let no_issuer = ExtractedAsset {
-            asset_type: TokenAssetType::ClassicCredit,
-            asset_code: Some("USDC".into()),
-            issuer_address: None,
-            contract_id: None,
-            name: None,
-            total_supply: None,
-            holder_count: None,
-        };
-        let overrides = derive_sac_overrides_from_assets(&[no_code, no_issuer], MAINNET_PASSPHRASE);
-        assert!(overrides.is_empty());
-    }
-
-    #[test]
-    fn overrides_emits_one_per_observed_asset_in_input_order() {
-        // Deterministic order — important for the persist UPDATE binding
-        // (UNNEST aligns positionally).
-        let assets = vec![
-            native_asset_input(),
-            classic_credit_asset_input(
-                "USDC",
-                "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
-            ),
-        ];
-        let overrides = derive_sac_overrides_from_assets(&assets, MAINNET_PASSPHRASE);
-        assert_eq!(overrides.len(), 2);
-        assert_eq!(overrides[0].identity, SacAssetIdentity::Native);
-        assert!(matches!(
-            overrides[1].identity,
-            SacAssetIdentity::Credit { .. }
-        ));
     }
 
     // -- Factory SAC: CreateContractHostFn carried inside auth entries --

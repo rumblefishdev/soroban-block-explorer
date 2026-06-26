@@ -310,12 +310,15 @@ entities:
   variants from observed contract deployments. Without the dedicated
   classic-credit producer, `account_balances_current` would carry the
   balances but the entity row never existed (Karol's pre-audit Bug #1).
-- **SAC overrides** → flip `soroban_contracts.is_sac=true` + `contract_type=Token`
-  for Stellar Asset Contracts whose `create_contract` happened before the indexed
-  window or was never deployed (a classic asset's deterministic SAC `contract_id`
-  surfaces via activity, not necessarily a deploy). Derived from observed
-  classic/native assets (`derive_sac_overrides_from_assets`, task 0218), gated on
-  `emitter == derive_sac(asset)` so a bespoke contract is never mislabeled.
+- **Un-deployed SACs → assets, not contracts** (task 0323) → a classic asset's
+  deterministic SAC `contract_id` can surface via a CAP-67 event with no on-chain
+  deploy. `detect_undeployed_sac_overrides` collects these crypto-proven emitters per
+  ledger (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
+  contract is never mislabeled); on the CH path each suppresses the Pass-2 FK stub
+  (**no `soroban_contracts` row**) and seeds a SAC `assets` row from its identity, so
+  `soroban_contracts` holds **deployed instances only**. The legacy PG path still flips
+  `is_sac=true` on pre-window SAC skeletons (`apply_sac_overrides_for_skeleton_contracts`,
+  task 0218) — being deprecated with PG.
 - **SAC event gate at NFT detection** (task 0294) → a CAP-67 classic-asset SAC
   emits `transfer`/`mint`/`burn` under its deterministic `contract_id` carrying
   the SEP-11 asset `CODE:ISSUER` in the LAST topic and an i128 **amount** in data.

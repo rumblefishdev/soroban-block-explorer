@@ -523,17 +523,17 @@ Design notes:
   1. **In-window SAC deploy** — `extract_contract_deployments` reads
      `LedgerEntryChange` with `executable=stellar_asset` and stages
      `is_sac=true` directly on the contract row.
-  2. **Forward-derive from observed asset (task 0218)** — every
-     classic-credit or native asset observed in the ledger is run
-     through `xdr_parser::derive_sac_overrides_from_assets`, which
-     applies the stellar-core SAC derivation
-     (`SHA256(XDR.serialize(HashIdPreimage::ContractId{network_id,
-Asset(code, issuer)}))`) to compute the deterministic SAC
-     contract_id. The persist step `apply_sac_overrides_for_skeleton_contracts`
-     then UPDATEs `is_sac=TRUE, contract_type=0` on any
-     `soroban_contracts` skeleton row matching a derived SAC — this
-     is how **pre-existing SACs** (deployed before the indexed window)
-     get classified. Idempotent on replay via `WHERE is_sac=FALSE`.
+  2. **Un-deployed SAC → asset, not contract (task 0323)** — a classic
+     asset's deterministic SAC `contract_id` can surface via a CAP-67
+     event with no on-chain deploy. `xdr_parser::detect_undeployed_sac_overrides`
+     collects these crypto-proven emitters per ledger
+     (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`); on
+     the CH path each suppresses the Pass-2 FK stub (**no `soroban_contracts`
+     row** is written) and seeds a SAC `assets` row from its identity, so
+     `soroban_contracts` holds **deployed instances only**. The legacy PG step
+     `apply_sac_overrides_for_skeleton_contracts` still UPDATEs `is_sac=TRUE`
+     on a matching skeleton row (task 0218, idempotent via `WHERE is_sac=FALSE`)
+     — being deprecated with the PG path.
   3. **(Future)** Soroban RPC `getLedgerEntries` fetch on first
      reference for stragglers neither in-window-deployed nor
      forward-derivable — not implemented; mentioned only to mark

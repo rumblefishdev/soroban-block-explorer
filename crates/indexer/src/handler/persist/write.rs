@@ -464,8 +464,9 @@ pub(super) fn populate_cache_from_staged(staged: &Staged, cache: &Classification
 /// the indexed window.
 ///
 /// Inputs come from `staged.sac_overrides`, populated by
-/// [`xdr_parser::derive_sac_overrides_from_assets`] over every observed
-/// classic / native asset in this ledger.
+/// `xdr_parser::detect_undeployed_sac_overrides` over the ledger's events
+/// (task 0323; was the trustline-sourced deriver). This PG path is legacy —
+/// the CH path now models un-deployed SACs as assets, not contract rows.
 ///
 /// **Idempotent**: the `WHERE is_sac = FALSE` guard short-circuits no-op
 /// writes on replay. The UPDATE never touches a row that already has
