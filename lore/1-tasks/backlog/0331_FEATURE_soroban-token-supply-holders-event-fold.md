@@ -124,6 +124,13 @@ which is part of the value.
 
 ## Notes
 
+- **Sequencing — do this AFTER live ingest resumes and catches up (`L_stop` → tip).**
+  0331 is read-side (no conflict with ingest running, unlike the 0304 backfill which
+  needed it stopped), but the fold reads `soroban_events`: the 0304/0281 window left a
+  gap from ~`L_stop`, so deploying the MV before catch-up **under-counts** recent supply.
+  The MV also stays fresh only while live ingest keeps writing events. No other blockers
+  (assets `asset_type=3` read path already on `ch`).
+
 - Reuses the validated CI check: sample tokens → `simulate total_supply()` (py-stellar-sdk)
   → compare vs the fold. Catches drift from missed/non-standard events.
 - Mechanism is **also a candidate for 0210 Phase 3** (SAC contract holdings) — same
