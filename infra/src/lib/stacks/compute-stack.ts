@@ -498,6 +498,19 @@ export class ComputeStack extends cdk.Stack {
           ...sharedEnv,
           RUST_LOG: 'info',
           MTLS_SECRET_NAME: enrichmentSecretName,
+          // Task 0311 — multi-provider Soroban RPC pool (round-robin +
+          // failover-on-transient). WITHOUT this the worker's
+          // NftTokenUriFetcher::new() falls back to the single SDF default and
+          // hits the per-second 429 wall under enrichment bursts (the bug 0311
+          // fixes). Keyless, in-sync endpoints from the 2026-06-22 box sieve.
+          // IPFS gateways intentionally left to DEFAULT_IPFS_GATEWAYS
+          // (ipfs.io + pinata) — already the good list in code.
+          SOROBAN_RPC_URLS: [
+            'https://mainnet.sorobanrpc.com',
+            'https://soroban-rpc.mainnet.stellar.gateway.fm/',
+            'https://rpc.ankr.com/stellar_soroban',
+            'https://stellar.api.onfinality.io/public',
+          ].join(','),
         },
       }
     );
