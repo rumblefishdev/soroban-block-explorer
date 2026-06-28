@@ -2,7 +2,7 @@
 id: '0268'
 title: 'SCHEMA: operations_appearances.pool_id → pool_ids Array(FixedString(32)) for multi-hop path payments'
 type: SCHEMA
-status: backlog
+status: active
 related_adr: ['0033', '0044']
 related_tasks: ['0243', '0252', '0261', '0266', '0267', '0281']
 tags:
@@ -46,6 +46,31 @@ history:
       rollback until then). Scope +: liquidity_pool_snapshots.gross_volume_a
       ALTER (the 0266 backfill writes it; column missing from prod and
       init.sql today).
+  - date: '2026-06-26'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 3 EXECUTED on prod, ahead of the 0281 window — forced by an
+      indexer outage. A production deploy bumped the `clickhouse` crate to
+      0.15.0, which validates the Rust Row struct against the live table
+      schema client-side (RowBinaryWithNamesAndTypes). The legacy scalar
+      `pool_id` (kept as read-path rollback per the 0610 plan) made prod
+      `operations_appearances` a 12-column table vs the 11-field
+      `OperationAppearanceRow` → every reconcile hard-failed with a redacted
+      "ClickHouse error" on persist; indexer + enrichment were paused
+      (concurrency 0). Phase-3 preconditions were already met (0267 E20 PASS
+      2026-06-18). Ran on the box:
+      `ALTER TABLE operations_appearances MODIFY COLUMN pool_ids REMOVE DEFAULT;`
+      then `... DROP COLUMN pool_id;` (REMOVE DEFAULT first — CH refuses to drop
+      a column a DEFAULT expr depends on, exactly as this task predicted). The
+      oa_pool_seek projection was already gone (Phase 2 done); only the DEFAULT
+      blocked the drop. Column reorder (pool_ids AFTER asset_issuer_id, for
+      strict init.sql parity) deliberately deferred — the 0.15 insert is
+      column-name-based, so dropping the extra column is the functional fix;
+      reorder only if the post-re-enable smoke still rejects.
+      Remaining before archive: re-enable indexer (restore concurrency 1,
+      revert pause commit 08acc738) + 1-ledger smoke confirms pool_ids write +
+      0267 E20 re-confirm. See [[project_indexer_ch015_opappear_drift]].
 ---
 
 # SCHEMA: operations_appearances.pool_id → pool_ids Array
@@ -179,14 +204,18 @@ Former Flow A (scalar first) is dead — kept in git history only.
 
 ## Acceptance Criteria
 
-- [ ] ALTER TABLE adds `pool_ids Array(FixedString(32))` with a
+- [x] ALTER TABLE adds `pool_ids Array(FixedString(32))` with a
       lossless backfill default from the legacy `pool_id` column.
-- [ ] Indexer write path updated to emit `pool_ids` (multi-element
-      for multi-hop ops).
-- [ ] All affected canonical SQL files updated to
-      `has(pool_ids, …)`.
-- [ ] Legacy `pool_id` column dropped only after API + indexer
-      cutover verified.
+      (Phase 1 — ADD + MATERIALIZE, done pre-window.)
+- [x] Indexer write path updated to emit `pool_ids` (multi-element
+      for multi-hop ops). (Code merged with 0261.)
+- [x] All affected canonical SQL files updated to
+      `has(pool_ids, …)`. (Done via 0261/0266; E20 PASS 2026-06-18.)
+- [x] Legacy `pool_id` column dropped only after API + indexer
+      cutover verified. (Phase 3 — REMOVE DEFAULT + DROP COLUMN, run
+      2026-06-26; E20 gate satisfied 06-18.)
+- [ ] Indexer re-enabled post-drop + 1-ledger smoke confirms `pool_ids`
+      write under clickhouse 0.15 (deferred — final gate before archive).
 - [ ] `compare_e20.py` post-migration `fail_total = 0` (100 %
       hash-set coverage).
 - [ ] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md`
