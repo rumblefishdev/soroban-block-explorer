@@ -1,11 +1,12 @@
 ---
 id: '0326'
-title: 'OPS: run wasm-upgrade-backfill on prod CH + validate (1,351 stale contract hashes)'
+title: 'OPS: run wasm-upgrade-backfill + upgradeable-backfill on prod CH + validate'
 type: OPS
-status: backlog
+status: active
 related_adr: []
-related_tasks: ['0320', '0316']
-tags: [clickhouse, ops, soroban, wasm-upgrade, backfill, validation]
+related_tasks: ['0320', '0316', '0327']
+tags:
+  [clickhouse, ops, soroban, wasm-upgrade, upgradeable, backfill, validation]
 history:
   - date: 2026-06-24
     status: backlog
@@ -16,6 +17,20 @@ history:
       it on real CH locally. This task is the PROD execution + validation, kept
       separate (mirrors 0295 → 0321). Read-only prod preview 2026-06-24:
       upgraded_contracts=1362, corrected=1351, unparseable=0.
+  - date: 2026-06-27
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active for the prod run. SCOPE WIDENED (user decision): this task
+      now also umbrellas the 0327 `upgradeable-backfill` prod run — 0327 shipped the
+      code but has no dedicated OPS task, so both one-shot backfills execute under
+      0326. Read-only prod re-verification 2026-06-27 (chq): script 1 invariant =
+      1351 stale (unchanged baseline), script 2 scanned = 2667 (in-use=2673,
+      already-keyed=0). Engines confirmed RMT for both soroban_contracts +
+      wasm_interface_metadata. Indexer stopped (last ledger 2026-06-15). Mainnet-RPC
+      truth spot-check 20/20: events-hash == on-chain, db stale. Two defensive code
+      patches requested for upgradeable-backfill (hard-fail -> log+nonzero-exit;
+      JSON-fallback -> skip-not-overwrite). Local only - no commits/push.
 ---
 
 # OPS: run wasm-upgrade-backfill on prod CH + validate
