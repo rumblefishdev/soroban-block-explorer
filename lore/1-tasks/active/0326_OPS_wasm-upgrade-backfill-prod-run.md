@@ -75,3 +75,35 @@ done in 0320; this is the prod run only.
 - Coordinate with **0316** (RMT clobber discipline): after the backfill, the
   invariant doubles as the clobber-back tripwire — if it goes non-zero later, a
   co-writer regressed an upgraded row.
+
+## Findings + decisions (2026-06-27 prep)
+
+Read-only prod re-verification (chq) + mainnet-RPC truth check. Runbook +
+verification script live in the session scratchpad (`runbook_0326.sh`,
+`verify_wasm_upgrade.sh`).
+
+- **Engines (prod):** both `soroban_contracts` (`RMT(wasm_uploaded_at_ledger)`) and
+  `wasm_interface_metadata` (`RMT`, no version col) confirmed ReplacingMergeTree —
+  the "some tables shipped as plain MergeTree" worry does NOT apply here.
+- **No data loss, either script:** no DELETE/DROP on data (only self-made temp
+  tables). Both writes pass the FULL row — script 1's `INSERT…SELECT` projects all
+  9 columns (only `wasm_hash` + `wasm_uploaded_at_ledger` overridden, 7 carried
+  forward); script 2's row IS the whole table (`wasm_hash` + merged `metadata`).
+- **Mainnet truth:** sampled 20/20 stale contracts — `events_chain == on-chain
+(stellar contract fetch | sha256)`, `db_stored` never. The hash script 1 writes
+  is the true current mainnet hash.
+- **Swap vs insert (script 1):** keep EXCHANGE (atomic, collapses dupes, engine-
+  agnostic). Insert would work on RMT but leaves old+new until merge.
+- **Two defensive patches applied to `upgradeable-backfill`** (user-requested):
+  hard-fail `Err`/panic → `warn!` + non-zero exit (resolved rows already written);
+  JSON `merge_upgradeable` → skip non-object instead of overwriting `{}`. 59 tests
+  green.
+- **`wasm_interface_metadata` is RMT with NO version column** + the API reads it
+  WITHOUT `FINAL` (3 sites). After script 2's re-insert, old+new rows coexist until
+  merge → transient Unknown-chip window (NOT data loss). **Decision:** the runbook's
+  `OPTIMIZE TABLE wasm_interface_metadata FINAL` step is _sufficient for steady
+  state_ (the live path writes byte-identical metadata per hash going forward, so no
+  future divergence). The fundamental hardening (make the API reads `FINAL` + fix the
+  wrong "plain MergeTree" comment) is tracked as **0332** — kept out of this OPS run
+  because it's a hot-path API change that previously broke (`d258c93b`) and needs
+  cross-env engine verification + testing.
