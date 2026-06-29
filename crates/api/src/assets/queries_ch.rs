@@ -83,18 +83,14 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
-// `total_supply` / `holder_count` come from the pre-computed `asset_aggregates`
-// table (lore-0293), a 1:1 LEFT JOIN like enrichment. Its columns are
-// `Nullable`, so a JOIN miss (native / soroban — no row) reads as NULL under the
-// readonly `api_reader` (`join_use_nulls = 0` fills a Nullable column with its
-// default, which is NULL), while a real 0-supply asset (has a row) reads 0 — no
-// sentinel needed. The table is refreshed on a cadence (eventually consistent).
-// Two intended semantics (matching the retired PG batch, not bugs):
-//   * a classic asset and its SAC wrap share one `(asset_code, issuer_id)`
-//     aggregate row, so both display the same supply/holders — a SAC IS the
-//     wrapped underlying asset; the join is 1:1 (no row multiplication).
-//   * a classic asset with no current trustlines has no aggregate row → NULL
-//     supply/holders (the batch wrote 0). NULL = "no balance data", deliberate.
+// `total_supply` / `holder_count` come from `balance_aggregates` (task 0331,
+// Option C) — the single pre-computed aggregate over the unified `balances` table,
+// keyed by the `assets.id` surrogate (`bagg.asset_id = a.id`). One 1:1 LEFT JOIN
+// for ALL asset types (classic + soroban). `total_supply` is RAW `Int128` (the API
+// returns it raw; clients scale by `decimals` — classic decimals=7). `Nullable`
+// columns, so a JOIN miss (no holders) reads NULL → "—" (not a fake 0). Refreshed
+// on a cadence (eventually consistent). Requires `assets.id` populated (prod:
+// ALTER + backfill — see init.sql).
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
@@ -105,8 +101,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     coalesce(toString(agg.total_supply), toString(bagg.total_supply)) AS total_supply, \
-     coalesce(agg.holder_count, bagg.holder_count)                     AS holder_count, \
+     toString(bagg.total_supply)  AS total_supply, \
+     bagg.holder_count            AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -118,10 +114,7 @@ const ASSET_CH_SELECT: &str = "SELECT \
          SELECT contract_id, name, symbol, decimals \
          FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
-     LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
-         AND agg.issuer_id = a.issuer_id \
-     LEFT JOIN balance_aggregates bagg \
-         ON a.asset_type = 3 AND bagg.asset_id = a.contract_id \
+     LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
@@ -164,8 +157,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     coalesce(toString(agg.total_supply), toString(bagg.total_supply)) AS total_supply, \
-     coalesce(agg.holder_count, bagg.holder_count)                     AS holder_count, \
+     toString(bagg.total_supply)  AS total_supply, \
+     bagg.holder_count            AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -176,10 +169,7 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
          SELECT contract_id, name, symbol, decimals \
          FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
-     LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
-         AND agg.issuer_id = a.issuer_id \
-     LEFT JOIN balance_aggregates bagg \
-         ON a.asset_type = 3 AND bagg.asset_id = a.contract_id \
+     LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \

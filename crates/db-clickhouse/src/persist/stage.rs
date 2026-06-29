@@ -1454,6 +1454,26 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     }
     out.balance_rows.extend(balance_dedup.into_values());
 
+    // ---- 6a (lore-0331 Option C): dual-write classic balances into unified
+    // `balances` (additive — `account_balances_current` still written above).
+    // `asset_type` here is the Horizon enum (0 native, 1/2 alphanum4/12); map to
+    // the project asset_id (native, else classic-credit). amount is the same
+    // scaled-i128 (decimals=7 at read). Accounts resolve via the `accounts` table,
+    // so no `addresses` rows needed for classic holders.
+    for r in &out.balance_rows {
+        let asset_id = if r.asset_type == 0 {
+            ids::asset_id(0, "", 0, 0)
+        } else {
+            ids::asset_id(1, &r.asset_code, r.issuer_id, 0)
+        };
+        out.unified_balance_rows.push(BalanceRow {
+            holder_id: r.account_id,
+            asset_id,
+            amount: r.balance,
+            last_updated_ledger: r.last_updated_ledger,
+        });
+    }
+
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
         let mut emitted: HashSet<&str> = HashSet::new();

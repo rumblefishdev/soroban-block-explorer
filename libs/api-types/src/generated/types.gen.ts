@@ -109,8 +109,8 @@ export type AssetDetailResponse = {
    */
   decimals: number;
   /**
-   * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
-   * (task 0331) from `ContractData` balance state. `null` = no balance data.
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -132,11 +132,11 @@ export type AssetDetailResponse = {
    */
   symbol?: string | null;
   /**
-   * Total supply as a decimal string. **Two conventions by asset type:**
-   * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
-   * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
-   * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
-   * display. `null` = no balance data (native, or a token with no holders).
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
    */
   total_supply?: string | null;
 } & {
@@ -170,8 +170,8 @@ export type AssetItem = {
    */
   decimals: number;
   /**
-   * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
-   * (task 0331) from `ContractData` balance state. `null` = no balance data.
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -193,11 +193,11 @@ export type AssetItem = {
    */
   symbol?: string | null;
   /**
-   * Total supply as a decimal string. **Two conventions by asset type:**
-   * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
-   * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
-   * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
-   * display. `null` = no balance data (native, or a token with no holders).
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
    */
   total_supply?: string | null;
 };
@@ -1022,8 +1022,8 @@ export type PaginatedAssetItem = {
      */
     decimals: number;
     /**
-     * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
-     * (task 0331) from `ContractData` balance state. `null` = no balance data.
+     * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+     * (all asset types — trustline holders + contract holders). `null` = no data.
      */
     holder_count?: number | null;
     icon_url?: string | null;
@@ -1045,11 +1045,11 @@ export type PaginatedAssetItem = {
      */
     symbol?: string | null;
     /**
-     * Total supply as a decimal string. **Two conventions by asset type:**
-     * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
-     * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
-     * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
-     * display. `null` = no balance data (native, or a token with no holders).
+     * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+     * display (task 0331 Option C: one convention for ALL asset types; classic
+     * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+     * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+     * unified `balances` table.
      */
     total_supply?: string | null;
   }>;
