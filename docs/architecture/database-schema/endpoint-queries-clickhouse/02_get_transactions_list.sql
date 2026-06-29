@@ -41,8 +41,14 @@
 --       `transactions t FINAL` unpruned — that merges the whole 3.6B-row table
 --       per request (measured; blew the read_rows quota, Code: 201). Prune
 --       `transactions` to the driver's partition and stream it (driver = hash
---       side). The driver still scans the partition by `type` / `contract_id`
---       (~8e7; not a PK prefix) — bounded, user-initiated, skip-index follow-up.
+--       side). The `contract_id` driver now SEEKS via the
+--       `idx_oa_contract_id` bloom_filter skip-index on `operations_appearances`
+--       (task 0333) — a SPARSE contract previously full-scanned the table
+--       (box-measured 13.18 M read_rows / 1609 granules → 245 K / 32 granules
+--       with the index; this full scan recurred and blew the quota again on
+--       2026-06-29, CH Code: 201). The `type` driver (Statement C) still scans
+--       the pruned partition (low-cardinality; bloom less effective) — its own
+--       skip-index/analysis remains a deferred follow-up.
 --     • ledgers (04) + network (01) are ORDER BY `sequence`, NOT `closed_at`;
 --       drive their reads off `sequence` (monotonic with closed_at) to stay on
 --       the primary key.

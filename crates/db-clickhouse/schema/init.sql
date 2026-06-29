@@ -465,7 +465,23 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     -- 0.025 default) keeps that scan's false-positive floor at ~0.1 % of the table
     -- (~6 M rows) instead of ~2.5 % (~155 M, box-measured 2026-06-17); same
     -- tight-FP rationale as the 0290 `idx_acc_id`.
-    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1
+    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1,
+    -- Skip index for the contract-filtered transaction-list path (E03
+    -- Statement B; task 0333). `contract_id` is NOT the ORDER BY prefix
+    -- (unlike the `soroban_events` / `soroban_invocations_appearances` arms of
+    -- the same UNION, which seek on `contract_id`), so this arm full-scanned.
+    -- The read driver seeks via read-in-order `ORDER BY ledger DESC LIMIT`: a
+    -- VERY active contract early-terminates near the tip (cheap), but a SPARSE
+    -- contract — few/old appearances — forces a scan of the entire table to
+    -- fill the page (box-measured: 42-appearance contract read 13.18 M / the
+    -- whole table; this is the ~6.2 B-rows/query full scan that blew the prod
+    -- `api_throttle.read_rows` quota on 2026-06-29, CH Code 201). This bloom
+    -- bounds that sparse regime to the granules that actually hold the contract.
+    -- `bloom_filter(0.001)` (not the 0.025 default) keeps the false-positive
+    -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
+    -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
+    -- holding only NULLs carry no value → skipped.
+    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
