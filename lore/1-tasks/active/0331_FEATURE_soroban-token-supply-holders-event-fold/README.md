@@ -66,8 +66,42 @@ everywhere. type-3 was the trigger; the fix is the fundamental balance represent
 - **Seed = RPC snapshot** (holder set from `soroban_events` → batched raw
   `getLedgerEntries`, 99.69% readable incl. archived). **NO ledger reprocess** — proven
   100% by an independent adversarial agent; matches the user's preference.
-- **SAC (type-2)**: keep two rows but compute REAL wrapped holders (option b) — coord 0210.
+- **SAC (assets type-2) computed INDEPENDENTLY — IN THIS TASK** (not borrowed from the
+  classic row). Today both the classic (assets type-1) and SAC (assets type-2) rows share
+  the one `(code, issuer)` aggregate → identical supply/holders. Instead compute the SAC
+  on its own and VERIFY against classic:
+  - **holders(SAC)** = classic trustline holders (G-accounts, `account_balances_current`)
+    ∪ SAC contract holders (C-addresses, the SAC's `ContractData Balance` entries). **Will
+    DIFFER from classic** (adds contract holders). Needs the SAC value decoder (see problems).
+  - **supply(SAC)** = the asset's total issuance → SHOULD equal classic trustline sum;
+    **verify equality, don't copy**.
+  - **Problems to handle (flagged):**
+    1. **SAC balance value is a STRUCT** (`BalanceValue{amount,authorized,clawback}`), NOT
+       bare `i128` → the type-3 parser (`decode_scval_i128`) skips it. Need a struct decoder.
+    2. **Double-count risk on supply**: contract-held balances moved FROM accounts within the
+       same fixed issuance — summing trustlines + contract-held double-counts. Correct
+       independent supply = the asset total (≈ classic sum); the verify is near-tautological
+       unless read from the SAC's own getter.
+    3. **SAC is BUILT-IN (no Wasm)** → CLI can't `invoke ... total_supply` by name (spec
+       unavailable; confirmed failing). On-chain verification needs a raw-entry/known-key
+       spike. This is the part that overlaps 0210 Phase 3 — now pulled into 0331 per decision.
 - **Empty tokens** (64% of type-3, no events): `—` is correct, not a coverage gap.
+
+### Gotcha — two different `asset_type` enums (load-bearing)
+- `account_balances_current.asset_type` = **Horizon** (0 native, 1 alphanum4 [code ≤4],
+  2 alphanum12 [code 5-12]) — verified by code length on prod (type-1 len 1-4, type-2 len 5-12).
+- `assets.asset_type` = **project** (0 native, 1 classic_credit, 2 sac, 3 soroban).
+- The classic aggregate `WHERE asset_type IN (1,2)` over `account_balances_current` = all
+  classic credit (both code lengths) — correct. Do NOT confuse with assets' SAC=2.
+
+### Surrogate keys — confirmed nature (for `assets.id`)
+All existing surrogates are `cityhash64` of the natural key: `account_id=hash64(G-strkey)`,
+`contract_id=hash64(C-strkey)`, even `transaction_id=hash64(real 32B tx hash)` (a derived
+surrogate, not the raw hash). `assets` never had a self-surrogate because nothing referenced
+an asset as ONE unit — other tables reference its COMPONENTS (`issuer_id`, `contract_id`).
+`balances.asset_id` is the first to need it. Add `assets.id = hash64(canonical identity)`
+(native→sentinel; classic→`CODE:ISSUER`+type marker; soroban→contract strkey) — same pattern
+as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter).
 
 ### Non-blockers resolved
 - **0198 is a POSTGRES task** (Seq Scan on the PG `account_balances_current`,
