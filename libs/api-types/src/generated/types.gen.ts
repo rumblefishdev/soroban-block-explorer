@@ -109,7 +109,8 @@ export type AssetDetailResponse = {
    */
   decimals: number;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
+   * (task 0331) from `ContractData` balance state. `null` = no balance data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -130,6 +131,13 @@ export type AssetDetailResponse = {
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
+  /**
+   * Total supply as a decimal string. **Two conventions by asset type:**
+   * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
+   * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
+   * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
+   * display. `null` = no balance data (native, or a token with no holders).
+   */
   total_supply?: string | null;
 } & {
   /**
@@ -162,7 +170,8 @@ export type AssetItem = {
    */
   decimals: number;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
+   * (task 0331) from `ContractData` balance state. `null` = no balance data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -183,6 +192,13 @@ export type AssetItem = {
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
+  /**
+   * Total supply as a decimal string. **Two conventions by asset type:**
+   * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
+   * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
+   * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
+   * display. `null` = no balance data (native, or a token with no holders).
+   */
   total_supply?: string | null;
 };
 
@@ -1006,7 +1022,8 @@ export type PaginatedAssetItem = {
      */
     decimals: number;
     /**
-     * May be `null` / stale until task 0135 ships.
+     * Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3
+     * (task 0331) from `ContractData` balance state. `null` = no balance data.
      */
     holder_count?: number | null;
     icon_url?: string | null;
@@ -1027,6 +1044,13 @@ export type PaginatedAssetItem = {
      * (use `asset_code`) and native.
      */
     symbol?: string | null;
+    /**
+     * Total supply as a decimal string. **Two conventions by asset type:**
+     * classic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,
+     * e.g. `"123.4567890"`); bespoke Soroban tokens (type 3, task 0331) is the
+     * RAW integer (`Int128`, e.g. `"63836094715548"`) — scale by `decimals` for
+     * display. `null` = no balance data (native, or a token with no holders).
+     */
     total_supply?: string | null;
   }>;
   page: PageInfo;

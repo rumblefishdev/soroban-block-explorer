@@ -2099,7 +2099,7 @@
               "holder_count": {
                 "type": ["integer", "null"],
                 "format": "int32",
-                "description": "May be `null` / stale until task 0135 ships."
+                "description": "Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3\n(task 0331) from `ContractData` balance state. `null` = no balance data."
               },
               "icon_url": {
                 "type": ["string", "null"]
@@ -2119,7 +2119,8 @@
                 "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
               },
               "total_supply": {
-                "type": ["string", "null"]
+                "type": ["string", "null"],
+                "description": "Total supply as a decimal string. **Two conventions by asset type:**\nclassic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,\ne.g. `\"123.4567890\"`); bespoke Soroban tokens (type 3, task 0331) is the\nRAW integer (`Int128`, e.g. `\"63836094715548\"`) — scale by `decimals` for\ndisplay. `null` = no balance data (native, or a token with no holders)."
               }
             }
           },
@@ -2171,7 +2172,7 @@
           "holder_count": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "May be `null` / stale until task 0135 ships."
+            "description": "Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3\n(task 0331) from `ContractData` balance state. `null` = no balance data."
           },
           "icon_url": {
             "type": ["string", "null"]
@@ -2191,7 +2192,8 @@
             "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
           },
           "total_supply": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Total supply as a decimal string. **Two conventions by asset type:**\nclassic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,\ne.g. `\"123.4567890\"`); bespoke Soroban tokens (type 3, task 0331) is the\nRAW integer (`Int128`, e.g. `\"63836094715548\"`) — scale by `decimals` for\ndisplay. `null` = no balance data (native, or a token with no holders)."
           }
         }
       },
@@ -3357,7 +3359,7 @@
                 "holder_count": {
                   "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "May be `null` / stale until task 0135 ships."
+                  "description": "Active-holder count (`balance > 0`). Classic/SAC from trustlines; type-3\n(task 0331) from `ContractData` balance state. `null` = no balance data."
                 },
                 "icon_url": {
                   "type": ["string", "null"]
@@ -3377,7 +3379,8 @@
                   "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
                 },
                 "total_supply": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Total supply as a decimal string. **Two conventions by asset type:**\nclassic / SAC (types 1-2) is pre-scaled human-readable (`Decimal128(7)`,\ne.g. `\"123.4567890\"`); bespoke Soroban tokens (type 3, task 0331) is the\nRAW integer (`Int128`, e.g. `\"63836094715548\"`) — scale by `decimals` for\ndisplay. `null` = no balance data (native, or a token with no holders)."
                 }
               }
             }
