@@ -73,8 +73,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use stellar_xdr::curr::{
-    AccountId, Hash, LedgerEntryData, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
-    LedgerKeyTrustLine, Limits, PublicKey, ReadXdr, TrustLineAsset, Uint256, WriteXdr,
+    AccountId, ContractDataDurability, ContractId, Hash, LedgerEntryData, LedgerKey,
+    LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, Limits,
+    PublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, ScVec, TrustLineAsset, Uint256, WriteXdr,
 };
 use tracing::warn;
 
@@ -267,6 +268,82 @@ pub fn contract_code_ledger_key(wasm_hash: [u8; 32]) -> LedgerKey {
     LedgerKey::ContractCode(LedgerKeyContractCode {
         hash: Hash(wasm_hash),
     })
+}
+
+/// Build a `LedgerKey::ContractData` for a token's per-holder balance entry —
+/// the standard `Vec[Symbol("Balance"), Address(holder)]` **persistent** key
+/// (task 0331 RPC seed). `token_strkey` is the token contract (`C…`);
+/// `holder_strkey` is a `G…` account or `C…` contract holder. Returns `None`
+/// (and warns) on malformed input or a non-contract token so one bad row from
+/// the holder-candidate scan can't crash the seed.
+pub fn balance_ledger_key(token_strkey: &str, holder_strkey: &str) -> Option<LedgerKey> {
+    let contract = sc_address(token_strkey)?;
+    if !matches!(contract, ScAddress::Contract(_)) {
+        warn!(token_strkey, "rpc_snapshot: balance-key token must be a C-StrKey; skipping");
+        return None;
+    }
+    let holder = sc_address(holder_strkey)?;
+    let key = ScVal::Vec(Some(
+        ScVec::try_from(vec![
+            ScVal::Symbol(ScSymbol::try_from(b"Balance".to_vec()).ok()?),
+            ScVal::Address(holder),
+        ])
+        .ok()?,
+    ));
+    Some(LedgerKey::ContractData(LedgerKeyContractData {
+        contract,
+        key,
+        durability: ContractDataDurability::Persistent,
+    }))
+}
+
+/// Pure decoder: shape a `LedgerEntryData::ContractData` standard balance entry
+/// into `(token_strkey, holder_strkey, balance)` (task 0331 RPC seed). Returns
+/// `None` for non-ContractData variants, non-`Balance` keys, or non-bare-`i128`
+/// values — the exact shapes the live parser
+/// (`xdr_parser::extract_soroban_token_balances`) recognises, kept in lock-step
+/// so seed and live ingestion never disagree on what counts as a balance.
+pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i128)> {
+    let LedgerEntryData::ContractData(entry) = data else {
+        return None;
+    };
+    if !matches!(entry.contract, ScAddress::Contract(_)) {
+        return None;
+    }
+    let ScVal::Vec(Some(elems)) = &entry.key else {
+        return None;
+    };
+    // Exactly `[Symbol("Balance"), Address(holder)]` — the third `next()` MUST
+    // be `None`, else a longer key is some other contract-data shape.
+    let mut it = elems.iter();
+    let (Some(ScVal::Symbol(sym)), Some(ScVal::Address(holder)), None) =
+        (it.next(), it.next(), it.next())
+    else {
+        return None;
+    };
+    if sym.0.as_slice() != b"Balance" {
+        return None;
+    }
+    let ScVal::I128(parts) = &entry.val else {
+        return None;
+    };
+    Some((entry.contract.to_string(), holder.to_string(), i128::from(parts)))
+}
+
+/// Parse a holder StrKey into an `ScAddress` — `G…` → account, `C…` → contract
+/// (34% of type-3 holders are contracts). Warns + `None` on anything else
+/// (muxed / garbage) rather than crashing the seed.
+fn sc_address(strkey: &str) -> Option<ScAddress> {
+    match stellar_strkey::Strkey::from_string(strkey) {
+        Ok(stellar_strkey::Strkey::PublicKeyEd25519(pk)) => Some(ScAddress::Account(AccountId(
+            PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)),
+        ))),
+        Ok(stellar_strkey::Strkey::Contract(c)) => Some(ScAddress::Contract(ContractId(Hash(c.0)))),
+        _ => {
+            warn!(strkey, "rpc_snapshot: holder StrKey is neither G nor C; skipping");
+            None
+        }
+    }
 }
 
 /// Build a `LedgerKey::Trustline` for the given account / asset.
@@ -695,5 +772,106 @@ mod tests {
         assert!(
             rebuild_trustline_asset(TrustlineAssetType::Alphanum4, "TOOLONG", issuer).is_none()
         );
+    }
+
+    // --- task 0331: per-holder token balance key + entry decode (RPC seed) ---
+
+    use stellar_xdr::curr::{
+        ContractDataDurability, ContractDataEntry, ContractId, ExtensionPoint, Int128Parts,
+        ScAddress, ScSymbol, ScVal, ScVec,
+    };
+
+    fn balance_entry(token: [u8; 32], holder: ScAddress, val: ScVal) -> LedgerEntryData {
+        LedgerEntryData::ContractData(ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: ScAddress::Contract(ContractId(Hash(token))),
+            key: ScVal::Vec(Some(
+                ScVec::try_from(vec![
+                    ScVal::Symbol(ScSymbol::try_from(b"Balance".to_vec()).unwrap()),
+                    ScVal::Address(holder),
+                ])
+                .unwrap(),
+            )),
+            durability: ContractDataDurability::Persistent,
+            val,
+        })
+    }
+
+    #[test]
+    fn balance_ledger_key_builds_persistent_balance_key() {
+        let token = stellar_strkey::Contract([0x11u8; 32]).to_string();
+        let holder = stellar_strkey::ed25519::PublicKey([0x22u8; 32]).to_string();
+        let key = balance_ledger_key(&token, &holder).expect("valid C token + G holder");
+        let LedgerKey::ContractData(k) = key else {
+            panic!("expected LedgerKey::ContractData variant");
+        };
+        assert_eq!(k.contract.to_string(), token.as_str());
+        assert_eq!(k.durability, ContractDataDurability::Persistent);
+        let ScVal::Vec(Some(elems)) = &k.key else {
+            panic!("balance key must be a vec");
+        };
+        let parts: Vec<&ScVal> = elems.iter().collect();
+        assert_eq!(parts.len(), 2, "key is [Symbol(Balance), Address(holder)]");
+        let ScVal::Symbol(sym) = parts[0] else {
+            panic!("first elem must be a symbol");
+        };
+        assert_eq!(sym.0.as_slice(), b"Balance");
+        let ScVal::Address(addr) = parts[1] else {
+            panic!("second elem must be an address");
+        };
+        assert_eq!(addr.to_string(), holder.as_str(), "holder address round-trips");
+    }
+
+    #[test]
+    fn balance_ledger_key_rejects_account_token_and_bad_holder() {
+        // The token must be a C-StrKey (a contract), never a G-account.
+        let g = stellar_strkey::ed25519::PublicKey([0x33u8; 32]).to_string();
+        assert!(balance_ledger_key(&g, &g).is_none());
+        // Malformed holder StrKey is skipped, not panicked.
+        let c = stellar_strkey::Contract([0x44u8; 32]).to_string();
+        assert!(balance_ledger_key(&c, "not-a-strkey").is_none());
+    }
+
+    #[test]
+    fn decode_balance_entry_extracts_contract_holder_balance() {
+        let holder = ScAddress::Account(make_account_id(0x55));
+        let data = balance_entry(
+            [0x11u8; 32],
+            holder.clone(),
+            ScVal::I128(Int128Parts { hi: 0, lo: 1_000_000 }),
+        );
+        let (token_sk, holder_sk, bal) =
+            decode_balance_entry(&data).expect("standard balance entry must decode");
+        assert_eq!(
+            token_sk,
+            ScAddress::Contract(ContractId(Hash([0x11u8; 32]))).to_string()
+        );
+        assert_eq!(holder_sk, holder.to_string());
+        assert_eq!(bal, 1_000_000);
+    }
+
+    #[test]
+    fn decode_balance_entry_rejects_wrong_shapes() {
+        // non-ContractData variant
+        assert!(decode_balance_entry(&make_account_entry(make_account_id(1), 0, 0, "")).is_none());
+        // wrong symbol (not "Balance")
+        let holder = ScAddress::Account(make_account_id(0x66));
+        let wrong_sym = LedgerEntryData::ContractData(ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: ScAddress::Contract(ContractId(Hash([0x11u8; 32]))),
+            key: ScVal::Vec(Some(
+                ScVec::try_from(vec![
+                    ScVal::Symbol(ScSymbol::try_from(b"State".to_vec()).unwrap()),
+                    ScVal::Address(holder.clone()),
+                ])
+                .unwrap(),
+            )),
+            durability: ContractDataDurability::Persistent,
+            val: ScVal::I128(Int128Parts { hi: 0, lo: 5 }),
+        });
+        assert!(decode_balance_entry(&wrong_sym).is_none());
+        // non-bare-i128 value (e.g. a SAC BalanceValue struct surfaces as Map/other)
+        let non_i128 = balance_entry([0x11u8; 32], holder, ScVal::U64(5));
+        assert!(decode_balance_entry(&non_i128).is_none());
     }
 }

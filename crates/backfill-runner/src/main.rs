@@ -4,6 +4,7 @@
 //! Sink:   Postgres, ADR 0027 schema, via
 //!         `indexer::handler::process::process_ledger` (parse-and-persist).
 
+mod balance_seed;
 mod bootstrap;
 mod ch_staging;
 mod contract_type_rebuild;
@@ -223,6 +224,20 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder Soroban
+    /// token balances (bespoke type-3 tokens) into the unified `balances`
+    /// table. Enumerates holders from each token's `soroban_events` stream,
+    /// reads their current `Balance(Address)` ledger entries from Soroban RPC
+    /// (`getLedgerEntries`), and upserts `balances` + `addresses`
+    /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct
+    /// regardless of indexer lag; live ingest supersedes it on catch-up.
+    /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` reports without
+    /// writing. CH-only.
+    BalanceSeed {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -382,6 +397,21 @@ async fn main() {
                 stats.upgradeable,
                 stats.frozen,
                 stats.missing_on_rpc,
+            );
+        }
+        Command::BalanceSeed { dry_run } => {
+            // rpc_url required only on the CH path; `execute` enforces it after
+            // the Postgres no-op short-circuits, so pass it through.
+            let stats = balance_seed::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                .await
+                .expect("balance_seed failed — idempotent, safe to re-run");
+            println!(
+                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={} addresses={}",
+                stats.dry_run,
+                stats.tokens,
+                stats.keys_requested,
+                stats.balances_decoded,
+                stats.addresses,
             );
         }
         Command::NftReclassify { dry_run } => {

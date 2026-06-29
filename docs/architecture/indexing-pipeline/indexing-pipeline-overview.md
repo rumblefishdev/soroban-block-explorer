@@ -383,6 +383,20 @@ look like skeletons. Without the flag the bootstrap step is skipped
 closes the 2026-05-12 CH-pilot audit §E06 gap and is documented in
 [`docs/architecture/database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism`](../database-schema/clickhouse-pilot.md#state-side-ingestion-initial-snapshot-mechanism).
 
+The same `--soroban-rpc-url` flag drives the **`balance-seed`** one-shot pass
+(task [0331](../../../lore/1-tasks/active/0331_FEATURE_soroban-token-supply-holders-event-fold/README.md))
+for bespoke Soroban-token (`asset_type = 3`) per-holder balances. The live
+parser writes the unified `balances` table only when it observes a
+`ContractData` `Balance(Address)` change, so dormant holders are absent and
+`total_supply` (`sum(amount)`) + `holder_count` (`countIf(amount > 0)`)
+under-count. `balance-seed` enumerates each type-3 token's holder candidates
+from its `soroban_events` topics/data (the event SET — value comes from ledger
+STATE, never an event-fold), reads their current `Balance(Address)` entries via
+`getLedgerEntries`, and upserts `balances` + `addresses`. It reads CURRENT chain
+state, so the snapshot is correct regardless of indexer lag; live ingest
+supersedes it on catch-up (`ReplacingMergeTree` by `last_updated_ledger`).
+CH-only, idempotent, `--dry-run` supported.
+
 ### 6.3 Backfill Scope and Execution Model
 
 - scope: from Soroban mainnet activation in late 2023 to the present

@@ -187,6 +187,13 @@ approximation for conformant tokens if ever needed. Reparse open-question now CL
 > unrecoverable. This block + the commit messages are the only surviving record of the
 > step-7 reasoning — keep it current so it survives the next session loss.
 
+**Status — core BUILT 2026-06-29 (TDD).** `backfill-runner balance-seed` (CH-only). Pure units
+`rpc_snapshot::balance_ledger_key` + `decode_balance_entry` unit-tested (RED→GREEN); orchestration
+`balance_seed.rs` (candidate scan → RPC `getLedgerEntries` → decode → upsert `balances` +
+`addresses`) mirrors `upgradeable_backfill`; candidate SQL validated on prod CH (MERU = 5974 holder
+candidates). MVP supply = `Σ balances` (TotalSupply-key = open Q#1, deferred). Remaining before
+prod: run under the catch-up gate + ≥10-token on-chain validation.
+
 **Scope:** seed existing holders + pick the supply source. The live indexer only captures
 NEW `ContractData` changes; step 7 backfills the balances that already exist on-chain.
 
