@@ -231,7 +231,15 @@ CREATE TABLE IF NOT EXISTS assets (
     name            Nullable(String),
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
-    icon_url        Nullable(String)
+    icon_url        Nullable(String),
+    -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
+    -- SEP-11 canonical identity; SAC shares its classic id; soroban id == its
+    -- contract surrogate). The first single-column asset key — `balances.asset_id`
+    -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
+    -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
+    -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF
+    -- NOT EXISTS won't add it. Default 0 until a row is rewritten/backfilled.
+    id              Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
@@ -364,6 +372,39 @@ CREATE TABLE IF NOT EXISTS soroban_token_balances (
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (contract_id, holder);
+
+-- ── Option C unified balance model (task 0331) ──────────────────────────────
+-- The two tables below are the unified replacement for `account_balances_current`
+-- (classic) + `soroban_token_balances` (type-3). Added ADDITIVELY now (steps 1-3);
+-- the persist repoint + classic migration (steps 4-6) move data onto them, after
+-- which the per-type tables are dropped. See the task README CURRENT PLAN.
+
+-- Unified address dimension — one surrogate per `ScAddress` (G-account OR
+-- C-contract), resolving `balances.holder_id` → strkey + kind for display/portfolio.
+-- `id = cityhash64(strkey)` (the same space as `accounts.id` / `soroban_contracts.id`);
+-- `kind` disambiguates that shared hash space. RMT dedups re-observations.
+CREATE TABLE IF NOT EXISTS addresses (
+    id     Int64,
+    strkey String,
+    kind   LowCardinality(String)   -- 'account' | 'contract' | (later: 'muxed' …)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (id);
+
+-- Unified per-holder balances — the single balance model for ALL asset types.
+-- `amount` is RAW `Int128` (scale by the asset's `decimals` at read — universal
+-- fixed-point, handles classic 7-dec AND arbitrary Soroban decimals). `holder_id`
+-- → `addresses.id` (account or contract); `asset_id` → the `assets.id` surrogate
+-- (`ids::asset_id`). RMT version = `last_updated_ledger`; a removed/zeroed balance
+-- writes 0 so a fully-spent holder collapses.
+CREATE TABLE IF NOT EXISTS balances (
+    holder_id           Int64,
+    asset_id            Int64,
+    amount              Int128,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (asset_id, holder_id);
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,

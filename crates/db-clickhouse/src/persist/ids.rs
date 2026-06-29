@@ -108,6 +108,27 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
     hash64(hash_bytes)
 }
 
+/// `assets.id` surrogate (task 0331) — `cityhash64` of the SEP-11 canonical asset
+/// identity, mirroring how `account_id`/`contract_id` hash their natural key.
+/// The first single-column asset key (nothing referenced an asset as one unit
+/// before `balances.asset_id`). Canonical form by `assets.asset_type` (project
+/// enum: 0 native, 1 classic_credit, 2 sac, 3 soroban):
+/// - native → `"native"`
+/// - classic / **SAC** → `"CODE:ISSUER"` — a SAC SHARES its underlying classic
+///   asset's id (same on-chain asset; the two `assets` rows aggregate as one)
+/// - soroban → the contract StrKey, so `asset_id == contract_id(strkey)` for type-3
+///
+/// Feeds `balances.asset_id`. Deterministic (replay-idempotent), no central counter.
+#[inline]
+pub fn asset_id(asset_type: i16, asset_code: &str, issuer_strkey: &str, contract_strkey: &str) -> i64 {
+    let canonical = match asset_type {
+        0 => "native".to_string(),
+        1 | 2 => format!("{asset_code}:{issuer_strkey}"),
+        _ => contract_strkey.to_string(),
+    };
+    hash64(canonical.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +162,23 @@ mod tests {
         // Same value used for `accounts.id` AND every FK column
         // (`source_id`, `caller_id`, etc.).
         assert_eq!(account_id(key), account_id(key));
+    }
+
+    /// `asset_id` (task 0331) — SEP-11 canonical surrogate for the unified
+    /// `balances.asset_id`. native→"native", classic/SAC→"CODE:ISSUER",
+    /// soroban→contract strkey.
+    #[test]
+    fn asset_id_sep11_canonical() {
+        // soroban (type 3): asset_id == the contract surrogate (no prefix).
+        assert_eq!(asset_id(3, "", "", "CTOKEN1"), contract_id("CTOKEN1"));
+        // SAC (type 2) shares its underlying classic asset's id (same CODE:ISSUER).
+        assert_eq!(
+            asset_id(1, "USDC", "GISSUER", ""),
+            asset_id(2, "USDC", "GISSUER", "CSAC")
+        );
+        // Distinct assets → distinct ids; native is its own thing; deterministic.
+        assert_ne!(asset_id(1, "USDC", "GA", ""), asset_id(1, "EURC", "GA", ""));
+        assert_ne!(asset_id(0, "", "", ""), asset_id(1, "USDC", "GA", ""));
+        assert_eq!(asset_id(0, "", "", ""), asset_id(0, "", "", ""));
     }
 }
