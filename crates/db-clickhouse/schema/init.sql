@@ -233,8 +233,8 @@ CREATE TABLE IF NOT EXISTS assets (
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
     icon_url        Nullable(String),
     -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
-    -- SEP-11 canonical identity; SAC shares its classic id; soroban id == its
-    -- contract surrogate). The first single-column asset key — `balances.asset_id`
+    -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
+    -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
     -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
     -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
     -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF

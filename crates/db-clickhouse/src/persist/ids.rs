@@ -114,16 +114,18 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
 /// before `balances.asset_id`). Canonical form by `assets.asset_type` (project
 /// enum: 0 native, 1 classic_credit, 2 sac, 3 soroban):
 /// - native → `"native"`
-/// - classic / **SAC** → `"CODE:ISSUER"` — a SAC SHARES its underlying classic
-///   asset's id (same on-chain asset; the two `assets` rows aggregate as one)
-/// - soroban → the contract StrKey, so `asset_id == contract_id(strkey)` for type-3
+/// - classic_credit: `"CODE:ISSUER"`
+/// - SAC + soroban: the contract StrKey (`asset_id == contract_id(strkey)`). A SAC
+///   is a SEPARATE asset from its underlying classic — distinct id/row/holders.
 ///
 /// Feeds `balances.asset_id`. Deterministic (replay-idempotent), no central counter.
 #[inline]
 pub fn asset_id(asset_type: i16, asset_code: &str, issuer_strkey: &str, contract_strkey: &str) -> i64 {
     let canonical = match asset_type {
         0 => "native".to_string(),
-        1 | 2 => format!("{asset_code}:{issuer_strkey}"),
+        1 => format!("{asset_code}:{issuer_strkey}"),
+        // 2 (SAC) + 3 (soroban): keyed by their own contract address — a SAC is a
+        // SEPARATE asset from its underlying classic (distinct row/holders/id).
         _ => contract_strkey.to_string(),
     };
     hash64(canonical.as_bytes())
@@ -168,15 +170,17 @@ mod tests {
     /// `balances.asset_id`. native→"native", classic/SAC→"CODE:ISSUER",
     /// soroban→contract strkey.
     #[test]
-    fn asset_id_sep11_canonical() {
-        // soroban (type 3): asset_id == the contract surrogate (no prefix).
+    fn asset_id_canonical() {
+        // soroban (3) AND SAC (2): asset_id == their OWN contract surrogate.
         assert_eq!(asset_id(3, "", "", "CTOKEN1"), contract_id("CTOKEN1"));
-        // SAC (type 2) shares its underlying classic asset's id (same CODE:ISSUER).
-        assert_eq!(
+        assert_eq!(asset_id(2, "USDC", "GISSUER", "CSAC"), contract_id("CSAC"));
+        // SAC and its underlying classic are DISTINCT assets → DISTINCT ids
+        // (different rows, different holders — not the same asset for us).
+        assert_ne!(
             asset_id(1, "USDC", "GISSUER", ""),
             asset_id(2, "USDC", "GISSUER", "CSAC")
         );
-        // Distinct assets → distinct ids; native is its own thing; deterministic.
+        // Distinct classics differ; native is its own thing; deterministic.
         assert_ne!(asset_id(1, "USDC", "GA", ""), asset_id(1, "EURC", "GA", ""));
         assert_ne!(asset_id(0, "", "", ""), asset_id(1, "USDC", "GA", ""));
         assert_eq!(asset_id(0, "", "", ""), asset_id(0, "", "", ""));
