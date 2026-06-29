@@ -74,6 +74,7 @@ fn column_order_assets() {
             "total_supply",
             "holder_count",
             "icon_url",
+            "id", // lore-0331 surrogate (last)
         ],
     );
 }
@@ -109,6 +110,19 @@ fn column_order_account_balances_current() {
             "last_updated_ledger",
         ],
     );
+}
+
+#[test]
+fn column_order_balances() {
+    assert_columns::<BalanceRow>(
+        "balances",
+        &["holder_id", "asset_id", "amount", "last_updated_ledger"],
+    );
+}
+
+#[test]
+fn column_order_addresses() {
+    assert_columns::<AddressRow>("addresses", &["id", "strkey", "kind"]);
 }
 
 #[test]

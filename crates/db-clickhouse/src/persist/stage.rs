@@ -128,10 +128,12 @@ pub struct StagedLedger {
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
     pub balance_rows: Vec<AccountBalanceRow>,
-    /// Per-holder Soroban token balances side table (task 0331). Populated inside
-    /// [`prepare_with_sac_overrides`] via [`build_soroban_balance_rows`] from the
-    /// `StageInputs.soroban_token_balances` slice.
-    pub soroban_balance_rows: Vec<SorobanTokenBalanceRow>,
+    /// Unified `balances` rows for type-3 tokens (task 0331, Option C). Built in
+    /// [`prepare_with_sac_overrides`] via [`build_balance_rows`] from
+    /// `StageInputs.soroban_token_balances`. (Classic joins in at step 6.)
+    pub unified_balance_rows: Vec<BalanceRow>,
+    /// `addresses` dimension rows for the balance holders (task 0331).
+    pub address_rows: Vec<AddressRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -311,21 +313,34 @@ pub fn build_metadata_rows(
         .collect()
 }
 
-/// Map parser-extracted Soroban token balances to `soroban_token_balances` rows
-/// (task 0331). `contract_id` is hashed to the surrogate (`ids::contract_id`,
-/// = `assets.contract_id`) so the aggregate + read join by it; `holder` keeps
-/// the raw StrKey; `last_updated_ledger` is the RMT version. A 1:1 map of the
-/// producer (`xdr_parser::extract_soroban_token_balances`).
-pub fn build_soroban_balance_rows(
-    balances: &[ExtractedSorobanBalance],
-) -> Vec<SorobanTokenBalanceRow> {
+/// Map parser-extracted Soroban token balances to unified `balances` rows
+/// (task 0331, Option C). `holder_id` = `ids::address_id(holder)`; `asset_id` =
+/// `ids::asset_id` for the type-3 token (= its contract surrogate); `amount` raw.
+pub fn build_balance_rows(balances: &[ExtractedSorobanBalance]) -> Vec<BalanceRow> {
     balances
         .iter()
-        .map(|b| SorobanTokenBalanceRow {
-            contract_id: ids::contract_id(&b.contract_id),
-            holder: b.holder.clone(),
-            balance: b.balance,
+        .map(|b| BalanceRow {
+            holder_id: ids::address_id(&b.holder),
+            asset_id: ids::asset_id(3, "", 0, ids::contract_id(&b.contract_id)),
+            amount: b.balance,
             last_updated_ledger: i64::from(b.ledger),
+        })
+        .collect()
+}
+
+/// Emit `addresses` dimension rows for every balance holder (task 0331).
+/// `id = ids::address_id(strkey)`; `kind` = account (G…) else contract.
+pub fn build_address_rows(balances: &[ExtractedSorobanBalance]) -> Vec<AddressRow> {
+    balances
+        .iter()
+        .map(|b| AddressRow {
+            id: ids::address_id(&b.holder),
+            strkey: b.holder.clone(),
+            kind: if b.holder.starts_with('G') {
+                "account".to_string()
+            } else {
+                "contract".to_string()
+            },
         })
         .collect()
 }
@@ -646,7 +661,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    out.soroban_balance_rows = build_soroban_balance_rows(soroban_token_balances);
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances);
+    out.address_rows = build_address_rows(soroban_token_balances);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -1012,7 +1028,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- assets (dedup by 4-tuple identity) ----
     let mut asset_seen: HashSet<(i16, String, i64, i64)> = HashSet::new();
     let push_asset =
-        |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, row: AssetRow| {
+        |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, mut row: AssetRow| {
+            // lore-0331: single asset surrogate, computed centrally from the row's
+            // identity so every build site is consistent.
+            row.id = ids::asset_id(row.asset_type, &row.asset_code, row.issuer_id, row.contract_id);
             let key = (
                 row.asset_type,
                 row.asset_code.clone(),
@@ -1039,6 +1058,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             total_supply: None, // dead column (lore-0293) → asset_aggregates
             holder_count: None,
             icon_url: None,
+            id: 0, // set by push_asset (ids::asset_id from the row's fields)
         };
         push_asset(&mut out, &mut asset_seen, row);
     }
@@ -1063,6 +1083,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
+            id: 0, // set by push_asset (ids::asset_id from the row's fields)
             },
         );
     }
@@ -1091,6 +1112,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
+            id: 0, // set by push_asset (ids::asset_id from the row's fields)
             },
         );
     }
@@ -1108,6 +1130,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             total_supply: None,
             holder_count: None,
             icon_url: None,
+            id: 0, // set by push_asset (ids::asset_id from the row's fields)
         },
     );
 
@@ -1141,6 +1164,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 total_supply: None,
                 holder_count: None,
                 icon_url: None,
+            id: 0, // set by push_asset (ids::asset_id from the row's fields)
             },
         );
     }
@@ -1894,18 +1918,42 @@ mod balance_tests {
     use xdr_parser::ExtractedSorobanBalance;
 
     #[test]
-    fn build_soroban_balance_rows_hashes_contract_and_copies_fields() {
+    fn build_balance_rows_maps_holder_and_asset_surrogates() {
         let extracted = vec![ExtractedSorobanBalance {
             contract_id: "CTOKEN1".into(),
             holder: "GHOLDER1".into(),
             balance: 800_009_446_178_i128,
             ledger: 100,
         }];
-        let rows = build_soroban_balance_rows(&extracted);
+        let rows = build_balance_rows(&extracted);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].contract_id, ids::contract_id("CTOKEN1"));
-        assert_eq!(rows[0].holder, "GHOLDER1");
-        assert_eq!(rows[0].balance, 800_009_446_178_i128);
+        assert_eq!(rows[0].holder_id, ids::address_id("GHOLDER1"));
+        // type-3 asset_id == the token's contract surrogate
+        assert_eq!(rows[0].asset_id, ids::contract_id("CTOKEN1"));
+        assert_eq!(rows[0].amount, 800_009_446_178_i128);
         assert_eq!(rows[0].last_updated_ledger, 100);
+    }
+
+    #[test]
+    fn build_address_rows_tags_kind_and_keeps_strkey() {
+        let extracted = vec![
+            ExtractedSorobanBalance {
+                contract_id: "CTOKEN1".into(),
+                holder: "GHOLDER1".into(),
+                balance: 1,
+                ledger: 1,
+            },
+            ExtractedSorobanBalance {
+                contract_id: "CTOKEN1".into(),
+                holder: "CCONTRACT1".into(),
+                balance: 1,
+                ledger: 1,
+            },
+        ];
+        let rows = build_address_rows(&extracted);
+        assert_eq!(rows[0].id, ids::address_id("GHOLDER1"));
+        assert_eq!(rows[0].strkey, "GHOLDER1");
+        assert_eq!(rows[0].kind, "account");
+        assert_eq!(rows[1].kind, "contract");
     }
 }

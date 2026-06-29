@@ -105,8 +105,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     coalesce(toString(agg.total_supply), toString(sagg.total_supply)) AS total_supply, \
-     coalesce(agg.holder_count, sagg.holder_count)                     AS holder_count, \
+     coalesce(toString(agg.total_supply), toString(bagg.total_supply)) AS total_supply, \
+     coalesce(agg.holder_count, bagg.holder_count)                     AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -120,8 +120,8 @@ const ASSET_CH_SELECT: &str = "SELECT \
      ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
          AND agg.issuer_id = a.issuer_id \
-     LEFT JOIN soroban_asset_aggregates sagg \
-         ON a.asset_type = 3 AND sagg.contract_id = a.contract_id \
+     LEFT JOIN balance_aggregates bagg \
+         ON a.asset_type = 3 AND bagg.asset_id = a.contract_id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
@@ -164,8 +164,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     coalesce(toString(agg.total_supply), toString(sagg.total_supply)) AS total_supply, \
-     coalesce(agg.holder_count, sagg.holder_count)                     AS holder_count, \
+     coalesce(toString(agg.total_supply), toString(bagg.total_supply)) AS total_supply, \
+     coalesce(agg.holder_count, bagg.holder_count)                     AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
@@ -178,8 +178,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN asset_aggregates agg  ON agg.asset_code = a.asset_code \
          AND agg.issuer_id = a.issuer_id \
-     LEFT JOIN soroban_asset_aggregates sagg \
-         ON a.asset_type = 3 AND sagg.contract_id = a.contract_id \
+     LEFT JOIN balance_aggregates bagg \
+         ON a.asset_type = 3 AND bagg.asset_id = a.contract_id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \

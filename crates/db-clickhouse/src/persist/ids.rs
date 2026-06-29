@@ -97,6 +97,15 @@ pub fn contract_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
+/// `addresses.id` / `balances.holder_id` from ANY `ScAddress` StrKey — a G-account
+/// or a C-contract (a balance holder can be either; task 0331). Same `cityhash64`
+/// as `account_id`/`contract_id` (one shared surrogate space; `addresses.kind`
+/// disambiguates).
+#[inline]
+pub fn address_id(strkey: &str) -> i64 {
+    hash64(strkey.as_bytes())
+}
+
 /// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
 /// every transaction `Int64` FK: `operations_appearances.transaction_id`,
 /// `transaction_participants.transaction_id`,
@@ -108,27 +117,25 @@ pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
     hash64(hash_bytes)
 }
 
-/// `assets.id` surrogate (task 0331) — `cityhash64` of the SEP-11 canonical asset
-/// identity, mirroring how `account_id`/`contract_id` hash their natural key.
-/// The first single-column asset key (nothing referenced an asset as one unit
-/// before `balances.asset_id`). Canonical form by `assets.asset_type` (project
-/// enum: 0 native, 1 classic_credit, 2 sac, 3 soroban):
-/// - native → `"native"`
-/// - classic_credit: `"CODE:ISSUER"`
-/// - SAC + soroban: the contract StrKey (`asset_id == contract_id(strkey)`). A SAC
-///   is a SEPARATE asset from its underlying classic — distinct id/row/holders.
+/// `assets.id` / `balances.asset_id` surrogate (task 0331). Takes the SURROGATE
+/// FKs (`issuer_id`, `contract_id` — both already `cityhash64` of their StrKey)
+/// that `AssetRow` carries. By `assets.asset_type` (project enum: 0 native,
+/// 1 classic_credit, 2 sac, 3 soroban):
+/// - native: `cityhash64("native")`
+/// - classic_credit: `cityhash64("CODE:<issuer_id>")`
+/// - SAC + soroban: **the `contract_id` surrogate itself** — so `asset_id ==
+///   contract_id` for these (a type-3 token's `balances.asset_id` equals its
+///   contract surrogate). A SAC is a SEPARATE asset from its classic → distinct id.
 ///
-/// Feeds `balances.asset_id`. Deterministic (replay-idempotent), no central counter.
+/// Deterministic (replay-idempotent), no central counter.
 #[inline]
-pub fn asset_id(asset_type: i16, asset_code: &str, issuer_strkey: &str, contract_strkey: &str) -> i64 {
-    let canonical = match asset_type {
-        0 => "native".to_string(),
-        1 => format!("{asset_code}:{issuer_strkey}"),
-        // 2 (SAC) + 3 (soroban): keyed by their own contract address — a SAC is a
-        // SEPARATE asset from its underlying classic (distinct row/holders/id).
-        _ => contract_strkey.to_string(),
-    };
-    hash64(canonical.as_bytes())
+pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: i64) -> i64 {
+    match asset_type {
+        0 => hash64(b"native"),
+        1 => hash64(format!("{asset_code}:{issuer_id}").as_bytes()),
+        // 2 (SAC) + 3 (soroban): the contract surrogate IS the asset id.
+        _ => contract_id,
+    }
 }
 
 #[cfg(test)]
@@ -171,18 +178,18 @@ mod tests {
     /// soroban→contract strkey.
     #[test]
     fn asset_id_canonical() {
+        let iss = account_id("GISSUER");
+        let csac = contract_id("CSAC");
+        let ctok = contract_id("CTOKEN1");
         // soroban (3) AND SAC (2): asset_id == their OWN contract surrogate.
-        assert_eq!(asset_id(3, "", "", "CTOKEN1"), contract_id("CTOKEN1"));
-        assert_eq!(asset_id(2, "USDC", "GISSUER", "CSAC"), contract_id("CSAC"));
+        assert_eq!(asset_id(3, "", 0, ctok), ctok);
+        assert_eq!(asset_id(2, "USDC", iss, csac), csac);
         // SAC and its underlying classic are DISTINCT assets → DISTINCT ids
         // (different rows, different holders — not the same asset for us).
-        assert_ne!(
-            asset_id(1, "USDC", "GISSUER", ""),
-            asset_id(2, "USDC", "GISSUER", "CSAC")
-        );
+        assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(2, "USDC", iss, csac));
         // Distinct classics differ; native is its own thing; deterministic.
-        assert_ne!(asset_id(1, "USDC", "GA", ""), asset_id(1, "EURC", "GA", ""));
-        assert_ne!(asset_id(0, "", "", ""), asset_id(1, "USDC", "GA", ""));
-        assert_eq!(asset_id(0, "", "", ""), asset_id(0, "", "", ""));
+        assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(1, "EURC", iss, 0));
+        assert_ne!(asset_id(0, "", 0, 0), asset_id(1, "USDC", iss, 0));
+        assert_eq!(asset_id(0, "", 0, 0), asset_id(0, "", 0, 0));
     }
 }

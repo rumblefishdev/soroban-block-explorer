@@ -105,7 +105,8 @@ struct TableInserts {
     nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
     balances: Option<Insert<AccountBalanceRow>>,
     /// Per-holder Soroban token balances side table (task 0331).
-    soroban_balances: Option<Insert<SorobanTokenBalanceRow>>,
+    unified_balances: Option<Insert<BalanceRow>>,
+    addresses: Option<Insert<AddressRow>>,
 }
 
 impl PartitionWriter {
@@ -274,9 +275,16 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.soroban_balances,
-            "soroban_token_balances",
-            &staged.soroban_balance_rows,
+            &mut self.inserts.unified_balances,
+            "balances",
+            &staged.unified_balance_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.addresses,
+            "addresses",
+            &staged.address_rows,
         )
         .await?;
 
@@ -323,7 +331,8 @@ impl PartitionWriter {
         end(self.inserts.nfts_pending).await?;
         end(self.inserts.nft_ownership_pending).await?;
         end(self.inserts.balances).await?;
-        end(self.inserts.soroban_balances).await?;
+        end(self.inserts.unified_balances).await?;
+        end(self.inserts.addresses).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.

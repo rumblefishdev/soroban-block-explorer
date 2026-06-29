@@ -307,33 +307,32 @@ FROM account_balances_current FINAL
 WHERE asset_type IN (1, 2)
 GROUP BY asset_code, issuer_id;
 
--- Pre-computed per-token aggregates for bespoke Soroban tokens (`asset_type = 3`,
--- task 0331) — the type-3 sibling of `asset_aggregates`. NOT merged into that
--- table: classic `total_supply` is `Decimal128(7)` (fixed 7-decimal, pre-scaled),
--- whereas a Soroban token's supply is a RAW `Int128` with token-specific decimals
--- (e.g. PIKA decimals=43224 overflows any Decimal) — incompatible column types, so
--- a parallel table that the assets read coalesces over. Same refreshable-MV shape
--- (full recompute, atomic EXCHANGE → no FINAL on read) over the ~48k-row
--- `soroban_token_balances`. `total_supply` is raw (the read scales by
--- `soroban_contract_metadata.decimals`); columns `Nullable` so a read LEFT-JOIN
--- miss is NULL (→ "—"), not a fake 0 (cf. `asset_aggregates`).
-CREATE TABLE IF NOT EXISTS soroban_asset_aggregates (
-    contract_id  Int64,
+-- Pre-computed per-asset aggregates over the unified `balances` table (task 0331,
+-- Option C) — supply + active-holder count keyed by the `assets.id` surrogate.
+-- `total_supply` is RAW `Int128` (the read scales by the asset's `decimals`); a
+-- Soroban token's supply needs raw Int128 (token-specific decimals; PIKA=43224
+-- overflows any Decimal), so this table is raw for ALL asset types once classic
+-- migrates in (step 6). Refreshable-MV (full recompute, atomic EXCHANGE → no FINAL
+-- on read). Columns `Nullable` so a read LEFT-JOIN miss is NULL (→ "—"), not 0.
+-- (Currently `balances` holds only type-3; classic still via `asset_aggregates`
+-- until step 6.)
+CREATE TABLE IF NOT EXISTS balance_aggregates (
+    asset_id     Int64,
     total_supply Nullable(Int128),
     holder_count Nullable(Int32)
 )
 ENGINE = MergeTree
-ORDER BY (contract_id);
+ORDER BY (asset_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS soroban_asset_aggregates_mv
+CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
 REFRESH EVERY 2 MINUTE
-TO soroban_asset_aggregates AS
+TO balance_aggregates AS
 SELECT
-    contract_id,
-    sum(balance)                  AS total_supply,
-    toInt32(countIf(balance > 0)) AS holder_count
-FROM soroban_token_balances FINAL
-GROUP BY contract_id;
+    asset_id,
+    sum(amount)                  AS total_supply,
+    toInt32(countIf(amount > 0)) AS holder_count
+FROM balances FINAL
+GROUP BY asset_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
@@ -345,33 +344,6 @@ CREATE TABLE IF NOT EXISTS account_balances_current (
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (account_id, asset_type, asset_code, issuer_id);
-
--- Per-holder Soroban token balances (task 0331) — the `asset_type = 3` mirror of
--- `account_balances_current`. Sourced from `ContractData` `Balance(Address)`
--- ledger-entry STATE (NOT an event-fold: a fold under-counts vault / rebasing /
--- non-SEP-41-event tokens — measured, see task 0331 README DECISION 2026-06-29).
--- Kept separate from `account_balances_current`, not merged: (a) the holder is any
--- `ScAddress` — G-account OR C-contract (34% are contracts on prod) — so it can't
--- key on `account_id`/`accounts`; (b) the classic table is the hot canonical-06
--- path mid perf-surgery (task 0198). Aggregated uniformly with the classic table
--- via UNION into `asset_aggregates` at the supply/holders recompute.
--- Columns: `contract_id` = the surrogate (`soroban_contracts.id` =
--- `assets.contract_id`) so supply/holders + the assets read JOIN by it; `holder`
--- = the raw G/C StrKey (display-ready — the surrogate hash is one-way, cf. the
--- 0323 strkey-degradation; ~48k rows make the wider column free); `balance` =
--- raw `Int128` (decimals are token-specific — applied at read via
--- `soroban_contract_metadata` — and amounts/0-dec tokens overflow `Decimal128(7)`,
--- e.g. PIKA decimals=43224). RMT version = `last_updated_ledger`; a removed /
--- archived entry writes `balance = 0` so a fully-spent holder collapses (mirrors
--- the trustline-removal → 0 convention).
-CREATE TABLE IF NOT EXISTS soroban_token_balances (
-    contract_id         Int64,
-    holder              String,
-    balance             Int128,
-    last_updated_ledger Int64
-)
-ENGINE = ReplacingMergeTree(last_updated_ledger)
-ORDER BY (contract_id, holder);
 
 -- ── Option C unified balance model (task 0331) ──────────────────────────────
 -- The two tables below are the unified replacement for `account_balances_current`

@@ -87,6 +87,9 @@ pub struct AssetRow {
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
+    /// lore-0331 surrogate (`ids::asset_id`) — single-column asset key for
+    /// `balances.asset_id`. Column order MUST match `assets` schema (id last).
+    pub id: i64,
 }
 
 /// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),
@@ -156,20 +159,27 @@ pub struct SorobanContractMetadataRow {
     pub version: i64,
 }
 
-/// `soroban_token_balances` — per-holder Soroban token balance from a
-/// `ContractData` `Balance(Address)` ledger-entry (task 0331). RMT(version);
-/// `last_updated_ledger` = observed ledger (latest wins); a removed/archived
-/// entry writes `balance = 0`. `contract_id` is the surrogate
-/// (`ids::contract_id`, = `assets.contract_id`) so the supply/holders aggregate
-/// and the assets read JOIN by it. `holder` is the raw G/C StrKey (display-ready;
-/// the surrogate hash is one-way). `balance` is the raw `Int128` (decimals are
-/// token-specific, applied at read via `soroban_contract_metadata`).
+/// `balances` — unified per-holder balance (task 0331, Option C). RMT(version);
+/// `last_updated_ledger` = observed ledger; removed/zeroed → `amount = 0`.
+/// `holder_id` = `cityhash64(holder StrKey)` (→ `addresses.id`); `asset_id` =
+/// `ids::asset_id` (→ `assets.id`); `amount` raw `Int128` (scale by the asset's
+/// decimals at read). Replaces `soroban_token_balances` + (after step 6) classic
+/// `account_balances_current`.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct SorobanTokenBalanceRow {
-    pub contract_id: i64,
-    pub holder: String,
-    pub balance: i128,
+pub struct BalanceRow {
+    pub holder_id: i64,
+    pub asset_id: i64,
+    pub amount: i128,
     pub last_updated_ledger: i64,
+}
+
+/// `addresses` — unified address dimension (task 0331). One row per `ScAddress`;
+/// resolves `balances.holder_id` → StrKey + kind. `id = cityhash64(strkey)`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AddressRow {
+    pub id: i64,
+    pub strkey: String,
+    pub kind: String,
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
