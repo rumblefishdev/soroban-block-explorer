@@ -32,10 +32,71 @@ history:
 
 ## Summary
 
-Compute `total_supply` and `holder_count` for **bespoke Soroban fungible tokens**
-(`asset_type = 3`) by folding the standardised SEP-41 `transfer` / `mint` / `burn`
-events already ingested in `soroban_events`, and surface them in the assets
-list/detail. Today these columns are `—` for every Soroban token.
+Surface `total_supply` and `holder_count` for **bespoke Soroban fungible tokens**
+(`asset_type = 3`) in the assets list/detail — today `—` for every Soroban token.
+The trigger is type-3, but the chosen fix is the **fundamental balance model**
+(Option C): a single unified per-holder `balances` table from ledger STATE, raw+decimals
+representation for all asset types. (Original event-fold plan REFUTED — see CURRENT PLAN.)
+
+> ⚠️ The H1/filename still say "event-fold MV" (historical). The actual approach is
+> ledger-state + Option C — see **CURRENT PLAN** below; everything under "DECISION",
+> "Implementation", "Findings", and "Implementation Plan (SUPERSEDED)" is trail.
+
+## CURRENT PLAN 2026-06-29 (karolkow) — Option C unified balances (authoritative)
+
+### Goal
+One unified per-holder balance model for ALL asset types (Option C), raw+decimals
+everywhere. type-3 was the trigger; the fix is the fundamental balance representation.
+
+### Confirmed decisions
+- **Mechanism = ledger STATE** (`ContractData Balance(Address)` entries), NOT event-fold
+  (refuted: vault/rebasing drift; 54% non-SEP-41 events — see Findings).
+- **Architecture = Option C**: unified `balances(holder_id, asset_id, amount, version)`,
+  not separate per-type tables. (Reworks the separate `soroban_token_balances` from the
+  earlier commits into this.)
+- **Representation = raw `Int128` + `decimals`** (from asset/metadata), scaled at READ.
+  Everywhere — classic migrates off `Decimal128(7)`. Universal fixed-point pattern.
+- **Holder dimension** `addresses(id Int64, strkey String, kind Enum: account|contract|…)`
+  — single surrogate over any `ScAddress`. Start account+contract (YAGNI on the rest).
+- **Asset surrogate**: add a single `assets.id Int64` (assets is composite-keyed today;
+  `balances.asset_id` needs ONE column — mirrors `accounts.id`/`soroban_contracts.id`).
+- **Supply = instance `TotalSupply` key** (extend the 0297 instance-storage extraction;
+  archival-proof), fallback Σ entries for plain SEP-41. NOT event-sum (vaults drift).
+- **Holders = `countIf(amount > 0)`** over `balances`.
+- **Seed = RPC snapshot** (holder set from `soroban_events` → batched raw
+  `getLedgerEntries`, 99.69% readable incl. archived). **NO ledger reprocess** — proven
+  100% by an independent adversarial agent; matches the user's preference.
+- **SAC (type-2)**: keep two rows but compute REAL wrapped holders (option b) — coord 0210.
+- **Empty tokens** (64% of type-3, no events): `—` is correct, not a coverage gap.
+
+### Non-blockers resolved
+- **0198 is a POSTGRES task** (Seq Scan on the PG `account_balances_current`,
+  `crates/api/src/accounts/queries.rs`), NOT the CH path — **no collision with Option C**.
+  Action: verify accounts is served from CH (PG path dead) → **archive 0198 as obsolete**.
+- **9% type-3 missing decimals** = 386 tokens with NO on-chain `METADATA` struct
+  (non-standard tail) → fall back to 7. Not a backfill gap (data absent).
+
+### Sequence (no 0198 gate)
+1. `addresses` dimension (account+contract)
+2. `assets.id` surrogate
+3. unified `balances` table (raw+decimals)
+4. type-3 → `balances` (repoint persist off `soroban_token_balances`; drop that table)
+5. aggregate + read over `balances`, supply via `TotalSupply` key
+6. **migrate classic** `account_balances_current` → `balances` (`Decimal128(7)`→raw) —
+   touches CH account-detail + aggregate + frontend; the one higher-risk step (NOT 0198)
+7. **RPC-snapshot seed** bin + `TotalSupply` extraction (extend 0297)
+8. docs (ADR 0032) + frontend amount rendering (coord 0257/0304)
+
+### Already built (earlier commits — reused / reworked by C)
+- `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
+  holder ingestion.
+- `soroban_token_balances` table + persist + `soroban_asset_aggregates` + read coalesce —
+  **reworked** into the unified `balances` by steps 3-6.
+
+### Open risks
+- **TTL eviction handling**: `removed → 0` must NOT zero an archived-but-positive balance
+  (raw reads still return archived values). Verify how eviction appears in LedgerEntryChanges.
+- value-shape: bare `i128` confirmed 4/4 type-3; struct shape is SAC (type-2).
 
 ## Prior art / why this is a distinct task
 
