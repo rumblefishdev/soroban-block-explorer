@@ -35,7 +35,7 @@ use db_clickhouse::persist::rows::WasmInterfaceMetadataRow;
 use serde::Deserialize;
 use serde_json::Value;
 use stellar_xdr::curr::LedgerEntryData;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::BackfillError;
 use crate::rpc_snapshot::{RpcClient, contract_code_ledger_key};
@@ -53,6 +53,9 @@ pub struct UpgradeableBackfillStats {
     pub frozen: u64,
     /// WASMs not returned by RPC (archived/expired) — left Unknown.
     pub missing_on_rpc: u64,
+    /// Rows whose stored `metadata` was not a JSON object — skipped, never
+    /// overwritten (left Unknown). Unreachable for real rows; defense-in-depth.
+    pub malformed_metadata: u64,
     pub dry_run: bool,
 }
 
@@ -132,7 +135,22 @@ pub async fn execute(
             continue;
         };
         let upgradeable = xdr_parser::contract::wasm_imports_upgrade_fn(cce.code.as_slice());
+        // RPC resolved this WASM regardless of what we do next — mark it seen so a
+        // skipped-malformed row is never miscounted as missing_on_rpc.
         seen.insert(hash);
+        // Merge into the EXISTING metadata. If the stored JSON is not an object we
+        // SKIP the row (leave it Unknown) rather than fabricate a fresh object —
+        // overwriting would drop the row's `functions` / `wasm_byte_len`. The
+        // read_missing WHERE (`JSONHas(metadata,'functions')`) makes this branch
+        // unreachable for real rows; it's pure defense-in-depth.
+        let Some(metadata) = merge_upgradeable(metadata, upgradeable) else {
+            stats.malformed_metadata += 1;
+            warn!(
+                wasm_hash = %hex::encode(hash),
+                "upgradeable_backfill: stored metadata is not a JSON object — skipping (left Unknown), not overwriting"
+            );
+            continue;
+        };
         stats.resolved += 1;
         if upgradeable {
             stats.upgradeable += 1;
@@ -141,7 +159,7 @@ pub async fn execute(
         }
         rows_out.push(WasmInterfaceMetadataRow {
             wasm_hash: hash,
-            metadata: merge_upgradeable(metadata, upgradeable),
+            metadata,
         });
     }
     let unresolved: Vec<String> = by_hash
@@ -177,22 +195,26 @@ pub async fn execute(
         "upgradeable_backfill: wrote resolved rows"
     );
 
-    // …then HARD-FAIL if any target WASM could not be resolved, rather than
-    // silently leaving it Unknown. These are in-use wasm_hashes (current code of
-    // a live contract) so a missing one is a real anomaly (e.g. archived state
-    // needing restore) the operator must see. Re-run after fixing; it's idempotent.
+    // …then LOUDLY WARN (not hard-fail) if any target WASM could not be resolved.
+    // The resolved rows are already written above, so aborting here would discard
+    // the summary, not the work. These are in-use wasm_hashes (current code of a
+    // live contract) so a missing one is a real anomaly (e.g. archived state
+    // needing restore) the operator must see — but a panic/backtrace is the wrong
+    // signal for "completed, with a tail to chase". main.rs turns a non-zero
+    // `missing_on_rpc` into a non-zero process exit so CI/operators still notice.
+    // Re-run after fixing; it's idempotent.
     if !unresolved.is_empty() {
         let sample: Vec<&String> = unresolved.iter().take(10).collect();
-        return Err(BackfillError::Incomplete(format!(
-            "{} of {} in-use WASMs had no ContractCode on RPC (wrote {} resolved). \
-             First unresolved: {:?}",
-            unresolved.len(),
-            by_hash.len(),
-            rows_out.len(),
-            sample
-        )));
+        warn!(
+            missing = unresolved.len(),
+            in_use = by_hash.len(),
+            written = rows_out.len(),
+            first_unresolved = ?sample,
+            "upgradeable_backfill: some in-use WASMs had no ContractCode on RPC — left Unknown (re-run after restoring archived state; idempotent)"
+        );
+    } else {
+        info!("upgradeable_backfill: done — all targets resolved");
     }
-    info!("upgradeable_backfill: done — all targets resolved");
     Ok(stats)
 }
 
@@ -231,18 +253,18 @@ fn decode_hash(hex_str: &str) -> Option<[u8; 32]> {
 }
 
 /// Set `upgradeable` on the stored metadata JSON, preserving `functions` /
-/// `wasm_byte_len`. Falls back to a fresh object if the stored value is not an
-/// object (should never happen — every live write is `json!({...})`).
-fn merge_upgradeable(metadata_json: &str, upgradeable: bool) -> String {
-    let mut v = serde_json::from_str::<Value>(metadata_json)
-        .unwrap_or_else(|_| Value::Object(Default::default()));
-    if !v.is_object() {
-        v = Value::Object(Default::default());
-    }
-    if let Value::Object(map) = &mut v {
-        map.insert("upgradeable".to_string(), Value::Bool(upgradeable));
-    }
-    v.to_string()
+/// `wasm_byte_len`. Returns `None` when the stored value is unparseable or not a
+/// JSON object — the caller then SKIPS the row (leaves it Unknown) instead of
+/// overwriting it with a fresh object, which would silently drop the other keys.
+/// Unreachable for real rows (read_missing requires a `functions` key); this is
+/// defense-in-depth, never a data-losing fallback.
+fn merge_upgradeable(metadata_json: &str, upgradeable: bool) -> Option<String> {
+    let mut v = serde_json::from_str::<Value>(metadata_json).ok()?;
+    let Value::Object(map) = &mut v else {
+        return None;
+    };
+    map.insert("upgradeable".to_string(), Value::Bool(upgradeable));
+    Some(v.to_string())
 }
 
 #[cfg(test)]
@@ -251,7 +273,8 @@ mod tests {
 
     #[test]
     fn merge_preserves_existing_keys() {
-        let merged = merge_upgradeable(r#"{"functions":[],"wasm_byte_len":256}"#, true);
+        let merged =
+            merge_upgradeable(r#"{"functions":[],"wasm_byte_len":256}"#, true).expect("object in");
         let v: Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(v["upgradeable"], Value::Bool(true));
         assert_eq!(v["wasm_byte_len"], 256);
@@ -259,19 +282,18 @@ mod tests {
     }
 
     #[test]
-    fn merge_overwrites_and_handles_garbage() {
-        // pre-existing false key is overwritten
-        let merged = merge_upgradeable(r#"{"upgradeable":false}"#, true);
+    fn merge_overwrites_and_skips_non_objects() {
+        // pre-existing false key is overwritten in-place
+        let merged = merge_upgradeable(r#"{"upgradeable":false}"#, true).expect("object in");
         assert_eq!(
             serde_json::from_str::<Value>(&merged).unwrap()["upgradeable"],
             Value::Bool(true)
         );
-        // non-object input degrades to a fresh object with the key
-        let merged = merge_upgradeable("not json", false);
-        assert_eq!(
-            serde_json::from_str::<Value>(&merged).unwrap()["upgradeable"],
-            Value::Bool(false)
-        );
+        // unparseable or non-object input is SKIPPED (None), never overwritten —
+        // so a row's other keys can never be lost to a fabricated empty object.
+        assert_eq!(merge_upgradeable("not json", false), None);
+        assert_eq!(merge_upgradeable("[1,2,3]", true), None);
+        assert_eq!(merge_upgradeable("42", true), None);
     }
 
     #[test]
