@@ -194,6 +194,42 @@ indexer 40, api 43; clippy clean; api-types regenerated + `check-generated` clea
 - **Frontend type-3 amount rendering** (raw → scale by `decimals`) — coordinate with 0257/0304.
 - **0210 Phase 3** — SAC `BalanceValue` struct decoder rides this same ingestion (cross-linked).
 
+## Findings 2026-06-29 (two independent agents) — RPC-snapshot seed viable at 100%
+
+Two unbiased agents (no access to this task) audited the data. Net:
+
+**A 100% backfill does NOT require ledger reprocess — an RPC snapshot suffices.**
+(Corrects the earlier "reprocess required" assumption.)
+- **64% of type-3 (2623/4071) have no events and are EMPTY on-chain** (0 `Balance`
+  entries, never minted) → `—` is correct, not a coverage gap. The meaningful set is
+  ~1448 (1409 real + 39 oracle/upgrade-only empties).
+- **Holder set is fully recoverable from `soroban_events`** (G/C addresses in topics/data
+  — even the DeFindex vault emits standard `mint` with the recipient in a topic).
+- **Raw `getLedgerEntries` returns values for TTL-archived entries: 642/644 = 99.69%**
+  across 40 stale tokens (`liveUntil=0`). `invoke` fails on archived; raw read does not.
+- **Supply is best read from the instance `TotalSupply` i128 key** (raw, archival-proof,
+  same instance-storage path as METADATA/0297). DeFindex `TotalSupply`=126678419935462 ==
+  `total_supply()`. For DeFindex-class vaults, Σ(per-holder events) DRIFTS (`report`/fee
+  mints move shares without standard events) — so supply must NOT be summed from events;
+  per-holder STATE (entries) + the `TotalSupply` key are correct.
+
+### Refined architecture (post-findings)
+- **Holders** ← per-holder `Balance(Address)` entries. LIVE: indexer ContractData parser
+  (already built). SEED: RPC snapshot (holder set from events → batched raw
+  `getLedgerEntries` ≤190 keys/req → nonzero count).
+- **Supply** ← instance `TotalSupply` key (extend the 0297 instance-storage extraction);
+  fallback Σ entries for plain SEP-41 without the key. NOT event-sum.
+- **Seed = RPC snapshot** (light; no galexie reprocess). Live stays indexer-driven.
+- Decimals already on prod (0297): 3840/4222 type-3 have them, **2522 ≠ 7** (variable
+  confirmed); ~9% missing → fall back to 7.
+
+### Recovery pipeline (seed, no reprocess)
+1. Holder candidates ← scan G/C strkeys in the token's `soroban_events` topics+data.
+2. Batched raw `getLedgerEntries` on `Balance(addr)` keys → drop zero/absent →
+   `holder_count` = nonzero count.
+3. `total_supply` ← instance `TotalSupply` key, else `total_supply()`, else Σ balances
+   (exact only for non-vault SEP-41). Empty tokens render `—`.
+
 ## Implementation Plan (SUPERSEDED — event-fold; historical trail)
 
 ### Event shapes (confirmed)
