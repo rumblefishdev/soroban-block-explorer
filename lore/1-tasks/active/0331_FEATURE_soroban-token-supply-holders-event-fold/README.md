@@ -137,6 +137,91 @@ as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter
   (raw reads still return archived values). Verify how eviction appears in LedgerEntryChanges.
 - value-shape: bare `i128` confirmed 4/4 type-3; struct shape is SAC (type-2).
 
+### Why not event-fold — re-litigated 2026-06-29 (staleness-IMMUNE proof + external analysis)
+
+An external analysis (Stanisław, via his own Claude session) proposed REVERTING to the original
+event-fold (refreshable MV over `soroban_events`, supply = Σmint−Σburn), arguing no backfill is
+needed — only ingest catch-up. Re-examined in full. **Verdict: event-fold stays rejected as the
+supply source / sole truth; his backfill mechanics are correct but answer the wrong question.**
+
+**Confound found + acknowledged.** The original DECISION refutation numbers (MERU 126.7B vs 63.8B
+etc.) compared a STALE fold against CURRENT mainnet: prod CH `soroban_events` is ~190,480 ledgers
+/ ~12 days behind tip (measured 2026-06-29: max `ledger_sequence`=63,059,708 vs mainnet 63,250,188).
+Those magnitudes are confounded and do NOT by themselves prove the fold wrong (Karol caught this).
+
+**New proof — measures event VOCABULARY, not freshness → unaffected by the lag (prod CH, 2026-06-29):**
+- **65.4% of type-3 event volume is fold-blind** — 1,266,280 of 1,936,527 events have NULL or
+  non-SEP-41 signatures. Fold keys only on transfer/mint/burn/clawback = 34.6%.
+- **179 type-3 tokens emit events but ZERO standard SEP-41** → fold sees nothing → would report
+  supply=0 / holders=0 ("—") despite real on-chain activity (~12% of the ~1448 meaningful set).
+- **14 tokens emit transfer/burn but ZERO mint** → supply entered via a non-folded path →
+  `Σmint−Σburn` is zero/negative while the token circulates → fold is mathematically inconsistent.
+- Value-moving events the fold misses, present in the data: `deposit` (30 tokens), `transfer_event`,
+  `admn_mnt`, `vault_deposit`/`VaultDeposit`; rebasing/yield: `accrue_interest` (3), `EpochProcessed`,
+  `vaulted_event` (balance/supply grows with NO transfer event at all).
+
+**Why fresh data does NOT fix it (deductive).** Catch-up adds more events of the same distribution;
+it cannot turn a `deposit` into a `mint`, nor emit a transfer for silent yield accrual. Freshness
+fixes the confound (stale-vs-current magnitudes), NOT the structural gap. Fold is correct for
+conformant SEP-41 tokens; permanently wrong for vault / rebasing / custom-mint tokens.
+
+**Stanisław's analysis — what's right, what it misses.**
+- RIGHT (and useful to US): no historical backfill (0228 filled events from ~50.46M, 9.27B rows —
+  verified `min(ledger_sequence)=50,457,424`); **no reparse** — verified in code: the silent-drop
+  bug was only in `nft.rs::detect_nft_events`; the generic event stream serializes verbatim
+  (`event.rs:143-144`, all topics+data via `scval_to_typed_json`, no shape-drop). His completeness
+  proof BENEFITS our seed: we use events only to ENUMERATE holders (G/C addresses in topics), then
+  read VALUE from RPC — so the 179 fold-blind tokens are still discoverable by our pipeline.
+- MISSES: he answered "does event-fold need a backfill" (no, + catch-up) — NOT "does event-fold
+  produce correct numbers." His MV pattern + wording are from the SUPERSEDED event-fold plan, likely
+  written without the DECISION/pivot in view. "Wait for catch-up → numbers correct" holds for
+  conformant tokens, fails for the 65%-blind volume above.
+
+**Net effect on this task: architecture + sequence UNCHANGED.** Supply = `TotalSupply` key (NOT
+fold). Holders = `Balance` entries (event SET + RPC VALUE); fold acceptable only as an
+approximation for conformant tokens if ever needed. Reparse open-question now CLOSED (below).
+
+### Step 7 — design + open questions (NEXT; 0 commits; reconstructed 2026-06-29 after session loss)
+
+> The 06-29 research session that produced this was accidentally deleted and is
+> unrecoverable. This block + the commit messages are the only surviving record of the
+> step-7 reasoning — keep it current so it survives the next session loss.
+
+**Scope:** seed existing holders + pick the supply source. The live indexer only captures
+NEW `ContractData` changes; step 7 backfills the balances that already exist on-chain.
+
+**Reuse — NOT from scratch.** `crates/backfill-runner/src/rpc_snapshot.rs` (built for the
+0320/0326 WASM-upgrade backfill, untouched by 0331) already has the `getLedgerEntries`
+`RpcClient` + batching + ledger-key builders (account / trustline / contract_code) + snapshot
+decoders. Step 7 = **add** a `Balance(Address)` ContractData key builder + a contract-instance
+key builder, **add** an i128-balance decoder + a `TotalSupply` instance-key decoder, then wire
+a seed bin on top. Do not rebuild the client.
+
+**Pipeline (from Findings):** holder candidates ← G/C strkeys in the token's `soroban_events`
+topics+data → batched raw `getLedgerEntries` on `Balance(addr)` keys → drop zero/absent →
+`holder_count` = nonzero count. supply ← instance `TotalSupply` key, else `total_supply()`,
+else Σ balances (exact only for non-vault SEP-41). Empty tokens (64%) → `—`.
+
+**Precondition — catch-up gate (sequencing, NOT code).** The seed reads CURRENT mainnet state via
+RPC, but the live balance path is fed by the indexer, which is ~12 days / 190,480 ledgers behind
+tip (2026-06-29). Run the seed only once the indexer is at ~tip — else the seed is correct at
+seed-time but decays stale until the lagging indexer reaches the seed ledger (~2 weeks). Manual
+check: `SELECT max(ledger_sequence) FROM soroban_events` ≈ mainnet tip (same gate as the Notes
+sequencing item). Optionally a guard in the seed bin refusing to run if the indexer is >N ledgers
+behind. Not feature logic.
+
+**Open questions — resolve before/at implementation:**
+1. **`TotalSupply` key confirmed on ONE token only** (DeFindex `126678419935462`). Confirm the
+   symbol name + that the key exists across token classes; verify the fallback chain for plain SEP-41.
+2. **TTL / eviction in `LedgerEntryChanges` still OPEN** (see Open risks) — `removed→0` must not
+   zero an archived-but-positive balance. Blocks both live and seed correctness.
+3. **Batch cap:** this doc says ≤190 keys/req; `rpc_snapshot.rs` has its own constant — reuse it,
+   don't introduce a third number.
+4. **Reparse — RESOLVED 2026-06-29: NOT needed.** Verified in code (`event.rs:143-144` serializes
+   topics+data verbatim; the silent-drop bug was nft-detector-only, `nft.rs::detect_nft_events`).
+   `soroban_events` is a faithful holder-enumeration source; re-decoding recovers nothing. (Also
+   confirms no historical event backfill — 0228 filled from ~50.46M, verified.)
+
 ## Prior art / why this is a distinct task
 
 - **0194 (completed)** populates `total_supply` + `holder_count` for **asset_type
@@ -441,3 +526,11 @@ own "after ingest catch-up" gate.
   incremental machinery needed.
 - Non-standard / non-conformant token event shapes (logged class) — separate follow-up if
   the residual is material.
+
+## Post-task follow-ups (deferred — record only, NOT yet spawned)
+
+- **6d — retire legacy classic balance storage.** Steps 6a/6b/6c shipped the classic→unified
+  `balances` migration but left the old path in place during transition: `account_balances_current`
+  is still dual-written (6a), and the legacy PG `fetch_balances` path is still kept (6c). 6d =
+  drop that legacy code/table once the unified `balances` model is prod-validated. Overlaps
+  **0243** (PG→CH per-module migration). Deferred to a post-task follow-up; not spawned yet.
