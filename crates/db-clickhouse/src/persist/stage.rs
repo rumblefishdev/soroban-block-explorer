@@ -44,6 +44,7 @@ use std::collections::{HashMap, HashSet};
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
+use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
@@ -127,6 +128,10 @@ pub struct StagedLedger {
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
     pub balance_rows: Vec<AccountBalanceRow>,
+    /// Per-holder Soroban token balances side table (task 0331). Populated inside
+    /// [`prepare_with_sac_overrides`] via [`build_soroban_balance_rows`] from the
+    /// `StageInputs.soroban_token_balances` slice.
+    pub soroban_balance_rows: Vec<SorobanTokenBalanceRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -156,6 +161,10 @@ pub struct StageInputs<'a> {
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
+    /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
+    /// entries (task 0331). Threaded to `soroban_balance_rows` via
+    /// [`build_soroban_balance_rows`]. Empty `&[]` for legacy callers.
+    pub soroban_token_balances: &'a [ExtractedSorobanBalance],
     /// Crypto-proven un-deployed-SAC overrides for this ledger's events
     /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
     /// suppresses the Pass-2 FK stub (no contract row) + seeds a SAC `assets`
@@ -208,6 +217,7 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
@@ -301,6 +311,25 @@ pub fn build_metadata_rows(
         .collect()
 }
 
+/// Map parser-extracted Soroban token balances to `soroban_token_balances` rows
+/// (task 0331). `contract_id` is hashed to the surrogate (`ids::contract_id`,
+/// = `assets.contract_id`) so the aggregate + read join by it; `holder` keeps
+/// the raw StrKey; `last_updated_ledger` is the RMT version. A 1:1 map of the
+/// producer (`xdr_parser::extract_soroban_token_balances`).
+pub fn build_soroban_balance_rows(
+    balances: &[ExtractedSorobanBalance],
+) -> Vec<SorobanTokenBalanceRow> {
+    balances
+        .iter()
+        .map(|b| SorobanTokenBalanceRow {
+            contract_id: ids::contract_id(&b.contract_id),
+            holder: b.holder.clone(),
+            balance: b.balance,
+            last_updated_ledger: i64::from(b.ledger),
+        })
+        .collect()
+}
+
 /// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
 /// un-deployed-SAC emitters for this ledger (task 0323). An un-deployed SAC is
 /// modelled as an ASSET, not a contract: each override (a) suppresses the
@@ -343,6 +372,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        soroban_token_balances,
         sac_overrides,
         prior_wasm_verdicts,
         prior_contract_verdicts,
@@ -616,6 +646,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
+    out.soroban_balance_rows = build_soroban_balance_rows(soroban_token_balances);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -1855,4 +1886,26 @@ fn merge_account_state_overrides(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod balance_tests {
+    use super::*;
+    use xdr_parser::ExtractedSorobanBalance;
+
+    #[test]
+    fn build_soroban_balance_rows_hashes_contract_and_copies_fields() {
+        let extracted = vec![ExtractedSorobanBalance {
+            contract_id: "CTOKEN1".into(),
+            holder: "GHOLDER1".into(),
+            balance: 800_009_446_178_i128,
+            ledger: 100,
+        }];
+        let rows = build_soroban_balance_rows(&extracted);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].contract_id, ids::contract_id("CTOKEN1"));
+        assert_eq!(rows[0].holder, "GHOLDER1");
+        assert_eq!(rows[0].balance, 800_009_446_178_i128);
+        assert_eq!(rows[0].last_updated_ledger, 100);
+    }
 }

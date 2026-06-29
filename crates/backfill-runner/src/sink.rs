@@ -225,6 +225,13 @@ impl PartitionWriterHandle<'_> {
                         nft_events: &parsed.nft_events,
                         lp_positions: &parsed.lp_positions,
                         contract_metadata_writes: &parsed.contract_metadata_writes,
+                        // Task 0331 — backfill reprocesses ledger ContractData
+                        // changes through the shared `process.rs`, so this is
+                        // populated for free: the historical-balance seed pass is
+                        // the existing backfill, not a new crate. (TTL-archived
+                        // entries never re-emitted in-window stay absent — the
+                        // open caveat.)
+                        soroban_token_balances: &parsed.soroban_token_balances,
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):

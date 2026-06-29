@@ -86,6 +86,7 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
     sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), SchemaError> {
@@ -131,6 +132,7 @@ pub async fn persist_ledger_clickhouse(
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        soroban_token_balances,
         sac_overrides,
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
@@ -500,6 +502,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

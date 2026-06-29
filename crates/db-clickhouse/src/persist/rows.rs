@@ -156,6 +156,22 @@ pub struct SorobanContractMetadataRow {
     pub version: i64,
 }
 
+/// `soroban_token_balances` — per-holder Soroban token balance from a
+/// `ContractData` `Balance(Address)` ledger-entry (task 0331). RMT(version);
+/// `last_updated_ledger` = observed ledger (latest wins); a removed/archived
+/// entry writes `balance = 0`. `contract_id` is the surrogate
+/// (`ids::contract_id`, = `assets.contract_id`) so the supply/holders aggregate
+/// and the assets read JOIN by it. `holder` is the raw G/C StrKey (display-ready;
+/// the surrogate hash is one-way). `balance` is the raw `Int128` (decimals are
+/// token-specific, applied at read via `soroban_contract_metadata`).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanTokenBalanceRow {
+    pub contract_id: i64,
+    pub holder: String,
+    pub balance: i128,
+    pub last_updated_ledger: i64,
+}
+
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
 /// = (contract_id, token_id). No surrogate id.
 #[derive(Debug, Clone, Row, Serialize)]
