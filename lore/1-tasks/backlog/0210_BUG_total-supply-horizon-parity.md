@@ -177,13 +177,26 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 
 ## Notes
 
-- **Event-fold mechanism for Phase 3 (NEW, 2026-06-26, task 0331).** Phase 3 (SAC
-  contract holdings) can read balances from the standardised SEP-41
-  `transfer`/`mint`/`burn` events in `soroban_events` (validated in 0331:
-  `Σmint − Σburn` = on-chain `total_supply()`, 6/6 sample) instead of a
-  `contract_data` storage scan — sidesteps the non-standard storage-key layouts
-  that scoped out 0138. Coordinate if 0331 lands first; 0331 owns the type-3
-  (bespoke Soroban) supply+holders that this task leaves out of scope.
+- **Phase 3 mechanism = the 0331 ContractData-balance ingestion (UPDATED
+  2026-06-29).** ⚠️ The earlier "event-fold over `soroban_events`" idea is
+  REFUTED — measured on prod (`stellar` RPC): the fold under-counts 3/3 tokens
+  with a getter (vault / rebasing / non-SEP-41-event tokens change balances with
+  no foldable event; 54% of type-3 events are non-SEP-41). 0331 pivoted to reading
+  **ledger STATE**: `ContractData` `Balance(Address)` entries → `soroban_token_balances`
+  (the parser already decodes these — `xdr-parser::extract_soroban_token_balances`).
+  Phase 3 (SAC contract holdings) is the **same mechanism on type-2 SAC contracts**:
+  same `Vec[Symbol("Balance"), Address]` key, same table/framework — the only delta
+  is the value shape (SAC stores a `BalanceValue` **struct**: amount + authorized +
+  clawback flags, vs the bespoke-token bare `i128`), so Phase 3 adds a struct decoder
+  + resolves SAC `contract_id → (code, issuer)`. The "non-standard storage-key
+  layouts" line that scoped out 0138 is **disproven** (the standard `Balance(Address)`
+  key was confirmed readable on a real vault token). **0331 lands the ingestion
+  framework first; Phase 3 is a small extension on top, not a separate path.**
+  0331 still owns type-3 (bespoke Soroban) supply+holders, out of this task's scope.
+  - **Double-count trap:** a SAC holds the real classic asset as a G-address
+    trustline (already in source #1) AND represents it as Soroban `Balance` entries
+    held by C-contracts. Sum only the C-contract holdings not already in the
+    trustline sum — matching Horizon's source #4.
 
 - **0194 deliberately deferred this.** From 0194 closing history (2026-05-XX):
   "Full Horizon-parity total_supply (LP reserves + claimable_balances + SAC
