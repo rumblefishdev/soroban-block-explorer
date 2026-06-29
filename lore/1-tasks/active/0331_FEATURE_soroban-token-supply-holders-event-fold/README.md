@@ -136,6 +136,26 @@ frontend (step 8), SAC (step 9), and prod run + validation of the seed.
    classic + how contract-holders are stored) → if clean: `BalanceValue` struct decoder +
    trustline∪contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
 
+### Remaining work (ordered) — code for steps 1–8 is done + on PR #293; these are deploy/ops/cleanup
+
+Strict order — each gates the next; 6d in particular must NOT start before validation passes.
+
+1. [ ] **Merge PR #293 + deploy.** Steps 1–8 (branch `feat/0331`): unified balances, supply via
+   `TotalSupply` key, the `balance-seed` bin, frontend scaling, PG-balance-path cut.
+2. [ ] **Ingest catch-up to tip** (the catch-up gate). Was ~12 days / 190,480 ledgers behind on
+   2026-06-29 (`max(ledger_sequence)` 63,059,708 vs mainnet 63,250,188). The seed MUST wait for this.
+3. [ ] **Run `balance-seed` in prod** (after catch-up): `backfill-runner --target clickhouse
+   balance-seed --soroban-rpc-url <url>` (dry-run first). Populates `balances` + `addresses` +
+   `soroban_token_supply` from current chain state (freshness-immune to the lag).
+4. [ ] **Validate** supply/holders vs on-chain getters on ≥10 type-3 tokens incl. a vault (MERU) +
+   a rebasing token (EUTBL/eurSAFO); confirm account-portfolio + native balances are present in `balances`.
+5. [ ] **6d — retire legacy classic balance path** (ONLY after step 4 passes; CH-internal, NOT
+   0243-gated — PG is dead). Migrate the accounts-list native-XLM read off `account_balances_current`
+   → `balances`; stop the indexer dual-write; drop `account_balances_current`.
+6. [ ] **Step 9 — SAC type-2 independent supply/holders** (LAST, spike-gated). Spike SAC
+   `total_supply` vs classic + how contract-holders are stored → if clean: `BalanceValue` struct
+   decoder + trustline∪contract holders + verify supply==classic; if messy defer to 0210/0323.
+
 ### Already built (earlier commits — reused / reworked by C)
 - `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
   holder ingestion.
