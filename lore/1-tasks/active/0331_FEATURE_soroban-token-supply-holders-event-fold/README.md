@@ -66,8 +66,10 @@ everywhere. type-3 was the trigger; the fix is the fundamental balance represent
 - **Seed = RPC snapshot** (holder set from `soroban_events` → batched raw
   `getLedgerEntries`, 99.69% readable incl. archived). **NO ledger reprocess** — proven
   100% by an independent adversarial agent; matches the user's preference.
-- **SAC (assets type-2) computed INDEPENDENTLY — IN THIS TASK** (not borrowed from the
-  classic row). Today both the classic (assets type-1) and SAC (assets type-2) rows share
+- **SAC (assets type-2) computed INDEPENDENTLY — IN THIS TASK, but SCHEDULED LAST (step 9),
+  spike-gated, does NOT block the core.** (Too many unknowns — struct value, double-count,
+  built-in SAC — to gate the core type-3 + unified work on it.) Today both the classic
+  (assets type-1) and SAC (assets type-2) rows share
   the one `(code, issuer)` aggregate → identical supply/holders. Instead compute the SAC
   on its own and VERIFY against classic:
   - **holders(SAC)** = classic trustline holders (G-accounts, `account_balances_current`)
@@ -120,6 +122,9 @@ as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter
    touches CH account-detail + aggregate + frontend; the one higher-risk step (NOT 0198)
 7. **RPC-snapshot seed** bin + `TotalSupply` extraction (extend 0297)
 8. docs (ADR 0032) + frontend amount rendering (coord 0257/0304)
+9. **(LAST, spike-gated) SAC type-2 independent** — spike (SAC total_supply vs classic +
+   how contract-holders are stored) → if clean: `BalanceValue` struct decoder + trustline∪
+   contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
 
 ### Already built (earlier commits — reused / reworked by C)
 - `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
