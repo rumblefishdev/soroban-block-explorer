@@ -13,8 +13,8 @@ use crate::classification::{ContractClassification, classify_contract_from_wasm_
 use crate::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedContractMetadata, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent,
-    SacAssetIdentity,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedSorobanBalance, NftEvent, SacAssetIdentity,
 };
 use domain::{ContractType, NftEventType, TokenAssetType};
 
@@ -297,6 +297,92 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Extract per-holder Soroban token balances from `ContractData`
+/// `Balance(Address)` ledger-entry changes (task 0331).
+///
+/// Reads ledger STATE (the current stored balance), not an event-fold —
+/// correct-by-construction for vault / rebasing / non-SEP-41-event tokens where
+/// a fold under-counts (README DECISION 2026-06-29). Maps to the
+/// `soroban_token_balances` side table (mirror of `account_balances_current`).
+///
+/// Only the standard `Vec[Symbol("Balance"), Address]` key with a bare-`i128`
+/// value is recognised. Non-standard balance layouts (e.g. the SAC
+/// `BalanceValue` struct, or a Map-wrapped amount) are skipped here and handled
+/// as separate, tested shapes — never silently mis-summed.
+pub fn extract_soroban_token_balances(
+    changes: &[ExtractedLedgerEntryChange],
+) -> Vec<ExtractedSorobanBalance> {
+    let mut out = Vec::new();
+    for change in changes {
+        if change.entry_type != "contract_data" {
+            continue;
+        }
+        let Some(holder) = balance_key_holder(&change.key) else {
+            continue;
+        };
+        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
+            continue;
+        };
+        let balance = match change.change_type.as_str() {
+            // Holder fully spent / entry archived → 0, so the RMT supersedes the
+            // stale positive balance (mirrors trustline-removal → 0).
+            "removed" => 0,
+            // `created` / `updated` / `restored` carry the current value.
+            // `state` (pre-image) is ignored — it shares the change's ledger, so
+            // emitting it would let the RMT clobber the real value with the old.
+            "created" | "updated" | "restored" => {
+                let Some(data) = change.data.as_ref() else {
+                    continue;
+                };
+                let Some(b) = decode_scval_i128(data) else {
+                    continue;
+                };
+                b
+            }
+            _ => continue,
+        };
+        out.push(ExtractedSorobanBalance {
+            contract_id,
+            holder,
+            balance,
+            ledger: change.ledger_sequence,
+        });
+    }
+    out
+}
+
+/// `Some(holder_strkey)` when `key.key` is the standard token balance key
+/// `Vec[Symbol("Balance"), Address(holder)]`; `None` otherwise. The holder is
+/// a `G…` account or `C…` contract — both are valid `ScAddress` holders.
+fn balance_key_holder(key: &Value) -> Option<String> {
+    let inner = key.get("key")?;
+    if inner.get("type")?.as_str()? != "vec" {
+        return None;
+    }
+    let elems = inner.get("value")?.as_array()?;
+    if elems.len() != 2 {
+        return None;
+    }
+    let tag = &elems[0];
+    if tag.get("type")?.as_str()? != "sym" || tag.get("value")?.as_str()? != "Balance" {
+        return None;
+    }
+    let holder = &elems[1];
+    if holder.get("type")?.as_str()? != "address" {
+        return None;
+    }
+    Some(holder.get("value")?.as_str()?.to_string())
+}
+
+/// Decode `data.val` as a bare `i128` (the standard token balance value shape).
+fn decode_scval_i128(data: &Value) -> Option<i128> {
+    let val = data.get("val")?;
+    if val.get("type")?.as_str()? != "i128" {
+        return None;
+    }
+    val.get("value")?.as_str()?.parse::<i128>().ok()
 }
 
 fn is_contract_instance_key(key: &Value) -> bool {
@@ -1344,6 +1430,93 @@ mod tests {
         let deployments =
             extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert!(deployments.is_empty());
+    }
+
+    // -- Soroban token balance tests (task 0331) --
+
+    #[test]
+    fn extract_balance_entry_bare_i128() {
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "800009446178" });
+        let changes = vec![make_change("contract_data", "updated", key, Some(data))];
+
+        let balances = extract_soroban_token_balances(&changes);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances[0].contract_id, "CTOKEN1");
+        assert_eq!(balances[0].holder, "GHOLDER1");
+        assert_eq!(balances[0].balance, 800_009_446_178_i128);
+        assert_eq!(balances[0].ledger, 100);
+    }
+
+    #[test]
+    fn removed_balance_entry_emits_zero() {
+        // Holder fully spent → entry removed (data is None). Must emit balance 0
+        // so the RMT supersedes the stale positive balance (else over-count).
+        let changes = vec![make_change(
+            "contract_data",
+            "removed",
+            json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "vec", "value": [
+                    { "type": "sym", "value": "Balance" },
+                    { "type": "address", "value": "GHOLDER1" }
+                ]},
+                "durability": "persistent",
+            }),
+            None,
+        )];
+
+        let balances = extract_soroban_token_balances(&changes);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances[0].holder, "GHOLDER1");
+        assert_eq!(balances[0].balance, 0);
+    }
+
+    #[test]
+    fn skip_state_preimage_balance_entry() {
+        // `state` is the pre-image (shares the change's ledger). Emitting it would
+        // let the RMT clobber the real value with the old balance.
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "999" });
+        let changes = vec![make_change("contract_data", "state", key, Some(data))];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
+    }
+
+    #[test]
+    fn skip_non_balance_contract_data_for_balances() {
+        // Symbol("name") and instance keys must not be mistaken for a balance.
+        let changes = vec![make_change(
+            "contract_data",
+            "updated",
+            json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "sym", "value": "name" },
+                "durability": "persistent",
+            }),
+            Some(json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "sym", "value": "name" },
+                "durability": "persistent",
+                "val": { "type": "string", "value": "MERU" },
+            })),
+        )];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
     }
 
     #[test]
