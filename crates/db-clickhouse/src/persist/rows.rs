@@ -182,6 +182,17 @@ pub struct AddressRow {
     pub kind: String,
 }
 
+/// `soroban_token_supply` — authoritative per-token `total_supply` from the
+/// instance `Symbol("TotalSupply")` i128 key (task 0331 step 7). RMT(version);
+/// `asset_id` = `ids::asset_id` (→ `assets.id`). Absent for tokens that don't
+/// store the key → the assets read falls back to `balance_aggregates`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SorobanTokenSupplyRow {
+    pub asset_id: i64,
+    pub total_supply: i128,
+    pub last_updated_ledger: i64,
+}
+
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
 /// = (contract_id, token_id). No surrogate id.
 #[derive(Debug, Clone, Row, Serialize)]

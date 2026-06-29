@@ -32,14 +32,17 @@
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
-use db_clickhouse::persist::rows::{AddressRow, BalanceRow};
+use db_clickhouse::persist::ids;
+use db_clickhouse::persist::rows::{AddressRow, BalanceRow, SorobanTokenSupplyRow};
 use db_clickhouse::persist::stage::{build_address_rows, build_balance_rows};
 use serde::Deserialize;
 use tracing::info;
 use xdr_parser::ExtractedSorobanBalance;
 
 use crate::error::BackfillError;
-use crate::rpc_snapshot::{RpcClient, balance_ledger_key, decode_balance_entry};
+use crate::rpc_snapshot::{
+    RpcClient, balance_ledger_key, decode_balance_entry, decode_total_supply, instance_ledger_key,
+};
 use crate::sink::Sink;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -52,6 +55,8 @@ pub struct BalanceSeedStats {
     pub balances_decoded: u64,
     /// Distinct holder addresses staged into the `addresses` dimension.
     pub addresses: u64,
+    /// Tokens whose authoritative instance `TotalSupply` key was read.
+    pub supply_read: u64,
     pub dry_run: bool,
 }
 
@@ -107,6 +112,12 @@ pub async fn execute(
                 keys.push(key);
             }
         }
+        // One instance key per token → its authoritative `TotalSupply` (where the
+        // token stores it). Mixed into the same batch; the decoders route each
+        // record by shape (Balance entry vs ContractInstance).
+        if let Some(key) = instance_ledger_key(&cand.token_strkey) {
+            keys.push(key);
+        }
     }
     stats.keys_requested = keys.len() as u64;
 
@@ -114,6 +125,7 @@ pub async fn execute(
     let records = rpc.get_ledger_entries(&keys).await?;
 
     let mut balances: Vec<ExtractedSorobanBalance> = Vec::with_capacity(records.len());
+    let mut supply_rows: Vec<SorobanTokenSupplyRow> = Vec::new();
     for rec in records {
         if let Some((contract_id, holder, balance)) = decode_balance_entry(&rec.data) {
             balances.push(ExtractedSorobanBalance {
@@ -122,9 +134,18 @@ pub async fn execute(
                 balance,
                 ledger: rec.last_modified_ledger,
             });
+        } else if let Some((token, total_supply)) = decode_total_supply(&rec.data) {
+            // Authoritative supply for tokens that store the key; tokens without it
+            // are simply absent here → the assets read falls back to Σ balances.
+            supply_rows.push(SorobanTokenSupplyRow {
+                asset_id: ids::asset_id(3, "", 0, ids::contract_id(&token)),
+                total_supply,
+                last_updated_ledger: i64::from(rec.last_modified_ledger),
+            });
         }
     }
     stats.balances_decoded = balances.len() as u64;
+    stats.supply_read = supply_rows.len() as u64;
 
     let balance_rows = build_balance_rows(&balances);
     let address_rows = build_address_rows(&balances);
@@ -136,6 +157,7 @@ pub async fn execute(
             keys_requested = stats.keys_requested,
             balances_decoded = stats.balances_decoded,
             addresses = stats.addresses,
+            supply_read = stats.supply_read,
             "balance_seed: dry-run, no rows written"
         );
         return Ok(stats);
@@ -152,9 +174,18 @@ pub async fn execute(
         insert.write(row).await?;
     }
     insert.end().await?;
+
+    let mut insert = client
+        .insert::<SorobanTokenSupplyRow>("soroban_token_supply")
+        .await?;
+    for row in &supply_rows {
+        insert.write(row).await?;
+    }
+    insert.end().await?;
     info!(
         balances = balance_rows.len(),
         addresses = address_rows.len(),
+        supply = supply_rows.len(),
         "balance_seed: wrote seed rows (RMT supersede; live ingest takes over on catch-up)"
     );
     Ok(stats)

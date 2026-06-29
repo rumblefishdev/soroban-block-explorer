@@ -346,6 +346,55 @@ fn sc_address(strkey: &str) -> Option<ScAddress> {
     }
 }
 
+/// Build a `LedgerKey::ContractData` for a contract's instance entry (the
+/// `ScContractInstance` storage map), persistent durability (task 0331). Used to
+/// read the authoritative `TotalSupply` key. `None` on a non-contract / malformed
+/// StrKey.
+///
+pub fn instance_ledger_key(token_strkey: &str) -> Option<LedgerKey> {
+    let contract = sc_address(token_strkey)?;
+    if !matches!(contract, ScAddress::Contract(_)) {
+        warn!(token_strkey, "rpc_snapshot: instance-key token must be a C-StrKey; skipping");
+        return None;
+    }
+    Some(LedgerKey::ContractData(LedgerKeyContractData {
+        contract,
+        key: ScVal::LedgerKeyContractInstance,
+        durability: ContractDataDurability::Persistent,
+    }))
+}
+
+/// Read a token's authoritative `total_supply` from its instance-storage
+/// `Symbol("TotalSupply")` key (task 0331). Archival-proof and exact — preferred
+/// over summing per-holder balances (which drifts on vault / rebasing tokens and
+/// under-counts on a TTL-archived tail). `None` when the token does not store the
+/// key (plain soroban-sdk tokens that don't track supply on-chain) or the value
+/// is not a bare `i128` — the caller then falls back to `Σ balances`. Returns
+/// `(token_strkey, total_supply)` so the seed can key the supply row without
+/// tracking request→response order.
+pub fn decode_total_supply(data: &LedgerEntryData) -> Option<(String, i128)> {
+    let LedgerEntryData::ContractData(entry) = data else {
+        return None;
+    };
+    let ScVal::ContractInstance(inst) = &entry.val else {
+        return None;
+    };
+    let storage = inst.storage.as_ref()?;
+    for e in storage.iter() {
+        let ScVal::Symbol(sym) = &e.key else {
+            continue;
+        };
+        if sym.0.as_slice() != b"TotalSupply" {
+            continue;
+        }
+        let ScVal::I128(parts) = &e.val else {
+            return None;
+        };
+        return Some((entry.contract.to_string(), i128::from(parts)));
+    }
+    None
+}
+
 /// Build a `LedgerKey::Trustline` for the given account / asset.
 /// Returns `None` on malformed StrKey (account or issuer).
 ///
@@ -873,5 +922,77 @@ mod tests {
         // non-bare-i128 value (e.g. a SAC BalanceValue struct surfaces as Map/other)
         let non_i128 = balance_entry([0x11u8; 32], holder, ScVal::U64(5));
         assert!(decode_balance_entry(&non_i128).is_none());
+    }
+
+    // --- task 0331: instance `TotalSupply` key (authoritative supply) ---
+
+    use stellar_xdr::curr::{ContractExecutable, ScContractInstance, ScMap, ScMapEntry};
+
+    fn sym(s: &str) -> ScVal {
+        ScVal::Symbol(ScSymbol::try_from(s.as_bytes().to_vec()).unwrap())
+    }
+
+    fn instance_entry(token: [u8; 32], storage: Vec<(ScVal, ScVal)>) -> LedgerEntryData {
+        let map = ScMap::try_from(
+            storage
+                .into_iter()
+                .map(|(key, val)| ScMapEntry { key, val })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        LedgerEntryData::ContractData(ContractDataEntry {
+            ext: ExtensionPoint::V0,
+            contract: ScAddress::Contract(ContractId(Hash(token))),
+            key: ScVal::LedgerKeyContractInstance,
+            durability: ContractDataDurability::Persistent,
+            val: ScVal::ContractInstance(ScContractInstance {
+                executable: ContractExecutable::Wasm(Hash([0u8; 32])),
+                storage: Some(map),
+            }),
+        })
+    }
+
+    #[test]
+    fn instance_ledger_key_builds_persistent_instance_key() {
+        let token = stellar_strkey::Contract([0x11u8; 32]).to_string();
+        let key = instance_ledger_key(&token).expect("valid C token");
+        let LedgerKey::ContractData(k) = key else {
+            panic!("expected LedgerKey::ContractData variant");
+        };
+        assert_eq!(k.contract.to_string(), token.as_str());
+        assert_eq!(k.durability, ContractDataDurability::Persistent);
+        assert!(matches!(k.key, ScVal::LedgerKeyContractInstance));
+    }
+
+    #[test]
+    fn decode_total_supply_reads_instance_key() {
+        // METADATA before TotalSupply — ScMap keys must be sorted (M < T).
+        let data = instance_entry(
+            [0x11u8; 32],
+            vec![
+                (sym("METADATA"), ScVal::U32(0)),
+                (
+                    sym("TotalSupply"),
+                    ScVal::I128(Int128Parts {
+                        hi: 0,
+                        lo: 126_717_554_425_310,
+                    }),
+                ),
+            ],
+        );
+        let token = ScAddress::Contract(ContractId(Hash([0x11u8; 32]))).to_string();
+        assert_eq!(decode_total_supply(&data), Some((token, 126_717_554_425_310)));
+    }
+
+    #[test]
+    fn decode_total_supply_absent_or_wrong_shape_is_none() {
+        // Plain soroban-sdk token: no TotalSupply key → None → caller sums balances.
+        let plain = instance_entry([0x11u8; 32], vec![(sym("Admin"), ScVal::U32(1))]);
+        assert_eq!(decode_total_supply(&plain), None);
+        // Non-ContractData variant → None.
+        assert_eq!(
+            decode_total_supply(&make_account_entry(make_account_id(1), 0, 0, "")),
+            None
+        );
     }
 }

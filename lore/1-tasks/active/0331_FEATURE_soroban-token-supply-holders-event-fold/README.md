@@ -191,8 +191,10 @@ approximation for conformant tokens if ever needed. Reparse open-question now CL
 `rpc_snapshot::balance_ledger_key` + `decode_balance_entry` unit-tested (RED→GREEN); orchestration
 `balance_seed.rs` (candidate scan → RPC `getLedgerEntries` → decode → upsert `balances` +
 `addresses`) mirrors `upgradeable_backfill`; candidate SQL validated on prod CH (MERU = 5974 holder
-candidates). MVP supply = `Σ balances` (TotalSupply-key = open Q#1, deferred). Remaining before
-prod: run under the catch-up gate + ≥10-token on-chain validation.
+candidates). Supply = authoritative instance `TotalSupply` key (RPC-probed: i128 on MERU/
+USDC-style, absent on plain soroban-sdk → fallback `Σ balances`), written to
+`soroban_token_supply` and coalesced over the sum at read. Remaining before prod: run under
+the catch-up gate + ≥10-token on-chain validation.
 
 **Scope:** seed existing holders + pick the supply source. The live indexer only captures
 NEW `ContractData` changes; step 7 backfills the balances that already exist on-chain.
@@ -218,8 +220,10 @@ sequencing item). Optionally a guard in the seed bin refusing to run if the inde
 behind. Not feature logic.
 
 **Open questions — resolve before/at implementation:**
-1. **`TotalSupply` key confirmed on ONE token only** (DeFindex `126678419935462`). Confirm the
-   symbol name + that the key exists across token classes; verify the fallback chain for plain SEP-41.
+1. **`TotalSupply` key — RESOLVED 2026-06-29.** RPC-probed across classes: instance-storage
+   `Symbol("TotalSupply")` i128 (MERU vault `126,717,554,425,310`; USDC-style: present; plain
+   soroban-sdk: ABSENT → `Σ balances` fallback). Built: `instance_ledger_key` +
+   `decode_total_supply` → `soroban_token_supply` table, coalesced over `balance_aggregates` at read.
 2. **TTL / eviction in `LedgerEntryChanges` still OPEN** (see Open risks) — `removed→0` must not
    zero an archived-but-positive balance. Blocks both live and seed correctness.
 3. **Batch cap:** this doc says ≤190 keys/req; `rpc_snapshot.rs` has its own constant — reuse it,

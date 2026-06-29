@@ -406,12 +406,13 @@ async fn main() {
                 .await
                 .expect("balance_seed failed — idempotent, safe to re-run");
             println!(
-                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={} addresses={}",
+                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={} addresses={} supply_read={}",
                 stats.dry_run,
                 stats.tokens,
                 stats.keys_requested,
                 stats.balances_decoded,
                 stats.addresses,
+                stats.supply_read,
             );
         }
         Command::NftReclassify { dry_run } => {

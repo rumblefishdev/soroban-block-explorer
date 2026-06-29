@@ -391,11 +391,15 @@ parser writes the unified `balances` table only when it observes a
 `total_supply` (`sum(amount)`) + `holder_count` (`countIf(amount > 0)`)
 under-count. `balance-seed` enumerates each type-3 token's holder candidates
 from its `soroban_events` topics/data (the event SET — value comes from ledger
-STATE, never an event-fold), reads their current `Balance(Address)` entries via
-`getLedgerEntries`, and upserts `balances` + `addresses`. It reads CURRENT chain
-state, so the snapshot is correct regardless of indexer lag; live ingest
-supersedes it on catch-up (`ReplacingMergeTree` by `last_updated_ledger`).
-CH-only, idempotent, `--dry-run` supported.
+STATE, never an event-fold), reads their current `Balance(Address)` entries **and**
+the token's instance `Symbol("TotalSupply")` key via `getLedgerEntries`, and upserts
+`balances` + `addresses` + `soroban_token_supply`. The last is the authoritative
+per-token supply (archival-proof, exact for vault/rebasing); the assets read
+coalesces it over the summed `balance_aggregates`, and tokens that don't store the
+key fall back to the sum. It reads CURRENT chain state, so the snapshot is correct
+regardless of indexer lag; live ingest supersedes it on catch-up
+(`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
+supported.
 
 ### 6.3 Backfill Scope and Execution Model
 

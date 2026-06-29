@@ -334,6 +334,20 @@ SELECT
 FROM balances FINAL
 GROUP BY asset_id;
 
+-- `soroban_token_supply` — authoritative per-token `total_supply`, read from the
+-- token's instance-storage `Symbol("TotalSupply")` i128 key (task 0331 step 7).
+-- Archival-proof + exact; preferred over `balance_aggregates.total_supply`
+-- (`sum(amount)`), which drifts on vault/rebasing tokens and under-counts on a
+-- TTL-archived tail. Seeded by `backfill-runner balance-seed`. Tokens that do not
+-- store the key (plain soroban-sdk) are absent here → read falls back to the sum.
+CREATE TABLE IF NOT EXISTS soroban_token_supply (
+    asset_id            Int64,
+    total_supply        Int128,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (asset_id);
+
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
     asset_type          Int16,
