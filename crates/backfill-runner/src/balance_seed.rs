@@ -73,18 +73,13 @@ pub async fn execute(
     rpc_url: Option<&str>,
     dry_run: bool,
 ) -> Result<BalanceSeedStats, BackfillError> {
-    let client = match sink {
-        Sink::Clickhouse(c) => c,
-        Sink::Postgres(_) => {
-            info!("balance_seed: CH-only (unified balances model); Postgres target is a no-op");
-            return Ok(BalanceSeedStats {
-                dry_run,
-                ..Default::default()
-            });
-        }
+    // ClickHouse-only — the unified balances model is CH; PG retired.
+    let Sink::Clickhouse(client) = sink else {
+        return Err(BackfillError::Incomplete(
+            "balance-seed is ClickHouse-only (unified balances model; PG retired)".to_string(),
+        ));
     };
 
-    // RPC is required only on the CH path; enforce after the Postgres no-op.
     let rpc_url = rpc_url.ok_or_else(|| {
         BackfillError::Incomplete(
             "balance_seed requires --soroban-rpc-url (or SOROBAN_RPC_URL)".to_string(),

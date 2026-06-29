@@ -172,48 +172,8 @@ pub async fn fetch_account(
     }))
 }
 
-// ---------------------------------------------------------------------------
-// Detail balances query — canonical 06 Statement B
-// ---------------------------------------------------------------------------
-
-/// `account_id` is the surrogate from [`fetch_account`].
-pub async fn fetch_balances(
-    pool: &PgPool,
-    account_id: i64,
-) -> Result<Vec<AccountBalanceRow>, sqlx::Error> {
-    let raw: Vec<PgRow> = sqlx::query(
-        "SELECT \
-            asset_type_name(abc.asset_type) AS asset_type_name, \
-            abc.asset_type                  AS asset_type, \
-            abc.asset_code, \
-            iss.account_id                  AS asset_issuer, \
-            abc.balance::text               AS balance, \
-            abc.last_updated_ledger \
-         FROM account_balances_current abc \
-         LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
-         WHERE abc.account_id = $1 \
-         ORDER BY abc.asset_type, abc.asset_code, iss.account_id",
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(raw
-        .iter()
-        .map(|r| AccountBalanceRow {
-            asset_type_name: r.get("asset_type_name"),
-            asset_type: r.get("asset_type"),
-            asset_code: r.get("asset_code"),
-            asset_issuer: r.get("asset_issuer"),
-            balance: r.get("balance"),
-            // Legacy PG path (accounts are CH-served, task 0243): classic is always
-            // 7-dec. NOTE: PG `balance` is pre-scaled NUMERIC, whereas the canonical
-            // CH path returns RAW (task 0331). Inconsistency is moot once PG retires.
-            decimals: 7,
-            last_updated_ledger: r.get("last_updated_ledger"),
-        })
-        .collect())
-}
+// Detail balances are ClickHouse-only (unified `balances` model, task 0331); the
+// legacy PG `fetch_balances` over `account_balances_current` was cut (PG retired).
 
 // ---------------------------------------------------------------------------
 // Transactions query — canonical 07

@@ -166,7 +166,7 @@ pub async fn get_account(
         }
     };
 
-    let balances = match fetch_balances_for_source(&state, source, header.id).await {
+    let balances = match fetch_account_balances(&state, header.id).await {
         Ok(rows) => rows
             .into_iter()
             .map(|r| AccountBalance {
@@ -377,19 +377,15 @@ async fn fetch_deleted_for_source(
     }
 }
 
-async fn fetch_balances_for_source(
+async fn fetch_account_balances(
     state: &AppState,
-    source: DataSource,
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, AcctFetchError> {
-    match source {
-        DataSource::Pg => queries::fetch_balances(&state.db, account_id)
-            .await
-            .map_err(AcctFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_balances(state.ch(), account_id)
-            .await
-            .map_err(AcctFetchError::Ch),
-    }
+    // Balances are ClickHouse-only — the unified `balances` model is CH (task 0331);
+    // the legacy PG portfolio path was cut (PG retired).
+    queries_ch::fetch_balances(state.ch(), account_id)
+        .await
+        .map_err(AcctFetchError::Ch)
 }
 
 async fn fetch_account_tx_for_source(
