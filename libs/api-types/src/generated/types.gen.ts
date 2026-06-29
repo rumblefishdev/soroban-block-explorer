@@ -15,9 +15,15 @@ export type AccountBalance = {
    */
   asset_type_name?: string | null;
   /**
-   * `NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros).
+   * RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
+   * Option C: one convention for all asset types; classic `decimals` = 7). The
+   * account portfolio now includes Soroban (type-3) token balances too.
    */
   balance: string;
+  /**
+   * Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
+   */
+  decimals: number;
   last_updated_ledger: number;
   /**
    * Raw SMALLINT — stable across label renames.

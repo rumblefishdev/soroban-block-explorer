@@ -175,6 +175,7 @@ pub async fn get_account(
                 asset_code: r.asset_code,
                 asset_issuer: r.asset_issuer,
                 balance: r.balance,
+                decimals: r.decimals,
                 last_updated_ledger: r.last_updated_ledger,
             })
             .collect(),

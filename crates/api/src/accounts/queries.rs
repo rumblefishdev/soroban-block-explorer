@@ -119,6 +119,7 @@ pub struct AccountBalanceRow {
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
     pub balance: String,
+    pub decimals: u32,
     pub last_updated_ledger: i64,
 }
 
@@ -205,6 +206,10 @@ pub async fn fetch_balances(
             asset_code: r.get("asset_code"),
             asset_issuer: r.get("asset_issuer"),
             balance: r.get("balance"),
+            // Legacy PG path (accounts are CH-served, task 0243): classic is always
+            // 7-dec. NOTE: PG `balance` is pre-scaled NUMERIC, whereas the canonical
+            // CH path returns RAW (task 0331). Inconsistency is moot once PG retires.
+            decimals: 7,
             last_updated_ledger: r.get("last_updated_ledger"),
         })
         .collect())

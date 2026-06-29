@@ -54,8 +54,12 @@ pub struct AccountBalance {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
-    /// `NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros).
+    /// RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
+    /// Option C: one convention for all asset types; classic `decimals` = 7). The
+    /// account portfolio now includes Soroban (type-3) token balances too.
     pub balance: String,
+    /// Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
+    pub decimals: u32,
     pub last_updated_ledger: i64,
 }
 

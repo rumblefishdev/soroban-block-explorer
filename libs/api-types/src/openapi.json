@@ -1916,7 +1916,7 @@
       "AccountBalance": {
         "type": "object",
         "description": "Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.",
-        "required": ["type", "balance", "last_updated_ledger"],
+        "required": ["type", "balance", "decimals", "last_updated_ledger"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -1930,7 +1930,13 @@
           },
           "balance": {
             "type": "string",
-            "description": "`NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros)."
+            "description": "RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331\nOption C: one convention for all asset types; classic `decimals` = 7). The\naccount portfolio now includes Soroban (type-3) token balances too."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.",
+            "minimum": 0
           },
           "last_updated_ledger": {
             "type": "integer",

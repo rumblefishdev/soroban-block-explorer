@@ -376,7 +376,11 @@ CREATE TABLE IF NOT EXISTS balances (
     last_updated_ledger Int64
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
-ORDER BY (asset_id, holder_id);
+-- holder_id FIRST: the account-detail read is a per-holder PK-prefix seek (the
+-- hot, latency-critical path — mirrors `account_balances_current`'s account_id-first
+-- key, avoids the 0198 Seq Scan). `balance_aggregates_mv` GROUP BY asset_id is a
+-- periodic full-recompute scan either way, so it doesn't need asset_id-first.
+ORDER BY (holder_id, asset_id);
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,

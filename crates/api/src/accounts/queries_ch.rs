@@ -298,11 +298,16 @@ struct AccountBalanceChRow {
     asset_code: Option<String>,
     asset_issuer: Option<String>,
     balance: String,
+    decimals: u32,
     last_updated_ledger: i64,
 }
 
-/// `account_id` is the surrogate from [`fetch_account`]. Leading-PK seek on
-/// `account_balances_current` (ORDER BY `(account_id, …)`).
+/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
+/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
+/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
+/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
+/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
+/// Soroban from on-chain `METADATA`).
 pub async fn fetch_balances(
     client: &clickhouse::Client,
     account_id: i64,
@@ -310,16 +315,21 @@ pub async fn fetch_balances(
     let rows = client
         .query(
             "SELECT \
-                abc.asset_type                  AS asset_type, \
-                nullIf(abc.asset_code, '')      AS asset_code, \
-                nullIf(iss.account_id, '')      AS asset_issuer, \
-                toString(abc.balance)           AS balance, \
-                abc.last_updated_ledger         AS last_updated_ledger \
-             FROM account_balances_current abc FINAL \
-             LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
-             WHERE abc.account_id = ? \
-             ORDER BY abc.asset_type, abc.asset_code, iss.account_id \
-             LIMIT 1 BY (abc.asset_type, abc.asset_code, abc.issuer_id)",
+                a.asset_type                  AS asset_type, \
+                nullIf(a.asset_code, '')      AS asset_code, \
+                nullIf(iss.account_id, '')    AS asset_issuer, \
+                toString(b.amount)            AS balance, \
+                coalesce(m.decimals, 7)       AS decimals, \
+                b.last_updated_ledger         AS last_updated_ledger \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             LEFT JOIN accounts iss ON iss.id = a.issuer_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+             LEFT JOIN ( \
+                 SELECT contract_id, decimals FROM soroban_contract_metadata FINAL \
+             ) m ON m.contract_id = sc.contract_id \
+             WHERE b.holder_id = ? AND b.amount != 0 \
+             ORDER BY a.asset_type, a.asset_code",
         )
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
@@ -333,6 +343,7 @@ pub async fn fetch_balances(
             asset_code: r.asset_code,
             asset_issuer: r.asset_issuer,
             balance: r.balance,
+            decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,
         })
         .collect())
