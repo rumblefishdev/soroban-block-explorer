@@ -112,19 +112,26 @@ as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter
 - **9% type-3 missing decimals** = 386 tokens with NO on-chain `METADATA` struct
   (non-standard tail) → fall back to 7. Not a backfill gap (data absent).
 
-### Sequence (no 0198 gate)
-1. `addresses` dimension (account+contract)
-2. `assets.id` surrogate
-3. unified `balances` table (raw+decimals)
-4. type-3 → `balances` (repoint persist off `soroban_token_balances`; drop that table)
-5. aggregate + read over `balances`, supply via `TotalSupply` key
-6. **migrate classic** `account_balances_current` → `balances` (`Decimal128(7)`→raw) —
-   touches CH account-detail + aggregate + frontend; the one higher-risk step (NOT 0198)
-7. **RPC-snapshot seed** bin + `TotalSupply` extraction (extend 0297)
-8. docs (ADR 0032) + frontend amount rendering (coord 0257/0304)
-9. **(LAST, spike-gated) SAC type-2 independent** — spike (SAC total_supply vs classic +
-   how contract-holders are stored) → if clean: `BalanceValue` struct decoder + trustline∪
-   contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
+### Sequence (no 0198 gate) — status as of 2026-06-29
+
+Code for steps 1–7 is on branch `feat/0331` (NOT yet merged / deployed). Remaining:
+frontend (step 8), SAC (step 9), and prod run + validation of the seed.
+
+1. ✅ `addresses` dimension (account+contract)
+2. ✅ `assets.id` surrogate
+3. ✅ unified `balances` table (raw+decimals)
+4. ✅ type-3 → `balances` (repointed persist off `soroban_token_balances`; dropped that table)
+5. ✅ aggregate + read over `balances`
+6. ✅ **migrate classic** `account_balances_current` → `balances` — **6a/6b/6c done**;
+   **6d (retire legacy classic path) deferred** → see Post-task follow-ups.
+7. ✅ **RPC-snapshot seed** bin (`backfill-runner balance-seed`) + `TotalSupply`-key supply
+   (commits `f1f0a66f` seed, `1406ea5b` supply). ◻ Remaining: prod run under the catch-up
+   gate + ≥10-token on-chain validation (vault + rebasing).
+8. ◻ docs (ADR 0032 — **schema/pipeline docs done**, see clickhouse-pilot §4f + indexing-pipeline
+   §6.2) + **frontend amount rendering remaining** (raw → scale by `decimals`; coord 0257/0304).
+9. ⏸ **(LAST, spike-gated) SAC type-2 independent** — NOT started. Spike (SAC total_supply vs
+   classic + how contract-holders are stored) → if clean: `BalanceValue` struct decoder +
+   trustline∪contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
 
 ### Already built (earlier commits — reused / reworked by C)
 - `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
@@ -460,21 +467,23 @@ Two unbiased agents (no access to this task) audited the data. Net:
   the numeric `contract_id` over the page set. `AssetRow.total_supply` / `holder_count`
   already exist (currently NULL for Soroban) — just populate.
 
-## Acceptance Criteria
+## Acceptance Criteria (storage-state — rewritten 2026-06-29; replaces the event-fold list)
 
-- [ ] `soroban_asset_aggregates` (MV/table) computes supply + holder_count from
-      `soroban_events` with **no joins over the event stream** (gotcha #19b).
-- [ ] Amount extractor handles `i128`-direct **and** `map{amount}` shapes; `Int128`/`Decimal256`.
-- [ ] Holders per-address fold covers `transfer`/`mint`/`burn`/`clawback`.
-- [ ] Assets list + detail surface supply + holders for `asset_type = 3` (no `—` where
-      data exists); id→symbol/decimals resolved on the small per-page set.
-- [ ] Supply matches on-chain `total_supply()` on a ≥10-token sample **including** a
-      map-shape mint token and the AQUA-XTAR / LIBRE ×100-regression cases; holders spot-checked.
-- [ ] Caveats documented: conformant tokens only (non-emitters stay `—`); non-standard
-      event shapes logged, not silently mis-summed.
-- [ ] **Docs updated** (ADR 0032): `docs/architecture/database-schema/**` (new MV/table) + `endpoint-queries` assets SQL.
-- [ ] **API types** — N/A expected (`total_supply`/`holder_count` already in the assets
-      response, currently NULL; populating ≠ schema change). Confirm no DTO change at PR time.
+- [x] Unified `balances` populated from `ContractData Balance(Address)` ledger STATE
+      (live parser + the `balance-seed` RPC snapshot) — NOT an event-fold.
+- [x] `balance_aggregates_mv` computes `total_supply` (`sum`) + `holder_count`
+      (`countIf(amount > 0)`) over `balances`, keyed by `assets.id`.
+- [x] type-3 supply read from the authoritative instance `TotalSupply` key, coalesced
+      over the sum (`soroban_token_supply`); plain tokens fall back to `Σ balances`.
+- [x] Assets list + detail surface supply + holders for `asset_type = 3` (read coalesce).
+- [x] Balance + supply decode unit-tested; non-bare-`i128` (SAC struct) + non-`Balance`
+      keys skipped, never mis-summed.
+- [x] **Docs (ADR 0032):** `clickhouse-pilot.md §4f` (balance family) + `indexing-pipeline §6.2`
+      (balance-seed). **API types:** regen produced no diff (SQL-only change) — confirmed.
+- [ ] **Prod validation:** run `balance-seed` under the catch-up gate; supply/holders match
+      on-chain getters on a ≥10-token sample incl. a vault (MERU) + a rebasing token (EUTBL/eurSAFO).
+- [ ] **Frontend** type-3 raw-amount rendering (scale by `decimals`) — step 8, coord 0257/0304.
+- [ ] **(deferred)** SAC type-2 independent supply/holders — step 9, spike-gated.
 
 ## Notes
 

@@ -281,6 +281,40 @@ PG keeps all of these.
   or a re-insert that relies on `wasm_uploaded_at_ledger` version
   semantics to absorb the corrected row).
 
+### 4f. Unified balance model (task 0331)
+
+Soroban-token (`asset_type = 3`) `total_supply` / `holder_count` rendered `—` (no
+trustlines). The fix is a CH-only **unified per-holder balance model** that also
+re-keys classic balances off PG's `Decimal128(7)` `account_balances_current` onto a
+raw representation. Five objects, none in PG:
+
+- **`addresses`** (`id Int64`, `strkey String`, `kind String`) — one row per
+  `ScAddress` (`G…` account or `C…` contract; ~34% of type-3 holders are
+  contracts). `id = cityhash64(strkey)`. Resolves `balances.holder_id` → StrKey for
+  portfolio / top-holders.
+- **`balances`** (`holder_id`, `asset_id`, `amount Int128`, `last_updated_ledger`)
+  `ReplacingMergeTree(last_updated_ledger)` — unified per-holder balance, raw
+  `Int128` (scale by the asset's `decimals` at read; type-3 decimals vary — PIKA
+  43224 overflows any `Decimal`). Read from `ContractData Balance(Address)` ledger
+  STATE, never an event-fold (folds drift on vault / rebasing / non-SEP-41-event
+  tokens — see README DECISION 2026-06-29). `removed` / spent → `amount = 0`.
+- **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
+  `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
+  (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
+  `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
+  asset types.
+- **`soroban_token_supply`** (`asset_id`, `total_supply Int128`,
+  `last_updated_ledger`) `ReplacingMergeTree` — authoritative per-token supply read
+  from the token's instance-storage `Symbol("TotalSupply")` i128 key (archival-proof;
+  exact for vault / rebasing where the sum drifts). The assets read does
+  `coalesce(soroban_token_supply, balance_aggregates)`; tokens that don't store the
+  key (plain soroban-sdk) fall back to the sum.
+
+The historical set is seeded once by `backfill-runner balance-seed` (RPC snapshot:
+holders enumerated from `soroban_events`, balances + the `TotalSupply` key read via
+`getLedgerEntries`); live ingest maintains `balances` forward and supersedes the seed
+on catch-up. See the [indexing-pipeline overview §6.2](../indexing-pipeline/indexing-pipeline-overview.md).
+
 ## 5. Engine, partitioning, and ordering
 
 Resolved in
