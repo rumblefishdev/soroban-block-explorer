@@ -127,10 +127,11 @@ frontend (step 8), SAC (step 9), and prod run + validation of the seed.
 7. ✅ **RPC-snapshot seed** bin (`backfill-runner balance-seed`) + `TotalSupply`-key supply
    (commits `f1f0a66f` seed, `1406ea5b` supply). ◻ Remaining: prod run under the catch-up
    gate + ≥10-token on-chain validation (vault + rebasing).
-8. ✅ docs (ADR 0032 — clickhouse-pilot §4f + indexing-pipeline §6.2) + **frontend assets amount
-   rendering done** (`scaleByDecimals` in libs/ui; AssetsTable + AssetSummary scale `total_supply`
-   by `decimals`). ◻ **account-portfolio scaling deferred to 0243** (AccountBalances; raw vs PG-legacy
-   pre-scaled depends on the 0243 feature flag — scaling now would break the legacy path).
+8. ✅ docs (ADR 0032 — clickhouse-pilot §4f + indexing-pipeline §6.2) + **frontend amount rendering
+   done** (`scaleByDecimals` in libs/ui): AssetsTable + AssetSummary scale `total_supply`, and
+   AccountBalances scales the account portfolio. (All API modules are `ch` in prod — verified
+   compute-stack.ts — so the portfolio is raw; PG is dead, so the legacy-pre-scaled concern is moot.
+   Also cut the dead PG balance path: `balance-seed` is CH-only, accounts `fetch_balances` PG path removed.)
 9. ⏸ **(LAST, spike-gated) SAC type-2 independent** — NOT started. Spike (SAC total_supply vs
    classic + how contract-holders are stored) → if clean: `BalanceValue` struct decoder +
    trustline∪contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
@@ -484,8 +485,8 @@ Two unbiased agents (no access to this task) audited the data. Net:
       (balance-seed). **API types:** regen produced no diff (SQL-only change) — confirmed.
 - [ ] **Prod validation:** run `balance-seed` under the catch-up gate; supply/holders match
       on-chain getters on a ≥10-token sample incl. a vault (MERU) + a rebasing token (EUTBL/eurSAFO).
-- [x] **Frontend** assets raw-amount rendering (`scaleByDecimals` by `decimals`) — AssetsTable +
-      AssetSummary. ◻ Account-portfolio (AccountBalances) scaling deferred to 0243 (feature-flag gated).
+- [x] **Frontend** raw-amount rendering (`scaleByDecimals` by `decimals`) — AssetsTable + AssetSummary
+      (`total_supply`) **and** AccountBalances (account portfolio). PG balance path cut (CH-only).
 - [ ] **(deferred)** SAC type-2 independent supply/holders — step 9, spike-gated.
 
 ## Notes

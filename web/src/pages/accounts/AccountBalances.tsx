@@ -6,6 +6,7 @@ import {
   EmptyState,
   formatAmount,
   IdentifierDisplay,
+  scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
@@ -160,7 +161,7 @@ function BalanceRow({
           variant="bodyMedium"
           sx={(theme) => ({ color: theme.palette.text.primary })}
         >
-          {formatAmount(balance.balance, 2)}
+          {formatAmount(scaleByDecimals(balance.balance, balance.decimals), 2)}
         </Typography>
         <Typography
           variant="bodyXsRegular"
