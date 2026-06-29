@@ -12,7 +12,7 @@ tags:
     contract-detail,
     replacingmergetree,
     correctness,
-    priority-low,
+    priority-medium,
     effort-small,
   ]
 links: []
@@ -72,3 +72,27 @@ CH contract detail endpoint`, which removed a `FINAL` that hit `ILLEGAL_FINAL` �
       re-insert, with NO `OPTIMIZE` needed (test: insert divergent metadata for an
       existing hash, read without merge, assert keyed row wins).
 - [ ] No regression on the contract-detail hot path (latency sanity).
+
+## Devil's-advocate follow-ups (2026-06-29, from the 0326 prod run)
+
+Two concrete hardenings surfaced by the adversarial review of the 0326 run:
+
+1. **Priority bump: low → medium.** The non-`FINAL` read is a latent landmine, not
+   cosmetic. The 0326 `OPTIMIZE` is one-time; the live indexer keeps INSERTing `wim`
+   rows, and the moment any write produces a _divergent_ `metadata` for an existing
+   `wasm_hash` (a metadata-schema change, a re-parse), the stale-read window reopens
+   with no recurring `OPTIMIZE`. Fix the read, don't rely on the merge.
+
+2. **Content-address verify in `upgradeable-backfill` (and the live parser path).**
+   `crates/backfill-runner/src/upgradeable_backfill.rs` runs `wasm_imports_upgrade_fn`
+   on whatever bytecode RPC returns and writes the derived `upgradeable` flag to prod
+   **without checking `sha256(cce.code) == requested wasm_hash`**. A corrupt / truncated
+   / tampered public-RPC response would write a WRONG flag with no detection. Add the
+   hash-equality guard before trusting the import scan (a few lines); apply the same
+   guard wherever the live path derives `upgradeable` from fetched bytecode.
+
+Acceptance for these:
+
+- [ ] `sha256(fetched code) == wasm_hash` asserted before the import scan; mismatch →
+      skip + warn (mirrors the 0326 `malformed_metadata` posture), never write a flag.
+- [ ] tags bumped to `priority-medium`.
