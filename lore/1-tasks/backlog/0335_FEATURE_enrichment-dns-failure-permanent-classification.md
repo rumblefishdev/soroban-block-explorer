@@ -1,5 +1,5 @@
 ---
-id: '0333'
+id: '0335'
 title: 'FEATURE: classify DNS-resolution failures as permanent (sentinel) in enrichment, not transient'
 type: FEATURE
 status: backlog
