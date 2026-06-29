@@ -8,6 +8,7 @@ import {
   formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
+  scaleByDecimals,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
@@ -86,7 +87,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
       return (
         <Stack sx={{ alignItems: 'flex-end' }}>
           <Typography variant="bodySmRegular">
-            {formatAmount(row.total_supply)}
+            {formatAmount(scaleByDecimals(row.total_supply, row.decimals))}
           </Typography>
           {unit && (
             <Typography

@@ -32,7 +32,8 @@ function makeAsset(
     issuer: null,
     contract_id: null,
     holder_count: 1_000_000,
-    total_supply: '50000000.0000000',
+    // RAW Int128 (task 0331 Option C) — 50,000,000 scaled by decimals=7.
+    total_supply: '500000000000000',
     icon_url: null,
     name: null,
     description: null,
