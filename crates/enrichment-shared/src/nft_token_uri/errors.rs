@@ -15,6 +15,8 @@
 //! every error variant collapses to `None` — the API never 5xx's because
 //! of an enrichment failure (matches the SEP-1 + stellar archive pattern).
 
+use std::error::Error as StdError;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -109,12 +111,17 @@ pub enum NftTokenUriError {
 pub fn is_transient(err: &NftTokenUriError) -> bool {
     match err {
         NftTokenUriError::Http { source, .. } => {
-            source.is_timeout()
-                || source.is_connect()
-                || source
-                    .status()
-                    .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
-                    .unwrap_or(false)
+            // A DNS-resolution failure (NXDOMAIN / host gone) is PERMANENT — no
+            // same-host retry resolves it; sentinel instead of retry → DLQ
+            // (task 0335). `is_endpoint_fault` deliberately still treats it as
+            // a failover trigger (a different pool endpoint is a different host).
+            !is_dns_failure(source)
+                && (source.is_timeout()
+                    || source.is_connect()
+                    || source
+                        .status()
+                        .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                        .unwrap_or(false))
         }
         // 3xx is permanent for an SQS retry (a persistent redirect is a
         // gateway-config fault a same-endpoint retry can't fix); 429 / 5xx
@@ -206,9 +213,97 @@ fn is_transient_soroban_rpc_pattern(msg: &str) -> bool {
         || m.contains("deadline") // "context deadline exceeded"
 }
 
+/// True when a `reqwest` error's source chain indicates DNS resolution failed
+/// (NXDOMAIN / host does not resolve). Such a failure is **permanent** — the
+/// domain is gone, no retry resolves it — so both [`is_transient`] and the
+/// SEP-1 `sep1_assets::is_transient` classify it permanent and the enrich fn
+/// writes the `''` sentinel instead of 3×-retrying to the DLQ (task 0335).
+///
+/// Deliberately NOT consulted by [`is_endpoint_fault`]: a dead host in the
+/// RPC/IPFS pool should still fail over to a different provider (a different
+/// host may resolve).
+pub(crate) fn is_dns_failure(err: &reqwest::Error) -> bool {
+    let mut src: Option<&(dyn StdError + 'static)> = Some(err);
+    while let Some(e) = src {
+        if is_dns_marker(&e.to_string()) {
+            return true;
+        }
+        src = e.source();
+    }
+    false
+}
+
+/// Resolver-error text markers for a DNS NXDOMAIN / no-such-host failure.
+/// Split from [`is_dns_failure`] so it is unit-testable without constructing a
+/// `reqwest::Error` (which has no public constructor). Matching is
+/// case-insensitive.
+///
+/// ponytail: string-match on resolver text — Linux `getaddrinfo` wording
+/// covers prod (Lambda AL2 + Hetzner box); upgrade to an explicit
+/// `tokio::net::lookup_host` pre-check if a resolver/platform changes phrasing.
+fn is_dns_marker(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("failed to lookup address")        // glibc getaddrinfo (Linux)
+        || m.contains("name or service not known") // EAI_NONAME (Linux)
+        || m.contains("no such host")               // common cross-platform
+        || m.contains("nodename nor servname")      // macOS EAI_NONAME (dev)
+        || m.contains("dns error") // hickory/trust-dns wrapper
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_marker_flags_nxdomain_phrasings() {
+        for s in [
+            "error sending request for url (https://dead.example/): error trying to connect: \
+             dns error: failed to lookup address information: Name or service not known",
+            "failed to lookup address information",
+            "No such host is known. (os error 11001)",
+            "nodename nor servname provided, or not known",
+        ] {
+            assert!(is_dns_marker(s), "should flag DNS failure: {s}");
+        }
+    }
+
+    /// Empirical guard: the whole fix hinges on `is_dns_marker` matching the
+    /// text reqwest actually emits for an unresolvable host AND on that text
+    /// being reachable via the error's `source()` chain. `.invalid` (RFC 6761)
+    /// never resolves → guaranteed NXDOMAIN, no real network egress. `#[ignore]`
+    /// (needs a working resolver). Run:
+    /// `cargo test -p enrichment-shared is_dns_failure_matches_real -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "needs a resolver; verifies is_dns_failure vs reqwest's real NXDOMAIN error"]
+    async fn is_dns_failure_matches_real_reqwest_nxdomain() {
+        let err = reqwest::Client::new()
+            .get("https://nonexistent-host-0335.invalid/.well-known/stellar.toml")
+            .send()
+            .await
+            .expect_err("an unresolvable host must error");
+        eprintln!("top-level: {err}");
+        let mut s: Option<&(dyn StdError + 'static)> = Some(&err);
+        while let Some(e) = s {
+            eprintln!("  source: {e}");
+            s = e.source();
+        }
+        assert!(
+            is_dns_failure(&err),
+            "is_dns_failure must fire for a real NXDOMAIN reqwest error"
+        );
+    }
+
+    #[test]
+    fn dns_marker_ignores_transient_phrasings() {
+        for s in [
+            "connection refused (os error 111)",
+            "operation timed out",
+            "error trying to connect: tls handshake eof",
+            "503 Service Unavailable",
+        ] {
+            assert!(!is_dns_marker(s), "should NOT flag (transient): {s}");
+        }
+    }
 
     #[test]
     fn body_too_large_is_permanent() {
