@@ -2,9 +2,9 @@
 id: '0327'
 title: 'FEATURE: contract Upgradeable/Immutable badge — WASM-import mutability detection + API field + FE chip'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0032']
-related_tasks: ['0320', '0325']
+related_tasks: ['0320', '0325', '0326', '0332']
 tags: [xdr-parser, soroban, classification, api, frontend, contract-detail]
 links:
   - https://github.com/stellar/stellar-protocol/blob/master/core/cap-0046-02.md
@@ -23,6 +23,17 @@ history:
     status: active
     who: karolkow
     note: Promoted to active to begin implementation.
+  - date: 2026-06-29
+    status: completed
+    who: karolkow
+    note: >
+      All 5 scope items + 9 ACs + 4 docs met. Code shipped via PR #287 (parser
+      import-scan, 3-state API field, FE chip, OpenAPI/api-types regen, docs).
+      Scope item 5 (backfill) executed on prod under 0326 (script 2
+      `upgradeable-backfill`: scanned=2631, upgradeable=925, frozen=1706,
+      missing-key 2667->0) — the hard dependency on 0326 is satisfied. Read-path
+      merge-correctness (non-FINAL `wasm_interface_metadata` join) deliberately
+      split out to backlog 0332; not a 0327 deliverable.
 ---
 
 # FEATURE: contract Upgradeable / Immutable badge
