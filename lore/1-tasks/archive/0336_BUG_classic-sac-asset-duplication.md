@@ -2,9 +2,9 @@
 id: '0336'
 title: 'BUG: classic↔SAC asset duplication — one economic asset stored as two `assets` rows (classic_credit + sac) + non-deterministic by-code-issuer resolver'
 type: BUG
-status: backlog
+status: superseded
 related_adr: []
-related_tasks: ['0154', '0323']
+related_tasks: ['0154', '0323', '0339']
 tags: [clickhouse, sac, assets, api, layer-data, priority-medium, effort-medium]
 links: []
 history:
@@ -15,6 +15,15 @@ history:
       Spawned from a SAC/asset modeling analysis session. Concretizes the
       "XLM ↔ XLM SAC link gap" that task 0154 explicitly deferred
       (0154 README, Out of scope). Sibling of 0323 (un-deployed SAC → asset).
+  - date: '2026-06-30'
+    status: superseded
+    who: claude
+    by: ['0339']
+    note: >
+      Superseded by 0339 (SAC = facet of classic_credit). The read-collapse here was a
+      band-aid for the classic↔SAC duplication symptom; 0339 root-fixes it by collapsing
+      the entity (one asset row, contract_id as a property), removing the duplication at
+      source. Archived as superseded before implementation (root-fix is the chosen path).
 ---
 
 # BUG: classic↔SAC asset duplication

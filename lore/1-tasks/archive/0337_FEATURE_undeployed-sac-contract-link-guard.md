@@ -2,9 +2,9 @@
 id: '0337'
 title: 'FEATURE: deployed-state-aware contract link for un-deployed SACs (asset detail + list)'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
-related_tasks: ['0323', '0336']
+related_tasks: ['0323', '0336', '0339']
 tags: [frontend, sac, assets, api, ux, priority-low, effort-small]
 links: []
 history:
@@ -16,6 +16,15 @@ history:
       sibling of 0336. Front half of "show the un-deployed-SAC handle, marked,
       non-linked"; the back half (re-derive the C… strkey) is 0323's deferred
       option-c.
+  - date: '2026-06-30'
+    status: superseded
+    who: claude
+    by: ['0339']
+    note: >
+      Superseded by 0339 (SAC = facet of classic_credit). The deployed-state link guard
+      here was a band-aid for the un-deployed-SAC misleading-link symptom; 0339 root-fixes
+      it by not modeling un-deployed SACs as a separate contract-bearing entity. Archived
+      as superseded before implementation (root-fix is the chosen path).
 ---
 
 # FEATURE: deployed-state-aware contract link for un-deployed SACs
