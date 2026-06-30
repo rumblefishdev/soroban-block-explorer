@@ -481,7 +481,22 @@ CREATE TABLE IF NOT EXISTS operations_appearances (
     -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
     -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
     -- holding only NULLs carry no value → skipped.
-    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1
+    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1,
+    -- Skip index for the CLASSIC / classic-wrap-SAC arm of the asset-transactions
+    -- driver (E10 GET /assets/:id/transactions; task 0334). That driver filters
+    -- `(asset_code = ? AND asset_issuer_id = ?) OR (contract_id = ?)`. For a
+    -- classic-wrap SAC both arms are present, and the `asset_*` arm had NO index —
+    -- so the `OR` defeated `idx_oa_contract_id` entirely (a granule can only be
+    -- skipped if BOTH disjuncts can be ruled out), forcing a FULL scan
+    -- (prod-measured: ~6.2 B rows / ~115 GiB / ~7.5 s per request for `zkSync`,
+    -- still blowing `api_throttle.read_rows` after the 0333 contract-only fix).
+    -- A bloom on `asset_issuer_id` (high-cardinality Int64 surrogate; `asset_code`
+    -- is then checked only within candidate granules) makes the classic arm
+    -- prunable; CH unions it with `idx_oa_contract_id` for the OR (EXPLAIN:
+    -- "<Combined skip indexes>"). Box-measured: 13.18 M (whole table) → 114 K.
+    -- Same `bloom_filter(0.001)` rationale as `idx_oa_contract_id`; asset_issuer_id
+    -- is Nullable (NULL = non-asset op) → NULL-only granules carry no value, skipped.
+    INDEX idx_oa_asset_issuer_id asset_issuer_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

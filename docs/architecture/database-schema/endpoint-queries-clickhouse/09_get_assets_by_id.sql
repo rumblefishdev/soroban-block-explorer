@@ -18,20 +18,32 @@
 --               soroban_contract_metadata ORDER BY (contract_id) — metadata join.
 --               asset_enrichment / asset_aggregates — side-table joins (below).
 -- CH Engine:    assets — Replacing — FINAL required.
---               accounts, soroban_contracts — Replacing, joined WITHOUT FINAL
+--               soroban_contracts — Replacing, joined WITHOUT FINAL
 --                 (join miss neutralised by `nullIf`).
+--               accounts — Replacing, NO LONGER joined (task 0334). The issuer
+--                 StrKey + home_domain are resolved by a separate single
+--                 `accounts.id` bloom-pruned key-seek (idx_acc_id), latest
+--                 version via ORDER BY last_seen_ledger DESC LIMIT 1.
 --               soroban_contract_metadata — Replacing(version), FINAL in the
 --                 sub-select (latest row per contract_id).
 --               asset_enrichment — Replacing(version), collapsed via argMax in
 --                 a GROUP BY sub-select.
 --               asset_aggregates — MergeTree batch table (no FINAL).
--- CH Pattern:   FINAL'd seek on `assets` + the metadata sub-select. The API
---               resolves the public `:id` TOKEN to the WHERE predicate at the
---               request boundary — NOT a surrogate:
+-- CH Pattern:   Two-step seek (task 0334), mirroring the list `08` (task 0319)
+--               and the tx-list `02` (task 0290). Step 1 reads the asset row from
+--               the accounts-join-free SELECT; step 2 resolves the issuer by an
+--               `accounts.id` key-seek. The full `accounts` join (~18.5M-row hash
+--               side) drove the detail to ~21M read_rows / ~1.58 GB per request
+--               (prod) — removing it cuts that by orders of magnitude (the issuer
+--               seek touches ~1-2 granules). The API resolves the public `:id`
+--               TOKEN to the WHERE predicate at the request boundary — NOT a
+--               surrogate:
 --                 • contract StrKey (`C…`) → seek `soroban_contracts.contract_id`
---                 • `CODE-ISSUER`          → `asset_code` + `accounts.account_id`
+--                 • `CODE-ISSUER`          → seek `accounts.account_id` → issuer
+--                                            surrogate id, then `asset_code` +
+--                                            `issuer_id` on `assets`
 --                 • `native`               → `asset_type = 0`
---               (task 0243, `assets/queries_ch.rs` + `canonical_id` in
+--               (task 0243/0334, `assets/queries_ch.rs` + `canonical_id` in
 --               `assets/handlers.rs`). The displayed `AssetItem.id` echoes the
 --               same token, so the FE never reconstructs the tuple.
 -- ADR 0044 §:   §4.5 (Replacing state). **PR #175 amendment:** the surrogate
@@ -50,16 +62,15 @@
 --     `soroban_contract_metadata.name` (on-chain SEP-41 `METADATA`, task 0297)
 --     → `'Stellar Lumen'` for native. `symbol`/`decimals` come from
 --     `soroban_contract_metadata` (decimals defaults to 7 for classic/SAC).
---     This is the joined detail variant (keeps the `accounts` issuer join,
---     which the list `08` drops per task 0319).
+--     The detail now uses the SAME accounts-join-free SELECT as the list `08`
+--     (task 0334 collapsed them); the issuer is resolved by a key-seek (step 2).
 
--- Shown with the contract-StrKey predicate (primary Soroban path). The API
--- swaps the WHERE for the CODE-ISSUER / native forms above; SELECT is identical.
+-- STEP 1 — asset row, accounts-join-free. Shown with the contract-StrKey
+-- predicate (primary Soroban path). The API swaps the WHERE for the
+-- CODE-ISSUER / native forms above; SELECT is identical.
 SELECT
     a.asset_type                        AS asset_type,
     nullIf(a.asset_code, '')            AS asset_code,
-    nullIf(iss.account_id, '')          AS issuer,
-    nullIf(iss.home_domain, '')         AS issuer_home_domain,  -- internal SEP-1 key
     nullIf(sc.contract_id, '')          AS contract_id,
     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''),
              if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name,
@@ -69,12 +80,11 @@ SELECT
     agg.holder_count                    AS holder_count,
     nullIf(sc.deployed_at_ledger, 0)    AS deployed_at_ledger,
     nullIf(ae.icon_url, '')             AS icon_url,
-    a.issuer_id                         AS issuer_id_key,
+    a.issuer_id                         AS issuer_id_key,  -- → step 2 seek
     a.contract_id                       AS contract_id_key
     -- not in DB: description, home_page — runtime SEP-1 fetch via
     --   `runtime_enrichment::sep1` (task 0188), keyed off issuer_home_domain.
 FROM assets a FINAL
-LEFT JOIN accounts          iss ON iss.id = a.issuer_id
 LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id
 LEFT JOIN (
     SELECT contract_id, name, symbol, decimals
@@ -91,4 +101,15 @@ LEFT JOIN (
 ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code
     AND ae.issuer_id = a.issuer_id   AND ae.contract_id = a.contract_id
 WHERE sc.contract_id = $1
+LIMIT 1;
+
+-- STEP 2 — resolve the issuer surrogate (issuer_id_key from step 1) to its
+-- StrKey + home_domain via the idx_acc_id bloom-pruned key-seek (task 0334).
+-- Skipped when issuer_id_key = 0 (native / no issuer). For the CODE-ISSUER form
+-- this seek runs FIRST (by accounts.account_id) to resolve the issuer surrogate,
+-- and the same row supplies the StrKey + home_domain.
+SELECT id, account_id, home_domain
+FROM accounts
+WHERE id = $issuer_id_key            -- CODE-ISSUER form: WHERE account_id = $strkey
+ORDER BY last_seen_ledger DESC
 LIMIT 1;
