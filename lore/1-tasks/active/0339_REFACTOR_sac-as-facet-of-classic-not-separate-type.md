@@ -3,7 +3,7 @@ id: '0339'
 title: 'REFACTOR: SAC is a facet of classic_credit, not a separate `asset_type` — collapse the classic↔SAC entity split'
 type: REFACTOR
 status: active
-related_adr: []
+related_adr: ['0051']
 related_tasks: ['0336', '0337', '0323', '0154', '0219']
 tags:
   [
@@ -38,6 +38,20 @@ history:
       one-row-per-(code,issuer) with native/soroban carve-outs; canonical-id wire change)
       → audit of the affected surfaces (schema / write-path / API / frontend) → ADR →
       phased implementation on a branch off develop.
+  - date: '2026-06-30'
+    status: active
+    who: claude
+    note: >
+      Design resolved → ADR 0051. Decisions: drop `asset_type=sac (2)`; SAC-ness as
+      self-contained property columns (`sac_contract_id` / `sac_strkey` / `sac_deployed`)
+      on the classic/native row; KEEP the CH ORDER BY (no rebuild — stop using value 2, the
+      handle moves to property columns); converge the write path (SAC deploy/override sets
+      the SAC columns on the classic/native row, not a separate type=2 row); canonical id
+      `C…→CODE-ISSUER` with `fetch_by_contract_id` extended for deep-link back-compat.
+      Subsumes 0336/0337 + option-c. Next: phased impl — Phase 1 (code + PR: schema ADD
+      COLUMN, enum/write-path/API/frontend, api-types), Phase 2 (prod ADD COLUMN + ~31k
+      type=2→type=1/0 data-pass, writer-first).
+---
 
 # REFACTOR: SAC is a facet of classic_credit, not a separate asset_type
 
