@@ -158,10 +158,13 @@ mod tests {
         // Task 0331 step 7 added `soroban_token_supply` (authoritative per-token
         // total_supply from the instance `TotalSupply` key; the assets read
         // coalesces it over `balance_aggregates`).
+        // task 0331 simplification: DROPPED the legacy `asset_aggregates` table +
+        // `asset_aggregates_mv` (classic supply over `account_balances_current`) —
+        // superseded by `balance_aggregates` over `balances`. 29 → 27.
         assert_eq!(
             stmts.len(),
-            29,
-            "expected 26 tables + 2 materialized views + 1 dictionary, got {}",
+            27,
+            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

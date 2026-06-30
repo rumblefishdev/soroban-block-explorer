@@ -105,30 +105,9 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- asset_aggregates — pre-computed per-asset table (lore-0293). The
-    // refreshable MV does NOT fire on insert (unlike a normal MV); force an
-    // out-of-schedule refresh, then POLL the target. `SYSTEM WAIT VIEW` alone is
-    // racy — it returns early if the just-triggered refresh hasn't entered the
-    // 'Running' state yet — so poll for the computed row instead. -----
-    client
-        .query("SYSTEM REFRESH VIEW asset_aggregates_mv")
-        .execute()
-        .await
-        .expect("refresh asset_aggregates_mv");
-    let agg_where =
-        format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER} AND holder_count = 1");
-    let mut populated = false;
-    for _ in 0..50 {
-        if count_rows(&client, "asset_aggregates", &agg_where).await == 1 {
-            populated = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200)); // ~10s budget
-    }
-    assert!(
-        populated,
-        "asset_aggregates not populated after refresh (~10s): {agg_where}"
-    );
+    // (legacy `asset_aggregates` refresh smoke removed — table dropped in the
+    // task 0331 simplification; classic supply now flows via `balance_aggregates`
+    // over `balances`.)
 
     // ----- soroban_contracts (state) -----
     client

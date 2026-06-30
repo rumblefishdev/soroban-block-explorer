@@ -280,33 +280,13 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
 -- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
 -- stay FINAL-free). The other tables are RMT because they are APPEND targets.
--- `asset_type IN (1,2)` = classic credit only; native (0) and pool-shares (3) are
--- excluded (their balance-sum is not a trustworthy supply — see the note).
--- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
--- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
--- distinguishing a JOIN miss from a real 0-supply with no sentinel.
--- TRADEOFF: figures lag by up to `REFRESH EVERY` (eventually consistent).
-CREATE TABLE IF NOT EXISTS asset_aggregates (
-    asset_code   LowCardinality(String),
-    issuer_id    Int64,
-    total_supply Nullable(Decimal128(7)),
-    holder_count Nullable(Int32)
-)
-ENGINE = MergeTree
-ORDER BY (asset_code, issuer_id);
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS asset_aggregates_mv
-REFRESH EVERY 2 MINUTE
-TO asset_aggregates AS
-SELECT
-    asset_code,
-    issuer_id,
-    sum(balance)                  AS total_supply,
-    toInt32(countIf(balance > 0)) AS holder_count
-FROM account_balances_current FINAL
-WHERE asset_type IN (1, 2)
-GROUP BY asset_code, issuer_id;
-
+-- NOTE: the legacy `asset_aggregates` table + `asset_aggregates_mv` (classic
+-- supply/holders over `account_balances_current`, keyed code+issuer) were DROPPED
+-- (task 0331) — superseded by `balance_aggregates` (below) over the unified
+-- `balances` table, keyed by `assets.id`. It was a refreshable MV (derived), so
+-- the drop loses no source data; classic supply now flows through `balances`
+-- (single-write + the one-time classic→`balances` migration).
+--
 -- Pre-computed per-asset aggregates over the unified `balances` table (task 0331,
 -- Option C) — supply + active-holder count keyed by the `assets.id` surrogate.
 -- `total_supply` is RAW `Int128` (the read scales by the asset's `decimals`); a
@@ -314,8 +294,8 @@ GROUP BY asset_code, issuer_id;
 -- overflows any Decimal), so this table is raw for ALL asset types once classic
 -- migrates in (step 6). Refreshable-MV (full recompute, atomic EXCHANGE → no FINAL
 -- on read). Columns `Nullable` so a read LEFT-JOIN miss is NULL (→ "—"), not 0.
--- (Currently `balances` holds only type-3; classic still via `asset_aggregates`
--- until step 6.)
+-- (classic enters `balances` via single-write + the one-time classic→`balances`
+-- migration; type-3 + SAC/native contract-held via the live parser + seed.)
 CREATE TABLE IF NOT EXISTS balance_aggregates (
     asset_id     Int64,
     total_supply Nullable(Int128),
