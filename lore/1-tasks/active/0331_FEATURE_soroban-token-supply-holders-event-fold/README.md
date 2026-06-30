@@ -303,6 +303,50 @@ root-fix; **supersedes 0336** (read-collapse band-aid) + **0337** (un-deployed-S
 **overrides the research agent's Option-c "keep two rows".** W3 is now homed in 0339 — coordinate there,
 no fresh ADR needed.
 
+## Sequencing correction + checks 2026-06-30 (continued)
+
+**DEV-first / OPS-last stands (W1 = bundle, W6 = single OPS window).** Earlier prose mis-ordered it
+(put merge/migrations first) — corrected here.
+
+**Key insight — 0339 is NOT a hard dependency of the SAC leg.** If the SAC/native contract-held leg
+writes balances **keyed by the classic/native `asset_id`** (`hash("CODE:issuer")` / `hash("native")` —
+both exist today after the `assets.id` backfill), then:
+- the numbers are **correct without 0339** (contract-held lands on the type-1 classic row);
+- 0339 only **cleans up the duplicate type-2 row** (the 0336 display symptom) — a **separate refactor
+  AFTER**, not interleaved, not on the critical path.
+
+So the whole of 0331 stays **one clean DEV→OPS block**; 0339 follows as display cleanup.
+
+- **DEV (all code, branches):** type-3 (done #293) · SAC `BalanceValue` spike (done) · ingest
+  contract-held 0/1/2 (state-snapshot — live ContractData changes + Hubble/archive seed; decode
+  `.amount`; holder = `address_id`; **keyed by classic/native `asset_id`**, 0339-forward-compatible) ·
+  native (W5) · read = trustlines + contract-held on the one classic row · surfacing (contract
+  portfolio, rich-list) · 6d code · frozen/deauthorized = count + document. NFT: none (works).
+- **OPS (one window, end):** merge all → migrations (`assets.id`, classic→`balances`) → catch-up →
+  ONE `balance-seed` (type-3 + contract-held 0/1/2) → validate (incl. a contract portfolio, e.g. the
+  ~1.2M-XLM pool) → 6d drop → feed 0199.
+- **AFTER, separate:** 0339 (SAC → facet of classic, drop type-2, fold ~31k, supersede 0336/0337).
+
+### Check A — NFT read/display: WORKS ✓
+The CH read resolves the owner via **`accounts` ∪ `soroban_contracts`**
+(`crates/api/src/nfts/queries_ch.rs:175-181`) and the DTO carries the contract `C…` strkey resolved via
+`soroban_contracts` (`dto.rs:18,39`) → a contract owner links to `/contract/`. (The accounts-only join
+at `queries.rs:131` is the DEAD PG path.) **Storage + read both correct.** Minor: surrogate hash-space is
+shared, so owner-type queries must resolve via `soroban_contracts`, not accounts-only (0 collisions in
+practice — the 2,834 contract-owned NFTs have no accounts overlap).
+
+### Check B — USDC holders −81k: staleness + retained zero-rows, NOT ingest incompleteness
+| | total trustlines | funded | max ledger |
+|---|---|---|---|
+| us (`account_balances_current`) | 3,456,365 | 554,733 | 63,192,694 |
+| StellarExpert (Circle USDC) | 2,245,437 | 635,959 | (tip) |
+
+- **Total: we have MORE** (+1.2M) → ingest is **not incomplete**; the extra rows are **retained
+  closed/zero trustlines** (`removed→0` not pruned — the 0331 "open risk").
+- **Funded −81k** = staleness (our snapshot at ledger 63.19M, behind tip) + some funded-on-chain stored
+  as 0 in our stale snapshot. **Not missing trustlines.**
+- **Data-quality follow-up:** prune zero/closed trustline rows; investigate stale-zero funded balances.
+
 ## Research plan — classic/SAC asset-model decision (Wątek 3, 2026-06-30)
 
 > Big schema decision: is `classic X` + `SAC(X)` one asset or two `assets` rows, and how to model supply/holders. Conclusion so far (docs + prod, 2026-06-30): ONE economic asset — one deterministic SAC per asset, account balances **share** the trustline, so one supply = trustlines + contract-balances. But this needs a full research + brainstorm (use the `brainstorming` skill) before any schema change. Devil's-advocate-hardened scope:
