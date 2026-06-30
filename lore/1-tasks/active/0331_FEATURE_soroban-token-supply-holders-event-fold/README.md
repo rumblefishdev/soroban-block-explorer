@@ -56,8 +56,10 @@ everywhere. type-3 was the trigger; the fix is the fundamental balance represent
   earlier commits into this.)
 - **Representation = raw `Int128` + `decimals`** (from asset/metadata), scaled at READ.
   Everywhere — classic migrates off `Decimal128(7)`. Universal fixed-point pattern.
-- **Holder dimension** `addresses(id Int64, strkey String, kind Enum: account|contract|…)`
-  — single surrogate over any `ScAddress`. Start account+contract (YAGNI on the rest).
+- **Holder dimension** — `balances.holder_id` is `cityhash64(holder StrKey)`, one shared surrogate
+  space with `accounts.id` / `soroban_contracts.id`. ~~Originally a dedicated `addresses` table.~~
+  **Dropped** during cleanup: it was written but never read, and resolution back to a StrKey is
+  already available via `accounts` (G) / `soroban_contracts` (C). No separate dimension.
 - **Asset surrogate**: add a single `assets.id Int64` (assets is composite-keyed today;
   `balances.asset_id` needs ONE column — mirrors `accounts.id`/`soroban_contracts.id`).
 - **Supply = instance `TotalSupply` key** (extend the 0297 instance-storage extraction;
@@ -117,7 +119,11 @@ as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter
 Code for steps 1–7 is on branch `feat/0331` (NOT yet merged / deployed). Remaining:
 frontend (step 8), SAC (step 9), and prod run + validation of the seed.
 
-1. ✅ `addresses` dimension (account+contract)
+1. ✅ ~~`addresses` dimension~~ — **dropped** (was written but never read; its `(id, strkey, kind)`
+   duplicates `accounts` ∪ `soroban_contracts`). Holder→StrKey resolution (for any future
+   top-holders / portfolio-StrKey read) is via `accounts` (G-accounts: `accounts.id =
+   cityhash64(strkey)`, `accounts.account_id = strkey`) / `soroban_contracts` (C-contracts:
+   `.id = cityhash64`, `.contract_id = strkey`) — one shared surrogate space, no dedicated dimension.
 2. ✅ `assets.id` surrogate
 3. ✅ unified `balances` table (raw+decimals)
 4. ✅ type-3 → `balances` (repointed persist off `soroban_token_balances`; dropped that table)
@@ -135,24 +141,74 @@ frontend (step 8), SAC (step 9), and prod run + validation of the seed.
 9. ⏸ **(LAST, spike-gated) SAC type-2 independent** — NOT started. Spike (SAC total_supply vs
    classic + how contract-holders are stored) → if clean: `BalanceValue` struct decoder +
    trustline∪contract holders + verify supply==classic. If messy: defer to 0210/0323. Does NOT block 1-8.
+   **Consistency note (load-bearing for step 9):** a balance holder can be a G-account OR a
+   C-contract. type-3 ALREADY counts contract-holders in `holder_count` (it reads every
+   `Balance(Address)` entry; ~34% of type-3 holders are contracts). Classic (type-1) has NO
+   contract holders (trustlines are account-only — a contract can only hold a classic asset via
+   the SAC). SAC (type-2) contract-holdings live in the SAC's own `ContractData Balance` entries
+   and are NOT yet captured → **until step 9, SAC `holder_count` undercounts (misses contract
+   holders), inconsistent with how type-3 counts them.** Step 9 must add SAC C-holders (trustline
+   accounts ∪ SAC contract-data holders) to close this cross-type gap.
 
 ### Remaining work (ordered) — code for steps 1–8 is done + on PR #293; these are deploy/ops/cleanup
 
 Strict order — each gates the next; 6d in particular must NOT start before validation passes.
 
-1. [ ] **Merge PR #293 + deploy.** Steps 1–8 (branch `feat/0331`): unified balances, supply via
-   `TotalSupply` key, the `balance-seed` bin, frontend scaling, PG-balance-path cut.
-2. [ ] **Ingest catch-up to tip** (the catch-up gate). Was ~12 days / 190,480 ledgers behind on
+1. [ ] **Merge PR #293.** Steps 1–8 (branch `feat/0331`): unified balances, supply via `TotalSupply`
+   key, the `balance-seed` bin, frontend scaling, PG-balance-path cut.
+2. [ ] **Deploy-time migrations — GATE the read cutover (review-found; the read serves classic/SAC
+   from `balance_aggregates`/`balances`, so these MUST land with the deploy or classic/portfolio
+   read wrong/empty):**
+   - **a. `assets.id` ALTER + backfill** (`init.sql` ships it `DEFAULT 0`; `CREATE IF NOT EXISTS`
+     can't add it). Until backfilled every row has `id=0` → the `bagg.asset_id = a.id` and the
+     account-portfolio `INNER JOIN assets ON a.id = b.asset_id` match nothing → **empty portfolios**.
+     Verify `count(id=0)=0` post-backfill.
+   - **b. Migrate classic `account_balances_current` → `balances`** (CH→CH; `Decimal128(7)` → raw
+     `Int128` ×10⁷; `holder_id = account_id` surrogate; `asset_id = assets.id`). Makes
+     `balance_aggregates` complete for classic so the unified read is correct (otherwise classic
+     supply/holders under-count — forward-only dual-write). Run as **documented SQL via `chq`** at
+     deploy (NOT a Rust subcommand — the join reads `assets.id` directly, avoiding the Rust
+     `cityhash_102` vs CH `cityHash64` variant mismatch, so do NOT compute the hash in SQL). The
+     two statements mirror the live 6a dual-write exactly → RMT-idempotent, safe to re-run.
+
+     Pre-check (the `assets.id` backfill from step 2a MUST be done first — else every migrated row
+     gets `asset_id = 0`; this MUST return 0 or **abort**):
+
+     ```sql
+     SELECT count() FROM assets FINAL WHERE asset_type IN (0, 1) AND id = 0
+     ```
+
+     Migration (the `if(abc.asset_type = 0, 0, 1)` maps Horizon native/alphanum → project
+     native/classic-credit; `toInt128(balance * 1e7)` is the raw `Int128` underlying the
+     `Decimal128(7)`):
+
+     ```sql
+     INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger)
+     SELECT abc.account_id, a.id, toInt128(abc.balance * 10000000), abc.last_updated_ledger
+     FROM account_balances_current abc FINAL
+     INNER JOIN assets a FINAL
+        ON a.asset_code = abc.asset_code
+       AND a.issuer_id  = abc.issuer_id
+       AND a.asset_type = if(abc.asset_type = 0, 0, 1)
+     ```
+
+     **SAC (type-2) NOT fixed by this** — its `asset_id` is the contract hash, distinct from the
+     classic `(code:issuer)` id the balances are keyed by → SAC stays `—` until step 9 (or the
+     migration dual-writes classic balances under the SAC id).
+3. [ ] **Ingest catch-up to tip** (the catch-up gate). Was ~12 days / 190,480 ledgers behind on
    2026-06-29 (`max(ledger_sequence)` 63,059,708 vs mainnet 63,250,188). The seed MUST wait for this.
-3. [ ] **Run `balance-seed` in prod** (after catch-up): `backfill-runner --target clickhouse
-   balance-seed --soroban-rpc-url <url>` (dry-run first). Populates `balances` + `addresses` +
+4. [ ] **Run `balance-seed` in prod** (after catch-up): `backfill-runner --target clickhouse
+   balance-seed --soroban-rpc-url <url>` (dry-run first). Populates `balances` +
    `soroban_token_supply` from current chain state (freshness-immune to the lag).
-4. [ ] **Validate** supply/holders vs on-chain getters on ≥10 type-3 tokens incl. a vault (MERU) +
-   a rebasing token (EUTBL/eurSAFO); confirm account-portfolio + native balances are present in `balances`.
-5. [ ] **6d — retire legacy classic balance path** (ONLY after step 4 passes; CH-internal, NOT
+5. [ ] **Validate** supply/holders vs on-chain getters on ≥10 type-3 tokens incl. a vault (MERU) +
+   a rebasing token (EUTBL/eurSAFO); **AND classic assets (USDC) + account portfolios** (the read
+   cutover affects them, not just type-3). Also: holder_count vs an independent enumeration on ≥3
+   tokens (the event-regex seed may miss holders never named in events); TTL/`removed→0` on a
+   dormant holder.
+6. [ ] **6d — retire legacy classic balance path** (ONLY after 2b + 5 pass; CH-internal, NOT
    0243-gated — PG is dead). Migrate the accounts-list native-XLM read off `account_balances_current`
    → `balances`; stop the indexer dual-write; drop `account_balances_current`.
-6. [ ] **Step 9 — SAC type-2 independent supply/holders** (LAST, spike-gated). Spike SAC
+7. [ ] **Step 9 — SAC type-2 independent supply/holders** (LAST, spike-gated). Spike SAC
    `total_supply` vs classic + how contract-holders are stored → if clean: `BalanceValue` struct
    decoder + trustline∪contract holders + verify supply==classic; if messy defer to 0210/0323.
 
@@ -219,8 +275,8 @@ approximation for conformant tokens if ever needed. Reparse open-question now CL
 
 **Status — core BUILT 2026-06-29 (TDD).** `backfill-runner balance-seed` (CH-only). Pure units
 `rpc_snapshot::balance_ledger_key` + `decode_balance_entry` unit-tested (RED→GREEN); orchestration
-`balance_seed.rs` (candidate scan → RPC `getLedgerEntries` → decode → upsert `balances` +
-`addresses`) mirrors `upgradeable_backfill`; candidate SQL validated on prod CH (MERU = 5974 holder
+`balance_seed.rs` (candidate scan → RPC `getLedgerEntries` → decode → upsert `balances`)
+mirrors `upgradeable_backfill`; candidate SQL validated on prod CH (MERU = 5974 holder
 candidates). Supply = authoritative instance `TotalSupply` key (RPC-probed: i128 on MERU/
 USDC-style, absent on plain soroban-sdk → fallback `Σ balances`), written to
 `soroban_token_supply` and coalesced over the sum at read. Remaining before prod: run under
@@ -502,7 +558,8 @@ Two unbiased agents (no access to this task) audited the data. Net:
 - [x] Balance + supply decode unit-tested; non-bare-`i128` (SAC struct) + non-`Balance`
       keys skipped, never mis-summed.
 - [x] **Docs (ADR 0032):** `clickhouse-pilot.md §4f` (balance family) + `indexing-pipeline §6.2`
-      (balance-seed). **API types:** regen produced no diff (SQL-only change) — confirmed.
+      (balance-seed). **API types:** the `decimals` field was added to the assets + account-balance
+      DTOs (steps 1–6, regenerated then); the step-7 read/seed + PG-cut changes produced no further diff.
 - [ ] **Prod validation:** run `balance-seed` under the catch-up gate; supply/holders match
       on-chain getters on a ≥10-token sample incl. a vault (MERU) + a rebasing token (EUTBL/eurSAFO).
 - [x] **Frontend** raw-amount rendering (`scaleByDecimals` by `decimals`) — AssetsTable + AssetSummary
