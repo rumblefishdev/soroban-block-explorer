@@ -94,6 +94,22 @@ history:
       critical-path) and SAC->classic resolver (their 0061 → gates Soroban-DEX
       legs = Phase 3). Phase 1/2 (classic) unblocks when API live; Phase 3 gated
       on 0061.
+  - date: '2026-06-30'
+    status: blocked
+    who: karolkow
+    note: >
+      Cross-link from the 0331 investigation (2026-06-30, contract-as-holder sweep):
+      Phase 3 (Soroban-DEX TVL) needs MORE than the SAC->classic price resolver (0061).
+      Soroban AMM pools (Soroswap/Phoenix/Aquarius) are CONTRACTS; their reserves are
+      contract-held SAC `ContractData Balance(pool)` entries — NOT indexed today. Classic
+      pools get reserves from `LiquidityPoolEntry` (on-ledger, already indexed); Soroban
+      pools have no such ledger entry, so the classic reserve path cannot supply them.
+      Reading them is the SAME mechanism as 0331's type-3 `balance-seed`
+      (`Balance(Address)` STATE read; decode the SAC `BalanceValue.amount`). Prerequisite:
+      the deferred "0331 SAC ContractData balance ingestion (types 0/1/2)" follow-up — one
+      data path serves both contract-held balances AND Soroban-LP reserves. Proof: one pool
+      (`CATUJXDU…`) holds ~1.2M XLM + ~194k EURC contract-held, invisible to the explorer
+      today. Classic Phase 1/2 unaffected.
 ---
 
 # LP analytics: TVL + volume + fee_revenue
