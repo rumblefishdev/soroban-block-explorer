@@ -2,9 +2,9 @@
 id: '0247'
 title: 'RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives'
 type: RESEARCH
-status: active
+status: completed
 related_adr: ['0011', '0027', '0029', '0037']
-related_tasks: ['0077', '0163', '0169', '0199', '0246', '0261', '0266']
+related_tasks: ['0077', '0163', '0169', '0199', '0246', '0261', '0266', '0279']
 tags:
   [
     priority-medium,
@@ -82,6 +82,16 @@ history:
       non-collapsed LedgerEntryChanges → 100%, no collision, no hot-path
       S3). Path decision recorded in the existing task 0279 (spawned from 0274). Recommendation
       delivered; research goal met.
+  - date: 2026-06-30
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived. Research goal met 2026-06-03 (verdict Path C, impl = 0279);
+      this entry only flips status active → completed and moves the task to
+      archive/. Remaining unchecked AC items (Path A benchmark, cache hit rate,
+      egress cost, ADR amendment) were Path-A/B artifacts the reframe rendered
+      moot — none are owed. Per-op reserve-diff validation that would have been
+      E2/E3/E4 lives in 0279's acceptance criteria.
 ---
 
 # RESEARCH: LP per-tx amounts — XDR archive fetch viability + alternatives
