@@ -2,7 +2,7 @@
 id: '0271'
 title: 'Search: collapse fetch_redirect into broad + singleton-redirect (option C refactor)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0047', '0024']
 related_tasks: ['0270', '0264', '0243']
 tags:
@@ -104,6 +104,20 @@ history:
       knows their composite/surrogate routing). Wire shape change
       is breaking but only our FE consumes the API; OpenAPI regen
       + FE typecheck enforce the migration in one PR.
+  - date: '2026-06-30'
+    status: completed
+    who: karolkow
+    note: >
+      Archived — status was stale `active`. Option C refactor shipped to
+      develop via PR #223 (2026-05-27, authored + merged by karolkow):
+      `fetch_redirect`/`RedirectRow`/`Classified::is_fully_typed()` removed,
+      `tx_hits` CTE re-enabled, handler always returns Results (FE owns
+      singleton routing), pool strkey output live. 135 lib + 3 integration
+      tests green; OpenAPI regen + FE typecheck green. AC checkboxes left
+      unchecked at merge (oversight) but verified present in code. Deviation:
+      `docs/architecture/api/url-conventions.md` deleted (not updated) per the
+      respect-user-edits rule — documented above. Detail-page 404 hygiene
+      audit done (all 7 routes uniform NotFoundState).
 ---
 
 # Search: collapse fetch_redirect into broad + singleton-redirect (option C)
