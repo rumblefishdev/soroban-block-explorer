@@ -140,9 +140,7 @@ pub async fn execute(
     stats.balances_decoded = balances.len() as u64;
     stats.supply_read = supply_rows.len() as u64;
 
-    // type-3 seed → empty SAC index (these are bespoke tokens keyed by their own
-    // contract surrogate; the SAC contract-held seed is a separate pass).
-    let balance_rows = build_balance_rows(&balances, &std::collections::HashMap::new());
+    let balance_rows = build_balance_rows(&balances);
 
     if dry_run {
         info!(

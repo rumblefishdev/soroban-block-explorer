@@ -232,10 +232,6 @@ impl PartitionWriterHandle<'_> {
                         // entries never re-emitted in-window stay absent — the
                         // open caveat.)
                         soroban_token_balances: &parsed.soroban_token_balances,
-                        // ponytail: empty SAC index here — the backfill seed keys
-                        // SAC contract-held balances to their own surrogate until
-                        // the targeted `assets` lookup lands (task 0331 SAC leg).
-                        sac_index: &std::collections::HashMap::new(),
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):

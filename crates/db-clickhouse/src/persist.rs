@@ -133,10 +133,6 @@ pub async fn persist_ledger_clickhouse(
         lp_positions,
         contract_metadata_writes,
         soroban_token_balances,
-        // ponytail: empty SAC index until the targeted `assets` (type-2) lookup
-        // lands — SAC contract-held balances key to their own surrogate for now;
-        // type-3 keying is unaffected. (task 0331 SAC leg, next step.)
-        sac_index: &std::collections::HashMap::new(),
         sac_overrides,
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
