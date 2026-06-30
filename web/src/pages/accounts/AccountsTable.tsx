@@ -7,6 +7,7 @@ import {
   IdentifierWithCopy,
   Dash,
   formatAmount,
+  scaleByDecimals,
   type ExplorerTableColumn,
   type SortDirection,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -58,7 +59,8 @@ const columns: ExplorerTableColumn<AccountListItem>[] = [
     cell: (row) =>
       row.xlm_balance != null ? (
         <Typography component="span" variant="bodySmMedium">
-          {formatAmount(row.xlm_balance)}
+          {/* xlm_balance is RAW stroops (Int128); native is 7 decimals. */}
+          {formatAmount(scaleByDecimals(row.xlm_balance, 7))}
         </Typography>
       ) : (
         <Dash />

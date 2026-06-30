@@ -50,7 +50,7 @@ export type AccountDetailResponse = {
  * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
  * first/last-seen activity window + `home_domain`. Ordered by
  * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
- * balance from `account_balances_current`; `null` if no native row exists.
+ * balance from the unified `balances` table; `null` if no native row exists.
  */
 export type AccountListItem = {
   account_id: string;
@@ -58,7 +58,9 @@ export type AccountListItem = {
   home_domain?: string | null;
   last_seen_ledger: number;
   /**
-   * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+   * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+   * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+   * the account-detail balances.
    */
   xlm_balance?: string | null;
 };
@@ -960,7 +962,9 @@ export type PaginatedAccountListItem = {
     home_domain?: string | null;
     last_seen_ledger: number;
     /**
-     * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+     * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+     * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+     * the account-detail balances.
      */
     xlm_balance?: string | null;
   }>;

@@ -1992,7 +1992,7 @@
       },
       "AccountListItem": {
         "type": "object",
-        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
         "required": ["account_id", "last_seen_ledger", "first_seen_ledger"],
         "properties": {
           "account_id": {
@@ -2011,7 +2011,7 @@
           },
           "xlm_balance": {
             "type": ["string", "null"],
-            "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+            "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
           }
         }
       },
@@ -3224,7 +3224,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
               "required": [
                 "account_id",
                 "last_seen_ledger",
@@ -3247,7 +3247,7 @@
                 },
                 "xlm_balance": {
                   "type": ["string", "null"],
-                  "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+                  "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
                 }
               }
             }

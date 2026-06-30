@@ -146,11 +146,11 @@ pub async fn fetch_list(
         return Ok(Vec::new());
     }
 
-    // Step 2: resolve the native (asset_type=0) XLM balance for the page's
-    // account ids by a PK-prefix key-seek. `account_balances_current` is
-    // ORDER BY (account_id, asset_type, …), so `account_id IN (…)` seeks the
-    // prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is i64
-    // surrogates (no injection surface), bounded by the page limit.
+    // Step 2: resolve each page account's native (XLM) balance from the unified
+    // `balances` table by a PK-prefix key-seek. `balances` is ORDER BY
+    // (holder_id, asset_id), so `holder_id IN (…)` seeks the prefix; `FINAL` is
+    // bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
+    // surface), bounded by the page limit.
     let ids = {
         let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
         v.sort_unstable();
@@ -159,9 +159,16 @@ pub async fn fetch_list(
     };
     let balances: HashMap<i64, String> = client
         .query(&format!(
-            "SELECT account_id AS account_id, toString(balance) AS balance \
-             FROM account_balances_current FINAL \
-             WHERE account_id IN ({ids}) AND asset_type = 0"
+            // task 0331 read-cutover: native (XLM) balance now from the unified
+            // `balances` table (RAW Int128 = stroops). The frontend scales by
+            // `decimals` (7 for native) — same raw-amount contract as the
+            // account-detail balances. Resolve native via `assets.asset_type = 0`
+            // (the native asset_id is a Rust cityhash, which CH `cityHash64`
+            // cannot recompute, so we join rather than hardcode a literal).
+            "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0"
         ))
         .fetch_all::<AccountListBalanceRow>()
         .await?
