@@ -22,6 +22,7 @@ mod sink;
 mod status;
 mod sync;
 mod upgradeable_backfill;
+mod util;
 mod wasm_upgrade_backfill;
 
 use std::path::{Path, PathBuf};
@@ -228,8 +229,8 @@ enum Command {
     /// token balances (bespoke type-3 tokens) into the unified `balances`
     /// table. Enumerates holders from each token's `soroban_events` stream,
     /// reads their current `Balance(Address)` ledger entries from Soroban RPC
-    /// (`getLedgerEntries`), and upserts `balances` + `addresses`
-    /// (ReplacingMergeTree). Reads CURRENT chain state, so it is correct
+    /// (`getLedgerEntries`), and upserts `balances` (ReplacingMergeTree).
+    /// Reads CURRENT chain state, so it is correct
     /// regardless of indexer lag; live ingest supersedes it on catch-up.
     /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` reports without
     /// writing. CH-only.
@@ -406,12 +407,11 @@ async fn main() {
                 .await
                 .expect("balance_seed failed — idempotent, safe to re-run");
             println!(
-                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={} addresses={} supply_read={}",
+                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={} supply_read={}",
                 stats.dry_run,
                 stats.tokens,
                 stats.keys_requested,
                 stats.balances_decoded,
-                stats.addresses,
                 stats.supply_read,
             );
         }

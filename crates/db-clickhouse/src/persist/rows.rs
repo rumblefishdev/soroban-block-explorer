@@ -161,25 +161,17 @@ pub struct SorobanContractMetadataRow {
 
 /// `balances` — unified per-holder balance (task 0331, Option C). RMT(version);
 /// `last_updated_ledger` = observed ledger; removed/zeroed → `amount = 0`.
-/// `holder_id` = `cityhash64(holder StrKey)` (→ `addresses.id`); `asset_id` =
-/// `ids::asset_id` (→ `assets.id`); `amount` raw `Int128` (scale by the asset's
-/// decimals at read). Replaces `soroban_token_balances` + (after step 6) classic
-/// `account_balances_current`.
+/// `holder_id` = `cityhash64(holder StrKey)` (one surrogate space with
+/// `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts`
+/// (G) / `soroban_contracts` (C)); `asset_id` = `ids::asset_id` (→ `assets.id`);
+/// `amount` raw `Int128` (scale by the asset's decimals at read). Replaces
+/// `soroban_token_balances` + (after step 6) classic `account_balances_current`.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct BalanceRow {
     pub holder_id: i64,
     pub asset_id: i64,
     pub amount: i128,
     pub last_updated_ledger: i64,
-}
-
-/// `addresses` — unified address dimension (task 0331). One row per `ScAddress`;
-/// resolves `balances.holder_id` → StrKey + kind. `id = cityhash64(strkey)`.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct AddressRow {
-    pub id: i64,
-    pub strkey: String,
-    pub kind: String,
 }
 
 /// `soroban_token_supply` — authoritative per-token `total_supply` from the

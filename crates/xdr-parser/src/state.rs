@@ -304,8 +304,9 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
 ///
 /// Reads ledger STATE (the current stored balance), not an event-fold —
 /// correct-by-construction for vault / rebasing / non-SEP-41-event tokens where
-/// a fold under-counts (README DECISION 2026-06-29). Maps to the
-/// `soroban_token_balances` side table (mirror of `account_balances_current`).
+/// a fold under-counts (README DECISION 2026-06-29). Persisted into the unified
+/// `balances` table (task 0331 Option C — the per-type `soroban_token_balances`
+/// table was dropped on the pivot).
 ///
 /// Only the standard `Vec[Symbol("Balance"), Address]` key with a bare-`i128`
 /// value is recognised. Non-standard balance layouts (e.g. the SAC

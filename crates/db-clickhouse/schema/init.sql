@@ -365,24 +365,14 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- the persist repoint + classic migration (steps 4-6) move data onto them, after
 -- which the per-type tables are dropped. See the task README CURRENT PLAN.
 
--- Unified address dimension — one surrogate per `ScAddress` (G-account OR
--- C-contract), resolving `balances.holder_id` → strkey + kind for display/portfolio.
--- `id = cityhash64(strkey)` (the same space as `accounts.id` / `soroban_contracts.id`);
--- `kind` disambiguates that shared hash space. RMT dedups re-observations.
-CREATE TABLE IF NOT EXISTS addresses (
-    id     Int64,
-    strkey String,
-    kind   LowCardinality(String)   -- 'account' | 'contract' | (later: 'muxed' …)
-)
-ENGINE = ReplacingMergeTree
-ORDER BY (id);
-
 -- Unified per-holder balances — the single balance model for ALL asset types.
 -- `amount` is RAW `Int128` (scale by the asset's `decimals` at read — universal
 -- fixed-point, handles classic 7-dec AND arbitrary Soroban decimals). `holder_id`
--- → `addresses.id` (account or contract); `asset_id` → the `assets.id` surrogate
--- (`ids::asset_id`). RMT version = `last_updated_ledger`; a removed/zeroed balance
--- writes 0 so a fully-spent holder collapses.
+-- = `cityhash64(holder StrKey)` (the same surrogate space as `accounts.id` /
+-- `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) or
+-- `soroban_contracts` (C) — there is no dedicated address dimension). `asset_id`
+-- → the `assets.id` surrogate (`ids::asset_id`). RMT version = `last_updated_ledger`;
+-- a removed/zeroed balance writes 0 so a fully-spent holder collapses.
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,

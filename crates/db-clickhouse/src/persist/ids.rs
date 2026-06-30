@@ -97,10 +97,10 @@ pub fn contract_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
-/// `addresses.id` / `balances.holder_id` from ANY `ScAddress` StrKey — a G-account
-/// or a C-contract (a balance holder can be either; task 0331). Same `cityhash64`
-/// as `account_id`/`contract_id` (one shared surrogate space; `addresses.kind`
-/// disambiguates).
+/// `balances.holder_id` from ANY `ScAddress` StrKey — a G-account or a C-contract
+/// (a balance holder can be either; task 0331). Same `cityhash64` as
+/// `account_id`/`contract_id` (one shared surrogate space; resolve back to a StrKey
+/// via `accounts` (G) / `soroban_contracts` (C)).
 #[inline]
 pub fn address_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())

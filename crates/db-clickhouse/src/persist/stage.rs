@@ -132,8 +132,6 @@ pub struct StagedLedger {
     /// [`prepare_with_sac_overrides`] via [`build_balance_rows`] from
     /// `StageInputs.soroban_token_balances`. (Classic joins in at step 6.)
     pub unified_balance_rows: Vec<BalanceRow>,
-    /// `addresses` dimension rows for the balance holders (task 0331).
-    pub address_rows: Vec<AddressRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -163,9 +161,10 @@ pub struct StageInputs<'a> {
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
-    /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
-    /// entries (task 0331). Threaded to `soroban_balance_rows` via
-    /// [`build_soroban_balance_rows`]. Empty `&[]` for legacy callers.
+    /// Per-holder Soroban token (type-3) balances from `ContractData`
+    /// `Balance(Address)` entries (task 0331). Threaded to the unified
+    /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
+    /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
     /// Crypto-proven un-deployed-SAC overrides for this ledger's events
     /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
@@ -324,23 +323,6 @@ pub fn build_balance_rows(balances: &[ExtractedSorobanBalance]) -> Vec<BalanceRo
             asset_id: ids::asset_id(3, "", 0, ids::contract_id(&b.contract_id)),
             amount: b.balance,
             last_updated_ledger: i64::from(b.ledger),
-        })
-        .collect()
-}
-
-/// Emit `addresses` dimension rows for every balance holder (task 0331).
-/// `id = ids::address_id(strkey)`; `kind` = account (G…) else contract.
-pub fn build_address_rows(balances: &[ExtractedSorobanBalance]) -> Vec<AddressRow> {
-    balances
-        .iter()
-        .map(|b| AddressRow {
-            id: ids::address_id(&b.holder),
-            strkey: b.holder.clone(),
-            kind: if b.holder.starts_with('G') {
-                "account".to_string()
-            } else {
-                "contract".to_string()
-            },
         })
         .collect()
 }
@@ -662,7 +644,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
     out.unified_balance_rows = build_balance_rows(soroban_token_balances);
-    out.address_rows = build_address_rows(soroban_token_balances);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -1952,28 +1933,5 @@ mod balance_tests {
         assert_eq!(rows[0].asset_id, ids::contract_id("CTOKEN1"));
         assert_eq!(rows[0].amount, 800_009_446_178_i128);
         assert_eq!(rows[0].last_updated_ledger, 100);
-    }
-
-    #[test]
-    fn build_address_rows_tags_kind_and_keeps_strkey() {
-        let extracted = vec![
-            ExtractedSorobanBalance {
-                contract_id: "CTOKEN1".into(),
-                holder: "GHOLDER1".into(),
-                balance: 1,
-                ledger: 1,
-            },
-            ExtractedSorobanBalance {
-                contract_id: "CTOKEN1".into(),
-                holder: "CCONTRACT1".into(),
-                balance: 1,
-                ledger: 1,
-            },
-        ];
-        let rows = build_address_rows(&extracted);
-        assert_eq!(rows[0].id, ids::address_id("GHOLDER1"));
-        assert_eq!(rows[0].strkey, "GHOLDER1");
-        assert_eq!(rows[0].kind, "account");
-        assert_eq!(rows[1].kind, "contract");
     }
 }

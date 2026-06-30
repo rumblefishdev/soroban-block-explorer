@@ -393,7 +393,7 @@ under-count. `balance-seed` enumerates each type-3 token's holder candidates
 from its `soroban_events` topics/data (the event SET — value comes from ledger
 STATE, never an event-fold), reads their current `Balance(Address)` entries **and**
 the token's instance `Symbol("TotalSupply")` key via `getLedgerEntries`, and upserts
-`balances` + `addresses` + `soroban_token_supply`. The last is the authoritative
+`balances` + `soroban_token_supply`. The last is the authoritative
 per-token supply (archival-proof, exact for vault/rebasing); the assets read
 coalesces it over the summed `balance_aggregates`, and tokens that don't store the
 key fall back to the sum. It reads CURRENT chain state, so the snapshot is correct

@@ -286,18 +286,19 @@ PG keeps all of these.
 Soroban-token (`asset_type = 3`) `total_supply` / `holder_count` rendered `—` (no
 trustlines). The fix is a CH-only **unified per-holder balance model** that also
 re-keys classic balances off PG's `Decimal128(7)` `account_balances_current` onto a
-raw representation. Five objects, none in PG:
+raw representation. Four objects, none in PG:
 
-- **`addresses`** (`id Int64`, `strkey String`, `kind String`) — one row per
-  `ScAddress` (`G…` account or `C…` contract; ~34% of type-3 holders are
-  contracts). `id = cityhash64(strkey)`. Resolves `balances.holder_id` → StrKey for
-  portfolio / top-holders.
 - **`balances`** (`holder_id`, `asset_id`, `amount Int128`, `last_updated_ledger`)
   `ReplacingMergeTree(last_updated_ledger)` — unified per-holder balance, raw
   `Int128` (scale by the asset's `decimals` at read; type-3 decimals vary — PIKA
   43224 overflows any `Decimal`). Read from `ContractData Balance(Address)` ledger
   STATE, never an event-fold (folds drift on vault / rebasing / non-SEP-41-event
   tokens — see README DECISION 2026-06-29). `removed` / spent → `amount = 0`.
+  `holder_id = cityhash64(holder StrKey)` — a `G…` account or `C…` contract (~34% of
+  type-3 holders are contracts), in the one surrogate space shared with `accounts.id`
+  / `soroban_contracts.id`. Resolution back to a StrKey (for portfolio / top-holders)
+  is via `accounts` (G) / `soroban_contracts` (C); there is no dedicated address
+  dimension.
 - **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
   `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
   (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over

@@ -19,10 +19,9 @@
 //! 2. Build `Balance(Address)` persistent ledger keys and fetch them via
 //!    `getLedgerEntries` (batched by the shared [`RpcClient`]); decode the
 //!    bare-`i128` value with the same contract the live parser uses.
-//! 3. Write `balances` + `addresses` rows. Both are `ReplacingMergeTree` (keyed
-//!    `(holder_id, asset_id)` / `id`) with version = the entry's last-modified
-//!    ledger, so the live writer cleanly supersedes the seed once ingest catches
-//!    up.
+//! 3. Write `balances` rows (`ReplacingMergeTree`, keyed `(holder_id, asset_id)`)
+//!    with version = the entry's last-modified ledger, so the live writer cleanly
+//!    supersedes the seed once ingest catches up.
 //!
 //! Reads CURRENT state, so it is **freshness-immune to the indexer lag** — the
 //! seed is correct at run time no matter how far behind live ingest is.
@@ -33,13 +32,14 @@
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AddressRow, BalanceRow, SorobanTokenSupplyRow};
-use db_clickhouse::persist::stage::{build_address_rows, build_balance_rows};
+use db_clickhouse::persist::rows::SorobanTokenSupplyRow;
+use db_clickhouse::persist::stage::build_balance_rows;
 use serde::Deserialize;
 use tracing::info;
 use xdr_parser::ExtractedSorobanBalance;
 
 use crate::error::BackfillError;
+use crate::util::insert_rows;
 use crate::rpc_snapshot::{
     RpcClient, balance_ledger_key, decode_balance_entry, decode_total_supply, instance_ledger_key,
 };
@@ -53,8 +53,6 @@ pub struct BalanceSeedStats {
     pub keys_requested: u64,
     /// Live `Balance` entries returned by RPC and decoded (bare-`i128` only).
     pub balances_decoded: u64,
-    /// Distinct holder addresses staged into the `addresses` dimension.
-    pub addresses: u64,
     /// Tokens whose authoritative instance `TotalSupply` key was read.
     pub supply_read: u64,
     pub dry_run: bool,
@@ -143,43 +141,22 @@ pub async fn execute(
     stats.supply_read = supply_rows.len() as u64;
 
     let balance_rows = build_balance_rows(&balances);
-    let address_rows = build_address_rows(&balances);
-    stats.addresses = address_rows.len() as u64;
 
     if dry_run {
         info!(
             tokens = stats.tokens,
             keys_requested = stats.keys_requested,
             balances_decoded = stats.balances_decoded,
-            addresses = stats.addresses,
             supply_read = stats.supply_read,
             "balance_seed: dry-run, no rows written"
         );
         return Ok(stats);
     }
 
-    let mut insert = client.insert::<BalanceRow>("balances").await?;
-    for row in &balance_rows {
-        insert.write(row).await?;
-    }
-    insert.end().await?;
-
-    let mut insert = client.insert::<AddressRow>("addresses").await?;
-    for row in &address_rows {
-        insert.write(row).await?;
-    }
-    insert.end().await?;
-
-    let mut insert = client
-        .insert::<SorobanTokenSupplyRow>("soroban_token_supply")
-        .await?;
-    for row in &supply_rows {
-        insert.write(row).await?;
-    }
-    insert.end().await?;
+    insert_rows(client, "balances", &balance_rows).await?;
+    insert_rows(client, "soroban_token_supply", &supply_rows).await?;
     info!(
         balances = balance_rows.len(),
-        addresses = address_rows.len(),
         supply = supply_rows.len(),
         "balance_seed: wrote seed rows (RMT supersede; live ingest takes over on catch-up)"
     );

@@ -121,11 +121,6 @@ fn column_order_balances() {
 }
 
 #[test]
-fn column_order_addresses() {
-    assert_columns::<AddressRow>("addresses", &["id", "strkey", "kind"]);
-}
-
-#[test]
 fn column_order_soroban_token_supply() {
     assert_columns::<SorobanTokenSupplyRow>(
         "soroban_token_supply",

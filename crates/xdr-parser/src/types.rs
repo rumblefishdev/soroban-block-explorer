@@ -311,9 +311,10 @@ pub struct ExtractedContractMetadata {
 /// A per-holder Soroban token balance recovered from a `ContractData`
 /// `Balance(Address)` ledger-entry change (task 0331).
 ///
-/// Maps to a `soroban_token_balances` side table (mirror of
-/// `account_balances_current` for `asset_type = 3`): one row per
-/// `(contract_id, holder)`, RMT-versioned by `ledger`. Reading ledger STATE is
+/// Persisted into the unified `balances` table (task 0331 Option C; the in-memory
+/// `soroban_token_balances` identifiers are leftover Option-A naming — there is no
+/// table of that name): one row per `(holder, asset_id)`, RMT-versioned by `ledger`.
+/// Reading ledger STATE is
 /// correct-by-construction for vault / rebasing / non-SEP-41-event tokens, where
 /// an event-fold under-counts (see task README DECISION 2026-06-29).
 #[derive(Debug, Clone, PartialEq)]

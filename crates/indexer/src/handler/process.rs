@@ -65,7 +65,8 @@ pub struct ParseOutput {
     /// table (task 0297). SACs already excluded by the producer.
     pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
     /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
-    /// ledger entries, for the `soroban_token_balances` side table (task 0331).
+    /// ledger entries, persisted into the unified `balances` table (task 0331; the
+    /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
     pub soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance>,
     /// Per-transaction operation tree JSON, collected by `extract_invocations`.
     /// Neither write path reads it today (CH writer skips it, PG flow

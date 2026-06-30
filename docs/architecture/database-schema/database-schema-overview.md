@@ -120,12 +120,20 @@ Derived explorer entities:
   renamed from `tokens` in ADR 0036 / task 0154
 - `accounts` — account identity hub (`BIGSERIAL id` surrogate + `VARCHAR(56)` natural `account_id`)
 - `account_balances_current` — classic trustline current balances (history table dropped per ADR 0035)
-- `soroban_token_balances` — per-holder bespoke-Soroban-token (`asset_type = 3`) balances
-  from `ContractData` `Balance(Address)` ledger state (task 0331); holder is any
-  `ScAddress` (G-account or C-contract), `balance` raw `Int128`
-- `asset_aggregates` + `soroban_asset_aggregates` — pre-computed per-asset
-  `total_supply` / `holder_count`, refreshable MVs; the former over classic trustlines
-  (`Decimal128(7)`), the latter over `soroban_token_balances` (raw `Int128`, task 0331)
+- `balances` — unified per-holder balances for ALL asset types (task 0331 Option C, CH-only); raw
+  `Int128` `amount` scaled by `decimals` at read; classic dual-written from
+  `account_balances_current`, type-3 from `ContractData Balance(Address)` ledger state.
+  `holder_id = cityhash64(holder StrKey)` (G-account or C-contract) in the one surrogate space
+  shared with `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) /
+  `soroban_contracts` (C) — there is no dedicated address dimension
+- `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
+  `holder_count` (`countIf(amount > 0)`) over `balances`
+- `soroban_token_supply` — authoritative per-token `total_supply` from the instance `TotalSupply`
+  key (task 0331); the assets read coalesces it over `balance_aggregates`
+- `asset_aggregates` (+ refreshable MV) — pre-computed classic `total_supply` / `holder_count` over
+  `account_balances_current` (`Decimal128(7)`, `asset_type IN (1,2)`). The `balances` family above
+  is ClickHouse-only (see `clickhouse-pilot.md §4f`); there is no `soroban_token_balances` /
+  `soroban_asset_aggregates` (superseded by the unified model on the Option-C pivot)
 - `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
   time-series snapshots + per-account share positions
