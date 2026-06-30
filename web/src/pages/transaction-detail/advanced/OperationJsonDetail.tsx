@@ -76,7 +76,9 @@ function AdvancedRow({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function categoryChip(opType: string): ReactNode {
-  if (opType === 'invoke_host_function') {
+  // op_type arrives SCREAMING_SNAKE (`INVOKE_HOST_FUNCTION`); compare lowercased
+  // so the Soroban chip actually fires (was stuck on "Classic").
+  if (opType.toLowerCase() === 'invoke_host_function') {
     return <Chip size="sm" color="success" label="Soroban" />;
   }
   return <Chip size="sm" color="neutral" label="Classic" />;
@@ -116,9 +118,13 @@ export function OperationJsonDetail({
   const opType = heavy.op_type ?? light.type_name.toLowerCase();
   const details = heavy.details;
 
-  const fnName = asString(pickDetailValue(details, 'function_name').value);
-  const argsField = pickDetailValue(details, 'arguments');
-  const returnField = pickDetailValue(details, 'return_value');
+  // Keys are the camelCase shape the XDR parser emits for INVOKE_HOST_FUNCTION
+  // (`extract_invoke_host_function`): functionName / functionArgs / returnValue.
+  // (Previously read snake_case `function_name`/`arguments`/`return_value`, which
+  // never matched → the decoded call was silently dropped from the UI.)
+  const fnName = asString(pickDetailValue(details, 'functionName').value);
+  const argsField = pickDetailValue(details, 'functionArgs');
+  const returnField = pickDetailValue(details, 'returnValue');
   const authField = pickDetailValue(details, 'auth');
 
   return (
