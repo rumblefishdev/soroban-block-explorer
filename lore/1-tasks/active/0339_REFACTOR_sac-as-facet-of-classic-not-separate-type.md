@@ -2,7 +2,7 @@
 id: '0339'
 title: 'REFACTOR: SAC is a facet of classic_credit, not a separate `asset_type` — collapse the classic↔SAC entity split'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0336', '0337', '0323', '0154', '0219']
 tags:
@@ -29,7 +29,15 @@ history:
       classic↔SAC duplication: SAC is the same economic asset as its classic
       credit, not a separate entity. Supersedes the band-aids 0336 (read-collapse)
       and 0337 (link guard); absorbs the un-deployed-SAC-as-asset concern.
----
+  - date: '2026-06-30'
+    status: active
+    who: claude
+    note: >
+      Promoted to active to start the design (ADR-first). Taking the SAC-as-facet refactor
+      to the workbench: 3 gating decisions (migration strategy; CH keying for
+      one-row-per-(code,issuer) with native/soroban carve-outs; canonical-id wire change)
+      → audit of the affected surfaces (schema / write-path / API / frontend) → ADR →
+      phased implementation on a branch off develop.
 
 # REFACTOR: SAC is a facet of classic_credit, not a separate asset_type
 
