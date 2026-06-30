@@ -4,7 +4,7 @@ title: 'BUG: assets.total_supply Horizon parity — extend MVP sum to 4 sources'
 type: BUG
 status: backlog
 related_adr: ['0043']
-related_tasks: ['0194', '0197', '0331']
+related_tasks: ['0194', '0197', '0331', '0339', '0323']
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
 milestone: 2
@@ -21,6 +21,20 @@ history:
       MVP misses 3 of them, causing known drift up to ~20-50% on DeFi
       assets (USDC w/ Soroswap + SAC). This task closes the gap and
       validates parity against an external source.
+  - date: '2026-06-30'
+    status: backlog
+    who: claude
+    note: >
+      Re-confirmed in a SAC/asset modeling session: the SAC contract-holder gap
+      (`holder_count` + `total_supply` miss contract-side `ContractData` balances) is real
+      and has a Horizon parity target (`num_accounts` + `num_contracts` / `contracts_amount`).
+      Phase 3 (SAC contract holdings) owns the supply half; the `holder_count` half stays
+      deferred here (out of scope) but now has a confirmed Horizon target if un-deferred —
+      note the "semantics differ from trustline count" caveat applies to the ACCOUNT side;
+      the CONTRACT side has a clean `num_contracts` target. 0323 Phase 2 executed →
+      `soroban_contracts` is now deployed-only, so deployed-SAC identification for Phase 3 is
+      cleaner (`is_sac=true, deployed>0`). Entity-model context: 0339 (SAC = facet of
+      classic_credit, not a separate asset_type).
 ---
 
 # BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
