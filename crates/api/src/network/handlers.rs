@@ -75,7 +75,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
         DataSource::Pg => head::latest_sequence_pg(&state.db)
             .await
             .map_err(FetchStatsError::from),
-        DataSource::Ch => head::latest_sequence_ch(state.ch())
+        DataSource::Ch => head::latest_sequence_ch(&state.ch())
             .await
             .map_err(FetchStatsError::from),
     };
@@ -125,7 +125,7 @@ pub async fn get_network_stats(State(state): State<AppState>, headers: HeaderMap
                 DataSource::Pg => queries::fetch_stats(&state.db, head)
                     .await
                     .map_err(FetchStatsError::from),
-                DataSource::Ch => queries_ch::fetch_stats(state.ch(), head)
+                DataSource::Ch => queries_ch::fetch_stats(&state.ch(), head)
                     .await
                     .map_err(FetchStatsError::from),
             }
