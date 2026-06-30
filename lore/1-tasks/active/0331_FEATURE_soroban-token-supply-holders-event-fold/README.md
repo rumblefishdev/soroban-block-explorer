@@ -236,6 +236,89 @@ window — do NOT merge #293 alone.
 - [ ] **Per-protocol decoder for custom-storage Soroban pools** (u32-keyed, e.g. Soroswap/Phoenix):
   LP-share supply + reserves from instance keys. Without it those pools → `—` (honest). Low priority.
 
+#### Enumeration spike (Wątek 2 = B) + decisions (2026-06-30 cont.)
+
+**SAC holder enumeration — event-scan is infeasible (8.3B events, 89% of all soroban_events).** Use STATE, not events:
+- **Going-forward (durable):** extend live ingestion to capture `Balance(Address)` ContractData changes — we already process `contract_data` changes for instance keys ([ledger_entry_changes.rs](crates/xdr-parser/src/ledger_entry_changes.rs)). Then every balance change flows live for SAC **and** type-3, no event-scan, no RPC. Reframes even the type-3 event-regex seed.
+- **Historical seed:** enumerate `Balance(Address)` per contract from a STATE snapshot — Hubble BigQuery `contract_data_current` (verify Soroban populated) or a history-archive checkpoint. NOT events.
+
+**Decisions (2026-06-30):**
+- **W2 = B:** state-snapshot enumeration (above), in the contract-as-holder work.
+- **W4 = NO ACTION — NFT contract-ownership ALREADY WORKS** (corrected 2026-06-30; earlier "defer/monitor" and "silent-loss bug" were both wrong — see "Findings (continued)" below). Prod: **2,834 NFTs are contract-owned**, correctly indexed; the bug claim came from reading the **dead PG path**. Live CH (event-derived) captures C-owners fine.
+- **W5 = include native:** ingest type-0 (native XLM) contract-held too — a contract's largest holding is often XLM (the pool's 1.2M XLM); excluding it makes contract portfolios wrong.
+- **W1 = lean-bundle, W6 = single OPS window** (W1 to revisit). **W3 = deeper research, see plan below.**
+
+**NFT bug magnitude (chq, 2026-06-30):** 12,835 NFTs / 60 contracts; nft_ownership = 12,835 mints + 8,468 transfers + 9 burns; **0 NULL owners on transfers**, the only 9 NULLs are legit burns. → contract-recipient NFTs ≈ 0 today (nascent). Latent bug, not current data loss. No S3 backfill.
+
+## Findings 2026-06-30 (continued) — NFT works / asset-gap real / USDC proof / SAC = facet (0339)
+
+**CORRECTION — NFT contract-ownership ALREADY WORKS** (the earlier "silent-loss bug" was a dead-PG misread):
+- Prod CH: **2,834 NFTs are contract-owned** (resolve via `soroban_contracts`, 0 collisions), 9,992
+  account-owned, 9 NULL (= genuine burns); **10,934 contract-owner events**, none dropped.
+- Why the earlier analysis was wrong: it read the **dead PG path** (`write.rs` sqlx `resolve_opt_id`,
+  G/M-only). NFT ownership is **event-derived** — the live CH parser (`nft.rs`, address-agnostic) names
+  the owner from the event topics and stores the contract surrogate. C-owners are captured live.
+- Action: **none — it works.** Only watch the read/display side: resolve owner via
+  `accounts ∪ soroban_contracts`, NOT accounts-only (surrogate ids share one hash space).
+
+**Asset contract-holder gap (types 0/1/2) IS real — NOT the same misread.** `balances` is **not in prod**
+(0331 unmerged); fungible contract-held balances are **state-derived** (`ContractData Balance`) and the
+parser does NOT extract the SAC `BalanceValue` for 0/1/2 (`state.rs` = trustlines + instance-keys only).
+type-3 the parser DOES extract (`extract_soroban_token_balances`), pending 0331 deploy. The difference
+from NFT: **event-derived = captured; state-derived = not.**
+
+**USDC empirical proof of the gap (StellarExpert vs us):**
+
+| | Supply | Holders |
+|---|---|---|
+| us (`asset_aggregates`, trustline-sum) | 202,823,803 | 554,515 |
+| SE (Circle USDC) | 250,076,158 | 635,959 funded |
+| Δ | **−47.3M (~19%)** | −81k (~13%) |
+
+- Supply **−47M** ≈ contract-held (SAC) + classic-LP reserves + claimable — the venues we don't count
+  (+ some 12-day lag). Tangible proof of the contract-as-holder undercount on a real asset.
+- Holders **−81k** = both count trustlines (SE doesn't count contracts in "funded") → **staleness /
+  trustline-ingest completeness**, NOT the contract gap. Flag for a separate check.
+
+**native vs classic/SAC vs type-3 (StellarExpert contrast):**
+- native [XLM](https://stellar.expert/explorer/public/asset/XLM): one asset, `trustlines` funded 9.86M,
+  **`contract` = CAS3J7GY (native SAC) as an attribute** → even native uses "one asset + SAC attribute".
+- type-3 [Spiko EUTBL](https://stellar.expert/explorer/public/contract/CBGV2QFQBBGEQRUKUMCPO3SZOHDDYO6SCP5CH6TW7EALKVHCXTMWDDOF):
+  **metadata only, ZERO supply/holders** (14,255 storage entries unread) → industry-wide gap; **0331 is
+  the differentiator** (we read that state).
+
+| | native (0) | classic+SAC (1/2) | soroban (3) |
+|---|---|---|---|
+| holders | accounts | trustlines + contract (SAC) | ContractData only |
+| SE supply/holders | ✅ | ✅ | ❌ "—" |
+
+**SAC = facet of classic (docs-truth, NOT keep-two-rows).** Per official docs ("SAC = an API for
+interacting with the asset"; un-deployed SAC = "reserved address, neither asset nor active contract")
++ StellarExpert (one asset, SAC as `contract` attribute, holders = trustlines) → classic + SAC = ONE
+asset, ONE supply/holder figure. **Supply/holders for the SAC row vs the classic row SHOULD be EQUAL**
+(one asset, shared balances); the new per-`asset_id` `balance_aggregates` would make them diverge into
+PARTIALS (type-1 = trustlines, type-2 = contract-held) → that divergence is the bug. **Task 0339**
+(backlog on develop — "SAC is a facet of `classic_credit`, drop `asset_type=2`") is the correct
+root-fix; **supersedes 0336** (read-collapse band-aid) + **0337** (un-deployed-SAC link guard); it
+**overrides the research agent's Option-c "keep two rows".** W3 is now homed in 0339 — coordinate there,
+no fresh ADR needed.
+
+## Research plan — classic/SAC asset-model decision (Wątek 3, 2026-06-30)
+
+> Big schema decision: is `classic X` + `SAC(X)` one asset or two `assets` rows, and how to model supply/holders. Conclusion so far (docs + prod, 2026-06-30): ONE economic asset — one deterministic SAC per asset, account balances **share** the trustline, so one supply = trustlines + contract-balances. But this needs a full research + brainstorm (use the `brainstorming` skill) before any schema change. Devil's-advocate-hardened scope:
+
+**Step 0 — read [0323] (SAC-as-asset depollution) FIRST** — it may already govern the type-1/type-2 row model. Don't brainstorm from blank.
+
+**Must answer:**
+1. **Full supply definition** — `Σ trustlines + Σ contract ContractData + Σ classic-LP reserves (+ claimable balances?)`. Trustline-only (and even +contract) is INCOMPLETE: a classic asset in a classic AMM pool sits in `LiquidityPoolEntry`, not a trustline → already excluded today. Define ALL holding venues.
+2. **Frozen / deauthorized balances** — does a deauthorized contract balance (`BalanceValue.authorized=false`) / issuer-frozen trustline count toward supply + holder_count? Define, consistently classic vs contract.
+3. **Native duality** — native XLM also has a SAC (`CAS3J7GY`); the two-row question applies to type-0 too.
+4. **How other indexers model it** — StellarExpert: SAC as a separate asset, or as the classic asset's contract address?
+5. **Consumers of the type-2 row** — enumerate every read / FK / join keying on the SAC `assets` row before any collapse / cross-link.
+6. **Options + migration reversibility** — (a) two rows + synced metrics; (b) collapse type-2 into an attribute of type-1; (c) two rows, type-2 = "contract view" with no independent supply. Score by correctness AND migration reversibility.
+
+**Output:** a decision + ADR (coordinated with 0323), then the schema/read change. Gates the SAC (type-2) leg of the contract-as-holder work; does NOT gate the type-3 ship.
+
 ### Already built (earlier commits — reused / reworked by C)
 - `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
   holder ingestion.
@@ -856,9 +939,11 @@ into this scope.
   the unified `balances` table (raw `i128`), not `account_balances_current`. Industry-wide gap
   (StellarExpert doesn't show it either). Not spawned.
 
-- **NFT contract-owner silently dropped → owner-less.** An NFT owned by a contract (`C…`) is
+- **NFT contract-owner — CORRECTED 2026-06-30: NOT a bug, already works** (live CH stores 2,834
+  contract-owned NFTs; the NULL claim below is the DEAD PG path, not live behaviour — see
+  Findings continued). Original (wrong) write-up kept for trail: ~~An NFT owned by a contract (`C…`) is
   recorded with `owner_id = NULL` (`write.rs:2762` rejects non-`G`/`M`; `staging.rs:1491`
   G-only; owner FK is accounts-only, no discriminator). Independent silent-data-loss bug. Fix via
   **Path A** (owner_id = `address_id` surrogate, union-resolve `accounts` ∪ `soroban_contracts` —
   like `balances.holder_id`; see Holder-model decision) + dropping the `G`/`M`-only guard, while
-  still splitting legit `C` owners from `L`/`B` false-positive NFTs (task 0118). Not spawned.
+  still splitting legit `C` owners from `L`/`B` false-positive NFTs (task 0118). Not spawned.~~ **(Moot — NFT contract-ownership already works on live CH.)**
