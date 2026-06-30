@@ -82,6 +82,20 @@ export interface EnvironmentConfig {
   /** Daily request quota for partner API key usage plans. */
   readonly apiGatewayPartnerDailyQuota: number;
 
+  /**
+   * Load-test window switch (task 0338). When `true`, the API Gateway stack
+   * lifts the volumetric DDoS protections so a load test measures backend
+   * capacity instead of edge throttling: the per-stage + usage-plan throttle
+   * is raised to the account ceiling and the REGIONAL WAF's per-IP rate-based
+   * rule is dropped. Everything else stays: WAF managed rules, `edge_lock`
+   * (X-Edge-Secret), API-key auth, and the Lambda↔Hetzner mTLS are untouched.
+   *
+   * DANGER: this removes the rate protections on the PUBLIC production API.
+   * Only flip `true` for a coordinated test window, then flip back. Never
+   * commit `true`. `validateConfig` emits a loud warning when it is set.
+   */
+  readonly loadTesting: boolean;
+
   // Delivery (consumed by DeliveryStack + ApiGatewayStack)
 
   /** Frontend SPA domain, e.g. "sorobanscan.rumblefish.dev". */
@@ -602,6 +616,23 @@ export function validateConfig(config: EnvironmentConfig): void {
         `and enableOriginSecretLock=false. The CloudFront distribution will be publicly ` +
         `accessible with no gating. If this is intentional, ignore. Otherwise enable one of ` +
         `them in envs/${config.envName}.json.`
+    );
+  }
+
+  // Loud, deliberately hard-to-miss warning: a load-test deploy strips the
+  // volumetric DDoS protections off the public API (task 0338). Allowed (the
+  // test runs against prod), but it must never ship unnoticed or stay on.
+  if (config.loadTesting) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `\n========================================================================\n` +
+        `[validateConfig] !!! LOAD-TEST MODE ACTIVE on "${config.envName}" !!!\n` +
+        `  API Gateway throttle is raised to the account ceiling and the WAF\n` +
+        `  per-IP rate-based rule is DROPPED. The public API has NO volumetric\n` +
+        `  rate protection in this deploy. Only valid for a coordinated test\n` +
+        `  window — set loadTesting=false in envs/${config.envName}.json and\n` +
+        `  redeploy as soon as the run is done. Do NOT commit loadTesting=true.\n` +
+        `========================================================================\n`
     );
   }
 }

@@ -30,6 +30,7 @@
   "apiGatewayCacheTtlImmutable": 3600,
   "apiGatewayCacheTtlMutable": 10,
   "apiGatewayPartnerDailyQuota": 10000,
+  "loadTesting": false,
   "domainName": "sorobanscan.rumblefish.dev",
   "apiDomainName": "api.sorobanscan.rumblefish.dev",
   "hostedZoneId": "Z10396861CRMUIWWA8TL9",
