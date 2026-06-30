@@ -308,10 +308,11 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
 /// `balances` table (task 0331 Option C — the per-type `soroban_token_balances`
 /// table was dropped on the pivot).
 ///
-/// Only the standard `Vec[Symbol("Balance"), Address]` key with a bare-`i128`
-/// value is recognised. Non-standard balance layouts (e.g. the SAC
-/// `BalanceValue` struct, or a Map-wrapped amount) are skipped here and handled
-/// as separate, tested shapes — never silently mis-summed.
+/// The standard `Vec[Symbol("Balance"), Address]` key is recognised with either
+/// a bare-`i128` value (soroban-sdk token) OR the SAC `BalanceValue` struct
+/// (`Map` with an `amount` field — native/classic/SAC contract holdings, types
+/// 0/1/2, task 0331 SAC leg). Other value shapes are skipped, never
+/// silently mis-summed.
 pub fn extract_soroban_token_balances(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedSorobanBalance> {
@@ -337,7 +338,7 @@ pub fn extract_soroban_token_balances(
                 let Some(data) = change.data.as_ref() else {
                     continue;
                 };
-                let Some(b) = decode_scval_i128(data) else {
+                let Some(b) = decode_balance_amount(data) else {
                     continue;
                 };
                 b
@@ -384,6 +385,37 @@ fn decode_scval_i128(data: &Value) -> Option<i128> {
         return None;
     }
     val.get("value")?.as_str()?.parse::<i128>().ok()
+}
+
+/// Decode a balance value: a bare `i128` (soroban-sdk token) OR the SAC
+/// `BalanceValue` struct's `amount` field. SAC contract-held balances (native /
+/// classic / SAC assets, types 0/1/2) store the amount in a
+/// `Map[amount: i128, authorized: bool, clawback: bool]` struct, not a bare
+/// `i128` — task 0331 SAC contract-held leg.
+fn decode_balance_amount(data: &Value) -> Option<i128> {
+    decode_scval_i128(data).or_else(|| decode_sac_balance_amount(data))
+}
+
+/// `Some(amount)` when `data.val` is the SAC `BalanceValue` struct
+/// (`Map` containing a `Symbol("amount") -> i128` entry); `None` otherwise. The
+/// `authorized` / `clawback` flags are intentionally ignored — a frozen balance
+/// still counts toward supply/holders (consistent with classic trustlines; see
+/// README Wątek 3 research).
+fn decode_sac_balance_amount(data: &Value) -> Option<i128> {
+    let val = data.get("val")?;
+    if val.get("type")?.as_str()? != "map" {
+        return None;
+    }
+    for entry in val.get("value")?.as_array()? {
+        let key = entry.get("key")?;
+        if key.get("type")?.as_str()? == "sym" && key.get("value")?.as_str()? == "amount" {
+            let amt = entry.get("value")?;
+            if amt.get("type")?.as_str()? == "i128" {
+                return amt.get("value")?.as_str()?.parse::<i128>().ok();
+            }
+        }
+    }
+    None
 }
 
 fn is_contract_instance_key(key: &Value) -> bool {
@@ -1454,6 +1486,40 @@ mod tests {
         assert_eq!(balances[0].contract_id, "CTOKEN1");
         assert_eq!(balances[0].holder, "GHOLDER1");
         assert_eq!(balances[0].balance, 800_009_446_178_i128);
+        assert_eq!(balances[0].ledger, 100);
+    }
+
+    #[test]
+    fn extract_sac_balance_value_struct() {
+        // A SAC stores a CONTRACT holder's balance as a `BalanceValue` struct
+        // (Map[amount: i128, authorized: bool, clawback: bool]), not a bare i128
+        // like a soroban-sdk token. The `.amount` field is the balance — task 0331
+        // SAC contract-held leg (the real shape read off mainnet: an AMM pool
+        // holding EURC via the EURC SAC).
+        let key = json!({
+            "contract": "CSACEURC",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "CPOOL1" }
+            ]},
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "map", "value": [
+            { "key": { "type": "sym", "value": "amount" },
+              "value": { "type": "i128", "value": "1939341492641" } },
+            { "key": { "type": "sym", "value": "authorized" },
+              "value": { "type": "bool", "value": true } },
+            { "key": { "type": "sym", "value": "clawback" },
+              "value": { "type": "bool", "value": false } }
+        ]});
+        let changes = vec![make_change("contract_data", "updated", key, Some(data))];
+
+        let balances = extract_soroban_token_balances(&changes);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances[0].contract_id, "CSACEURC");
+        assert_eq!(balances[0].holder, "CPOOL1");
+        assert_eq!(balances[0].balance, 1_939_341_492_641_i128);
         assert_eq!(balances[0].ledger, 100);
     }
 

@@ -313,16 +313,35 @@ pub fn build_metadata_rows(
 }
 
 /// Map parser-extracted Soroban token balances to unified `balances` rows
-/// (task 0331, Option C). `holder_id` = `ids::address_id(holder)`; `asset_id` =
-/// `ids::asset_id` for the type-3 token (= its contract surrogate); `amount` raw.
-pub fn build_balance_rows(balances: &[ExtractedSorobanBalance]) -> Vec<BalanceRow> {
+/// (task 0331, Option C). `holder_id` = `ids::address_id(holder)`; `amount` raw.
+///
+/// `asset_id` keying depends on whether the balance's contract is a SAC:
+/// - **SAC** (its strkey is in `sac_index` → `(asset_code, issuer_id)`): the
+///   balance is a contract holding the underlying CLASSIC asset — key by the
+///   CLASSIC `asset_id` (`asset_type=1`), because classic + SAC are ONE economic
+///   asset (task 0331 SAC leg; 0339-forward — the contract-held amount lands on
+///   the classic row, not the SAC's own type-2 surrogate).
+/// - **bespoke type-3 token** (not in `sac_index`): key by its own contract
+///   surrogate (`asset_type=3`).
+///
+/// An empty `sac_index` reproduces the original type-3-only behaviour.
+pub fn build_balance_rows(
+    balances: &[ExtractedSorobanBalance],
+    sac_index: &HashMap<String, (String, i64)>,
+) -> Vec<BalanceRow> {
     balances
         .iter()
-        .map(|b| BalanceRow {
-            holder_id: ids::address_id(&b.holder),
-            asset_id: ids::asset_id(3, "", 0, ids::contract_id(&b.contract_id)),
-            amount: b.balance,
-            last_updated_ledger: i64::from(b.ledger),
+        .map(|b| {
+            let asset_id = match sac_index.get(&b.contract_id) {
+                Some((code, issuer_id)) => ids::asset_id(1, code, *issuer_id, 0),
+                None => ids::asset_id(3, "", 0, ids::contract_id(&b.contract_id)),
+            };
+            BalanceRow {
+                holder_id: ids::address_id(&b.holder),
+                asset_id,
+                amount: b.balance,
+                last_updated_ledger: i64::from(b.ledger),
+            }
         })
         .collect()
 }
@@ -643,7 +662,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    out.unified_balance_rows = build_balance_rows(soroban_token_balances);
+    // ponytail: empty SAC index for now — SAC contract-held balances key to
+    // their own surrogate until the SAC -> (code, issuer) population lands (next
+    // unit); type-3 keying is unaffected.
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances, &HashMap::new());
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -1926,12 +1948,50 @@ mod balance_tests {
             balance: 800_009_446_178_i128,
             ledger: 100,
         }];
-        let rows = build_balance_rows(&extracted);
+        let rows = build_balance_rows(&extracted, &HashMap::new());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].holder_id, ids::address_id("GHOLDER1"));
         // type-3 asset_id == the token's contract surrogate
         assert_eq!(rows[0].asset_id, ids::contract_id("CTOKEN1"));
         assert_eq!(rows[0].amount, 800_009_446_178_i128);
         assert_eq!(rows[0].last_updated_ledger, 100);
+    }
+
+    #[test]
+    fn build_balance_rows_keys_sac_balance_to_classic_asset() {
+        // A SAC contract-held balance (a `BalanceValue` stored ON the SAC) must
+        // key to the underlying CLASSIC asset's id — classic and SAC are ONE
+        // economic asset — NOT the SAC's own contract surrogate. The
+        // SAC -> (code, issuer_id) mapping is injected (task 0331 SAC leg;
+        // 0339-forward: contract-held lands on the classic row).
+        let issuer = ids::account_id("GISSUER");
+        let mut sac_index: HashMap<String, (String, i64)> = HashMap::new();
+        sac_index.insert("CSACUSDC".into(), ("USDC".into(), issuer));
+
+        let extracted = vec![
+            // a contract holding USDC via the USDC SAC
+            ExtractedSorobanBalance {
+                contract_id: "CSACUSDC".into(),
+                holder: "CPOOL1".into(),
+                balance: 1_939_341_492_641_i128,
+                ledger: 100,
+            },
+            // a bespoke type-3 token (not a SAC) — keying unchanged
+            ExtractedSorobanBalance {
+                contract_id: "CTOKEN1".into(),
+                holder: "GHOLDER1".into(),
+                balance: 42,
+                ledger: 100,
+            },
+        ];
+
+        let rows = build_balance_rows(&extracted, &sac_index);
+        assert_eq!(rows.len(), 2);
+        // SAC balance → the CLASSIC asset id, NOT the SAC's own surrogate.
+        assert_eq!(rows[0].asset_id, ids::asset_id(1, "USDC", issuer, 0));
+        assert_ne!(rows[0].asset_id, ids::contract_id("CSACUSDC"));
+        assert_eq!(rows[0].holder_id, ids::address_id("CPOOL1"));
+        // type-3 token → its own contract surrogate (unchanged).
+        assert_eq!(rows[1].asset_id, ids::contract_id("CTOKEN1"));
     }
 }
