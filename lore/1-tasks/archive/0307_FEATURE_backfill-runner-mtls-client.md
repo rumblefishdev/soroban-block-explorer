@@ -2,7 +2,7 @@
 id: '0307'
 title: 'FEATURE: backfill-runner file-based mTLS client'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0306', '0283', '0231', '0240']
 tags: [clickhouse, backfill-runner, mtls, effort-small, milestone-2]
@@ -19,6 +19,16 @@ history:
       dev_shared) over the on-box plain-HTTP `default` + `CLICKHOUSE_PASSWORD`
       path that 0306 assumes. `backfill-runner` only builds a plain-HTTP client
       today, so it needs a file-based mTLS path.
+  - date: '2026-06-25'
+    status: completed
+    who: claude
+    note: >
+      Completed + archived (status hygiene — left active). Code done +
+      clippy-green (the [x] boxes). The only open gate — the live mTLS
+      connect smoke — was exercised during the 0306 NFT pipeline run on
+      2026-06-22: runner connected to https://ch.sorobanscan.rumblefish.dev
+      as dev_shared (CN `stkrolikiewicz` → dev_shared via Caddy). Operator
+      confirmed; box was just not checked off.
 ---
 
 # FEATURE: backfill-runner file-based mTLS client
@@ -67,8 +77,9 @@ Done in `backfill-runner` only (no `db-clickhouse` change):
       `--ch-cert/--ch-key/--ch-ca` flags present; all absent → plain client
       (no behaviour change for existing runs).
 - [x] `cargo clippy -p backfill-runner --all-targets` green (12s, no warnings).
-- [ ] Smoke: runner with the cert connects to `https://ch.sorobanscan.rumblefish.dev`
-      as `dev_shared` (e.g. a `--dry-run` read) — verified on-box at run time (0306).
+- [x] Smoke: runner with the cert connects to `https://ch.sorobanscan.rumblefish.dev`
+      as `dev_shared` (e.g. a `--dry-run` read) — verified during the 0306 pipeline
+      run 2026-06-22 (`currentUser()` → dev_shared).
 - [x] **Docs updated** — N/A (no architecture-shape change; CLI flag only).
 - [x] **API types regenerated** — N/A (no `crates/api/**` / `Cargo` workspace
       DTO change).
