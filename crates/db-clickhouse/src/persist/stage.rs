@@ -166,6 +166,14 @@ pub struct StageInputs<'a> {
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
     /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
+    /// SAC contract strkey → underlying asset identity (`asset_code`, `issuer_id`),
+    /// used to key contract-held SAC balances onto their CLASSIC asset id (or the
+    /// NATIVE asset for the XLM SAC, which maps to `("", 0)`) — task 0331 SAC leg,
+    /// option A (write-time). Populated by the writer from `assets` (type-2 rows)
+    /// for the SACs this batch's balances reference. Empty for legacy / type-3-only
+    /// callers → those balances fall back to their own surrogate (see
+    /// [`build_balance_rows`]).
+    pub sac_index: &'a HashMap<String, (String, i64)>,
     /// Crypto-proven un-deployed-SAC overrides for this ledger's events
     /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
     /// suppresses the Pass-2 FK stub (no contract row) + seeds a SAC `assets`
@@ -219,6 +227,7 @@ pub fn prepare(
         lp_positions,
         contract_metadata_writes: &[],
         soroban_token_balances: &[],
+        sac_index: &HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
@@ -333,7 +342,14 @@ pub fn build_balance_rows(
         .iter()
         .map(|b| {
             let asset_id = match sac_index.get(&b.contract_id) {
+                // SAC: key by the UNDERLYING asset. The native (XLM) SAC has empty
+                // code + issuer 0 → native asset (type 0); every other SAC → its
+                // classic asset (type 1, code:issuer).
+                Some((code, issuer_id)) if code.is_empty() && *issuer_id == 0 => {
+                    ids::asset_id(0, "", 0, 0)
+                }
                 Some((code, issuer_id)) => ids::asset_id(1, code, *issuer_id, 0),
+                // bespoke type-3 token → its own contract surrogate.
                 None => ids::asset_id(3, "", 0, ids::contract_id(&b.contract_id)),
             };
             BalanceRow {
@@ -389,6 +405,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         lp_positions,
         contract_metadata_writes,
         soroban_token_balances,
+        sac_index,
         sac_overrides,
         prior_wasm_verdicts,
         prior_contract_verdicts,
@@ -662,10 +679,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    // ponytail: empty SAC index for now — SAC contract-held balances key to
-    // their own surrogate until the SAC -> (code, issuer) population lands (next
-    // unit); type-3 keying is unaffected.
-    out.unified_balance_rows = build_balance_rows(soroban_token_balances, &HashMap::new());
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_index);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -1058,7 +1072,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             issuer_id,
             contract_id: contract_id_int,
             name: t.name.clone(),
-            total_supply: None, // dead column (lore-0293) → asset_aggregates
+            total_supply: None, // dead column (lore-0293) → balance_aggregates
             holder_count: None,
             icon_url: None,
             id: 0, // set by push_asset (ids::asset_id from the row's fields)
@@ -1993,5 +2007,23 @@ mod balance_tests {
         assert_eq!(rows[0].holder_id, ids::address_id("CPOOL1"));
         // type-3 token → its own contract surrogate (unchanged).
         assert_eq!(rows[1].asset_id, ids::contract_id("CTOKEN1"));
+    }
+
+    #[test]
+    fn build_balance_rows_keys_native_sac_to_native_asset() {
+        // The native (XLM) SAC is the SAC whose underlying asset has empty code +
+        // issuer 0. A contract holding XLM via it keys to the NATIVE asset id
+        // (asset_type 0), not a classic (code:issuer) id (task 0331, native leg).
+        let mut sac_index: HashMap<String, (String, i64)> = HashMap::new();
+        sac_index.insert("CNATIVESAC".into(), (String::new(), 0));
+        let extracted = vec![ExtractedSorobanBalance {
+            contract_id: "CNATIVESAC".into(),
+            holder: "CPOOL1".into(),
+            balance: 12_150_286_124_879_i128,
+            ledger: 100,
+        }];
+        let rows = build_balance_rows(&extracted, &sac_index);
+        assert_eq!(rows[0].asset_id, ids::asset_id(0, "", 0, 0));
+        assert_ne!(rows[0].asset_id, ids::asset_id(1, "", 0, 0));
     }
 }
