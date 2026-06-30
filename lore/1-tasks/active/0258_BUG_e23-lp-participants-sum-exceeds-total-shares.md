@@ -2,7 +2,7 @@
 id: '0258'
 title: 'BUG: E23 LP participants page sum > liquidity_pool_snapshots.total_shares'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0252']
 tags: [priority-medium, effort-small, layer-clickhouse, data-correctness]
@@ -37,6 +37,10 @@ history:
       Spawned as backlog so Phase D can close 9/9 with this single
       anomaly tracked separately. 214/215 valid pools in the sample
       pass cleanly.
+  - date: '2026-06-30'
+    status: active
+    who: stkrolikiewicz
+    note: Promoted to active to begin diagnosis (root cause a/b/c).
 ---
 
 # BUG: E23 LP participants page sum > total_shares
