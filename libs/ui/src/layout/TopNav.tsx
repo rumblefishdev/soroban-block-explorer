@@ -157,7 +157,11 @@ export function TopNav({
             <Stat
               label="TPS"
               value={
-                <AnimatedNumber value={stats?.tps_60s} format={TPS_FORMAT} />
+                <AnimatedNumber
+                  value={stats?.tps_60s}
+                  format={TPS_FORMAT}
+                  animate={false}
+                />
               }
               valueColor="text.success"
             />
@@ -168,6 +172,7 @@ export function TopNav({
                 <AnimatedNumber
                   value={stats?.latest_ledger_sequence}
                   format={countFormat}
+                  animate={false}
                 />
               }
             />
@@ -178,6 +183,7 @@ export function TopNav({
                 <AnimatedNumber
                   value={stats?.total_accounts}
                   format={countFormat}
+                  animate={false}
                 />
               }
             />
@@ -188,6 +194,7 @@ export function TopNav({
                 <AnimatedNumber
                   value={stats?.total_contracts}
                   format={countFormat}
+                  animate={false}
                 />
               }
             />
