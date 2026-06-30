@@ -991,3 +991,52 @@ into this scope.
   **Path A** (owner_id = `address_id` surrogate, union-resolve `accounts` ∪ `soroban_contracts` —
   like `balances.holder_id`; see Holder-model decision) + dropping the `G`/`M`-only guard, while
   still splitting legit `C` owners from `L`/`B` false-positive NFTs (task 0118). Not spawned.~~ **(Moot — NFT contract-ownership already works on live CH.)**
+
+## DECISION 2026-06-30 (karolkow) — `total_supply` = sum-only; DROP the `TotalSupply` key path
+
+Supersedes "Step 7" (the authoritative-key `soroban_token_supply` table + the
+`coalesce(tsup, bagg)` read). **One universal method:** `total_supply` = Σ per-holder
+`amount` from `balance_aggregates` (the MV-refreshed `sum(amount)` over `balances`).
+No second source, no fallback, no seeded key table.
+
+### Why (measured on prod via `chq`, 2026-06-30)
+- **4114** type-3 tokens. **2995 (72.8%)** expose a `total_supply()` fn (OZ-family — store the
+  on-chain `Symbol("TotalSupply")` instance key); **1119 (27.2%)** do NOT. (Agent first reported
+  76.6/23.4 with a looser match; re-measured exact at 72.8/27.2.)
+- SEP-41 does **not** mandate `total_supply()` (10-fn interface, none is supply) — verified against
+  spec. SAC has no supply view. So the key is an OZ extension, present on ≤73% — **key-only would
+  render "—" for ~27%** (option B dead).
+- The 1119 no-key tokens are **plain/launchpad fungible tokens, NOT fee-vaults** (all `mint`+`transfer`,
+  zero `deposit`/`get_reserves`; top-5 wasm templates = ~60% of the cohort). For a plain token
+  `Σ balances` IS the correct supply.
+- **Mint always credits a holder balance** (OZ `mint`: `total_supply += x` AND `balance[to] += x`) —
+  there is no mint-to-nobody. The "extra"/fee supply of a vault lands on some `Address`, usually a
+  **contract treasury (`C…`)**. Under **Path A** we sum **G ∪ C** holders → that balance is captured.
+  ⇒ `Σ balances` == real supply, **including** vault/treasury-held supply.
+
+### Accepted non-100% residue (the explicit cost of one method)
+- **TTL-archived** balance entries (expired ledger state we can't read) → tiny undercount.
+- **True rebasing** tokens (stored `Balance` = shares ≠ effective balance) → rare.
+- User decision: not worth a second source / a per-token key read / a refresh cadence. If one specific
+  high-value token later reads visibly wrong, add a key read **for that token only** — do not
+  reintroduce a blanket `coalesce` (that blend was the original smell).
+
+### Why not keep the key as an override (option C, the prior `coalesce`)
+The key table was **seed-only** (`balance-seed` script wrote it once via RPC; the live indexer never
+updated it) → it froze at seed time, and `coalesce(tsup, bagg)` preferred that **stale** key over the
+fresh 2-min sum. Two columns + a staleness bug for no measurable gain over the sum.
+
+### What was deleted (commit on `feat/0331_…`; −152 net)
+- `db-clickhouse/schema/init.sql` — `soroban_token_supply` table → tombstone comment.
+- `db-clickhouse/src/lib.rs` — statement-count guard 27 → **26** (24 tables + 1 MV + 1 dict).
+- `db-clickhouse/src/persist/rows.rs` — `SorobanTokenSupplyRow` struct.
+- `db-clickhouse/src/persist/tests_cross.rs` — its column-order test.
+- `api/src/assets/queries_ch.rs` — both builders: `coalesce(tsup, bagg)` → `toString(bagg.total_supply)`;
+  removed the `tsup` (`soroban_token_supply`) JOIN.
+- `backfill-runner/src/balance_seed.rs` — supply-row decode/insert, instance-key request, `supply_read` stat.
+- `backfill-runner/src/rpc_snapshot.rs` — `decode_total_supply` + `instance_ledger_key` (+ their tests).
+- `backfill-runner/src/main.rs` — `supply_read` CLI log field.
+
+**Wire shape unchanged:** `total_supply` stays `Option<String>` (RAW `Int128`, client scales by
+`decimals`); source-only change ⇒ no openapi / api-types regen. `cargo test` green, zero warnings.
+`holder_count` is unaffected — still `balance_aggregates.countIf(amount>0)`.

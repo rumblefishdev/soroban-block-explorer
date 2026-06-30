@@ -121,14 +121,6 @@ fn column_order_balances() {
 }
 
 #[test]
-fn column_order_soroban_token_supply() {
-    assert_columns::<SorobanTokenSupplyRow>(
-        "soroban_token_supply",
-        &["asset_id", "total_supply", "last_updated_ledger"],
-    );
-}
-
-#[test]
 fn column_order_soroban_contracts() {
     assert_columns::<SorobanContractRow>(
         "soroban_contracts",

@@ -155,16 +155,16 @@ mod tests {
         // `soroban_asset_aggregates` (+ MV) — net one fewer table, same MV count.
         // (The interim `addresses` resolution table was dropped — holder→StrKey
         // resolves via `accounts` (G) / `soroban_contracts` (C), no dimension.)
-        // Task 0331 step 7 added `soroban_token_supply` (authoritative per-token
-        // total_supply from the instance `TotalSupply` key; the assets read
-        // coalesces it over `balance_aggregates`).
         // task 0331 simplification: DROPPED the legacy `asset_aggregates` table +
         // `asset_aggregates_mv` (classic supply over `account_balances_current`) —
         // superseded by `balance_aggregates` over `balances`. 29 → 27.
+        // task 0331 Option A: DROPPED `soroban_token_supply` (the per-token
+        // `TotalSupply` key read) — `balance_aggregates` (Σ amount) is the sole
+        // supply source; one universal method, no seed-only staleness. 27 → 26.
         assert_eq!(
             stmts.len(),
-            27,
-            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
+            26,
+            "expected 24 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

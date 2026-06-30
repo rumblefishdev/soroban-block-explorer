@@ -84,17 +84,18 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
 // `total_supply` / `holder_count` come from `balance_aggregates` (task 0331,
-// Option C) — the single pre-computed aggregate over the unified `balances` table,
+// Option A) — the single pre-computed aggregate over the unified `balances` table,
 // keyed by the `assets.id` surrogate (`bagg.asset_id = a.id`). One 1:1 LEFT JOIN
-// for ALL asset types (classic + soroban). For type-3 tokens that store an
-// authoritative instance `TotalSupply` key, `soroban_token_supply` (tsup) overrides
-// the summed value via `coalesce(tsup, bagg)` — archival-proof + exact for vault /
-// rebasing tokens (task 0331 step 7; seeded by `backfill-runner balance-seed`).
-// `total_supply` is RAW `Int128` (the API
-// returns it raw; clients scale by `decimals` — classic decimals=7). `Nullable`
-// columns, so a JOIN miss (no holders) reads NULL → "—" (not a fake 0). Refreshed
-// on a cadence (eventually consistent). Requires `assets.id` populated (prod:
-// ALTER + backfill — see init.sql).
+// for ALL asset types (classic + soroban). `total_supply` = Σ per-holder `amount`
+// over G+C holders: a mint always credits a holder balance (often a contract
+// treasury — captured because we sum contracts too), so the sum equals the token's
+// real supply. The narrow residue — TTL-archived entries + true rebasing — is the
+// accepted non-100% cost of ONE universal method (no per-token `TotalSupply` key
+// read; see task 0331 Option-A decision). RAW `Int128` (the API returns it raw;
+// clients scale by `decimals` — classic decimals=7). `Nullable` columns, so a JOIN
+// miss (no holders) reads NULL → "—" (not a fake 0). Refreshed by the MV on a
+// cadence (eventually consistent). Requires `assets.id` populated (prod: ALTER +
+// backfill — see init.sql).
 const ASSET_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
@@ -105,7 +106,7 @@ const ASSET_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     toString(coalesce(tsup.total_supply, bagg.total_supply)) AS total_supply, \
+     toString(bagg.total_supply)  AS total_supply, \
      bagg.holder_count            AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
@@ -119,11 +120,6 @@ const ASSET_CH_SELECT: &str = "SELECT \
          FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-     LEFT JOIN ( \
-         SELECT asset_id, argMax(total_supply, last_updated_ledger) AS total_supply \
-         FROM soroban_token_supply \
-         GROUP BY asset_id \
-     ) tsup ON tsup.asset_id = a.id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
@@ -166,7 +162,7 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
               if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
      nullIf(m.symbol, '')         AS symbol, \
      coalesce(m.decimals, 7)      AS decimals, \
-     toString(coalesce(tsup.total_supply, bagg.total_supply)) AS total_supply, \
+     toString(bagg.total_supply)  AS total_supply, \
      bagg.holder_count            AS holder_count, \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
@@ -179,11 +175,6 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
          FROM soroban_contract_metadata FINAL \
      ) m ON m.contract_id = sc.contract_id \
      LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-     LEFT JOIN ( \
-         SELECT asset_id, argMax(total_supply, last_updated_ledger) AS total_supply \
-         FROM soroban_token_supply \
-         GROUP BY asset_id \
-     ) tsup ON tsup.asset_id = a.id \
      LEFT JOIN ( \
          SELECT asset_type, asset_code, issuer_id, contract_id, \
                 argMax(icon_url, version) AS icon_url, \
