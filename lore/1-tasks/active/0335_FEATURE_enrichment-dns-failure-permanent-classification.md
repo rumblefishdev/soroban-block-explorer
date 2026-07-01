@@ -2,7 +2,7 @@
 id: '0335'
 title: 'FEATURE: classify DNS-resolution failures as permanent (sentinel) in enrichment, not transient'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0311', '0306', '0231']
 tags: [enrichment, clickhouse, classification, effort-small, priority-medium]
@@ -22,6 +22,18 @@ history:
       so a DNS-resolution failure (NXDOMAIN / host does not resolve) is
       PERMANENT → sentinel + ack, while keeping connect-refused / TLS /
       timeout / 5xx transient.
+  - date: '2026-06-29'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started. Corrected the premise: `is_transient` is NOT shared — there
+      are TWO functions. The 85% dead-domain case is the SEP-1 path
+      (`sep1_assets::is_transient(&Sep1Error)`, the `Sep1Error::Http { source }
+      → None => true` arm); the NFT path is a separate
+      `nft_token_uri::errors::is_transient(&NftTokenUriError)`. Both hold a
+      `reqwest::Error` in their `Http` variant, so a shared
+      `is_dns_failure(&reqwest::Error)` helper fixes both. Code on a branch
+      + PR; this status flip pushed direct to develop.
 ---
 
 # FEATURE: DNS-failure → permanent (sentinel) in enrichment classification
@@ -40,13 +52,17 @@ TLS / timeout / 5xx / 429) on the retry path.
 
 ## Context
 
-- Classifier: [`is_transient`](../../../crates/enrichment-shared/src/nft_token_uri/errors.rs)
-  — single decision point, used by **both** the NFT path
-  ([nft_token_uri.rs](../../../crates/enrichment-shared/src/enrich_and_persist/nft_token_uri.rs))
-  and the SEP-1 path
-  ([sep1_assets.rs:110](../../../crates/enrichment-shared/src/enrich_and_persist/sep1_assets.rs)).
-  `is_transient == false` → enrich fn writes the `''` sentinel + returns
-  `Ok` (acked, candidate-query skips it next pass).
+- Classifier: there are **TWO** `is_transient` functions (not one shared) —
+  **SEP-1** `sep1_assets::is_transient(&Sep1Error)`
+  ([sep1_assets.rs:216](../../../crates/enrichment-shared/src/enrich_and_persist/sep1_assets.rs))
+  is the 85% dead-domain case (the `Sep1Error::Http { source } → status() None
+=> true` arm classifies a network-layer/DNS failure transient); **NFT**
+  `nft_token_uri::errors::is_transient(&NftTokenUriError)`
+  ([errors.rs:109](../../../crates/enrichment-shared/src/nft_token_uri/errors.rs))
+  has the analogous `Http { source }.is_connect()` arm. Both `Http` variants
+  carry a `reqwest::Error`, so one `is_dns_failure(&reqwest::Error)` helper
+  serves both. `is_transient == false` → enrich fn writes the `''` sentinel +
+  returns `Ok` (acked, candidate-query skips it next pass).
 - Why it is conservative today (and correct as a default): an ambiguous
   connect failure could be a temporarily-down site; marking it permanent
   writes a sentinel that the `NOT IN` candidate query then skips, silently
@@ -122,13 +138,43 @@ Unit-test `is_dns_failure` against representative reqwest error strings
 
 ## Acceptance Criteria
 
-- [ ] `is_dns_failure` helper; DNS-resolution failures classified permanent.
-- [ ] Connect-refused / TLS / timeout / 5xx / 429 stay transient (unchanged).
-- [ ] Unit tests for both classes.
-- [ ] Applies to both NFT + SEP-1 paths (shared `is_transient`).
+- [x] `is_dns_failure` helper; DNS-resolution failures classified permanent.
+      (`nft_token_uri::errors::is_dns_failure` + `is_dns_marker`.)
+- [x] Connect-refused / TLS / timeout / 5xx / 429 stay transient (unchanged).
+- [x] Unit tests for both classes. (`dns_marker_flags_nxdomain_phrasings` +
+      `dns_marker_ignores_transient_phrasings`; 77 pass / 0 fail, +2 new.)
+- [x] Applies to both `is_transient` fns — SEP-1 (`sep1_assets`, the 85% case)
+      via `None => !is_dns_failure(source)` + NFT (`nft_token_uri::errors`) via
+      the `Http` arm. `is_endpoint_fault` intentionally unchanged (DNS-dead host
+      still fails over to a different pool endpoint).
 - [ ] After deploy: a `enrich sep1-assets` pass moves the dead-domain tail
       from `transient` to `sentinel` (drain converges; candidate count drops).
+      **Deferred — needs build + deploy.**
 - [ ] Lambda steady-state: dead-domain assets no longer reach the DLQ.
+      **Deferred — needs deploy.**
+
+## Implementation Notes
+
+- Premise corrected: NOT one shared classifier — `is_transient` exists twice
+  (`sep1_assets::is_transient(&Sep1Error)` = the 85% dead-domain case; and
+  `nft_token_uri::errors::is_transient(&NftTokenUriError)`). Both `Http`
+  variants carry a `reqwest::Error`, so one `pub(crate) is_dns_failure`
+  (in `nft_token_uri::errors`, imported by `sep1_assets`) serves both.
+- `is_dns_failure` walks the `std::error::Error` source chain; the matchable
+  text is split into `is_dns_marker(&str)` so it is unit-testable without
+  constructing a `reqwest::Error` (no public ctor). String-match ceiling noted
+  in the comment (upgrade path: `tokio::net::lookup_host` pre-check).
+- `cargo test -p enrichment-shared` 77/0, `clippy --all-targets` clean, fmt clean.
+- **Gap closed — string-match verified vs real reqwest output.** Added an
+  `#[ignore]` net test (`is_dns_failure_matches_real_reqwest_nxdomain`) hitting a
+  `.invalid` host. Real chain: `error sending request` → `client error (Connect)`
+  → `dns error` → `failed to lookup address information: …`. `is_dns_failure`
+  fires; markers `"dns error"` + `"failed to lookup address information"` are
+  **hyper-level (platform-independent)** — Linux prod tail is `Name or service
+not known`, still matched. Clients use the default GaiResolver (no
+  `hickory-dns` feature), matching the test — so the verified text holds in prod.
+  SEP-1 maps NXDOMAIN → `Sep1Error::Http` (not `Timeout`, which needs
+  `is_timeout()`), so the `Http`-arm fix covers it.
 
 ## Notes
 
