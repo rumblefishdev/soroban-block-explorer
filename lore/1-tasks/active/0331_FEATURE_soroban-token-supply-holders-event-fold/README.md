@@ -1040,3 +1040,56 @@ fresh 2-min sum. Two columns + a staleness bug for no measurable gain over the s
 **Wire shape unchanged:** `total_supply` stays `Option<String>` (RAW `Int128`, client scales by
 `decimals`); source-only change ⇒ no openapi / api-types regen. `cargo test` green, zero warnings.
 `holder_count` is unaffected — still `balance_aggregates.countIf(amount>0)`.
+
+## STATUS SUMMARY 2026-07-01 (karolkow) — DEV done / DEV left / OPS left
+
+Branch `feat/0331_…` (name is stale — the design is ledger-STATE, not an event-fold).
+13 commits `75fe7025..71ee96ff`. All green, pushed.
+
+### ✅ DEV DONE
+- **Model:** unified `balances` (holder_id = G∪C surrogate, asset_id, amount `Int128`) +
+  `balance_aggregates` MV (`sum(amount)` = supply, `countIf(amount>0)` = holders). Dropped legacy
+  `asset_aggregates` view + interim `addresses` table.
+- **Supply = Option A (sum-only):** dropped the `TotalSupply` key path (`soroban_token_supply` table,
+  key-seed, `coalesce`). Supply is the single `balance_aggregates` sum.
+- **Writes = Option B (single-write):** classic + native stage straight into `balances`;
+  `account_balances_current` write removed (table KEPT for the migration + rollback). `AssetRow::staged`
+  constructor (surrogate `id` computed once) + pinned golden hash test.
+- **Reads cut to `balances`:** accounts-list native XLM; account-detail portfolio (incl. type-3 tokens
+  with `contract_id` + `symbol` + full `name`, resolved `coalesce(asset_enrichment, metadata)` like
+  `/assets`). FE renders the token row (name title + symbol ticker + `/assets/${contract_id}` link).
+- **Type-3 ingest wired live + backfill:** `xdr_parser::extract_soroban_token_balances`
+  (`process.rs:420` → threaded through `StageInputs.soroban_token_balances`); `balance-seed` RPC-snapshot
+  path (funnel stats + unit/integration/**real-mainnet e2e** tests).
+- **Cleanup:** dead `assets` columns `name`/`icon_url`/`total_supply`/`holder_count` marked, drop folded
+  into task 0310; architecture docs refreshed.
+
+### 🔜 DEV LEFT
+- **Contract-held asset types 0/1/2** (a contract holding native / classic / SAC, stored as a SAC
+  `Balance(Address) → BalanceValue{amount}` struct) — the reverted SAC-struct leg (`7a5d61d6`).
+  Deferred to a **post-0339** task (0339 collapses SAC into classic first). Type-3 contract-holders are
+  ALREADY captured (same reader, Path A).
+
+That's it — the type-3 DEV path is complete.
+
+### 🛠️ OPS LEFT (code ready, not deployed)
+1. **Merge** PR `feat/0331_…` → develop.
+2. **Backfill `assets.id`** (Rust runner — CH `cityHash64` ≠ the Rust surrogate, so SQL can't recompute
+   it; existing rows are `id=0` until backfilled → the aggregate JOIN reads `—`).
+3. **Classic → `balances` data migration** (copy `account_balances_current`) **+ drop** the old table (6b/6d).
+4. **Populate type-3 balances** — pick one:
+   - `balance-seed --soroban-rpc-url` — cheap RPC snapshot of event-discovered holders (**~99.7%**;
+     misses holders whose token set a balance WITHOUT emitting an event naming them), OR
+   - **full re-backfill over the Soroban era from S3** — the live parser already extracts every
+     `Balance(Address)` change (see DEV-done wiring), so a historical replay is **100%**, event-independent.
+     This is an **OPS run, not new code** — just point the backfill at the historical range.
+5. **Catch-up** live ingest.
+6. **Validate** — `sum(balances)` vs StellarExpert / spot-check (can't PROVE 100% — chain doesn't
+   enumerate holders).
+7. *(separate task 0310)* drop the 4 dead `assets` columns in one `ALTER`.
+
+### Leftovers after cutover (checked 2026-07-01)
+- `account_balances_current` TABLE — kept on purpose (data + rollback; dropped in 6d).
+- No LIVE CH read/write of it remains (one stale bootstrap-test cleanup fixed to `balances`).
+- Remaining refs are **PG-dead** (`queries.rs` PG list, PG integration tests — retired with PG, not 0331)
+  + `smoke.rs` (exercises the still-existing table) + `audit-harness`/`db-merge` tooling.

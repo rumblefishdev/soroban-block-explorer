@@ -623,7 +623,7 @@ mod tests {
         // Cleanup any prior rows.
         for q in [
             "ALTER TABLE accounts DELETE WHERE id = ?",
-            "ALTER TABLE account_balances_current DELETE WHERE account_id = ?",
+            "ALTER TABLE balances DELETE WHERE holder_id = ?",
         ] {
             let _ = client
                 .query(q)
