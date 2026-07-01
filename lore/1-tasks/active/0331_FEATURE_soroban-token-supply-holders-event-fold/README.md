@@ -1093,3 +1093,35 @@ That's it — the type-3 DEV path is complete.
 - No LIVE CH read/write of it remains (one stale bootstrap-test cleanup fixed to `balances`).
 - Remaining refs are **PG-dead** (`queries.rs` PG list, PG integration tests — retired with PG, not 0331)
   + `smoke.rs` (exercises the still-existing table) + `audit-harness`/`db-merge` tooling.
+
+## NEXT SESSION — build the migration runners (decided A1 + B1, 2026-07-01)
+
+Chosen shape: **A1** = separate `backfill-runner` subcommands (NOT folded into `balance-seed`; it's
+already one binary with many subcommands — bootstrap/nft-reclassify pattern). **B1** = `balance-seed`
+(RPC, ~99.7%) for type-3, reprocess S3 only if validate shows a big gap. DDL drops + validate = ad-hoc
+`chq` (no code). Do each with TDD + `--dry-run`.
+
+### `classic-migrate` subcommand (do FIRST — simple, safe)
+Read `account_balances_current` → write `balances` (`BalanceRow`). `holder_id = account_id`;
+`asset_id = ids::asset_id(0,"",0,0)` for native (`asset_type=0`), else `ids::asset_id(1, code, issuer_id, 0)`;
+`amount = balance`; `last_updated_ledger` carried through. **Safe:** `balances` is `RMT(last_updated_ledger)`
+— HAS a version, so the insert is a clean versioned upsert (idempotent). Mirror `balance_seed.rs` structure
++ funnel stats.
+
+### `assets-id-backfill` subcommand (do SECOND — has traps, verified on prod 2026-07-01)
+Prereq DDL (ad-hoc): `ALTER TABLE assets ADD COLUMN id Int64 DEFAULT 0` (prod has NO `id` column yet).
+Traps:
+1. **`assets` is `ReplacingMergeTree` with NO version** → a re-insert has no deterministic winner under
+   `OPTIMIZE FINAL`. Prefer `ALTER … UPDATE` where possible over re-insert.
+2. **`total_supply`/`holder_count` hold 230262/367486 real values in prod (63%)** — a re-insert via
+   `AssetRow::staged` (which nulls them) would WIPE them. Any re-insert MUST read + preserve all columns.
+3. **`name`/`icon_url` are 0-populated** (safe either way).
+4. **Per-type `id`:** type 2/3 → `id = contract_id` (already the row's column — pure SQL);
+   type 0 → a constant (`ids::asset_id(0,"",0,0)`); ONLY type 1 (classic) needs the Rust hash
+   `ids::asset_id(1, code, issuer_id, 0)`.
+Recommended: `ALTER TABLE assets UPDATE id = contract_id WHERE asset_type IN (2,3)` +
+`… UPDATE id = <native_const> WHERE asset_type = 0` (pure SQL, no wipe); a Rust pass only for type 1
+(read full rows, compute id, re-insert preserving columns, then `OPTIMIZE`). Golden hash test
+(`ids::golden_surrogate_values_are_pinned`) guards the hash.
+
+Wire both into `main.rs` `Command` enum + dispatch (mirror `BalanceSeed`). `assets` = ~367k rows (cheap).
