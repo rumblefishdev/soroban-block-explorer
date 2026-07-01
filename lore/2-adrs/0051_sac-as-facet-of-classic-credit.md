@@ -223,9 +223,11 @@ stays reserved for `soroban` identity.
 
 ### Negative
 
-- Migration is two-part (seed `asset_sac` from the type=2 rows' `(code,issuer,contract)` +
-  relabel/merge the type=2 identity into type=1/0), **writer-first** (deploy the writer
-  change → then the pass, else rows regrow) — coordinated like 0323 Phase 1/2.
+- Migration is three-part (seed `asset_sac` from the type=2 rows' surrogate + insert the
+  missing type=1/0 identity rows + `ALTER TABLE assets DELETE WHERE asset_type = 2`),
+  **writer-first** (deploy the writer change → then the pass, else rows regrow) — coordinated
+  like 0323 Phase 1/2. Concrete, CH-26.3-validated SQL + rollback + acceptance checks:
+  [Phase 2 migration runbook](../1-tasks/active/0339_phase2-migration-runbook.md).
 - Writer maintains the `asset_sac` side table (`max`-merged on a SAC sighting); the `C…`
   strkey is re-derived on read (not stored).
 - Canonical-id wire change: SAC-wrap id `C… → CODE-ISSUER`; `/assets/{C…}` deep-links
