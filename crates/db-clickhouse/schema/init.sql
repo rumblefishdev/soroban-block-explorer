@@ -229,8 +229,8 @@ CREATE TABLE IF NOT EXISTS assets (
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
     name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
-    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
     icon_url        Nullable(String),
     -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
     -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
@@ -269,17 +269,6 @@ CREATE TABLE IF NOT EXISTS asset_enrichment (
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
--- Pre-computed per-asset aggregates (lore-0293; replaces the one-shot
--- `asset-aggregates` CLI). One row per classic-credit asset, FINAL `total_supply`
--- / `holder_count` ready to read via a 1:1 LEFT JOIN (cf. `asset_enrichment`). A
--- REFRESHABLE MV recomputes the whole table from `account_balances_current` on a
--- cadence — an incremental per-asset sum isn't possible without breaking the
--- indexer's absolute-state idempotency (full rationale + prod evidence:
--- notes/G-assets-aggregate-clobber-proof.md). Refresh is a batch admin job, off
--- the `api_reader` read quota (~1 s over 36 M rows).
--- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
--- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
--- stay FINAL-free). The other tables are RMT because they are APPEND targets.
 -- NOTE: the legacy `asset_aggregates` table + `asset_aggregates_mv` (classic
 -- supply/holders over `account_balances_current`, keyed code+issuer) were DROPPED
 -- (task 0331) — superseded by `balance_aggregates` (below) over the unified
@@ -335,9 +324,10 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 
 -- ── Option C unified balance model (task 0331) ──────────────────────────────
 -- The two tables below are the unified replacement for `account_balances_current`
--- (classic) + `soroban_token_balances` (type-3). Added ADDITIVELY now (steps 1-3);
--- the persist repoint + classic migration (steps 4-6) move data onto them, after
--- which the per-type tables are dropped. See the task README CURRENT PLAN.
+-- (classic) + the interim `soroban_token_balances` (type-3). The persist path now
+-- writes `balances` ONLY (single-write, task 0331 Option A); `account_balances_current`
+-- is retained (no longer written) pending the one-time classic→`balances` data
+-- migration + drop (OPS steps 6b/6d). See the task README.
 
 -- Unified per-holder balances — the single balance model for ALL asset types.
 -- `amount` is RAW `Int128` (scale by the asset's `decimals` at read — universal

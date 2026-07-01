@@ -877,30 +877,4 @@ mod tests {
 
     // --- task 0331: instance `TotalSupply` key (authoritative supply) ---
 
-    use stellar_xdr::curr::{ContractExecutable, ScContractInstance, ScMap, ScMapEntry};
-
-    fn sym(s: &str) -> ScVal {
-        ScVal::Symbol(ScSymbol::try_from(s.as_bytes().to_vec()).unwrap())
-    }
-
-    fn instance_entry(token: [u8; 32], storage: Vec<(ScVal, ScVal)>) -> LedgerEntryData {
-        let map = ScMap::try_from(
-            storage
-                .into_iter()
-                .map(|(key, val)| ScMapEntry { key, val })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        LedgerEntryData::ContractData(ContractDataEntry {
-            ext: ExtensionPoint::V0,
-            contract: ScAddress::Contract(ContractId(Hash(token))),
-            key: ScVal::LedgerKeyContractInstance,
-            durability: ContractDataDurability::Persistent,
-            val: ScVal::ContractInstance(ScContractInstance {
-                executable: ContractExecutable::Wasm(Hash([0u8; 32])),
-                storage: Some(map),
-            }),
-        })
-    }
-
 }

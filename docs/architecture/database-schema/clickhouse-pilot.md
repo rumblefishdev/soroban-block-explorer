@@ -286,7 +286,7 @@ PG keeps all of these.
 Soroban-token (`asset_type = 3`) `total_supply` / `holder_count` rendered `—` (no
 trustlines). The fix is a CH-only **unified per-holder balance model** that also
 re-keys classic balances off PG's `Decimal128(7)` `account_balances_current` onto a
-raw representation. Four objects, none in PG:
+raw representation. Two objects, none in PG:
 
 - **`balances`** (`holder_id`, `asset_id`, `amount Int128`, `last_updated_ledger`)
   `ReplacingMergeTree(last_updated_ledger)` — unified per-holder balance, raw
@@ -303,16 +303,15 @@ raw representation. Four objects, none in PG:
   `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
   (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
   `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
-  asset types.
-- **`soroban_token_supply`** (`asset_id`, `total_supply Int128`,
-  `last_updated_ledger`) `ReplacingMergeTree` — authoritative per-token supply read
-  from the token's instance-storage `Symbol("TotalSupply")` i128 key (archival-proof;
-  exact for vault / rebasing where the sum drifts). The assets read does
-  `coalesce(soroban_token_supply, balance_aggregates)`; tokens that don't store the
-  key (plain soroban-sdk) fall back to the sum.
+  asset types. **`total_supply` = `sum(amount)` is the SOLE supply source** — task
+  0331 Option A: a mint always credits a holder balance (often a contract treasury,
+  summed because holders include `C…`), so the sum equals real supply. No per-token
+  `TotalSupply` key read (it was optional — only ~73% of wasm expose it — and
+  seed-only/stale); the narrow residue (TTL-archived tail + true rebasing) is the
+  accepted non-100% cost. See README DECISION 2026-06-30.
 
 The historical set is seeded once by `backfill-runner balance-seed` (RPC snapshot:
-holders enumerated from `soroban_events`, balances + the `TotalSupply` key read via
+holders enumerated from `soroban_events`, `Balance(Address)` entries read via
 `getLedgerEntries`); live ingest maintains `balances` forward and supersedes the seed
 on catch-up. See the [indexing-pipeline overview §6.2](../indexing-pipeline/indexing-pipeline-overview.md).
 
