@@ -42,6 +42,68 @@ representation for all asset types. (Original event-fold plan REFUTED — see CU
 > ledger-state + Option C — see **CURRENT PLAN** below; everything under "DECISION",
 > "Implementation", "Findings", and "Implementation Plan (SUPERSEDED)" is trail.
 
+## Path X 2026-07-01 (karolkow) — contract-held 0/1 LIVE via symmetric keying (SUPERSEDES key-by-type-1)
+
+Authoritative for the contract-held classic/native leg (old D2). **Supersedes** the CURRENT PLAN
+line "keyed by classic/native `asset_id` (type-1), 0339-forward-compatible": we now key contract-held
+balances by the **storing contract's own surrogate**, exactly like type-3 — no map, no new table.
+
+### The two problems
+- **Problem A — decode the value.** A contract holds a classic/native asset as a `Balance(Address)`
+  `ContractData` entry inside that asset's **SAC**, valued as the `BalanceValue { amount, authorized,
+  clawback }` **struct** (not the bare `i128` a type-3 token uses). The type-3 path dropped it.
+- **Problem B — assign the `asset_id`.** The SAC `contract_id` is a one-way hash of the asset, so a
+  balance change alone can't yield `(code, issuer)`.
+
+### Decision — Path X (symmetric, no map)
+`ids::asset_id(_, contract)` returns the **contract surrogate for BOTH type-2 (SAC) and type-3**
+(verified `ids.rs:132`; golden test `asset_id(2,…,csac)==csac`, `asset_id(3,…,ctok)==ctok`). So a SAC
+balance emitted with `contract_id = SAC` lands on that SAC's **existing type-2 asset row** — the same
+symmetric rule type-3 uses for its own row. **Task 0339 folds type-2 → type-0/1** (it already folds
+the trustline aggregates; `balances` rides the same fold). This dissolves Problem B entirely: no
+registry, no prefetch, no routing-by-shape, no silent-fallback — we never re-identify the asset at
+write time, we key by the storing contract, which is always correct.
+
+**Rejected alternatives** (all needed the SAC→asset map, which Path X avoids): (1) durable map on
+`soroban_contracts` + write-side prefetch; (2) read-side JOIN fold (pushes cost to every reader,
+gotcha #19b ×100 risk); (3) forward-compute reverse map (indexer is Lambda/stateless → ~322k-asset
+recompute per batch). See the devil's-advocate pass in the session trail.
+
+### Done (branch, TDD, all green — 284 xdr-parser + 65 db-clickhouse + 20 indexer, clippy clean)
+- `decode_sac_balance_value` + `SacBalanceValue { amount, authorized, clawback }` (`state.rs`), strict:
+  rejects any non-`{amount,authorized,clawback}` map (`_ => return None`).
+- Wired into `extract_soroban_token_balances`: bare `i128` → type-3; SAC struct → `.amount`. **~5 lines;
+  staging UNCHANGED** (already keys by contract surrogate). Live path parser→staging→balances→aggregate
+  works for contract-held 0/1 on the branch.
+- Real-mainnet NON-circular tests: `decode_sac_balance_value_real_mainnet`,
+  `extract_sac_struct_balance_real_mainnet`, `decode_sac_balance_value_rejects_foreign_maps`.
+
+### Validation (pool `CATUJXDU…`, native XLM + classic EURC, 2026-07-01) — 4 sources, exact match
+| source | XLM (raw) | EURC (raw) | independence |
+|---|---|---|---|
+| our SAC decode (parser) | 11 668 057 013 216 | 2 020 807 612 134 | — |
+| SAC `balance()` getter | same | same | semi (same entry) |
+| pool `get_reserves()` | same | same | **full** (protocol's own storage) |
+| StellarExpert (web) | 1 166 805.7013216 | 202 080.7612134 | **full** (3rd party) |
+
+Rigorous for decoder correctness; NOT yet for edge classes (vault, rebasing, TTL-archived, many
+holders) — that's the OPS `O5` ≥10-token pass.
+
+### Coordination + open items
+- **[0339 MUST]** When 0339 folds type-2 → type-1, it MUST re-key `balances.asset_id` (type-2 →
+  type-0/1) too, else contract-held silently vanishes when the type-2 asset rows are deleted. Add to
+  0339 acceptance criteria.
+- **authorized/clawback**: decoded into `SacBalanceValue` but NOT propagated (only `amount` used).
+  Frozen-balance policy (count vs exclude; UI "frozen"/"clawback" badge) is open — data is captured, so
+  a later decision needs no re-backfill.
+- native by ACCOUNT is unchanged (AccountEntry → `asset_id(0)` direct); only contract-held native goes
+  via the native SAC's type-2 row → 0339 fold.
+
+### Next
+- Backfill (historical contract-held) — deferred; rides the SAME parser via a `backfill-runner Run`
+  over the Soroban range (no separate mechanism). Decide in a later session.
+- OPS: unchanged (merge → migrations → catch-up → one balance-seed/Run → validate → 6d drop).
+
 ## CURRENT PLAN 2026-06-29 (karolkow) — Option C unified balances (authoritative)
 
 ### Goal
@@ -166,11 +228,14 @@ window — do NOT merge #293 alone.
 
 - type-3 core (unified `balances`, supply via `TotalSupply`, `balance-seed`, frontend scaling,
   PG-balance cut) — **DONE, on PR #293.**
-- **D1. [ ] Spike SAC `BalanceValue`** (read-only mainnet, FIRST — gates D2): struct shape
-  `{amount,authorized,clawback}`, SAC `total_supply` vs classic, how contract-holders are stored.
-  If messy → defer the SAC leg to 0210/0323.
-- **D2. [ ] Ingest contract-held balances, types 0/1/2** (subsumes the old "step 9"; extends to
-  native + classic). `ContractData Balance(Address)` scan in each SAC → decode the struct `.amount`
+- **D1. [x] Spike SAC `BalanceValue`** — DONE 2026-07-01 (real mainnet): struct shape
+  `{amount,authorized,clawback}` confirmed; decoder validated vs `balance()`/`get_reserves()`/
+  StellarExpert (see **Path X** section above). Not messy → SAC leg stays in 0331.
+- **D2. [~] Ingest contract-held balances, types 0/1/2** — LIVE parser DONE via **Path X** (above):
+  `decode_sac_balance_value` wired into `extract_soroban_token_balances`; keyed by storing-contract
+  surrogate (type-2), 0339 folds to type-0/1. Remaining: historical backfill (deferred; same parser via
+  a `Run`). Original note below (superseded on keying — no `address_id`/type-1 keying, symmetric instead):
+  `ContractData Balance(Address)` scan in each SAC → decode the struct `.amount`
   → write to unified `balances` (raw `i128`), `holder_id = address_id` (Path A, G or C). Fixes the
   type-1/2 supply/holder under-count + contract portfolios.
 - **D3. [ ] NFT contract-owner fix** (Path A): `owner_id = address_id` surrogate, union-resolve
