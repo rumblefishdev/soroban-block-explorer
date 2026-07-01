@@ -71,6 +71,22 @@ A is less new structure but touches ~40 `<IdentifierDisplay>` callsites
 (today **0** pass `href`). B keeps callers untouched but adds a shared
 package. Decide before implementing.
 
+### Decision (2026-07-01): B-lite — single source lives IN `libs/ui`
+
+Neither A nor a new package. A code dive killed pure A: two `<IdentifierDisplay>`
+callsites live **inside** `libs/ui` (`visualization/OperationFlowTree.tsx`,
+`identifiers/IdentifierWithCopy.tsx`), and `OperationFlowTree` builds entity
+links itself — it cannot import `web/`, so an href-only component either breaks
+it or forces keeping a lib-side table anyway (defeating single-source). And there
+is **no** existing shared low-level lib (`libs/` = only `api-types` + `ui`), so
+canonical B means a brand-new nx package for one 30-line table — overkill.
+
+Dependency direction already allows the clean answer: **web → libs/ui**, so the
+lowest node both reach is `libs/ui`. Put the canonical table there
+(`libs/ui/src/routes.ts`), export it; `web/src/router/routes.ts` re-exports it
+and keeps only the app-only `NAV_LINKS`. Zero web callsite changes; the encode
+drift is fixed in one place.
+
 ## Implementation (after the decision)
 
 - Resolve the dependency-direction decision (A vs B) above.
@@ -86,17 +102,20 @@ package. Decide before implementing.
 
 ## Acceptance Criteria
 
-- [ ] Exactly one place defines each entity's URL shape; the other is deleted
-      or re-exports it.
-- [ ] `IdentifierDisplay` no longer carries an independent route table (it is
-      href-driven, or imports the shared module).
-- [ ] All `<IdentifierDisplay>` callsites render correct links (no broken
-      hrefs); `routeForHit` + NFT composite + asset `route_token` semantics
-      unchanged.
-- [ ] FE tests green (`routeForHit.test.ts` + component tests).
-- [ ] No new `libs/ui → web/` import (dependency direction preserved).
+- [x] Exactly one place defines each entity's URL shape (`libs/ui/src/routes.ts`);
+      `web/src/router/routes.ts` re-exports it, the old `libs/ui` identifier table
+      is deleted (derived from canonical).
+- [x] `IdentifierDisplay` no longer carries an independent route table —
+      `getIdentifierHref` builds on the canonical `routes` (via `hrefBuilders`).
+- [x] All `<IdentifierDisplay>` callsites render correct links (0 web callsite
+      changes); `routeForHit` + NFT composite + asset `route_token` semantics
+      unchanged. Encode drift (account/contract/tx/ledger) unified to always-encode.
+- [x] FE tests green — ui 77/77 (`routes.test.ts` + `routeForHit.test.ts`), web
+      104/104, typecheck + lint clean (verified with worktree-local `npm ci`, not
+      develop's libs).
+- [x] No new `libs/ui → web/` import — direction is web → libs/ui (web re-exports).
 
 ## Future Work
 
-- None beyond this task; it IS the deferred follow-up. If Option B is chosen
-  and the shared module grows, revisit packaging.
+- None. If `libs/ui` owning app URL _shapes_ ever chafes (e.g. libs/ui gets a
+  second, non-app consumer), split the table into its own low-level package then.
