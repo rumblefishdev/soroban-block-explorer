@@ -2,7 +2,7 @@
 id: '0041'
 title: 'Galexie testnet/mainnet operational validation'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0001', '0034', '0145']
 tags: [priority-high, effort-small, layer-indexing, layer-infra]
@@ -29,6 +29,14 @@ history:
       work is purely operational: deploy to testnet, observe ledger
       cadence, verify S3→Lambda trigger end-to-end, then re-validate
       with mainnet config. Effort medium → small.
+  - date: 2026-07-01
+    status: superseded
+    who: stkrolikiewicz
+    note: >
+      Archived as superseded. Galexie mainnet ingestion is validated in production
+      by the 0239/0241 cutover (live ingestion running post-0241). The remaining
+      testnet-then-mainnet operational re-validation is moot now that live mainnet
+      ingest runs in prod.
 ---
 
 # Galexie testnet/mainnet operational validation

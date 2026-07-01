@@ -1399,27 +1399,17 @@ pub(super) async fn upsert_assets(
         return Ok(());
     }
     // Separate paths per identity class — each has its own partial UNIQUE.
-    // Task 0160: SAC rows split by underlying asset — classic-wrap SACs carry
-    // code+issuer and key off `(asset_code, issuer_id)`; native XLM-SAC has
-    // NULL code/issuer (permitted by `ck_assets_identity` after 0160 schema
-    // loosening) and keys off `contract_id` alongside Soroban-native rows.
+    // ADR 0051: `Sac` is retired — a SAC folds onto its classic_credit / native
+    // row (the SAC facet is a non-key property, not modelled by this legacy PG
+    // schema), so there is no separate SAC bucket here.
     let mut native: Vec<&AssetRow> = Vec::new();
     let mut classic_credit: Vec<&AssetRow> = Vec::new();
-    let mut sac_credit: Vec<&AssetRow> = Vec::new();
-    let mut sac_native: Vec<&AssetRow> = Vec::new();
     let mut soroban: Vec<&AssetRow> = Vec::new();
 
     for t in &staged.asset_rows {
         match t.asset_type {
             TokenAssetType::Native => native.push(t),
             TokenAssetType::ClassicCredit => classic_credit.push(t),
-            TokenAssetType::Sac => {
-                if t.asset_code.is_some() && t.issuer_str_key.is_some() {
-                    sac_credit.push(t);
-                } else {
-                    sac_native.push(t);
-                }
-            }
             TokenAssetType::Soroban => soroban.push(t),
         }
     }
@@ -1433,15 +1423,6 @@ pub(super) async fn upsert_assets(
         contract_ids,
     )
     .await?;
-    upsert_assets_classic_like(
-        db_tx,
-        &sac_credit,
-        TokenAssetType::Sac,
-        account_ids,
-        contract_ids,
-    )
-    .await?;
-    upsert_assets_contract_keyed(db_tx, &sac_native, TokenAssetType::Sac, contract_ids).await?;
     upsert_assets_contract_keyed(db_tx, &soroban, TokenAssetType::Soroban, contract_ids).await?;
 
     Ok(())
@@ -1485,11 +1466,8 @@ async fn upsert_assets_classic_like(
     contract_ids: &HashMap<String, i64>,
 ) -> Result<(), HandlerError> {
     debug_assert!(
-        matches!(
-            asset_type,
-            TokenAssetType::ClassicCredit | TokenAssetType::Sac
-        ),
-        "upsert_assets_classic_like only handles classic_credit/sac; got {asset_type:?}"
+        matches!(asset_type, TokenAssetType::ClassicCredit),
+        "upsert_assets_classic_like only handles classic_credit; got {asset_type:?}"
     );
     if rows.is_empty() {
         return Ok(());
@@ -1566,11 +1544,10 @@ async fn upsert_assets_classic_like(
     Ok(())
 }
 
-/// Upsert asset rows keyed by `contract_id` (Soroban-native assets and
-/// native XLM-SAC rows). `uidx_assets_soroban` enforces one row per
-/// contract across both `asset_type = Sac` and `asset_type = Soroban`.
-/// Task 0160: native XLM-SAC has NULL code+issuer + non-NULL contract_id
-/// — permitted by the relaxed `ck_assets_identity`.
+/// Upsert asset rows keyed by `contract_id` (Soroban-native assets). ADR 0051:
+/// SAC rows are retired, so only `asset_type = Soroban` flows here now; the
+/// `uidx_assets_soroban` partial UNIQUE (predicate `asset_type IN (2, 3)` in the
+/// legacy PG schema) and its conflict clause are kept intact to match the index.
 async fn upsert_assets_contract_keyed(
     db_tx: &mut Transaction<'_, Postgres>,
     rows: &[&AssetRow],
@@ -1578,8 +1555,8 @@ async fn upsert_assets_contract_keyed(
     contract_ids: &HashMap<String, i64>,
 ) -> Result<(), HandlerError> {
     debug_assert!(
-        matches!(asset_type, TokenAssetType::Sac | TokenAssetType::Soroban),
-        "upsert_assets_contract_keyed handles sac/soroban only; got {asset_type:?}"
+        matches!(asset_type, TokenAssetType::Soroban),
+        "upsert_assets_contract_keyed handles soroban only; got {asset_type:?}"
     );
     if rows.is_empty() {
         return Ok(());

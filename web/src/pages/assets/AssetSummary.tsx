@@ -94,6 +94,40 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
           ]}
         />
       )}
+      {asset.sac_contract_id && (
+        <SummaryRow
+          cells={[
+            {
+              label: 'SAC contract',
+              // ADR 0051: the classic/native asset's Stellar Asset Contract.
+              // Link to the contract page only when deployed — an un-deployed
+              // SAC is a reserved address, not a live contract (subsumes 0337).
+              value: (
+                <Box
+                  sx={{
+                    '& a': { whiteSpace: 'normal', wordBreak: 'break-all' },
+                  }}
+                >
+                  <IdentifierWithCopy
+                    value={asset.sac_contract_id}
+                    type="contract"
+                    truncate={false}
+                    linked={asset.sac_deployed ?? false}
+                  />
+                  {!asset.sac_deployed && (
+                    <Typography
+                      variant="bodyXsRegular"
+                      sx={(theme) => ({ color: theme.palette.text.secondary })}
+                    >
+                      Reserved address — not deployed
+                    </Typography>
+                  )}
+                </Box>
+              ),
+            },
+          ]}
+        />
+      )}
       <SummaryRow
         cells={[
           {

@@ -116,6 +116,8 @@ pub struct StagedLedger {
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     pub asset_rows: Vec<AssetRow>,
+    /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
+    pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
     /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
@@ -1007,7 +1009,18 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // ---- assets (dedup by 4-tuple identity) ----
+    // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
+    //
+    // ADR 0051: the classic_credit / native `assets` row is the asset's identity;
+    // the SAC handle is a FACET written to the `asset_sac` side table — NOT a
+    // column on `assets`, which is a no-version RMT re-written whole every ledger
+    // a trustline for the asset changes (`detect_classic_credit_assets`) and would
+    // clobber a mutable non-key column to its default on the next re-emit (the
+    // ~25% NULL prod bug). `push_asset` dedups identity by the 4-tuple; `push_sac`
+    // collects one facet per key, `max`-merging `sac_deployed` (a deploy sticks
+    // over a later un-deployed override) — mirrored by the `asset_sac`
+    // AggregatingMergeTree so the fold is correct cross-ledger too, not just
+    // within one staged batch.
     let mut asset_seen: HashSet<(i16, String, i64, i64)> = HashSet::new();
     let push_asset =
         |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, row: AssetRow| {
@@ -1023,6 +1036,21 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 out.asset_rows.push(row);
             }
         };
+    // Facet accumulator: (asset_type, code, issuer_id, contract_id=0) → (surrogate, deployed).
+    let mut sac_facets: HashMap<(i16, String, i64), (i64, u8)> = HashMap::new();
+    let mut push_sac = |asset_type: i16,
+                        asset_code: String,
+                        issuer_id: i64,
+                        sac_contract_id: i64,
+                        deployed: u8| {
+        let e = sac_facets
+            .entry((asset_type, asset_code, issuer_id))
+            .or_insert((0, 0));
+        if sac_contract_id != 0 {
+            e.0 = sac_contract_id;
+        }
+        e.1 = e.1.max(deployed);
+    };
     for t in assets {
         let issuer_id = t
             .issuer_address
@@ -1037,50 +1065,89 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             contract_id_int,
             t.name.clone(),
         );
+        // SAC facet carried by `detect_assets`' SAC branch (the classic/native
+        // carrier for a deploy). Emitted to `asset_sac`, never onto `assets`.
+        if let Some(sac) = t.sac_contract_id.as_deref() {
+            push_sac(
+                t.asset_type as i16,
+                row.asset_code.clone(),
+                issuer_id,
+                ids::contract_id(sac),
+                t.sac_deployed as u8,
+            );
+        }
         push_asset(&mut out, &mut asset_seen, row);
     }
 
+    // SAC deploys (ADR 0051): ensure the underlying classic_credit / native
+    // identity row exists and record the SAC facet (`sac_deployed = 1`). Never a
+    // separate `type=2` row. `detect_assets` already emits the same carrier from
+    // these deployments; the dedup collapses the two, and this also covers callers
+    // that pass deployments without running `detect_assets`.
     for dep in contract_deployments {
         let Some(sac) = &dep.sac_asset else {
             continue;
         };
-        let (asset_code, issuer_id) = match sac {
-            SacAssetIdentity::Native => (String::new(), 0),
-            SacAssetIdentity::Credit { code, issuer } => (code.clone(), ids::account_id(issuer)),
+        let (asset_type, asset_code, issuer_id) = match sac {
+            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Credit { code, issuer } => (
+                domain::TokenAssetType::ClassicCredit,
+                code.clone(),
+                ids::account_id(issuer),
+            ),
         };
+        push_sac(
+            asset_type as i16,
+            asset_code.clone(),
+            issuer_id,
+            ids::contract_id(&dep.contract_id),
+            1,
+        );
         push_asset(
             &mut out,
             &mut asset_seen,
             AssetRow::staged(
-                domain::TokenAssetType::Sac as i16,
+                asset_type as i16,
                 asset_code,
                 issuer_id,
-                ids::contract_id(&dep.contract_id),
+                0, // key reserved for soroban identity
                 None,
             ),
         );
     }
 
-    // Un-deployed-SAC assets (task 0323 AC#3). The crypto-proven event emitters
-    // in `sac_overrides` (see `detect_undeployed_sac_overrides`) get NO contract
-    // row (suppressed in Pass-2 below); model each as a SAC `assets` row so its
-    // activity has a home. `identity` carries the classic asset; the C… strkey is
-    // re-derivable from it (the surrogate `id` here is the one-way hash). A
-    // deployed SAC (e.g. USDC) that also emits is harmless — `push_asset` dedupes
-    // and its real deploy row already exists.
+    // Un-deployed-SAC facet (task 0323 AC#3 → ADR 0051). The crypto-proven event
+    // emitters in `sac_overrides` (see `detect_undeployed_sac_overrides`) get NO
+    // contract row (suppressed in Pass-2 below); fold the SAC handle onto the
+    // underlying classic_credit / native row with `sac_deployed = false` so its
+    // activity has a home while it stays a reserved-but-un-deployed address.
+    // `ov.identity` carries the classic asset. A deployed SAC (e.g. USDC) that
+    // also emits is harmless — `push_asset`'s merge keeps `sac_deployed = true`
+    // from the real deploy row (OR-merge never downgrades it).
     for ov in sac_overrides {
-        let (asset_code, issuer_id) = match &ov.identity {
-            SacAssetIdentity::Native => (String::new(), 0),
-            SacAssetIdentity::Credit { code, issuer } => (code.clone(), ids::account_id(issuer)),
+        let (asset_type, asset_code, issuer_id) = match &ov.identity {
+            SacAssetIdentity::Native => (domain::TokenAssetType::Native, String::new(), 0),
+            SacAssetIdentity::Credit { code, issuer } => (
+                domain::TokenAssetType::ClassicCredit,
+                code.clone(),
+                ids::account_id(issuer),
+            ),
         };
+        push_sac(
+            asset_type as i16,
+            asset_code.clone(),
+            issuer_id,
+            ids::contract_id(&ov.contract_id),
+            0,
+        );
         push_asset(
             &mut out,
             &mut asset_seen,
             AssetRow::staged(
-                domain::TokenAssetType::Sac as i16,
+                asset_type as i16,
                 asset_code,
                 issuer_id,
-                ids::contract_id(&ov.contract_id),
+                0, // key reserved for soroban identity
                 None,
             ),
         );
@@ -1108,8 +1175,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // `contract_id` — code/issuer are empty, aggregates are filled later by the
     // `asset-aggregates` batch. `push_asset` dedups against any row the parser
     // already emitted same-batch; SAC short-circuits `Fungible`, so these never
-    // collide with a `Sac` (type-2) row. Read from the staged `contract_rows`
-    // so the corrected verdict (incl. the prior-ledger override) is honoured.
+    // collide with a SAC-carrying classic/native row. Read from the staged
+    // `contract_rows` so the corrected verdict (incl. the prior-ledger override)
+    // is honoured.
     let fungible_contract_ids: Vec<i64> = out
         .contract_rows
         .iter()
@@ -1128,6 +1196,20 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 None,
             ),
         );
+    }
+
+    // Materialise the accumulated SAC facets into `asset_sac` rows (contract_id
+    // is 0 — the classic/native carrier's key). AggregatingMergeTree `max`-merges
+    // these with any prior-ledger rows, so `sac_deployed` is monotonic.
+    for ((asset_type, asset_code, issuer_id), (sac_contract_id, sac_deployed)) in sac_facets {
+        out.asset_sac_rows.push(AssetSacRow {
+            asset_type,
+            asset_code,
+            issuer_id,
+            contract_id: 0,
+            sac_contract_id,
+            sac_deployed,
+        });
     }
 
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------

@@ -116,8 +116,9 @@ Stellar archive, not stored in the DB):
 
 Derived explorer entities:
 
-- `assets` — unified asset registry (native, classic_credit, SAC, Soroban SEP-41);
-  renamed from `tokens` in ADR 0036 / task 0154
+- `assets` — unified asset registry (native, classic_credit, Soroban SEP-41);
+  a SAC is a facet of its classic_credit / native row, not a separate type
+  (ADR 0051 / task 0339). Renamed from `tokens` in ADR 0036 / task 0154
 - `accounts` — account identity hub (`BIGSERIAL id` surrogate + `VARCHAR(56)` natural `account_id`)
 - `account_balances_current` — classic trustline current balances (history table dropped per ADR 0035)
 - `balances` — unified per-holder balances for ALL asset types (task 0331 Option C, CH-only); raw
@@ -536,14 +537,15 @@ Design notes:
   1. **In-window SAC deploy** — `extract_contract_deployments` reads
      `LedgerEntryChange` with `executable=stellar_asset` and stages
      `is_sac=true` directly on the contract row.
-  2. **Un-deployed SAC → asset, not contract (task 0323)** — a classic
-     asset's deterministic SAC `contract_id` can surface via a CAP-67
+  2. **Un-deployed SAC → asset facet, not contract (task 0323 → ADR 0051)** — a
+     classic asset's deterministic SAC `contract_id` can surface via a CAP-67
      event with no on-chain deploy. `xdr_parser::detect_undeployed_sac_overrides`
      collects these crypto-proven emitters per ledger
      (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`); on
      the CH path each suppresses the Pass-2 FK stub (**no `soroban_contracts`
-     row** is written) and seeds a SAC `assets` row from its identity, so
-     `soroban_contracts` holds **deployed instances only**. The legacy PG step
+     row** is written) and folds the SAC handle onto the underlying
+     classic_credit / native `assets` row (`sac_contract_id` set, `sac_deployed
+= false`), so `soroban_contracts` holds **deployed instances only**. The legacy PG step
      `apply_sac_overrides_for_skeleton_contracts` still UPDATEs `is_sac=TRUE`
      on a matching skeleton row (task 0218, idempotent via `WHERE is_sac=FALSE`)
      — being deprecated with the PG path.
@@ -672,35 +674,56 @@ Design notes:
 
 ```sql
 CREATE TABLE assets (
-    id           SERIAL        PRIMARY KEY,
-    asset_type   SMALLINT      NOT NULL,   -- TokenAssetType: 0=native, 1=classic_credit, 2=sac, 3=soroban
-    asset_code   VARCHAR(12),
-    issuer_id    BIGINT        REFERENCES accounts(id),           -- ADR 0026
-    contract_id  BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030
-    name         VARCHAR(256),
-    total_supply NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
-    holder_count INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
-    icon_url     VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
+    id              SERIAL        PRIMARY KEY,
+    asset_type      SMALLINT      NOT NULL,   -- TokenAssetType: 0=native, 1=classic_credit, 3=soroban (2=sac RETIRED, ADR 0051)
+    asset_code      VARCHAR(12),
+    issuer_id       BIGINT        REFERENCES accounts(id),           -- ADR 0026
+    contract_id     BIGINT        REFERENCES soroban_contracts(id),  -- ADR 0030; soroban identity only
+    name            VARCHAR(256),
+    total_supply    NUMERIC(28,7),                                   -- indexer recompute per ledger (ADR 0043 / task 0194 §1b)
+    holder_count    INTEGER,                                         -- indexer recompute per ledger (ADR 0043 / task 0194 §1c)
+    icon_url        VARCHAR(1024),                                   -- list-level thumbnail (ADR 0037 / task 0164)
     CONSTRAINT ck_assets_asset_type_range CHECK (asset_type BETWEEN 0 AND 15),
-    -- asset_type = 2 (SAC) admits two shapes — classic-credit wrap carries
-    -- (code + issuer + contract); native XLM wrap carries (NULL + NULL +
-    -- contract). See ADR 0038.
+    -- ADR 0051: a SAC is a FACET of its classic_credit / native asset, not a
+    -- separate type. `assets` holds only the asset's IDENTITY; the SAC handle
+    -- lives in the `asset_sac` side table (below), NOT as columns here — `assets`
+    -- is re-written whole every ledger, so a mutable non-key column would be
+    -- clobbered by the next re-emit.
     CONSTRAINT ck_assets_identity CHECK (
         (asset_type = 0 AND asset_code IS NULL     AND issuer_id IS NULL     AND contract_id IS NULL)
      OR (asset_type = 1 AND asset_code IS NOT NULL AND issuer_id IS NOT NULL AND contract_id IS NULL)
-     OR (asset_type = 2 AND contract_id IS NOT NULL AND (
-            (asset_code IS NOT NULL AND issuer_id IS NOT NULL)   -- classic-credit SAC
-         OR (asset_code IS NULL     AND issuer_id IS NULL)        -- native XLM-SAC (ADR 0038)
-        ))
      OR (asset_type = 3 AND issuer_id IS NULL      AND contract_id IS NOT NULL)
     )
 );
 -- partial unique indexes enforce one row per logical asset:
 CREATE UNIQUE INDEX uidx_assets_native        ON assets ((asset_type)) WHERE asset_type = 0;
-CREATE UNIQUE INDEX uidx_assets_classic_asset ON assets (asset_code, issuer_id) WHERE asset_type IN (1, 2);
-CREATE UNIQUE INDEX uidx_assets_soroban       ON assets (contract_id)           WHERE asset_type IN (2, 3);
+CREATE UNIQUE INDEX uidx_assets_classic_asset ON assets (asset_code, issuer_id) WHERE asset_type = 1;
+CREATE UNIQUE INDEX uidx_assets_soroban       ON assets (contract_id)           WHERE asset_type = 3;
 CREATE INDEX idx_assets_type      ON assets (asset_type);
 CREATE INDEX idx_assets_code_trgm ON assets USING GIN (asset_code gin_trgm_ops);
+
+-- SAC facet side table (ADR 0051). One logical row per SAC-having classic_credit
+-- / native asset, keyed byte-for-byte like `assets`, joined at read. Written by
+-- the INDEXER only on a SAC sighting (deploy → sac_deployed=1, un-deployed
+-- override event → 0), NEVER on a plain trustline re-emit, so the per-ledger
+-- whole-row `assets` rewrite can't zero it (the clobber that moved total_supply →
+-- asset_aggregates and name/icon → asset_enrichment). On ClickHouse it is an
+-- AggregatingMergeTree with SimpleAggregateFunction(max) columns: `sac_deployed`
+-- is monotonic, so a deploy sighting `max`-beats any later un-deployed override.
+-- The SAC's C… StrKey is NOT stored — it re-derives on read from `code:issuer`.
+CREATE TABLE asset_sac (
+    asset_type      SMALLINT,
+    asset_code      VARCHAR(12),
+    issuer_id       BIGINT,
+    contract_id     BIGINT,      -- 0 for the classic/native carrier
+    sac_contract_id BIGINT,      -- surrogate of the SAC's C… StrKey (max-merged)
+    sac_deployed    BOOLEAN      -- deployed on-chain? (max-merged → sticky-true)
+    -- CH: ENGINE = AggregatingMergeTree
+    --     ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+    -- No skip-index on `sac_contract_id`: every read aggregates the whole (small,
+    -- ~31k-row) table (`GROUP BY key, max(sac_contract_id)`), so a per-column index
+    -- prunes nothing; the `/assets/{C…}` deep-link filters that join result.
+);
 ```
 
 Purpose:
@@ -719,13 +742,20 @@ Design notes:
   [ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md); label
   helper `token_asset_type_name(ty)` renders strings for psql/BI
 - `issuer_id` / `contract_id` are `BIGINT` surrogate FKs (ADRs 0026 / 0030); the
-  identity rules in `ck_assets_identity` close the NULL-in-UNIQUE loophole and
-  enforce that classic identity fields move together for SAC rows (both set or
-  both NULL — see [ADR 0038](../../../lore/2-adrs/0038_loosen-ck-assets-identity-for-native-xlm-sac.md))
-- native XLM is uniquely identified by `asset_type = 0`; classic credit and
-  classic-credit-wrap SACs by `(asset_code, issuer_id)`; classic-credit-wrap
-  SAC, native XLM-SAC, and Soroban-native assets all dedupe by `contract_id`
-  via `uidx_assets_soroban`
+  identity rules in `ck_assets_identity` close the NULL-in-UNIQUE loophole
+- **SAC is a facet, not a type** ([ADR 0051](../../../lore/2-adrs/0051_sac-as-facet-of-classic-credit.md),
+  task 0339): a classic asset and its Stellar Asset Contract are the **same
+  economic asset**, so SAC-ness is carried in the `asset_sac` side table —
+  `sac_contract_id` (surrogate of the SAC's `C…` StrKey — the `C…` itself is NOT
+  stored; it re-derives on read from `code:issuer`) + `sac_deployed` — keyed on
+  the classic_credit / native identity, never a separate `asset_type = 2`.
+  Populated for deployed AND un-deployed SACs (an un-deployed SAC still emits
+  events that must resolve to the asset). It lives in a side table (not columns
+  on `assets`) because `assets` is re-written whole every ledger. This supersedes
+  the classic↔SAC split (and its ADR 0038 native-XLM-SAC carve-out)
+- native XLM is uniquely identified by `asset_type = 0`; classic credit by
+  `(asset_code, issuer_id)`; Soroban-native assets by `contract_id` via
+  `uidx_assets_soroban`
 - the native XLM singleton (`asset_type = 0`, name `"Stellar Lumen"`, all
   identity columns NULL) is bootstrapped on **two paths** that both rely on
   `uidx_assets_native`'s `WHERE NOT EXISTS` no-op semantics:
@@ -748,10 +778,13 @@ Design notes:
     handled by `extract_lp_positions`. Producer added in task 0219 to
     close Karol's pre-audit Bug #1 (classic credits had no producer;
     the persist branch fired only in tests).
-  - `2 = Sac` → `xdr_parser::detect_assets` (`crates/xdr-parser/src/state.rs`)
-    on every observed SAC contract deployment. SAC identity carried via
-    the deployment's `sac_asset` field (`SacAssetIdentity::Credit` or
-    `Native`).
+  - **SAC facet** (`asset_sac` side table, ADR 0051) → a SAC deploy
+    (`xdr_parser::detect_assets`, `crates/xdr-parser/src/state.rs`) emits a facet
+    row with `sac_deployed = 1`; an un-deployed SAC seen via a CAP-67 event
+    (`detect_undeployed_sac_overrides`) emits one with `sac_deployed = 0`. Neither
+    emits a distinct `asset_type` row; the staging `push_sac` accumulator
+    `max`-merges the facet per key (deploy beats override), mirrored cross-ledger
+    by the `asset_sac` AggregatingMergeTree.
   - `3 = Soroban` → `xdr_parser::detect_assets` for non-SAC deployments
     whose WASM interface classifies as `Fungible` via
     `xdr_parser::classify_contract_from_wasm_spec`.

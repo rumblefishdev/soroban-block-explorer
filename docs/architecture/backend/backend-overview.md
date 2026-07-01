@@ -210,6 +210,18 @@ The backend serves data from the block explorer's own database, adding:
   the natural identity 4-tuple `(asset_type, asset_code, issuer_id, contract_id)`,
   which is why `/assets/:id` and the list cursor use the composite token /
   composite keyset rather than the dropped `assets.id`.
+  **SAC is a facet, not a type** ([ADR 0051](../../../lore/2-adrs/0051_sac-as-facet-of-classic-credit.md),
+  task 0339): `asset_type_name` / `filter[type]` no longer carry `sac`; the asset
+  DTO surfaces `sac_contract_id` (the SAC's `C…`, **re-derived on read** from
+  `code:issuer` via `derive_sac_strkey` — never stored) + `sac_deployed`, both
+  read from the indexer-owned `asset_sac` side table (`AggregatingMergeTree`,
+  `max`-merged) LEFT-JOINed at read — NOT columns on `assets` (which is
+  re-written whole every ledger and would clobber them). The canonical `id` of a
+  SAC-wrap is its `CODE-ISSUER`, and the "SAC" view is the property filter
+  `filter[sac]=true` (`sac.sac_contract_id != 0`). `/assets/{C…}` deep-links
+  resolve either a soroban contract OR a SAC — `fetch_by_contract_id` hashes the
+  input `C…` to its surrogate and matches it against the (small, whole-table
+  aggregated) `asset_sac` join.
   The `nfts` table on ClickHouse is likewise **surrogate-free** (keyed on
   `(contract_id, token_id)`): the wire `NftItem.id` is dropped, the list cursor
   keys on `(minted_at_ledger, contract_id, token_id)`, and the transfers

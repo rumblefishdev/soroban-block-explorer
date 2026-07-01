@@ -432,7 +432,19 @@ pub struct ExtractedAsset {
     pub asset_type: TokenAssetType,
     pub asset_code: Option<String>,
     pub issuer_address: Option<String>,
+    /// Soroban contract identity (`C…` StrKey) — set ONLY for `soroban`
+    /// (type=3) assets, where the contract IS the asset. `None` for
+    /// native / classic_credit (a SAC handle rides in `sac_contract_id`).
     pub contract_id: Option<String>,
+    /// SAC facet (ADR 0051): the wrapping Stellar-Asset-Contract's `C…`
+    /// StrKey for a `native` / `classic_credit` asset. `None` when the asset
+    /// has no SAC. Persisted as a cityhash64 surrogate on `asset_sac.sac_contract_id`
+    /// (a side table — not a column on `assets`).
+    pub sac_contract_id: Option<String>,
+    /// Whether `sac_contract_id`'s SAC is actually deployed on-chain (ADR 0051).
+    /// `true` from a SAC deploy sighting; `false` for an un-deployed SAC seen
+    /// only via events. Meaningless (and `false`) when `sac_contract_id` is `None`.
+    pub sac_deployed: bool,
     pub name: Option<String>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,

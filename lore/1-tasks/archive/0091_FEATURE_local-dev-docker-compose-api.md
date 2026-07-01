@@ -18,6 +18,13 @@ history:
     status: canceled
     who: stkrolikiewicz
     note: 'Obsolete per ADR 0005: NestJS local entrypoint replaced by cargo lambda watch for Rust backend'
+  - date: 2026-07-01
+    status: canceled
+    who: stkrolikiewicz
+    note: >
+      Archived. Canceled 2026-03-31 as obsolete per ADR 0005 (NestJS backend
+      replaced by Rust; local entrypoint superseded by cargo lambda watch). Moving
+      out of backlog to archive/.
 ---
 
 # Local dev: NestJS API local entrypoint and dev workflow

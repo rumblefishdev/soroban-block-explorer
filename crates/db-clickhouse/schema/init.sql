@@ -247,6 +247,39 @@ CREATE TABLE IF NOT EXISTS assets (
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
+-- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
+-- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at
+-- read (`… GROUP BY key` with `max()`). Written by the INDEXER (not the enricher)
+-- ONLY when a SAC is sighted — a deploy (`sac_deployed=1`) or an un-deployed
+-- override event (`sac_deployed=0`) — NEVER on a plain trustline re-emit, so the
+-- per-ledger whole-row `assets` rewrite can never zero it.
+--   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey (the same
+--     hash used for `soroban_contracts.id`). The `C…` StrKey itself is NOT stored
+--     — it re-derives on read from `code:issuer` (`derive_sac_strkey`).
+--   * `sac_deployed` — deployed on-chain? MONOTONIC (false→true, never back), so
+--     `SimpleAggregateFunction(max)` makes a deploy sighting stick over any later
+--     un-deployed-override event; `max()` on the constant surrogate is a no-op.
+-- AggregatingMergeTree (not RMT): `max` merges column-wise per key, so an override
+-- event AFTER a deploy cannot downgrade `sac_deployed` (a versioned RMT keeps the
+-- last-inserted whole row and WOULD downgrade). No `soroban_contracts` join needed
+-- for deployed-ness — the flag is stored.
+-- No skip-index on `sac_contract_id`: every read aggregates the whole (small)
+-- table — `SELECT key, max(sac_contract_id) … GROUP BY key` for the join, then the
+-- `/assets/{C…}` deep-link filters `sac.sac_contract_id = ?` on that join result —
+-- so a per-column index would prune nothing. `asset_sac` is one row per
+-- SAC-having asset (~31k at mainnet scale), so the full-table aggregate is cheap;
+-- add a `sac_contract_id` skip-index + a direct point-lookup only if it ever grows.
+CREATE TABLE IF NOT EXISTS asset_sac (
+    asset_type      Int16,
+    asset_code      LowCardinality(String),
+    issuer_id       Int64,
+    contract_id     Int64,
+    sac_contract_id SimpleAggregateFunction(max, Int64),
+    sac_deployed    SimpleAggregateFunction(max, UInt8)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
 -- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
 -- enrichment-worker Lambda (NOT the indexer), keyed byte-for-byte like
 -- `assets`, joined at read (`… FINAL`/`argMax`). Lives in a separate table

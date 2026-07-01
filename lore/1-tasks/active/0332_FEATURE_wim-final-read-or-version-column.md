@@ -2,7 +2,7 @@
 id: '0332'
 title: 'FEATURE: make contract-detail reads of wasm_interface_metadata merge-correct (FINAL or version col)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0326', '0327', '0320']
 tags:
@@ -25,6 +25,12 @@ history:
       sufficient for steady state; this is the fundamental hardening so the read
       path is correct regardless of merge timing. Created on the 0326 branch (not
       develop) because develop had unrelated uncommitted WIP in the same API files.
+  - date: '2026-07-01'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. Bundled with 0299 onto a single branch
+      (feat/0299_0332_routes-consolidation-and-wim-read).
 ---
 
 # FEATURE: contract-detail wim read must be merge-correct

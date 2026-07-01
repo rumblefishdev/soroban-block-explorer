@@ -147,7 +147,8 @@ mod tests {
         // pre-computed asset aggregates (`assets.total_supply` / `holder_count`
         // now served from `asset_aggregates`; the dead columns' drop is deferred
         // to task 0310); task 0297 added the `soroban_contract_metadata` side
-        // table (on-chain token name/symbol/decimals); task 0331 added the
+        // table (on-chain token name/symbol/decimals); ADR 0051 / task 0339 added
+        // the `asset_sac` SAC-facet side table; task 0331 added the
         // `soroban_token_balances` per-holder side table (asset_type=3 balances
         // from ContractData `Balance(Address)` ledger state) + the
         // task 0331 Option C: unified `balances` + `balance_aggregates`

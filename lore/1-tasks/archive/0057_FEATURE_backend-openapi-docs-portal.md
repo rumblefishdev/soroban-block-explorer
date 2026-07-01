@@ -2,7 +2,7 @@
 id: '0057'
 title: 'Backend: OpenAPI spec generation and docs portal'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: ['0005']
 related_tasks: ['0023', '0042', '0092']
 tags: [layer-backend, openapi, documentation, swagger]
@@ -17,6 +17,14 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Updated per ADR 0005: axum → Rust (axum + utoipa + sqlx)'
+  - date: 2026-07-01
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived as completed. OpenAPI generation + docs portal shipped: utoipa spec
+      extraction (extract_openapi bin) plus Swagger UI at /api-docs and /api-docs-
+      json, under the CI 'API types freshness' gate. Task doc was never promoted
+      from backlog.
 ---
 
 # Backend: OpenAPI spec generation and docs portal

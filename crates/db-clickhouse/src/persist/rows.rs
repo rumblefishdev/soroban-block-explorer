@@ -119,6 +119,25 @@ impl AssetRow {
     }
 }
 
+/// `asset_sac` — indexer-owned SAC facet side table (ADR 0051 / task 0339),
+/// `AggregatingMergeTree` with `SimpleAggregateFunction(max)` columns. Keyed
+/// byte-for-byte like `assets`; written ONLY on a SAC sighting (deploy or
+/// un-deployed override), so the per-ledger whole-row `assets` rewrite cannot
+/// zero it. `max()` merges column-wise: `sac_deployed` (monotonic) sticks true
+/// once deployed; `sac_contract_id` is a constant per key. Insert side just
+/// serialises the raw values (the engine aggregates on merge).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct AssetSacRow {
+    pub asset_type: i16,
+    pub asset_code: String,
+    pub issuer_id: i64,
+    pub contract_id: i64,
+    /// cityhash64 surrogate of the SAC's `C…` StrKey.
+    pub sac_contract_id: i64,
+    /// Deployed on-chain? Serialised as `UInt8` (0/1) to match the CH column.
+    pub sac_deployed: u8,
+}
+
 /// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),
 /// RMT(version). Written by the enrichment worker, NOT the indexer; keyed
 /// byte-for-byte like `assets` and joined at read. `version` =
