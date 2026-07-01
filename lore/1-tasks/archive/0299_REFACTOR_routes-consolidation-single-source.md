@@ -2,7 +2,7 @@
 id: '0299'
 title: 'REFACTOR: consolidate duplicated route tables — IdentifierDisplay href prop, single source of truth'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0243', '0263', '0264', '0270']
 tags: [frontend, refactor, routing, effort-medium, priority-low, phase-future]
@@ -24,6 +24,18 @@ history:
     note: >
       Promoted to active. Bundled with 0332 onto a single branch
       (feat/0299_0332_routes-consolidation-and-wim-read).
+  - date: '2026-07-01'
+    status: completed
+    who: karolkow
+    note: >
+      Implemented B-lite: canonical route table now single-sourced in
+      libs/ui/src/routes.ts; web/src/router/routes.ts re-exports it (0 callsite
+      changes) keeping only NAV_LINKS; identifiers derive from it. Encode drift
+      fixed. Emerged: chose B-lite over the task's A/B — pure A breaks the two
+      lib-internal IdentifierDisplay callsites (OperationFlowTree builds links,
+      can't reach web); canonical B (new package) overkill with no existing shared
+      lib. Tests: ui 77/77 (+routes.test.ts), web 104/104, typecheck+lint clean
+      (worktree-local npm ci). frontend-overview.md updated (ADR 0032). PR #300.
 ---
 
 # REFACTOR: consolidate duplicated route tables → single source of truth

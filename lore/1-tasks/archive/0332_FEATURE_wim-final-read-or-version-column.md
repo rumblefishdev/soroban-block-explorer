@@ -2,7 +2,7 @@
 id: '0332'
 title: 'FEATURE: make contract-detail reads of wasm_interface_metadata merge-correct (FINAL or version col)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0326', '0327', '0320']
 tags:
@@ -31,6 +31,18 @@ history:
     note: >
       Promoted to active. Bundled with 0299 onto a single branch
       (feat/0299_0332_routes-consolidation-and-wim-read).
+  - date: '2026-07-01'
+    status: completed
+    who: karolkow
+    note: >
+      Added FINAL to the 2 CH wim reads (queries_ch.rs:307,549), fixed the stale
+      "plain MergeTree" comment, aligned canonical doc 12. Engine verified RMT
+      (prod chq + init.sql); FINAL query prod-validated. PG site N/A (retired).
+      Emerged: descoped the sha256 content-address guard (implemented then
+      reverted) — upgradeable-backfill is a spent one-shot and the live path reads
+      trusted ledger bytes, so the guard was dead code (YAGNI). No automated CH
+      regression test (no CH harness in tests_integration) — validated via prod.
+      PR #300.
 ---
 
 # FEATURE: contract-detail wim read must be merge-correct
