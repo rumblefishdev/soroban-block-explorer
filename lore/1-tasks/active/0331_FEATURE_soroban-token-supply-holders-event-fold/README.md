@@ -99,16 +99,27 @@ holders) — that's the OPS `O5` ≥10-token pass.
 - native by ACCOUNT is unchanged (AccountEntry → `asset_id(0)` direct); only contract-held native goes
   via the native SAC's type-2 row → 0339 fold.
 
-### Historical backfill for contract-held 0/1 — LIGHT seed, NOT S3 reprocess (2026-07-01)
+### Historical backfill for contract-held 0/1 — LIGHT seed, NOT S3 reprocess (2026-07-01) — BUILT
 An S3 `Run` works (shared parser → same decode) but is heavy (12.8M ledgers × decompress+XDR-parse).
-Prefer **extending the existing `balance-seed`** (reuses candidate-scan → RPC → `build_balance_rows`):
-- add SAC (0/1) candidates — C-addresses scraped from SAC events (`signature='transfer'`, ~4.46B rows,
-  LowCardinality-filtered, one-time CH scan, NO XDR parse) grouped per SAC contract;
-- add an XDR-level SAC-struct decoder in `rpc_snapshot` (port of `decode_sac_balance_value`);
-- key by the SAC surrogate (Path X). `balance-seed` today decodes bare `i128` only (type-3) — this is
-  net-new work, not free.
-- **Benchmark the 4.46B scan on a bounded range FIRST**; cross-check coverage vs pools enumerable via
-  `get_reserves()` (a missed known pool = incomplete enumeration); log dropped counts, never claim 100%.
+Instead the existing `balance-seed` was **extended** (DONE — reuses candidate-scan → RPC →
+`build_balance_rows`):
+- `read_sac_seed_candidates` — C-addresses scraped from SAC events (full canonical vocabulary
+  `transfer/mint/burn/clawback/set_authorized`), scoped by `assets asset_type=2`, deduped with
+  `groupUniqArrayArray` (memory-bounded — a plain `groupArrayArray` would OOM on high-traffic SACs).
+- `decode_balance_entry` (rpc_snapshot) decodes the SAC struct by **reusing** the live parser's
+  `xdr_parser::decode_sac_balance_value` (via `scval_to_typed_json`) — ONE decoder, lock-step by
+  construction. Keyed by the SAC surrogate (Path X). Both value shapes flow through one pipeline.
+- Real-mainnet non-circular tests (`decode_balance_entry_sac_struct_real_mainnet`) + gated CH
+  integration test (`read_sac_seed_candidates_scrapes_contract_holders_only`).
+
+**OPS to run it (not done):**
+- **`--dry-run` FIRST** to benchmark the ~4.46B-row scan + read the funnel counts before a live write.
+- **REQUIRED validation gate**: cross-check the seed's per-SAC sum against pools independently readable
+  via `get_reserves()`; a missed known pool = incomplete enumeration. Log dropped counts; never claim 100%.
+- Completeness is unverifiable in general (event-scrape can't prove it found every holder; most SACs have
+  no "all holders" oracle) — accept + document the residual. `authorized=false` (frozen) balances are
+  seeded into supply and their magnitude is currently unmeasured (flags decoded but not threaded) —
+  decide count-vs-exclude before relying on the number.
 
 ### OPS sequencing (ordered) — NO step needs a halted indexer; only ONE thing precedes the deploy
 The CH indexer is **single-write** (`writer.rs:107`: legacy `account_balances_current` insert removed;
