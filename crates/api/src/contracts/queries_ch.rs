@@ -278,13 +278,15 @@ pub async fn fetch_contract(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
-    // Two FINAL/aliasing pitfalls, both 500'd every contract detail (regression
-    // from task 0327):
-    //   1. `wasm_interface_metadata` is a plain `MergeTree`, so it must NOT carry
-    //      `FINAL` — CH rejects `FINAL` on a non-replacing engine with
-    //      `Code: 181 (ILLEGAL_FINAL)`. Only `soroban_contracts` (Replacing)
-    //      takes `FINAL`. (The events stats query below already joins `wim`
-    //      FINAL-free.)
+    // Two correctness pitfalls on this join (task 0332):
+    //   1. `wasm_interface_metadata` is `ReplacingMergeTree` (no version column),
+    //      so the `wim` join MUST carry `FINAL`. A non-`FINAL` read can pick a
+    //      stale duplicate row during the window after `upgradeable-backfill`
+    //      (task 0327) re-INSERTs an existing `wasm_hash` with _divergent_
+    //      `metadata`, before the background merge collapses it → the
+    //      `upgradeable` chip flickers to Unknown. `FINAL` is legal on RMT and
+    //      the table is tiny (~3.7k rows), so it is cheap. (An earlier comment
+    //      here wrongly called it a plain `MergeTree`; prod is RMT.)
     //   2. `sc.id` MUST be aliased `AS id`: `id` is ambiguous across the joined
     //      tables (`soroban_contracts`, `accounts`), so CH names the result
     //      column `sc.id`, which the `clickhouse` row deserialiser can't match
@@ -304,7 +306,7 @@ pub async fn fetch_contract(
                           JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN accounts deployer ON deployer.id = sc.deployer_id \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -546,7 +548,7 @@ pub async fn fetch_wasm_interface(
                 lower(hex(sc.wasm_hash))        AS wasm_hash, \
                 ifNull(wim.metadata, '')        AS metadata \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
