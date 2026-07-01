@@ -314,10 +314,13 @@ entities:
 - **SAC is a facet of the classic/native asset, not a separate row** (ADR 0051 /
   task 0339). A SAC deploy (`detect_assets` SAC branch) and an un-deployed SAC
   seen via a CAP-67 event (`detect_undeployed_sac_overrides`, task 0323) both
-  set the SAC handle (`sac_contract_id` = surrogate of the derived `C…`, +
-  `sac_deployed`) on the ONE `classic_credit` / `native` `assets` row rather than
-  emitting a distinct `asset_type = 2` — the staging fingerprint merges the facet
-  onto the classic/native fingerprint. Override collection is crypto-gated
+  record the SAC handle (`sac_contract_id` = surrogate of the derived `C…`, +
+  `sac_deployed`) keyed on the `classic_credit` / `native` identity in the
+  `asset_sac` side table — NOT a distinct `asset_type = 2` row, and NOT columns on
+  `assets` (which is re-written whole every ledger and would clobber them). The
+  staging `push_sac` accumulator `max`-merges the facet per key (a deploy sighting
+  beats a later un-deployed override), mirrored cross-ledger by the `asset_sac`
+  AggregatingMergeTree. Override collection is crypto-gated
   (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
   contract is never mislabeled) and suppresses the Pass-2 FK stub (**no
   `soroban_contracts` row**), so `soroban_contracts` holds **deployed instances
