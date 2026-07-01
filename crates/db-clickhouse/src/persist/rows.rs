@@ -87,6 +87,12 @@ pub struct AssetRow {
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
+    /// SAC facet (ADR 0051): cityhash64 surrogate of the wrapping SAC's `C…`
+    /// StrKey, or 0 when the asset has no SAC. Non-key; `contract_id` above
+    /// stays reserved for soroban identity.
+    pub sac_contract_id: i64,
+    /// Whether `sac_contract_id`'s SAC is deployed on-chain (ADR 0051).
+    pub sac_deployed: bool,
 }
 
 /// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),

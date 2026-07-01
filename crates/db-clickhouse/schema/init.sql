@@ -212,9 +212,22 @@ ORDER BY (contract_id);
 ----------------------------------------------------------------------
 
 -- assets identity is a 4-tuple. Native XLM: all-empty + asset_type=0.
--- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
--- set, code/issuer optional. Soroban-native: contract_id set,
--- code/issuer=empty/0.
+-- Classic credit: code+issuer set, contract_id=0. Soroban-native:
+-- contract_id set, code/issuer=empty/0.
+--
+-- SAC-ness is a FACET, not a type (ADR 0051 / task 0339). A Stellar Asset
+-- Contract wraps a classic_credit / native asset, so it is recorded as
+-- property columns on that ONE row (never a separate `asset_type=2`):
+--   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey
+--     (the same hash used for `soroban_contracts.id` / `contract_id`).
+--     0 = the asset has no SAC. Populated for deployed AND un-deployed SACs
+--     (an un-deployed SAC still emits events that must resolve to the asset).
+--     Kept OUT of the ORDER BY key on purpose (the key `contract_id` is
+--     reserved for `soroban` identity); this is a non-key lookup index.
+--   * `sac_deployed` — whether that SAC is actually deployed on-chain
+--     (writer-maintained; read stays join-free — no `soroban_contracts` join).
+-- The `C…` StrKey itself is NOT stored — it is a pure function of
+-- `code:issuer` and re-derived on read by the API (`derive_sac_contract_id`).
 --
 -- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
 -- lore-0293: nothing reads them (the API serves the aggregate from
@@ -227,11 +240,13 @@ CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
-    contract_id     Int64,            -- 0 for native / classic-credit
+    contract_id     Int64,            -- 0 for native / classic-credit (soroban identity only)
     name            Nullable(String),
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
-    icon_url        Nullable(String)
+    icon_url        Nullable(String),
+    sac_contract_id Int64 DEFAULT 0,          -- SAC surrogate facet (ADR 0051); 0 = no SAC
+    sac_deployed    Bool  DEFAULT false       -- SAC deployed on-chain? (ADR 0051)
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);

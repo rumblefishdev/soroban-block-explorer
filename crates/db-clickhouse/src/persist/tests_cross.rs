@@ -74,6 +74,8 @@ fn column_order_assets() {
             "total_supply",
             "holder_count",
             "icon_url",
+            "sac_contract_id",
+            "sac_deployed",
         ],
     );
 }
@@ -1659,10 +1661,11 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
 // Task 0323 — un-deployed SAC modelled as asset (was task 0220 re-insert)
 // ---------------------------------------------------------------------------
 
-/// Task 0323 — an un-deployed SAC (in `sac_overrides`, not deployed this
-/// ledger) is modelled as an ASSET, not a contract: NO `soroban_contracts`
-/// row is written for it (the Pass-2 FK stub is suppressed), and a SAC
-/// `assets` row is seeded from its identity. (Was the task-0220 skeleton.)
+/// Task 0323 → ADR 0051 — an un-deployed SAC (in `sac_overrides`, not deployed
+/// this ledger) is modelled as an ASSET FACET, not a contract: NO
+/// `soroban_contracts` row is written for it (the Pass-2 FK stub is suppressed),
+/// and the SAC handle is folded onto the underlying classic/native asset row
+/// (`sac_contract_id` set, `sac_deployed = false`). (Was the task-0220 skeleton.)
 #[test]
 fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
     let ledger = synthetic_ledger();
@@ -1707,16 +1710,35 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
             .any(|r| r.contract_id == xlm_sac),
         "un-deployed SAC override writes NO contract row",
     );
-    // Instead, exactly one SAC asset row seeded from the override identity
-    // (native XLM SAC → empty code, issuer 0).
-    let sac_assets: Vec<&_> = staged
+    // Instead, the native XLM SAC folds onto the native (type=0) asset row —
+    // one native row, SAC handle in `sac_contract_id`, `sac_deployed = false`.
+    // (The override merges with the native singleton on the shared identity key.)
+    let native_rows: Vec<&_> = staged
         .asset_rows
         .iter()
-        .filter(|a| a.asset_type == domain::TokenAssetType::Sac as i16)
+        .filter(|a| a.asset_type == domain::TokenAssetType::Native as i16)
         .collect();
-    assert_eq!(sac_assets.len(), 1, "one SAC asset row for the override");
-    assert_eq!(sac_assets[0].asset_code, "");
-    assert_eq!(sac_assets[0].issuer_id, 0);
+    assert_eq!(
+        native_rows.len(),
+        1,
+        "one native asset row (override merged)"
+    );
+    assert_eq!(native_rows[0].asset_code, "");
+    assert_eq!(native_rows[0].issuer_id, 0);
+    assert_eq!(
+        native_rows[0].sac_contract_id,
+        super::ids::contract_id(xlm_sac),
+        "SAC handle folded onto the native row as a surrogate",
+    );
+    assert!(
+        !native_rows[0].sac_deployed,
+        "un-deployed override → sac_deployed = false",
+    );
+    // No leftover `asset_type = 2` rows — that value is retired (ADR 0051).
+    assert!(
+        !staged.asset_rows.iter().any(|a| a.asset_type == 2),
+        "no retired type=2 rows emitted",
+    );
 }
 
 /// When the same contract is deployed in the current ledger (real
