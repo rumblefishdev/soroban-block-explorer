@@ -705,10 +705,11 @@ CREATE TABLE asset_sac (
     contract_id     BIGINT,      -- 0 for the classic/native carrier
     sac_contract_id BIGINT,      -- surrogate of the SAC's C… StrKey (max-merged)
     sac_deployed    BOOLEAN      -- deployed on-chain? (max-merged → sticky-true)
-    -- CH: ORDER BY (asset_type, asset_code, issuer_id, contract_id);
-    --     INDEX idx_asset_sac_contract_id sac_contract_id TYPE bloom_filter — the
-    --     SAC's C… (events/tx, /assets/{C…}) resolves back to the asset via this
-    --     non-key lookup, which needs a skip-index or it full-scans.
+    -- CH: ENGINE = AggregatingMergeTree
+    --     ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+    -- No skip-index on `sac_contract_id`: every read aggregates the whole (small,
+    -- ~31k-row) table (`GROUP BY key, max(sac_contract_id)`), so a per-column index
+    -- prunes nothing; the `/assets/{C…}` deep-link filters that join result.
 );
 ```
 

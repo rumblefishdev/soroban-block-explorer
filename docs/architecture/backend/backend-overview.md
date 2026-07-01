@@ -220,7 +220,8 @@ The backend serves data from the block explorer's own database, adding:
   SAC-wrap is its `CODE-ISSUER`, and the "SAC" view is the property filter
   `filter[sac]=true` (`sac.sac_contract_id != 0`). `/assets/{C…}` deep-links
   resolve either a soroban contract OR a SAC — `fetch_by_contract_id` hashes the
-  input `C…` to its surrogate (bloom skip-index on `asset_sac`) and matches.
+  input `C…` to its surrogate and matches it against the (small, whole-table
+  aggregated) `asset_sac` join.
   The `nfts` table on ClickHouse is likewise **surrogate-free** (keyed on
   `(contract_id, token_id)`): the wire `NftItem.id` is dropped, the list cursor
   keys on `(minted_at_ledger, contract_id, token_id)`, and the transfers

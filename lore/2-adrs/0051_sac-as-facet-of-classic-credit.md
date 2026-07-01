@@ -108,9 +108,10 @@ SAC-ness becomes a **property** of a `classic_credit` (or `native`) asset, not a
      on a trustline re-emit — so the per-ledger `assets` rewrite cannot zero it. `max`
      merges column-wise: `sac_deployed` is monotonic, so a deploy sighting sticks over any
      later un-deployed override (a version-based RMT would keep the last whole row and
-     WOULD downgrade). Populated for ANY SAC-having asset — deployed or not. A `bloom_filter`
-     skip-index on `sac_contract_id` resolves Soroban activity (events/tx under `C…`, the
-     `/assets/{C…}` deep-link) back to the asset.
+     WOULD downgrade). Populated for ANY SAC-having asset — deployed or not. Reads aggregate
+     the whole (small, ~31k-row) table (`GROUP BY key, max(…)`) to resolve Soroban activity
+     (events/tx under `C…`, the `/assets/{C…}` deep-link) back to the asset — no skip-index
+     (the aggregate reads every row anyway; add one + a direct point-lookup if it grows).
 
    The `C…` **strkey is NOT stored** — it is a pure function of `code:issuer`
    (`derive_sac_strkey`), so it is **re-derived on read** (API response layer) for display.

@@ -261,16 +261,19 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- event AFTER a deploy cannot downgrade `sac_deployed` (a versioned RMT keeps the
 -- last-inserted whole row and WOULD downgrade). No `soroban_contracts` join needed
 -- for deployed-ness — the flag is stored.
+-- No skip-index on `sac_contract_id`: every read aggregates the whole (small)
+-- table — `SELECT key, max(sac_contract_id) … GROUP BY key` for the join, then the
+-- `/assets/{C…}` deep-link filters `sac.sac_contract_id = ?` on that join result —
+-- so a per-column index would prune nothing. `asset_sac` is one row per
+-- SAC-having asset (~31k at mainnet scale), so the full-table aggregate is cheap;
+-- add a `sac_contract_id` skip-index + a direct point-lookup only if it ever grows.
 CREATE TABLE IF NOT EXISTS asset_sac (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,
     contract_id     Int64,
     sac_contract_id SimpleAggregateFunction(max, Int64),
-    sac_deployed    SimpleAggregateFunction(max, UInt8),
-    -- equality lookup on the SAC surrogate (resolve a `C…` event/tx and the
-    -- `/assets/{C…}` deep-link back to the asset); non-key → skip-index or scan.
-    INDEX idx_asset_sac_contract_id sac_contract_id TYPE bloom_filter GRANULARITY 4
+    sac_deployed    SimpleAggregateFunction(max, UInt8)
 )
 ENGINE = AggregatingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);

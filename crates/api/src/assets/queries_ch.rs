@@ -118,7 +118,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      coalesce(m.decimals, 7)      AS decimals, \
      toString(agg.total_supply)   AS total_supply, \
      agg.holder_count             AS holder_count, \
-     nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
+     nullIf(coalesce(nullIf(sc.deployed_at_ledger, 0), \
+                     nullIf(sac_sc.deployed_at_ledger, 0)), 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key, \
@@ -147,7 +148,9 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
          FROM asset_sac \
          GROUP BY asset_type, asset_code, issuer_id, contract_id \
      ) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code \
-         AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id";
+         AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id \
+     LEFT JOIN soroban_contracts sac_sc \
+         ON sac_sc.id = sac.sac_contract_id AND sac.sac_contract_id != 0";
 
 /// Row decoded from [`ASSET_LIST_CH_SELECT`] — the asset header WITHOUT the
 /// join-resolved `issuer` / `issuer_home_domain`, which are key-seeked separately
