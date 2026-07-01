@@ -39,7 +39,7 @@ history:
 
 `wasm_interface_metadata` is `ReplacingMergeTree` with **no version column**. The
 API contract-detail path reads it via `LEFT JOIN wasm_interface_metadata wim`
-**without `FINAL`** (3 sites), relying on the old invariant "content is immutable
+**without `FINAL`** (2 CH sites — PG retired, see below), relying on the old invariant "content is immutable
 per `wasm_hash`, so any duplicate is byte-identical". The 0327 `upgradeable-backfill`
 (run under 0326) breaks that invariant transiently: it re-INSERTs an existing
 `wasm_hash` with a _different_ `metadata` (now carrying `upgradeable`), so old + new
@@ -58,26 +58,34 @@ This task removes the latent landmine permanently.
 CH contract detail endpoint`, which removed a `FINAL` that hit `ILLEGAL_FINAL` —
   evidence the table (or some env) was plain `MergeTree` at that time. So: verify the
   engine across ALL deploy targets BEFORE re-adding `FINAL`.
-- Read sites without `FINAL`: `queries_ch.rs:307`, `queries_ch.rs:549`,
-  `queries.rs:252`.
+- Read sites without `FINAL`: `queries_ch.rs:307`, `queries_ch.rs:549` (ClickHouse).
+- The third historical site, `queries.rs:252`, is the **Postgres** path
+  (`sqlx::PgPool`, JSONB `?` operator). Postgres is **retired** — `FINAL` is a
+  ClickHouse-only concept and the RMT merge race cannot occur in PG. So the PG
+  site is **N/A**; do not touch it here. If it obstructs, delete the PG detail
+  path outright rather than maintaining it.
 
 ## Implementation
 
 1. Verify `wasm_interface_metadata` engine is `ReplacingMergeTree` in every deploy
    target (prod ✓ 2026-06-27; check local/CI init.sql ✓; any other env).
-2. Add `FINAL` to the `wim` join at the 3 read sites (tiny table → cheap).
+2. Add `FINAL` to the `wim` join at the 2 CH read sites (tiny table → cheap).
+   PG site `queries.rs:252` is N/A (retired engine).
 3. Fix the stale "plain `MergeTree`" comment to say RMT-no-version + why `FINAL`.
 4. (Alternative, heavier — only if `FINAL` proves too costly anywhere) add a version
    column + `ReplacingMergeTree(version)` via migration. Default to option 2.
 
 ## Acceptance Criteria
 
-- [ ] Engine verified RMT in all envs; `FINAL` added to the 3 wim reads.
-- [ ] Stale "plain MergeTree" comment corrected.
-- [ ] Contract-detail chip is correct immediately after an `upgradeable-backfill`
-      re-insert, with NO `OPTIMIZE` needed (test: insert divergent metadata for an
-      existing hash, read without merge, assert keyed row wins).
-- [ ] No regression on the contract-detail hot path (latency sanity).
+- [x] Engine verified RMT in all CH envs (prod `chq` + `db-clickhouse/schema/init.sql`);
+      `FINAL` added to the 2 CH wim reads (`queries_ch.rs:307`, `:549`). PG site N/A — retired.
+- [x] Stale "plain MergeTree" comment corrected (`queries_ch.rs`); canonical doc
+      `12_get_contracts_interface.sql` brought in line with doc 11 (`wim FINAL`).
+- [~] Contract-detail chip correct immediately after re-insert, no `OPTIMIZE`.
+  Validated against prod CH (`FINAL` accepted, correct `upgradeable` row); NO
+  automated regression test — `tests_integration.rs` has no CH harness (PG-only),
+  and FINAL-dedup is a ClickHouse guarantee. A CH test harness is its own task.
+- [x] No regression on hot path — `FINAL` over a ~3.9k-row table is negligible.
 
 ## Devil's-advocate follow-ups (2026-06-29, from the 0326 prod run)
 
@@ -99,6 +107,13 @@ Two concrete hardenings surfaced by the adversarial review of the 0326 run:
 
 Acceptance for these:
 
-- [ ] `sha256(fetched code) == wasm_hash` asserted before the import scan; mismatch →
-      skip + warn (mirrors the 0326 `malformed_metadata` posture), never write a flag.
-- [ ] tags bumped to `priority-medium`.
+- [~] **Content-address guard — descoped (2026-07-01).** `upgradeable-backfill` is a
+  one-shot backfill of pre-0327 WASMs; it was already run in prod and won't
+  recur (the live parser writes `upgradeable` going forward). The only
+  tamperable surface (public-RPC fetch) lives in this spent script — the live
+  path derives `upgradeable` from the **authenticated ledger stream**, which is
+  already content-addressed by the protocol (no untrusted-fetch surface). So a
+  `sha256(code) == wasm_hash` guard would be dead code on a script that never
+  re-runs; YAGNI. Was implemented + tested, then reverted. If the backfill is
+  ever re-purposed for a re-parse over public RPC, add the guard then.
+- [x] tags bumped to `priority-medium` (already set in frontmatter).
