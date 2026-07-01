@@ -417,7 +417,8 @@ pub struct ExtractedAsset {
     pub contract_id: Option<String>,
     /// SAC facet (ADR 0051): the wrapping Stellar-Asset-Contract's `C…`
     /// StrKey for a `native` / `classic_credit` asset. `None` when the asset
-    /// has no SAC. Persisted as a cityhash64 surrogate on `assets.sac_contract_id`.
+    /// has no SAC. Persisted as a cityhash64 surrogate on `asset_sac.sac_contract_id`
+    /// (a side table — not a column on `assets`).
     pub sac_contract_id: Option<String>,
     /// Whether `sac_contract_id`'s SAC is actually deployed on-chain (ADR 0051).
     /// `true` from a SAC deploy sighting; `false` for an un-deployed SAC seen

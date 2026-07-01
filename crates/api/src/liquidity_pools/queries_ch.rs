@@ -153,12 +153,13 @@ pub async fn fetch_pool_by_id(
     // resolves `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
     // deduped by GROUP BY so a leg cannot fan the result out (the inline-join
     // form did, masked only by the outer LIMIT 1). Post-ADR 0051 the SAC handle
-    // is a FACET on the classic_credit / native row (`sac_contract_id`), not a
-    // separate `asset_type = 2` — so the deployed SAC's `C…` StrKey resolves via
-    // `soroban_contracts` keyed on `a.sac_contract_id` (un-deployed SACs have no
-    // contract row → NULL, as before), and the classic carrier is `asset_type IN
-    // (0, 1)`. Native legs (`asset_code = ''`) are excluded from the join (NULL
-    // code → no assets match → NULL contract_id + NULL icon_url).
+    // is a FACET in the `asset_sac` side table (not a column on `assets`, and not
+    // a separate `asset_type = 2`) — so the deployed SAC's `C…` StrKey resolves by
+    // two hops: leg `(code, issuer)` → `asset_sac.sac_contract_id` (surrogate) →
+    // `soroban_contracts.contract_id` (un-deployed SACs have no contract row →
+    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`. Native legs
+    // (`asset_code = ''`) are excluded from the join (NULL code → no assets match →
+    // NULL contract_id + NULL icon_url).
     let row = client
         .query(
             "WITH legs AS ( \

@@ -8,10 +8,10 @@
 //!
 //! A Stellar Asset Contract (SAC) is **not** a distinct variant (ADR 0051):
 //! a SAC is the same economic asset as its classic credit / native asset,
-//! so SAC-ness is carried as property columns (`assets.sac_contract_id` /
-//! `sac_deployed`) on the `classic_credit` / `native` row, not a separate
-//! `asset_type`. Discriminant `2` (the former `Sac`) is retired and left
-//! unused — `TryFrom<i16>` rejects it.
+//! so SAC-ness is carried in the `asset_sac` side table (`sac_contract_id` /
+//! `sac_deployed`) keyed on the `classic_credit` / `native` identity, not a
+//! separate `asset_type`. Discriminant `2` (the former `Sac`) is retired and
+//! left unused — `TryFrom<i16>` rejects it.
 
 use serde::{Deserialize, Serialize};
 
