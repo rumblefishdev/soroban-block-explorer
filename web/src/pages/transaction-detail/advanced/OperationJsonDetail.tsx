@@ -88,11 +88,18 @@ function inlineScalar(value: unknown): ReactNode {
   if (typeof value === 'boolean') {
     return <Chip size="sm" color="neutral" label={String(value)} />;
   }
-  if (typeof value === 'string' && value.length > 0 && value.length <= 64) {
-    return <Chip size="sm" color="neutral" label={value} />;
-  }
   if (typeof value === 'number') {
     return <Chip size="sm" color="neutral" label={String(value)} />;
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    // Short enum-ish values (native, host-function type, amounts) stay chips;
+    // long identifiers (strkeys, CODE:ISSUER assets) go to wrapping mono — a
+    // Chip won't break mid-word and overflows the row.
+    return value.length <= 20 ? (
+      <Chip size="sm" color="neutral" label={value} />
+    ) : (
+      <MonoText>{value}</MonoText>
+    );
   }
   return null;
 }
@@ -127,6 +134,19 @@ export function OperationJsonDetail({
   const returnField = pickDetailValue(details, 'returnValue');
   const authField = pickDetailValue(details, 'auth');
 
+  // Soroban (INVOKE_HOST_FUNCTION) gets the typed rows above; every other op
+  // type (payment, manage_offer, change_trust, …) emits its own `details` map
+  // from the XDR parser — render those generically so classic ops aren't just a
+  // bare chip. Scalars → inline chip, structured values → pretty JSON.
+  const isInvoke = fnName != null;
+  const genericEntries =
+    !isInvoke &&
+    details != null &&
+    typeof details === 'object' &&
+    !Array.isArray(details)
+      ? Object.entries(details as Record<string, unknown>)
+      : [];
+
   return (
     <Box
       sx={(theme) => ({
@@ -143,7 +163,7 @@ export function OperationJsonDetail({
           value={<MonoText>{light.contract_id}</MonoText>}
         />
       )}
-      {fnName != null && (
+      {isInvoke && (
         <AdvancedRow
           label="function_name"
           value={<Chip size="sm" color="neutral" label={fnName} />}
@@ -171,6 +191,13 @@ export function OperationJsonDetail({
           value={<HighlightedJson value={authField.value} />}
         />
       )}
+      {genericEntries.map(([key, value]) => (
+        <AdvancedRow
+          key={key}
+          label={key}
+          value={inlineScalar(value) ?? <HighlightedJson value={value} />}
+        />
+      ))}
     </Box>
   );
 }
