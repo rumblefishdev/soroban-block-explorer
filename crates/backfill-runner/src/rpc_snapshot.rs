@@ -832,6 +832,23 @@ mod tests {
         assert!(balance_ledger_key(&c, "not-a-strkey").is_none());
     }
 
+    /// Real mainnet end-to-end (RPC `getLedgerEntries`, 2026-07-01): the actual
+    /// `Balance(GAWOKP6N…)` ContractData entry for token `CCSNFZ5R…` at ledger
+    /// 63268948, decoded straight from the on-chain XDR. The decoded value equals
+    /// the independent `stellar contract invoke … balance` read (10000040000000)
+    /// — NON-circular: these bytes are the ledger's, not the test's.
+    #[test]
+    fn decode_balance_entry_real_mainnet() {
+        let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
+        let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
+        let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
+        let (token, holder, balance) =
+            decode_balance_entry(&data).expect("standard bare-i128 balance entry");
+        assert_eq!(token, "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG");
+        assert_eq!(holder, "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ");
+        assert_eq!(balance, 10_000_040_000_000);
+    }
+
     #[test]
     fn decode_balance_entry_extracts_contract_holder_balance() {
         let holder = ScAddress::Account(make_account_id(0x55));

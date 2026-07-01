@@ -1457,6 +1457,59 @@ mod tests {
         assert_eq!(balances[0].ledger, 100);
     }
 
+    /// Real mainnet end-to-end (RPC `getLedgerEntries`, 2026-07-01): decodes the
+    /// ACTUAL `Balance(GAWOKP6N…)` ContractData entry for token `CCSNFZ5R…` at
+    /// ledger 63268948 from on-chain XDR, converts its real key + val `ScVal`s
+    /// via the REAL `scval_to_typed_json` (the exact JSON the ingestion emits),
+    /// and asserts the live parser recovers contract + holder + balance. The
+    /// i128 comes from the LEDGER BYTES (not a test constant) and equals the
+    /// independent `stellar contract invoke … balance` read (10000040000000) —
+    /// NON-circular.
+    #[test]
+    fn extract_balance_real_mainnet_entry() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(entry_b64)
+            .unwrap();
+        let LedgerEntryData::ContractData(entry) =
+            LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+        else {
+            panic!("expected ContractData");
+        };
+
+        let key = json!({
+            "contract": entry.contract.to_string(),
+            "key": crate::scval::scval_to_typed_json(&entry.key),
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = crate::scval::scval_to_typed_json(&entry.val);
+
+        let balances = extract_soroban_token_balances(&[make_change(
+            "contract_data",
+            "updated",
+            key,
+            Some(data),
+        )]);
+
+        assert_eq!(balances.len(), 1, "one balance from the real entry");
+        assert_eq!(
+            balances[0].contract_id,
+            "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG"
+        );
+        assert_eq!(
+            balances[0].holder,
+            "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ"
+        );
+        assert_eq!(
+            balances[0].balance, 10_000_040_000_000,
+            "parser must decode the exact on-chain i128 from the real entry"
+        );
+    }
+
     #[test]
     fn removed_balance_entry_emits_zero() {
         // Holder fully spent → entry removed (data is None). Must emit balance 0
