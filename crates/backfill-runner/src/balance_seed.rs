@@ -1,5 +1,8 @@
-//! Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder Soroban token
-//! balances for bespoke type-3 tokens.
+//! Task 0331 — one-shot RPC-snapshot seed of per-holder balances: bespoke type-3
+//! tokens AND contract-held classic/native (types 0/1, held via each asset's SAC —
+//! Path X). Both flow through one pipeline; `decode_balance_entry` handles the two
+//! value shapes (bare `i128` + the SAC `BalanceValue` struct) and `build_balance_rows`
+//! keys both by the storing contract's surrogate.
 //!
 //! ## Why this exists
 //!
@@ -12,13 +15,15 @@
 //!
 //! ## Mechanism
 //!
-//! 1. Per type-3 token, enumerate holder candidates = every `G…`/`C…` StrKey in
-//!    the token's `soroban_events` topics + data (the event SET — the value comes
-//!    from ledger STATE via RPC, never an event-fold; see task README DECISION
-//!    2026-06-29).
+//! 1. Enumerate holder candidates from `soroban_events` (the event SET — the value
+//!    comes from ledger STATE via RPC, never an event-fold; see task README
+//!    DECISION 2026-06-29): per type-3 token every `G…`/`C…` StrKey in its events;
+//!    per SAC only `C…` (contract) holders in its value-moving events (a G-account
+//!    holds a classic/native asset via its trustline, not SAC storage).
 //! 2. Build `Balance(Address)` persistent ledger keys and fetch them via
-//!    `getLedgerEntries` (batched by the shared [`RpcClient`]); decode the
-//!    bare-`i128` value with the same contract the live parser uses.
+//!    `getLedgerEntries` (batched by the shared [`RpcClient`]); decode the bare-`i128`
+//!    (type-3) OR SAC `BalanceValue` struct (0/1) value with the same contract the
+//!    live parser uses.
 //! 3. Write `balances` rows (`ReplacingMergeTree`, keyed `(holder_id, asset_id)`)
 //!    with version = the entry's last-modified ledger, so the live writer cleanly
 //!    supersedes the seed once ingest catches up.
@@ -37,9 +42,9 @@ use tracing::info;
 use xdr_parser::ExtractedSorobanBalance;
 
 use crate::error::BackfillError;
-use crate::util::insert_rows;
 use crate::rpc_snapshot::{RpcClient, balance_ledger_key, decode_balance_entry};
 use crate::sink::Sink;
+use crate::util::insert_rows;
 
 /// Per-run funnel LEVELS — read top-to-bottom they show where holders drop off
 /// (enumerated → keyed → found on-chain → decoded), so an operator can tell an
@@ -48,7 +53,8 @@ use crate::sink::Sink;
 /// shapes skipped = `entries_returned - balances_decoded`), not redundant fields.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BalanceSeedStats {
-    /// type-3 tokens with at least one holder candidate in their event stream.
+    /// candidate contracts (type-3 tokens + SACs) with ≥1 holder candidate in
+    /// their event stream.
     pub tokens: u64,
     /// `(token, holder)` candidate pairs enumerated from the event scan.
     pub holders_enumerated: u64,
@@ -58,8 +64,8 @@ pub struct BalanceSeedStats {
     /// vs `keys_requested` is holders with no live entry (false-positive scrape
     /// or a since-zeroed balance).
     pub entries_returned: u64,
-    /// Standard bare-`i128` balances decoded + staged; the shortfall vs
-    /// `entries_returned` is non-standard shapes (e.g. a SAC struct) skipped.
+    /// Balances decoded + staged (bare-`i128` type-3 AND SAC-struct 0/1); the
+    /// shortfall vs `entries_returned` is genuinely-unrecognized value shapes.
     pub balances_decoded: u64,
     pub dry_run: bool,
 }
@@ -110,9 +116,21 @@ pub async fn execute(
         )
     })?;
 
-    let candidates = read_seed_candidates(client).await?;
+    // Two candidate sources, both merged into one funnel: type-3 bespoke tokens
+    // (holders in their own contract) and SACs (contract-held classic/native 0/1,
+    // Path X — holders are C-addresses inside the asset's SAC). `decode_balance_entry`
+    // handles both value shapes (bare i128 + SAC struct), and `build_balance_rows`
+    // keys both by the storing contract's surrogate, so downstream is shape-agnostic.
+    let mut candidates = read_seed_candidates(client).await?;
+    let type3_tokens = candidates.len();
+    candidates.extend(read_sac_seed_candidates(client).await?);
+    let sac_contracts = candidates.len() - type3_tokens;
+    info!(
+        type3_tokens,
+        sac_contracts, "balance_seed: candidate sources (type-3 tokens + SAC contracts)"
+    );
     if candidates.is_empty() {
-        info!("balance_seed: no type-3 token holder candidates found — nothing to do");
+        info!("balance_seed: no holder candidates found — nothing to do");
         return Ok(BalanceSeedStats::from_funnel(&candidates, 0, 0, 0, dry_run));
     }
 
@@ -183,21 +201,63 @@ pub async fn execute(
 /// `topics_xdr`/`data_xdr`; over-matching is harmless (a non-holder key just
 /// returns an absent entry, dropped). Scoped to the type-3 set so the scan reads
 /// ~the bespoke-token event subset, not the full firehose.
+///
+/// `groupUniqArrayArray` dedups DURING aggregation — memory stays bounded to the
+/// distinct holder count, not the raw appearance count (see `read_sac_seed_candidates`
+/// for why that matters at scale).
 async fn read_seed_candidates(
     client: &ClickhouseClient,
 ) -> Result<Vec<SeedCandidate>, clickhouse::error::Error> {
     client
         .query(
             "SELECT sc.contract_id AS token_strkey, \
-                    arrayDistinct(arrayConcat( \
-                        groupArrayArray(extractAll(e.topics_xdr, '([GC][A-Z2-7]{55})')), \
-                        groupArrayArray(extractAll(e.data_xdr, '([GC][A-Z2-7]{55})')) \
+                    groupUniqArrayArray(arrayConcat( \
+                        extractAll(e.topics_xdr, '([GC][A-Z2-7]{55})'), \
+                        extractAll(e.data_xdr, '([GC][A-Z2-7]{55})') \
                     )) AS holders \
              FROM soroban_events e \
              INNER JOIN soroban_contracts sc FINAL ON sc.id = e.contract_id \
              WHERE e.contract_id IN ( \
                  SELECT contract_id FROM assets WHERE asset_type = 3 AND contract_id != 0 \
              ) \
+             GROUP BY sc.contract_id",
+        )
+        .fetch_all::<SeedCandidate>()
+        .await
+}
+
+/// SAC candidate query (task 0331 Path X): for every SAC (an `assets` `asset_type=2`
+/// row — same source the type-3 scan uses for its scope, and it guarantees the SAC
+/// has an asset row for the read join), its C-StrKey + the distinct set of
+/// **contract** (`C…`) holder StrKeys in its value-moving events. Only `C…` is
+/// scraped: a G-account holds a classic/native asset via its TRUSTLINE (no SAC
+/// storage entry), so the SAC's `Balance(Address)` entries are contract-held only.
+///
+/// The `signature IN (…)` set is the full canonical SAC event vocabulary
+/// (`xdr_parser::sac::SAC_CONTROL_EVENT_SIGNATURES`) — including `set_authorized`,
+/// which can be a contract holder's only surviving event after older transfers age
+/// out of the (lagged) stream. `groupUniqArrayArray` dedups DURING aggregation:
+/// critical here because SACs are the bulk of the event stream (~4.46B `transfer`
+/// rows) and a plain `groupArrayArray` would materialise every raw appearance of a
+/// high-traffic SAC (USDC/native) into one array before dedup → CH memory blow-up.
+/// The scan is still HEAVY (it reads that bulk): run `--dry-run` FIRST to gauge cost
+/// and read the funnel counts before a live write.
+async fn read_sac_seed_candidates(
+    client: &ClickhouseClient,
+) -> Result<Vec<SeedCandidate>, clickhouse::error::Error> {
+    client
+        .query(
+            "SELECT sc.contract_id AS token_strkey, \
+                    groupUniqArrayArray(arrayConcat( \
+                        extractAll(e.topics_xdr, '(C[A-Z2-7]{55})'), \
+                        extractAll(e.data_xdr, '(C[A-Z2-7]{55})') \
+                    )) AS holders \
+             FROM soroban_events e \
+             INNER JOIN soroban_contracts sc FINAL ON sc.id = e.contract_id \
+             WHERE e.contract_id IN ( \
+                 SELECT contract_id FROM assets WHERE asset_type = 2 AND contract_id != 0 \
+             ) \
+               AND e.signature IN ('transfer', 'mint', 'burn', 'clawback', 'set_authorized') \
              GROUP BY sc.contract_id",
         )
         .fetch_all::<SeedCandidate>()
@@ -217,7 +277,10 @@ mod tests {
 
     #[test]
     fn from_funnel_snapshots_levels_and_derives_drops() {
-        let candidates = vec![cand("CTOKENA", &["GA", "GB", "GC"]), cand("CTOKENB", &["GD"])];
+        let candidates = vec![
+            cand("CTOKENA", &["GA", "GB", "GC"]),
+            cand("CTOKENB", &["GD"]),
+        ];
         // 4 enumerated → 3 keyed (1 malformed dropped) → 2 on-chain → 2 decoded.
         let s = BalanceSeedStats::from_funnel(&candidates, 3, 2, 2, false);
         assert_eq!(s.tokens, 2);
@@ -227,9 +290,17 @@ mod tests {
         assert_eq!(s.balances_decoded, 2);
         assert!(!s.dry_run);
         // The drops are plain subtraction of stored levels — not redundant fields.
-        assert_eq!(s.holders_enumerated - s.keys_requested, 1, "malformed dropped");
+        assert_eq!(
+            s.holders_enumerated - s.keys_requested,
+            1,
+            "malformed dropped"
+        );
         assert_eq!(s.keys_requested - s.entries_returned, 1, "absent on-chain");
-        assert_eq!(s.entries_returned - s.balances_decoded, 0, "non-standard skipped");
+        assert_eq!(
+            s.entries_returned - s.balances_decoded,
+            0,
+            "non-standard skipped"
+        );
     }
 
     #[test]
@@ -323,6 +394,87 @@ mod tests {
         assert_eq!(
             holders, want,
             "regex scrapes both G topics + the C data address, distinct"
+        );
+
+        scrub(&client).await;
+    }
+
+    /// Integration: the SAC candidate query scrapes ONLY `C…` (contract) holders
+    /// from a SAC's value-moving events — G-accounts hold classic via trustlines,
+    /// not SAC storage, so they must be excluded. Gated on `CLICKHOUSE_URL`.
+    #[tokio::test]
+    async fn read_sac_seed_candidates_scrapes_contract_holders_only() {
+        if std::env::var("CLICKHOUSE_URL").is_err() {
+            eprintln!(
+                "CLICKHOUSE_URL not set — skipping SAC balance-seed candidate integration test"
+            );
+            return;
+        }
+        let cfg = db_clickhouse::Config::from_env();
+        let client = db_clickhouse::client(&cfg);
+        db_clickhouse::apply_init_sql(&client)
+            .await
+            .expect("init sql");
+
+        const SID: i64 = 7_000_000_000_000_000_222;
+        let sac = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+        let g = "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ";
+        let c = "CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY";
+
+        let scrub = |cl: &ClickhouseClient| {
+            let cl = cl.clone();
+            async move {
+                for q in [
+                    format!("ALTER TABLE soroban_events DELETE WHERE contract_id = {SID}"),
+                    format!("ALTER TABLE soroban_contracts DELETE WHERE id = {SID}"),
+                    format!("ALTER TABLE assets DELETE WHERE contract_id = {SID}"),
+                ] {
+                    let _ = cl.query(&q).execute().await;
+                }
+            }
+        };
+        scrub(&client).await;
+
+        client
+            .query(&format!(
+                "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES ({SID}, '{sac}', true)"
+            ))
+            .execute()
+            .await
+            .expect("insert sac contract");
+        // The scope is `assets WHERE asset_type = 2` (SAC), so the SAC needs an asset row.
+        client
+            .query(&format!(
+                "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id) \
+                 VALUES (2, 'USDC', 0, {SID})"
+            ))
+            .execute()
+            .await
+            .expect("insert sac asset");
+        // A transfer topic set carrying one G-account and one C-contract holder.
+        let topics = format!(
+            "[{{\"type\":\"address\",\"value\":\"{g}\"}},{{\"type\":\"address\",\"value\":\"{c}\"}}]"
+        );
+        client
+            .query(&format!(
+                "INSERT INTO soroban_events (contract_id, signature, topics_xdr, data_xdr) \
+                 VALUES ({SID}, 'transfer', '{topics}', '')"
+            ))
+            .execute()
+            .await
+            .expect("insert event");
+
+        let mine: Vec<_> = read_sac_seed_candidates(&client)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|row| row.token_strkey == sac)
+            .collect();
+        assert_eq!(mine.len(), 1, "one candidate row for the SAC");
+        assert_eq!(
+            mine[0].holders,
+            vec![c.to_string()],
+            "only the C-contract holder is scraped; the G-account is excluded"
         );
 
         scrub(&client).await;

@@ -99,10 +99,45 @@ holders) — that's the OPS `O5` ≥10-token pass.
 - native by ACCOUNT is unchanged (AccountEntry → `asset_id(0)` direct); only contract-held native goes
   via the native SAC's type-2 row → 0339 fold.
 
-### Next
-- Backfill (historical contract-held) — deferred; rides the SAME parser via a `backfill-runner Run`
-  over the Soroban range (no separate mechanism). Decide in a later session.
-- OPS: unchanged (merge → migrations → catch-up → one balance-seed/Run → validate → 6d drop).
+### Historical backfill for contract-held 0/1 — LIGHT seed, NOT S3 reprocess (2026-07-01)
+An S3 `Run` works (shared parser → same decode) but is heavy (12.8M ledgers × decompress+XDR-parse).
+Prefer **extending the existing `balance-seed`** (reuses candidate-scan → RPC → `build_balance_rows`):
+- add SAC (0/1) candidates — C-addresses scraped from SAC events (`signature='transfer'`, ~4.46B rows,
+  LowCardinality-filtered, one-time CH scan, NO XDR parse) grouped per SAC contract;
+- add an XDR-level SAC-struct decoder in `rpc_snapshot` (port of `decode_sac_balance_value`);
+- key by the SAC surrogate (Path X). `balance-seed` today decodes bare `i128` only (type-3) — this is
+  net-new work, not free.
+- **Benchmark the 4.46B scan on a bounded range FIRST**; cross-check coverage vs pools enumerable via
+  `get_reserves()` (a missed known pool = incomplete enumeration); log dropped counts, never claim 100%.
+
+### OPS sequencing (ordered) — NO step needs a halted indexer; only ONE thing precedes the deploy
+The CH indexer is **single-write** (`writer.rs:107`: legacy `account_balances_current` insert removed;
+classic+native stage straight into `balances`). So deploying the indexer is a **cutover**, not a
+dual-write. Deploy the indexer FIRST so it feeds `balances` live, then fill history behind it — no gap,
+no re-runs.
+
+1. **[DB, BEFORE indexer deploy] `ALTER TABLE assets ADD COLUMN id`** — the ONLY pre-deploy step.
+   `CREATE IF NOT EXISTS` can't add it; without it the indexer's `assets` insert fails / rows get `id=0`
+   → every read joins on `assets.id` → empty supply+portfolios. **Hard gate; verify `count(id=0)=0`
+   after backfill.** (Blocker C1.)
+2. **[deploy indexer]** — init.sql creates `balances`+`balance_aggregates`; live writes begin; `abc` frozen.
+3. **[DB] migrations (AFTER deploy)** — `assets.id` backfill (`WHERE id=0`); classic/native
+   `account_balances_current` → `balances` (captures the now-frozen `abc`).
+4. **[run] catch-up** to tip (indexer running).
+5. **[run] light contract-held 0/1 seed** (after catch-up; stamp rows with the RPC `latestLedger` so the
+   seed's version wins over any older replayed change).
+6. **[deploy API + frontend]** — read-cutover, AFTER `balances` is populated (hard coupling: #293 read
+   path serves classic/SAC from `balances`; deploying it over empty tables = wrong/empty reads).
+7. **[validate]** — incl. measuring frozen (`authorized=false`) magnitude before deciding count-vs-exclude.
+8. **[DB] drop `account_balances_current`** — already not written since step 2, so just drop post-validation.
+
+**Blockers before prod (devil's advocate 2026-07-01):**
+- **C1** — the `assets.id` ALTER gate (above).
+- **C2** — do NOT launch 0331's read-cutover WITHOUT 0339 (or a read-guard): the assets list shows all
+  types, so every classic asset renders as a DUPLICATE (type-1 trustlines + type-2 SAC contract-held)
+  with divergent supply. Gate 0331 launch on 0339's type-2→type-1 fold, or hide type-2 supply until then.
+- **Rollback** — single-write cutover means rolling the indexer back is lossy (the window's account
+  updates went to `balances` only); recovery needs a reprocess. Snapshot before the migration/seed.
 
 ## CURRENT PLAN 2026-06-29 (karolkow) — Option C unified balances (authoritative)
 
@@ -245,8 +280,9 @@ window — do NOT merge #293 alone.
   joins/endpoints (no synthetic rows).
 - **D5. [ ] Surfacing read/UI** — contract detail "holdings" (what a contract holds), rich-list /
   top-holders including contracts, classic/SAC supply+holders now including the contract-held part.
-- **D6. [ ] 6d code** — switch the accounts-list native-XLM read off `account_balances_current` →
-  `balances` (the table DROP stays in OPS, post-validation).
+- **D6. [x] 6d code** — DONE: accounts-list native-XLM read is off `account_balances_current`, now a
+  PK-prefix key-seek on the unified `balances` table (`queries_ch.rs:168-171`, "task 0331 read-cutover").
+  The table DROP stays in OPS, post-validation.
 - (optional) dry-run `balance-seed` against stale prod data mid-DEV = cheap pipeline smoke-test.
 
 #### OPS phase (ONE window, at the end — strict order, each gates the next)

@@ -72,6 +72,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use stellar_xdr::curr::{
     AccountId, ContractDataDurability, ContractId, Hash, LedgerEntryData, LedgerKey,
     LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, Limits,
@@ -279,7 +280,10 @@ pub fn contract_code_ledger_key(wasm_hash: [u8; 32]) -> LedgerKey {
 pub fn balance_ledger_key(token_strkey: &str, holder_strkey: &str) -> Option<LedgerKey> {
     let contract = sc_address(token_strkey)?;
     if !matches!(contract, ScAddress::Contract(_)) {
-        warn!(token_strkey, "rpc_snapshot: balance-key token must be a C-StrKey; skipping");
+        warn!(
+            token_strkey,
+            "rpc_snapshot: balance-key token must be a C-StrKey; skipping"
+        );
         return None;
     }
     let holder = sc_address(holder_strkey)?;
@@ -298,11 +302,17 @@ pub fn balance_ledger_key(token_strkey: &str, holder_strkey: &str) -> Option<Led
 }
 
 /// Pure decoder: shape a `LedgerEntryData::ContractData` standard balance entry
-/// into `(token_strkey, holder_strkey, balance)` (task 0331 RPC seed). Returns
-/// `None` for non-ContractData variants, non-`Balance` keys, or non-bare-`i128`
-/// values — the exact shapes the live parser
-/// (`xdr_parser::extract_soroban_token_balances`) recognises, kept in lock-step
-/// so seed and live ingestion never disagree on what counts as a balance.
+/// into `(token_strkey, holder_strkey, balance)` (task 0331 RPC seed). Handles
+/// BOTH value shapes: a bare `i128` (a type-3 token balance) OR the SAC
+/// `BalanceValue { amount, authorized, clawback }` struct (contract-held
+/// classic/native — Path X). Returns `None` for non-ContractData variants,
+/// non-`Balance` keys, or any other value shape.
+///
+/// The struct case is decoded by the SAME `xdr_parser::decode_sac_balance_value`
+/// the live parser uses (converting the value to the tagged JSON it expects), so
+/// seed and live share ONE strict decoder — lock-step by construction, not by a
+/// comment. The key-shape check stays on `ScVal` here (the RPC path holds an XDR
+/// entry); the bare-`i128` case is a one-liner not worth sharing.
 pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i128)> {
     let LedgerEntryData::ContractData(entry) = data else {
         return None;
@@ -324,10 +334,15 @@ pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i
     if sym.0.as_slice() != b"Balance" {
         return None;
     }
-    let ScVal::I128(parts) = &entry.val else {
-        return None;
+    let balance = match &entry.val {
+        ScVal::I128(parts) => i128::from(parts),
+        ScVal::Map(_) => {
+            let json = json!({ "val": xdr_parser::scval_to_typed_json(&entry.val) });
+            xdr_parser::decode_sac_balance_value(&json)?.amount
+        }
+        _ => return None,
     };
-    Some((entry.contract.to_string(), holder.to_string(), i128::from(parts)))
+    Some((entry.contract.to_string(), holder.to_string(), balance))
 }
 
 /// Parse a holder StrKey into an `ScAddress` — `G…` → account, `C…` → contract
@@ -340,7 +355,10 @@ fn sc_address(strkey: &str) -> Option<ScAddress> {
         ))),
         Ok(stellar_strkey::Strkey::Contract(c)) => Some(ScAddress::Contract(ContractId(Hash(c.0)))),
         _ => {
-            warn!(strkey, "rpc_snapshot: holder StrKey is neither G nor C; skipping");
+            warn!(
+                strkey,
+                "rpc_snapshot: holder StrKey is neither G nor C; skipping"
+            );
             None
         }
     }
@@ -778,7 +796,7 @@ mod tests {
 
     use stellar_xdr::curr::{
         ContractDataDurability, ContractDataEntry, ContractId, ExtensionPoint, Int128Parts,
-        ScAddress, ScSymbol, ScVal, ScVec,
+        ScAddress, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec,
     };
 
     fn balance_entry(token: [u8; 32], holder: ScAddress, val: ScVal) -> LedgerEntryData {
@@ -819,7 +837,11 @@ mod tests {
         let ScVal::Address(addr) = parts[1] else {
             panic!("second elem must be an address");
         };
-        assert_eq!(addr.to_string(), holder.as_str(), "holder address round-trips");
+        assert_eq!(
+            addr.to_string(),
+            holder.as_str(),
+            "holder address round-trips"
+        );
     }
 
     #[test]
@@ -844,9 +866,38 @@ mod tests {
         let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
         let (token, holder, balance) =
             decode_balance_entry(&data).expect("standard bare-i128 balance entry");
-        assert_eq!(token, "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG");
-        assert_eq!(holder, "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ");
+        assert_eq!(
+            token,
+            "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG"
+        );
+        assert_eq!(
+            holder,
+            "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ"
+        );
         assert_eq!(balance, 10_000_040_000_000);
+    }
+
+    /// Real mainnet (RPC `getLedgerEntries`, 2026-07-01): the ACTUAL SAC
+    /// `BalanceValue` struct entry for the pool `CATUJXDU…` holding native XLM in
+    /// the XLM SAC — the contract-held classic/native shape the seed must now
+    /// decode. The amount comes from the ledger bytes and equals the independent
+    /// `balance()`/`get_reserves()` read (11_635_129_310_963) — NON-circular.
+    #[test]
+    fn decode_balance_entry_sac_struct_real_mainnet() {
+        let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
+        let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
+        let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
+        let (token, holder, balance) =
+            decode_balance_entry(&data).expect("SAC BalanceValue struct balance entry");
+        assert_eq!(
+            token,
+            "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
+        );
+        assert_eq!(
+            holder,
+            "CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY"
+        );
+        assert_eq!(balance, 11_635_129_310_963);
     }
 
     #[test]
@@ -855,7 +906,10 @@ mod tests {
         let data = balance_entry(
             [0x11u8; 32],
             holder.clone(),
-            ScVal::I128(Int128Parts { hi: 0, lo: 1_000_000 }),
+            ScVal::I128(Int128Parts {
+                hi: 0,
+                lo: 1_000_000,
+            }),
         );
         let (token_sk, holder_sk, bal) =
             decode_balance_entry(&data).expect("standard balance entry must decode");
@@ -887,11 +941,24 @@ mod tests {
             val: ScVal::I128(Int128Parts { hi: 0, lo: 5 }),
         });
         assert!(decode_balance_entry(&wrong_sym).is_none());
-        // non-bare-i128 value (e.g. a SAC BalanceValue struct surfaces as Map/other)
-        let non_i128 = balance_entry([0x11u8; 32], holder, ScVal::U64(5));
-        assert!(decode_balance_entry(&non_i128).is_none());
+        // an unsupported value shape (neither bare i128 nor the SAC struct map)
+        let other = balance_entry([0x11u8; 32], holder.clone(), ScVal::U64(5));
+        assert!(decode_balance_entry(&other).is_none());
+        // a Map that is NOT the exact {amount,authorized,clawback} SAC struct
+        // (only `amount`) → None: strict, never partial-decode a foreign map.
+        let foreign_map = balance_entry(
+            [0x11u8; 32],
+            holder,
+            ScVal::Map(Some(
+                ScMap::try_from(vec![ScMapEntry {
+                    key: ScVal::Symbol(ScSymbol::try_from(b"amount".to_vec()).unwrap()),
+                    val: ScVal::I128(Int128Parts { hi: 0, lo: 5 }),
+                }])
+                .unwrap(),
+            )),
+        );
+        assert!(decode_balance_entry(&foreign_map).is_none());
     }
 
     // --- task 0331: instance `TotalSupply` key (authoritative supply) ---
-
 }
