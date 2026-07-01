@@ -1,106 +1,123 @@
 # load-tests — Soroban Block Explorer API load harness (task 0338)
 
 `--vus` concurrent users loop **every** endpoint with **no think-time** for
-`--duration`. Each request carries a unique `X-Request-Id` (`<code>-<hex>`) so
-the server stamps `system.query_log.log_comment` with it (B2 correlation): you
-get **client-side latency/errors** AND **server-side read_rows/read_bytes** per
-endpoint (and per request), without a fragile per-line log scrape — the harness
-writes the CSVs directly.
+`--duration`. Each request carries a unique `X-Request-Id` so ClickHouse
+`system.query_log` records `read_rows`/`read_bytes` per request (the "B2"
+correlation). All output lands in `crates/load-tests/out/<UTC-start>/`
+(gitignored). Each step below says which folder to run it from.
 
-This is a **diagnostic**, not a pass/fail gate. A 1000×1h run is *expected* to
-shed load (202/429/5xx) once a backend ceiling is hit — the value is the **knee
-point** and **which endpoints are hottest/most expensive**, which drives the
-caching/indexing work.
+> Prereq (deployed once, committed CH config): `api_reader`'s quota + the
+> `log_comment` `changeable_in_readonly` constraint (`profiles.xml` +
+> `config.d/access-control.xml`) must be live on the box — sync CH config +
+> force-recreate the container. Without the constraint every request 500s.
 
-## Build
+---
+
+## 1. Deploy the infra in load-test mode
+
+**Run from: `infra/`**
+
+Set `"loadTesting": true` in `infra/envs/production.json`, then deploy the two
+affected stacks (NOT `--all` — it sweeps unrelated stacks):
+
+```bash
+AWS_PROFILE=soroban-explorer make deploy-production-apigateway
+AWS_PROFILE=soroban-explorer make deploy-production-compute
+```
+
+- **ApiGateway** — lifts the 50 rps throttle + drops the WAF per-IP rate rule.
+- **Compute** — sets `LOAD_TESTING` on the API Lambda → arms the `log_comment` middleware.
+
+## 2. Build the harness
+
+**Run from: repo root**
 
 ```bash
 cargo build --release -p load-tests
 ```
 
-## Outputs (in `--out-dir`)
+## 3. Set auth + run
 
-- `client.csv` — one row per request: `ts_ms,round,vu,request_id,endpoint,method,http_status,err_class,duration_ms,ttfb_ms,url`
-- `client_summary.csv` — per-endpoint `requests,errors,err_rate_pct,p50,p90,p95,p99,max`
+**Run from: repo root**
 
-`err_class` splits `ok / 4xx / 5xx / 429 (throttle) / 403 (edge) / 401 (auth) / 504 (timeout) / conn`.
-
-## Preconditions for a PROD run
-
-1. **`loadTesting: true`** deployed (lifts WAF rate + GW throttle AND arms the
-   `log_comment` middleware via `LOAD_TESTING` env) — `make -C infra deploy-production-apigateway` + `deploy-production-compute`.
-2. **CH `api_reader` → `unlimited` quota** applied + container recreated.
-3. **`API_KEY`** present in the server `API_KEYS` allowlist (paid-tier bypass of Turnstile/JWT).
-4. **`ulimit -n 65535`** on the generator box (1000 VUs ≈ 1000 sockets).
-5. Coordinate the window (SNS→Slack alarms will fire) and have the rollback ready.
-
-## Run
-
-Smoke first (low scale; confirm `log_comment` lands, harvest non-empty):
+`API_KEY` must be in the server `API_KEYS` allowlist; `EDGE_SECRET` is the
+Cloudflare edge secret from Secrets Manager:
 
 ```bash
+export API_KEY="<paid-tier key present in the server API_KEYS>"
+export EDGE_SECRET=$(AWS_PROFILE=soroban-explorer aws secretsmanager get-secret-value \
+  --secret-id soroban/production/cloudflare/edge-secret --query SecretString --output text)
+```
+
+Base URL — pick one:
+
+- **Direct to the API Gateway origin** (bypasses Cloudflare's own rate limit; use
+  this for backend capacity). Take the `ApiEndpoint` from the ApiGateway stack
+  output (the `…execute-api.eu-central-1.amazonaws.com/production` URL) and append
+  `/v1`. Requires `--edge-secret` (Cloudflare won't inject it off its own path).
+- **Through Cloudflare** — `https://api-sorobanscan.rumblefishdev.com/v1` (the real
+  path, but subject to Cloudflare's own rate limit → HTTP 429 `error code: 1015`,
+  which `loadTesting` does NOT control).
+
+```bash
+# smoke first — expect mostly 200
+./target/release/load-tests \
+  --base-url <API_GW_ORIGIN>/v1 \
+  --api-key "$API_KEY" --edge-secret "$EDGE_SECRET" \
+  --vus 10 --duration 1m
+
+# full run
 ulimit -n 65535
 ./target/release/load-tests \
-  --base-url https://api-sorobanscan.rumblefishdev.com/v1 \
-  --api-key "$API_KEY" \
-  --vus 10 --duration 30s --out-dir .temp/load-tests/run-smoke
+  --base-url <API_GW_ORIGIN>/v1 \
+  --api-key "$API_KEY" --edge-secret "$EDGE_SECRET" \
+  --vus 1000 --duration 1h --harvest 500
 ```
 
-Baseline 1000×1h (note the UTC start/end — you need them for the query_log window):
+Output → `crates/load-tests/out/<UTC-start>/client.csv`. At the end the harness
+prints the run dir and a **ready-to-paste** `--param_start='…' --param_end='…'`
+window — copy it for step 4 (no `date -u` needed).
+
+Diagnostics if the smoke isn't 200: `401` = `x-api-key` not in `API_KEYS`;
+`403` = missing `x-edge-secret` (or WAF `NoUserAgent` — the harness sets a UA);
+`429`/`1015` = Cloudflare rate limit (use the direct origin); `500 db_error` =
+CH rejected `log_comment` — the `profiles.xml` `changeable_in_readonly`
+constraint (+ `config.d/access-control.xml`) isn't deployed to the box.
+
+## 4. Pull the per-request query_log to your laptop
+
+**Run from: repo root**
+
+Paste the window the harness printed. Read-only `SELECT` on `system.query_log`;
+CSV streams over SSH straight to your disk (nothing is written on the box):
 
 ```bash
-date -u; ulimit -n 65535
-./target/release/load-tests \
-  --base-url https://api-sorobanscan.rumblefishdev.com/v1 \
-  --api-key "$API_KEY" \
-  --vus 1000 --duration 1h --out-dir .temp/load-tests/run-baseline
-date -u
+cat crates/load-tests/query_log_per_request.sql | \
+  ssh -i ~/.ssh/<key> deploy@<box-ip> \
+    "docker exec -i app-clickhouse-1 clickhouse-client \
+      --param_start='<UTC start>' --param_end='<UTC end>'" \
+  > crates/load-tests/out/<UTC-start>/query_log_per_request.csv
 ```
 
-Local (against the local API + local ClickHouse, see `.temp/local-api-clickhouse-README.md`):
+`-i` (NOT `-it`) — a TTY breaks the pipe.
+
+## 5. Join into one CSV
+
+**Run from: repo root**
 
 ```bash
-# local API must run with LOCAL_API=1 LOAD_TESTING=true and CH datasource envs
-./target/release/load-tests \
-  --base-url http://127.0.0.1:9100/lambda-url/api/v1 \
-  --vus 20 --duration 30s --out-dir .temp/load-tests/run-local
+./target/release/join \
+  --client    crates/load-tests/out/<UTC-start>/client.csv \
+  --query-log crates/load-tests/out/<UTC-start>/query_log_per_request.csv \
+  --out       crates/load-tests/out/<UTC-start>/results.csv
 ```
 
-Env vars work too (`BASE_URL`, `API_KEY`, `EDGE_SECRET`, `VUS`, `DURATION`, `HARVEST`, `OUT_DIR`).
+`results.csv` = one dry row per request:
+`ts_ms,round,vu,request_id,endpoint,method,http_status,err_class,duration_ms,ttfb_ms,read_rows,read_bytes,ch_queries,ch_duration_ms,memory_max,url`.
+Compute any stats in post-processing.
 
-## Collect the server side + analyse
+## 6. Roll back after the test
 
-On the ClickHouse host, scoped to the run window:
-
-```bash
-docker compose exec -T clickhouse clickhouse-client --user=default --password=clickhouse \
-  --param_start='<UTC start>' --param_end='<UTC end>' \
-  --queries-file crates/load-tests/query_log_summary.sql
-```
-
-Join `client_summary.csv` (client latency/errors) with `query_log_summary.csv`
-(server read_rows/bytes) on the `endpoint` column → the ranked list of endpoints
-to cache/index. Drill into a single request via `client.csv.request_id` =
-`query_log.log_comment` (see the comment at the bottom of the `.sql`).
-
-> **Caveat — the join is apples-to-oranges on request counts.** A cache hit
-> (e.g. `netstats`, `ctrdetail`) issues **no** CH query, so it is **absent** from
-> `query_log_summary.csv` while still counted in `client_summary.csv`. Hence
-> `client_summary.requests ≥ query_log.http_requests`; the difference = cache
-> hits + non-CH paths. A low `read_rows_total` can mean "served from cache", not
-> "cheap" — that gap (high client volume, low CH cost) is itself a signal the
-> endpoint is *already* well cached.
-
-## Diagnostic loop (the actual goal)
-
-```
-1. baseline run → lawina 202/429/5xx + knee point; log_comment ⇒ hottest/priciest endpoints
-2. fix the binding constraint: cache hot IMMUTABLE endpoints + skip-index the heavy filters
-3. re-run → CH now sees only cache-misses → check the hour runs clean
-4. iterate until 1000×1h passes with an acceptable error rate
-```
-
-## After the test — ROLLBACK
-
-- `loadTesting: true → false` in `infra/envs/production.json` + redeploy ApiGateway **and** Compute.
-- CH `api_reader` quota `unlimited → api_throttle` in `services.xml` + container recreate.
+**Run from: `infra/`** — set `"loadTesting": false`, then
+`make deploy-production-apigateway` + `make deploy-production-compute`. Then
+rotate / remove your `API_KEY` from the server `API_KEYS`.

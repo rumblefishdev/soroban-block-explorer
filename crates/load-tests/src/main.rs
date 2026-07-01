@@ -57,8 +57,11 @@ struct Args {
     /// cursor (API caps a page at 100), e.g. `HARVEST=10000` for wide coverage.
     #[arg(long, env = "HARVEST", default_value_t = 100)]
     harvest: usize,
-    /// Directory for `client.csv` + `client_summary.csv`.
-    #[arg(long, env = "OUT_DIR", default_value = ".")]
+    /// Base output dir. Each run writes a timestamped subdir under it (the
+    /// subdir name is the run's UTC start — Rust-generated, no name to pass),
+    /// holding `client.csv` + `client_summary.csv`. Defaults to the crate's
+    /// `out/` (gitignored), resolved absolutely so it works from any cwd.
+    #[arg(long, env = "OUT_DIR", default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/out"))]
     out_dir: String,
 }
 
@@ -297,6 +300,28 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+/// Format epoch seconds as UTC `YYYY-MM-DD HH:MM:SS` — ready to paste 1:1 into
+/// a ClickHouse `--param_start`/`--param_end` DateTime (civil-from-days, no dep).
+fn fmt_utc(secs: u64) -> String {
+    let rem = secs % 86_400;
+    let (h, mi, s) = (rem / 3_600, (rem % 3_600) / 60, rem % 60);
+    let mut z = (secs / 86_400) as i64 + 719_468; // days since 1970-01-01, shifted
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    z -= era * 146_097;
+    let yoe = (z - z / 1_460 + z / 36_524 - z / 146_096) / 365;
+    let doy = z - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = era * 400 + yoe + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+}
+
+/// Filesystem-safe variant of [`fmt_utc`] for a run's directory name.
+fn dir_stamp(secs: u64) -> String {
+    fmt_utc(secs).replace(' ', "T").replace(':', "-") + "Z"
+}
+
 fn parse_duration(s: &str) -> Duration {
     let s = s.trim();
     let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
@@ -528,9 +553,15 @@ async fn main() {
     let args = Args::parse();
     let dur = parse_duration(&args.duration);
 
-    // Fail fast on an unwritable / missing out-dir BEFORE the run, instead of
-    // discovering it only when the writer thread panics at the very end.
-    std::fs::create_dir_all(&args.out_dir).expect("create --out-dir");
+    // Each run gets its own timestamped subdir under the base out-dir, named by
+    // the run's UTC start (no name to pass). Created up front so an unwritable
+    // path fails fast, not only when the writer thread panics at the end.
+    let run_start = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let run_dir = format!("{}/{}", args.out_dir, dir_stamp(run_start));
+    std::fs::create_dir_all(&run_dir).expect("create run out dir");
 
     let mut headers = HeaderMap::new();
     if !args.api_key.is_empty() {
@@ -547,6 +578,9 @@ async fn main() {
     }
     let client = reqwest::Client::builder()
         .default_headers(headers)
+        // reqwest sends NO User-Agent by default; AWS WAF CommonRuleSet's
+        // `NoUserAgent_HEADER` rule then 403s every request. Set one explicitly.
+        .user_agent(concat!("soroban-load-tests/", env!("CARGO_PKG_VERSION")))
         .pool_max_idle_per_host(args.vus)
         // Above the CH 30s per-query cap so a hung request surfaces, not blocks forever.
         .timeout(Duration::from_secs(35))
@@ -586,7 +620,7 @@ async fn main() {
 
     let (tx, rx) = std::sync::mpsc::channel::<Sample>();
     let writer = std::thread::spawn({
-        let out_dir = args.out_dir.clone();
+        let out_dir = run_dir.clone();
         move || writer_thread(rx, out_dir)
     });
 
@@ -695,9 +729,21 @@ async fn main() {
         w.await.ok();
     }
     writer.join().expect("writer thread");
+    let run_end = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(run_start);
     eprintln!(
         "[done] total={} errors={}",
         total.load(Ordering::Relaxed),
         errors.load(Ordering::Relaxed)
+    );
+    eprintln!("[out] {run_dir}");
+    // Ready-to-paste query_log window. End is padded +90s so requests still
+    // finishing (up to the 30s cap) and the async query_log flush land inside it.
+    eprintln!(
+        "[query_log window] --param_start='{}' --param_end='{}'",
+        fmt_utc(run_start),
+        fmt_utc(run_end + 90),
     );
 }

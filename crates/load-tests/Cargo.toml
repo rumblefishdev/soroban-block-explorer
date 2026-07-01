@@ -13,5 +13,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sy
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+csv = "1"
 hdrhistogram = "7"
 fastrand = "2"

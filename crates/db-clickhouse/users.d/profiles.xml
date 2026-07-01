@@ -25,6 +25,23 @@
             <allow_ddl>0</allow_ddl>
             <max_memory_usage>4000000000</max_memory_usage>
             <max_execution_time>30</max_execution_time>
+            <!-- Whitelist ONLY `log_comment` as changeable under readonly=1
+                 (task 0338). `api_reader` runs readonly=1, which otherwise
+                 rejects EVERY query-time setting change with a db_error — so the
+                 per-request correlation id the API stamps as `log_comment` (B2)
+                 500s on prod (it worked locally only because LOCAL_API connects
+                 as the non-readonly `default` user). This punches a hole for
+                 `log_comment` alone — harmless, it just annotates
+                 system.query_log — leaving every other setting locked (the 4 GB
+                 / 30 s per-query caps stay enforced). Requires the server flag
+                 `settings_constraints_replace_previous=true`
+                 (config.d/access-control.xml), else `changeable_in_readonly` is
+                 ignored and the db_error persists. -->
+            <constraints>
+                <log_comment>
+                    <changeable_in_readonly/>
+                </log_comment>
+            </constraints>
         </read_only>
 
         <write_no_ddl>
