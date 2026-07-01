@@ -1,7 +1,7 @@
 ---
 id: '0051'
 title: 'SAC is a facet of classic_credit, not a separate asset_type'
-status: proposed
+status: accepted
 deciders: [stkrolikiewicz]
 related_tasks: ['0339', '0323', '0210', '0331']
 related_adrs: ['0034', '0037', '0038']
@@ -17,7 +17,15 @@ history:
       ADR created for task 0339 (collapse the classic↔SAC entity split). Decisions
       confirmed in the SAC/asset modeling session: drop asset_type=sac, SAC-ness as
       self-contained property columns on the classic/native asset row, no CH rebuild.
----
+  - date: '2026-06-30'
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Accepted. Refined in review: 2 stored SAC columns (`sac_contract_id` surrogate +
+      `sac_deployed` Bool), NOT 3 — the `C…` strkey is re-derived on read from `code:issuer`,
+      not stored (Alt 3). Clarified why the SAC handle cannot reuse the key `contract_id`
+      (it is the ORDER-BY identity, reserved for soroban; reusing it regrows the duplication
+      on deploy — Alt 4). Docs land with the 0339 implementation.
 
 # ADR 0051: SAC is a facet of classic_credit, not a separate asset_type
 
@@ -69,13 +77,23 @@ SAC-ness becomes a **property** of a `classic_credit` (or `native`) asset, not a
    `soroban` (type=3, bespoke, no classic backing) remains the only genuinely
    contract-native asset type.
 
-2. **Add 3 SAC property columns to `assets`** so the asset row is self-contained
-   (no `soroban_contracts` join on the asset read):
+2. **Add 2 SAC property columns to `assets`** (non-key — the asset's identity / ORDER-BY
+   tuple stays stable regardless of SAC deploy state → one row):
 
-   - `sac_contract_id Int64 DEFAULT 0` — the SAC surrogate (for resolution/indexing).
-   - `sac_strkey String DEFAULT ''` — the `C…` text, re-derivable from `code:issuer`
-     (subsumes the deferred "option-c" strkey display).
-   - `sac_deployed Bool DEFAULT false` — deployed-ness, writer-maintained.
+   - `sac_contract_id Int64 DEFAULT 0` — the SAC surrogate. **Stored + indexed**: it is the
+     lookup key that resolves Soroban activity (events/tx under `C…`) back to the asset, and
+     it cannot be derived-and-matched efficiently. Populated for ANY SAC-having asset —
+     deployed or not (un-deployed SACs still emit events that must resolve). Kept OUT of the
+     ORDER-BY key on purpose; the key `contract_id` is reserved for `soroban` (type=3),
+     where the contract IS the identity (see §3).
+   - `sac_deployed Bool DEFAULT false` — deployed-ness, writer-maintained. **Stored** (not
+     derived from a `soroban_contracts` join) so the asset read stays join-free.
+
+   The `C…` **strkey is NOT stored** — it is a pure function of `code:issuer`
+   (`derive_sac_contract_id`), so it is **re-derived on read** (API response layer) for
+   display. This keeps the read join-free without denormalising a derivable value and still
+   subsumes the deferred "option-c" strkey display. (`sac_contract_id` is stored anyway
+   because it is the resolution index — a `C…` lookup hashes the input to this surrogate.)
 
 3. **Keep the `assets` ORDER BY unchanged** — `(asset_type, asset_code, issuer_id,
 contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written as
@@ -88,14 +106,14 @@ contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written 
    SAC columns instead of emitting a separate `type=2` row; the staging fingerprint folds
    SAC into the `classic_credit`/`native` fingerprint.
 
-5. **API.** Drop `sac` from `asset_type_name` / `filter[type]`; surface
-   `sac_contract_id` / `sac_strkey` / `sac_deployed`; the "SAC" view becomes a property
-   filter (`classic_credit WHERE sac_contract_id != 0`). Canonical `id` for SAC-wraps
-   becomes `CODE-ISSUER`; `fetch_by_contract_id` is extended to also match
-   `sac_contract_id` / `sac_strkey` so `/assets/{C…}` deep-links still resolve.
+5. **API.** Drop `sac` from `asset_type_name` / `filter[type]`; surface `sac_contract_id`
+   + `sac_deployed` + the re-derived `C…` strkey; the "SAC" view becomes a property filter
+   (`classic_credit WHERE sac_contract_id != 0`). Canonical `id` for SAC-wraps becomes
+   `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate
+   and match `sac_contract_id` so `/assets/{C…}` deep-links still resolve.
 
 6. **Frontend.** "SAC" filter → property filter; SAC badge derived from
-   `sac_contract_id != 0`; the contract link renders from `sac_strkey` with
+   `sac_contract_id != 0`; the contract link renders from the (re-derived) `C…` strkey with
    deployment-awareness (`sac_deployed`) — **subsumes 0337**.
 
 ---
@@ -108,9 +126,10 @@ contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written 
 - **No CH rebuild.** Keeping `asset_type` in the key and simply not using value 2 (with the
   handle moved to property columns) gives one-row-per-economic-asset without an ORDER-BY
   change or new-table swap — the migration reduces to `ADD COLUMN` + a ~31k-row data pass.
-- **Shortest read.** Storing `sac_strkey` + `sac_deployed` makes the asset row
-  self-contained → the asset read needs **no `soroban_contracts` join**, and it folds in
-  the option-c strkey display in one move.
+- **Shortest read.** `sac_contract_id` + `sac_deployed` on the row (and the `C…` strkey
+  re-derived on read from `code:issuer`) make the asset read **self-contained — no
+  `soroban_contracts` join** — while avoiding denormalising the derivable strkey. Folds in
+  the option-c strkey display.
 - **Subsumes the band-aids.** One model fix replaces 0336 (read-collapse) + 0337 (link
   guard) + option-c, at the source rather than as read-time / UI patches.
 
@@ -138,17 +157,30 @@ a model error.
 **Decision:** REJECTED — keeping `asset_type` in the key and not using value 2 achieves the
 same one-row result with only `ADD COLUMN` + a data pass.
 
-### Alternative 3: Derive `deployed` from a `soroban_contracts` join (no stored flag/strkey)
+### Alternative 3: Derive `deployed` from a `soroban_contracts` join
 
-**Description:** No SAC property columns beyond the surrogate; read joins
-`soroban_contracts` for the strkey + `deployed_at_ledger`.
+**Description:** No stored `sac_deployed`; the asset read joins `soroban_contracts` for
+`deployed_at_ledger`.
 
-**Cons:** keeps the asset read coupled to `soroban_contracts`; does not fix the strkey
-display (option-c stays open).
+**Cons:** keeps the asset read coupled to `soroban_contracts`.
 
-**Decision:** REJECTED — storing `sac_strkey` + `sac_deployed` yields a self-contained,
-no-join read and subsumes option-c. Drift risk is low (the writer sets the deploy row and
-the SAC columns together).
+**Decision:** REJECTED for `deployed` — store `sac_deployed` (Bool) so the read stays
+join-free. The strkey is the OPPOSITE call: it is NOT stored (it is derivable from
+`code:issuer`, re-derived on read) — storing it would denormalise a derivable value for no
+join-avoidance gain (the read is already join-free via the stored surrogate + flag).
+
+### Alternative 4: Reuse the key `contract_id` for the SAC handle (populate only when deployed)
+
+**Description:** No `sac_contract_id`; put the SAC contract_id in the existing key
+`contract_id`, set only when the SAC is deployed.
+
+**Cons:** breaks the one-row goal. `contract_id` is part of the ORDER-BY key (= row identity);
+setting it on deploy changes a classic asset's key `(1,code,issuer,0) → (1,code,issuer,C…)`
+→ a NEW row alongside the trustline row → the duplication regrows. And an un-deployed SAC
+(`contract_id` absent) could not resolve its Soroban events (no stored surrogate to match).
+
+**Decision:** REJECTED — the SAC handle must be a NON-KEY, always-populated, stored+indexed
+column (`sac_contract_id`); the key `contract_id` stays reserved for `soroban` identity.
 
 ---
 
@@ -166,8 +198,8 @@ the SAC columns together).
 
 - Migration data-pass (type=2 → merge into type=1/0), **writer-first** (deploy the writer
   change → then the pass, else rows regrow) — coordinated like 0323 Phase 1/2.
-- Writer maintains 3 SAC columns (`sac_contract_id` / `sac_strkey` / `sac_deployed`), set
-  together at deploy/derivation.
+- Writer maintains 2 SAC columns (`sac_contract_id` + `sac_deployed`), set at
+  deploy/derivation; the `C…` strkey is re-derived on read (not stored).
 - Canonical-id wire change: SAC-wrap id `C… → CODE-ISSUER`; `/assets/{C…}` deep-links
   handled by the extended resolver (back-compat preserved).
 - Enum / DTO / frontend-filter ripple from dropping `sac=2`; api-types regen.
@@ -176,7 +208,8 @@ the SAC columns together).
 
 ## Delivery Checklist
 
-Docs land WITH the implementation (task 0339); this ADR is `proposed`.
+The decision is `accepted`; the `docs/architecture/**` updates land WITH the implementation
+(task 0339) and are ticked when 0339 lands.
 
 - [ ] `docs/architecture/technical-design-general-overview.md` — N/A (no top-level shape change).
 - [ ] `docs/architecture/database-schema/database-schema-overview.md` — **on implementation** (assets columns + asset_type taxonomy).
