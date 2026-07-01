@@ -32,11 +32,11 @@
 //!
 //! ## Trustline removal handling
 //!
-//! Parser-emitted `removed_trustlines` are translated to
-//! `AccountBalanceRow` with `balance = 0` and current ledger as
+//! Parser-emitted `removed_trustlines` are translated to a unified
+//! `BalanceRow` with `amount = 0` and current ledger as
 //! `last_updated_ledger`. `ReplacingMergeTree(last_updated_ledger)`
 //! keeps the zero-balance row (newest version wins). Read-time
-//! convention: `WHERE balance > 0` to recover "active trustlines"
+//! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
 use std::collections::{HashMap, HashSet};
@@ -127,10 +127,11 @@ pub struct StagedLedger {
     /// drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
-    pub balance_rows: Vec<AccountBalanceRow>,
-    /// Unified `balances` rows for type-3 tokens (task 0331, Option C). Built in
-    /// [`prepare_with_sac_overrides`] via [`build_balance_rows`] from
-    /// `StageInputs.soroban_token_balances`. (Classic joins in at step 6.)
+    /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
+    /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
+    /// from `StageInputs.soroban_token_balances`; classic + native per-account
+    /// balances are appended straight from `account_states` (single-write — the
+    /// legacy `account_balances_current` staging was removed).
     pub unified_balance_rows: Vec<BalanceRow>,
 }
 
@@ -1331,8 +1332,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // ---- account_balances_current ----
-    let mut balance_dedup: HashMap<(i64, i16, String, i64), AccountBalanceRow> = HashMap::new();
+    // ---- unified `balances` — classic + native per-account balances (lore-0331
+    // Option A single-write). `account_balances_current` is no longer written (only
+    // its table remains, for the pending classic→`balances` migration + rollback).
+    // Dedup straight on (holder_id, asset_id): the project `asset_id` already folds
+    // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
+    // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
+    let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1345,115 +1351,31 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             };
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
-            let balance = decimal7_string_to_i128(balance_str)?;
-            let (asset_code, issuer_id) = if asset_type == AssetType::Native {
-                (String::new(), 0)
+            let amount = decimal7_string_to_i128(balance_str)?;
+            let asset_id = if asset_type == AssetType::Native {
+                ids::asset_id(0, "", 0, 0)
             } else {
-                let code = b
-                    .get("asset_code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let issuer = b
-                    .get("issuer")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
+                let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
+                let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
                 if code.is_empty() || issuer.is_empty() {
                     continue;
                 }
-                (code, ids::account_id(&issuer))
+                ids::asset_id(1, code, ids::account_id(issuer), 0)
             };
-            let key = (
-                account_id_int,
-                asset_type as i16,
-                asset_code.clone(),
-                issuer_id,
-            );
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code,
-                issuer_id,
-                balance,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
+            upsert_balance(&mut balance_dedup, account_id_int, asset_id, amount, watermark);
         }
 
         for rm in &st.removed_trustlines {
-            let code = rm
-                .get("asset_code")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let issuer = rm
-                .get("issuer")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let code = rm.get("asset_code").and_then(Value::as_str).unwrap_or("");
+            let issuer = rm.get("issuer").and_then(Value::as_str).unwrap_or("");
             if code.is_empty() || issuer.is_empty() {
                 continue;
             }
-            let asset_type = if code.len() <= 4 {
-                AssetType::CreditAlphanum4
-            } else {
-                AssetType::CreditAlphanum12
-            };
-            let issuer_id = ids::account_id(&issuer);
-            let key = (account_id_int, asset_type as i16, code.clone(), issuer_id);
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code: code,
-                issuer_id,
-                balance: 0,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
+            let asset_id = ids::asset_id(1, code, ids::account_id(issuer), 0);
+            upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
         }
     }
-    out.balance_rows.extend(balance_dedup.into_values());
-
-    // ---- 6a (lore-0331 Option C): dual-write classic balances into unified
-    // `balances` (additive — `account_balances_current` still written above).
-    // `asset_type` here is the Horizon enum (0 native, 1/2 alphanum4/12); map to
-    // the project asset_id (native, else classic-credit). amount is the same
-    // scaled-i128 (decimals=7 at read). Accounts resolve via the `accounts` table,
-    // so no `addresses` rows needed for classic holders.
-    for r in &out.balance_rows {
-        let asset_id = if r.asset_type == 0 {
-            ids::asset_id(0, "", 0, 0)
-        } else {
-            ids::asset_id(1, &r.asset_code, r.issuer_id, 0)
-        };
-        out.unified_balance_rows.push(BalanceRow {
-            holder_id: r.account_id,
-            asset_id,
-            amount: r.balance,
-            last_updated_ledger: r.last_updated_ledger,
-        });
-    }
+    out.unified_balance_rows.extend(balance_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
@@ -1566,6 +1488,34 @@ fn decode_hash(hex_str: &str, field: &'static str) -> Result<[u8; 32], SchemaErr
 
 fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
+}
+
+/// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
+/// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
+fn upsert_balance(
+    map: &mut HashMap<(i64, i64), BalanceRow>,
+    holder_id: i64,
+    asset_id: i64,
+    amount: i128,
+    last_updated_ledger: i64,
+) {
+    use std::collections::hash_map::Entry;
+    let row = BalanceRow {
+        holder_id,
+        asset_id,
+        amount,
+        last_updated_ledger,
+    };
+    match map.entry((holder_id, asset_id)) {
+        Entry::Occupied(mut occ) => {
+            if row.last_updated_ledger >= occ.get().last_updated_ledger {
+                *occ.get_mut() = row;
+            }
+        }
+        Entry::Vacant(vac) => {
+            vac.insert(row);
+        }
+    }
 }
 
 fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {

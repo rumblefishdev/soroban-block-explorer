@@ -103,8 +103,8 @@ struct TableInserts {
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
     nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
-    balances: Option<Insert<AccountBalanceRow>>,
-    /// Per-holder Soroban token balances side table (task 0331).
+    /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
+    /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
 }
 
@@ -267,13 +267,6 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.balances,
-            "account_balances_current",
-            &staged.balance_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
             &mut self.inserts.unified_balances,
             "balances",
             &staged.unified_balance_rows,
@@ -322,7 +315,6 @@ impl PartitionWriter {
         // dedupes the orphan rows on the next merge.
         end(self.inserts.nfts_pending).await?;
         end(self.inserts.nft_ownership_pending).await?;
-        end(self.inserts.balances).await?;
         end(self.inserts.unified_balances).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every

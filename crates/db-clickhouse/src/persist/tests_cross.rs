@@ -98,21 +98,6 @@ fn column_order_asset_enrichment() {
 }
 
 #[test]
-fn column_order_account_balances_current() {
-    assert_columns::<AccountBalanceRow>(
-        "account_balances_current",
-        &[
-            "account_id",
-            "asset_type",
-            "asset_code",
-            "issuer_id",
-            "balance",
-            "last_updated_ledger",
-        ],
-    );
-}
-
-#[test]
 fn column_order_balances() {
     assert_columns::<BalanceRow>(
         "balances",

@@ -109,18 +109,11 @@ pub struct AssetEnrichmentRow {
     pub version: i64,
 }
 
-/// `account_balances_current` — state, RMT(last_updated_ledger).
-/// Trustline removals emitted as `balance = 0` rows; reads filter
-/// `WHERE balance > 0`.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct AccountBalanceRow {
-    pub account_id: i64,
-    pub asset_type: i16,
-    pub asset_code: String,
-    pub issuer_id: i64,
-    pub balance: i128,
-    pub last_updated_ledger: i64,
-}
+// `account_balances_current` — table retained (pending classic→`balances`
+// migration + rollback) but NO LONGER WRITTEN (lore-0331 Option A single-write):
+// its `AccountBalanceRow` write struct was removed. Classic + native balances now
+// stage straight into the unified `balances` table (`BalanceRow`); reads already
+// resolve there.
 
 /// `soroban_contracts` — state hub, RMT(wasm_uploaded_at_ledger).
 /// Surrogate `id`; `wasm_uploaded_at_ledger = 0` is the stub sentinel
