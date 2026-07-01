@@ -308,10 +308,14 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
 /// `balances` table (task 0331 Option C — the per-type `soroban_token_balances`
 /// table was dropped on the pivot).
 ///
-/// Only the standard `Vec[Symbol("Balance"), Address]` key with a bare-`i128`
-/// value is recognised. Non-standard balance layouts (e.g. the SAC
-/// `BalanceValue` struct, or a Map-wrapped amount) are skipped here and handled
-/// as separate, tested shapes — never silently mis-summed.
+/// Recognises the standard `Vec[Symbol("Balance"), Address]` key with EITHER
+/// value shape: a bare `i128` (a type-3 Soroban token balance) OR the SAC
+/// `BalanceValue` struct (a contract-held classic/native asset, held via the
+/// asset's SAC — task 0331 Path X). Both are keyed downstream by the STORING
+/// contract's surrogate (`ids::asset_id(_, contract)`), so a SAC balance lands
+/// on that SAC's own type-2 asset row — the same symmetric rule type-3 uses for
+/// its own row; task 0339 folds type-2 into type-0/1. Any other value shape is
+/// skipped, never silently mis-summed.
 pub fn extract_soroban_token_balances(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedSorobanBalance> {
@@ -337,10 +341,18 @@ pub fn extract_soroban_token_balances(
                 let Some(data) = change.data.as_ref() else {
                     continue;
                 };
-                let Some(b) = decode_scval_i128(data) else {
+                // Bare `i128` → type-3 token balance. SAC `BalanceValue` struct →
+                // contract-held classic/native balance; take `.amount`. (Its
+                // `authorized`/`clawback` flags are decodable but not propagated
+                // yet — the frozen-balance policy is open, task 0331.) Any other
+                // shape is skipped.
+                if let Some(b) = decode_scval_i128(data) {
+                    b
+                } else if let Some(sac) = decode_sac_balance_value(data) {
+                    sac.amount
+                } else {
                     continue;
-                };
-                b
+                }
             }
             _ => continue,
         };
@@ -384,6 +396,60 @@ fn decode_scval_i128(data: &Value) -> Option<i128> {
         return None;
     }
     val.get("value")?.as_str()?.parse::<i128>().ok()
+}
+
+/// The SAC `BalanceValue` struct — how a CONTRACT holds a classic/native asset.
+///
+/// A contract has no trustline; it holds a classic (type-1) or native (type-0) asset
+/// as a `Balance(Address)` `ContractData` entry **inside that asset's SAC**, and the
+/// value is this struct — NOT the bare `i128` a bespoke Soroban token (type-3) uses.
+/// `scval_to_typed_json` serializes it as a `map` of symbol→value entries. Task 0331
+/// (contract-held 0/1). `authorized`/`clawback` are carried so a later step can decide
+/// whether a deauthorized/frozen balance counts toward supply/holders (open policy).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SacBalanceValue {
+    pub amount: i128,
+    pub authorized: bool,
+    pub clawback: bool,
+}
+
+/// Decode `data.val` as a SAC `BalanceValue` struct. `None` for any other shape —
+/// including the bare-`i128` type-3 balance and a partial/foreign map — so the two
+/// value shapes never cross-decode. Does NOT assign an asset: mapping the SAC contract
+/// back to its classic/native asset (type-0/1) is the caller's job (task 0331 Problem B).
+pub fn decode_sac_balance_value(data: &Value) -> Option<SacBalanceValue> {
+    let val = data.get("val")?;
+    if val.get("type")?.as_str()? != "map" {
+        return None;
+    }
+    let mut amount = None;
+    let mut authorized = None;
+    let mut clawback = None;
+    for entry in val.get("value")?.as_array()? {
+        let key = entry.get("key")?;
+        if key.get("type")?.as_str()? != "sym" {
+            return None;
+        }
+        let field = entry.get("value")?;
+        match key.get("value")?.as_str()? {
+            "amount" => {
+                if field.get("type")?.as_str()? != "i128" {
+                    return None;
+                }
+                amount = Some(field.get("value")?.as_str()?.parse::<i128>().ok()?);
+            }
+            "authorized" => authorized = field.get("value")?.as_bool(),
+            "clawback" => clawback = field.get("value")?.as_bool(),
+            // Strict: an unknown symbol key means this is NOT the SAC
+            // `BalanceValue` struct → reject, never partial-decode a foreign map.
+            _ => return None,
+        }
+    }
+    Some(SacBalanceValue {
+        amount: amount?,
+        authorized: authorized?,
+        clawback: clawback?,
+    })
 }
 
 fn is_contract_instance_key(key: &Value) -> bool {
@@ -1507,6 +1573,133 @@ mod tests {
         assert_eq!(
             balances[0].balance, 10_000_040_000_000,
             "parser must decode the exact on-chain i128 from the real entry"
+        );
+    }
+
+    /// Real mainnet (RPC `getLedgerEntries`, 2026-07-01): the ACTUAL SAC `BalanceValue`
+    /// struct entries for the AMM pool `CATUJXDU…` holding native XLM and EURC (each held
+    /// via the asset's SAC — the contract-held classic/native case the type-3 bare-`i128`
+    /// path drops today). Decodes on-chain XDR → real `scval_to_typed_json` → the new
+    /// `decode_sac_balance_value`, and asserts the amount equals the INDEPENDENT
+    /// `stellar contract invoke … balance` read (native 11_635_129_310_963, EURC
+    /// 2_026_487_623_620) — the i128 comes from the ledger bytes, NON-circular. Also
+    /// asserts the bare-`i128` decoder rejects the struct (the two shapes never cross-decode).
+    #[test]
+    fn decode_sac_balance_value_real_mainnet() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        for (entry_b64, expected_amount) in [
+            (
+                "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA",
+                11_635_129_310_963_i128,
+            ),
+            (
+                "AAAABgAAAAAAAAAB5qfZ63UjAGpGmqdIOtEQckdEPA2C5idj3mcISMTpfJAAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAB19QTL8QAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA",
+                2_026_487_623_620_i128,
+            ),
+        ] {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(entry_b64)
+                .unwrap();
+            let LedgerEntryData::ContractData(entry) =
+                LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+            else {
+                panic!("expected ContractData");
+            };
+            let data = json!({ "val": crate::scval::scval_to_typed_json(&entry.val) });
+
+            let decoded = decode_sac_balance_value(&data).expect("SAC BalanceValue decodes");
+            assert_eq!(
+                decoded.amount, expected_amount,
+                "amount must equal the independent on-chain balance() read"
+            );
+            assert!(decoded.authorized, "pool balances are authorized");
+            assert!(!decoded.clawback, "no clawback on these balances");
+
+            // The two value shapes must never cross-decode.
+            assert!(
+                decode_scval_i128(&data).is_none(),
+                "bare-i128 decoder must reject the SAC struct"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_sac_balance_value_rejects_foreign_maps() {
+        // Missing a required field (no `clawback`) → None.
+        let missing = json!({ "val": { "type": "map", "value": [
+            { "key": { "type": "sym", "value": "amount" }, "value": { "type": "i128", "value": "5" } },
+            { "key": { "type": "sym", "value": "authorized" }, "value": { "type": "bool", "value": true } },
+        ]}});
+        assert!(decode_sac_balance_value(&missing).is_none());
+
+        // An unknown extra symbol key → None (not the SAC struct, don't partial-decode).
+        let foreign = json!({ "val": { "type": "map", "value": [
+            { "key": { "type": "sym", "value": "amount" }, "value": { "type": "i128", "value": "5" } },
+            { "key": { "type": "sym", "value": "authorized" }, "value": { "type": "bool", "value": true } },
+            { "key": { "type": "sym", "value": "clawback" }, "value": { "type": "bool", "value": false } },
+            { "key": { "type": "sym", "value": "extra" }, "value": { "type": "i128", "value": "9" } },
+        ]}});
+        assert!(decode_sac_balance_value(&foreign).is_none());
+
+        // A bare i128 (type-3 shape) is not a map → None.
+        let bare = json!({ "val": { "type": "i128", "value": "5" } });
+        assert!(decode_sac_balance_value(&bare).is_none());
+    }
+
+    /// Path X end-to-end (real mainnet entry): `extract_soroban_token_balances`
+    /// now emits the contract-held balance for a SAC `BalanceValue` struct — the
+    /// pool `CATUJXDU…` holding native XLM in the XLM SAC. Same real entry as
+    /// `decode_sac_balance_value_real_mainnet`, but asserts the WHOLE extractor
+    /// (not just the value decoder) surfaces it: contract = the SAC, holder = the
+    /// pool, balance = the independent on-chain read. Keyed downstream by the SAC
+    /// surrogate → lands on the SAC's type-2 asset row (task 0339 folds to type-0).
+    #[test]
+    fn extract_sac_struct_balance_real_mainnet() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(entry_b64)
+            .unwrap();
+        let LedgerEntryData::ContractData(entry) =
+            LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+        else {
+            panic!("expected ContractData");
+        };
+        let key = json!({
+            "contract": entry.contract.to_string(),
+            "key": crate::scval::scval_to_typed_json(&entry.key),
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = crate::scval::scval_to_typed_json(&entry.val);
+
+        let balances = extract_soroban_token_balances(&[make_change(
+            "contract_data",
+            "updated",
+            key,
+            Some(data),
+        )]);
+
+        assert_eq!(
+            balances.len(),
+            1,
+            "extractor surfaces the SAC struct balance"
+        );
+        assert_eq!(
+            balances[0].contract_id, "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+            "stored in the native XLM SAC"
+        );
+        assert_eq!(
+            balances[0].holder, "CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY",
+            "held by the pool contract"
+        );
+        assert_eq!(
+            balances[0].balance, 11_635_129_310_963,
+            "the exact on-chain SAC balance"
         );
     }
 
