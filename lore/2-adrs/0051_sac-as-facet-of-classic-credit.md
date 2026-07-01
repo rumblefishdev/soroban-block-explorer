@@ -107,10 +107,11 @@ contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written 
    SAC into the `classic_credit`/`native` fingerprint.
 
 5. **API.** Drop `sac` from `asset_type_name` / `filter[type]`; surface `sac_contract_id`
-   + `sac_deployed` + the re-derived `C…` strkey; the "SAC" view becomes a property filter
-   (`classic_credit WHERE sac_contract_id != 0`). Canonical `id` for SAC-wraps becomes
-   `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate
-   and match `sac_contract_id` so `/assets/{C…}` deep-links still resolve.
+
+   - `sac_deployed` + the re-derived `C…` strkey; the "SAC" view becomes a property filter
+     (`classic_credit WHERE sac_contract_id != 0`). Canonical `id` for SAC-wraps becomes
+     `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate
+     and match `sac_contract_id` so `/assets/{C…}` deep-links still resolve.
 
 6. **Frontend.** "SAC" filter → property filter; SAC badge derived from
    `sac_contract_id != 0`; the contract link renders from the (re-derived) `C…` strkey with
