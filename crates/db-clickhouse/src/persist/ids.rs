@@ -173,6 +173,30 @@ mod tests {
         assert_eq!(account_id(key), account_id(key));
     }
 
+    /// GOLDEN — pins the cityhash surrogate of known inputs to their exact `i64`.
+    /// These bytes are load-bearing: they key `balances.holder_id` / `.asset_id`,
+    /// `assets.id`, and every account/contract FK across the schema. A change to
+    /// the hash (crate swap, seed, byte handling) silently RE-KEYS the whole DB
+    /// and orphans every prior row — this test makes such a change fail LOUDLY.
+    /// Do NOT "update the expected value" to make it pass: if it breaks, the hash
+    /// changed and every table needs a full re-backfill (see the module header).
+    #[test]
+    fn golden_surrogate_values_are_pinned() {
+        let g = "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ";
+        let c = "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG";
+        assert_eq!(account_id(g), 4_204_727_763_610_853_148);
+        // `address_id` shares the account/contract surrogate space (task 0331).
+        assert_eq!(address_id(g), 4_204_727_763_610_853_148);
+        assert_eq!(contract_id(c), -8_283_827_203_770_785_938);
+        assert_eq!(asset_id(0, "", 0, 0), -6_959_166_271_784_855_184); // native
+        assert_eq!(
+            asset_id(1, "USDC", account_id(g), 0),
+            -5_142_557_507_226_545_233
+        ); // classic "CODE:issuer"
+        // type-3 asset_id IS the token's own contract surrogate (identity, no re-hash).
+        assert_eq!(asset_id(3, "", 0, contract_id(c)), contract_id(c));
+    }
+
     /// `asset_id` (task 0331) — SEP-11 canonical surrogate for the unified
     /// `balances.asset_id`. native→"native", classic/SAC→"CODE:ISSUER",
     /// soroban→contract strkey.

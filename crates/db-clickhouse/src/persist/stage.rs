@@ -1010,10 +1010,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- assets (dedup by 4-tuple identity) ----
     let mut asset_seen: HashSet<(i16, String, i64, i64)> = HashSet::new();
     let push_asset =
-        |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, mut row: AssetRow| {
-            // lore-0331: single asset surrogate, computed centrally from the row's
-            // identity so every build site is consistent.
-            row.id = ids::asset_id(row.asset_type, &row.asset_code, row.issuer_id, row.contract_id);
+        |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, row: AssetRow| {
+            // Dedup by the identity 4-tuple. `row.id` is already the `ids::asset_id`
+            // surrogate (computed in `AssetRow::staged`), so build sites can't diverge.
             let key = (
                 row.asset_type,
                 row.asset_code.clone(),
@@ -1031,17 +1030,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             .map(ids::account_id)
             .unwrap_or(0);
         let contract_id_int = t.contract_id.as_deref().map(ids::contract_id).unwrap_or(0);
-        let row = AssetRow {
-            asset_type: t.asset_type as i16,
-            asset_code: t.asset_code.clone().unwrap_or_default(),
+        let row = AssetRow::staged(
+            t.asset_type as i16,
+            t.asset_code.clone().unwrap_or_default(),
             issuer_id,
-            contract_id: contract_id_int,
-            name: t.name.clone(),
-            total_supply: None, // dead column (lore-0293) → balance_aggregates
-            holder_count: None,
-            icon_url: None,
-            id: 0, // set by push_asset (ids::asset_id from the row's fields)
-        };
+            contract_id_int,
+            t.name.clone(),
+        );
         push_asset(&mut out, &mut asset_seen, row);
     }
 
@@ -1056,17 +1051,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: domain::TokenAssetType::Sac as i16,
+            AssetRow::staged(
+                domain::TokenAssetType::Sac as i16,
                 asset_code,
                 issuer_id,
-                contract_id: ids::contract_id(&dep.contract_id),
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            id: 0, // set by push_asset (ids::asset_id from the row's fields)
-            },
+                ids::contract_id(&dep.contract_id),
+                None,
+            ),
         );
     }
 
@@ -1085,17 +1076,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: domain::TokenAssetType::Sac as i16,
+            AssetRow::staged(
+                domain::TokenAssetType::Sac as i16,
                 asset_code,
                 issuer_id,
-                contract_id: ids::contract_id(&ov.contract_id),
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            id: 0, // set by push_asset (ids::asset_id from the row's fields)
-            },
+                ids::contract_id(&ov.contract_id),
+                None,
+            ),
         );
     }
 
@@ -1103,17 +1090,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     push_asset(
         &mut out,
         &mut asset_seen,
-        AssetRow {
-            asset_type: domain::TokenAssetType::Native as i16,
-            asset_code: String::new(),
-            issuer_id: 0,
-            contract_id: 0,
-            name: Some("Stellar Lumen".to_string()),
-            total_supply: None,
-            holder_count: None,
-            icon_url: None,
-            id: 0, // set by push_asset (ids::asset_id from the row's fields)
-        },
+        AssetRow::staged(
+            domain::TokenAssetType::Native as i16,
+            String::new(),
+            0,
+            0,
+            Some("Stellar Lumen".to_string()),
+        ),
     );
 
     // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
@@ -1137,17 +1120,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: domain::TokenAssetType::Soroban as i16,
-                asset_code: String::new(),
-                issuer_id: 0,
+            AssetRow::staged(
+                domain::TokenAssetType::Soroban as i16,
+                String::new(),
+                0,
                 contract_id,
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            id: 0, // set by push_asset (ids::asset_id from the row's fields)
-            },
+                None,
+            ),
         );
     }
 

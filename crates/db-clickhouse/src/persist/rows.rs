@@ -73,11 +73,11 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
-/// `total_supply`/`holder_count` are DEAD columns (lore-0293): the indexer
-/// writes them `None`; the live value is served from the pre-computed
-/// `balance_aggregates` table (refreshable MV over `balances`, task 0331 —
-/// replaced the legacy `asset_aggregates`). Kept for backward-compat; drop
-/// deferred to a cleanup task (0310).
+/// `name`, `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
+/// indexer writes them `None` and NO read touches them: supply/holders come from
+/// `balance_aggregates` (lore-0293), display name/icon from `asset_enrichment`
+/// coalesced over `soroban_contract_metadata`. `name` is 0/367321-populated in
+/// prod. Kept for backward-compat; `ALTER … DROP COLUMN` batched in task 0310.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
@@ -91,6 +91,32 @@ pub struct AssetRow {
     /// lore-0331 surrogate (`ids::asset_id`) — single-column asset key for
     /// `balances.asset_id`. Column order MUST match `assets` schema (id last).
     pub id: i64,
+}
+
+impl AssetRow {
+    /// Build a staging `AssetRow` from its identity + name, computing the `id`
+    /// surrogate ONCE from the identity so no build site can forget it or diverge.
+    /// The aggregate columns are dead at write time (lore-0293 → `balance_aggregates`)
+    /// so they are always `None` here.
+    pub fn staged(
+        asset_type: i16,
+        asset_code: String,
+        issuer_id: i64,
+        contract_id: i64,
+        name: Option<String>,
+    ) -> Self {
+        Self {
+            id: super::ids::asset_id(asset_type, &asset_code, issuer_id, contract_id),
+            asset_type,
+            asset_code,
+            issuer_id,
+            contract_id,
+            name,
+            total_supply: None,
+            holder_count: None,
+            icon_url: None,
+        }
+    }
 }
 
 /// `asset_enrichment` — off-chain SEP-1 enrichment side table (task 0231),
