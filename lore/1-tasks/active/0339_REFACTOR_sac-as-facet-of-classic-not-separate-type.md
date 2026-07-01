@@ -51,6 +51,24 @@ history:
       Subsumes 0336/0337 + option-c. Next: phased impl — Phase 1 (code + PR: schema ADD
       COLUMN, enum/write-path/API/frontend, api-types), Phase 2 (prod ADD COLUMN + ~31k
       type=2→type=1/0 data-pass, writer-first).
+  - date: '2026-07-01'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Phase 1 landed — PR #298 merged (enum drops Sac=2; write path + API + frontend +
+      docs + api-types). Key EMERGED correction (adversarial review): the SAC facet is NOT
+      columns on `assets` (a versionless RMT re-written whole every ledger → a mutable
+      non-key column is clobbered by the next trustline re-emit, the same trap that moved
+      total_supply→asset_aggregates); it moved to a new indexer-owned `asset_sac`
+      AggregatingMergeTree(max) side table, joined at read (ADR 0051 amended). A second
+      adversarial review caught a critical bug shipped in #298 — `asset_aggregates_mv`
+      narrowed to `asset_type = 1`, but that MV reads `account_balances_current` where
+      asset_type is the XDR discriminator (2 = credit_alphanum12, a long-code CLASSIC
+      asset, NOT sac) → dropped long-code classic supply/holders; reverted in follow-up
+      PR #299 (+ the CH-26.3-validated Phase 2 runbook). 0336/0337 archived (superseded).
+      Remaining: **Phase 2** prod data-pass (seed `asset_sac` + insert missing type=1/0
+      identities + DELETE type=2), writer-first — runbook: `0339_phase2-migration-runbook.md`.
+      Status stays `active` until Phase 2 runs; ACs ticked then.
 ---
 
 # REFACTOR: SAC is a facet of classic_credit, not a separate asset_type
