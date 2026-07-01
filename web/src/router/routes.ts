@@ -1,35 +1,12 @@
-export const routes = {
-  home: '/',
+// The canonical URL-shape table is the SINGLE source of truth in libs/ui
+// (`@rumblefish/soroban-block-explorer-ui`), so the app and the lib components
+// (`IdentifierDisplay`, `routeForHit`, `OperationFlowTree`) share one
+// definition — a URL-shape change is a one-file edit there (task 0299). This
+// module re-exports it unchanged so existing `import { routes } from
+// '../router/routes'` callsites keep working, and adds the app-only nav config.
+import { routes } from '@rumblefish/soroban-block-explorer-ui';
 
-  transactions: '/transactions',
-  transaction: (hash: string) => `/transactions/${hash}`,
-
-  ledgers: '/ledgers',
-  ledger: (sequence: number | string) => `/ledgers/${sequence}`,
-
-  accounts: '/accounts',
-  account: (accountId: string) => `/accounts/${accountId}`,
-
-  assets: '/assets',
-  asset: (id: string) => `/assets/${encodeURIComponent(id)}`,
-
-  contracts: '/contracts',
-  contract: (contractId: string) => `/contracts/${contractId}`,
-
-  nfts: '/nfts',
-  // Composite key `(contract_id, token_id)`: `contract_id` is the C-strkey
-  // of the issuing contract (56 chars), `tokenId` is an opaque
-  // contract-defined string (≤128 ASCII) — encode to guard `/`, `?`, `#`.
-  nft: (contractId: string, tokenId: string) =>
-    `/nfts/${contractId}/${encodeURIComponent(tokenId)}`,
-
-  pools: '/liquidity-pools',
-  // `strkey` is the CAP-38 `L...` form (56 chars, base32). Canonical
-  // everywhere — backend `/v1/liquidity-pools/:id` accepts strkey only.
-  pool: (strkey: string) => `/liquidity-pools/${encodeURIComponent(strkey)}`,
-
-  search: (q: string) => `/search?q=${encodeURIComponent(q)}`,
-} as const;
+export { routes };
 
 export const NAV_LINKS = [
   { to: routes.transactions, label: 'Transactions' },
