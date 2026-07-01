@@ -29,7 +29,10 @@ export default function AssetsListPage() {
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
     if (code) filters['filter[code]'] = code;
-    if (type) filters['filter[type]'] = type;
+    // ADR 0051: "SAC" is a property filter over classic_credit / native rows,
+    // not an asset_type — map the chip's `sac` value to `filter[sac]=true`.
+    if (type === 'sac') filters['filter[sac]'] = 'true';
+    else if (type) filters['filter[type]'] = type;
     return filters;
   }, [code, type]);
 

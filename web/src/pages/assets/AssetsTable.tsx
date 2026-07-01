@@ -14,7 +14,7 @@ import {
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetTypeMeta } from './assetType.js';
+import { assetBadgeMeta } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -22,7 +22,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     header: 'Token',
     width: 240,
     cell: (row) => {
-      const meta = assetTypeMeta(row.asset_type_name);
+      const meta = assetBadgeMeta(row.asset_type_name, row.sac_contract_id);
       // Soroban-native tokens have no classic asset_code; fall back to the
       // on-chain SEP-41 symbol as the token label (task 0304).
       const label = row.asset_code ?? row.symbol;
@@ -65,9 +65,18 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     id: 'issuer',
     header: 'Issuer / Contract ID',
     width: 160,
+    // Soroban contract identity → always linked. A SAC facet (`sac_contract_id`)
+    // links to its contract page only when deployed — an un-deployed SAC is a
+    // reserved address, not a live contract (ADR 0051, subsumes 0337).
     cell: (row) =>
       row.contract_id ? (
         <IdentifierWithCopy value={row.contract_id} type="contract" />
+      ) : row.sac_contract_id ? (
+        <IdentifierWithCopy
+          value={row.sac_contract_id}
+          type="contract"
+          linked={row.sac_deployed ?? false}
+        />
       ) : row.issuer ? (
         <IdentifierWithCopy value={row.issuer} type="account" />
       ) : (

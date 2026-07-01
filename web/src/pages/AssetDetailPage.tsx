@@ -17,7 +17,7 @@ import { AssetIcon } from './assets/AssetIcon.js';
 import { AssetMetadata } from './assets/AssetMetadata.js';
 import { AssetSummary } from './assets/AssetSummary.js';
 import { AssetTransactions } from './assets/AssetTransactions.js';
-import { assetTypeMeta } from './assets/assetType.js';
+import { assetBadgeMeta } from './assets/assetType.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 /**
@@ -46,7 +46,9 @@ export default function AssetDetailPage() {
   // Soroban-native tokens have no classic asset_code; fall back to the on-chain
   // SEP-41 symbol for the title + breadcrumb before the generic label (0304).
   const code = data?.asset_code ?? data?.symbol ?? 'Asset';
-  const meta = data ? assetTypeMeta(data.asset_type_name) : null;
+  const meta = data
+    ? assetBadgeMeta(data.asset_type_name, data.sac_contract_id)
+    : null;
 
   let summary: ReactNode = null;
   let metadata: ReactNode = null;
