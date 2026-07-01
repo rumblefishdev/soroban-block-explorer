@@ -88,18 +88,25 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
-// `total_supply` / `holder_count` come from the pre-computed `asset_aggregates`
-// table (lore-0293), a 1:1 LEFT JOIN like enrichment. Its columns are
-// `Nullable`, so a JOIN miss (native / soroban — no row) reads as NULL under the
-// readonly `api_reader` (`join_use_nulls = 0` fills a Nullable column with its
-// default, which is NULL), while a real 0-supply asset (has a row) reads 0 — no
-// sentinel needed. The table is refreshed on a cadence (eventually consistent).
-// Two intended semantics (matching the retired PG batch, not bugs):
-//   * a classic asset and its SAC wrap share one `(asset_code, issuer_id)`
-//     aggregate row, so both display the same supply/holders — a SAC IS the
-//     wrapped underlying asset; the join is 1:1 (no row multiplication).
-//   * a classic asset with no current trustlines has no aggregate row → NULL
-//     supply/holders (the batch wrote 0). NULL = "no balance data", deliberate.
+// `total_supply` / `holder_count` come from `balance_aggregates` (task 0331,
+// Option A) — the single pre-computed aggregate over the unified `balances`
+// table, keyed by the `assets.id` surrogate (`bagg.asset_id = a.id`), one 1:1
+// LEFT JOIN for ALL asset types. `total_supply` = Σ per-holder `amount` over G+C
+// holders: a mint always credits a holder balance (often a contract treasury,
+// summed because we sum contracts too), so the sum equals the token's real
+// supply; the narrow residue (TTL-archived tail + true rebasing) is the accepted
+// non-100% cost of one universal method — no per-token `TotalSupply` key read
+// (see the task 0331 Option-A decision). RAW `Int128` (the API returns it raw;
+// clients scale by `decimals`, classic = 7). `Nullable` columns, so a JOIN miss
+// (no holders — reads NULL under the readonly `api_reader`, where
+// `join_use_nulls = 0` defaults a Nullable to NULL) renders "—", not a fake 0.
+// Refreshed by the MV on a cadence (eventually consistent). Requires `assets.id`
+// populated (prod: ALTER + backfill — see init.sql).
+// NOTE: unlike the retired `asset_aggregates` (keyed `(asset_code, issuer_id)`),
+// a classic asset and its SAC wrap have DISTINCT `assets.id` here (surrogate keyed
+// per type), so they do NOT share an aggregate row. Contract-held SAC balances are
+// not summed yet (accounts hold the underlying classic; the SAC contract-held leg
+// is deferred), so a SAC reads "—" until task 0339 folds SAC into classic.
 /// Accounts-join-free SELECT, shared by the list (task 0319) AND the detail
 /// paths (task 0334). It drops the `LEFT JOIN accounts iss` (and the two `issuer`
 /// columns it produced) that built its hash side from the whole `accounts` table
