@@ -407,10 +407,13 @@ async fn main() {
                 .await
                 .expect("balance_seed failed — idempotent, safe to re-run");
             println!(
-                "balance_seed completed (dry_run={}): tokens={} keys_requested={} balances_decoded={}",
+                "balance_seed completed (dry_run={}): tokens={} holders_enumerated={} \
+                 keys_requested={} entries_returned={} balances_decoded={}",
                 stats.dry_run,
                 stats.tokens,
+                stats.holders_enumerated,
                 stats.keys_requested,
+                stats.entries_returned,
                 stats.balances_decoded,
             );
         }

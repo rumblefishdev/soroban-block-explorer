@@ -41,15 +41,47 @@ use crate::util::insert_rows;
 use crate::rpc_snapshot::{RpcClient, balance_ledger_key, decode_balance_entry};
 use crate::sink::Sink;
 
-#[derive(Debug, Default, Clone, Copy)]
+/// Per-run funnel LEVELS — read top-to-bottom they show where holders drop off
+/// (enumerated → keyed → found on-chain → decoded), so an operator can tell an
+/// empty result apart from an RPC / shape problem. Only the distinct levels are
+/// stored; the drops between them are plain subtraction (e.g. non-standard
+/// shapes skipped = `entries_returned - balances_decoded`), not redundant fields.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct BalanceSeedStats {
     /// type-3 tokens with at least one holder candidate in their event stream.
     pub tokens: u64,
-    /// `(token, holder)` balance keys requested from RPC.
+    /// `(token, holder)` candidate pairs enumerated from the event scan.
+    pub holders_enumerated: u64,
+    /// Candidate keys built + requested from RPC (malformed `StrKey`s dropped).
     pub keys_requested: u64,
-    /// Live `Balance` entries returned by RPC and decoded (bare-`i128` only).
+    /// Ledger entries RPC returned (a key that exists on-chain); the shortfall
+    /// vs `keys_requested` is holders with no live entry (false-positive scrape
+    /// or a since-zeroed balance).
+    pub entries_returned: u64,
+    /// Standard bare-`i128` balances decoded + staged; the shortfall vs
+    /// `entries_returned` is non-standard shapes (e.g. a SAC struct) skipped.
     pub balances_decoded: u64,
     pub dry_run: bool,
+}
+
+impl BalanceSeedStats {
+    /// Snapshot the funnel levels from the raw stage sizes.
+    fn from_funnel(
+        candidates: &[SeedCandidate],
+        keys_requested: u64,
+        entries_returned: u64,
+        balances_decoded: u64,
+        dry_run: bool,
+    ) -> Self {
+        Self {
+            tokens: candidates.len() as u64,
+            holders_enumerated: candidates.iter().map(|c| c.holders.len() as u64).sum(),
+            keys_requested,
+            entries_returned,
+            balances_decoded,
+            dry_run,
+        }
+    }
 }
 
 /// One row of the candidate query: a token's C-StrKey + every holder StrKey
@@ -79,19 +111,15 @@ pub async fn execute(
     })?;
 
     let candidates = read_seed_candidates(client).await?;
-    let mut stats = BalanceSeedStats {
-        tokens: candidates.len() as u64,
-        dry_run,
-        ..Default::default()
-    };
     if candidates.is_empty() {
         info!("balance_seed: no type-3 token holder candidates found — nothing to do");
-        return Ok(stats);
+        return Ok(BalanceSeedStats::from_funnel(&candidates, 0, 0, 0, dry_run));
     }
 
     // Build every (token, holder) balance key. `decode_balance_entry` recovers
     // the token + holder from the returned entry itself, so request→response
-    // order need not be tracked.
+    // order need not be tracked. `balance_ledger_key` returns `None` on a
+    // malformed holder (the drop shows as `holders_enumerated - keys_requested`).
     let mut keys = Vec::new();
     for cand in &candidates {
         for holder in &cand.holders {
@@ -100,10 +128,11 @@ pub async fn execute(
             }
         }
     }
-    stats.keys_requested = keys.len() as u64;
+    let keys_requested = keys.len() as u64;
 
     let rpc = RpcClient::new(rpc_url)?;
     let records = rpc.get_ledger_entries(&keys).await?;
+    let entries_returned = records.len() as u64;
 
     let mut balances: Vec<ExtractedSorobanBalance> = Vec::with_capacity(records.len());
     for rec in records {
@@ -116,14 +145,22 @@ pub async fn execute(
             });
         }
     }
-    stats.balances_decoded = balances.len() as u64;
 
+    let stats = BalanceSeedStats::from_funnel(
+        &candidates,
+        keys_requested,
+        entries_returned,
+        balances.len() as u64,
+        dry_run,
+    );
     let balance_rows = build_balance_rows(&balances);
 
     if dry_run {
         info!(
             tokens = stats.tokens,
+            holders_enumerated = stats.holders_enumerated,
             keys_requested = stats.keys_requested,
+            entries_returned = stats.entries_returned,
             balances_decoded = stats.balances_decoded,
             "balance_seed: dry-run, no rows written"
         );
@@ -133,6 +170,8 @@ pub async fn execute(
     insert_rows(client, "balances", &balance_rows).await?;
     info!(
         balances = balance_rows.len(),
+        entries_returned = stats.entries_returned,
+        balances_decoded = stats.balances_decoded,
         "balance_seed: wrote seed rows (RMT supersede; live ingest takes over on catch-up)"
     );
     Ok(stats)
@@ -163,4 +202,129 @@ async fn read_seed_candidates(
         )
         .fetch_all::<SeedCandidate>()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cand(token: &str, holders: &[&str]) -> SeedCandidate {
+        SeedCandidate {
+            token_strkey: token.into(),
+            holders: holders.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn from_funnel_snapshots_levels_and_derives_drops() {
+        let candidates = vec![cand("CTOKENA", &["GA", "GB", "GC"]), cand("CTOKENB", &["GD"])];
+        // 4 enumerated → 3 keyed (1 malformed dropped) → 2 on-chain → 2 decoded.
+        let s = BalanceSeedStats::from_funnel(&candidates, 3, 2, 2, false);
+        assert_eq!(s.tokens, 2);
+        assert_eq!(s.holders_enumerated, 4);
+        assert_eq!(s.keys_requested, 3);
+        assert_eq!(s.entries_returned, 2);
+        assert_eq!(s.balances_decoded, 2);
+        assert!(!s.dry_run);
+        // The drops are plain subtraction of stored levels — not redundant fields.
+        assert_eq!(s.holders_enumerated - s.keys_requested, 1, "malformed dropped");
+        assert_eq!(s.keys_requested - s.entries_returned, 1, "absent on-chain");
+        assert_eq!(s.entries_returned - s.balances_decoded, 0, "non-standard skipped");
+    }
+
+    #[test]
+    fn from_funnel_empty_is_all_zero() {
+        let s = BalanceSeedStats::from_funnel(&[], 0, 0, 0, true);
+        assert_eq!(
+            s,
+            BalanceSeedStats {
+                dry_run: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// Integration: the candidate query's ClickHouse regex must scrape EVERY
+    /// `G…`/`C…` StrKey from a type-3 token's event `topics_xdr` + `data_xdr`,
+    /// distinct. Gated on `CLICKHOUSE_URL` (skipped when unset, like the
+    /// db-clickhouse smoke test) — inserts a coherent contract+asset+event,
+    /// runs the real query, asserts, then cleans up.
+    #[tokio::test]
+    async fn read_seed_candidates_scrapes_holders_from_events() {
+        if std::env::var("CLICKHOUSE_URL").is_err() {
+            eprintln!("CLICKHOUSE_URL not set — skipping balance-seed candidate integration test");
+            return;
+        }
+        let cfg = db_clickhouse::Config::from_env();
+        let client = db_clickhouse::client(&cfg);
+        db_clickhouse::apply_init_sql(&client)
+            .await
+            .expect("init sql");
+
+        const SID: i64 = 7_000_000_000_000_000_123;
+        let token = "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG";
+        let g1 = "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ";
+        let g2 = "GB7ZJDRFBU5JALPZRJKA3CVRGNCJMR2ZDCWZNPMNCMU2WAWDMGPYPM4F";
+        let c1 = "CAVCJKFX33OI7CPKFNJXOHLXVZHFAWWAUUKUKZJG62YPHSDZ7CXWRH3J";
+
+        let scrub = |c: &ClickhouseClient| {
+            let c = c.clone();
+            async move {
+                for q in [
+                    format!("ALTER TABLE soroban_events DELETE WHERE contract_id = {SID}"),
+                    format!("ALTER TABLE soroban_contracts DELETE WHERE id = {SID}"),
+                    format!("ALTER TABLE assets DELETE WHERE contract_id = {SID}"),
+                ] {
+                    let _ = c.query(&q).execute().await;
+                }
+            }
+        };
+        scrub(&client).await;
+
+        client
+            .query(&format!(
+                "INSERT INTO soroban_contracts (id, contract_id) VALUES ({SID}, '{token}')"
+            ))
+            .execute()
+            .await
+            .expect("insert contract");
+        client
+            .query(&format!(
+                "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id) \
+                 VALUES (3, '', 0, {SID})"
+            ))
+            .execute()
+            .await
+            .expect("insert asset");
+        let topics = format!(
+            "[{{\"type\":\"address\",\"value\":\"{g1}\"}},{{\"type\":\"address\",\"value\":\"{g2}\"}}]"
+        );
+        let data = format!("{{\"type\":\"address\",\"value\":\"{c1}\"}}");
+        client
+            .query(&format!(
+                "INSERT INTO soroban_events (contract_id, topics_xdr, data_xdr) \
+                 VALUES ({SID}, '{topics}', '{data}')"
+            ))
+            .execute()
+            .await
+            .expect("insert event");
+
+        let mine: Vec<_> = read_seed_candidates(&client)
+            .await
+            .expect("query")
+            .into_iter()
+            .filter(|c| c.token_strkey == token)
+            .collect();
+        assert_eq!(mine.len(), 1, "one candidate row for the token");
+        let mut holders = mine[0].holders.clone();
+        holders.sort();
+        let mut want = vec![g1.to_string(), g2.to_string(), c1.to_string()];
+        want.sort();
+        assert_eq!(
+            holders, want,
+            "regex scrapes both G topics + the C data address, distinct"
+        );
+
+        scrub(&client).await;
+    }
 }
