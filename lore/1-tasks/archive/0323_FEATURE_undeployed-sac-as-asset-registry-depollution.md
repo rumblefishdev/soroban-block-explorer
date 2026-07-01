@@ -27,7 +27,7 @@ history:
       the orphans genuinely have no on-ledger contract instance.
   - date: '2026-06-25'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Promoted to active + runbook added (sequencing for the next 0281-style
       maintenance window). Blockers re-confirmed clear: related 0294/0218/0283
@@ -36,7 +36,7 @@ history:
       open) → Phase 1 (PR) precedes any prod data-pass. See ## Runbook.
   - date: '2026-06-25'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Phase 1 (code) implemented + PR #286: writer skip + skeleton removal
       (event-sourced detect_undeployed_sac_overrides), AC#3 SAC asset emission,
@@ -47,7 +47,7 @@ history:
       merge + indexer redeploy.
   - date: '2026-06-30'
     status: completed
-    who: claude
+    who: stkrolikiewicz
     note: >
       Phase 2 EXECUTED on prod CH. Gate #286 confirmed live (indexer Lambda
       `LastModified` 2026-06-26T09:37 > #286 merge 08:07; concurrency=1; behavioral

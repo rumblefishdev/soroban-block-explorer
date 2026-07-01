@@ -12,7 +12,7 @@ links:
 history:
   - date: '2026-06-30'
     status: proposed
-    who: claude
+    who: stkrolikiewicz
     note: >
       ADR created for task 0339 (collapse the classic↔SAC entity split). Decisions
       confirmed in the SAC/asset modeling session: drop asset_type=sac, SAC-ness as

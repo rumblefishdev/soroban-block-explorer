@@ -10,14 +10,14 @@ links: []
 history:
   - date: '2026-06-29'
     status: backlog
-    who: claude
+    who: stkrolikiewicz
     note: >
       Spawned from a SAC/asset modeling analysis session. Concretizes the
       "XLM ↔ XLM SAC link gap" that task 0154 explicitly deferred
       (0154 README, Out of scope). Sibling of 0323 (un-deployed SAC → asset).
   - date: '2026-06-30'
     status: superseded
-    who: claude
+    who: stkrolikiewicz
     by: ['0339']
     note: >
       Superseded by 0339 (SAC = facet of classic_credit). The read-collapse here was a

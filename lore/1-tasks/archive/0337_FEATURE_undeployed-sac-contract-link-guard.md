@@ -10,7 +10,7 @@ links: []
 history:
   - date: '2026-06-29'
     status: backlog
-    who: claude
+    who: stkrolikiewicz
     note: >
       Spawned from the SAC/asset modeling analysis session as the frontend
       sibling of 0336. Front half of "show the un-deployed-SAC handle, marked,
@@ -18,7 +18,7 @@ history:
       option-c.
   - date: '2026-06-30'
     status: superseded
-    who: claude
+    who: stkrolikiewicz
     by: ['0339']
     note: >
       Superseded by 0339 (SAC = facet of classic_credit). The deployed-state link guard

@@ -23,7 +23,7 @@ history:
       validates parity against an external source.
   - date: '2026-06-30'
     status: backlog
-    who: claude
+    who: stkrolikiewicz
     note: >
       Re-confirmed in a SAC/asset modeling session: the SAC contract-holder gap
       (`holder_count` + `total_supply` miss contract-side `ContractData` balances) is real

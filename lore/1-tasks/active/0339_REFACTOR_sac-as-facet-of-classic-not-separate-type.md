@@ -23,7 +23,7 @@ links:
 history:
   - date: '2026-06-30'
     status: backlog
-    who: claude
+    who: stkrolikiewicz
     note: >
       Spawned from a SAC/asset modeling analysis session. Root-fix for the
       classic↔SAC duplication: SAC is the same economic asset as its classic
@@ -31,7 +31,7 @@ history:
       and 0337 (link guard); absorbs the un-deployed-SAC-as-asset concern.
   - date: '2026-06-30'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Promoted to active to start the design (ADR-first). Taking the SAC-as-facet refactor
       to the workbench: 3 gating decisions (migration strategy; CH keying for
@@ -40,7 +40,7 @@ history:
       phased implementation on a branch off develop.
   - date: '2026-06-30'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Design resolved → ADR 0051. Decisions: drop `asset_type=sac (2)`; SAC-ness as
       self-contained property columns (`sac_contract_id` / `sac_strkey` / `sac_deployed`)
