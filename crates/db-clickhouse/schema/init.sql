@@ -112,8 +112,11 @@ ORDER BY (sequence);
 -- re-emits the same `(wasm_hash, metadata)` row. Plain MergeTree never dedups
 -- → permanent byte-identical duplicates that double `contracts/interface`
 -- JOINs and needed a manual `OPTIMIZE … DEDUPLICATE BY wasm_hash` (task 0228).
--- Content is immutable per `wasm_hash`, so no version column — any duplicate is
--- byte-identical and RMT collapses it on merge; reads stay FINAL-free. (lore-0293)
+-- No version column. Duplicates were historically byte-identical (lore-0293),
+-- but the 0327 upgradeable-backfill re-INSERTs a DIVERGENT `metadata` for an
+-- existing `wasm_hash` (it adds the `upgradeable` bit), so old + new rows coexist
+-- until merge and are NOT byte-identical. Point reads MUST therefore use `FINAL`
+-- (see `queries_ch.rs`, doc E12, task 0332), not rely on the merge.
 CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))

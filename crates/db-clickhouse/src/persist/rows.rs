@@ -52,7 +52,10 @@ pub struct LedgerRow {
     pub base_fee: i64,
 }
 
-/// `wasm_interface_metadata` — immutable lookup, MergeTree.
+/// `wasm_interface_metadata` — content-addressed lookup, `ReplacingMergeTree`
+/// (no version column). Point reads MUST use `FINAL` (see `queries_ch.rs`,
+/// task 0332): the 0327 upgradeable-backfill re-INSERTs a divergent `metadata`
+/// for an existing `wasm_hash`, so duplicates are not byte-identical until merge.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct WasmInterfaceMetadataRow {
     pub wasm_hash: [u8; 32],
