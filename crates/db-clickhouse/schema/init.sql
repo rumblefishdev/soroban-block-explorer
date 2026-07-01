@@ -212,9 +212,18 @@ ORDER BY (contract_id);
 ----------------------------------------------------------------------
 
 -- assets identity is a 4-tuple. Native XLM: all-empty + asset_type=0.
--- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
--- set, code/issuer optional. Soroban-native: contract_id set,
--- code/issuer=empty/0.
+-- Classic credit: code+issuer set, contract_id=0. Soroban-native:
+-- contract_id set, code/issuer=empty/0.
+--
+-- SAC-ness is a FACET, not a type (ADR 0051 / task 0339). A Stellar Asset
+-- Contract wraps a classic_credit / native asset — the SAME economic asset — so
+-- it is NOT a separate `asset_type=2` row. The SAC handle is stored in the
+-- indexer-owned `asset_sac` side table (below), NOT as columns on `assets`:
+-- `assets` is a no-version RMT re-written whole every ledger a trustline for the
+-- asset changes (see the `total_supply`/`holder_count` note), so a mutable
+-- non-key column here would be clobbered to its default by the next re-emit
+-- (exactly the ~25% NULL prod bug). `asset_sac` is written ONLY on a SAC
+-- sighting and merged with `max()`, so it survives the re-emit.
 --
 -- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
 -- lore-0293: nothing reads them (the API serves the aggregate from
@@ -227,13 +236,46 @@ CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
-    contract_id     Int64,            -- 0 for native / classic-credit
+    contract_id     Int64,            -- 0 for native / classic-credit (soroban identity only)
     name            Nullable(String),
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
     icon_url        Nullable(String)
 )
 ENGINE = ReplacingMergeTree
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
+-- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at
+-- read (`… GROUP BY key` with `max()`). Written by the INDEXER (not the enricher)
+-- ONLY when a SAC is sighted — a deploy (`sac_deployed=1`) or an un-deployed
+-- override event (`sac_deployed=0`) — NEVER on a plain trustline re-emit, so the
+-- per-ledger whole-row `assets` rewrite can never zero it.
+--   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey (the same
+--     hash used for `soroban_contracts.id`). The `C…` StrKey itself is NOT stored
+--     — it re-derives on read from `code:issuer` (`derive_sac_strkey`).
+--   * `sac_deployed` — deployed on-chain? MONOTONIC (false→true, never back), so
+--     `SimpleAggregateFunction(max)` makes a deploy sighting stick over any later
+--     un-deployed-override event; `max()` on the constant surrogate is a no-op.
+-- AggregatingMergeTree (not RMT): `max` merges column-wise per key, so an override
+-- event AFTER a deploy cannot downgrade `sac_deployed` (a versioned RMT keeps the
+-- last-inserted whole row and WOULD downgrade). No `soroban_contracts` join needed
+-- for deployed-ness — the flag is stored.
+-- No skip-index on `sac_contract_id`: every read aggregates the whole (small)
+-- table — `SELECT key, max(sac_contract_id) … GROUP BY key` for the join, then the
+-- `/assets/{C…}` deep-link filters `sac.sac_contract_id = ?` on that join result —
+-- so a per-column index would prune nothing. `asset_sac` is one row per
+-- SAC-having asset (~31k at mainnet scale), so the full-table aggregate is cheap;
+-- add a `sac_contract_id` skip-index + a direct point-lookup only if it ever grows.
+CREATE TABLE IF NOT EXISTS asset_sac (
+    asset_type      Int16,
+    asset_code      LowCardinality(String),
+    issuer_id       Int64,
+    contract_id     Int64,
+    sac_contract_id SimpleAggregateFunction(max, Int64),
+    sac_deployed    SimpleAggregateFunction(max, UInt8)
+)
+ENGINE = AggregatingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
 -- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
@@ -272,8 +314,11 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
 -- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
 -- stay FINAL-free). The other tables are RMT because they are APPEND targets.
--- `asset_type IN (1,2)` = classic credit only; native (0) and pool-shares (3) are
--- excluded (their balance-sum is not a trustworthy supply — see the note).
+-- `asset_type = 1` = classic credit only; native (0) and pool-shares (3) are
+-- excluded (their balance-sum is not a trustworthy supply — see the note). A
+-- SAC-wrapped classic asset is `asset_type = 1` too (ADR 0051 — SAC is a facet,
+-- not a separate type), so this single classic bucket already covers it (it and
+-- its SAC share the one `(asset_code, issuer_id)` aggregate).
 -- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
 -- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
 -- distinguishing a JOIN miss from a real 0-supply with no sentinel.
@@ -296,7 +341,7 @@ SELECT
     sum(balance)                  AS total_supply,
     toInt32(countIf(balance > 0)) AS holder_count
 FROM account_balances_current FINAL
-WHERE asset_type IN (1, 2)
+WHERE asset_type = 1
 GROUP BY asset_code, issuer_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (

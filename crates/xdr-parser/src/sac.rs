@@ -79,6 +79,22 @@ pub fn derive_sac_contract_id(
     Ok(ScAddress::Contract(ContractId(Hash(digest))).to_string())
 }
 
+/// Re-derive a classic / native asset's SAC `C…` StrKey from its identity
+/// (ADR 0051). The StrKey is **not stored** — the API derives it on read for
+/// display, since it is a pure function of `code:issuer`. Empty `asset_code`
+/// AND `issuer` ⇒ the native (XLM) SAC. Returns `None` for a malformed issuer
+/// StrKey or an over-long code (caller renders no contract link).
+pub fn derive_sac_strkey(asset_code: &str, issuer: &str, network_id: &[u8; 32]) -> Option<String> {
+    let asset = if asset_code.is_empty() && issuer.is_empty() {
+        Asset::Native
+    } else {
+        let issuer_acct = AccountId::from_str(issuer).ok()?;
+        build_credit_asset(asset_code, issuer_acct).ok()?
+    };
+    let preimage = ContractIdPreimage::Asset(asset);
+    derive_sac_contract_id(&preimage, network_id).ok()
+}
+
 /// Crypto-proven un-deployed-SAC `(contract_id, identity)` pair (task 0323).
 ///
 /// Produced by `detect_undeployed_sac_overrides` for every event-emitting

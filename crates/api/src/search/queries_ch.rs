@@ -84,7 +84,7 @@ fn token_asset_type_name(asset_type: i16) -> Option<String> {
     match asset_type {
         0 => Some("native"),
         1 => Some("classic_credit"),
-        2 => Some("sac"),
+        // 2 (`sac`) retired — ADR 0051 (mirrors `assets::queries_ch::asset_type_name`).
         3 => Some("soroban"),
         _ => None,
     }
@@ -760,7 +760,8 @@ mod tests {
     fn token_asset_type_name_matches_pg_function() {
         assert_eq!(token_asset_type_name(0).as_deref(), Some("native"));
         assert_eq!(token_asset_type_name(1).as_deref(), Some("classic_credit"));
-        assert_eq!(token_asset_type_name(2).as_deref(), Some("sac"));
+        // 2 (`sac`) retired — ADR 0051.
+        assert_eq!(token_asset_type_name(2), None);
         assert_eq!(token_asset_type_name(3).as_deref(), Some("soroban"));
         assert_eq!(token_asset_type_name(99), None);
     }

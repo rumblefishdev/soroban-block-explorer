@@ -6,9 +6,11 @@
 //! (`description`, `home_page`) lives per-entity in S3 at
 //! `s3://<bucket>/assets/{id}.json`. Legacy `metadata JSONB` is also gone.
 //!
-//! `asset_type ∈ {"native", "classic_credit", "sac", "soroban"}`. Identity by:
-//! - classic_credit/SAC: UNIQUE `(asset_code, issuer_id)` (partial)
-//! - soroban/SAC: UNIQUE `(contract_id)` (partial)
+//! `asset_type ∈ {"native", "classic_credit", "soroban"}` (ADR 0051 — `sac`
+//! is no longer a distinct type; a SAC is a facet of its classic_credit /
+//! native asset, carried in `sac_contract_id` / `sac_deployed`). Identity by:
+//! - native / classic_credit: `(asset_type, asset_code, issuer_id)`
+//! - soroban: `(contract_id)`
 
 use serde::{Deserialize, Serialize};
 

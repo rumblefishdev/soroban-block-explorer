@@ -845,16 +845,15 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 ///
 /// Two paths produce an [`ExtractedAsset`]:
 ///
-/// 1. **SAC deployments** — [`TokenAssetType::Sac`] row. Identity comes
-///    from `deployment.sac_asset` (resolved from
+/// 1. **SAC deployments** — folded onto the underlying asset as a FACET
+///    (ADR 0051): a `classic_credit` (type 1) or `native` (type 0) row with the
+///    SAC handle in `sac_contract_id` (the deploy's derived `C…`) + `sac_deployed
+///    = true`; the key `contract_id` stays unset (reserved for soroban identity).
+///    Identity comes from `deployment.sac_asset` (resolved from
 ///    `ContractIdPreimage::FromAsset` via `crate::sac::extract_sac_identities`
 ///    in the indexer). Two shapes:
-///    - `Credit { code, issuer }` → row keyed by code+issuer+contract_id
-///      (`uidx_assets_classic_asset` partial unique).
-///    - `Native` → row keyed by contract_id only (NULL code/issuer);
-///      `ck_assets_identity` permits this for `asset_type=2` after the
-///      0160 schema loosening migration. Aligns with Horizon/SDK
-///      rendering of native asset.
+///    - `Credit { code, issuer }` → the classic_credit row for that pair.
+///    - `Native` → the native (type 0) row (NULL code/issuer).
 ///    - `None` (SAC deployment whose creating preimage is not in this
 ///      batch) is logged as a warn and skipped — better to lose one row
 ///      than fabricate identity.
@@ -896,18 +895,22 @@ pub fn detect_assets(
     let mut assets = Vec::new();
     for deployment in deployments {
         if deployment.is_sac {
-            // Task 0160: populate classic asset identity for the SAC row
-            // straight from the typed enum produced by the parser.
-            //   Native             → NULL code, NULL issuer (schema-loosened
-            //                        for asset_type=2; row keyed by contract_id).
-            //   Credit{code,issuer}→ real code + issuer (classic-keyed row).
+            // ADR 0051: a SAC is a FACET of its underlying classic_credit /
+            // native asset, not a separate `asset_type`. Emit the underlying
+            // asset row and record the SAC handle (`deployment.contract_id` is
+            // the SAC's derived `C…` StrKey) + deployed=true in the facet
+            // columns. Identity from the typed enum produced by the parser:
+            //   Native             → the native (type=0) row, no code/issuer.
+            //   Credit{code,issuer}→ the classic_credit (type=1) row.
             //   None               → preimage not in this batch; skip with
             //                        a warn rather than fabricate identity.
-            let (asset_code, issuer_address) = match &deployment.sac_asset {
-                Some(SacAssetIdentity::Native) => (None, None),
-                Some(SacAssetIdentity::Credit { code, issuer }) => {
-                    (Some(code.clone()), Some(issuer.clone()))
-                }
+            let (asset_type, asset_code, issuer_address) = match &deployment.sac_asset {
+                Some(SacAssetIdentity::Native) => (TokenAssetType::Native, None, None),
+                Some(SacAssetIdentity::Credit { code, issuer }) => (
+                    TokenAssetType::ClassicCredit,
+                    Some(code.clone()),
+                    Some(issuer.clone()),
+                ),
                 None => {
                     warn!(
                         contract_id = %deployment.contract_id,
@@ -917,13 +920,17 @@ pub fn detect_assets(
                 }
             };
             assets.push(ExtractedAsset {
-                asset_type: TokenAssetType::Sac,
+                asset_type,
                 asset_code,
                 issuer_address,
-                contract_id: Some(deployment.contract_id.clone()),
-                // SAC assets do not carry an on-chain `Symbol("name")` storage
-                // entry (they wrap a classic asset; name is derived from
-                // `asset_code` / SEP-1 metadata). Leave NULL for SAC rows.
+                // Key `contract_id` stays reserved for soroban identity — the
+                // SAC handle lives in the facet column, keeping this classic /
+                // native row on its stable identity key (ORDER BY value 0).
+                contract_id: None,
+                sac_contract_id: Some(deployment.contract_id.clone()),
+                sac_deployed: true,
+                // The underlying asset's on-chain name is not carried by the
+                // SAC deploy (it derives from `asset_code` / SEP-1 metadata).
                 name: None,
                 total_supply: None,
                 holder_count: None,
@@ -944,6 +951,9 @@ pub fn detect_assets(
                 asset_code: None,
                 issuer_address: None,
                 contract_id: Some(deployment.contract_id.clone()),
+                // Bespoke Soroban token — no classic backing, so no SAC facet.
+                sac_contract_id: None,
+                sac_deployed: false,
                 // Per ADR 0042 / task 0156: thread the on-chain
                 // `Symbol("name")` extracted at deploy time into the
                 // asset row. Late-init / re-init paths land via the
@@ -1047,6 +1057,10 @@ pub fn detect_classic_credit_assets(changes: &[ExtractedLedgerEntryChange]) -> V
             asset_code: Some(code.to_string()),
             issuer_address: Some(issuer.to_string()),
             contract_id: None,
+            // A trustline observation carries no SAC signal; if this asset has
+            // a SAC, the deploy/override path folds it onto this same row.
+            sac_contract_id: None,
+            sac_deployed: false,
             name: None,
             total_supply: None,
             holder_count: None,
@@ -1072,6 +1086,9 @@ pub fn native_asset_singleton() -> ExtractedAsset {
         asset_code: None,
         issuer_address: None,
         contract_id: None,
+        // XLM's SAC facet is folded on by the deploy/override path when seen.
+        sac_contract_id: None,
+        sac_deployed: false,
         name: None,
         total_supply: None,
         holder_count: None,
@@ -2131,7 +2148,10 @@ mod tests {
     }
 
     #[test]
-    fn sac_credit_deployment_produces_asset_with_real_identity() {
+    fn sac_credit_deployment_produces_classic_credit_with_sac_facet() {
+        // ADR 0051: a SAC credit deploy folds onto the classic_credit row —
+        // the SAC handle rides in `sac_contract_id` (+ `sac_deployed = true`),
+        // NOT a separate `asset_type`; the key `contract_id` stays unset.
         let deployments = vec![ExtractedContractDeployment {
             contract_id: "CSAC456".into(),
             wasm_hash: None,
@@ -2148,8 +2168,10 @@ mod tests {
 
         let assets = detect_assets(&deployments, &[]);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::Sac);
-        assert_eq!(assets[0].contract_id.as_deref(), Some("CSAC456"));
+        assert_eq!(assets[0].asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(assets[0].contract_id, None);
+        assert_eq!(assets[0].sac_contract_id.as_deref(), Some("CSAC456"));
+        assert!(assets[0].sac_deployed);
         // Task 0160 regression: SAC identity must survive through to the asset row.
         assert_eq!(assets[0].asset_code.as_deref(), Some("USDC"));
         assert_eq!(
@@ -2159,10 +2181,9 @@ mod tests {
     }
 
     #[test]
-    fn sac_native_deployment_produces_asset_with_null_code_and_issuer() {
-        // SAC deploy wrapping native XLM — typed `Native` variant flows
-        // through to the assets row as NULL code / NULL issuer
-        // (allowed by ck_assets_identity after the 0160 migration).
+    fn sac_native_deployment_produces_native_with_sac_facet() {
+        // ADR 0051: a SAC deploy wrapping native XLM folds onto the native
+        // (type=0) row — NULL code/issuer, SAC handle in `sac_contract_id`.
         let deployments = vec![ExtractedContractDeployment {
             contract_id: "CXLM_SAC".into(),
             wasm_hash: None,
@@ -2176,8 +2197,10 @@ mod tests {
 
         let assets = detect_assets(&deployments, &[]);
         assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].asset_type, TokenAssetType::Sac);
-        assert_eq!(assets[0].contract_id.as_deref(), Some("CXLM_SAC"));
+        assert_eq!(assets[0].asset_type, TokenAssetType::Native);
+        assert_eq!(assets[0].contract_id, None);
+        assert_eq!(assets[0].sac_contract_id.as_deref(), Some("CXLM_SAC"));
+        assert!(assets[0].sac_deployed);
         assert!(assets[0].asset_code.is_none());
         assert!(assets[0].issuer_address.is_none());
     }
@@ -2343,12 +2366,22 @@ mod tests {
 
         let assets = detect_assets(&deployments, &interfaces);
         assert_eq!(assets.len(), 2);
-        let by_contract: std::collections::HashMap<_, _> = assets
+        // The SAC folds onto a classic_credit carrier (handle in `sac_contract_id`,
+        // key `contract_id` unset); the bespoke fungible is a soroban row keyed by
+        // its own `contract_id`.
+        let sac = assets
             .iter()
-            .map(|t| (t.contract_id.as_deref().unwrap(), t.asset_type))
-            .collect();
-        assert_eq!(by_contract.get("CSAC005"), Some(&TokenAssetType::Sac));
-        assert_eq!(by_contract.get("CFUN006"), Some(&TokenAssetType::Soroban));
+            .find(|a| a.sac_contract_id.as_deref() == Some("CSAC005"))
+            .expect("SAC carrier present");
+        assert_eq!(sac.asset_type, TokenAssetType::ClassicCredit);
+        assert_eq!(sac.contract_id, None);
+        assert!(sac.sac_deployed);
+        let fungible = assets
+            .iter()
+            .find(|a| a.contract_id.as_deref() == Some("CFUN006"))
+            .expect("soroban fungible present");
+        assert_eq!(fungible.asset_type, TokenAssetType::Soroban);
+        assert_eq!(fungible.sac_contract_id, None);
     }
 
     // -- NFT Detection Tests --

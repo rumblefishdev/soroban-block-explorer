@@ -126,7 +126,7 @@ impl Publisher {
     }
 }
 
-/// Derive the classic/SAC `AssetKey`s from a batch's extracted assets,
+/// Derive the classic-credit `AssetKey`s from a batch's extracted assets,
 /// mirroring the `assets`-table identity in `db_clickhouse::persist::stage`
 /// (so the keys match the side-table rows the worker writes). Not deduped —
 /// `filter::unenriched_asset_keys` collapses duplicates before the query.
@@ -135,8 +135,11 @@ fn sep1_candidate_keys(extracted: &[ExtractedAsset]) -> Vec<AssetKey> {
         .iter()
         .filter_map(|t| {
             let asset_type = t.asset_type as i16;
-            // Only classic credit (1) + SAC (2) carry SEP-1 enrichment.
-            if asset_type != 1 && asset_type != 2 {
+            // Only classic credit (1) carries SEP-1 (stellar.toml) enrichment,
+            // keyed on `(code, issuer)`. A SAC is now a facet of this same
+            // classic_credit row (ADR 0051 — the former type=2 is gone), so one
+            // key still covers it. Native (0) / soroban (3) have no SEP-1 toml.
+            if asset_type != 1 {
                 return None;
             }
             Some(AssetKey {
@@ -302,6 +305,8 @@ mod tests {
             asset_code: code.map(String::from),
             issuer_address: issuer.map(String::from),
             contract_id: contract.map(String::from),
+            sac_contract_id: None,
+            sac_deployed: false,
             name: None,
             total_supply: None,
             holder_count: None,
@@ -309,7 +314,9 @@ mod tests {
     }
 
     #[test]
-    fn candidate_keys_keep_classic_sac_skip_native_soroban() {
+    fn candidate_keys_keep_classic_skip_native_soroban() {
+        // ADR 0051: a SAC is a facet of a classic_credit (type=1) row now, so the
+        // SAC case IS a classic_credit — one candidate key covers it.
         let extracted = vec![
             asset(
                 TokenAssetType::ClassicCredit,
@@ -318,10 +325,10 @@ mod tests {
                 None,
             ),
             asset(
-                TokenAssetType::Sac,
+                TokenAssetType::ClassicCredit,
                 Some("SAC"),
                 Some("GISSUER2"),
-                Some("CCONTRACT"),
+                None,
             ),
             asset(TokenAssetType::Native, None, None, None), // skipped (0)
             asset(TokenAssetType::Soroban, None, None, Some("CSOROBAN")), // skipped (3)
@@ -329,7 +336,7 @@ mod tests {
 
         let keys = sep1_candidate_keys(&extracted);
 
-        // classic + sac = two; native/soroban excluded. Dedup is the filter's job.
+        // two classic_credit candidates; native/soroban excluded. Dedup is the filter's job.
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&AssetKey {
             asset_type: 1,
@@ -338,15 +345,15 @@ mod tests {
             contract_id: 0,
         }));
         assert!(keys.contains(&AssetKey {
-            asset_type: 2,
+            asset_type: 1,
             asset_code: "SAC".into(),
             issuer_id: ids::account_id("GISSUER2"),
-            contract_id: ids::contract_id("CCONTRACT"),
+            contract_id: 0,
         }));
     }
 
     #[test]
-    fn candidate_keys_empty_when_no_classic_or_sac() {
+    fn candidate_keys_empty_when_no_classic() {
         let extracted = vec![
             asset(TokenAssetType::Native, None, None, None),
             asset(TokenAssetType::Soroban, None, None, Some("C")),

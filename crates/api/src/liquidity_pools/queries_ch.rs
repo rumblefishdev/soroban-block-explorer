@@ -149,15 +149,17 @@ pub async fn fetch_pool_by_id(
     // across RMT versions, `any()` is safe) scans the id column but builds a
     // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
     //
-    // SAC mirror + icon_url (task 0263 + 0274 gap #5): the `sac` CTE resolves
-    // `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
+    // SAC mirror + icon_url (task 0263 + 0274 gap #5 → ADR 0051): the `sac` CTE
+    // resolves `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
     // deduped by GROUP BY so a leg cannot fan the result out (the inline-join
-    // form did, masked only by the outer LIMIT 1). `contract_id` comes from the
-    // `asset_type = 2` (SAC) row via `soroban_contracts`; `icon_url` from either
-    // the classic (`asset_type = 1`) or SAC row — hence `asset_type IN (1, 2)`,
-    // matching PG's `uidx_assets_classic_asset` predicate. Native legs
-    // (`asset_code = ''`) are excluded from the join (PG parity: NULL code → no
-    // assets match → NULL contract_id + NULL icon_url).
+    // form did, masked only by the outer LIMIT 1). Post-ADR 0051 the SAC handle
+    // is a FACET in the `asset_sac` side table (not a column on `assets`, and not
+    // a separate `asset_type = 2`) — so the deployed SAC's `C…` StrKey resolves by
+    // two hops: leg `(code, issuer)` → `asset_sac.sac_contract_id` (surrogate) →
+    // `soroban_contracts.contract_id` (un-deployed SACs have no contract row →
+    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`. Native legs
+    // (`asset_code = ''`) are excluded from the join (NULL code → no assets match →
+    // NULL contract_id + NULL icon_url).
     let row = client
         .query(
             "WITH legs AS ( \
@@ -175,8 +177,14 @@ pub async fn fetch_pool_by_id(
                         max(sc.contract_id) AS contract_id, \
                         max(a.icon_url)     AS icon_url \
                  FROM assets a \
-                 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
-                 WHERE a.asset_type IN (1, 2) \
+                 LEFT JOIN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id, \
+                            max(sac_contract_id) AS sac_contract_id \
+                     FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                       AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+                 LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+                 WHERE a.asset_type IN (0, 1) \
                    AND (a.asset_code, a.issuer_id) IN ( \
                        SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
                        UNION ALL \
@@ -875,8 +883,14 @@ pub async fn fetch_pool_list(
                     max(sc.contract_id) AS contract_id, \
                     max(a.icon_url)     AS icon_url \
              FROM assets a \
-             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id AND a.contract_id != 0 \
-             WHERE a.asset_type IN (1, 2) \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        max(sac_contract_id) AS sac_contract_id \
+                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                   AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+             WHERE a.asset_type IN (0, 1) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \
                    UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page WHERE asset_b_code != '') \

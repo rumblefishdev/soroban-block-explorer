@@ -26,6 +26,19 @@ history:
       not stored (Alt 3). Clarified why the SAC handle cannot reuse the key `contract_id`
       (it is the ORDER-BY identity, reserved for soroban; reusing it regrows the duplication
       on deploy — Alt 4). Docs land with the 0339 implementation.
+  - date: '2026-07-01'
+    status: accepted
+    who: stkrolikiewicz
+    note: >
+      Storage correction during 0339 Phase-1 implementation (adversarial review). The
+      "2 SAC columns on `assets`" storage (§2) is BROKEN: `assets` is a version-less
+      ReplacingMergeTree re-written whole every ledger a trustline changes
+      (`detect_classic_credit_assets`), so a mutable non-key column is clobbered to its
+      default by the next facet-less re-emit — the SAC would vanish for every actively-traded
+      asset after its deploy ledger (the same trap that moved total_supply → asset_aggregates
+      and name/icon → asset_enrichment). §2/§3/§4/§5 amended: the facet moves to a dedicated
+      indexer-owned `asset_sac` AggregatingMergeTree side table (`max`-merge → sticky
+      `sac_deployed`), joined at read. Decision (SAC-as-facet) and the wire DTO are unchanged.
 
 # ADR 0051: SAC is a facet of classic_credit, not a separate asset_type
 
@@ -77,41 +90,51 @@ SAC-ness becomes a **property** of a `classic_credit` (or `native`) asset, not a
    `soroban` (type=3, bespoke, no classic backing) remains the only genuinely
    contract-native asset type.
 
-2. **Add 2 SAC property columns to `assets`** (non-key — the asset's identity / ORDER-BY
-   tuple stays stable regardless of SAC deploy state → one row):
+2. **Store the SAC facet in a dedicated `asset_sac` side table** (NOT columns on `assets`).
 
-   - `sac_contract_id Int64 DEFAULT 0` — the SAC surrogate. **Stored + indexed**: it is the
-     lookup key that resolves Soroban activity (events/tx under `C…`) back to the asset, and
-     it cannot be derived-and-matched efficiently. Populated for ANY SAC-having asset —
-     deployed or not (un-deployed SACs still emit events that must resolve). Kept OUT of the
-     ORDER-BY key on purpose; the key `contract_id` is reserved for `soroban` (type=3),
-     where the contract IS the identity (see §3).
-   - `sac_deployed Bool DEFAULT false` — deployed-ness, writer-maintained. **Stored** (not
-     derived from a `soroban_contracts` join) so the asset read stays join-free.
+   > **Storage correction (emerged during 0339 implementation — see history).** The
+   > original decision was "2 SAC property columns on `assets`". Adversarial review caught
+   > that this is BROKEN: `assets` is a **version-less `ReplacingMergeTree` re-written whole
+   > every ledger** a trustline for the asset changes (`detect_classic_credit_assets`), so a
+   > mutable non-key column here is clobbered to its default by the next facet-less re-emit —
+   > the exact bug that already moved `total_supply`/`holder_count` → `asset_aggregates` and
+   > `name`/`icon_url` → `asset_enrichment`. The facet therefore lives in a side table,
+   > mirroring that established pattern.
+
+   - `asset_sac` — `AggregatingMergeTree`, keyed byte-for-byte like `assets`
+     `(asset_type, asset_code, issuer_id, contract_id)`, with `SimpleAggregateFunction(max)`
+     columns `sac_contract_id Int64` + `sac_deployed UInt8`. Written by the INDEXER **only on
+     a SAC sighting** (deploy → `sac_deployed=1`; un-deployed override event → `0`) — never
+     on a trustline re-emit — so the per-ledger `assets` rewrite cannot zero it. `max`
+     merges column-wise: `sac_deployed` is monotonic, so a deploy sighting sticks over any
+     later un-deployed override (a version-based RMT would keep the last whole row and
+     WOULD downgrade). Populated for ANY SAC-having asset — deployed or not. Reads aggregate
+     the whole (small, ~31k-row) table (`GROUP BY key, max(…)`) to resolve Soroban activity
+     (events/tx under `C…`, the `/assets/{C…}` deep-link) back to the asset — no skip-index
+     (the aggregate reads every row anyway; add one + a direct point-lookup if it grows).
 
    The `C…` **strkey is NOT stored** — it is a pure function of `code:issuer`
-   (`derive_sac_contract_id`), so it is **re-derived on read** (API response layer) for
-   display. This keeps the read join-free without denormalising a derivable value and still
-   subsumes the deferred "option-c" strkey display. (`sac_contract_id` is stored anyway
-   because it is the resolution index — a `C…` lookup hashes the input to this surrogate.)
+   (`derive_sac_strkey`), so it is **re-derived on read** (API response layer) for display.
+   (The surrogate `sac_contract_id` is stored because it is the resolution index — a `C…`
+   lookup hashes the input to this surrogate and matches it.)
 
 3. **Keep the `assets` ORDER BY unchanged** — `(asset_type, asset_code, issuer_id,
-contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written as
-   `type=1` (classic) or `type=0` (native) with key `contract_id=0` and the SAC handle in
-   the property columns. The key `contract_id` stays in use **only for `soroban` (type=3)**.
-   Result: one row per economic asset (classic+SAC collapse on `(code,issuer)`; native +
-   XLM-SAC collapse on the native singleton; soroban keyed by `contract_id`).
+contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap's IDENTITY is written to
+   `assets` as `type=1` (classic) or `type=0` (native) with key `contract_id=0`; the SAC
+   handle lives in `asset_sac` (§2). The key `contract_id` stays in use **only for `soroban`
+   (type=3)**. Result: one identity row per economic asset (classic+SAC collapse on
+   `(code,issuer)`; native + XLM-SAC collapse on the native singleton; soroban keyed by
+   `contract_id`), with the SAC facet joined at read.
 
-4. **Converge the write path.** A SAC deploy/override UPDATES the classic/native asset's
-   SAC columns instead of emitting a separate `type=2` row; the staging fingerprint folds
-   SAC into the `classic_credit`/`native` fingerprint.
+4. **Converge the write path.** A SAC deploy/override emits an `asset_sac` facet row keyed on
+   the classic/native identity instead of a separate `type=2` row; the staging `push_sac`
+   accumulator `max`-merges the facet per key (deploy beats override).
 
-5. **API.** Drop `sac` from `asset_type_name` / `filter[type]`; surface `sac_contract_id`
-
-   - `sac_deployed` + the re-derived `C…` strkey; the "SAC" view becomes a property filter
-     (`classic_credit WHERE sac_contract_id != 0`). Canonical `id` for SAC-wraps becomes
-     `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate
-     and match `sac_contract_id` so `/assets/{C…}` deep-links still resolve.
+5. **API.** Drop `sac` from `asset_type_name` / `filter[type]`; surface `sac_contract_id` +
+   `sac_deployed` (LEFT-JOINed from `asset_sac`) + the re-derived `C…` strkey; the "SAC" view
+   becomes a property filter (`sac.sac_contract_id != 0`). Canonical `id` for SAC-wraps becomes
+   `CODE-ISSUER`; `fetch_by_contract_id` is extended to hash an input `C…` to its surrogate and
+   match `asset_sac.sac_contract_id` so `/assets/{C…}` deep-links still resolve.
 
 6. **Frontend.** "SAC" filter → property filter; SAC badge derived from
    `sac_contract_id != 0`; the contract link renders from the (re-derived) `C…` strkey with
@@ -124,13 +147,14 @@ contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written 
 - **Matches the asset's reality** (Stellar docs: one asset; SAC = an API facet) and the
   standard explorer model (Horizon: classic asset is the asset; SAC is a
   contract-with-deployment-status, not a separate asset).
-- **No CH rebuild.** Keeping `asset_type` in the key and simply not using value 2 (with the
-  handle moved to property columns) gives one-row-per-economic-asset without an ORDER-BY
-  change or new-table swap — the migration reduces to `ADD COLUMN` + a ~31k-row data pass.
-- **Shortest read.** `sac_contract_id` + `sac_deployed` on the row (and the `C…` strkey
-  re-derived on read from `code:issuer`) make the asset read **self-contained — no
-  `soroban_contracts` join** — while avoiding denormalising the derivable strkey. Folds in
-  the option-c strkey display.
+- **No CH `assets` rebuild.** Keeping `asset_type` in the key and simply not using value 2
+  gives one identity-row-per-economic-asset without an ORDER-BY change or new-table swap. The
+  SAC facet is a small **new side table** (`asset_sac`, `CREATE TABLE` + a ~31k-row seed),
+  not an in-place `assets` change (see the §2 storage correction).
+- **Cheap read.** The `asset_sac` join adds one small (~31k-row) LEFT JOIN — smaller than the
+  `asset_aggregates` join already in the list query — and no `soroban_contracts` join is
+  needed for deployed-ness (the flag is stored). The `C…` strkey re-derives on read from
+  `code:issuer`. Folds in the option-c strkey display.
 - **Subsumes the band-aids.** One model fix replaces 0336 (read-collapse) + 0337 (link
   guard) + option-c, at the source rather than as read-time / UI patches.
 
@@ -181,7 +205,8 @@ setting it on deploy changes a classic asset's key `(1,code,issuer,0) → (1,cod
 (`contract_id` absent) could not resolve its Soroban events (no stored surrogate to match).
 
 **Decision:** REJECTED — the SAC handle must be a NON-KEY, always-populated, stored+indexed
-column (`sac_contract_id`); the key `contract_id` stays reserved for `soroban` identity.
+value (`asset_sac.sac_contract_id`, per the §2 side table); the key `assets.contract_id`
+stays reserved for `soroban` identity.
 
 ---
 
@@ -189,18 +214,20 @@ column (`sac_contract_id`); the key `contract_id` stays reserved for `soroban` i
 
 ### Positive
 
-- One `assets` row per economic asset — no classic↔SAC duplication; deterministic resolver.
-- Self-contained asset read (no `soroban_contracts` join) — shortest query, decoupled.
+- One `assets` identity row per economic asset — no classic↔SAC duplication; deterministic resolver.
+- Cheap read — one small `asset_sac` join (no `soroban_contracts` join for deployed-ness).
 - Subsumes 0336 (duplication), 0337 (link guard), and option-c (strkey display) in one model.
 - Aligns with the standard Stellar / Horizon model.
-- No CH table rebuild — migration is `ADD COLUMN` + a ~31k-row data pass.
+- No CH `assets` rebuild — migration is `CREATE TABLE asset_sac` + a ~31k-row seed from the
+  existing type=2 rows (facet), plus the type=2 → type=1/0 identity relabel.
 
 ### Negative
 
-- Migration data-pass (type=2 → merge into type=1/0), **writer-first** (deploy the writer
+- Migration is two-part (seed `asset_sac` from the type=2 rows' `(code,issuer,contract)` +
+  relabel/merge the type=2 identity into type=1/0), **writer-first** (deploy the writer
   change → then the pass, else rows regrow) — coordinated like 0323 Phase 1/2.
-- Writer maintains 2 SAC columns (`sac_contract_id` + `sac_deployed`), set at
-  deploy/derivation; the `C…` strkey is re-derived on read (not stored).
+- Writer maintains the `asset_sac` side table (`max`-merged on a SAC sighting); the `C…`
+  strkey is re-derived on read (not stored).
 - Canonical-id wire change: SAC-wrap id `C… → CODE-ISSUER`; `/assets/{C…}` deep-links
   handled by the extended resolver (back-compat preserved).
 - Enum / DTO / frontend-filter ripple from dropping `sac=2`; api-types regen.

@@ -999,6 +999,9 @@ impl Staged {
             // soroban/SAC dedup by contract_id. SAC satisfies both uniques —
             // we collapse on either key to avoid emitting two rows that the
             // ON CONFLICT would have to merge.
+            // ADR 0051: SAC is a facet of the classic_credit / native row, so a
+            // SAC deploy/override arrives as that underlying type — its fingerprint
+            // folds into the `native` / `classic_credit` bucket, never a `sac|…` one.
             let fp = match t.asset_type {
                 TokenAssetType::Native => "native".to_string(),
                 TokenAssetType::ClassicCredit => format!(
@@ -1006,9 +1009,6 @@ impl Staged {
                     t.asset_code.as_deref().unwrap_or(""),
                     t.issuer_address.as_deref().unwrap_or("")
                 ),
-                TokenAssetType::Sac => {
-                    format!("sac|{}", t.contract_id.as_deref().unwrap_or(""))
-                }
                 TokenAssetType::Soroban => {
                     format!("soroban|{}", t.contract_id.as_deref().unwrap_or(""))
                 }

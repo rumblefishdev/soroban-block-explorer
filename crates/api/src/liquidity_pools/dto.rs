@@ -98,10 +98,10 @@ pub struct PoolListParams {
 ///   * `asset_type == 0` — native XLM; FE renders unlinked (no on-chain
 ///     address in classic Stellar protocol; SAC mirror is network-dependent).
 ///   * `contract_id` — C-strkey of the SAC mirror for a classic credit
-///     leg (populated when an `assets` row with `asset_type = 2`
-///     exists for `(asset_code, issuer)` and carries a
-///     `soroban_contracts.contract_id`). `None` for legs without an
-///     SAC mirror. Pool legs only carry XDR `AssetType` (native /
+///     leg (populated when the leg's `(asset_code, issuer)` classic_credit /
+///     native `assets` row carries a deployed SAC facet — `sac_contract_id`
+///     resolving a `soroban_contracts.contract_id`, ADR 0051). `None` for legs
+///     without a deployed SAC mirror. Pool legs only carry XDR `AssetType` (native /
 ///     credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
 ///     so SAC / Soroban legs are not directly representable here;
 ///     `contract_id` surfaces the SAC mirror look-up so the FE can
@@ -111,15 +111,17 @@ pub struct PoolListParams {
 ///     accepted by `parse_asset_id`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
-    /// `native | classic_credit | sac | soroban`. `null` only on schema drift.
+    /// `native | classic_credit | soroban` (ADR 0051 — `sac` retired). `null`
+    /// only on schema drift.
     pub asset_type_name: Option<String>,
-    /// Raw SMALLINT (0=native, 1=classic_credit, 2=sac, 3=soroban).
+    /// Raw SMALLINT (0=native, 1=classic_credit, 3=soroban). 2 (`sac`) is retired.
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
-    /// C-strkey of the SAC mirror, when a matching `assets` row
-    /// (`asset_type = 2`) exists for `(asset_code, issuer)`. `None` for
-    /// native legs and for classic credit legs without an SAC mirror.
+    /// C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
+    /// classic_credit / native asset (ADR 0051 — resolved via the row's
+    /// `sac_contract_id` facet). `None` for native legs and for classic credit
+    /// legs without a deployed SAC.
     pub contract_id: Option<String>,
     /// Asset icon URL, mirrored from the leg's `assets.icon_url` row so
     /// pool avatars render the same icon as the assets list. `None` for
