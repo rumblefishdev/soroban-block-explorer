@@ -306,19 +306,24 @@ entities:
   (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
   per-ledger singleton emit (`xdr_parser::native_asset_singleton`) — the
   persist `WHERE NOT EXISTS` against `uidx_assets_native` keeps re-emit free.
-  These two paths complement `detect_assets`, which only emits SAC + Soroban
-  variants from observed contract deployments. Without the dedicated
-  classic-credit producer, `account_balances_current` would carry the
-  balances but the entity row never existed (Karol's pre-audit Bug #1).
-- **Un-deployed SACs → assets, not contracts** (task 0323) → a classic asset's
-  deterministic SAC `contract_id` can surface via a CAP-67 event with no on-chain
-  deploy. `detect_undeployed_sac_overrides` collects these crypto-proven emitters per
-  ledger (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
-  contract is never mislabeled); on the CH path each suppresses the Pass-2 FK stub
-  (**no `soroban_contracts` row**) and seeds a SAC `assets` row from its identity, so
-  `soroban_contracts` holds **deployed instances only**. The legacy PG path still flips
-  `is_sac=true` on pre-window SAC skeletons (`apply_sac_overrides_for_skeleton_contracts`,
-  task 0218) — being deprecated with PG.
+  These paths complement `detect_assets`, which emits Soroban-native rows plus
+  **folds a SAC deploy onto the underlying classic/native row** (see below).
+  Without the dedicated classic-credit producer, `account_balances_current`
+  would carry the balances but the entity row never existed (Karol's pre-audit
+  Bug #1).
+- **SAC is a facet of the classic/native asset, not a separate row** (ADR 0051 /
+  task 0339). A SAC deploy (`detect_assets` SAC branch) and an un-deployed SAC
+  seen via a CAP-67 event (`detect_undeployed_sac_overrides`, task 0323) both
+  set the SAC handle (`sac_contract_id` = surrogate of the derived `C…`, +
+  `sac_deployed`) on the ONE `classic_credit` / `native` `assets` row rather than
+  emitting a distinct `asset_type = 2` — the staging fingerprint merges the facet
+  onto the classic/native fingerprint. Override collection is crypto-gated
+  (`sac_override_from_event_topics`, `emitter == derive_sac(asset)`, so a bespoke
+  contract is never mislabeled) and suppresses the Pass-2 FK stub (**no
+  `soroban_contracts` row**), so `soroban_contracts` holds **deployed instances
+  only**. The `C…` StrKey itself is not stored — the read path re-derives it from
+  `code:issuer` (`derive_sac_strkey`). The legacy PG path still flips `is_sac=true`
+  on pre-window SAC skeletons (`apply_sac_overrides_for_skeleton_contracts`, task 0218) — being deprecated with PG.
 - **SAC event gate at NFT detection** (task 0294) → a CAP-67 classic-asset SAC
   emits `transfer`/`mint`/`burn` under its deterministic `contract_id` carrying
   the SEP-11 asset `CODE:ISSUER` in the LAST topic and an i128 **amount** in data.

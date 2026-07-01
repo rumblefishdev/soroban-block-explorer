@@ -418,9 +418,8 @@ Expanded behavior:
 
 List of all known assets (native XLM, classic credit assets, SACs, and Soroban-native assets).
 
-- Asset table - asset code, issuer / contract ID, type (native / classic credit / SAC / Soroban), total
-  supply, holder count
-- Filters - type (native, classic_credit, SAC, Soroban), asset code search
+- Asset table - asset code, issuer / contract ID, type badge, total supply, holder count
+- Filters - type (native, classic_credit, Soroban) + the SAC chip, asset code search
 - Cursor-based pagination controls
 
 Expanded behavior:
@@ -430,19 +429,29 @@ Expanded behavior:
 - Asset identity rendering must be careful because classic assets are defined by code plus
   issuer, while contracts are defined by contract ID.
 - Type badges and display formatting should prevent users from confusing similarly named assets.
+- **SAC is a facet, not a type** ([ADR 0051](../../../lore/2-adrs/0051_sac-as-facet-of-classic-credit.md),
+  task 0339). The API no longer returns `asset_type_name = "sac"`; the frontend
+  derives the "SAC" badge from the `sac_contract_id` facet (`assetBadgeMeta`), and
+  the "SAC" filter chip is a **property filter** — it sends `filter[sac]=true`, not
+  `filter[type]=sac`. The SAC contract link (list + detail) renders from the
+  re-derived `sac_contract_id` and is **deployment-aware**: linked to the contract
+  page only when `sac_deployed`, otherwise shown as a reserved (non-clickable)
+  address with a "not deployed" note (subsumes the old link-guard task 0337).
 
 ### 6.9 Asset (`/assets/:id`)
 
 Single asset detail view.
 
-> **Routing (`:id` token, task 0243).** The numeric surrogate was dropped (PR #175);
-> `:id` is a single canonical token — a contract StrKey (`C…`, SAC / Soroban / native
-> XLM-SAC), a `CODE-ISSUER` composite (classic credit, e.g. `USDC-GA…`), or the reserved
-> `native` literal (the classic XLM singleton). The API returns this same token in
-> `AssetItem.id`, so the frontend never builds the URL from parts — it echoes
-> `AssetItem.id` (e.g. `routeForHit`, the list-table row link, and the LP-leg link all do
-> exactly this). Search asset hits carry the token in `route_token` (the displayed
-> `identifier` stays the asset code).
+> **Routing (`:id` token, task 0243 / ADR 0051).** The numeric surrogate was dropped
+> (PR #175); `:id` is a single canonical token — a contract StrKey (`C…`, Soroban), a
+> `CODE-ISSUER` composite (classic credit incl. **SAC-wraps** — a SAC is a facet, not a
+> separate identity, ADR 0051), or the reserved `native` literal (the classic XLM
+> singleton). The API returns this same token in `AssetItem.id`, so the frontend never
+> builds the URL from parts — it echoes `AssetItem.id` (e.g. `routeForHit`, the list-table
+> row link, and the LP-leg link all do exactly this). A SAC's `C…` still resolves as a
+> deep-link (`fetch_by_contract_id` matches the `sac_contract_id` facet), for back-compat
+> with links minted before the change. Search asset hits carry the token in `route_token`
+> (the displayed `identifier` stays the asset code).
 
 - Asset summary - asset code, issuer or contract ID (copyable), type badge, total supply,
   holder count, deployed at ledger (if Soroban)
