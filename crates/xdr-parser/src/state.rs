@@ -845,16 +845,15 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 ///
 /// Two paths produce an [`ExtractedAsset`]:
 ///
-/// 1. **SAC deployments** — [`TokenAssetType::Sac`] row. Identity comes
-///    from `deployment.sac_asset` (resolved from
+/// 1. **SAC deployments** — folded onto the underlying asset as a FACET
+///    (ADR 0051): a `classic_credit` (type 1) or `native` (type 0) row with the
+///    SAC handle in `sac_contract_id` (the deploy's derived `C…`) + `sac_deployed
+///    = true`; the key `contract_id` stays unset (reserved for soroban identity).
+///    Identity comes from `deployment.sac_asset` (resolved from
 ///    `ContractIdPreimage::FromAsset` via `crate::sac::extract_sac_identities`
 ///    in the indexer). Two shapes:
-///    - `Credit { code, issuer }` → row keyed by code+issuer+contract_id
-///      (`uidx_assets_classic_asset` partial unique).
-///    - `Native` → row keyed by contract_id only (NULL code/issuer);
-///      `ck_assets_identity` permits this for `asset_type=2` after the
-///      0160 schema loosening migration. Aligns with Horizon/SDK
-///      rendering of native asset.
+///    - `Credit { code, issuer }` → the classic_credit row for that pair.
+///    - `Native` → the native (type 0) row (NULL code/issuer).
 ///    - `None` (SAC deployment whose creating preimage is not in this
 ///      batch) is logged as a warn and skipped — better to lose one row
 ///      than fabricate identity.

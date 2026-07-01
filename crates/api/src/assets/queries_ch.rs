@@ -122,8 +122,8 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
      a.contract_id                AS contract_id_key, \
-     a.sac_contract_id            AS sac_contract_surrogate, \
-     a.sac_deployed               AS sac_deployed \
+     sac.sac_contract_id          AS sac_contract_surrogate, \
+     sac.sac_deployed             AS sac_deployed \
      FROM assets a FINAL \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
      LEFT JOIN ( \
@@ -139,7 +139,15 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
          FROM asset_enrichment \
          GROUP BY asset_type, asset_code, issuer_id, contract_id \
      ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
-         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id";
+         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id \
+     LEFT JOIN ( \
+         SELECT asset_type, asset_code, issuer_id, contract_id, \
+                max(sac_contract_id)        AS sac_contract_id, \
+                toBool(max(sac_deployed))   AS sac_deployed \
+         FROM asset_sac \
+         GROUP BY asset_type, asset_code, issuer_id, contract_id \
+     ) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code \
+         AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id";
 
 /// Row decoded from [`ASSET_LIST_CH_SELECT`] — the asset header WITHOUT the
 /// join-resolved `issuer` / `issuer_home_domain`, which are key-seeked separately
@@ -279,9 +287,10 @@ pub async fn fetch_list(
         .asset_type
         .map_or_else(String::new, |t| format!(" AND a.asset_type = {t}"));
     // SAC property filter (ADR 0051): the old `filter[type]=sac` view, now a
-    // facet predicate over classic_credit / native rows.
+    // facet predicate over the joined `asset_sac` side table (a LEFT-JOIN miss
+    // decodes as 0 under the readonly `join_use_nulls = 0`).
     let sac_clause = if params.sac_only {
-        " AND a.sac_contract_id != 0"
+        " AND sac.sac_contract_id != 0"
     } else {
         ""
     };
@@ -375,10 +384,10 @@ pub async fn fetch_list(
 /// classic / native asset (ADR 0051). Two match arms:
 ///   * `sc.contract_id = ?` — soroban identity (the `assets.contract_id` key,
 ///     resolved via the `soroban_contracts` join).
-///   * `a.sac_contract_id = {surrogate}` — the SAC facet. The `C…` StrKey is
-///     hashed to its `assets.sac_contract_id` surrogate the same way the writer
-///     derives it (`db_clickhouse::persist::ids::contract_id`), so `/assets/{C…}`
-///     for a SAC lands on its classic / native row.
+///   * `sac.sac_contract_id = {surrogate}` — the SAC facet (joined `asset_sac`).
+///     The `C…` StrKey is hashed to its `asset_sac.sac_contract_id` surrogate the
+///     same way the writer derives it (`db_clickhouse::persist::ids::contract_id`),
+///     so `/assets/{C…}` for a SAC lands on its classic / native row.
 ///
 /// A `C…` is at most one of the two (a SAC address ≠ a deployed-wasm address),
 /// so the OR yields a single row. Issuer StrKey + home_domain then resolve by a
@@ -390,7 +399,7 @@ pub async fn fetch_by_contract_id(
     let sac_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
     let sql = format!(
         "{ASSET_LIST_CH_SELECT} \
-         WHERE sc.contract_id = ? OR a.sac_contract_id = {sac_surrogate} LIMIT 1"
+         WHERE sc.contract_id = ? OR sac.sac_contract_id = {sac_surrogate} LIMIT 1"
     );
     let row = client
         .query(&sql)

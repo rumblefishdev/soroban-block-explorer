@@ -176,7 +176,13 @@ pub async fn fetch_pool_by_id(
                         max(sc.contract_id) AS contract_id, \
                         max(a.icon_url)     AS icon_url \
                  FROM assets a \
-                 LEFT JOIN soroban_contracts sc ON sc.id = a.sac_contract_id AND a.sac_contract_id != 0 \
+                 LEFT JOIN ( \
+                     SELECT asset_type, asset_code, issuer_id, contract_id, \
+                            max(sac_contract_id) AS sac_contract_id \
+                     FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+                 ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                       AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+                 LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
                  WHERE a.asset_type IN (0, 1) \
                    AND (a.asset_code, a.issuer_id) IN ( \
                        SELECT asset_a_code, asset_a_issuer_id FROM legs WHERE asset_a_code != '' \
@@ -876,7 +882,13 @@ pub async fn fetch_pool_list(
                     max(sc.contract_id) AS contract_id, \
                     max(a.icon_url)     AS icon_url \
              FROM assets a \
-             LEFT JOIN soroban_contracts sc ON sc.id = a.sac_contract_id AND a.sac_contract_id != 0 \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        max(sac_contract_id) AS sac_contract_id \
+                 FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
+                   AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
              WHERE a.asset_type IN (0, 1) \
                AND (a.asset_code, a.issuer_id) IN ( \
                    SELECT asset_a_code, asset_a_issuer_id FROM page WHERE asset_a_code != '' \

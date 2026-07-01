@@ -74,6 +74,20 @@ fn column_order_assets() {
             "total_supply",
             "holder_count",
             "icon_url",
+        ],
+    );
+}
+
+/// ADR 0051 — SAC facet side table. Positional RowBinary must match `init.sql`.
+#[test]
+fn column_order_asset_sac() {
+    assert_columns::<AssetSacRow>(
+        "asset_sac",
+        &[
+            "asset_type",
+            "asset_code",
+            "issuer_id",
+            "contract_id",
             "sac_contract_id",
             "sac_deployed",
         ],
@@ -1710,9 +1724,10 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
             .any(|r| r.contract_id == xlm_sac),
         "un-deployed SAC override writes NO contract row",
     );
-    // Instead, the native XLM SAC folds onto the native (type=0) asset row —
-    // one native row, SAC handle in `sac_contract_id`, `sac_deployed = false`.
-    // (The override merges with the native singleton on the shared identity key.)
+    // The native (type=0) identity row exists (one, merged with the singleton) —
+    // and the SAC handle is folded into `asset_sac`, NOT onto the `assets` row
+    // (ADR 0051 — the assets table is a no-version RMT, so the facet lives in the
+    // AggregatingMergeTree side table). `sac_deployed = 0` for an un-deployed override.
     let native_rows: Vec<&_> = staged
         .asset_rows
         .iter()
@@ -1721,20 +1736,37 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
     assert_eq!(
         native_rows.len(),
         1,
-        "one native asset row (override merged)"
+        "one native asset identity row (override merged)"
     );
     assert_eq!(native_rows[0].asset_code, "");
     assert_eq!(native_rows[0].issuer_id, 0);
+
+    let sac_rows: Vec<&_> = staged
+        .asset_sac_rows
+        .iter()
+        .filter(|s| s.asset_type == domain::TokenAssetType::Native as i16)
+        .collect();
     assert_eq!(
-        native_rows[0].sac_contract_id,
+        sac_rows.len(),
+        1,
+        "one asset_sac facet row for the native SAC"
+    );
+    assert_eq!(sac_rows[0].asset_code, "");
+    assert_eq!(sac_rows[0].issuer_id, 0);
+    assert_eq!(
+        sac_rows[0].contract_id, 0,
+        "facet keyed on the carrier (contract_id 0)"
+    );
+    assert_eq!(
+        sac_rows[0].sac_contract_id,
         super::ids::contract_id(xlm_sac),
-        "SAC handle folded onto the native row as a surrogate",
+        "SAC handle stored as the C… surrogate",
     );
-    assert!(
-        !native_rows[0].sac_deployed,
-        "un-deployed override → sac_deployed = false",
+    assert_eq!(
+        sac_rows[0].sac_deployed, 0,
+        "un-deployed override → sac_deployed = 0",
     );
-    // No leftover `asset_type = 2` rows — that value is retired (ADR 0051).
+    // No retired `asset_type = 2` rows — that value is gone (ADR 0051).
     assert!(
         !staged.asset_rows.iter().any(|a| a.asset_type == 2),
         "no retired type=2 rows emitted",
@@ -1800,6 +1832,85 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
     assert_eq!(
         row.wasm_uploaded_at_ledger, 10,
         "real deploy carries the deploy ledger as version"
+    );
+
+    // ADR 0051: one asset_sac facet row, `sac_deployed = 1` — the deploy sighting
+    // (1) `max`-beats the same-ledger override sighting (0) via push_sac.
+    let facet: Vec<&_> = staged
+        .asset_sac_rows
+        .iter()
+        .filter(|s| s.asset_type == domain::TokenAssetType::Native as i16)
+        .collect();
+    assert_eq!(facet.len(), 1, "one native asset_sac facet row");
+    assert_eq!(
+        facet[0].sac_contract_id,
+        super::ids::contract_id(xlm_sac),
+        "facet carries the SAC surrogate",
+    );
+    assert_eq!(
+        facet[0].sac_deployed, 1,
+        "deploy sighting wins over override (max-merge)",
+    );
+}
+
+/// ADR 0051 regression — the clobber bug the columns-on-`assets` design had. A
+/// ledger with ONLY trustline activity (a classic_credit asset, no SAC sighting)
+/// emits its identity row but ZERO `asset_sac` rows, so a per-ledger re-emit can
+/// never zero a previously-recorded SAC facet (the facet lives in the
+/// AggregatingMergeTree side table, written only on a SAC sighting).
+#[test]
+fn prepare_trustline_only_ledger_emits_no_sac_facet() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0xA2);
+    let usdc = ExtractedAsset {
+        asset_type: domain::TokenAssetType::ClassicCredit,
+        asset_code: Some("USDC".to_string()),
+        issuer_address: Some(
+            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+        ),
+        contract_id: None,
+        sac_contract_id: None,
+        sac_deployed: false,
+        name: None,
+        total_supply: None,
+        holder_count: None,
+    };
+
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: std::slice::from_ref(&usdc),
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+    })
+    .expect("prepare_with_sac_overrides");
+
+    // Identity row present…
+    assert!(
+        staged
+            .asset_rows
+            .iter()
+            .any(|a| a.asset_type == 1 && a.asset_code == "USDC"),
+        "classic_credit identity row emitted",
+    );
+    // …but NO facet row → nothing that could clobber a prior SAC facet.
+    assert!(
+        staged.asset_sac_rows.is_empty(),
+        "trustline-only ledger writes no asset_sac rows",
     );
 }
 

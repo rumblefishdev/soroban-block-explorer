@@ -94,6 +94,7 @@ struct TableInserts {
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
     assets: Option<Insert<AssetRow>>,
+    asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
     nft_ownership: Option<Insert<NftOwnershipRow>>,
     /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
@@ -233,6 +234,13 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
+            &mut self.inserts.asset_sac,
+            "asset_sac",
+            &staged.asset_sac_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
             &mut self.inserts.nfts,
             "nfts",
             &staged.nft_rows,
@@ -303,6 +311,7 @@ impl PartitionWriter {
         end(self.inserts.events).await?;
         end(self.inserts.invocations).await?;
         end(self.inserts.assets).await?;
+        end(self.inserts.asset_sac).await?;
         end(self.inserts.nfts).await?;
         end(self.inserts.nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same

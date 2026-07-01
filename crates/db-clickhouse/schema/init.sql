@@ -216,18 +216,14 @@ ORDER BY (contract_id);
 -- contract_id set, code/issuer=empty/0.
 --
 -- SAC-ness is a FACET, not a type (ADR 0051 / task 0339). A Stellar Asset
--- Contract wraps a classic_credit / native asset, so it is recorded as
--- property columns on that ONE row (never a separate `asset_type=2`):
---   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey
---     (the same hash used for `soroban_contracts.id` / `contract_id`).
---     0 = the asset has no SAC. Populated for deployed AND un-deployed SACs
---     (an un-deployed SAC still emits events that must resolve to the asset).
---     Kept OUT of the ORDER BY key on purpose (the key `contract_id` is
---     reserved for `soroban` identity); this is a non-key lookup index.
---   * `sac_deployed` — whether that SAC is actually deployed on-chain
---     (writer-maintained; read stays join-free — no `soroban_contracts` join).
--- The `C…` StrKey itself is NOT stored — it is a pure function of
--- `code:issuer` and re-derived on read by the API (`derive_sac_contract_id`).
+-- Contract wraps a classic_credit / native asset — the SAME economic asset — so
+-- it is NOT a separate `asset_type=2` row. The SAC handle is stored in the
+-- indexer-owned `asset_sac` side table (below), NOT as columns on `assets`:
+-- `assets` is a no-version RMT re-written whole every ledger a trustline for the
+-- asset changes (see the `total_supply`/`holder_count` note), so a mutable
+-- non-key column here would be clobbered to its default by the next re-emit
+-- (exactly the ~25% NULL prod bug). `asset_sac` is written ONLY on a SAC
+-- sighting and merged with `max()`, so it survives the re-emit.
 --
 -- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
 -- lore-0293: nothing reads them (the API serves the aggregate from
@@ -244,18 +240,39 @@ CREATE TABLE IF NOT EXISTS assets (
     name            Nullable(String),
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
-    icon_url        Nullable(String),
-    sac_contract_id Int64 DEFAULT 0,          -- SAC surrogate facet (ADR 0051); 0 = no SAC
-    sac_deployed    Bool  DEFAULT false,      -- SAC deployed on-chain? (ADR 0051)
-    -- `sac_contract_id` is deliberately OUT of the ORDER BY (so a classic asset's
-    -- identity stays stable across SAC deploy), but it IS the lookup key for
-    -- resolving Soroban events/tx under a SAC's `C…` back to the asset and for
-    -- `/assets/{C…}` deep-link / search. Equality lookups on a non-key column
-    -- need a skip-index or they full-scan `assets` (same lesson as the
-    -- operations_appearances non-PK filter). ADR 0051.
-    INDEX idx_assets_sac_contract_id sac_contract_id TYPE bloom_filter GRANULARITY 4
+    icon_url        Nullable(String)
 )
 ENGINE = ReplacingMergeTree
+ORDER BY (asset_type, asset_code, issuer_id, contract_id);
+
+-- SAC facet side table (ADR 0051 / task 0339). One logical row per SAC-having
+-- classic_credit / native asset, keyed byte-for-byte like `assets` and joined at
+-- read (`… GROUP BY key` with `max()`). Written by the INDEXER (not the enricher)
+-- ONLY when a SAC is sighted — a deploy (`sac_deployed=1`) or an un-deployed
+-- override event (`sac_deployed=0`) — NEVER on a plain trustline re-emit, so the
+-- per-ledger whole-row `assets` rewrite can never zero it.
+--   * `sac_contract_id` — cityhash64 surrogate of the SAC's `C…` StrKey (the same
+--     hash used for `soroban_contracts.id`). The `C…` StrKey itself is NOT stored
+--     — it re-derives on read from `code:issuer` (`derive_sac_strkey`).
+--   * `sac_deployed` — deployed on-chain? MONOTONIC (false→true, never back), so
+--     `SimpleAggregateFunction(max)` makes a deploy sighting stick over any later
+--     un-deployed-override event; `max()` on the constant surrogate is a no-op.
+-- AggregatingMergeTree (not RMT): `max` merges column-wise per key, so an override
+-- event AFTER a deploy cannot downgrade `sac_deployed` (a versioned RMT keeps the
+-- last-inserted whole row and WOULD downgrade). No `soroban_contracts` join needed
+-- for deployed-ness — the flag is stored.
+CREATE TABLE IF NOT EXISTS asset_sac (
+    asset_type      Int16,
+    asset_code      LowCardinality(String),
+    issuer_id       Int64,
+    contract_id     Int64,
+    sac_contract_id SimpleAggregateFunction(max, Int64),
+    sac_deployed    SimpleAggregateFunction(max, UInt8),
+    -- equality lookup on the SAC surrogate (resolve a `C…` event/tx and the
+    -- `/assets/{C…}` deep-link back to the asset); non-key → skip-index or scan.
+    INDEX idx_asset_sac_contract_id sac_contract_id TYPE bloom_filter GRANULARITY 4
+)
+ENGINE = AggregatingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
 -- Off-chain SEP-1 enrichment for `assets` (task 0231). Written by the
