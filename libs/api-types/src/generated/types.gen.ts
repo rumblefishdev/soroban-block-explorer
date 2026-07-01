@@ -31,8 +31,14 @@ export type AccountBalance = {
   decimals: number;
   last_updated_ledger: number;
   /**
-   * On-chain token `symbol` (type-3, from `METADATA`) — the display code for
-   * Soroban tokens. `null` for native / classic (they carry `asset_code`).
+   * On-chain token full `name` (type-3, from `METADATA`, e.g. "USDC-EURC
+   * Soroswap LP Token") — the display title, distinct from the `symbol`
+   * ticker. `null` for native / classic (they have no on-chain name).
+   */
+  name?: string | null;
+  /**
+   * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+   * ticker. `null` for native / classic (they carry `asset_code`).
    */
   symbol?: string | null;
   /**

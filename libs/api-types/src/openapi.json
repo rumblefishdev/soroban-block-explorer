@@ -1946,9 +1946,13 @@
             "type": "integer",
             "format": "int64"
           },
+          "name": {
+            "type": ["string", "null"],
+            "description": "On-chain token full `name` (type-3, from `METADATA`, e.g. \"USDC-EURC\nSoroswap LP Token\") — the display title, distinct from the `symbol`\nticker. `null` for native / classic (they have no on-chain name)."
+          },
           "symbol": {
             "type": ["string", "null"],
-            "description": "On-chain token `symbol` (type-3, from `METADATA`) — the display code for\nSoroban tokens. `null` for native / classic (they carry `asset_code`)."
+            "description": "On-chain token `symbol` (type-3, from `METADATA`, e.g. \"SMOL\") — the short\nticker. `null` for native / classic (they carry `asset_code`)."
           },
           "type": {
             "type": "integer",

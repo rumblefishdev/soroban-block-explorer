@@ -175,6 +175,7 @@ pub async fn get_account(
                 asset_code: r.asset_code,
                 asset_issuer: r.asset_issuer,
                 contract_id: r.contract_id,
+                name: r.name,
                 symbol: r.symbol,
                 balance: r.balance,
                 decimals: r.decimals,

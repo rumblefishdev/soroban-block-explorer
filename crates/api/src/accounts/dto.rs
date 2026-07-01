@@ -59,8 +59,12 @@ pub struct AccountBalance {
     /// C-strkey of the Soroban token's contract (type-3 only) — the identity +
     /// link target (`/assets/${contract_id}`). `null` for native / classic.
     pub contract_id: Option<String>,
-    /// On-chain token `symbol` (type-3, from `METADATA`) — the display code for
-    /// Soroban tokens. `null` for native / classic (they carry `asset_code`).
+    /// On-chain token full `name` (type-3, from `METADATA`, e.g. "USDC-EURC
+    /// Soroswap LP Token") — the display title, distinct from the `symbol`
+    /// ticker. `null` for native / classic (they have no on-chain name).
+    pub name: Option<String>,
+    /// On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+    /// ticker. `null` for native / classic (they carry `asset_code`).
     pub symbol: Option<String>,
     /// RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
     /// Option C: one convention for all asset types; classic `decimals` = 7). The

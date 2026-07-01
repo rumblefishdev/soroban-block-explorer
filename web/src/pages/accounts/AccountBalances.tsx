@@ -41,7 +41,9 @@ function shape(balance: AccountBalance): BalanceShape {
     const symbol = balance.symbol ?? '—';
     return {
       isNative: false,
-      name: symbol,
+      // Full on-chain name as the title (like /assets), symbol as the ticker
+      // under the amount. Fall back to symbol when the token has no name.
+      name: balance.name ?? symbol,
       code: symbol,
       subline: balance.contract_id ?? '',
       chipLabel: 'Token',

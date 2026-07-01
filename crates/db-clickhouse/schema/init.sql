@@ -216,22 +216,25 @@ ORDER BY (contract_id);
 -- set, code/issuer optional. Soroban-native: contract_id set,
 -- code/issuer=empty/0.
 --
--- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
--- lore-0293: nothing reads them (the API serves the aggregate from
--- `asset_aggregates` below) and the indexer writes them NULL. They
--- are a global rollup over every holder's balance; writing them into this
--- per-ledger-rewritten row clobbered them (no-version RMT, last-write-wins →
--- ~25% of classic assets served NULL in prod). Drop (`ALTER … DROP COLUMN`)
--- deferred to a cleanup task.
+-- DEAD columns (`ALTER … DROP COLUMN` batched in the cleanup task 0310):
+--  * `total_supply` / `holder_count` (lore-0293) — nothing reads them (the API
+--    serves the aggregate from `balance_aggregates`); the indexer writes NULL.
+--    A global rollup written into this per-ledger-rewritten row clobbered them
+--    (no-version RMT, last-write-wins → ~25% of classic served NULL in prod).
+--  * `name` / `icon_url` — the indexer writes them NULL (parser never sets an
+--    asset name; verified 0/367321 rows populated in prod). Every read resolves
+--    the display name/icon from `asset_enrichment` (curated) coalesced over
+--    `soroban_contract_metadata` (on-chain) — never from `assets` — so these two
+--    are vestigial too.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
-    name            Nullable(String),
+    name            Nullable(String),         -- DEAD (0 rows prod) → asset_enrichment / soroban_contract_metadata
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
-    icon_url        Nullable(String),
+    icon_url        Nullable(String),         -- DEAD → asset_enrichment.icon_url
     -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
     -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
     -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`

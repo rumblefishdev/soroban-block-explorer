@@ -305,6 +305,7 @@ struct AccountBalanceChRow {
     asset_code: Option<String>,
     asset_issuer: Option<String>,
     contract_id: Option<String>,
+    name: Option<String>,
     symbol: Option<String>,
     balance: String,
     decimals: u32,
@@ -328,6 +329,7 @@ pub async fn fetch_balances(
                 nullIf(a.asset_code, '')      AS asset_code, \
                 nullIf(iss.account_id, '')    AS asset_issuer, \
                 nullIf(sc.contract_id, '')    AS contract_id, \
+                coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
                 nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
                 coalesce(m.decimals, 7)       AS decimals, \
@@ -337,8 +339,15 @@ pub async fn fetch_balances(
              LEFT JOIN accounts iss ON iss.id = a.issuer_id \
              LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
              LEFT JOIN ( \
-                 SELECT contract_id, symbol, decimals FROM soroban_contract_metadata FINAL \
+                 SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
              ) m ON m.contract_id = sc.contract_id \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        argMax(name, version) AS name \
+                 FROM asset_enrichment \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
+                 AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
              WHERE b.holder_id = ? AND b.amount != 0 \
              ORDER BY a.asset_type, a.asset_code",
         )
@@ -354,6 +363,7 @@ pub async fn fetch_balances(
             asset_code: r.asset_code,
             asset_issuer: r.asset_issuer,
             contract_id: r.contract_id,
+            name: r.name,
             symbol: r.symbol,
             balance: r.balance,
             decimals: r.decimals,
