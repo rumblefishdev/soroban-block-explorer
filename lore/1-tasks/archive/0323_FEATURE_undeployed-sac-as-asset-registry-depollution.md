@@ -199,8 +199,9 @@ NULL` — un-deployed SACs that emit NO SAC-control event (not gate-confirmable)
 
 - [x] Writer no longer creates `soroban_contracts` rows for un-deployed SACs (Pass-2 skip + skeleton removal); unit-tested (a SAC-event-only ledger writes no contract row for it) — PR #286.
 - [x] **(Phase 2 — DONE 2026-06-30)** `/v1/contracts` returns only deployed instances —
-      **312,854** ghost rows deleted on prod (predicate `coalesce(deployed_at_ledger,0)=0 AND
-      wasm_hash IS NULL`, guard=0, snapshot-driven); `ghosts_left=0`, registry FINAL
+      **312,854** ghost rows deleted on prod (predicate
+      `coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL`, guard=0, snapshot-driven);
+      `ghosts_left=0`, registry FINAL
       430,778→117,924, deployed SACs (3,910) + un-deployed-SAC assets (32,486) untouched.
 - [x] The 3 INNER joins are LEFT (PR #286); a tx/event/NFT referencing a row-less contract
       no longer vanishes. (Appearance-vanish regression is CH-integration / live tests.)

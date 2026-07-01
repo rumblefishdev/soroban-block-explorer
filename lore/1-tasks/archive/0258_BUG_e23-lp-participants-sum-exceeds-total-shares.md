@@ -136,8 +136,9 @@ three `page()` iterations** → exactly `3 × total`. "150 rows = 3 × 50"
 and the precise `3.0000×` are the fingerprint of three identical pages.
 
 The three hypotheses in the original plan are all disproved:
+
 - **(a) lp_positions FINAL not deduping** — disproved. `Σ lp_positions
-  FINAL (shares>0)` equals the snapshot total *exactly* on the flagged
+FINAL (shares>0)` equals the snapshot total _exactly_ on the flagged
   pool, and `max_lp_per_acct_FINAL = 1`.
 - **(b) snapshot lag** — disproved. Latest snapshot (ledger 58700382)
   carries the current `total_shares`; no lag.
@@ -148,11 +149,11 @@ The three hypotheses in the original plan are all disproved:
 
 Flagged pool `510FAA345A1B8577CD2973722800614003FF8073BEBD2ABCAECC1981C8F8E9BE`:
 
-| metric | value |
-|--------|-------|
-| `Σ lp_positions FINAL (shares>0)` | `518764976644.6898527` |
-| `argMax(total_shares)` (latest snapshot) | `518764976644.6898527` (exact match) |
-| endpoint `JOIN accounts acc FINAL` rows / sum | 1 / `518764976644.69` (no fan-out) |
+| metric                                        | value                                |
+| --------------------------------------------- | ------------------------------------ |
+| `Σ lp_positions FINAL (shares>0)`             | `518764976644.6898527`               |
+| `argMax(total_shares)` (latest snapshot)      | `518764976644.6898527` (exact match) |
+| endpoint `JOIN accounts acc FINAL` rows / sum | 1 / `518764976644.69` (no fan-out)   |
 
 `FINAL`-on-join proven to deduplicate (pool-independent test): account
 `-2641338041311796945` has **11** raw Replacing parts → `FINAL` = 1 →

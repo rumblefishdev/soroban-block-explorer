@@ -61,7 +61,7 @@ A classic asset and its Stellar Asset Contract (SAC) are the **same economic
 asset** — Stellar docs call them "the same asset", with the SAC being "an API for
 interacting with the asset". Our `assets` table splits them into two entities
 (`asset_type=1 classic_credit` vs `asset_type=2 sac`), which is a conflation of
-*identity* with *addressing/interface*. Re-model: **SAC-ness becomes a property**
+_identity_ with _addressing/interface_. Re-model: **SAC-ness becomes a property**
 (`contract_id` + a deployed flag) of a `classic_credit` asset, not a separate
 type/row. Only `soroban` (bespoke, no classic backing) stays a distinct
 contract-backed type. This root-fixes the symptoms that 0336 and 0337 band-aid.
@@ -114,7 +114,7 @@ build-order artifact.
 - `soroban` (type=3) unchanged — the only genuinely distinct contract-backed asset
   (no classic backing).
 - "SAC" UI filter → a **property filter** (`classic_credit WHERE contract_id IS
-  NOT NULL` / `sac_deployed`), preserved without a separate type.
+NOT NULL` / `sac_deployed`), preserved without a separate type.
 - SAC-event activity (under `C…`) resolves to the (single) classic asset — by
   `code:issuer` (the event carries it) and/or `contract_id` on the one row.
 
@@ -128,12 +128,12 @@ build-order artifact.
    asset's `contract_id`/deployed flag instead of emitting a separate `sac` row.
    Un-deployed SAC seen via event → `classic_credit` row from the event's
    `code:issuer`, `contract_id` set, deployed=false. (`detect_classic_credit_assets`
-   + the SAC/override path.)
+   - the SAC/override path.)
 4. **Migration** — fold existing ~31k type=2 rows into their `classic_credit`
    counterparts (merge `contract_id` onto the type=1 row / relabel + dedup). No
    asset lost — esp. SAC-event-only assets that have no prior trustline row.
 5. **API DTO** — `asset_type`/`asset_type_name` lose `sac`; surface `contract_id`
-   + deployed flag on `classic_credit`. **Regen api-types.**
+   - deployed flag on `classic_credit`. **Regen api-types.**
 6. **Frontend** — "SAC" filter → property filter (subsumes 0336 read-collapse on
    the list); contract_id rendered deployment-aware, non-linked when un-deployed
    (subsumes 0337). Canonical id: `code-issuer` primary, `C…` secondary handle;

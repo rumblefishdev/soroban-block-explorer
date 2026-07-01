@@ -412,7 +412,7 @@ branch session. Reviewer must decide three things and run two checks:
   **(Open — recommend spawning a backlog task; not auto-created.)**
 - ~~Contracts events split-brain reconcile~~ — DONE this branch (events → CH).
 - ~~**Remaining modules:** liquidity_pools, nfts, search → CH~~ — DONE: LP (#246
-  + flip #251), NFT (#274 + flip 8024ddef), search (task **0318**).
+  - flip #251), NFT (#274 + flip 8024ddef), search (task **0318**).
 - ~~**0231** must land before `ASSETS=ch` prod flip~~ — DONE: 0231 completed.
 - **Cleanup** (remove sqlx / drop `queries.rs` / simplify `DataSource`) — tracked
   as backlog task **0244**.

@@ -35,8 +35,8 @@ for interacting with the asset" (it debits/credits the same trustlines; an un-de
 SAC is "merely a reserved address, neither an asset nor an active contract").
 
 Our `assets` table splits this one asset into **two rows**: `asset_type=1`
-(classic_credit, by `code:issuer`) and `asset_type=2` (sac, carrying the `contract_id`).
-This is a conflation of *identity* with *addressing/interface*, and an evolutionary
+(classic*credit, by `code:issuer`) and `asset_type=2` (sac, carrying the `contract_id`).
+This is a conflation of \_identity* with _addressing/interface_, and an evolutionary
 artifact — the system was Soroban-first (0154), with `classic_credit` written added
 later (0219), so `sac` predates `classic_credit`.
 
@@ -71,13 +71,14 @@ SAC-ness becomes a **property** of a `classic_credit` (or `native`) asset, not a
 
 2. **Add 3 SAC property columns to `assets`** so the asset row is self-contained
    (no `soroban_contracts` join on the asset read):
+
    - `sac_contract_id Int64 DEFAULT 0` — the SAC surrogate (for resolution/indexing).
    - `sac_strkey String DEFAULT ''` — the `C…` text, re-derivable from `code:issuer`
      (subsumes the deferred "option-c" strkey display).
    - `sac_deployed Bool DEFAULT false` — deployed-ness, writer-maintained.
 
 3. **Keep the `assets` ORDER BY unchanged** — `(asset_type, asset_code, issuer_id,
-   contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written as
+contract_id)`. **No table rebuild / no ORDER-BY change.** A SAC-wrap is written as
    `type=1` (classic) or `type=0` (native) with key `contract_id=0` and the SAC handle in
    the property columns. The key `contract_id` stays in use **only for `soroban` (type=3)**.
    Result: one row per economic asset (classic+SAC collapse on `(code,issuer)`; native +

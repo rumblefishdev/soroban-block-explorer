@@ -43,9 +43,9 @@ detail resolver **non-deterministic**. Fix: collapse the two on read (prefer the
 
 - **PG:** `uidx_assets_classic_asset (asset_code, issuer_id)` was UNIQUE
   **across asset_type**, so a `(code,issuer)` had exactly one row; learning the
-  SAC `contract_id` *upgraded* it `1→2` in place.
+  SAC `contract_id` _upgraded_ it `1→2` in place.
 - **CH:** `assets` is `ReplacingMergeTree ORDER BY (asset_type, asset_code,
-  issuer_id, contract_id)` (`crates/db-clickhouse/schema/init.sql`). `asset_type`
+issuer_id, contract_id)` (`crates/db-clickhouse/schema/init.sql`). `asset_type`
   is in the sort key, so a `type=1` (contract_id=0) and a `type=2` (contract_id
   set) row for the same `(code,issuer)` have **different keys → never merged →
   two rows coexist**.
