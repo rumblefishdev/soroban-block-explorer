@@ -72,17 +72,25 @@ with both. Uses an `IN`-subquery (not a join) to avoid fan-out on un-merged
 `soroban_contracts` parts. Idempotent (`max`-merge) and harmless alongside facets the
 post-Phase-1 writer already wrote.
 
+> ⚠️ **NO SELECT-list aliases** (`AS asset_type` / `AS contract_id`). They **shadow** the
+> physical columns: on prod CH 26.3 `WHERE asset_type = 2` then binds the alias value (`0`/`1`),
+> never `2`, so the INSERT matches nothing and **silently writes 0 rows** (`written_rows = 0`,
+> no error). `INSERT … SELECT` maps by **position**, so the aliases were cosmetic — dropped.
+> (Hit live during the 2026-07-01 run. Debug note: `count()` short-circuits past the shadow, so a
+> dry `SELECT count()` still returns 42060 — verify with `written_rows` in `system.query_log` or
+> `FORMAT Null`, **not** `count()`.)
+
 ```sql
 INSERT INTO asset_sac (asset_type, asset_code, issuer_id, contract_id, sac_contract_id, sac_deployed)
 SELECT
-    if(asset_code = '' AND issuer_id = 0, 0, 1) AS asset_type,
+    if(asset_code = '' AND issuer_id = 0, 0, 1),   -- carrier asset_type: 0=native-wrap, else 1
     asset_code,
     issuer_id,
-    0                AS contract_id,             -- facet keyed on the carrier (contract_id 0)
-    contract_id      AS sac_contract_id,          -- the type=2 row's contract_id IS the SAC surrogate
+    0,                                             -- facet keyed on the carrier (contract_id 0)
+    contract_id,                                   -- the type=2 row's contract_id IS the SAC surrogate → sac_contract_id
     toUInt8(contract_id IN (
         SELECT id FROM soroban_contracts WHERE deployed_at_ledger IS NOT NULL  -- real deploy, not a stub
-    )) AS sac_deployed
+    ))
 FROM assets FINAL
 WHERE asset_type = 2;
 ```
@@ -174,13 +182,16 @@ SELECT
      WHERE asset_type = 2)                                                         AS type2_baseline_rows
 FROM asset_sac;   -- facets >= distinct(type2_baseline (code,issuer)); gate g3 already proves coverage
 
--- (c) no orphan facets — every facet has a matching identity row
+-- (c) no orphan facets — every facet has a matching identity row.
+--     Use LEFT ANTI JOIN, NOT `LEFT JOIN … WHERE a.col IS NULL`: under the default
+--     join_use_nulls=0 an unmatched right side is filled with ''/0, NOT NULL, so the
+--     IS NULL filter silently never fires — a false-negative that would hide real orphans.
 SELECT count() FROM (
-    SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_sac
-    GROUP BY asset_type, asset_code, issuer_id, contract_id
+    SELECT DISTINCT asset_type, asset_code, issuer_id, contract_id FROM asset_sac
 ) s
-LEFT JOIN assets a FINAL USING (asset_type, asset_code, issuer_id, contract_id)
-WHERE a.asset_code IS NULL;                                                  -- expect 0
+LEFT ANTI JOIN (
+    SELECT asset_type, asset_code, issuer_id, contract_id FROM assets FINAL
+) a USING (asset_type, asset_code, issuer_id, contract_id);                  -- expect 0
 
 -- (d) native singleton name intact
 SELECT name FROM assets FINAL WHERE asset_type = 0;                          -- expect 'Stellar Lumen'
