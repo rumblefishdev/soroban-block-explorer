@@ -314,11 +314,15 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
 -- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
 -- stay FINAL-free). The other tables are RMT because they are APPEND targets.
--- `asset_type = 1` = classic credit only; native (0) and pool-shares (3) are
--- excluded (their balance-sum is not a trustworthy supply — see the note). A
--- SAC-wrapped classic asset is `asset_type = 1` too (ADR 0051 — SAC is a facet,
--- not a separate type), so this single classic bucket already covers it (it and
--- its SAC share the one `(asset_code, issuer_id)` aggregate).
+-- `asset_type IN (1, 2)` = classic credit only; native (0) and pool-shares (3)
+-- are excluded (their balance-sum is not a trustworthy supply — see the note).
+-- NB: `account_balances_current.asset_type` is the XDR `AssetType` discriminator
+-- (1 = credit_alphanum4, 2 = credit_alphanum12 — see `domain::AssetType`, stamped
+-- by code length), NOT the `assets`-table `TokenAssetType`. So `2` here is a
+-- long-code (5–12-char) CLASSIC asset, not a SAC (SACs are never trustlines and
+-- never appear in this table) — both alphanum widths must be summed. ADR 0051's
+-- SAC-retirement does NOT touch this domain; a SAC-wrapped classic asset's supply
+-- is already covered under its classic `(asset_code, issuer_id)` here.
 -- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
 -- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
 -- distinguishing a JOIN miss from a real 0-supply with no sentinel.
@@ -341,7 +345,7 @@ SELECT
     sum(balance)                  AS total_supply,
     toInt32(countIf(balance > 0)) AS holder_count
 FROM account_balances_current FINAL
-WHERE asset_type = 1
+WHERE asset_type IN (1, 2)
 GROUP BY asset_code, issuer_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
