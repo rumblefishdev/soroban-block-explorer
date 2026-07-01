@@ -2,7 +2,7 @@
 id: '0299'
 title: 'REFACTOR: consolidate duplicated route tables — IdentifierDisplay href prop, single source of truth'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0243', '0263', '0264', '0270']
 tags: [frontend, refactor, routing, effort-medium, priority-low, phase-future]
@@ -18,6 +18,12 @@ history:
       smell again. Deliberately NOT done on the 0243 branch — unrelated to the
       CH migration, ~40 callsites, and conflicts with the 0257 audit line which
       also edits routes.ts. Captured here as its own task.
+  - date: '2026-07-01'
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active. Bundled with 0332 onto a single branch
+      (feat/0299_0332_routes-consolidation-and-wim-read).
 ---
 
 # REFACTOR: consolidate duplicated route tables → single source of truth
