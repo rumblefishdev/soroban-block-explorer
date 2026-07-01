@@ -11,11 +11,14 @@
 --               wasm_interface_metadata ORDER BY (wasm_hash) — direct seek.
 -- CH Engine:    soroban_contracts — Replacing(wasm_uploaded_at_ledger) (FINAL).
 --               wasm_interface_metadata — ReplacingMergeTree, no version
---                 (no FINAL — immutable per wasm_hash; was MergeTree, lore-0293).
+--                 (wim FINAL — a re-INSERT with divergent metadata for an
+--                  existing wasm_hash, e.g. the 0327 upgradeable-backfill,
+--                  leaves duplicate rows until a background merge; FINAL
+--                  collapses them so the read can't pick a stale row. lore-0332).
 -- CH Pattern:   Single statement; LEFT JOIN tolerates SAC contracts (NULL
 --               wasm_hash).
 -- ADR 0044 §:   §4.5 (soroban_contracts state), §4.8 (wasm_interface_metadata
---                 immutable lookup, plain MergeTree).
+--                 lookup, ReplacingMergeTree read via FINAL).
 -- Notes:
 --   • Identical shape to PG E12. `wasm_interface_metadata.metadata` is
 --     stored as `String` in CH (CH `String` is just bytes — JSON content
@@ -31,5 +34,5 @@ SELECT
     lower(hex(sc.wasm_hash))                AS wasm_hash_hex,
     wim.metadata                            AS interface_metadata
 FROM soroban_contracts sc FINAL
-LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash
+LEFT JOIN wasm_interface_metadata wim FINAL ON wim.wasm_hash = sc.wasm_hash
 WHERE sc.contract_id = $1;
