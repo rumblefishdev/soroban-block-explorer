@@ -59,18 +59,20 @@ Base URL — pick one:
   path, but subject to Cloudflare's own rate limit → HTTP 429 `error code: 1015`,
   which `loadTesting` does NOT control).
 
+`API_KEY`/`EDGE_SECRET` are read from the exported env (above) — pass them as
+env, NOT as `--api-key`/`--edge-secret` flags, so the secrets never land in the
+process arg list (`ps aux`) during the run.
+
 ```bash
 # smoke first — expect mostly 200
 ./target/release/load-tests \
   --base-url <API_GW_ORIGIN>/v1 \
-  --api-key "$API_KEY" --edge-secret "$EDGE_SECRET" \
   --vus 10 --duration 1m
 
 # full run
 ulimit -n 65535
 ./target/release/load-tests \
   --base-url <API_GW_ORIGIN>/v1 \
-  --api-key "$API_KEY" --edge-secret "$EDGE_SECRET" \
   --vus 1000 --duration 1h --harvest 500
 ```
 
