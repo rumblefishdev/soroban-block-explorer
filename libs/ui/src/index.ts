@@ -18,6 +18,10 @@ export {
 } from './theme/index.js';
 
 export { Chip, type ChipProps } from './components/Chip.js';
+
+// Canonical URL-shape table (task 0299) — single source of truth for entity
+// routes, shared by libs/ui components and the web app (which re-exports it).
+export { routes } from './routes.js';
 export {
   DebouncedField,
   type DebouncedFieldProps,
