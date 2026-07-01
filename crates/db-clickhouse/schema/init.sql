@@ -246,7 +246,14 @@ CREATE TABLE IF NOT EXISTS assets (
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
     icon_url        Nullable(String),
     sac_contract_id Int64 DEFAULT 0,          -- SAC surrogate facet (ADR 0051); 0 = no SAC
-    sac_deployed    Bool  DEFAULT false       -- SAC deployed on-chain? (ADR 0051)
+    sac_deployed    Bool  DEFAULT false,      -- SAC deployed on-chain? (ADR 0051)
+    -- `sac_contract_id` is deliberately OUT of the ORDER BY (so a classic asset's
+    -- identity stays stable across SAC deploy), but it IS the lookup key for
+    -- resolving Soroban events/tx under a SAC's `C…` back to the asset and for
+    -- `/assets/{C…}` deep-link / search. Equality lookups on a non-key column
+    -- need a skip-index or they full-scan `assets` (same lesson as the
+    -- operations_appearances non-PK filter). ADR 0051.
+    INDEX idx_assets_sac_contract_id sac_contract_id TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
@@ -287,8 +294,11 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
 -- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
 -- stay FINAL-free). The other tables are RMT because they are APPEND targets.
--- `asset_type IN (1,2)` = classic credit only; native (0) and pool-shares (3) are
--- excluded (their balance-sum is not a trustworthy supply — see the note).
+-- `asset_type = 1` = classic credit only; native (0) and pool-shares (3) are
+-- excluded (their balance-sum is not a trustworthy supply — see the note). A
+-- SAC-wrapped classic asset is `asset_type = 1` too (ADR 0051 — SAC is a facet,
+-- not a separate type), so this single classic bucket already covers it (it and
+-- its SAC share the one `(asset_code, issuer_id)` aggregate).
 -- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
 -- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
 -- distinguishing a JOIN miss from a real 0-supply with no sentinel.
@@ -311,7 +321,7 @@ SELECT
     sum(balance)                  AS total_supply,
     toInt32(countIf(balance > 0)) AS holder_count
 FROM account_balances_current FINAL
-WHERE asset_type IN (1, 2)
+WHERE asset_type = 1
 GROUP BY asset_code, issuer_id;
 
 CREATE TABLE IF NOT EXISTS account_balances_current (

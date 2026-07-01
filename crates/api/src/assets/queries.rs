@@ -49,6 +49,13 @@ pub struct AssetRow {
     /// no issuer_id, classic-credit has no contract_id), matching CH defaults.
     pub issuer_id: i64,
     pub contract_surrogate_id: i64,
+    /// SAC facet (ADR 0051): the surrogate of the wrapping SAC's `C…` StrKey,
+    /// or `0` when the asset has no observed SAC. Never on the wire — the
+    /// handler re-derives the display StrKey from `code:issuer` when non-zero.
+    /// (PG path leaves this `0`: the legacy schema has no facet column.)
+    pub sac_contract_surrogate: i64,
+    /// Whether the `sac_contract_surrogate` SAC is deployed on-chain (ADR 0051).
+    pub sac_deployed: bool,
 }
 
 #[derive(Debug)]
@@ -86,6 +93,9 @@ pub struct ResolvedListParams {
     /// Raw substring (no `%` / `_` from the caller). The SQL builder
     /// wraps it in `%...%` for the trigram match.
     pub asset_code: Option<String>,
+    /// SAC property filter (ADR 0051): restrict to assets with a SAC
+    /// (`sac_contract_id != 0`) — the old `filter[type]=sac` view.
+    pub sac_only: bool,
 }
 
 fn push_glue(qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>, has_where: &mut bool) {
@@ -130,6 +140,10 @@ fn map_asset_row(r: &PgRow) -> AssetRow {
         issuer_home_domain: r.get("issuer_home_domain"),
         issuer_id: r.get("issuer_id_key"),
         contract_surrogate_id: r.get("contract_id_key"),
+        // SAC facet (ADR 0051) is CH-only — the legacy PG schema has no facet
+        // columns, so the (non-live) PG path never surfaces a SAC.
+        sac_contract_surrogate: 0,
+        sac_deployed: false,
     }
 }
 

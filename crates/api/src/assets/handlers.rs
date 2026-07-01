@@ -77,9 +77,11 @@ async fn fetch_asset_row_for_source(
 }
 
 /// Canonical wire id — the single token usable as `/assets/{id}`: the contract
-/// StrKey when present (SAC / Soroban / native XLM), else the `CODE-ISSUER`
-/// composite (classic credit). Every asset has at least one (native XLM carries
-/// a `CSAC…` contract id), so the empty fallback is unreachable in practice.
+/// StrKey for a `soroban` asset (the contract IS the asset), the reserved
+/// `native` token for XLM, else the `CODE-ISSUER` composite (classic credit).
+/// A SAC-wrapped classic / native asset keys off CODE-ISSUER / `native` (ADR
+/// 0051 — the SAC handle is a facet, not the identity), so the empty fallback
+/// is unreachable in practice.
 fn canonical_id(row: &AssetRow) -> String {
     if let Some(contract_id) = &row.contract_id {
         return contract_id.clone();
@@ -94,7 +96,20 @@ fn canonical_id(row: &AssetRow) -> String {
     String::new()
 }
 
-fn map_item(row: AssetRow) -> AssetItem {
+/// Map a fetched row to the wire item, re-deriving the SAC `C…` StrKey on read
+/// (ADR 0051 — never stored) from `code:issuer` when the asset carries an
+/// observed SAC facet (`sac_contract_surrogate != 0`).
+fn map_item(row: AssetRow, network_id: &[u8; 32]) -> AssetItem {
+    let (sac_contract_id, sac_deployed) = if row.sac_contract_surrogate != 0 {
+        let code = row.asset_code.as_deref().unwrap_or("");
+        let issuer = row.issuer.as_deref().unwrap_or("");
+        (
+            xdr_parser::derive_sac_strkey(code, issuer, network_id),
+            Some(row.sac_deployed),
+        )
+    } else {
+        (None, None)
+    };
     AssetItem {
         id: canonical_id(&row),
         asset_type_name: row.asset_type_name,
@@ -102,6 +117,8 @@ fn map_item(row: AssetRow) -> AssetItem {
         asset_code: row.asset_code,
         issuer: row.issuer,
         contract_id: row.contract_id,
+        sac_contract_id,
+        sac_deployed,
         name: row.name,
         symbol: row.symbol,
         decimals: row.decimals,
@@ -181,6 +198,12 @@ pub async fn list_assets(
         return resp;
     }
 
+    // SAC property filter (ADR 0051): `filter[sac]=true` → the SAC view.
+    let sac_only = params
+        .filter_sac
+        .as_deref()
+        .is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
+
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
     let resolved = ResolvedListParams {
@@ -188,6 +211,7 @@ pub async fn list_assets(
         cursor: pagination.cursor,
         asset_type,
         asset_code: params.filter_code,
+        sac_only,
     };
 
     let source = DataSource::for_module(Module::Assets);
@@ -217,7 +241,10 @@ pub async fn list_assets(
             )
         },
     );
-    let data: Vec<AssetItem> = rows.into_iter().map(map_item).collect();
+    let data: Vec<AssetItem> = rows
+        .into_iter()
+        .map(|r| map_item(r, &state.network_id))
+        .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -290,7 +317,7 @@ pub async fn get_asset(State(state): State<AppState>, Path(id): Path<String>) ->
     };
 
     let response = AssetDetailResponse {
-        item: map_item(row),
+        item: map_item(row, &state.network_id),
         deployed_at_ledger,
         description,
         home_page,
@@ -584,6 +611,8 @@ mod tests {
             issuer_home_domain: None,
             issuer_id: 0,
             contract_surrogate_id: 0,
+            sac_contract_surrogate: 0,
+            sac_deployed: false,
         }
     }
 
@@ -680,10 +709,37 @@ mod tests {
 
     #[test]
     fn canonical_id_prefers_contract_strkey() {
-        // SAC classic-wrap carries BOTH a classic identity and a contract id;
-        // the contract StrKey wins (single canonical token).
-        let row = asset_row(2, Some("USDC"), Some(G_STRKEY), Some(C_STRKEY));
+        // Defensive precedence: a present key `contract_id` wins over CODE-ISSUER.
+        // Post-ADR 0051 a row never carries both (soroban has only a contract id,
+        // classic only code+issuer), but the ordering is still the contract.
+        let row = asset_row(3, Some("USDC"), Some(G_STRKEY), Some(C_STRKEY));
         assert_eq!(canonical_id(&row), C_STRKEY);
+    }
+
+    #[test]
+    fn map_item_rederives_sac_strkey_for_classic_wrap() {
+        // ADR 0051: a classic_credit asset with an observed SAC surfaces the
+        // re-derived C… StrKey (never stored) + the deployed flag. USDC's mainnet
+        // SAC is a published constant — regression-guards the read-side derivation.
+        const USDC_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let net = xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE);
+
+        let mut row = asset_row(1, Some("USDC"), Some(USDC_ISSUER), None);
+        row.sac_contract_surrogate = 42; // non-zero ⇒ "has SAC" (value irrelevant)
+        row.sac_deployed = true;
+        let item = map_item(row, &net);
+        assert_eq!(
+            item.sac_contract_id.as_deref(),
+            Some("CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75")
+        );
+        assert_eq!(item.sac_deployed, Some(true));
+        assert_eq!(item.contract_id, None); // key contract_id stays soroban-only
+
+        // No observed SAC ⇒ no facet on the wire.
+        let plain = asset_row(1, Some("USDC"), Some(USDC_ISSUER), None);
+        let plain_item = map_item(plain, &net);
+        assert_eq!(plain_item.sac_contract_id, None);
+        assert_eq!(plain_item.sac_deployed, None);
     }
 
     #[test]

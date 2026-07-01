@@ -63,7 +63,7 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
     match asset_type {
         0 => Some("native"),
         1 => Some("classic_credit"),
-        2 => Some("sac"),
+        // 2 (`sac`) retired — ADR 0051; a SAC is a facet of classic_credit / native.
         3 => Some("soroban"),
         _ => None,
     }
@@ -121,7 +121,9 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
      nullIf(ae.icon_url, '')      AS icon_url, \
      a.issuer_id                  AS issuer_id_key, \
-     a.contract_id                AS contract_id_key \
+     a.contract_id                AS contract_id_key, \
+     a.sac_contract_id            AS sac_contract_surrogate, \
+     a.sac_deployed               AS sac_deployed \
      FROM assets a FINAL \
      LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
      LEFT JOIN ( \
@@ -156,6 +158,8 @@ struct AssetListChRow {
     icon_url: Option<String>,
     issuer_id_key: i64,
     contract_id_key: i64,
+    sac_contract_surrogate: i64,
+    sac_deployed: bool,
 }
 
 /// Issuer resolve row: `accounts` → `id` (surrogate) + `account_id` StrKey +
@@ -198,6 +202,8 @@ fn list_row_to_asset_row(r: AssetListChRow, iss: Option<(String, Option<String>)
         issuer_home_domain,
         issuer_id: r.issuer_id_key,
         contract_surrogate_id: r.contract_id_key,
+        sac_contract_surrogate: r.sac_contract_surrogate,
+        sac_deployed: r.sac_deployed,
     }
 }
 
@@ -272,6 +278,13 @@ pub async fn fetch_list(
     let type_clause = params
         .asset_type
         .map_or_else(String::new, |t| format!(" AND a.asset_type = {t}"));
+    // SAC property filter (ADR 0051): the old `filter[type]=sac` view, now a
+    // facet predicate over classic_credit / native rows.
+    let sac_clause = if params.sac_only {
+        " AND a.sac_contract_id != 0"
+    } else {
+        ""
+    };
     let code_clause = if params.asset_code.is_some() {
         " AND positionCaseInsensitive(a.asset_code, ?) > 0"
     } else {
@@ -285,7 +298,7 @@ pub async fn fetch_list(
 
     let sql = format!(
         "{ASSET_LIST_CH_SELECT} \
-         WHERE 1{type_clause}{code_clause}{cursor_clause} \
+         WHERE 1{type_clause}{sac_clause}{code_clause}{cursor_clause} \
          ORDER BY a.asset_type {order}, a.asset_code {order}, \
                   a.issuer_id {order}, a.contract_id {order} \
          LIMIT ?"
@@ -357,14 +370,28 @@ pub async fn fetch_list(
 // Detail — GET /v1/assets/:id (canonical 09), three resolution forms
 // ---------------------------------------------------------------------------
 
-/// Resolve by contract StrKey (SAC / Soroban / native XLM-SAC). PK seek on
-/// `soroban_contracts.contract_id`, then the issuer StrKey + home_domain by a
-/// single `accounts.id` key-seek (task 0334) instead of the full `accounts` join.
+/// Resolve by contract StrKey (`C…`) — either a bespoke `soroban` asset (the
+/// contract IS the asset) OR a SAC whose deep-link must resolve to the wrapped
+/// classic / native asset (ADR 0051). Two match arms:
+///   * `sc.contract_id = ?` — soroban identity (the `assets.contract_id` key,
+///     resolved via the `soroban_contracts` join).
+///   * `a.sac_contract_id = {surrogate}` — the SAC facet. The `C…` StrKey is
+///     hashed to its `assets.sac_contract_id` surrogate the same way the writer
+///     derives it (`db_clickhouse::persist::ids::contract_id`), so `/assets/{C…}`
+///     for a SAC lands on its classic / native row.
+///
+/// A `C…` is at most one of the two (a SAC address ≠ a deployed-wasm address),
+/// so the OR yields a single row. Issuer StrKey + home_domain then resolve by a
+/// single `accounts.id` key-seek (task 0334).
 pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_LIST_CH_SELECT} WHERE sc.contract_id = ? LIMIT 1");
+    let sac_surrogate = db_clickhouse::persist::ids::contract_id(contract_id);
+    let sql = format!(
+        "{ASSET_LIST_CH_SELECT} \
+         WHERE sc.contract_id = ? OR a.sac_contract_id = {sac_surrogate} LIMIT 1"
+    );
     let row = client
         .query(&sql)
         .bind(contract_id)
@@ -378,8 +405,9 @@ pub async fn fetch_by_contract_id(
 /// `accounts.account_id` PK seek (accounts is `ORDER BY account_id`), then filter
 /// `assets` by `(asset_code, issuer_id)` — no full `accounts` join (task 0334).
 /// The same seek yields the issuer StrKey + home_domain, so no second lookup.
-/// `ORDER BY a.asset_type` makes the classic credit row (type 1) win over its
-/// coexisting SAC-wrap (type 2) deterministically — both share `(code, issuer)`.
+/// `ORDER BY a.asset_type` is a deterministic tiebreak; post-ADR 0051 a
+/// `(code, issuer)` maps to a single classic_credit row (its SAC is a facet on
+/// that same row, not a separate type=2), so at most one row matches anyway.
 pub async fn fetch_by_code_issuer(
     client: &clickhouse::Client,
     asset_code: &str,
@@ -612,7 +640,8 @@ mod tests {
     fn asset_type_name_matches_pg_function() {
         assert_eq!(asset_type_name(0).as_deref(), Some("native"));
         assert_eq!(asset_type_name(1).as_deref(), Some("classic_credit"));
-        assert_eq!(asset_type_name(2).as_deref(), Some("sac"));
+        // 2 (`sac`) retired — ADR 0051.
+        assert_eq!(asset_type_name(2), None);
         assert_eq!(asset_type_name(3).as_deref(), Some("soroban"));
         assert_eq!(asset_type_name(99), None);
     }
