@@ -1932,6 +1932,10 @@
             "type": "string",
             "description": "RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331\nOption C: one convention for all asset types; classic `decimals` = 7). The\naccount portfolio now includes Soroban (type-3) token balances too."
           },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the Soroban token's contract (type-3 only) — the identity +\nlink target (`/assets/${contract_id}`). `null` for native / classic."
+          },
           "decimals": {
             "type": "integer",
             "format": "int32",
@@ -1941,6 +1945,10 @@
           "last_updated_ledger": {
             "type": "integer",
             "format": "int64"
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain token `symbol` (type-3, from `METADATA`) — the display code for\nSoroban tokens. `null` for native / classic (they carry `asset_code`)."
           },
           "type": {
             "type": "integer",

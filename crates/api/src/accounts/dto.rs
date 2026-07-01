@@ -56,6 +56,12 @@ pub struct AccountBalance {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
+    /// C-strkey of the Soroban token's contract (type-3 only) — the identity +
+    /// link target (`/assets/${contract_id}`). `null` for native / classic.
+    pub contract_id: Option<String>,
+    /// On-chain token `symbol` (type-3, from `METADATA`) — the display code for
+    /// Soroban tokens. `null` for native / classic (they carry `asset_code`).
+    pub symbol: Option<String>,
     /// RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
     /// Option C: one convention for all asset types; classic `decimals` = 7). The
     /// account portfolio now includes Soroban (type-3) token balances too.

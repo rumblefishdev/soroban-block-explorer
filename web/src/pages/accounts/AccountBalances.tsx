@@ -20,7 +20,7 @@ interface BalanceShape {
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic' | 'SAC' | null;
+  chipLabel: 'Classic' | 'SAC' | 'Token' | null;
   href: string | undefined;
 }
 
@@ -35,6 +35,20 @@ function shape(balance: AccountBalance): BalanceShape {
       href: undefined,
     };
   }
+  // Soroban token (type-3): no classic code/issuer — its identity is the token
+  // contract + on-chain symbol. Link to the asset detail page by contract id.
+  if (balance.type === 3) {
+    const symbol = balance.symbol ?? '—';
+    return {
+      isNative: false,
+      name: symbol,
+      code: symbol,
+      subline: balance.contract_id ?? '',
+      chipLabel: 'Token',
+      href: balance.contract_id ? routes.asset(balance.contract_id) : undefined,
+    };
+  }
+
   const code = balance.asset_code ?? '—';
   const issuer = balance.asset_issuer ?? '';
 
@@ -150,7 +164,13 @@ function BalanceRow({
           {s.chipLabel && (
             <Chip
               size="sm"
-              color={s.chipLabel === 'SAC' ? 'brown' : 'default'}
+              color={
+                s.chipLabel === 'SAC'
+                  ? 'brown'
+                  : s.chipLabel === 'Token'
+                    ? 'neutral'
+                    : 'default'
+              }
               label={s.chipLabel}
             />
           )}

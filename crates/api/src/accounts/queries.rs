@@ -118,6 +118,8 @@ pub struct AccountBalanceRow {
     pub asset_type: i16,
     pub asset_code: Option<String>,
     pub asset_issuer: Option<String>,
+    pub contract_id: Option<String>,
+    pub symbol: Option<String>,
     pub balance: String,
     pub decimals: u32,
     pub last_updated_ledger: i64,

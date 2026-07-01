@@ -304,6 +304,8 @@ struct AccountBalanceChRow {
     asset_type: i16,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
+    contract_id: Option<String>,
+    symbol: Option<String>,
     balance: String,
     decimals: u32,
     last_updated_ledger: i64,
@@ -325,6 +327,8 @@ pub async fn fetch_balances(
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
                 nullIf(iss.account_id, '')    AS asset_issuer, \
+                nullIf(sc.contract_id, '')    AS contract_id, \
+                nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
                 coalesce(m.decimals, 7)       AS decimals, \
                 b.last_updated_ledger         AS last_updated_ledger \
@@ -333,7 +337,7 @@ pub async fn fetch_balances(
              LEFT JOIN accounts iss ON iss.id = a.issuer_id \
              LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
              LEFT JOIN ( \
-                 SELECT contract_id, decimals FROM soroban_contract_metadata FINAL \
+                 SELECT contract_id, symbol, decimals FROM soroban_contract_metadata FINAL \
              ) m ON m.contract_id = sc.contract_id \
              WHERE b.holder_id = ? AND b.amount != 0 \
              ORDER BY a.asset_type, a.asset_code",
@@ -349,6 +353,8 @@ pub async fn fetch_balances(
             asset_type: r.asset_type,
             asset_code: r.asset_code,
             asset_issuer: r.asset_issuer,
+            contract_id: r.contract_id,
+            symbol: r.symbol,
             balance: r.balance,
             decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,

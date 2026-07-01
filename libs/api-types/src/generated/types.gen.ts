@@ -21,10 +21,20 @@ export type AccountBalance = {
    */
   balance: string;
   /**
+   * C-strkey of the Soroban token's contract (type-3 only) — the identity +
+   * link target (`/assets/${contract_id}`). `null` for native / classic.
+   */
+  contract_id?: string | null;
+  /**
    * Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
    */
   decimals: number;
   last_updated_ledger: number;
+  /**
+   * On-chain token `symbol` (type-3, from `METADATA`) — the display code for
+   * Soroban tokens. `null` for native / classic (they carry `asset_code`).
+   */
+  symbol?: string | null;
   /**
    * Raw SMALLINT — stable across label renames.
    */
