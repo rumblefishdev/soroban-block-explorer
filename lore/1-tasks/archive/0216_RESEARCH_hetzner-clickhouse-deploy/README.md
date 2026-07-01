@@ -2,7 +2,7 @@
 id: '0216'
 title: 'RESEARCH: Hetzner production ClickHouse — server selection, provisioning, deploy mechanism'
 type: RESEARCH
-status: active
+status: completed
 related_adr: ['0044', '0045']
 related_tasks: ['0227']
 tags:
@@ -31,6 +31,14 @@ history:
   - date: '2026-05-15'
     status: active
     note: 'Hardware ordered and provisioned.'
+  - date: '2026-07-01'
+    status: completed
+    note: >
+      Archived as completed. Research + provisioning delivered: server selected,
+      hardware ordered and provisioned, deploy mechanism decided (data plane on
+      Hetzner, API stays on AWS). Implementation follow-ups 0227 (ansible), 0239
+      (AWS cutover) and 0240 (CH RBAC) are all archived and prod ClickHouse is
+      live on Hetzner. All acceptance criteria met.
 ---
 
 # RESEARCH: Hetzner production ClickHouse

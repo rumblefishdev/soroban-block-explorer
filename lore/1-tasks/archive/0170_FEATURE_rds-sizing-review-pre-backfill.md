@@ -2,7 +2,8 @@
 id: '0170'
 title: 'Infra: RDS instance type sizing review before mainnet backfill'
 type: FEATURE
-status: backlog
+status: canceled
+reason: obsolete
 related_adr: ['0011', '0019', '0037']
 related_tasks: ['0045', '0130', '0145']
 tags: [layer-infra, rds, performance, capacity-planning, phase-pre-backfill]
@@ -17,6 +18,14 @@ history:
       11.6M ledgers backfill workload at Stellar mainnet scale; right-sizing
       must precede task 0130 (historical partitions) and task 0145
       (backfill-runner).
+  - date: 2026-07-01
+    status: canceled
+    who: stkrolikiewicz
+    note: >
+      Archived as canceled (obsolete). The AWS RDS/Postgres serving + backfill
+      topology this task exists to right-size was abandoned per ADR 0044/0045 —
+      the data plane moved to ClickHouse on Hetzner. There is no RDS instance to
+      size.
 ---
 
 # Infra: RDS instance type sizing review before mainnet backfill

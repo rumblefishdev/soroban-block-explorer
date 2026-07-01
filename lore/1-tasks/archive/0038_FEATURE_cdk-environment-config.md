@@ -2,7 +2,7 @@
 id: '0038'
 title: 'CDK: environment-specific configuration (dev/staging/prod)'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0006']
 tags: [priority-high, effort-medium, layer-infra]
@@ -14,6 +14,16 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created'
+  - date: 2026-07-01
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived as completed. The environment-config capability shipped and is in
+      prod: EnvironmentConfig + validateConfig in infra/src/lib/types.ts, values
+      in infra/envs/production.json, loaded typed in bin/production.ts and
+      lib/app.ts, consumed by 0191/0234/0239/0241/0273/0277. Original
+      dev/staging/RDS scope is obsolete after the 0239 AWS cutover and 0249
+      staging retirement.
 ---
 
 # CDK: environment-specific configuration (dev/staging/prod)

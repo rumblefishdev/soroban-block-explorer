@@ -2,7 +2,7 @@
 id: '0301'
 title: 'ClickHouse enrichment rollout + finish: deploy, prod drain, NFT read-join, full smoke, cleanup'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: ['0044', '0045', '0047', '0050']
 related_tasks: ['0231', '0243', '0282']
 tags:
@@ -36,6 +36,15 @@ history:
       task, allocated first on develop). Moved this task to the next free id
       (0300 was the prior max). Rewrote all refs (0231 README, ADR 0050, the
       enrichment code comments).
+  - date: '2026-07-01'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Archived as completed. The rollout landed: CH deploy and read-path flip
+      across all 9 API modules (0243, 0284), NFT read-join, prod drain, and
+      ADR-0032 docs sync all shipped. Residual code follow-ups (dead-column drop,
+      async_insert) are carried by successors 0310/0322. Nothing remains uniquely
+      owned by 0301.
 ---
 
 # ClickHouse enrichment rollout + finish

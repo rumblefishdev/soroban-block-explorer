@@ -2,7 +2,7 @@
 id: '0089'
 title: 'Load testing: 1M baseline and 10M stress scenarios'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0338']
 tags: [priority-high, effort-medium, layer-testing]
@@ -22,6 +22,14 @@ history:
       Cloudflare, B2 CH correlation, loadTesting flag). This task's plan is
       stale (RDS read-replica + staging assumptions, both decommissioned).
       Fold/archive once 0338 lands.
+  - date: 2026-07-01
+    status: superseded
+    who: stkrolikiewicz
+    note: >
+      Archived as superseded by 0338 (current-architecture k6 + ClickHouse-
+      correlation harness). 0089's RDS-read-replica + staging plan is stale (both
+      decommissioned). Confirms the 2026-06-30 note's fold/archive-once-0338-lands
+      intent; the load-testing effort now lives entirely under 0338.
 ---
 
 # Load testing: 1M baseline and 10M stress scenarios
