@@ -4,7 +4,7 @@ title: 'Load testing: 1M baseline and 10M stress scenarios'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: []
+related_tasks: ['0338']
 tags: [priority-high, effort-medium, layer-testing]
 milestone: 3
 links:
@@ -14,6 +14,14 @@ history:
     status: backlog
     who: fmazur
     note: 'Task created — D3 scope coverage (task 0085)'
+  - date: 2026-06-30
+    status: backlog
+    who: fmazur
+    note: >
+      Superseded by 0338 (concrete current-architecture harness: k6 through
+      Cloudflare, B2 CH correlation, loadTesting flag). This task's plan is
+      stale (RDS read-replica + staging assumptions, both decommissioned).
+      Fold/archive once 0338 lands.
 ---
 
 # Load testing: 1M baseline and 10M stress scenarios

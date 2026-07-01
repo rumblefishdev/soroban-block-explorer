@@ -92,10 +92,10 @@ export function EventsSection({
                     )}
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    <HighlightedJson value={event.topics} compact />
+                    <HighlightedJson value={event.topics} />
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    <HighlightedJson value={event.data} compact />
+                    <HighlightedJson value={event.data} />
                   </TableCell>
                 </TableRow>
               ))}

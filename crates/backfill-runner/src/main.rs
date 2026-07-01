@@ -391,14 +391,27 @@ async fn main() {
                     .await
                     .expect("upgradeable_backfill failed — idempotent, safe to re-run");
             println!(
-                "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={}",
+                "upgradeable_backfill completed (dry_run={}): scanned={} resolved={} upgradeable={} frozen={} missing_on_rpc={} malformed_metadata={}",
                 stats.dry_run,
                 stats.scanned,
                 stats.resolved,
                 stats.upgradeable,
                 stats.frozen,
                 stats.missing_on_rpc,
+                stats.malformed_metadata,
             );
+            // Unresolved in-use WASMs / skipped malformed rows are no longer a
+            // panic (task 0326 op decision): the resolved rows are already written
+            // and the summary above is the useful output. But they ARE a real
+            // anomaly the operator must chase, so a for-real run still exits
+            // non-zero (dry-run only previews, never signals failure).
+            if !stats.dry_run && (stats.missing_on_rpc > 0 || stats.malformed_metadata > 0) {
+                eprintln!(
+                    "upgradeable_backfill: {} unresolved + {} malformed left Unknown — re-run after fixing (idempotent)",
+                    stats.missing_on_rpc, stats.malformed_metadata,
+                );
+                std::process::exit(1);
+            }
         }
         Command::BalanceSeed { dry_run } => {
             // rpc_url required only on the CH path; `execute` enforces it after

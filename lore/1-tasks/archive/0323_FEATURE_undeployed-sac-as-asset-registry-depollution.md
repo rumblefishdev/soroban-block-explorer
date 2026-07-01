@@ -2,7 +2,7 @@
 id: '0323'
 title: 'FEATURE: model un-deployed SACs as assets, not soroban_contracts rows (registry depollution / T3)'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0294', '0218', '0283']
 tags:
@@ -27,7 +27,7 @@ history:
       the orphans genuinely have no on-ledger contract instance.
   - date: '2026-06-25'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Promoted to active + runbook added (sequencing for the next 0281-style
       maintenance window). Blockers re-confirmed clear: related 0294/0218/0283
@@ -36,7 +36,7 @@ history:
       open) → Phase 1 (PR) precedes any prod data-pass. See ## Runbook.
   - date: '2026-06-25'
     status: active
-    who: claude
+    who: stkrolikiewicz
     note: >
       Phase 1 (code) implemented + PR #286: writer skip + skeleton removal
       (event-sourced detect_undeployed_sac_overrides), AC#3 SAC asset emission,
@@ -45,6 +45,19 @@ history:
       clippy clean; ADR-0032 docs synced. Phase-1 ACs checked. Remaining is Phase 2
       (window data-pass): prod-count verify + ~87M nfts_pending drop, gated on #286
       merge + indexer redeploy.
+  - date: '2026-06-30'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Phase 2 EXECUTED on prod CH. Gate #286 confirmed live (indexer Lambda
+      `LastModified` 2026-06-26T09:37 > #286 merge 08:07; concurrency=1; behavioral
+      ghost-flat). AC#6: deleted 312,854 un-deployed-SAC ghost rows (predicate
+      `coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL`, guard=0, snapshot-driven);
+      `ghosts_left=0`, soroban_contracts FINAL 430,778→117,924, deployed SACs kept (3,910),
+      un-deployed-SAC assets kept (32,486). AC#7: N/A — false `nfts_pending` /
+      `nft_ownership_pending` already drained (0/0 for the targets); the "~87M" estimate was
+      both wrong-scale (real tables ~37k/87k rows) and stale. No stop-ingest (gate live → no
+      regrow). Targeted backup `pre_0323_phase2` taken. All ACs done/N/A → archived.
 ---
 
 # FEATURE: model un-deployed SACs as assets, not soroban_contracts rows
@@ -185,10 +198,11 @@ NULL` — un-deployed SACs that emit NO SAC-control event (not gate-confirmable)
 ## Acceptance Criteria
 
 - [x] Writer no longer creates `soroban_contracts` rows for un-deployed SACs (Pass-2 skip + skeleton removal); unit-tested (a SAC-event-only ledger writes no contract row for it) — PR #286.
-- [ ] **(Phase 2 — prod verify)** `/v1/contracts` returns only deployed instances
-      (forward-fixed in PR #286; existing ~311k ghosts deleted in the Phase-2 pass) —
-      verified on prod counts. **Cleanup predicate is `coalesce(deployed_at_ledger,0)=0`, NOT
-      `IS NULL`** — `IS NULL` misses the ~235k `=0`-sentinel skeleton rows.
+- [x] **(Phase 2 — DONE 2026-06-30)** `/v1/contracts` returns only deployed instances —
+      **312,854** ghost rows deleted on prod (predicate
+      `coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL`, guard=0, snapshot-driven);
+      `ghosts_left=0`, registry FINAL
+      430,778→117,924, deployed SACs (3,910) + un-deployed-SAC assets (32,486) untouched.
 - [x] The 3 INNER joins are LEFT (PR #286); a tx/event/NFT referencing a row-less contract
       no longer vanishes. (Appearance-vanish regression is CH-integration / live tests.)
 - [x] Un-deployed-SAC assets present in `assets` — AC#3 emits a SAC asset row per
@@ -198,9 +212,10 @@ NULL` — un-deployed SACs that emit NO SAC-control event (not gate-confirmable)
 - [x] Historical cleanup decided — **delete** existing un-deployed-SAC rows in the Phase-2
       window pass (predicate `coalesce(deployed_at_ledger,0)=0 AND wasm_hash IS NULL`,
       guarded vs pre-window deploys); NOT age-out. See ## Runbook.
-- [ ] **(Phase 2)** **~87M false `nfts_pending` + `nft_ownership_pending` rows for
-      crypto-proven-SAC contracts dropped** (the PR #286 gate only stops NEW ones; the drop
-      is the window data-pass).
+- [x] **(Phase 2 — N/A 2026-06-30)** false `nfts_pending` + `nft_ownership_pending` for the
+      crypto-proven-SAC contracts — **already drained** (0/0 rows for the 312,854 targets at
+      execution). The "~87M" estimate was wrong-scale (real tables ~37k/87k rows total) and
+      stale (prior nft-reclassify batches cleared them). No drop needed.
 - [x] **Dead `sac_overrides` plumbing removed** — `derive_sac_overrides_from_assets` + its 7
       tests + export deleted; `sac_overrides` repurposed to event-derived (PR #286).
 

@@ -2,7 +2,7 @@
 id: '0268'
 title: 'SCHEMA: operations_appearances.pool_id → pool_ids Array(FixedString(32)) for multi-hop path payments'
 type: SCHEMA
-status: active
+status: completed
 related_adr: ['0033', '0044']
 related_tasks: ['0243', '0252', '0261', '0266', '0267', '0281']
 tags:
@@ -71,6 +71,24 @@ history:
       Remaining before archive: re-enable indexer (restore concurrency 1,
       revert pause commit 08acc738) + 1-ledger smoke confirms pool_ids write +
       0267 E20 re-confirm. See [[project_indexer_ch015_opappear_drift]].
+  - date: '2026-06-30'
+    status: done
+    who: stkrolikiewicz
+    note: >
+      All three pre-archive gates verified GREEN on prod (ch-prod-01),
+      task complete. (1) Schema: `system.columns` shows only
+      `pool_ids Array(FixedString(32))`; legacy `pool_id` gone. (2) Smoke
+      (last 200k ledgers, tip 63.20M — indexer re-enabled 06-29 via commit
+      2ae0ec14, concurrency 0→1): `lp_missing_pool=0` (every type 22/23 LP op
+      keeps its pool post-drop), and `pp_multihop=4.02M` of 19.23M
+      path-payment ops = ~21% genuinely multi-hop — the exact data the old
+      scalar `pool_id` discarded, above the original 10–15% napkin estimate.
+      (3) E20 `compare_e20_ch.py --anchors 50` vs Horizon: evaluated=50,
+      skipped=0, mean_recall=1.0000, mean_precision=0.9999, min_recall=1.0000,
+      min_precision=0.9950, zero FLAGs → `fail_total=0`, 100% hash-set
+      coverage. Docs (database-schema-overview.md) + api-types
+      (`pool_ids: Array<string>`) already landed with the 0261 code PR.
+      Flow B fully delivered end-to-end.
 ---
 
 # SCHEMA: operations_appearances.pool_id → pool_ids Array
@@ -214,15 +232,16 @@ Former Flow A (scalar first) is dead — kept in git history only.
 - [x] Legacy `pool_id` column dropped only after API + indexer
       cutover verified. (Phase 3 — REMOVE DEFAULT + DROP COLUMN, run
       2026-06-26; E20 gate satisfied 06-18.)
-- [ ] Indexer re-enabled post-drop + 1-ledger smoke confirms `pool_ids`
-      write under clickhouse 0.15 (deferred — final gate before archive).
-- [ ] `compare_e20.py` post-migration `fail_total = 0` (100 %
-      hash-set coverage).
-- [ ] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md`
-      records the array semantic.
-- [ ] **API types regenerated** — required (response shape changes
-      from `pool_id: string | null` to `pool_ids: string[]` in the
-      LP-tx endpoints).
+- [x] Indexer re-enabled post-drop + 1-ledger smoke confirms `pool_ids`
+      write under clickhouse 0.15. (06-29 re-enable, concurrency 0→1;
+      smoke 06-30: `lp_missing_pool=0`, tip 63.20M, multi-hop 4.02M.)
+- [x] `compare_e20.py` post-migration `fail_total = 0` (100 %
+      hash-set coverage). (06-30: evaluated=50, min_recall=1.0000,
+      min_precision=0.9950, zero FLAGs.)
+- [x] **Docs updated** — `docs/architecture/database-schema/database-schema-overview.md`
+      records the array semantic. (Landed with 0261 code PR — overview L363.)
+- [x] **API types regenerated** — `pool_ids: Array<string>` in the
+      LP-tx endpoints. (Landed with 0261 code PR — types.gen.ts L833.)
 
 ## Notes
 

@@ -13,17 +13,22 @@
 //!   so the `asset_type` → label mapping is done in Rust ([`asset_type_name`]),
 //!   identical to the PG migration `20260422000000_enum_label_functions`.
 //! - **`assets a FINAL`** collapses re-ingested asset versions (ReplacingMergeTree
-//!   keyed on the 4-tuple). The `accounts` / `soroban_contracts` lookup joins
-//!   carry no FINAL — same convention as the contracts/accounts CH detail
-//!   reads: the identity columns they project (issuer StrKey, contract StrKey,
-//!   write-once `home_domain` / `deployed_at_ledger`) are stable across
-//!   versions, and a 16M-row `accounts FINAL` would be ruinous.
-//! - **`nullIf(...)` on the joined columns** (issuer / contract_id /
-//!   home_domain → `nullIf(_, '')`, deployed_at_ledger → `nullIf(_, 0)`) makes a
-//!   LEFT-JOIN miss decode as `None`. We do NOT use `SETTINGS join_use_nulls = 1`
-//!   — the `api_reader` CH user runs under `readonly = 1` (RBAC profile
-//!   `read_only`), which rejects per-query setting overrides. Same convention as
-//!   stkrolikiewicz's CH modules (accounts `fetch_balances`, LP).
+//!   keyed on the 4-tuple). The `soroban_contracts` lookup join carries no FINAL
+//!   — the identity columns it projects (contract StrKey, `deployed_at_ledger`)
+//!   are write-once / stable across versions. The `accounts` table is NOT joined
+//!   (task 0319 for the list, task 0334 for the detail): a full `accounts` hash
+//!   side (~18M rows) was the dominant read cost. The issuer is resolved by a
+//!   separate `accounts.id` key-seek instead. `home_domain` IS mutable
+//!   (SET_OPTIONS), so the seek picks the latest version
+//!   (`ORDER BY last_seen_ledger DESC LIMIT 1`); a 16M-row `accounts FINAL`
+//!   would be ruinous.
+//! - **`nullIf(...)` on the joined columns** (contract_id → `nullIf(_, '')`,
+//!   deployed_at_ledger → `nullIf(_, 0)`) makes a LEFT-JOIN miss decode as
+//!   `None`. We do NOT use `SETTINGS join_use_nulls = 1` — the `api_reader` CH
+//!   user runs under `readonly = 1` (RBAC profile `read_only`), which rejects
+//!   per-query setting overrides. Same convention as stkrolikiewicz's CH modules
+//!   (accounts `fetch_balances`, LP). The issuer StrKey / home_domain are emptied
+//!   to `None` in Rust ([`list_row_to_asset_row`]), not via `nullIf`.
 //! - **Cursor** is the composite `AssetKeyCursor`; its keyset clause is only
 //!   present on continuation pages, so the clickhouse 0.15 "None bound into a
 //!   tuple keyset returns 0 rows" defect is sidestepped (the bound values are
@@ -65,11 +70,11 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
     .map(str::to_string)
 }
 
-/// Shared projection — column order MUST match [`AssetChRow`] (positional decode).
-/// `nullIf(asset_code, '')` collapses the native sentinel to `None`; the joined
-/// `issuer` / `contract_id` / `home_domain` / `deployed_at_ledger` decode to
-/// `None` on a JOIN miss via the `nullIf(...)` wraps (readonly-safe; no
-/// `SETTINGS join_use_nulls`).
+// Projection / enrichment semantics shared by the list + detail reads (task
+// 0334 collapsed the detail paths onto the same accounts-join-free SELECT).
+// Column order MUST match the row struct (positional decode); the `nullIf(...)`
+// wraps make a LEFT-JOIN miss decode as `None` (readonly-safe; no
+// `SETTINGS join_use_nulls`).
 // Enrichment (icon_url + classic/SAC name) is read from the `asset_enrichment`
 // side table (ADR 0050 / task 0231), NOT the indexer-owned `assets.{icon_url,
 // name}` placeholders (dropped, task 0231 step 8). Per Option C the name has a
@@ -83,77 +88,26 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // sub-aggregate collapses it to one latest row per key so the LEFT JOIN can't
 // multiply asset rows on un-merged duplicates. `''` is the sentinel
 // ("tried, nothing"), neutralised with `nullIf`.
-// `total_supply` / `holder_count` come from `balance_aggregates` (task 0331,
-// Option A) — the single pre-computed aggregate over the unified `balances` table,
-// keyed by the `assets.id` surrogate (`bagg.asset_id = a.id`). One 1:1 LEFT JOIN
-// for ALL asset types (classic + soroban). `total_supply` = Σ per-holder `amount`
-// over G+C holders: a mint always credits a holder balance (often a contract
-// treasury — captured because we sum contracts too), so the sum equals the token's
-// real supply. The narrow residue — TTL-archived entries + true rebasing — is the
-// accepted non-100% cost of ONE universal method (no per-token `TotalSupply` key
-// read; see task 0331 Option-A decision). RAW `Int128` (the API returns it raw;
-// clients scale by `decimals` — classic decimals=7). `Nullable` columns, so a JOIN
-// miss (no holders) reads NULL → "—" (not a fake 0). Refreshed by the MV on a
-// cadence (eventually consistent). Requires `assets.id` populated (prod: ALTER +
-// backfill — see init.sql).
-const ASSET_CH_SELECT: &str = "SELECT \
-     a.asset_type                 AS asset_type, \
-     nullIf(a.asset_code, '')     AS asset_code, \
-     nullIf(iss.account_id, '')   AS issuer, \
-     nullIf(iss.home_domain, '')  AS issuer_home_domain, \
-     nullIf(sc.contract_id, '')   AS contract_id, \
-     coalesce(nullIf(ae.name, ''), nullIf(m.name, ''), \
-              if(a.asset_type = 0, 'Stellar Lumen', NULL)) AS name, \
-     nullIf(m.symbol, '')         AS symbol, \
-     coalesce(m.decimals, 7)      AS decimals, \
-     toString(bagg.total_supply)  AS total_supply, \
-     bagg.holder_count            AS holder_count, \
-     nullIf(sc.deployed_at_ledger, 0) AS deployed_at_ledger, \
-     nullIf(ae.icon_url, '')      AS icon_url, \
-     a.issuer_id                  AS issuer_id_key, \
-     a.contract_id                AS contract_id_key \
-     FROM assets a FINAL \
-     LEFT JOIN accounts iss          ON iss.id = a.issuer_id \
-     LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id \
-     LEFT JOIN ( \
-         SELECT contract_id, name, symbol, decimals \
-         FROM soroban_contract_metadata FINAL \
-     ) m ON m.contract_id = sc.contract_id \
-     LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-     LEFT JOIN ( \
-         SELECT asset_type, asset_code, issuer_id, contract_id, \
-                argMax(icon_url, version) AS icon_url, \
-                argMax(name, version)     AS name \
-         FROM asset_enrichment \
-         GROUP BY asset_type, asset_code, issuer_id, contract_id \
-     ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
-         AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id";
-
-#[derive(Debug, Row, Deserialize)]
-struct AssetChRow {
-    asset_type: i16,
-    asset_code: Option<String>,
-    issuer: Option<String>,
-    issuer_home_domain: Option<String>,
-    contract_id: Option<String>,
-    name: Option<String>,
-    symbol: Option<String>,
-    decimals: u32,
-    total_supply: Option<String>,
-    holder_count: Option<i32>,
-    deployed_at_ledger: Option<i64>,
-    icon_url: Option<String>,
-    issuer_id_key: i64,
-    contract_id_key: i64,
-}
-
-/// List-only SELECT (task 0319): identical to [`ASSET_CH_SELECT`] **minus** the
-/// `LEFT JOIN accounts iss` and the two `issuer` columns it produced. That join
-/// built its hash side from the whole `accounts` table (~18M rows on prod) — the
-/// dominant cost of the ~1.35s `/assets` list. The issuer StrKey + home_domain
-/// are resolved per-page below by a bloom-pruned key-seek. The detail paths keep
-/// the joined `ASSET_CH_SELECT` (they filter on `iss.account_id`), so they are
-/// untouched.
+// `total_supply` / `holder_count` come from the pre-computed `asset_aggregates`
+// table (lore-0293), a 1:1 LEFT JOIN like enrichment. Its columns are
+// `Nullable`, so a JOIN miss (native / soroban — no row) reads as NULL under the
+// readonly `api_reader` (`join_use_nulls = 0` fills a Nullable column with its
+// default, which is NULL), while a real 0-supply asset (has a row) reads 0 — no
+// sentinel needed. The table is refreshed on a cadence (eventually consistent).
+// Two intended semantics (matching the retired PG batch, not bugs):
+//   * a classic asset and its SAC wrap share one `(asset_code, issuer_id)`
+//     aggregate row, so both display the same supply/holders — a SAC IS the
+//     wrapped underlying asset; the join is 1:1 (no row multiplication).
+//   * a classic asset with no current trustlines has no aggregate row → NULL
+//     supply/holders (the batch wrote 0). NULL = "no balance data", deliberate.
+/// Accounts-join-free SELECT, shared by the list (task 0319) AND the detail
+/// paths (task 0334). It drops the `LEFT JOIN accounts iss` (and the two `issuer`
+/// columns it produced) that built its hash side from the whole `accounts` table
+/// (~18M rows on prod) — the dominant cost of both the ~1.35s `/assets` list and
+/// the ~1s `/assets/:id` detail (prod: ~21M read_rows / ~1.58 GB / request, of
+/// which `accounts` was ~18.5M). The issuer StrKey + home_domain are resolved by
+/// a bloom-pruned `accounts.id` key-seek instead — per-page for the list, single
+/// for the detail (see [`resolve_issuer`]).
 const ASSET_LIST_CH_SELECT: &str = "SELECT \
      a.asset_type                 AS asset_type, \
      nullIf(a.asset_code, '')     AS asset_code, \
@@ -184,8 +138,9 @@ const ASSET_LIST_CH_SELECT: &str = "SELECT \
      ) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code \
          AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id";
 
-/// List row: [`AssetChRow`] minus the join-resolved `issuer` / `issuer_home_domain`
-/// (resolved per-page, task 0319).
+/// Row decoded from [`ASSET_LIST_CH_SELECT`] — the asset header WITHOUT the
+/// join-resolved `issuer` / `issuer_home_domain`, which are key-seeked separately
+/// (per-page for the list, task 0319; per-request for the detail, task 0334).
 #[derive(Debug, Row, Deserialize)]
 struct AssetListChRow {
     asset_type: i16,
@@ -202,8 +157,11 @@ struct AssetListChRow {
     contract_id_key: i64,
 }
 
-/// Step-2 resolve row: `accounts.id` (surrogate) → issuer `account_id` StrKey +
-/// `home_domain`, via the `idx_acc_id` bloom-pruned key-seek (task 0319).
+/// Issuer resolve row: `accounts` → `id` (surrogate) + `account_id` StrKey +
+/// `home_domain`. Decoded from [`seek_latest_account`], reached two ways: by `id`
+/// (rides the `idx_acc_id` bloom skip-index — list per-page seek, task 0319, and
+/// the detail `resolve_issuer`, task 0334) or by `account_id` (the table's
+/// `ORDER BY account_id` primary key — the CODE-ISSUER detail form, task 0334).
 #[derive(Debug, Row, Deserialize)]
 struct AssetIssuerRow {
     id: i64,
@@ -211,12 +169,23 @@ struct AssetIssuerRow {
     home_domain: Option<String>,
 }
 
-fn map_ch_row(r: AssetChRow) -> AssetRow {
+/// Build an [`AssetRow`] from an [`ASSET_LIST_CH_SELECT`] projection row plus the
+/// separately key-seeked issuer (`(StrKey, home_domain)`), consumed by value (no
+/// clone). `iss` is `None` for native / no-issuer assets or a seek miss. Shared
+/// by the list page map and the three detail fetches (task 0334).
+fn list_row_to_asset_row(r: AssetListChRow, iss: Option<(String, Option<String>)>) -> AssetRow {
+    let (issuer, issuer_home_domain) = match iss {
+        Some((account_id, home_domain)) => (
+            Some(account_id).filter(|s| !s.is_empty()),
+            home_domain.filter(|s| !s.is_empty()),
+        ),
+        None => (None, None),
+    };
     AssetRow {
         asset_type: r.asset_type,
         asset_type_name: asset_type_name(r.asset_type),
         asset_code: r.asset_code,
-        issuer: r.issuer,
+        issuer,
         contract_id: r.contract_id,
         name: r.name,
         symbol: r.symbol,
@@ -225,10 +194,63 @@ fn map_ch_row(r: AssetChRow) -> AssetRow {
         holder_count: r.holder_count,
         icon_url: r.icon_url,
         deployed_at_ledger: r.deployed_at_ledger,
-        issuer_home_domain: r.issuer_home_domain,
+        issuer_home_domain,
         issuer_id: r.issuer_id_key,
         contract_surrogate_id: r.contract_id_key,
     }
+}
+
+/// Single-row `accounts` seek → ([`AssetIssuerRow`]: `id`, `account_id` StrKey,
+/// `home_domain`), latest version. `where_col` MUST be a trusted static column
+/// name — `"id"` (rides the `idx_acc_id` bloom skip-index) or `"account_id"`
+/// (the `ORDER BY account_id` primary key) — NEVER user input (it is
+/// interpolated, the value is bound). `home_domain` is mutable (SET_OPTIONS), so
+/// pick the latest version (`ORDER BY last_seen_ledger DESC LIMIT 1`, no FINAL).
+async fn seek_latest_account(
+    client: &clickhouse::Client,
+    where_col: &str,
+    value: impl serde::Serialize,
+) -> Result<Option<AssetIssuerRow>, clickhouse::error::Error> {
+    let sql = format!(
+        "SELECT id AS id, account_id AS account_id, home_domain AS home_domain \
+         FROM accounts WHERE {where_col} = ? \
+         ORDER BY last_seen_ledger DESC LIMIT 1"
+    );
+    client
+        .query(&sql)
+        .bind(value)
+        .fetch_optional::<AssetIssuerRow>()
+        .await
+}
+
+/// Resolve one issuer surrogate `id` → `(StrKey, home_domain)` via the
+/// `accounts.id` bloom-pruned key-seek (task 0334) — NOT a full `accounts` scan /
+/// hash join. `id == 0` (native / no issuer) returns `None` without a query.
+async fn resolve_issuer(
+    client: &clickhouse::Client,
+    issuer_id: i64,
+) -> Result<Option<(String, Option<String>)>, clickhouse::error::Error> {
+    if issuer_id == 0 {
+        return Ok(None);
+    }
+    Ok(seek_latest_account(client, "id", issuer_id)
+        .await?
+        .map(|r| (r.account_id, r.home_domain)))
+}
+
+/// Finish a detail fetch whose asset row was read from [`ASSET_LIST_CH_SELECT`]:
+/// resolve the issuer by an `accounts.id` key-seek, then map to [`AssetRow`].
+/// Shared by the contract-StrKey and native forms (the CODE-ISSUER form resolves
+/// its issuer up front, so it maps directly). A `None` row ⇒ asset not found.
+async fn finish_detail(
+    client: &clickhouse::Client,
+    row: Option<AssetListChRow>,
+) -> Result<Option<AssetRow>, clickhouse::error::Error> {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let iss = resolve_issuer(client, row.issuer_id_key).await?;
+    Ok(Some(list_row_to_asset_row(row, iss)))
 }
 
 // ---------------------------------------------------------------------------
@@ -324,24 +346,8 @@ pub async fn fetch_list(
     Ok(rows
         .into_iter()
         .map(|r| {
-            let iss = issuers.get(&r.issuer_id_key);
-            AssetRow {
-                asset_type: r.asset_type,
-                asset_type_name: asset_type_name(r.asset_type),
-                asset_code: r.asset_code,
-                issuer: iss.map(|(acc, _)| acc.clone()).filter(|s| !s.is_empty()),
-                contract_id: r.contract_id,
-                name: r.name,
-                symbol: r.symbol,
-                decimals: r.decimals,
-                total_supply: r.total_supply,
-                holder_count: r.holder_count,
-                icon_url: r.icon_url,
-                deployed_at_ledger: r.deployed_at_ledger,
-                issuer_home_domain: iss.and_then(|(_, hd)| hd.clone()).filter(|s| !s.is_empty()),
-                issuer_id: r.issuer_id_key,
-                contract_surrogate_id: r.contract_id_key,
-            }
+            let iss = issuers.get(&r.issuer_id_key).cloned();
+            list_row_to_asset_row(r, iss)
         })
         .collect())
 }
@@ -351,46 +357,69 @@ pub async fn fetch_list(
 // ---------------------------------------------------------------------------
 
 /// Resolve by contract StrKey (SAC / Soroban / native XLM-SAC). PK seek on
-/// `soroban_contracts.contract_id`, then the asset row by surrogate id.
+/// `soroban_contracts.contract_id`, then the issuer StrKey + home_domain by a
+/// single `accounts.id` key-seek (task 0334) instead of the full `accounts` join.
 pub async fn fetch_by_contract_id(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_CH_SELECT} WHERE sc.contract_id = ? LIMIT 1");
+    let sql = format!("{ASSET_LIST_CH_SELECT} WHERE sc.contract_id = ? LIMIT 1");
     let row = client
         .query(&sql)
         .bind(contract_id)
-        .fetch_optional::<AssetChRow>()
+        .fetch_optional::<AssetListChRow>()
         .await?;
-    Ok(row.map(map_ch_row))
+    finish_detail(client, row).await
 }
 
 /// Resolve by `CODE-ISSUER` (classic credit / classic-wrap SAC). `issuer` is the
-/// G-StrKey; the join resolves it to the surrogate `issuer_id`.
+/// G-StrKey. Resolve it to the surrogate `issuer_id` first via the
+/// `accounts.account_id` PK seek (accounts is `ORDER BY account_id`), then filter
+/// `assets` by `(asset_code, issuer_id)` — no full `accounts` join (task 0334).
+/// The same seek yields the issuer StrKey + home_domain, so no second lookup.
+/// `ORDER BY a.asset_type` makes the classic credit row (type 1) win over its
+/// coexisting SAC-wrap (type 2) deterministically — both share `(code, issuer)`.
 pub async fn fetch_by_code_issuer(
     client: &clickhouse::Client,
     asset_code: &str,
     issuer: &str,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_CH_SELECT} WHERE a.asset_code = ? AND iss.account_id = ? LIMIT 1");
-    let row = client
+    let Some(issuer_row) = seek_latest_account(client, "account_id", issuer).await? else {
+        return Ok(None);
+    };
+
+    let sql = format!(
+        "{ASSET_LIST_CH_SELECT} \
+         WHERE a.asset_code = ? AND a.issuer_id = ? \
+         ORDER BY a.asset_type LIMIT 1"
+    );
+    let Some(row) = client
         .query(&sql)
         .bind(asset_code)
-        .bind(issuer)
-        .fetch_optional::<AssetChRow>()
-        .await?;
-    Ok(row.map(map_ch_row))
+        .bind(issuer_row.id)
+        .fetch_optional::<AssetListChRow>()
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let iss = (issuer_row.account_id, issuer_row.home_domain);
+    Ok(Some(list_row_to_asset_row(row, Some(iss))))
 }
 
 /// Resolve the classic native XLM singleton (`asset_type = 0`). Native has no
 /// composite identity, so it is addressed by the reserved `/assets/native`
-/// token rather than a StrKey or CODE-ISSUER pair.
+/// token rather than a StrKey or CODE-ISSUER pair. `issuer_id = 0` → no issuer
+/// seek (task 0334).
 pub async fn fetch_native(
     client: &clickhouse::Client,
 ) -> Result<Option<AssetRow>, clickhouse::error::Error> {
-    let sql = format!("{ASSET_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
-    let row = client.query(&sql).fetch_optional::<AssetChRow>().await?;
-    Ok(row.map(map_ch_row))
+    let sql = format!("{ASSET_LIST_CH_SELECT} WHERE a.asset_type = 0 LIMIT 1");
+    let row = client
+        .query(&sql)
+        .fetch_optional::<AssetListChRow>()
+        .await?;
+    finish_detail(client, row).await
 }
 
 // ---------------------------------------------------------------------------

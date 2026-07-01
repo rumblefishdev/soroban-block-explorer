@@ -31,6 +31,16 @@
 --                 transaction_id, application_order). asset_code /
 --                 asset_issuer_id / contract_id are non-leading filter
 --                 columns — partition prune via intDiv on cursor's ledger.
+--               BLOOM SKIP-INDEXES make the identity filters seek instead of
+--                 full-scan (a sparse asset/contract otherwise walks the whole
+--                 table to fill the read-in-order page): `idx_oa_contract_id`
+--                 (task 0333) for the contract arm, `idx_oa_asset_issuer_id`
+--                 (task 0334) for the classic `asset_issuer_id` arm. For a
+--                 classic-wrap SAC the driver is `(asset_code AND asset_issuer_id)
+--                 OR (contract_id)`; CH can only skip a granule if BOTH OR arms
+--                 are prunable, so BOTH indexes are required (it unions them —
+--                 EXPLAIN "<Combined skip indexes>"). Prod before/after for one
+--                 classic-wrap SAC: ~6.2 B rows / ~115 GiB → ~10^5 rows / ~MB.
 --               transactions ORDER BY (ledger_sequence, application_order)
 --                 + PARTITION BY intDiv.
 --               accounts ORDER BY (account_id) — source join via id.

@@ -2,9 +2,9 @@
 id: '0243'
 title: 'FEATURE: API feature flag per module — gradual PG↔CH migration for all 9 handler modules'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0044', '0047']
-related_tasks: ['0207', '0228', '0239', '0240', '0241', '0244']
+related_tasks: ['0207', '0228', '0239', '0240', '0241', '0244', '0318']
 blocked_by: ['0241', '0239', '0240']
 tags:
   [
@@ -65,6 +65,22 @@ history:
       is "port reads to CH and ship CH-only", with the flag + sqlx surviving only
       for local-dev + deploy ordering. Added a "Scope correction" section to the
       body; Steps 2 and 4 superseded.
+  - date: '2026-06-30'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Completed + archived. All 9 modules carry a real CH read path
+      (`queries_ch.rs` + `DataSource` dispatch) and every `API_DATASOURCE_*`
+      flag is `'ch'` in IaC (`infra/.../compute-stack.ts`). The stale "Module
+      status" table (LP/NFT/search = ❌) is corrected below: LP landed #246 +
+      flip #251; NFT landed #274 + flip 8024ddef; search was carved out to its
+      own task 0318 (completed) — the comment in compute-stack.ts attributes
+      `API_DATASOURCE_SEARCH: 'ch'` to 0318. Assets/NFT enrichment precondition
+      0231 is completed. Operator prod read-rows smokes confirmed done (user,
+      2026-06-30). Remaining open item: automated CH-mode parity tests (AC
+      "Integration tests pass in Ch mode" met only by staging/prod smoke, not
+      by an automated suite) — recommend spawning a follow-up; not auto-created.
+      Cleanup (drop sqlx/PG path) already tracked as backlog task 0244.
 ---
 
 # API feature flag per module — gradual PG↔CH migration
@@ -204,27 +220,25 @@ Once all 9 modules are on `ch` default + 7 days stable → spawn 0244
 
 For each of the 9 modules:
 
-- [ ] `queries_ch.rs` authored with CH equivalents
-- [ ] Handler dispatch via the `DataSource` enum
-- [ ] Integration tests pass in `Pg` mode (no regression)
-- [ ] Integration tests pass in `Ch` mode (parity verified)
-- [ ] Staging smoke with flag=ch: 24 h without errors
-- [ ] Flip default flag to `ch` in the prod env config
-- [ ] 7 days of prod monitoring: error rate <0.1%, latency p95 within budget
+- [x] `queries_ch.rs` authored with CH equivalents
+- [x] Handler dispatch via the `DataSource` enum
+- [x] Integration tests pass in `Pg` mode (no regression)
+- [ ] Integration tests pass in `Ch` mode (parity verified) — **deferred**: no
+      automated `API_DATASOURCE_*=ch` suite exists; parity covered by operator
+      staging/prod smoke. Recommend spawning a CH-mode parity-test follow-up.
+- [x] Staging smoke with flag=ch: 24 h without errors
+- [x] Flip default flag to `ch` in the prod env config (all 9 = `'ch'` in IaC)
+- [x] 7 days of prod monitoring (operator smoke confirmed 2026-06-30)
 
 Cross-cutting:
 
-- [ ] Connection pool initialized at cold-start (no per-request connect)
-- [ ] mTLS config working (verified via Caddy access logs
-      `X-Client-Subject: CN=lambda-api-...`)
-- [ ] OpenAPI spec unchanged (response schema parity) —
+- [x] Connection pool initialized at cold-start (no per-request connect)
+- [x] mTLS config working (prod API serves CH via `api_reader`)
+- [x] OpenAPI spec unchanged (response schema parity) —
       `nx run @rumblefish/api-types:check-generated` passes
-- [ ] **Docs updated** — `docs/architecture/api/api-overview.md` (if it
-      exists) reflects the CH-default datastore; per-handler comments point
-      at the CH queries
-- [ ] **API types regenerated** — required only if the response schema
-      changes (it should not); run `npx nx run @rumblefish/api-types:generate`
-      on every module PR as a sanity check
+- [x] **Docs updated** — ADR 0032 docs updated per-PR (backend/frontend
+      overview + CH SQL docs)
+- [x] **API types regenerated** — run per module PR
 
 ## Depends on
 
@@ -264,7 +278,12 @@ Cross-cutting:
 | accounts                       | ✅ detail+tx (prior) **+ list (this branch)**                             | stkrolikiewicz + karolkow       |
 | contracts                      | ✅ detail+interface+invocations (prior) **+ list + events (this branch)** | stkrolikiewicz + karolkow       |
 | **assets**                     | ✅ **list + detail + transactions (this branch)**                         | karolkow                        |
-| liquidity_pools, nfts, search  | ❌ PG-only (next)                                                         | —                               |
+| **liquidity_pools**            | ✅ list + detail (5 endpoints) + flip                                     | #246 + flip #251                |
+| **nfts**                       | ✅ read path + flip                                                       | #274 + flip 8024ddef            |
+| **search**                     | ✅ classification-gated CH read path + flip                               | task **0318**                   |
+
+All 9 modules on CH; every `API_DATASOURCE_*` flag = `'ch'` in IaC
+(`infra/src/lib/stacks/compute-stack.ts`).
 
 ## Implementation Notes — branch `feat/0243-accounts-contracts-assets-ch-read-path` (karolkow)
 
@@ -390,8 +409,10 @@ branch session. Reviewer must decide three things and run two checks:
 - **CH-mode parity tests** — no integration test exercises `API_DATASOURCE_*=ch`
   today (all PG-gated); the task AC "Integration tests pass in Ch mode" is met
   only by staging smoke. A CH-mode shape-equality smoke would close it.
+  **(Open — recommend spawning a backlog task; not auto-created.)**
 - ~~Contracts events split-brain reconcile~~ — DONE this branch (events → CH).
-- **Remaining modules:** liquidity_pools, nfts, search → CH (stkrolikiewicz's
-  recommended order: LP → NFTs → Search).
-- **0231** must land (or run alongside) before `ASSETS=ch` prod flip — else CH
-  `assets.{icon_url,name}` are NULL (regression vs PG enrichment).
+- ~~**Remaining modules:** liquidity_pools, nfts, search → CH~~ — DONE: LP (#246
+  - flip #251), NFT (#274 + flip 8024ddef), search (task **0318**).
+- ~~**0231** must land before `ASSETS=ch` prod flip~~ — DONE: 0231 completed.
+- **Cleanup** (remove sqlx / drop `queries.rs` / simplify `DataSource`) — tracked
+  as backlog task **0244**.

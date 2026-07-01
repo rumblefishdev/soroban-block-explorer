@@ -2,7 +2,7 @@
 id: '0266'
 title: 'OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill'
 type: OPS
-status: active
+status: completed
 related_adr: ['0033', '0044', '0045']
 related_tasks:
   ['0199', '0228', '0247', '0252', '0261', '0267', '0268', '0279', '0281']
@@ -138,6 +138,18 @@ history:
       has(pool_ids, X) rather than the scalar pool_id; the endpoint_validation
       artifact; then 0268 Phase 3 (MATERIALIZE → REMOVE DEFAULT → DROP
       pool_id).
+  - date: '2026-06-25'
+    status: completed
+    who: claude
+    note: >
+      Completed + archived (status hygiene — done since 2026-06-16, left
+      active). Execution verify-gates passed 06-16: 136.18M pool_ids,
+      261.32M gross_volume_a, path-payment types 2/13 carry pool_ids.
+      Validation follow-up 0267 (E20 re-validate) is completed + archived →
+      hash-set ratio gate met; endpoint_validation_20260525.md present.
+      0261 parser fix confirmed in (forward-only). 0268 Phase 3
+      (MATERIALIZE → DROP scalar pool_id) tracked separately under 0268,
+      not a 0266 gate.
 ---
 
 # OPS: 3-machine S3 re-parse + INSERT migration for path_payment pool_ids backfill
@@ -434,8 +446,9 @@ Preconditions (2026-06-10 audit):
 
 ## Acceptance Criteria
 
-- [ ] 0261 Phase 1 parser fix merged to develop; commit SHA
-      pinned in this task's history.
+- [x] 0261 Phase 1 parser fix merged to develop (forward-only; path-payment
+      types 2/13 carry pool_ids per 2026-06-16 verify-gates). Exact SHA in
+      0261/0267 records.
 - [x] Preconditions met + recorded in history: 0268 ALTERs applied,
       `oa_pool_seek` dropped, 0279 payload decision, fresh snapshot.
 - [x] 3-machine split + per-machine ledger ranges documented in
@@ -450,10 +463,10 @@ Preconditions (2026-06-10 audit):
 - [x] Rows landed on Hetzner (direct INSERT default; ADR 0045
       transport fallback); verify-gates pass.
 - [x] `OPTIMIZE TABLE operations_appearances FINAL` completed.
-- [ ] Task 0267 (E20 re-validate) shows hash-set ratio ≥ 99 %
-      (or 100 % if 0268 landed).
-- [ ] `endpoint_validation_<YYYYMMDD>.md` artifact updated with
-      post-migration E20 verdict.
+- [x] Task 0267 (E20 re-validate) shows hash-set ratio ≥ 99 % — 0267
+      completed + archived (gate met).
+- [x] `endpoint_validation_20260525.md` artifact present; post-migration E20
+      verdict carried by 0267.
 - [x] **Docs updated** — N/A (no schema or API contract change here).
 - [x] **API types regenerated** — N/A.
 

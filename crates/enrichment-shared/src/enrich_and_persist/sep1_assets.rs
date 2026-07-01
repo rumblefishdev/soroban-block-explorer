@@ -27,6 +27,7 @@ use serde::Deserialize;
 use tracing::{debug, instrument, warn};
 
 use super::{AssetKey, EnrichError, EnrichOutcome};
+use crate::nft_token_uri::errors::is_dns_failure;
 use crate::sep1::dto::Sep1Currency;
 use crate::sep1::errors::Sep1Error;
 use crate::sep1::{Sep1Fetcher, Sep1TomlParsed};
@@ -210,16 +211,22 @@ fn find_currency<'a>(
         .find(|c| c.code.as_deref() == Some(code) && c.issuer.as_deref() == Some(issuer))
 }
 
-/// Network-layer (no HTTP status) and 5xx retry. 4xx and parse-level
-/// failures are permanent — caller writes the empty sentinel. `pub` so the
-/// ClickHouse paths classify fetch errors with the same rule as the PG worker.
+/// Network-layer (no HTTP status) and 5xx retry — EXCEPT a DNS-resolution
+/// failure (NXDOMAIN / dead issuer domain), which is permanent (task 0335).
+/// 4xx and parse-level failures are permanent too — caller writes the empty
+/// sentinel. `pub` so the ClickHouse paths classify fetch errors with the same
+/// rule as the PG worker.
 pub fn is_transient(err: &Sep1Error) -> bool {
     match err {
         Sep1Error::Timeout { .. } => true,
         Sep1Error::Http { source, .. } => match source.status() {
             Some(s) if s.is_server_error() => true,
             Some(_) => false,
-            None => true,
+            // No HTTP status = network-layer failure. A DNS-resolution failure
+            // (NXDOMAIN / dead issuer domain) is PERMANENT → sentinel, not
+            // 3×-retry → DLQ (task 0335). Connect-refused / TLS / connect-timeout
+            // may recover → transient.
+            None => !is_dns_failure(source),
         },
         Sep1Error::MissingHomeDomain
         | Sep1Error::MalformedHomeDomain { .. }

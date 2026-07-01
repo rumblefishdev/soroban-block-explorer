@@ -2,7 +2,7 @@
 id: '0198'
 title: 'Canonical SQL 06 Statement B: UNION ALL over partial indexes to avoid Seq Scan on account_balances_current'
 type: BUG
-status: active
+status: completed
 related_adr: ['0026', '0037']
 related_tasks: ['0048', '0167', '0172']
 tags: [priority-medium, effort-small, layer-backend, performance]
@@ -16,6 +16,17 @@ history:
     status: active
     who: FilipDz
     note: 'Spawned from web/audit-0048.md MEDIUM finding. Same shape as 0172 contracts-stats fix, different table.'
+  - date: '2026-06-29'
+    status: completed
+    who: karolkow
+    note: >
+      Archived as OBSOLETE. PG-only task (Seq Scan on Postgres
+      account_balances_current; partial indexes uidx_abc_native/uidx_abc_credit
+      infra present on PG). The problem does NOT exist on ClickHouse: account_balances_current
+      is ORDER BY (account_id, …) so an account-id query is a PK-prefix seek, never a Seq
+      Scan (see crates/api/src/accounts/queries_ch.rs fetch_balances). Accounts are migrating
+      PG→CH (DataSource switch, task 0243); nobody is working on this and it does not apply to
+      the CH target. Verified during the 0331 Option-C balance-model design.
 ---
 
 # Canonical SQL 06 Statement B: UNION ALL over partial indexes

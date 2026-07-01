@@ -2,7 +2,7 @@
 id: '0311'
 title: 'FEATURE: enrichment multi-provider RPC + IPFS gateway rotation/failover'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0231', '0301', '0306', '0307']
 tags: [enrichment, nft, rpc, ipfs, effort-small, milestone-2]
@@ -21,6 +21,19 @@ history:
       path-style IPFS gateways; the hardcoded `cloudflare-ipfs.com` gateway
       is dead/unreachable from the box. Validate locally + on-box batch
       before the PR.
+  - date: '2026-07-01'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged + archived. RPC/IPFS rotation + failover shipped (PR #270,
+      `6a9dc896`); `SOROBAN_RPC_URLS` wired into the enrichment-worker Lambda
+      (`3f5f5f4f`). On-box validated: a --retry-sentinels batch produced 0
+      RPC-429 vs the single-RPC wall. Core ACs met; the "full re-drain → ≥95%"
+      AC was revised away (residual is permanent-dominated: contract reverts +
+      dead links). The two recoverable levers — IPFS concurrency 3-4 for the
+      re-drain, and `data:`-URI inline-metadata support (~⅓ of the sentinel
+      sample, Sushiswap LP NFTs) — left as follow-ups; no backlog task created
+      yet (data:-URI is scheme handling, not rotation).
 ---
 
 # FEATURE: enrichment multi-provider RPC + IPFS gateway rotation/failover
@@ -33,10 +46,11 @@ transport errors (429 / 5xx / timeout)**, instead of the single hardcoded SDF
 RPC + single dead IPFS gateway. Goal: clear the ~1,450 RPC-429-throttled hot
 NFTs (84% → ~95%+) for **$0** and no new infra.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** Sieve done (pools picked, below). Next: implement in
-`enrichment-shared`, unit-test on mac, validate a small batch on-box, then PR.
+Shipped + merged (PR #270 `6a9dc896`; Lambda env wiring `3f5f5f4f`), on-box
+validated (0 RPC-429). Follow-up levers (IPFS concurrency, `data:`-URI support)
+noted below — not yet spawned as tasks.
 
 ## Context
 

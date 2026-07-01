@@ -2,7 +2,7 @@
 id: '0281'
 title: 'OPS: batched ClickHouse maintenance window — restart-gated + migration changes'
 type: OPS
-status: active
+status: completed
 related_adr: ['0044', '0047']
 related_tasks: ['0221', '0243', '0261', '0266', '0268']
 tags:
@@ -56,6 +56,20 @@ history:
       that is ~155M rows (the 2.5 % FP floor). Tightened idx_oa_pool_ids to
       `bloom_filter(0.001)` (0290 precedent) -> 5.28M. Both regimes now ~5-8M.
       Net: read-in-order query change + index FP bump, no new table.
+  - date: '2026-06-30'
+    status: done
+    who: stkrolikiewicz
+    note: >
+      Closeout. All A/B/C/D shipped. Pre-window gates + A/B (0268 ADD/MATERIALIZE,
+      gross_volume_a, oa_pool_seek + dead-index drops, idx_oa_pool_ids bloom) applied
+      on prod during the live 0266 window. C (read-path) merged to develop via PR #259
+      (8c7193cc): fetch_pool_transactions now `has(pool_ids, toFixedString(unhex(?),32))`
+      + inner read-in-order ORDER BY/LIMIT with limit*4 over-fetch and Rust (ls,tid)
+      dedup; box-measured 6.75B->7.4M (~900x). Emerged in C review: outer GROUP-BY
+      lost-tail data-loss bug — fixed with capped-page detection + single re-fetch at
+      hard limit*128 bound. D: init.sql on develop carries the final shape (pool_ids
+      Array, idx_oa_pool_ids bloom_filter(0.001), no idx_oa_contract/idx_oa_type, no
+      stale oa_pool_seek). No follow-up backlog spawned.
 ---
 
 # OPS: batched ClickHouse maintenance window
@@ -77,21 +91,21 @@ column migration) can't be done ad-hoc. These items wait for the window.
 
 ### Pre-window gates (ONLINE, before pausing ingestion)
 
-- [ ] **Fresh snapshot** of the CH volume — mandatory gate. 0272
+- [x] **Fresh snapshot** of the CH volume — mandatory gate. 0272
       precedent: Snapshot B RESTORE of 690 GiB took 642 s; cheap
       insurance, and a window has already failed once (0241 attempt 1).
-- [ ] **0268 Phase 1 ALTERs pre-run** (both online; the MATERIALIZE
+- [x] **0268 Phase 1 ALTERs pre-run** (both online; the MATERIALIZE
       mutation runs for hours on 5.8B rows — do NOT spend window time
       on it): `operations_appearances.pool_ids` ADD + MATERIALIZE,
       and `liquidity_pool_snapshots.gross_volume_a` ADD (consumed by
       the 0266 backfill). The old indexer keeps writing meanwhile —
       INSERTs without the column fill `pool_ids` via the DEFAULT from
       the scalar.
-- [ ] Disk headroom check (`df -h /srv/clickhouse-data`).
+- [x] Disk headroom check (`df -h /srv/clickhouse-data`).
 
 ### A. CH config — needs a restart to take effect
 
-- [ ] **`api_reader` → allow `force_optimize_projection`** (task 0243). Add a
+- [x] **`api_reader` → allow `force_optimize_projection`** (task 0243). Add a
       `changeable_in_readonly` constraint for _only_ that setting to the
       `read_only` profile (`crates/db-clickhouse/users.d/profiles.xml`), or set
       the profile to `readonly = 2`. `settings_constraints_replace_previous` is
@@ -106,13 +120,13 @@ column migration) can't be done ad-hoc. These items wait for the window.
 
 ### B. Schema migration — pairs with the indexer redeploy (task 0268)
 
-- [ ] **`operations_appearances.pool_id` (scalar `Nullable(FixedString(32))`)
+- [x] **`operations_appearances.pool_id` (scalar `Nullable(FixedString(32))`)
       → `pool_ids Array(FixedString(32))`** for multi-hop path payments. Heavy
       column migration on a 6B+ row table + indexer write-path change (emit the
       full crossed-pool list). See 0268 for the migration plan. The heavy
       ADD + MATERIALIZE part pre-runs ONLINE (pre-window gates above); the
       window itself carries only the writer switch + projection swap (C).
-- [ ] **Indexer redeploy** — the path-payment pool-id corrections (0261/0266),
+- [x] **Indexer redeploy** — the path-payment pool-id corrections (0261/0266),
       the 0221 SAC→`nfts_pending` routing fix (+ post-deploy drain runbook
       re-run), and any other staged fixes ride this same window.
 
@@ -121,27 +135,27 @@ column migration) can't be done ad-hoc. These items wait for the window.
 The LP CH read path filters `operations_appearances.pool_id = unhex(X)`. After
 0268 it must become `has(pool_ids, unhex(X))` — and the seek strategy changes:
 
-- [ ] **`fetch_pool_transactions` (`crates/api/src/liquidity_pools/queries_ch.rs`)**:
+- [x] **`fetch_pool_transactions` (`crates/api/src/liquidity_pools/queries_ch.rs`)**:
       `WHERE oa.pool_id = unhex(?)` → `WHERE has(oa.pool_ids, unhex(?))`.
-- [ ] **`oa_pool_seek` projection is invalidated** — `ORDER BY (pool_id, …)`
+- [x] **`oa_pool_seek` projection is invalidated** — `ORDER BY (pool_id, …)`
       cannot serve `has(pool_ids, X)` (array membership ≠ scalar prefix seek).
       Redesign the seek: e.g. a `bloom_filter`/`set` skip index on `pool_ids`, an
       `arrayJoin(pool_ids)`-backed projection, or a normalized
       `op_pool_appearances(pool_id, ledger_sequence, transaction_id)` helper
       table. Re-validate the read cost (the current bare-filter trick relied on
       the scalar projection auto-route).
-- [ ] Re-check the other LP endpoints + the global tx-list contract filter for
+- [x] Re-check the other LP endpoints + the global tx-list contract filter for
       any `operations_appearances.pool_id` references.
 
 ### D. Non-restart CH cleanups — batch here for convenience
 
-- [ ] **Drop the dead skip indexes** `idx_oa_contract` (bloom) + `idx_oa_type`
+- [x] **Drop the dead skip indexes** `idx_oa_contract` (bloom) + `idx_oa_type`
       (set) on `operations_appearances` — proven useless (0243 handoff: a hot
       contract's ops scatter across every granule; bloom skips nothing), only
       materialized on partition 125, waste insert-time work.
       `ALTER TABLE operations_appearances DROP INDEX idx_oa_contract; DROP INDEX
 idx_oa_type;`
-- [ ] **Sync `init.sql`** so fresh CH instances match prod: add `PROJECTION
+- [x] **Sync `init.sql`** so fresh CH instances match prod: add `PROJECTION
 oa_pool_seek` + `SETTINGS deduplicate_merge_projection_mode = 'rebuild'`
       to the `operations_appearances` CREATE TABLE
       (`crates/db-clickhouse/schema/init.sql`). Prod already has the projection
@@ -150,10 +164,10 @@ oa_pool_seek` + `SETTINGS deduplicate_merge_projection_mode = 'rebuild'`
 
 ## Acceptance Criteria
 
-- [ ] Pre-window gates done (snapshot + 0268 Phase 1 ALTERs) before
+- [x] Pre-window gates done (snapshot + 0268 Phase 1 ALTERs) before
       the ingestion pause.
-- [ ] All A/B items applied in a single ingestion-paused window.
-- [ ] C (0243 read-path) updated + box-validated against the post-0268 schema.
-- [ ] D cleanups applied; `init.sql` reflects the final operations_appearances
+- [x] All A/B items applied in a single ingestion-paused window.
+- [x] C (0243 read-path) updated + box-validated against the post-0268 schema.
+- [x] D cleanups applied; `init.sql` reflects the final operations_appearances
       shape (no drift vs prod).
-- [ ] LP transactions endpoint re-smoked on CH after the window (cost + parity).
+- [x] LP transactions endpoint re-smoked on CH after the window (cost + parity).

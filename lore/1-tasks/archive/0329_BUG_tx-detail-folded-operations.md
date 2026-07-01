@@ -2,7 +2,7 @@
 id: '0329'
 title: 'Transaction detail shows only 1 of N operations (folded operations_appearances)'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['frontend', 'transaction-detail', 'effort-small']
@@ -16,6 +16,17 @@ history:
     status: active
     who: stkrolikiewicz
     note: 'Promoted to active — starting frontend fix.'
+  - date: 2026-07-01
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged via PR #297 (merge 0f0a06fb) + archived. Frontend-only unfold:
+      header count from `operation_count`, picker from `heavy.operations`
+      (new `buildOperationEntries`), fallback to folded light. 3 files, +183/-11;
+      typecheck + lint + 104 web tests green (incl. new operationEntries.test.ts).
+      Verified live against prod API: airdrop tx c91a146e…fdd2 now renders
+      "100 Operations" + 100 picker rows (#1…#100) — was "1 Operation". Steps 1-2
+      of the plan shipped; Step 3 (heavy population) confirmed live on prod.
 ---
 
 # Transaction detail shows only 1 of N operations (folded operations_appearances)
@@ -30,7 +41,7 @@ unfolded list already ships in the same API response as `heavy.operations`
 (XDR-decoded). Fix is frontend-only: drive the header from `operation_count` and
 the picker list from `heavy.operations`.
 
-## Status: Backlog
+## Status: Completed
 
 ## Context
 
@@ -85,18 +96,59 @@ enrichment, or return the unfolded op list).
 
 ## Acceptance Criteria
 
-- [ ] Detail header shows the true operation count (`operation_count`) for
-      multi-op txs (4 / 3 / 100), not the folded 1.
-- [ ] Operation picker lists every operation of a multi-op tx (verified on
-      `143323a2…` → 4, `e8249a…` → 3) when `heavy` is available.
-- [ ] Graceful fallback when `heavy` is null: count still correct; picker shows
-      the folded row(s) without crashing.
-- [ ] `heavy.operations` population in prod verified on a real response (Step 3)
-      before relying on it for the picker.
-- [ ] **Docs updated** — N/A (frontend rendering only; no schema/endpoint/pipeline
-      change). Revisit if Step 3 forces a backend change.
-- [ ] **API types regenerated** — N/A (no `crates/api/**` / `Cargo` / `api-types`
-      change for the frontend fix). Revisit if a backend change is needed.
+- [x] Detail header shows the true operation count (`operation_count`) — verified
+      live: airdrop `c91a146e…fdd2` renders "100 Operations" (was "1 Operation").
+- [x] Operation picker lists every operation — verified live: 100 picker rows
+      (`#1…#100`) on `c91a146e…`; also confirmed 15/17/85-op batches in prod.
+- [x] Graceful fallback when `heavy` is null — `buildOperationEntries` returns the
+      folded light rows; count stays correct from `operation_count`. Covered by
+      `operationEntries.test.ts`.
+- [x] `heavy.operations` population in prod verified — Step 3 done: real prod-API
+      response (dev-proxy) returned the full unfolded op list.
+- [x] **Docs updated** — N/A (frontend rendering only; no schema/endpoint/pipeline
+      change).
+- [x] **API types regenerated** — N/A (no `crates/api/**` / `Cargo` / `api-types`
+      change).
+
+## Implementation Notes
+
+Shipped in PR #297 (merge `0f0a06fb`), 3 files, +183 / -11:
+
+- `web/.../sections/OperationsSection.tsx` — `count = tx.operation_count` (was
+  `ops.length`); picker driven by `buildOperationEntries(tx).map(e => e.row)`;
+  `selectedHeavyOp` now taken 1:1 from the entry (lore-0330's amount panel wiring
+  preserved).
+- `web/.../sections/operationEntries.ts` (new) — `buildOperationEntries()` maps
+  each `heavy.operations` item to `{ row, light, heavy }`, matching the heavy op to
+  its folded light identity (by `application_order`, then `type_name` fallback);
+  returns folded light rows unchanged when `heavy` is empty.
+- `web/.../sections/operationEntries.test.ts` (new) — unfold, fallback, and match
+  cases (+102 lines).
+
+Verified: `nx typecheck/lint/test @…-web` green (104 tests); live against prod API.
+
+## Design Decisions
+
+### From Plan
+
+1. **Header count from `operation_count`, picker from `heavy.operations`** — exactly
+   Steps 1-2 of the plan. Fallback to folded light preserves correctness when the
+   read-time XDR fetch (ADR 0029) is unavailable.
+
+### Emerged
+
+2. **Ported only the core-unfold commit; dropped the amount commits.** The old
+   `fix/0329` branch (5 commits) also added per-op amount rendering, but lore-0330
+   shipped that independently (amount-sent) and merged first. Cherry-picking just
+   the unfold (`a3b8ee30`) onto current develop avoided conflicts with 0330's
+   `humanizeOp.ts` / `stroops.ts` rewrite; the amount work is now redundant.
+3. **Unique picker keys via `application_order`.** Folded entries share one light
+   `appearance_id`; the row key is overridden with `application_order` so
+   same-identity heavy ops (e.g. 100 payments) get stable, unique React keys.
+4. **Stale cross-worktree `.tsbuildinfo` gotcha** — the symlinked node_modules
+   shares the nx/tsc cache; a stale `dist/*.tsbuildinfo` produced bogus TS6053
+   "file not found" on first typecheck. Cleared it + `--skip-nx-cache`. (Noted for
+   the `worktree-hooks` skill.)
 
 ## Notes
 
