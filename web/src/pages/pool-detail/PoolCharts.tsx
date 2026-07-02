@@ -265,18 +265,29 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
 }
 
 /**
+ * ponytail: build-time kill-switch for the whole chart card. Every metric
+ * series is NULL until the price-oracle API lands (lore-0341, blocked on
+ * 0199 + 0215), so we hide the card entirely rather than render a permanent
+ * "pending" placeholder. Flip to `true` — and delete the pending-oracle
+ * branch in `PoolChartsContent` — once the endpoint returns real data.
+ */
+const CHARTS_ENABLED = false;
+
+/**
  * Chart card on the LP detail page (Figma node `325:22339`). One chart
  * with three metric tabs (TVL / Volume / Fees) and a four-preset range
  * selector (1D / 7D / 30D / 1Y). Lazy-fetched: the chart endpoint is
  * only hit when the section scrolls into view.
  *
- * All three metric series come back null until task 0199 ships the
- * price-oracle integration — in that case we render an inline
- * "Chart data not yet available" placeholder per 0215 §6.14 rather than
- * empty axes. The shape of the placeholder is removed by 0250 once 0199
- * lands.
+ * Currently disabled behind `CHARTS_ENABLED` (see above): all three metric
+ * series come back null until task 0199 ships the price-oracle integration,
+ * so the card does not render at all. When re-enabled, the inline
+ * "Chart data not yet available" placeholder (per 0215 §6.14) covers the
+ * interim null-series state.
  */
 export function PoolCharts({ poolId }: PoolChartsProps) {
+  if (!CHARTS_ENABLED) return null;
+
   return (
     <LazySection
       placeholder={<CardSkeleton />}
