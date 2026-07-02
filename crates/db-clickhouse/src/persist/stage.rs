@@ -32,11 +32,11 @@
 //!
 //! ## Trustline removal handling
 //!
-//! Parser-emitted `removed_trustlines` are translated to
-//! `AccountBalanceRow` with `balance = 0` and current ledger as
+//! Parser-emitted `removed_trustlines` are translated to a unified
+//! `BalanceRow` with `amount = 0` and current ledger as
 //! `last_updated_ledger`. `ReplacingMergeTree(last_updated_ledger)`
 //! keeps the zero-balance row (newest version wins). Read-time
-//! convention: `WHERE balance > 0` to recover "active trustlines"
+//! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
 use std::collections::{HashMap, HashSet};
@@ -44,6 +44,7 @@ use std::collections::{HashMap, HashSet};
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
 use xdr_parser::ExtractedContractMetadata;
+use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
@@ -128,7 +129,12 @@ pub struct StagedLedger {
     /// drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
-    pub balance_rows: Vec<AccountBalanceRow>,
+    /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
+    /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
+    /// from `StageInputs.soroban_token_balances`; classic + native per-account
+    /// balances are appended straight from `account_states` (single-write — the
+    /// legacy `account_balances_current` staging was removed).
+    pub unified_balance_rows: Vec<BalanceRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -158,6 +164,17 @@ pub struct StageInputs<'a> {
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
+    /// Per-holder Soroban token (type-3) balances from `ContractData`
+    /// `Balance(Address)` entries (task 0331). Threaded to the unified
+    /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
+    /// legacy callers.
+    pub soroban_token_balances: &'a [ExtractedSorobanBalance],
+    /// Task 0331 + ADR 0051 — SAC contract surrogate → wrapped classic/native
+    /// `asset_id` (from `asset_sac`, via [`crate::persist::fetch_sac_classic_map`]).
+    /// [`build_balance_rows`] keys a contract-held SAC balance onto the classic
+    /// asset it wraps instead of the SAC surrogate (which has no `assets` row of its
+    /// own). Empty map for legacy callers (SAC balances keep their surrogate key).
+    pub sac_classic: &'a HashMap<i64, i64>,
     /// Crypto-proven un-deployed-SAC overrides for this ledger's events
     /// (task 0323, `xdr_parser::detect_undeployed_sac_overrides`). Each
     /// suppresses the Pass-2 FK stub (no contract row) + seeds a SAC `assets`
@@ -210,6 +227,8 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
         prior_contract_verdicts: &HashMap::new(),
@@ -303,6 +322,54 @@ pub fn build_metadata_rows(
         .collect()
 }
 
+/// Map parser-extracted Soroban token balances to unified `balances` rows
+/// (task 0331, Option C). `holder_id` = `ids::address_id(holder)`; `amount` raw.
+///
+/// `asset_id` is resolved from the STORING contract's surrogate: a SAC is NOT a
+/// distinct asset (ADR 0051 retired `asset_type=2`) and has no `assets` row of its
+/// own, so a contract-held SAC balance must key by the classic/native asset it
+/// wraps or it would orphan. `sac_classic` maps a SAC contract surrogate → its
+/// classic/native `asset_id` (from the `asset_sac` facet, via
+/// [`crate::persist::fetch_sac_classic_map`]); a storing contract ABSENT from the
+/// map is a type-3 token and keeps its own surrogate (`ids::asset_id(3, …)`). The
+/// resolution happens HERE, at build time — the live indexer (`prepare_with_sac_overrides`)
+/// and the RPC seed both call this one shared fn with the same map, so neither
+/// post-mutates the staged rows.
+pub fn build_balance_rows(
+    balances: &[ExtractedSorobanBalance],
+    sac_classic: &HashMap<i64, i64>,
+) -> Vec<BalanceRow> {
+    // Dedup by (holder_id, asset_id) keeping the LAST occurrence, position-stable:
+    // two txs in one ledger can touch the same holder+asset, producing rows that
+    // share the RMT version (`last_updated_ledger`) — a tie the merge would resolve
+    // nondeterministically. Ledger/tx order puts the final state last, so last-wins
+    // is correct; the first-seen position is preserved for deterministic output.
+    let mut rows: Vec<BalanceRow> = Vec::with_capacity(balances.len());
+    let mut idx: HashMap<(i64, i64), usize> = HashMap::with_capacity(balances.len());
+    for b in balances {
+        let contract = ids::contract_id(&b.contract_id);
+        let holder_id = ids::address_id(&b.holder);
+        let asset_id = sac_classic
+            .get(&contract)
+            .copied()
+            .unwrap_or_else(|| ids::asset_id(3, "", 0, contract));
+        let row = BalanceRow {
+            holder_id,
+            asset_id,
+            amount: b.balance,
+            last_updated_ledger: i64::from(b.ledger),
+        };
+        match idx.get(&(holder_id, asset_id)) {
+            Some(&i) => rows[i] = row,
+            None => {
+                idx.insert((holder_id, asset_id), rows.len());
+                rows.push(row);
+            }
+        }
+    }
+    rows
+}
+
 /// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
 /// un-deployed-SAC emitters for this ledger (task 0323). An un-deployed SAC is
 /// modelled as an ASSET, not a contract: each override (a) suppresses the
@@ -345,6 +412,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        soroban_token_balances,
+        sac_classic,
         sac_overrides,
         prior_wasm_verdicts,
         prior_contract_verdicts,
@@ -618,6 +687,39 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
+    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
+    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
+    // `asset_sac` during this same staging. Seed those current-ledger carriers so a
+    // same-ledger contract-held balance re-keys onto the wrapped classic/native id
+    // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
+    // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
+    let effective_sac_classic;
+    let sac_map: &HashMap<i64, i64> = if !soroban_token_balances.is_empty()
+        && assets.iter().any(|t| t.sac_contract_id.is_some())
+    {
+        let mut m = sac_classic.clone();
+        for t in assets {
+            if let Some(sac) = t.sac_contract_id.as_deref() {
+                let issuer_id = t
+                    .issuer_address
+                    .as_deref()
+                    .map(ids::account_id)
+                    .unwrap_or(0);
+                let classic = ids::asset_id(
+                    t.asset_type as i16,
+                    t.asset_code.as_deref().unwrap_or(""),
+                    issuer_id,
+                    0,
+                );
+                m.entry(ids::contract_id(sac)).or_insert(classic);
+            }
+        }
+        effective_sac_classic = m;
+        &effective_sac_classic
+    } else {
+        sac_classic
+    };
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote
@@ -995,6 +1097,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut asset_seen: HashSet<(i16, String, i64, i64)> = HashSet::new();
     let push_asset =
         |out: &mut StagedLedger, seen: &mut HashSet<(i16, String, i64, i64)>, row: AssetRow| {
+            // Dedup by the identity 4-tuple. `row.id` is already the `ids::asset_id`
+            // surrogate (computed in `AssetRow::staged`), so build sites can't diverge.
             let key = (
                 row.asset_type,
                 row.asset_code.clone(),
@@ -1027,16 +1131,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             .map(ids::account_id)
             .unwrap_or(0);
         let contract_id_int = t.contract_id.as_deref().map(ids::contract_id).unwrap_or(0);
-        let row = AssetRow {
-            asset_type: t.asset_type as i16,
-            asset_code: t.asset_code.clone().unwrap_or_default(),
+        let row = AssetRow::staged(
+            t.asset_type as i16,
+            t.asset_code.clone().unwrap_or_default(),
             issuer_id,
-            contract_id: contract_id_int,
-            name: t.name.clone(),
-            total_supply: None, // dead column (lore-0293) → asset_aggregates
-            holder_count: None,
-            icon_url: None,
-        };
+            contract_id_int,
+            t.name.clone(),
+        );
         // SAC facet carried by `detect_assets`' SAC branch (the classic/native
         // carrier for a deploy). Emitted to `asset_sac`, never onto `assets`.
         if let Some(sac) = t.sac_contract_id.as_deref() {
@@ -1078,16 +1179,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: asset_type as i16,
+            AssetRow::staged(
+                asset_type as i16,
                 asset_code,
                 issuer_id,
-                contract_id: 0, // key reserved for soroban identity
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            },
+                0, // key reserved for soroban identity
+                None,
+            ),
         );
     }
 
@@ -1118,16 +1216,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: asset_type as i16,
+            AssetRow::staged(
+                asset_type as i16,
                 asset_code,
                 issuer_id,
-                contract_id: 0, // key reserved for soroban identity
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            },
+                0, // key reserved for soroban identity
+                None,
+            ),
         );
     }
 
@@ -1135,16 +1230,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     push_asset(
         &mut out,
         &mut asset_seen,
-        AssetRow {
-            asset_type: domain::TokenAssetType::Native as i16,
-            asset_code: String::new(),
-            issuer_id: 0,
-            contract_id: 0,
-            name: Some("Stellar Lumen".to_string()),
-            total_supply: None,
-            holder_count: None,
-            icon_url: None,
-        },
+        AssetRow::staged(
+            domain::TokenAssetType::Native as i16,
+            String::new(),
+            0,
+            0,
+            Some("Stellar Lumen".to_string()),
+        ),
     );
 
     // ---- assets type-3 for WASM-classified Soroban fungibles (task 0283 G2) --
@@ -1169,16 +1261,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         push_asset(
             &mut out,
             &mut asset_seen,
-            AssetRow {
-                asset_type: domain::TokenAssetType::Soroban as i16,
-                asset_code: String::new(),
-                issuer_id: 0,
+            AssetRow::staged(
+                domain::TokenAssetType::Soroban as i16,
+                String::new(),
+                0,
                 contract_id,
-                name: None,
-                total_supply: None,
-                holder_count: None,
-                icon_url: None,
-            },
+                None,
+            ),
         );
     }
 
@@ -1377,8 +1466,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // ---- account_balances_current ----
-    let mut balance_dedup: HashMap<(i64, i16, String, i64), AccountBalanceRow> = HashMap::new();
+    // ---- unified `balances` — classic + native per-account balances (lore-0331
+    // Option A single-write). `account_balances_current` is no longer written (only
+    // its table remains, for the pending classic→`balances` migration + rollback).
+    // Dedup straight on (holder_id, asset_id): the project `asset_id` already folds
+    // the Horizon alphanum4/12 split into one `classic-credit` key. amount is the
+    // same scaled-i128 (decimals=7 at read); accounts resolve via `accounts`.
+    let mut balance_dedup: HashMap<(i64, i64), BalanceRow> = HashMap::new();
     for st in account_states {
         let watermark = i64::from(st.last_seen_ledger);
         let account_id_int = ids::account_id(&st.account_id);
@@ -1391,95 +1485,37 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             };
             let balance_str = b.get("balance").and_then(Value::as_str).unwrap_or("0");
-            let balance = decimal7_string_to_i128(balance_str)?;
-            let (asset_code, issuer_id) = if asset_type == AssetType::Native {
-                (String::new(), 0)
+            let amount = decimal7_string_to_i128(balance_str)?;
+            let asset_id = if asset_type == AssetType::Native {
+                ids::asset_id(0, "", 0, 0)
             } else {
-                let code = b
-                    .get("asset_code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let issuer = b
-                    .get("issuer")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
+                let code = b.get("asset_code").and_then(Value::as_str).unwrap_or("");
+                let issuer = b.get("issuer").and_then(Value::as_str).unwrap_or("");
                 if code.is_empty() || issuer.is_empty() {
                     continue;
                 }
-                (code, ids::account_id(&issuer))
+                ids::asset_id(1, code, ids::account_id(issuer), 0)
             };
-            let key = (
+            upsert_balance(
+                &mut balance_dedup,
                 account_id_int,
-                asset_type as i16,
-                asset_code.clone(),
-                issuer_id,
+                asset_id,
+                amount,
+                watermark,
             );
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code,
-                issuer_id,
-                balance,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
         }
 
         for rm in &st.removed_trustlines {
-            let code = rm
-                .get("asset_code")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let issuer = rm
-                .get("issuer")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let code = rm.get("asset_code").and_then(Value::as_str).unwrap_or("");
+            let issuer = rm.get("issuer").and_then(Value::as_str).unwrap_or("");
             if code.is_empty() || issuer.is_empty() {
                 continue;
             }
-            let asset_type = if code.len() <= 4 {
-                AssetType::CreditAlphanum4
-            } else {
-                AssetType::CreditAlphanum12
-            };
-            let issuer_id = ids::account_id(&issuer);
-            let key = (account_id_int, asset_type as i16, code.clone(), issuer_id);
-            let row = AccountBalanceRow {
-                account_id: account_id_int,
-                asset_type: asset_type as i16,
-                asset_code: code,
-                issuer_id,
-                balance: 0,
-                last_updated_ledger: watermark,
-            };
-            match balance_dedup.entry(key) {
-                Entry::Occupied(mut occ) => {
-                    let existing = occ.get_mut();
-                    if row.last_updated_ledger >= existing.last_updated_ledger {
-                        *existing = row;
-                    }
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(row);
-                }
-            }
+            let asset_id = ids::asset_id(1, code, ids::account_id(issuer), 0);
+            upsert_balance(&mut balance_dedup, account_id_int, asset_id, 0, watermark);
         }
     }
-    out.balance_rows.extend(balance_dedup.into_values());
+    out.unified_balance_rows.extend(balance_dedup.into_values());
 
     // ---- soroban_contracts Pass 2 stub-rowing ----
     {
@@ -1592,6 +1628,34 @@ fn decode_hash(hex_str: &str, field: &'static str) -> Result<[u8; 32], SchemaErr
 
 fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
+}
+
+/// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
+/// the newest `last_updated_ledger` (RMT version semantics resolved at stage time).
+fn upsert_balance(
+    map: &mut HashMap<(i64, i64), BalanceRow>,
+    holder_id: i64,
+    asset_id: i64,
+    amount: i128,
+    last_updated_ledger: i64,
+) {
+    use std::collections::hash_map::Entry;
+    let row = BalanceRow {
+        holder_id,
+        asset_id,
+        amount,
+        last_updated_ledger,
+    };
+    match map.entry((holder_id, asset_id)) {
+        Entry::Occupied(mut occ) => {
+            if row.last_updated_ledger >= occ.get().last_updated_ledger {
+                *occ.get_mut() = row;
+            }
+        }
+        Entry::Vacant(vac) => {
+            vac.insert(row);
+        }
+    }
 }
 
 fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
@@ -1937,4 +2001,63 @@ fn merge_account_state_overrides(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod balance_tests {
+    use super::*;
+    use xdr_parser::ExtractedSorobanBalance;
+
+    #[test]
+    fn build_balance_rows_maps_holder_and_asset_surrogates() {
+        let extracted = vec![ExtractedSorobanBalance {
+            contract_id: "CTOKEN1".into(),
+            holder: "GHOLDER1".into(),
+            balance: 800_009_446_178_i128,
+            ledger: 100,
+        }];
+        // No SAC map → type-3 keying: asset_id == the token's contract surrogate.
+        let rows = build_balance_rows(&extracted, &HashMap::new());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].holder_id, ids::address_id("GHOLDER1"));
+        assert_eq!(rows[0].asset_id, ids::contract_id("CTOKEN1"));
+        assert_eq!(rows[0].amount, 800_009_446_178_i128);
+        assert_eq!(rows[0].last_updated_ledger, 100);
+    }
+
+    #[test]
+    fn build_balance_rows_rekeys_sac_via_map_but_not_type3() {
+        // A SAC contract-held balance + a type-3 token balance. The map re-keys
+        // only the SAC (its surrogate → classic id); the type-3 token is absent
+        // and keeps its own surrogate.
+        let classic_usdc = ids::asset_id(1, "USDC", 42, 0);
+        let sac_classic = HashMap::from([(ids::contract_id("CSAC"), classic_usdc)]);
+        let rows = build_balance_rows(
+            &[
+                ExtractedSorobanBalance {
+                    contract_id: "CSAC".into(),
+                    holder: "CPOOL".into(),
+                    balance: 100,
+                    ledger: 10,
+                },
+                ExtractedSorobanBalance {
+                    contract_id: "CTOKEN3".into(),
+                    holder: "GHOLDER".into(),
+                    balance: 200,
+                    ledger: 10,
+                },
+            ],
+            &sac_classic,
+        );
+
+        assert_eq!(
+            rows[0].asset_id, classic_usdc,
+            "SAC contract-held → classic id"
+        );
+        assert_eq!(
+            rows[1].asset_id,
+            ids::contract_id("CTOKEN3"),
+            "type-3 unchanged"
+        );
+    }
 }

@@ -1,3 +1,8 @@
+-- ⚠️ SUPERSEDED by task 0331 (unified balances). Supply/holders come from
+-- `balance_aggregates` (MV over `balances`, keyed by `assets.id`), NOT
+-- `asset_aggregates`; post-ADR-0051 a SAC is a facet folded into its classic row.
+-- Authoritative query: `crates/api/src/assets/queries_ch.rs`. Reference SQL below is
+-- pre-0331.
 -- Endpoint:     GET /assets/:id
 -- Purpose:      Asset detail. DB returns the composed header (code, type,
 --               supply, holder_count, icon, name, symbol, decimals) plus the

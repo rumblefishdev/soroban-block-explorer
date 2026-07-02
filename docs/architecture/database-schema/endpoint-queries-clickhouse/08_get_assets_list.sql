@@ -1,3 +1,9 @@
+-- ⚠️ SUPERSEDED by task 0331 (unified balances). `total_supply` / `holder_count` now
+-- come from `balance_aggregates` (refreshable MV over the unified `balances` table,
+-- keyed by the RE-ADDED `assets.id` surrogate — PR #175 dropped it, 0331 restored it),
+-- NOT `asset_aggregates`. Post-ADR-0051 a SAC is a FACET folded into its classic row,
+-- so there is ONE aggregate row per asset (no separate SAC row). Authoritative query:
+-- `crates/api/src/assets/queries_ch.rs`. Reference SQL below is pre-0331.
 -- Endpoint:     GET /assets
 -- Purpose:      Paginated list of assets across all four types (native,
 --               classic credit, SAC, soroban-native). Optional filters:

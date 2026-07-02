@@ -27,7 +27,9 @@ const NATIVE_BALANCE: AccountBalance = {
   asset_type_name: 'native',
   asset_code: null,
   asset_issuer: null,
-  balance: '500.0000000',
+  // RAW Int128 (task 0331) — 500 XLM scaled by decimals=7.
+  balance: '5000000000',
+  decimals: 7,
   last_updated_ledger: 100,
   type: 0,
 };
@@ -35,7 +37,9 @@ const USDC_BALANCE: AccountBalance = {
   asset_type_name: 'credit_alphanum4',
   asset_code: 'USDC',
   asset_issuer: USDC_ISSUER,
-  balance: '1250.5000000',
+  // RAW Int128 (task 0331) — 1250.5 USDC scaled by decimals=7.
+  balance: '12505000000',
+  decimals: 7,
   last_updated_ledger: 100,
   type: 1,
 };
@@ -110,6 +114,10 @@ describe('AccountDetailPage', () => {
     expect(screen.getAllByText(VALID_ACCOUNT).length).toBeGreaterThan(0);
     // Native balance always shows the "Stellar Lumens" name.
     expect(screen.getByText('Stellar Lumens')).toBeInTheDocument();
+    // RAW balance is scaled by decimals for display (task 0331): native
+    // `5000000000` / 7 → `500.00`; classic `12505000000` / 7 → `1,250.50`.
+    expect(screen.getByText('500.00')).toBeInTheDocument();
+    expect(screen.getByText('1,250.50')).toBeInTheDocument();
     // Classic credit balance shows the code as the row name.
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
   });

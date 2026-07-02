@@ -281,6 +281,40 @@ PG keeps all of these.
   or a re-insert that relies on `wasm_uploaded_at_ledger` version
   semantics to absorb the corrected row).
 
+### 4f. Unified balance model (task 0331)
+
+Soroban-token (`asset_type = 3`) `total_supply` / `holder_count` rendered `—` (no
+trustlines). The fix is a CH-only **unified per-holder balance model** that also
+re-keys classic balances off PG's `Decimal128(7)` `account_balances_current` onto a
+raw representation. Two objects, none in PG:
+
+- **`balances`** (`holder_id`, `asset_id`, `amount Int128`, `last_updated_ledger`)
+  `ReplacingMergeTree(last_updated_ledger)` — unified per-holder balance, raw
+  `Int128` (scale by the asset's `decimals` at read; type-3 decimals vary — PIKA
+  43224 overflows any `Decimal`). Read from `ContractData Balance(Address)` ledger
+  STATE, never an event-fold (folds drift on vault / rebasing / non-SEP-41-event
+  tokens — see README DECISION 2026-06-29). `removed` / spent → `amount = 0`.
+  `holder_id = cityhash64(holder StrKey)` — a `G…` account or `C…` contract (~34% of
+  type-3 holders are contracts), in the one surrogate space shared with `accounts.id`
+  / `soroban_contracts.id`. Resolution back to a StrKey (for portfolio / top-holders)
+  is via `accounts` (G) / `soroban_contracts` (C); there is no dedicated address
+  dimension.
+- **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
+  `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
+  (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
+  `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
+  asset types. **`total_supply` = `sum(amount)` is the SOLE supply source** — task
+  0331 Option A: a mint always credits a holder balance (often a contract treasury,
+  summed because holders include `C…`), so the sum equals real supply. No per-token
+  `TotalSupply` key read (it was optional — only ~73% of wasm expose it — and
+  seed-only/stale); the narrow residue (TTL-archived tail + true rebasing) is the
+  accepted non-100% cost. See README DECISION 2026-06-30.
+
+The historical set is seeded once by `backfill-runner balance-seed` (RPC snapshot:
+holders enumerated from `soroban_events`, `Balance(Address)` entries read via
+`getLedgerEntries`); live ingest maintains `balances` forward and supersedes the seed
+on catch-up. See the [indexing-pipeline overview §6.2](../indexing-pipeline/indexing-pipeline-overview.md).
+
 ## 5. Engine, partitioning, and ordering
 
 Resolved in

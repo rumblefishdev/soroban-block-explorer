@@ -97,6 +97,15 @@ pub fn contract_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
+/// `balances.holder_id` from ANY `ScAddress` StrKey — a G-account or a C-contract
+/// (a balance holder can be either; task 0331). Same `cityhash64` as
+/// `account_id`/`contract_id` (one shared surrogate space; resolve back to a StrKey
+/// via `accounts` (G) / `soroban_contracts` (C)).
+#[inline]
+pub fn address_id(strkey: &str) -> i64 {
+    hash64(strkey.as_bytes())
+}
+
 /// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
 /// every transaction `Int64` FK: `operations_appearances.transaction_id`,
 /// `transaction_participants.transaction_id`,
@@ -106,6 +115,35 @@ pub fn contract_id(strkey: &str) -> i64 {
 #[inline]
 pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
     hash64(hash_bytes)
+}
+
+/// `assets.id` / `balances.asset_id` surrogate (task 0331). Takes the SURROGATE
+/// FKs (`issuer_id`, `contract_id` — both already `cityhash64` of their StrKey)
+/// that `AssetRow` carries. By `assets.asset_type` (project enum: 0 native,
+/// 1 classic_credit, 2 sac, 3 soroban):
+/// - native: `cityhash64("native")`
+/// - classic_credit: `cityhash64("CODE:<issuer_id>")`
+/// - soroban (type-3): **the `contract_id` surrogate itself** — a token's
+///   `balances.asset_id` equals its own contract surrogate.
+///
+/// The `_` arm also covers the **RETIRED type-2 (SAC)**: post-ADR-0051 / task 0339
+/// a SAC is a FACET of its classic/native asset, NOT a separate asset. Its
+/// contract-held balances are re-keyed onto the WRAPPED classic/native id in
+/// [`crate::persist::stage::build_balance_rows`], so NO type-2 `asset_id` is ever
+/// persisted. `_ => contract_id` is kept only so the fn stays total on an
+/// unexpected legacy type-2 input; `TokenAssetType::TryFrom` already rejects 2.
+///
+/// Deterministic (replay-idempotent), no central counter.
+#[inline]
+pub fn asset_id(asset_type: i16, asset_code: &str, issuer_id: i64, contract_id: i64) -> i64 {
+    match asset_type {
+        0 => hash64(b"native"),
+        1 => hash64(format!("{asset_code}:{issuer_id}").as_bytes()),
+        // soroban (type-3): the contract surrogate IS the asset id. The retired
+        // type-2 (SAC) also lands here, but its balances are re-keyed to the classic
+        // id (ADR 0051), so a type-2 result is never stored.
+        _ => contract_id,
+    }
 }
 
 #[cfg(test)]
@@ -141,5 +179,54 @@ mod tests {
         // Same value used for `accounts.id` AND every FK column
         // (`source_id`, `caller_id`, etc.).
         assert_eq!(account_id(key), account_id(key));
+    }
+
+    /// GOLDEN — pins the cityhash surrogate of known inputs to their exact `i64`.
+    /// These bytes are load-bearing: they key `balances.holder_id` / `.asset_id`,
+    /// `assets.id`, and every account/contract FK across the schema. A change to
+    /// the hash (crate swap, seed, byte handling) silently RE-KEYS the whole DB
+    /// and orphans every prior row — this test makes such a change fail LOUDLY.
+    /// Do NOT "update the expected value" to make it pass: if it breaks, the hash
+    /// changed and every table needs a full re-backfill (see the module header).
+    #[test]
+    fn golden_surrogate_values_are_pinned() {
+        let g = "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ";
+        let c = "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG";
+        assert_eq!(account_id(g), 4_204_727_763_610_853_148);
+        // `address_id` shares the account/contract surrogate space (task 0331).
+        assert_eq!(address_id(g), 4_204_727_763_610_853_148);
+        assert_eq!(contract_id(c), -8_283_827_203_770_785_938);
+        assert_eq!(asset_id(0, "", 0, 0), -6_959_166_271_784_855_184); // native
+        assert_eq!(
+            asset_id(1, "USDC", account_id(g), 0),
+            -5_142_557_507_226_545_233
+        ); // classic "CODE:issuer"
+        // type-3 asset_id IS the token's own contract surrogate (identity, no re-hash).
+        assert_eq!(asset_id(3, "", 0, contract_id(c)), contract_id(c));
+    }
+
+    /// `asset_id` (task 0331) — surrogate for the unified `balances.asset_id`.
+    /// native→"native"; classic→"CODE:ISSUER"; soroban (type-3)→the contract
+    /// surrogate itself. The fn is TOTAL, so the retired type-2 (SAC) input also maps
+    /// to the contract surrogate — but ADR 0051 re-keys SAC balances onto the classic
+    /// id, so no type-2 id is ever stored; the type-2 cases below only pin the raw fn.
+    #[test]
+    fn asset_id_canonical() {
+        let iss = account_id("GISSUER");
+        let csac = contract_id("CSAC");
+        let ctok = contract_id("CTOKEN1");
+        // soroban (3): asset_id == its OWN contract surrogate.
+        assert_eq!(asset_id(3, "", 0, ctok), ctok);
+        // type-2 (SAC) is RETIRED (ADR 0051): the total fn still maps it to the
+        // contract surrogate, but a SAC balance is re-keyed to its classic id, so this
+        // value is never persisted — asserted only to document the raw fn.
+        assert_eq!(asset_id(2, "USDC", iss, csac), csac);
+        // The raw fn gives classic and the (retired) type-2 surrogate DISTINCT values —
+        // which is exactly WHY the re-key exists: map that surrogate → the classic id.
+        assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(2, "USDC", iss, csac));
+        // Distinct classics differ; native is its own thing; deterministic.
+        assert_ne!(asset_id(1, "USDC", iss, 0), asset_id(1, "EURC", iss, 0));
+        assert_ne!(asset_id(0, "", 0, 0), asset_id(1, "USDC", iss, 0));
+        assert_eq!(asset_id(0, "", 0, 0), asset_id(0, "", 0, 0));
     }
 }

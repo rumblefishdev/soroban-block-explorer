@@ -5,20 +5,48 @@ export type ClientOptions = {
 };
 
 /**
- * Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.
+ * Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have
+ * both; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`
+ * instead (the account portfolio includes Soroban balances, task 0331 Option C).
  */
 export type AccountBalance = {
   asset_code?: string | null;
   asset_issuer?: string | null;
   /**
-   * `native` | `credit_alphanum4` | `credit_alphanum12`.
+   * Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
+   * | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
+   * — identify them via `contract_id`, not this label.
    */
   asset_type_name?: string | null;
   /**
-   * `NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros).
+   * RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
+   * Option C: one convention for all asset types; classic `decimals` = 7). The
+   * account portfolio now includes Soroban (type-3) token balances too.
    */
   balance: string;
+  /**
+   * C-strkey of the Soroban token's contract (type-3 only) — the identity +
+   * link target (`/assets/${contract_id}`). `null` for native / classic.
+   */
+  contract_id?: string | null;
+  /**
+   * Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
+   */
+  decimals: number;
   last_updated_ledger: number;
+  /**
+   * Asset display `name`, from two disjoint sources by asset type: classic /
+   * native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
+   * assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+   * Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
+   * `null` when neither source has a name.
+   */
+  name?: string | null;
+  /**
+   * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+   * ticker. `null` for native / classic (they carry `asset_code`).
+   */
+  symbol?: string | null;
   /**
    * Raw SMALLINT — stable across label renames.
    */
@@ -44,7 +72,7 @@ export type AccountDetailResponse = {
  * One row of `GET /v1/accounts`. Identity + native (XLM) balance + the
  * first/last-seen activity window + `home_domain`. Ordered by
  * `last_seen_ledger` (the only indexed sort). `xlm_balance` is the native
- * balance from `account_balances_current`; `null` if no native row exists.
+ * balance from the unified `balances` table; `null` if no native row exists.
  */
 export type AccountListItem = {
   account_id: string;
@@ -52,7 +80,9 @@ export type AccountListItem = {
   home_domain?: string | null;
   last_seen_ledger: number;
   /**
-   * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+   * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+   * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+   * the account-detail balances.
    */
   xlm_balance?: string | null;
 };
@@ -115,7 +145,8 @@ export type AssetDetailResponse = {
    */
   decimals: number;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -148,6 +179,13 @@ export type AssetDetailResponse = {
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
+  /**
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
+   */
   total_supply?: string | null;
 } & {
   /**
@@ -186,7 +224,8 @@ export type AssetItem = {
    */
   decimals: number;
   /**
-   * May be `null` / stale until task 0135 ships.
+   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+   * (all asset types — trustline holders + contract holders). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -219,6 +258,13 @@ export type AssetItem = {
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
+  /**
+   * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+   * display (task 0331 Option C: one convention for ALL asset types; classic
+   * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+   * unified `balances` table.
+   */
   total_supply?: string | null;
 };
 
@@ -974,7 +1020,9 @@ export type PaginatedAccountListItem = {
     home_domain?: string | null;
     last_seen_ledger: number;
     /**
-     * Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string.
+     * Native (XLM) balance as a RAW `Int128` stroop string (human value =
+     * ÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as
+     * the account-detail balances.
      */
     xlm_balance?: string | null;
   }>;
@@ -1048,7 +1096,8 @@ export type PaginatedAssetItem = {
      */
     decimals: number;
     /**
-     * May be `null` / stale until task 0135 ships.
+     * Active-holder count (`amount > 0`) from the unified `balances` aggregate
+     * (all asset types — trustline holders + contract holders). `null` = no data.
      */
     holder_count?: number | null;
     icon_url?: string | null;
@@ -1081,6 +1130,13 @@ export type PaginatedAssetItem = {
      * (use `asset_code`) and native.
      */
     symbol?: string | null;
+    /**
+     * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+     * display (task 0331 Option C: one convention for ALL asset types; classic
+     * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+     * (a token/asset with no holders). Sourced from `balance_aggregates` over the
+     * unified `balances` table.
+     */
     total_supply?: string | null;
   }>;
   page: PageInfo;

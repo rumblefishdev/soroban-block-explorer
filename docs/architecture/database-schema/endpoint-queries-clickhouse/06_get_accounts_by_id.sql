@@ -1,3 +1,8 @@
+-- ⚠️ SUPERSEDED by task 0331 (unified balances). The account portfolio now reads
+-- per-holder balances from the unified `balances` table (joined on `assets.id`),
+-- NOT `account_balances_current`; it also surfaces Soroban (type-3) token balances.
+-- Authoritative query: `crates/api/src/accounts/queries_ch.rs::fetch_balances`.
+-- The reference SQL below is pre-0331, kept for endpoint/inputs documentation only.
 -- Endpoint:     GET /accounts/:account_id
 -- Purpose:      Account detail: header + current balances (native + credit).
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.7

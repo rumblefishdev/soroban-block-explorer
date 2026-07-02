@@ -4,6 +4,7 @@ import {
   formatAmount,
   IdentifierDisplay,
   IdentifierWithCopy,
+  scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
@@ -11,9 +12,11 @@ import { SummaryRow } from '../detail/SummaryRow.js';
 
 function SupplyValue({
   supply,
+  decimals,
   code,
 }: {
   supply?: string | null;
+  decimals: number;
   code?: string | null;
 }) {
   return (
@@ -22,7 +25,7 @@ function SupplyValue({
         variant="bodySmBold"
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
-        {formatAmount(supply)}
+        {formatAmount(scaleByDecimals(supply, decimals))}
       </Typography>
       {code && (
         <Typography
@@ -132,6 +135,7 @@ export function AssetSummary({ asset }: { asset: AssetDetailResponse }) {
             value: (
               <SupplyValue
                 supply={asset.total_supply}
+                decimals={asset.decimals}
                 // Soroban-native tokens have no classic `asset_code`; fall back
                 // to the on-chain SEP-41 `symbol` so supply reads e.g. "1.5 USDC"
                 // instead of an unlabelled number (task 0304).

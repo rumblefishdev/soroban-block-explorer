@@ -73,10 +73,11 @@ pub struct AccountRow {
 
 /// `assets` — state, plain RMT. Composite PK: identity 4-tuple.
 /// Native XLM: asset_type=0, asset_code='', issuer_id=0, contract_id=0.
-/// `total_supply`/`holder_count` are DEAD columns (lore-0293): the indexer
-/// writes them `None`; the live value is served from the pre-computed
-/// `asset_aggregates` table (refreshable MV). Kept for backward-compat; drop
-/// deferred to a cleanup task (0310).
+/// `name`, `total_supply`, `holder_count`, `icon_url` are DEAD columns — the
+/// indexer writes them `None` and NO read touches them: supply/holders come from
+/// `balance_aggregates` (lore-0293), display name/icon from `asset_enrichment`
+/// coalesced over `soroban_contract_metadata`. `name` is 0/367321-populated in
+/// prod. Kept for backward-compat; `ALTER … DROP COLUMN` batched in task 0310.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct AssetRow {
     pub asset_type: i16,
@@ -87,6 +88,35 @@ pub struct AssetRow {
     pub total_supply: Option<i128>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
+    /// lore-0331 surrogate (`ids::asset_id`) — single-column asset key for
+    /// `balances.asset_id`. Column order MUST match `assets` schema (id last).
+    pub id: i64,
+}
+
+impl AssetRow {
+    /// Build a staging `AssetRow` from its identity + name, computing the `id`
+    /// surrogate ONCE from the identity so no build site can forget it or diverge.
+    /// The aggregate columns are dead at write time (lore-0293 → `balance_aggregates`)
+    /// so they are always `None` here.
+    pub fn staged(
+        asset_type: i16,
+        asset_code: String,
+        issuer_id: i64,
+        contract_id: i64,
+        name: Option<String>,
+    ) -> Self {
+        Self {
+            id: super::ids::asset_id(asset_type, &asset_code, issuer_id, contract_id),
+            asset_type,
+            asset_code,
+            issuer_id,
+            contract_id,
+            name,
+            total_supply: None,
+            holder_count: None,
+            icon_url: None,
+        }
+    }
 }
 
 /// `asset_sac` — indexer-owned SAC facet side table (ADR 0051 / task 0339),
@@ -124,18 +154,11 @@ pub struct AssetEnrichmentRow {
     pub version: i64,
 }
 
-/// `account_balances_current` — state, RMT(last_updated_ledger).
-/// Trustline removals emitted as `balance = 0` rows; reads filter
-/// `WHERE balance > 0`.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct AccountBalanceRow {
-    pub account_id: i64,
-    pub asset_type: i16,
-    pub asset_code: String,
-    pub issuer_id: i64,
-    pub balance: i128,
-    pub last_updated_ledger: i64,
-}
+// `account_balances_current` — table retained (pending classic→`balances`
+// migration + rollback) but NO LONGER WRITTEN (lore-0331 Option A single-write):
+// its `AccountBalanceRow` write struct was removed. Classic + native balances now
+// stage straight into the unified `balances` table (`BalanceRow`); reads already
+// resolve there.
 
 /// `soroban_contracts` — state hub, RMT(wasm_uploaded_at_ledger).
 /// Surrogate `id`; `wasm_uploaded_at_ledger = 0` is the stub sentinel
@@ -173,6 +196,21 @@ pub struct SorobanContractMetadataRow {
     pub symbol: Option<String>,
     pub decimals: Option<u32>,
     pub version: i64,
+}
+
+/// `balances` — unified per-holder balance (task 0331, Option C). RMT(version);
+/// `last_updated_ledger` = observed ledger; removed/zeroed → `amount = 0`.
+/// `holder_id` = `cityhash64(holder StrKey)` (one surrogate space with
+/// `accounts.id` / `soroban_contracts.id`; resolve back to a StrKey via `accounts`
+/// (G) / `soroban_contracts` (C)); `asset_id` = `ids::asset_id` (→ `assets.id`);
+/// `amount` raw `Int128` (scale by the asset's decimals at read). Replaces
+/// `soroban_token_balances` + (after step 6) classic `account_balances_current`.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct BalanceRow {
+    pub holder_id: i64,
+    pub asset_id: i64,
+    pub amount: i128,
+    pub last_updated_ledger: i64,
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK

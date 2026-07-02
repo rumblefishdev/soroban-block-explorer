@@ -65,8 +65,14 @@ pub struct AssetItem {
     /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
     /// (Stellar classic precision). Load-bearing for amount rendering.
     pub decimals: u32,
+    /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
+    /// display (task 0331 Option C: one convention for ALL asset types; classic
+    /// `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
+    /// (a token/asset with no holders). Sourced from `balance_aggregates` over the
+    /// unified `balances` table.
     pub total_supply: Option<String>,
-    /// May be `null` / stale until task 0135 ships.
+    /// Active-holder count (`amount > 0`) from the unified `balances` aggregate
+    /// (all asset types — trustline holders + contract holders). `null` = no data.
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
 }

@@ -298,25 +298,7 @@ fn parse_batch(
     Ok((nft_fold.into_values().collect(), own_out))
 }
 
-/// Batch-INSERT pending rows. No-op on an empty slice.
-async fn insert_rows<T>(
-    client: &ClickhouseClient,
-    table: &str,
-    rows: &[T],
-) -> Result<(), BackfillError>
-where
-    T: clickhouse::Row + clickhouse::RowOwned + serde::Serialize,
-{
-    if rows.is_empty() {
-        return Ok(());
-    }
-    let mut insert = client.insert::<T>(table).await.map_err(BackfillError::Ch)?;
-    for row in rows {
-        insert.write(row).await.map_err(BackfillError::Ch)?;
-    }
-    insert.end().await.map_err(BackfillError::Ch)?;
-    Ok(())
-}
+use crate::util::insert_rows;
 
 #[cfg(test)]
 mod tests {

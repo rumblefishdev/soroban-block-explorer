@@ -1,7 +1,4 @@
-import { formatAmount } from './amount.js';
-
-/** 1 XLM = 10,000,000 stroops. BigInt to keep large-value math exact. */
-export const STROOPS_PER_XLM_BIGINT = 10_000_000n;
+import { formatAmount, scaleByDecimals } from './amount.js';
 
 /**
  * Converts a stroop count to its XLM-scale decimal string (7 dp, trailing
@@ -13,19 +10,9 @@ export const STROOPS_PER_XLM_BIGINT = 10_000_000n;
  * from BigInt modulo).
  */
 function stroopsToDecimal(stroops: string | number): string | null {
-  let safe: bigint;
-  if (typeof stroops === 'number') {
-    if (!Number.isFinite(stroops) || stroops < 0) return null;
-    safe = BigInt(Math.trunc(stroops));
-  } else {
-    const trimmed = stroops.trim();
-    if (!/^\d+$/.test(trimmed)) return null;
-    safe = BigInt(trimmed);
-  }
-  const whole = safe / STROOPS_PER_XLM_BIGINT;
-  const frac = safe % STROOPS_PER_XLM_BIGINT;
-  const fracStr = frac.toString().padStart(7, '0').replace(/0+$/, '');
-  return fracStr.length > 0 ? `${whole}.${fracStr}` : `${whole}`;
+  // 1 XLM = 10⁷ stroops — the generic decimal-scaler with decimals=7 (dedup of
+  // what was a copy of `scaleByDecimals`'s algorithm; task 0331 review).
+  return scaleByDecimals(stroops, 7);
 }
 
 /**

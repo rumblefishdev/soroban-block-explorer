@@ -74,6 +74,7 @@ fn column_order_assets() {
             "total_supply",
             "holder_count",
             "icon_url",
+            "id", // lore-0331 surrogate (last)
         ],
     );
 }
@@ -113,17 +114,10 @@ fn column_order_asset_enrichment() {
 }
 
 #[test]
-fn column_order_account_balances_current() {
-    assert_columns::<AccountBalanceRow>(
-        "account_balances_current",
-        &[
-            "account_id",
-            "asset_type",
-            "asset_code",
-            "issuer_id",
-            "balance",
-            "last_updated_ledger",
-        ],
+fn column_order_balances() {
+    assert_columns::<BalanceRow>(
+        "balances",
+        &["holder_id", "asset_id", "amount", "last_updated_ledger"],
     );
 }
 
@@ -1212,6 +1206,8 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1372,6 +1368,8 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
@@ -1411,6 +1409,8 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &prior,
@@ -1452,6 +1452,8 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1506,6 +1508,8 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &prior,
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1558,6 +1562,8 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1709,6 +1715,8 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1814,6 +1822,8 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &overrides,
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
@@ -1892,6 +1902,8 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        soroban_token_balances: &[],
+        sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),

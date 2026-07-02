@@ -308,6 +308,27 @@ pub struct ExtractedContractMetadata {
     pub ledger: u32,
 }
 
+/// A per-holder Soroban token balance recovered from a `ContractData`
+/// `Balance(Address)` ledger-entry change (task 0331).
+///
+/// Persisted into the unified `balances` table (task 0331 Option C; the in-memory
+/// `soroban_token_balances` identifiers are leftover Option-A naming — there is no
+/// table of that name): one row per `(holder, asset_id)`, RMT-versioned by `ledger`.
+/// Reading ledger STATE is
+/// correct-by-construction for vault / rebasing / non-SEP-41-event tokens, where
+/// an event-fold under-counts (see task README DECISION 2026-06-29).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedSorobanBalance {
+    /// Token contract StrKey (`C…`). Hashed to the surrogate id at persistence.
+    pub contract_id: String,
+    /// Holder address StrKey — `G…` account OR `C…` contract (34% are contracts).
+    pub holder: String,
+    /// Current balance (i128; tokens can exceed i64 / use >7 decimals).
+    pub balance: i128,
+    /// Ledger the balance was observed — the side table's RMT version slot.
+    pub ledger: u32,
+}
+
 /// Extracted contract deployment from LedgerEntryChanges.
 ///
 /// Produced by `extract_contract_deployments` when a new contract instance

@@ -6,6 +6,7 @@ import {
   EmptyState,
   formatAmount,
   IdentifierDisplay,
+  scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
@@ -19,7 +20,7 @@ interface BalanceShape {
   name: string;
   code: string;
   subline: string;
-  chipLabel: 'Classic' | 'SAC' | null;
+  chipLabel: 'Classic' | 'SAC' | 'Token' | null;
   href: string | undefined;
 }
 
@@ -34,6 +35,22 @@ function shape(balance: AccountBalance): BalanceShape {
       href: undefined,
     };
   }
+  // Soroban token (type-3): no classic code/issuer — its identity is the token
+  // contract + on-chain symbol. Link to the asset detail page by contract id.
+  if (balance.type === 3) {
+    const symbol = balance.symbol ?? '—';
+    return {
+      isNative: false,
+      // Full on-chain name as the title (like /assets), symbol as the ticker
+      // under the amount. Fall back to symbol when the token has no name.
+      name: balance.name ?? symbol,
+      code: symbol,
+      subline: balance.contract_id ?? '',
+      chipLabel: 'Token',
+      href: balance.contract_id ? routes.asset(balance.contract_id) : undefined,
+    };
+  }
+
   const code = balance.asset_code ?? '—';
   const issuer = balance.asset_issuer ?? '';
 
@@ -149,7 +166,13 @@ function BalanceRow({
           {s.chipLabel && (
             <Chip
               size="sm"
-              color={s.chipLabel === 'SAC' ? 'brown' : 'default'}
+              color={
+                s.chipLabel === 'SAC'
+                  ? 'brown'
+                  : s.chipLabel === 'Token'
+                  ? 'neutral'
+                  : 'default'
+              }
               label={s.chipLabel}
             />
           )}
@@ -160,7 +183,7 @@ function BalanceRow({
           variant="bodyMedium"
           sx={(theme) => ({ color: theme.palette.text.primary })}
         >
-          {formatAmount(balance.balance, 2)}
+          {formatAmount(scaleByDecimals(balance.balance, balance.decimals), 2)}
         </Typography>
         <Typography
           variant="bodyXsRegular"

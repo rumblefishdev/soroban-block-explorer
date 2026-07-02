@@ -399,6 +399,7 @@ async fn persist_with_retry(
                 &parsed.nft_events,
                 &parsed.lp_positions,
                 &parsed.contract_metadata_writes,
+                &parsed.soroban_token_balances,
                 &parsed.sac_overrides,
                 classification_cache,
             )

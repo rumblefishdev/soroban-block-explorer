@@ -1925,8 +1925,8 @@
     "schemas": {
       "AccountBalance": {
         "type": "object",
-        "description": "Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.",
-        "required": ["type", "balance", "last_updated_ledger"],
+        "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
+        "required": ["type", "balance", "decimals", "last_updated_ledger"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -1936,15 +1936,33 @@
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native` | `credit_alphanum4` | `credit_alphanum12`."
+            "description": "Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`\n| `credit_alphanum12` for classic. Soroban (type-3) rows are also returned\n— identify them via `contract_id`, not this label."
           },
           "balance": {
             "type": "string",
-            "description": "`NUMERIC(28,7)` as fixed-precision string (preserves trailing zeros)."
+            "description": "RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331\nOption C: one convention for all asset types; classic `decimals` = 7). The\naccount portfolio now includes Soroban (type-3) token balances too."
+          },
+          "contract_id": {
+            "type": ["string", "null"],
+            "description": "C-strkey of the Soroban token's contract (type-3 only) — the identity +\nlink target (`/assets/${contract_id}`). `null` for native / classic."
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.",
+            "minimum": 0
           },
           "last_updated_ledger": {
             "type": "integer",
             "format": "int64"
+          },
+          "name": {
+            "type": ["string", "null"],
+            "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "On-chain token `symbol` (type-3, from `METADATA`, e.g. \"SMOL\") — the short\nticker. `null` for native / classic (they carry `asset_code`)."
           },
           "type": {
             "type": "integer",
@@ -1996,7 +2014,7 @@
       },
       "AccountListItem": {
         "type": "object",
-        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+        "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
         "required": ["account_id", "last_seen_ledger", "first_seen_ledger"],
         "properties": {
           "account_id": {
@@ -2015,7 +2033,7 @@
           },
           "xlm_balance": {
             "type": ["string", "null"],
-            "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+            "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
           }
         }
       },
@@ -2110,7 +2128,7 @@
               "holder_count": {
                 "type": ["integer", "null"],
                 "format": "int32",
-                "description": "May be `null` / stale until task 0135 ships."
+                "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
               },
               "icon_url": {
                 "type": ["string", "null"]
@@ -2138,7 +2156,8 @@
                 "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
               },
               "total_supply": {
-                "type": ["string", "null"]
+                "type": ["string", "null"],
+                "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
               }
             }
           },
@@ -2191,7 +2210,7 @@
           "holder_count": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "May be `null` / stale until task 0135 ships."
+            "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
           },
           "icon_url": {
             "type": ["string", "null"]
@@ -2219,7 +2238,8 @@
             "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
           },
           "total_supply": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
           }
         }
       },
@@ -3244,7 +3264,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from `account_balances_current`; `null` if no native row exists.",
+              "description": "One row of `GET /v1/accounts`. Identity + native (XLM) balance + the\nfirst/last-seen activity window + `home_domain`. Ordered by\n`last_seen_ledger` (the only indexed sort). `xlm_balance` is the native\nbalance from the unified `balances` table; `null` if no native row exists.",
               "required": [
                 "account_id",
                 "last_seen_ledger",
@@ -3267,7 +3287,7 @@
                 },
                 "xlm_balance": {
                   "type": ["string", "null"],
-                  "description": "Native (XLM) balance, `NUMERIC(28,7)` as a fixed-precision string."
+                  "description": "Native (XLM) balance as a RAW `Int128` stroop string (human value =\n÷10⁷); the frontend scales by 7 decimals — same raw-amount contract as\nthe account-detail balances."
                 }
               }
             }
@@ -3386,7 +3406,7 @@
                 "holder_count": {
                   "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "May be `null` / stale until task 0135 ships."
+                  "description": "Active-holder count (`amount > 0`) from the unified `balances` aggregate\n(all asset types — trustline holders + contract holders). `null` = no data."
                 },
                 "icon_url": {
                   "type": ["string", "null"]
@@ -3414,7 +3434,8 @@
                   "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
                 },
                 "total_supply": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Total supply as a RAW integer string (`Int128`) — scale by `decimals` for\ndisplay (task 0331 Option C: one convention for ALL asset types; classic\n`decimals` is 7). E.g. `\"63836094715548\"`. `null` = no balance data\n(a token/asset with no holders). Sourced from `balance_aggregates` over the\nunified `balances` table."
                 }
               }
             }

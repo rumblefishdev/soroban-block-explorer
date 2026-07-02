@@ -212,35 +212,37 @@ ORDER BY (contract_id);
 ----------------------------------------------------------------------
 
 -- assets identity is a 4-tuple. Native XLM: all-empty + asset_type=0.
--- Classic credit: code+issuer set, contract_id=0. Soroban-native:
--- contract_id set, code/issuer=empty/0.
+-- Classic credit: code+issuer set, contract_id=0. SAC: contract_id
+-- set, code/issuer optional. Soroban-native: contract_id set,
+-- code/issuer=empty/0.
 --
--- SAC-ness is a FACET, not a type (ADR 0051 / task 0339). A Stellar Asset
--- Contract wraps a classic_credit / native asset — the SAME economic asset — so
--- it is NOT a separate `asset_type=2` row. The SAC handle is stored in the
--- indexer-owned `asset_sac` side table (below), NOT as columns on `assets`:
--- `assets` is a no-version RMT re-written whole every ledger a trustline for the
--- asset changes (see the `total_supply`/`holder_count` note), so a mutable
--- non-key column here would be clobbered to its default by the next re-emit
--- (exactly the ~25% NULL prod bug). `asset_sac` is written ONLY on a SAC
--- sighting and merged with `max()`, so it survives the re-emit.
---
--- `total_supply` / `holder_count` are kept for backward-compat but DEAD as of
--- lore-0293: nothing reads them (the API serves the aggregate from
--- `asset_aggregates` below) and the indexer writes them NULL. They
--- are a global rollup over every holder's balance; writing them into this
--- per-ledger-rewritten row clobbered them (no-version RMT, last-write-wins →
--- ~25% of classic assets served NULL in prod). Drop (`ALTER … DROP COLUMN`)
--- deferred to a cleanup task.
+-- DEAD columns (`ALTER … DROP COLUMN` batched in the cleanup task 0310):
+--  * `total_supply` / `holder_count` (lore-0293) — nothing reads them (the API
+--    serves the aggregate from `balance_aggregates`); the indexer writes NULL.
+--    A global rollup written into this per-ledger-rewritten row clobbered them
+--    (no-version RMT, last-write-wins → ~25% of classic served NULL in prod).
+--  * `name` / `icon_url` — the indexer writes them NULL (parser never sets an
+--    asset name; verified 0/367321 rows populated in prod). Every read resolves
+--    the display name/icon from `asset_enrichment` (curated) coalesced over
+--    `soroban_contract_metadata` (on-chain) — never from `assets` — so these two
+--    are vestigial too.
 CREATE TABLE IF NOT EXISTS assets (
     asset_type      Int16,
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
-    contract_id     Int64,            -- 0 for native / classic-credit (soroban identity only)
-    name            Nullable(String),
-    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → asset_aggregates
-    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → asset_aggregates
-    icon_url        Nullable(String)
+    contract_id     Int64,            -- 0 for native / classic-credit
+    name            Nullable(String),         -- DEAD (0 rows prod) → asset_enrichment / soroban_contract_metadata
+    total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
+    holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
+    icon_url        Nullable(String),         -- DEAD → asset_enrichment.icon_url
+    -- lore-0331 (Option C): single surrogate = ids::asset_id (cityhash64 of the
+    -- canonical identity; classic="CODE:ISSUER"; SAC + soroban keyed by their own
+    -- contract, so each is a DISTINCT asset id). The first single-column asset key — `balances.asset_id`
+    -- references it. NOT in ORDER BY (natural key unchanged; additive, non-breaking).
+    -- PROD: existing table needs `ALTER TABLE assets ADD COLUMN id Int64` + a
+    -- one-time backfill of `id` for existing rows (maintenance window) — CREATE IF
+    -- NOT EXISTS won't add it. Default 0 until a row is rewritten/backfilled.
+    id              Int64 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
@@ -303,50 +305,41 @@ CREATE TABLE IF NOT EXISTS asset_enrichment (
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 
--- Pre-computed per-asset aggregates (lore-0293; replaces the one-shot
--- `asset-aggregates` CLI). One row per classic-credit asset, FINAL `total_supply`
--- / `holder_count` ready to read via a 1:1 LEFT JOIN (cf. `asset_enrichment`). A
--- REFRESHABLE MV recomputes the whole table from `account_balances_current` on a
--- cadence — an incremental per-asset sum isn't possible without breaking the
--- indexer's absolute-state idempotency (full rationale + prod evidence:
--- notes/G-assets-aggregate-clobber-proof.md). Refresh is a batch admin job, off
--- the `api_reader` read quota (~1 s over 36 M rows).
--- ENGINE = MergeTree, not RMT: a refreshable MV atomically REPLACES the target
--- each refresh, so no duplicate keys accumulate (nothing for RMT to dedup; reads
--- stay FINAL-free). The other tables are RMT because they are APPEND targets.
--- `asset_type IN (1, 2)` = classic credit only; native (0) and pool-shares (3)
--- are excluded (their balance-sum is not a trustworthy supply — see the note).
--- NB: `account_balances_current.asset_type` is the XDR `AssetType` discriminator
--- (1 = credit_alphanum4, 2 = credit_alphanum12 — see `domain::AssetType`, stamped
--- by code length), NOT the `assets`-table `TokenAssetType`. So `2` here is a
--- long-code (5–12-char) CLASSIC asset, not a SAC (SACs are never trustlines and
--- never appear in this table) — both alphanum widths must be summed. ADR 0051's
--- SAC-retirement does NOT touch this domain; a SAC-wrapped classic asset's supply
--- is already covered under its classic `(asset_code, issuer_id)` here.
--- Columns are `Nullable` so a LEFT-JOIN miss reads NULL under the readonly
--- `api_reader` (`join_use_nulls = 0` → a Nullable column's default IS NULL),
--- distinguishing a JOIN miss from a real 0-supply with no sentinel.
--- TRADEOFF: figures lag by up to `REFRESH EVERY` (eventually consistent).
-CREATE TABLE IF NOT EXISTS asset_aggregates (
-    asset_code   LowCardinality(String),
-    issuer_id    Int64,
-    total_supply Nullable(Decimal128(7)),
+-- NOTE: the legacy `asset_aggregates` table + `asset_aggregates_mv` (classic
+-- supply/holders over `account_balances_current`, keyed code+issuer) were DROPPED
+-- (task 0331) — superseded by `balance_aggregates` (below) over the unified
+-- `balances` table, keyed by `assets.id`. It was a refreshable MV (derived), so
+-- the drop loses no source data; classic supply now flows through `balances`
+-- (single-write + the one-time classic→`balances` migration).
+--
+-- Pre-computed per-asset aggregates over the unified `balances` table (task 0331,
+-- Option C) — supply + active-holder count keyed by the `assets.id` surrogate.
+-- `total_supply` is RAW `Int128` (the read scales by the asset's `decimals`); a
+-- Soroban token's supply needs raw Int128 (token-specific decimals; PIKA=43224
+-- overflows any Decimal), so this table is raw for ALL asset types once classic
+-- migrates in (step 6). Refreshable-MV (full recompute, atomic EXCHANGE → no FINAL
+-- on read). Columns `Nullable` so a read LEFT-JOIN miss is NULL (→ "—"), not 0.
+-- (classic enters `balances` via single-write + the one-time classic→`balances`
+-- migration; type-3 + SAC/native contract-held via the live parser + seed.)
+CREATE TABLE IF NOT EXISTS balance_aggregates (
+    asset_id     Int64,
+    total_supply Nullable(Int128),
     holder_count Nullable(Int32)
 )
 ENGINE = MergeTree
-ORDER BY (asset_code, issuer_id);
+ORDER BY (asset_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS asset_aggregates_mv
-REFRESH EVERY 2 MINUTE
-TO asset_aggregates AS
-SELECT
-    asset_code,
-    issuer_id,
-    sum(balance)                  AS total_supply,
-    toInt32(countIf(balance > 0)) AS holder_count
-FROM account_balances_current FINAL
-WHERE asset_type IN (1, 2)
-GROUP BY asset_code, issuer_id;
+-- NOTE: `balance_aggregates_mv` (the refreshable MV that fills this table) is
+-- defined AFTER `balances` below — a `CREATE MATERIALIZED VIEW … FROM balances`
+-- needs its source table to already exist on a fresh `init.sql` run.
+
+-- (tombstone) `soroban_token_supply` was DROPPED — task 0331 Option-A decision.
+-- A per-token authoritative `TotalSupply` key read (76.6% of type-3 tokens expose
+-- one; 27% do not) added a second supply source + a seed-only staleness bug for
+-- no measurable gain: a mint always credits a holder balance (often a contract
+-- treasury, summed under Path A G+C holders), so `balance_aggregates.total_supply`
+-- (Σ amount, MV-refreshed) equals the real supply. ONE universal method; the
+-- narrow residue (TTL-archived tail + true rebasing) is the accepted non-100% cost.
 
 CREATE TABLE IF NOT EXISTS account_balances_current (
     account_id          Int64,
@@ -358,6 +351,47 @@ CREATE TABLE IF NOT EXISTS account_balances_current (
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (account_id, asset_type, asset_code, issuer_id);
+
+-- ── Option C unified balance model (task 0331) ──────────────────────────────
+-- The two tables below are the unified replacement for `account_balances_current`
+-- (classic) + the interim `soroban_token_balances` (type-3). The persist path now
+-- writes `balances` ONLY (single-write, task 0331 Option A); `account_balances_current`
+-- is retained (no longer written) pending the one-time classic→`balances` data
+-- migration + drop (OPS steps 6b/6d). See the task README.
+
+-- Unified per-holder balances — the single balance model for ALL asset types.
+-- `amount` is RAW `Int128` (scale by the asset's `decimals` at read — universal
+-- fixed-point, handles classic 7-dec AND arbitrary Soroban decimals). `holder_id`
+-- = `cityhash64(holder StrKey)` (the same surrogate space as `accounts.id` /
+-- `soroban_contracts.id`; resolve back to a StrKey via `accounts` (G) or
+-- `soroban_contracts` (C) — there is no dedicated address dimension). `asset_id`
+-- → the `assets.id` surrogate (`ids::asset_id`). RMT version = `last_updated_ledger`;
+-- a removed/zeroed balance writes 0 so a fully-spent holder collapses.
+CREATE TABLE IF NOT EXISTS balances (
+    holder_id           Int64,
+    asset_id            Int64,
+    amount              Int128,
+    last_updated_ledger Int64
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+-- holder_id FIRST: the account-detail read is a per-holder PK-prefix seek (the
+-- hot, latency-critical path — mirrors `account_balances_current`'s account_id-first
+-- key, avoids the 0198 Seq Scan). `balance_aggregates_mv` GROUP BY asset_id is a
+-- periodic full-recompute scan either way, so it doesn't need asset_id-first.
+ORDER BY (holder_id, asset_id);
+
+-- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
+-- above — the source table MUST exist before this CREATE). Full recompute + atomic
+-- EXCHANGE, so reads need no FINAL.
+CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO balance_aggregates AS
+SELECT
+    asset_id,
+    sum(amount)                  AS total_supply,
+    toInt32(countIf(amount > 0)) AS holder_count
+FROM balances FINAL
+GROUP BY asset_id;
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,

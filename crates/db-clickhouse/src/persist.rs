@@ -41,7 +41,8 @@ use xdr_parser::types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
     ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition,
-    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance,
+    ExtractedTransaction,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -86,6 +87,7 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
     sac_overrides: &[SacOverride],
     classification_cache: &ClassificationCache,
 ) -> Result<(), SchemaError> {
@@ -100,7 +102,7 @@ pub async fn persist_ledger_clickhouse(
     //   for contracts deployed earlier), memoised by `classification_cache`.
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
-    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows) = tokio::join!(
+    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
         fetch_prior_contract_verdicts(
             client,
@@ -110,7 +112,13 @@ pub async fn persist_ledger_clickhouse(
             classification_cache,
         ),
         fetch_prior_contract_rows(client, events),
+        // task 0331 + ADR 0051: SAC contract-held balances key by the SAC
+        // surrogate; re-map them onto the wrapped classic/native asset id below.
+        fetch_sac_classic_map(client, soroban_token_balances),
     );
+    // Fail closed on the SAC map (unlike the verdict prefetches above): an error
+    // here would otherwise orphan contract-held balances under their surrogate key.
+    let sac_classic = sac_classic?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
@@ -131,6 +139,10 @@ pub async fn persist_ledger_clickhouse(
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        soroban_token_balances,
+        // ADR 0051: `build_balance_rows` keys contract-held SAC balances onto the
+        // wrapped classic/native asset (the SAC has no `assets` row) via this map.
+        sac_classic: &sac_classic,
         sac_overrides,
         prior_wasm_verdicts: &prior_wasm_verdicts,
         prior_contract_verdicts: &prior_contract_verdicts,
@@ -242,6 +254,63 @@ async fn fetch_prior_wasm_verdicts(
             HashMap::new()
         }
     }
+}
+
+/// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the
+/// `asset_sac` table shape): a SAC's contract surrogate + the classic/native
+/// identity it wraps.
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct SacClassicRow {
+    sac_id: i64,
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+}
+
+/// Build the `SAC contract surrogate → classic/native asset_id` map from the
+/// `asset_sac` facet table (task 0331 + ADR 0051). A SAC is not a distinct asset,
+/// so a contract-held SAC balance must be re-keyed onto the classic/native asset it
+/// wraps (see [`stage::build_balance_rows`]). `asset_sac` is one row per
+/// SAC-having asset (~31k at mainnet scale), so the whole map loads at once — far
+/// simpler than a reverse `IN`-list over the non-key `sac_contract_id` column.
+/// Skips the query when there are no soroban balances to re-key. On error the map
+/// is empty (SAC balances keep their surrogate key — orphaned but never wrong; a
+/// re-run recovers).
+pub async fn fetch_sac_classic_map(
+    client: &Client,
+    soroban_token_balances: &[ExtractedSorobanBalance],
+) -> Result<HashMap<i64, i64>, clickhouse::error::Error> {
+    if soroban_token_balances.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // `asset_sac` is an AggregatingMergeTree: `sac_contract_id` / `sac_deployed` are
+    // `SimpleAggregateFunction(max)` columns, so a read MUST `GROUP BY` the full key
+    // and apply `max(...)` to collapse the per-part partial states (this is the read
+    // protocol, not a magnitude compare — the surrogate is constant per key, so
+    // `max` just returns it). `contract_id` is in the key (always 0 for a SAC's
+    // classic/native identity) hence in the GROUP BY, but unused in the output.
+    // `HAVING max(sac_deployed) = 1` keeps only DEPLOYED SACs — an un-deployed SAC
+    // has no contract and cannot hold a balance, so it never matches a balance key.
+    let sql = "SELECT max(sac_contract_id) AS sac_id, asset_type, asset_code, issuer_id \
+               FROM asset_sac \
+               GROUP BY asset_type, asset_code, issuer_id, contract_id \
+               HAVING max(sac_deployed) = 1";
+    // Propagate the error (do NOT fail open to an empty map): with no map, a
+    // contract-held SAC balance keys by its surrogate — which has no `assets` row,
+    // so the row orphans (invisible to every read) and is COMMITTED silently. The
+    // sibling verdict prefetches fail open because a miss just means "default
+    // classification"; here a miss means lost balance data. Returning Err aborts
+    // the ledger/partition so it retries once CH is readable again.
+    let rows = client.query(sql).fetch_all::<SacClassicRow>().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.sac_id,
+                ids::asset_id(r.asset_type, &r.asset_code, r.issuer_id, 0),
+            )
+        })
+        .collect())
 }
 
 /// Read + classify the verdicts for `hashes_hex_lower` from
@@ -500,6 +569,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

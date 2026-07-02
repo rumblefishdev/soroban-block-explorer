@@ -105,30 +105,30 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- asset_aggregates — pre-computed per-asset table (lore-0293). The
-    // refreshable MV does NOT fire on insert (unlike a normal MV); force an
-    // out-of-schedule refresh, then POLL the target. `SYSTEM WAIT VIEW` alone is
-    // racy — it returns early if the just-triggered refresh hasn't entered the
-    // 'Running' state yet — so poll for the computed row instead. -----
+    // ----- balances (unified per-holder model, task 0331 Option C) -----
     client
-        .query("SYSTEM REFRESH VIEW asset_aggregates_mv")
+        .query(
+            "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) \
+             VALUES (?, ?, 123456789, ?)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("refresh asset_aggregates_mv");
-    let agg_where =
-        format!("asset_code = 'USDC' AND issuer_id = {SMOKE_LEDGER} AND holder_count = 1");
-    let mut populated = false;
-    for _ in 0..50 {
-        if count_rows(&client, "asset_aggregates", &agg_where).await == 1 {
-            populated = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200)); // ~10s budget
-    }
-    assert!(
-        populated,
-        "asset_aggregates not populated after refresh (~10s): {agg_where}"
-    );
+        .expect("insert balances");
+    assert_count(
+        &client,
+        "balances",
+        &format!("holder_id = {SMOKE_LEDGER}"),
+        1,
+    )
+    .await;
+
+    // (`balance_aggregates` is filled by `balance_aggregates_mv`, a REFRESH EVERY
+    // 2 MINUTE view — not synchronously assertable in a smoke test. The legacy
+    // `asset_aggregates` refresh smoke was dropped with that table in the task 0331
+    // simplification; classic supply now flows via `balance_aggregates` over `balances`.)
 
     // ----- soroban_contracts (state) -----
     client
@@ -423,6 +423,85 @@ async fn count_rows(client: &clickhouse::Client, table: &str, where_clause: &str
 }
 
 /// Assert there are exactly `expected` rows in `table` matching `where_clause`.
+/// The `balance_aggregates_mv` refreshable MV is the source of every user-facing
+/// `total_supply` / `holder_count`, and the main smoke test can't assert it (2-minute
+/// cadence). This proves it sums correctly: it runs in a THROWAWAY database (the MV
+/// does a FULL recompute of `balances` into `balance_aggregates`, replacing the whole
+/// target — must never touch shared data), forces an immediate refresh, and checks the
+/// result. Gated on `CLICKHOUSE_URL`.
+#[tokio::test]
+async fn balance_aggregates_mv_sums_supply_and_holders() {
+    let Some(url) = ch_url() else {
+        eprintln!("CLICKHOUSE_URL not set — skipping balance_aggregates MV test");
+        return;
+    };
+    let db = "ch_test_0331_balance_agg_mv";
+    let base = client(&Config {
+        url: url.clone(),
+        ..Config::from_env()
+    });
+    base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+        .execute()
+        .await
+        .expect("drop pre-existing throwaway db");
+    base.query(&format!("CREATE DATABASE {db}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let cl = client(&Config {
+        url,
+        database: db.to_string(),
+        ..Config::from_env()
+    });
+    apply_init_sql(&cl).await.expect("apply init schema");
+
+    // One asset, three holders: 100 + 50 positive, 1 zeroed → supply 150, holders 2.
+    let asset: i64 = 424_242;
+    cl.query(
+        "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
+         (1, ?, 100, 10), (2, ?, 50, 10), (3, ?, 0, 10)",
+    )
+    .bind(asset)
+    .bind(asset)
+    .bind(asset)
+    .execute()
+    .await
+    .expect("insert balances");
+
+    // Force the refreshable MV to recompute NOW (vs REFRESH EVERY 2 MINUTE) and wait.
+    cl.query("SYSTEM REFRESH VIEW balance_aggregates_mv")
+        .execute()
+        .await
+        .expect("refresh mv");
+    cl.query("SYSTEM WAIT VIEW balance_aggregates_mv")
+        .execute()
+        .await
+        .expect("wait mv");
+
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct Agg {
+        total_supply: Option<i128>,
+        holder_count: Option<i32>,
+    }
+    let agg = cl
+        .query("SELECT total_supply, holder_count FROM balance_aggregates WHERE asset_id = ?")
+        .bind(asset)
+        .fetch_one::<Agg>()
+        .await
+        .expect("aggregate row");
+    assert_eq!(
+        agg.total_supply,
+        Some(150),
+        "sum(amount) over the 3 balance rows"
+    );
+    assert_eq!(agg.holder_count, Some(2), "countIf(amount > 0)");
+
+    base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+        .execute()
+        .await
+        .expect("cleanup throwaway db");
+}
+
 async fn assert_count(client: &clickhouse::Client, table: &str, where_clause: &str, expected: u64) {
     let actual = count_rows(client, table, where_clause).await;
     assert_eq!(

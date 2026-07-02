@@ -13,8 +13,8 @@ use crate::classification::{ContractClassification, classify_contract_from_wasm_
 use crate::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
     ExtractedContractMetadata, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, NftEvent,
-    SacAssetIdentity,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedSorobanBalance, NftEvent, SacAssetIdentity,
 };
 use domain::{ContractType, NftEventType, TokenAssetType};
 
@@ -297,6 +297,167 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Extract per-holder Soroban token balances from `ContractData`
+/// `Balance(Address)` ledger-entry changes (task 0331).
+///
+/// Reads ledger STATE (the current stored balance), not an event-fold —
+/// correct-by-construction for vault / rebasing / non-SEP-41-event tokens where
+/// a fold under-counts (README DECISION 2026-06-29). Persisted into the unified
+/// `balances` table (task 0331 Option C — the per-type `soroban_token_balances`
+/// table was dropped on the pivot).
+///
+/// Recognises the standard `Vec[Symbol("Balance"), Address]` key with EITHER
+/// value shape: a bare `i128` (a type-3 Soroban token balance) OR the SAC
+/// `BalanceValue` struct (a contract-held classic/native asset, held via the
+/// asset's SAC — task 0331). This extractor emits every balance keyed by the
+/// STORING contract; the type distinction is resolved downstream in
+/// `build_balance_rows`, which keeps type-3 on its own surrogate but re-keys a
+/// SAC-held balance onto the wrapped classic/native asset_id via the `asset_sac`
+/// map (ADR 0051 — task 0339 retired the standalone type-2 SAC asset, so a SAC
+/// balance now folds onto its type-0/1 row). Any other value shape is skipped,
+/// never silently mis-summed.
+pub fn extract_soroban_token_balances(
+    changes: &[ExtractedLedgerEntryChange],
+) -> Vec<ExtractedSorobanBalance> {
+    let mut out = Vec::new();
+    for change in changes {
+        if change.entry_type != "contract_data" {
+            continue;
+        }
+        let Some(holder) = balance_key_holder(&change.key) else {
+            continue;
+        };
+        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
+            continue;
+        };
+        let balance = match change.change_type.as_str() {
+            // Holder fully spent / entry archived → 0, so the RMT supersedes the
+            // stale positive balance (mirrors trustline-removal → 0).
+            "removed" => 0,
+            // `created` / `updated` / `restored` carry the current value.
+            // `state` (pre-image) is ignored — it shares the change's ledger, so
+            // emitting it would let the RMT clobber the real value with the old.
+            "created" | "updated" | "restored" => {
+                let Some(data) = change.data.as_ref() else {
+                    continue;
+                };
+                // Bare `i128` → type-3 token balance. SAC `BalanceValue` struct →
+                // contract-held classic/native balance; take `.amount`. (Its
+                // `authorized`/`clawback` flags are decodable but not propagated
+                // yet — the frozen-balance policy is open, task 0331.) Any other
+                // shape is skipped.
+                if let Some(b) = decode_scval_i128(data) {
+                    b
+                } else if let Some(sac) = decode_sac_balance_value(data) {
+                    sac.amount
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+        out.push(ExtractedSorobanBalance {
+            contract_id,
+            holder,
+            balance,
+            ledger: change.ledger_sequence,
+        });
+    }
+    out
+}
+
+/// `Some(holder_strkey)` when `key.key` is the standard token balance key
+/// `Vec[Symbol("Balance"), Address(holder)]`; `None` otherwise. The holder is
+/// a `G…` account or `C…` contract — both are valid `ScAddress` holders.
+fn balance_key_holder(key: &Value) -> Option<String> {
+    // Token / SAC balances are PERSISTENT contract-data entries. Reject temporary
+    // (or missing-durability) entries even when the inner shape matches, so a
+    // foreign `Balance(Address)`-shaped temp entry is never summed as a balance.
+    if key.get("durability")?.as_str()? != "persistent" {
+        return None;
+    }
+    let inner = key.get("key")?;
+    if inner.get("type")?.as_str()? != "vec" {
+        return None;
+    }
+    let elems = inner.get("value")?.as_array()?;
+    if elems.len() != 2 {
+        return None;
+    }
+    let tag = &elems[0];
+    if tag.get("type")?.as_str()? != "sym" || tag.get("value")?.as_str()? != "Balance" {
+        return None;
+    }
+    let holder = &elems[1];
+    if holder.get("type")?.as_str()? != "address" {
+        return None;
+    }
+    Some(holder.get("value")?.as_str()?.to_string())
+}
+
+/// Decode `data.val` as a bare `i128` (the standard token balance value shape).
+fn decode_scval_i128(data: &Value) -> Option<i128> {
+    let val = data.get("val")?;
+    if val.get("type")?.as_str()? != "i128" {
+        return None;
+    }
+    val.get("value")?.as_str()?.parse::<i128>().ok()
+}
+
+/// The SAC `BalanceValue` struct — how a CONTRACT holds a classic/native asset.
+///
+/// A contract has no trustline; it holds a classic (type-1) or native (type-0) asset
+/// as a `Balance(Address)` `ContractData` entry **inside that asset's SAC**, and the
+/// value is this struct — NOT the bare `i128` a bespoke Soroban token (type-3) uses.
+/// `scval_to_typed_json` serializes it as a `map` of symbol→value entries. Task 0331
+/// (contract-held 0/1). `authorized`/`clawback` are carried so a later step can decide
+/// whether a deauthorized/frozen balance counts toward supply/holders (open policy).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SacBalanceValue {
+    pub amount: i128,
+    pub authorized: bool,
+    pub clawback: bool,
+}
+
+/// Decode `data.val` as a SAC `BalanceValue` struct. `None` for any other shape —
+/// including the bare-`i128` type-3 balance and a partial/foreign map — so the two
+/// value shapes never cross-decode. Does NOT assign an asset: mapping the SAC contract
+/// back to its classic/native asset (type-0/1) is the caller's job (task 0331 Problem B).
+pub fn decode_sac_balance_value(data: &Value) -> Option<SacBalanceValue> {
+    let val = data.get("val")?;
+    if val.get("type")?.as_str()? != "map" {
+        return None;
+    }
+    let mut amount = None;
+    let mut authorized = None;
+    let mut clawback = None;
+    for entry in val.get("value")?.as_array()? {
+        let key = entry.get("key")?;
+        if key.get("type")?.as_str()? != "sym" {
+            return None;
+        }
+        let field = entry.get("value")?;
+        match key.get("value")?.as_str()? {
+            "amount" => {
+                if field.get("type")?.as_str()? != "i128" {
+                    return None;
+                }
+                amount = Some(field.get("value")?.as_str()?.parse::<i128>().ok()?);
+            }
+            "authorized" => authorized = field.get("value")?.as_bool(),
+            "clawback" => clawback = field.get("value")?.as_bool(),
+            // Strict: an unknown symbol key means this is NOT the SAC
+            // `BalanceValue` struct → reject, never partial-decode a foreign map.
+            _ => return None,
+        }
+    }
+    Some(SacBalanceValue {
+        amount: amount?,
+        authorized: authorized?,
+        clawback: clawback?,
+    })
 }
 
 fn is_contract_instance_key(key: &Value) -> bool {
@@ -1361,6 +1522,291 @@ mod tests {
         let deployments =
             extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
         assert!(deployments.is_empty());
+    }
+
+    // -- Soroban token balance tests (task 0331) --
+
+    #[test]
+    fn extract_balance_entry_bare_i128() {
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "800009446178" });
+        let changes = vec![make_change("contract_data", "updated", key, Some(data))];
+
+        let balances = extract_soroban_token_balances(&changes);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances[0].contract_id, "CTOKEN1");
+        assert_eq!(balances[0].holder, "GHOLDER1");
+        assert_eq!(balances[0].balance, 800_009_446_178_i128);
+        assert_eq!(balances[0].ledger, 100);
+    }
+
+    /// Real mainnet end-to-end (RPC `getLedgerEntries`, 2026-07-01): decodes the
+    /// ACTUAL `Balance(GAWOKP6N…)` ContractData entry for token `CCSNFZ5R…` at
+    /// ledger 63268948 from on-chain XDR, converts its real key + val `ScVal`s
+    /// via the REAL `scval_to_typed_json` (the exact JSON the ingestion emits),
+    /// and asserts the live parser recovers contract + holder + balance. The
+    /// i128 comes from the LEDGER BYTES (not a test constant) and equals the
+    /// independent `stellar contract invoke … balance` read (10000040000000) —
+    /// NON-circular.
+    #[test]
+    fn extract_balance_real_mainnet_entry() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(entry_b64)
+            .unwrap();
+        let LedgerEntryData::ContractData(entry) =
+            LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+        else {
+            panic!("expected ContractData");
+        };
+
+        let key = json!({
+            "contract": entry.contract.to_string(),
+            "key": crate::scval::scval_to_typed_json(&entry.key),
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = crate::scval::scval_to_typed_json(&entry.val);
+
+        let balances = extract_soroban_token_balances(&[make_change(
+            "contract_data",
+            "updated",
+            key,
+            Some(data),
+        )]);
+
+        assert_eq!(balances.len(), 1, "one balance from the real entry");
+        assert_eq!(
+            balances[0].contract_id,
+            "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG"
+        );
+        assert_eq!(
+            balances[0].holder,
+            "GAWOKP6NJAWNRPQDE4O3NZYDFJHEMLUIP36AC74HNBHLTA3GURYB4PYJ"
+        );
+        assert_eq!(
+            balances[0].balance, 10_000_040_000_000,
+            "parser must decode the exact on-chain i128 from the real entry"
+        );
+    }
+
+    /// Real mainnet (RPC `getLedgerEntries`, 2026-07-01): the ACTUAL SAC `BalanceValue`
+    /// struct entries for the AMM pool `CATUJXDU…` holding native XLM and EURC (each held
+    /// via the asset's SAC — the contract-held classic/native case the type-3 bare-`i128`
+    /// path drops today). Decodes on-chain XDR → real `scval_to_typed_json` → the new
+    /// `decode_sac_balance_value`, and asserts the amount equals the INDEPENDENT
+    /// `stellar contract invoke … balance` read (native 11_635_129_310_963, EURC
+    /// 2_026_487_623_620) — the i128 comes from the ledger bytes, NON-circular. Also
+    /// asserts the bare-`i128` decoder rejects the struct (the two shapes never cross-decode).
+    #[test]
+    fn decode_sac_balance_value_real_mainnet() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        for (entry_b64, expected_amount) in [
+            (
+                "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA",
+                11_635_129_310_963_i128,
+            ),
+            (
+                "AAAABgAAAAAAAAAB5qfZ63UjAGpGmqdIOtEQckdEPA2C5idj3mcISMTpfJAAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAB19QTL8QAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA",
+                2_026_487_623_620_i128,
+            ),
+        ] {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(entry_b64)
+                .unwrap();
+            let LedgerEntryData::ContractData(entry) =
+                LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+            else {
+                panic!("expected ContractData");
+            };
+            let data = json!({ "val": crate::scval::scval_to_typed_json(&entry.val) });
+
+            let decoded = decode_sac_balance_value(&data).expect("SAC BalanceValue decodes");
+            assert_eq!(
+                decoded.amount, expected_amount,
+                "amount must equal the independent on-chain balance() read"
+            );
+            assert!(decoded.authorized, "pool balances are authorized");
+            assert!(!decoded.clawback, "no clawback on these balances");
+
+            // The two value shapes must never cross-decode.
+            assert!(
+                decode_scval_i128(&data).is_none(),
+                "bare-i128 decoder must reject the SAC struct"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_sac_balance_value_rejects_foreign_maps() {
+        // Missing a required field (no `clawback`) → None.
+        let missing = json!({ "val": { "type": "map", "value": [
+            { "key": { "type": "sym", "value": "amount" }, "value": { "type": "i128", "value": "5" } },
+            { "key": { "type": "sym", "value": "authorized" }, "value": { "type": "bool", "value": true } },
+        ]}});
+        assert!(decode_sac_balance_value(&missing).is_none());
+
+        // An unknown extra symbol key → None (not the SAC struct, don't partial-decode).
+        let foreign = json!({ "val": { "type": "map", "value": [
+            { "key": { "type": "sym", "value": "amount" }, "value": { "type": "i128", "value": "5" } },
+            { "key": { "type": "sym", "value": "authorized" }, "value": { "type": "bool", "value": true } },
+            { "key": { "type": "sym", "value": "clawback" }, "value": { "type": "bool", "value": false } },
+            { "key": { "type": "sym", "value": "extra" }, "value": { "type": "i128", "value": "9" } },
+        ]}});
+        assert!(decode_sac_balance_value(&foreign).is_none());
+
+        // A bare i128 (type-3 shape) is not a map → None.
+        let bare = json!({ "val": { "type": "i128", "value": "5" } });
+        assert!(decode_sac_balance_value(&bare).is_none());
+    }
+
+    /// Contract-held SAC balance end-to-end (real mainnet entry): `extract_soroban_token_balances`
+    /// now emits the contract-held balance for a SAC `BalanceValue` struct — the
+    /// pool `CATUJXDU…` holding native XLM in the XLM SAC. Same real entry as
+    /// `decode_sac_balance_value_real_mainnet`, but asserts the WHOLE extractor
+    /// (not just the value decoder) surfaces it: contract = the SAC, holder = the
+    /// pool, balance = the independent on-chain read. Keyed downstream by the SAC
+    /// surrogate → lands on the SAC's type-2 asset row (task 0339 folds to type-0).
+    #[test]
+    fn extract_sac_struct_balance_real_mainnet() {
+        use base64::Engine;
+        use stellar_xdr::curr::{LedgerEntryData, Limits, ReadXdr};
+
+        let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(entry_b64)
+            .unwrap();
+        let LedgerEntryData::ContractData(entry) =
+            LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap()
+        else {
+            panic!("expected ContractData");
+        };
+        let key = json!({
+            "contract": entry.contract.to_string(),
+            "key": crate::scval::scval_to_typed_json(&entry.key),
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = crate::scval::scval_to_typed_json(&entry.val);
+
+        let balances = extract_soroban_token_balances(&[make_change(
+            "contract_data",
+            "updated",
+            key,
+            Some(data),
+        )]);
+
+        assert_eq!(
+            balances.len(),
+            1,
+            "extractor surfaces the SAC struct balance"
+        );
+        assert_eq!(
+            balances[0].contract_id, "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+            "stored in the native XLM SAC"
+        );
+        assert_eq!(
+            balances[0].holder, "CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY",
+            "held by the pool contract"
+        );
+        assert_eq!(
+            balances[0].balance, 11_635_129_310_963,
+            "the exact on-chain SAC balance"
+        );
+    }
+
+    #[test]
+    fn removed_balance_entry_emits_zero() {
+        // Holder fully spent → entry removed (data is None). Must emit balance 0
+        // so the RMT supersedes the stale positive balance (else over-count).
+        let changes = vec![make_change(
+            "contract_data",
+            "removed",
+            json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "vec", "value": [
+                    { "type": "sym", "value": "Balance" },
+                    { "type": "address", "value": "GHOLDER1" }
+                ]},
+                "durability": "persistent",
+            }),
+            None,
+        )];
+
+        let balances = extract_soroban_token_balances(&changes);
+        assert_eq!(balances.len(), 1);
+        assert_eq!(balances[0].holder, "GHOLDER1");
+        assert_eq!(balances[0].balance, 0);
+    }
+
+    #[test]
+    fn skip_state_preimage_balance_entry() {
+        // `state` is the pre-image (shares the change's ledger). Emitting it would
+        // let the RMT clobber the real value with the old balance.
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "persistent",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "999" });
+        let changes = vec![make_change("contract_data", "state", key, Some(data))];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
+    }
+
+    #[test]
+    fn skip_temporary_durability_balance_entry() {
+        // Exact `Balance(Address)` shape but TEMPORARY durability — a real token /
+        // SAC balance is PERSISTENT, so this foreign temp entry must be skipped.
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "temporary",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "999" });
+        let changes = vec![make_change("contract_data", "updated", key, Some(data))];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
+    }
+
+    #[test]
+    fn skip_non_balance_contract_data_for_balances() {
+        // Symbol("name") and instance keys must not be mistaken for a balance.
+        let changes = vec![make_change(
+            "contract_data",
+            "updated",
+            json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "sym", "value": "name" },
+                "durability": "persistent",
+            }),
+            Some(json!({
+                "contract": "CTOKEN1",
+                "key": { "type": "sym", "value": "name" },
+                "durability": "persistent",
+                "val": { "type": "string", "value": "MERU" },
+            })),
+        )];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
     }
 
     #[test]

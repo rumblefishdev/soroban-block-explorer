@@ -146,11 +146,11 @@ pub async fn fetch_list(
         return Ok(Vec::new());
     }
 
-    // Step 2: resolve the native (asset_type=0) XLM balance for the page's
-    // account ids by a PK-prefix key-seek. `account_balances_current` is
-    // ORDER BY (account_id, asset_type, …), so `account_id IN (…)` seeks the
-    // prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is i64
-    // surrogates (no injection surface), bounded by the page limit.
+    // Step 2: resolve each page account's native (XLM) balance from the unified
+    // `balances` table by a PK-prefix key-seek. `balances` is ORDER BY
+    // (holder_id, asset_id), so `holder_id IN (…)` seeks the prefix; `FINAL` is
+    // bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
+    // surface), bounded by the page limit.
     let ids = {
         let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
         v.sort_unstable();
@@ -159,9 +159,16 @@ pub async fn fetch_list(
     };
     let balances: HashMap<i64, String> = client
         .query(&format!(
-            "SELECT account_id AS account_id, toString(balance) AS balance \
-             FROM account_balances_current FINAL \
-             WHERE account_id IN ({ids}) AND asset_type = 0"
+            // task 0331 read-cutover: native (XLM) balance now from the unified
+            // `balances` table (RAW Int128 = stroops). The frontend scales by
+            // `decimals` (7 for native) — same raw-amount contract as the
+            // account-detail balances. Resolve native via `assets.asset_type = 0`
+            // (the native asset_id is a Rust cityhash, which CH `cityHash64`
+            // cannot recompute, so we join rather than hardcode a literal).
+            "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0"
         ))
         .fetch_all::<AccountListBalanceRow>()
         .await?
@@ -297,12 +304,20 @@ struct AccountBalanceChRow {
     asset_type: i16,
     asset_code: Option<String>,
     asset_issuer: Option<String>,
+    contract_id: Option<String>,
+    name: Option<String>,
+    symbol: Option<String>,
     balance: String,
+    decimals: u32,
     last_updated_ledger: i64,
 }
 
-/// `account_id` is the surrogate from [`fetch_account`]. Leading-PK seek on
-/// `account_balances_current` (ORDER BY `(account_id, …)`).
+/// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
+/// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
+/// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
+/// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
+/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
+/// Soroban from on-chain `METADATA`).
 pub async fn fetch_balances(
     client: &clickhouse::Client,
     account_id: i64,
@@ -310,16 +325,31 @@ pub async fn fetch_balances(
     let rows = client
         .query(
             "SELECT \
-                abc.asset_type                  AS asset_type, \
-                nullIf(abc.asset_code, '')      AS asset_code, \
-                nullIf(iss.account_id, '')      AS asset_issuer, \
-                toString(abc.balance)           AS balance, \
-                abc.last_updated_ledger         AS last_updated_ledger \
-             FROM account_balances_current abc FINAL \
-             LEFT JOIN accounts iss ON iss.id = abc.issuer_id \
-             WHERE abc.account_id = ? \
-             ORDER BY abc.asset_type, abc.asset_code, iss.account_id \
-             LIMIT 1 BY (abc.asset_type, abc.asset_code, abc.issuer_id)",
+                a.asset_type                  AS asset_type, \
+                nullIf(a.asset_code, '')      AS asset_code, \
+                nullIf(iss.account_id, '')    AS asset_issuer, \
+                nullIf(sc.contract_id, '')    AS contract_id, \
+                coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
+                nullIf(m.symbol, '')          AS symbol, \
+                toString(b.amount)            AS balance, \
+                coalesce(m.decimals, 7)       AS decimals, \
+                b.last_updated_ledger         AS last_updated_ledger \
+             FROM balances b FINAL \
+             INNER JOIN assets a FINAL ON a.id = b.asset_id \
+             LEFT JOIN accounts iss ON iss.id = a.issuer_id \
+             LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+             LEFT JOIN ( \
+                 SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
+             ) m ON m.contract_id = sc.contract_id \
+             LEFT JOIN ( \
+                 SELECT asset_type, asset_code, issuer_id, contract_id, \
+                        argMax(name, version) AS name \
+                 FROM asset_enrichment \
+                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
+             ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
+                 AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
+             WHERE b.holder_id = ? AND b.amount != 0 \
+             ORDER BY a.asset_type, a.asset_code",
         )
         .bind(account_id)
         .fetch_all::<AccountBalanceChRow>()
@@ -332,7 +362,11 @@ pub async fn fetch_balances(
             asset_type: r.asset_type,
             asset_code: r.asset_code,
             asset_issuer: r.asset_issuer,
+            contract_id: r.contract_id,
+            name: r.name,
+            symbol: r.symbol,
             balance: r.balance,
+            decimals: r.decimals,
             last_updated_ledger: r.last_updated_ledger,
         })
         .collect())
