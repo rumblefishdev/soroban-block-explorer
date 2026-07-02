@@ -105,7 +105,10 @@ worker's CDK env), so the live rollout was split out here.
 NFT `token_uri`/name/image are fetched from **live** Soroban RPC (the parser
 stores no metadata at mint), so a contract whose ContractInstance is
 archived/evicted (state-archival TTL — restorable but not live) returns nothing
-and is **un-enrichable even after perfect classification**. A network-wide
+and is **un-enrichable even after perfect classification**. (Correction, task
+0340: `collection_name` is NOT part of the `token_uri()` JSON — it comes from a
+separate contract-level SEP-50 `name()` RPC; still a live-RPC round-trip, so the
+same liveness ceiling applies.) A network-wide
 `getEvents` sample found **~66% of recent transfer/mint/burn emitters ABSENT**
 from live state. Implications for this rollout:
 
