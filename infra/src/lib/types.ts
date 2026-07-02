@@ -324,10 +324,16 @@ export interface EnvironmentConfig {
   readonly processorErrorRateThreshold: number;
   /** API Gateway 5xx error rate % threshold for the 5xx alarm. */
   readonly apiGateway5xxThreshold: number;
-  /** Slack workspace ID for AWS Chatbot alarm notifications. */
-  readonly slackWorkspaceId: string;
-  /** Slack channel ID for AWS Chatbot alarm notifications. */
-  readonly slackChannelId: string;
+  /**
+   * Ephemeral-storage utilization % threshold for the Galexie captive-core
+   * disk alarm. Baseline is ~30% (captive-core's BucketList = current ledger
+   * state); 60 gives long lead time to plan a disk bump before a merge/catchup
+   * spike hits the "No space left on device" ceiling (incident 2026-07-01/02).
+   */
+  readonly galexieEphemeralUtilizationThreshold: number;
+  // Slack workspace + channel IDs are NOT in env config — they are
+  // deployment-specific identifiers kept out of the (public) repo and sourced
+  // at deploy time from SSM Parameter Store (see CloudWatchStack).
 
   // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, HetznerDnsStack)
 
@@ -479,16 +485,11 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
   if (
-    !config.slackWorkspaceId ||
-    config.slackWorkspaceId.includes('CHANGE_ME')
+    config.galexieEphemeralUtilizationThreshold <= 0 ||
+    config.galexieEphemeralUtilizationThreshold > 100
   ) {
     errors.push(
-      `slackWorkspaceId missing or placeholder: "${config.slackWorkspaceId}"`
-    );
-  }
-  if (!config.slackChannelId || config.slackChannelId.includes('CHANGE_ME')) {
-    errors.push(
-      `slackChannelId missing or placeholder: "${config.slackChannelId}"`
+      `galexieEphemeralUtilizationThreshold must be between 0 and 100, got: ${config.galexieEphemeralUtilizationThreshold}`
     );
   }
 

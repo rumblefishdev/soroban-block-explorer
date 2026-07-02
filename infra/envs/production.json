@@ -60,8 +60,7 @@
   "galexieLagMinutes": 15,
   "processorErrorRateThreshold": 0.01,
   "apiGateway5xxThreshold": 0.5,
-  "slackWorkspaceId": "T83HLEDJN",
-  "slackChannelId": "C09JZ0Z0Z0Z",
+  "galexieEphemeralUtilizationThreshold": 60,
   "chDomainName": "ch.sorobanscan.rumblefish.dev",
   "mtlsSecretNamePrefix": "soroban/production/mtls"
 }
