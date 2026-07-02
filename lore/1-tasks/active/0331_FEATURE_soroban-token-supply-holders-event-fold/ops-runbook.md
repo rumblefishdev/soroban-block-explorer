@@ -15,21 +15,20 @@
       is populated, and the type-2 duplicate rows are already gone. (0339 Phase 1 reader is
       therefore also live.)
 - [x] **Snapshot** taken (DB + host).
-- [ ] Indexer binary built from `feat/0331…` (the re-key + `assets.id`-writing `AssetRow::staged`
-      + single-write `balances`).
+- [ ] Indexer binary built from `feat/0331…` (the re-key + `assets.id`-writing `AssetRow::staged` + single-write `balances`).
 - [ ] `assets.id` column does NOT yet exist on prod (`chq`: column absent) — Step 1 adds it.
 
 ## Ordering is load-bearing
 
 The indexer is **single-write**: once deployed it writes `balances` only and STOPS writing
 `account_balances_current`. So deploying it is a **cutover**, not a dual-write. And the
-*current* prod indexer has NO `assets.id` code, so it would keep writing `id=0` — therefore
+_current_ prod indexer has NO `assets.id` code, so it would keep writing `id=0` — therefore
 the `assets.id` backfill must be bracketed by **stop-old → backfill → deploy-new**, never
 "backfill then restart the old binary".
 
 ---
 
-## Step 1 — [DB] add the `assets.id` column  (indexer still running)
+## Step 1 — [DB] add the `assets.id` column (indexer still running)
 
 ```sql
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS id Int64 DEFAULT 0;
@@ -43,7 +42,7 @@ manual ALTER. All existing rows are now `id = 0`.
 Required for the whole-table `EXCHANGE` in Step 3 (a concurrent write between staging-build
 and swap would be lost), and so the old (no-`id`) binary stops re-introducing `id=0` rows.
 
-## Step 3 — [run] backfill `assets.id`  (indexer STOPPED)
+## Step 3 — [run] backfill `assets.id` (indexer STOPPED)
 
 ```bash
 # benchmark / preview first
@@ -61,7 +60,7 @@ SQL) into a temp map, builds a staging `assets`, and `EXCHANGE TABLES`-swaps it.
 SELECT count() FROM assets FINAL WHERE id = 0;   -- MUST be 0
 ```
 
-## Step 4 — [deploy] the new indexer  (single-write cutover)
+## Step 4 — [deploy] the new indexer (single-write cutover)
 
 `init.sql` (idempotent) creates `balances`, `balance_aggregates`, and `balance_aggregates_mv`.
 From here: live writes go to `balances`; `account_balances_current` is frozen (no longer
@@ -95,7 +94,7 @@ Let the indexer catch up to the chain head before seeding (the seed reads curren
 and must not be superseded by a still-lagging live writer). Confirm `max(sequence)` in
 `ledgers` is at tip.
 
-## Step 7 — [run] balance-seed  (after catch-up)
+## Step 7 — [run] balance-seed (after catch-up)
 
 ```bash
 # benchmark the ~4.46B-row SAC scan + read the funnel counts FIRST
@@ -153,16 +152,16 @@ the snapshot precondition. The `assets.id` swap and the classic migration are bo
 
 ## Command summary
 
-| # | Where | Command / SQL |
-|---|-------|---------------|
-| 1 | `chq` | `ALTER TABLE assets ADD COLUMN IF NOT EXISTS id Int64 DEFAULT 0` |
-| 2 | ops | stop indexer |
-| 3 | shell | `backfill-runner … assets-id-backfill [--dry-run]` → verify `count(id=0)=0` |
-| 4 | ops | deploy new indexer (creates `balances` via init.sql; cutover) |
-| 5 | `chq` | classic `account_balances_current` → `balances` INSERT…SELECT |
-| 6 | run | catch-up to tip |
-| 7 | shell | `backfill-runner … balance-seed --soroban-rpc-url <url> [--dry-run]` |
-| 8 | validate | `get_reserves` / stellar-api cross-checks |
-| 9 | ops | deploy API + frontend |
-| 10 | `chq` | `DROP TABLE account_balances_current` |
-| 11 | — | feed 0199 |
+| #   | Where    | Command / SQL                                                               |
+| --- | -------- | --------------------------------------------------------------------------- |
+| 1   | `chq`    | `ALTER TABLE assets ADD COLUMN IF NOT EXISTS id Int64 DEFAULT 0`            |
+| 2   | ops      | stop indexer                                                                |
+| 3   | shell    | `backfill-runner … assets-id-backfill [--dry-run]` → verify `count(id=0)=0` |
+| 4   | ops      | deploy new indexer (creates `balances` via init.sql; cutover)               |
+| 5   | `chq`    | classic `account_balances_current` → `balances` INSERT…SELECT               |
+| 6   | run      | catch-up to tip                                                             |
+| 7   | shell    | `backfill-runner … balance-seed --soroban-rpc-url <url> [--dry-run]`        |
+| 8   | validate | `get_reserves` / stellar-api cross-checks                                   |
+| 9   | ops      | deploy API + frontend                                                       |
+| 10  | `chq`    | `DROP TABLE account_balances_current`                                       |
+| 11  | —        | feed 0199                                                                   |

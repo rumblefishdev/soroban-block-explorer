@@ -88,13 +88,14 @@ in `crates/indexer/src/handler/persist/write.rs` — that whole PG path is **dea
 each source just needs its holdings written as `balances` rows (additive, no recompute).
 
 **Remaining = the 2 NON-contract sources only:**
-- **#2 Claimable balances** — we parse the *operations* (create/claim/clawback) but
+
+- **#2 Claimable balances** — we parse the _operations_ (create/claim/clawback) but
   keep **no state table** of per-asset claimable amounts (no `claimable_balances`
   table on prod). Needs a new ingestion path.
 - **#3 NATIVE protocol LP reserves** — a classic Stellar AMM (`LiquidityPoolEntry`)
   is NOT a contract; its reserves live in the protocol pool entry, not a trustline or
   a `Balance(contract)` entry, so 0331 does not capture them. (`liquidity_pools` holds
-  74,728 pool *definitions* but no reserve columns; reserves are in `pool_snapshots`.)
+  74,728 pool _definitions_ but no reserve columns; reserves are in `pool_snapshots`.)
 
 **Rewritten scope:** write synthetic `balances` rows for claimable amounts (holder =
 claimable-balance id) + native-LP reserves (holder = pool id), keyed by `assets.id`.
@@ -112,7 +113,7 @@ reserves) — the residual ~20-50% drift on heavily-pooled assets.
    Pre-claim hot wallet liquidity. ❌ NOT done (only ops parsed; no state table).
 3. **Liquidity pool reserves** — NATIVE protocol AMM (`LiquidityPoolEntry`) reserves
    per asset participant. ❌ NOT done (not a contract; reserves in `pool_snapshots`).
-   *(Soroban-DEX pool reserves are a CONTRACT holding → already captured by 0331 #4.)*
+   _(Soroban-DEX pool reserves are a CONTRACT holding → already captured by 0331 #4.)_
 4. **SAC contract holdings** — Stellar Asset Contract instance balance held
    inside Soroban contracts (SAC entries in `contract_data`).
    ✅ **DONE via 0331** (contract-held type-0/1 re-key, ADR 0051).
@@ -209,8 +210,8 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 ## Acceptance Criteria
 
 - [~] Supply sums all 4 sources. **Trustlines + SAC/contract holdings DONE via 0331**
-      (`sum(balances)` over the unified model — the dead `recompute_asset_aggregates`
-      is superseded); **claimable + native-LP reserves remain**.
+  (`sum(balances)` over the unified model — the dead `recompute_asset_aggregates`
+  is superseded); **claimable + native-LP reserves remain**.
 - [x] SAC contract holdings path — DONE via **0331 + ADR 0051** (contract-held type-0/1
       re-key; state-based, no separate aggregation table needed).
 - [ ] Per-ledger overhead measured. Target: < +10% over post-0194 baseline.
@@ -247,12 +248,14 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
   same `Vec[Symbol("Balance"), Address]` key, same table/framework — the only delta
   is the value shape (SAC stores a `BalanceValue` **struct**: amount + authorized +
   clawback flags, vs the bespoke-token bare `i128`), so Phase 3 adds a struct decoder
-  + resolves SAC `contract_id → (code, issuer)`. The "non-standard storage-key
-  layouts" line that scoped out 0138 is **disproven** (the standard `Balance(Address)`
-  key was confirmed readable on a real vault token). **0331 lands the ingestion
-  framework first; Phase 3 is a small extension on top, not a separate path.**
-  0331 still owns type-3 (bespoke Soroban) supply+holders, out of this task's scope.
-  - **Double-count trap:** the same classic asset is held two ways — as G-address
+
+  - resolves SAC `contract_id → (code, issuer)`. The "non-standard storage-key
+    layouts" line that scoped out 0138 is **disproven** (the standard `Balance(Address)`
+    key was confirmed readable on a real vault token). **0331 lands the ingestion
+    framework first; Phase 3 is a small extension on top, not a separate path.**
+    0331 still owns type-3 (bespoke Soroban) supply+holders, out of this task's scope.
+
+  * **Double-count trap:** the same classic asset is held two ways — as G-address
     trustline holdings (source #1) AND as Soroban `Balance` entries held by
     C-contracts via the SAC (source #4). Total supply is the ADDITIVE union:
     `trustline holdings + C-contract Balance holdings`. A trustline holder and a

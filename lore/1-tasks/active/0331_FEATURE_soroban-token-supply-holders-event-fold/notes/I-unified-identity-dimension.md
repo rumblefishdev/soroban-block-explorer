@@ -83,9 +83,9 @@ C        generic balances(holder_id, asset_id, balance, version)  → falls out 
 
 ## Reference — asset identifier per type (prod, 2026-06-29)
 
-| type | name | identifier |
-|------|------|------------|
-| 0 native | XLM | none — singleton (`native`) |
-| 1 classic | USDC | `USDC:GA5ZLINQWRY2DRORJWXMQESAVT3C2KXX5KWXH36S7QBX2734DIAZQXRP` (code:issuer) |
-| 2 sac | USDC | `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` + contract `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
-| 3 soroban | MERU | `CCA2ZJP5BVRXYTQH4FAGHCAUMRYCXVC4CRYC2NXHWMR7TIVX36U7F5HR` (contract only) |
+| type      | name | identifier                                                                                                                            |
+| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 native  | XLM  | none — singleton (`native`)                                                                                                           |
+| 1 classic | USDC | `USDC:GA5ZLINQWRY2DRORJWXMQESAVT3C2KXX5KWXH36S7QBX2734DIAZQXRP` (code:issuer)                                                         |
+| 2 sac     | USDC | `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` + contract `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75` |
+| 3 soroban | MERU | `CCA2ZJP5BVRXYTQH4FAGHCAUMRYCXVC4CRYC2NXHWMR7TIVX36U7F5HR` (contract only)                                                            |

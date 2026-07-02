@@ -170,8 +170,8 @@ function BalanceRow({
                 s.chipLabel === 'SAC'
                   ? 'brown'
                   : s.chipLabel === 'Token'
-                    ? 'neutral'
-                    : 'default'
+                  ? 'neutral'
+                  : 'default'
               }
               label={s.chipLabel}
             />

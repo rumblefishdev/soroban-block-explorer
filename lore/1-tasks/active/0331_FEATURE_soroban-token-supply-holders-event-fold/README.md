@@ -54,6 +54,7 @@ orphan (P2), and the seed's `asset_type=2` scope returned nothing (P3).
 **Replacement (implemented, tests green, UNCOMMITTED):** re-key contract-held SAC balances onto
 the wrapped **classic/native `asset_id`** using `asset_sac` as the SAC→classic map (the map we
 would have had to build ourselves — 0339 provides it).
+
 - `stage::remap_sac_balances_to_classic(rows, sac_to_classic)` — pure post-pass: a balance whose
   `asset_id` is a SAC surrogate is re-keyed to the classic/native id; type-3 tokens + account
   classic/native rows are absent from the map and pass through untouched (verified).
@@ -98,6 +99,7 @@ before our ingest window / with missed detection has no `asset_sac` row → its 
 - **Snapshot** — already taken (DB + host). No pre-window snapshot step needed.
 
 ### Remaining DEV
+
 - [x] Proposal-A re-key + P1/P4 — committed + pushed (`dde40154`, `b8ee1085`).
 - [x] "Path X" comment labels refreshed to ADR-0051 wording; `sink.rs` Run path re-keys too.
 - [x] Frozen policy — decided (count normally); no code.
@@ -108,6 +110,7 @@ before our ingest window / with missed detection has no `asset_sac` row → its 
   `asset_type=2` / `account_balances_current` — pre-existing dead code (PG retired), WON'T TOUCH.
 
 ### Remaining OPS
+
 **Full step-by-step execution plan: [`ops-runbook.md`](./ops-runbook.md).** Summary below.
 
 Verified against prod CH 2026-07-02 (`chq`): `assets` `asset_type=2` rows = **0** (folded/deleted);
@@ -125,15 +128,17 @@ Verified against prod CH 2026-07-02 (`chq`): `assets` `asset_type=2` rows = **0*
 - Snapshot: DONE (DB + host).
 
 ### balance-seed post-merge coverage — VERIFIED OK (2026-07-02, karolkow)
+
 The merge broke the seed (P2: SAC balances keyed by the removed type-2 surrogate → orphan; P3:
 `read_sac_seed_candidates` scoped `asset_type=2` → returned nothing). **Both fixed + confirmed in code:**
+
 - `read_seed_candidates` — type-3 tokens (`assets asset_type=3`), scrapes G+C holders.
 - `read_sac_seed_candidates` — contract-held 0/1, scoped **`soroban_contracts.is_sac = true`** (reverted
   from `asset_type=2`), scrapes **C-only** holders (G trustlines come via the classic→`balances`
   migration, not the seed).
 - `build_balance_rows` re-keys SAC surrogate → wrapped classic/native id via the `asset_sac` map.
-There is NO third candidate function by design: account-held 0/1 is the migration; contract-held 0/1 is
-the SAC path; type-3 is its own path. Coverage is complete for the seed's scope.
+  There is NO third candidate function by design: account-held 0/1 is the migration; contract-held 0/1 is
+  the SAC path; type-3 is its own path. Coverage is complete for the seed's scope.
 
 ## Path X 2026-07-01 (karolkow) — contract-held 0/1 LIVE via symmetric keying (SUPERSEDED by the 0339 merge above)
 
@@ -142,13 +147,15 @@ line "keyed by classic/native `asset_id` (type-1), 0339-forward-compatible": we 
 balances by the **storing contract's own surrogate**, exactly like type-3 — no map, no new table.
 
 ### The two problems
+
 - **Problem A — decode the value.** A contract holds a classic/native asset as a `Balance(Address)`
   `ContractData` entry inside that asset's **SAC**, valued as the `BalanceValue { amount, authorized,
-  clawback }` **struct** (not the bare `i128` a type-3 token uses). The type-3 path dropped it.
+clawback }` **struct** (not the bare `i128` a type-3 token uses). The type-3 path dropped it.
 - **Problem B — assign the `asset_id`.** The SAC `contract_id` is a one-way hash of the asset, so a
   balance change alone can't yield `(code, issuer)`.
 
 ### Decision — Path X (symmetric, no map)
+
 `ids::asset_id(_, contract)` returns the **contract surrogate for BOTH type-2 (SAC) and type-3**
 (verified `ids.rs:132`; golden test `asset_id(2,…,csac)==csac`, `asset_id(3,…,ctok)==ctok`). So a SAC
 balance emitted with `contract_id = SAC` lands on that SAC's **existing type-2 asset row** — the same
@@ -163,6 +170,7 @@ gotcha #19b ×100 risk); (3) forward-compute reverse map (indexer is Lambda/stat
 recompute per batch). See the devil's-advocate pass in the session trail.
 
 ### Done (branch, TDD, all green — 284 xdr-parser + 65 db-clickhouse + 20 indexer, clippy clean)
+
 - `decode_sac_balance_value` + `SacBalanceValue { amount, authorized, clawback }` (`state.rs`), strict:
   rejects any non-`{amount,authorized,clawback}` map (`_ => return None`).
 - Wired into `extract_soroban_token_balances`: bare `i128` → type-3; SAC struct → `.amount`. **~5 lines;
@@ -172,17 +180,19 @@ recompute per batch). See the devil's-advocate pass in the session trail.
   `extract_sac_struct_balance_real_mainnet`, `decode_sac_balance_value_rejects_foreign_maps`.
 
 ### Validation (pool `CATUJXDU…`, native XLM + classic EURC, 2026-07-01) — 4 sources, exact match
-| source | XLM (raw) | EURC (raw) | independence |
-|---|---|---|---|
-| our SAC decode (parser) | 11 668 057 013 216 | 2 020 807 612 134 | — |
-| SAC `balance()` getter | same | same | semi (same entry) |
-| pool `get_reserves()` | same | same | **full** (protocol's own storage) |
-| StellarExpert (web) | 1 166 805.7013216 | 202 080.7612134 | **full** (3rd party) |
+
+| source                  | XLM (raw)          | EURC (raw)        | independence                      |
+| ----------------------- | ------------------ | ----------------- | --------------------------------- |
+| our SAC decode (parser) | 11 668 057 013 216 | 2 020 807 612 134 | —                                 |
+| SAC `balance()` getter  | same               | same              | semi (same entry)                 |
+| pool `get_reserves()`   | same               | same              | **full** (protocol's own storage) |
+| StellarExpert (web)     | 1 166 805.7013216  | 202 080.7612134   | **full** (3rd party)              |
 
 Rigorous for decoder correctness; NOT yet for edge classes (vault, rebasing, TTL-archived, many
 holders) — that's the OPS `O5` ≥10-token pass.
 
 ### Coordination + open items
+
 - **[0339 MUST]** When 0339 folds type-2 → type-1, it MUST re-key `balances.asset_id` (type-2 →
   type-0/1) too, else contract-held silently vanishes when the type-2 asset rows are deleted. Add to
   0339 acceptance criteria.
@@ -193,9 +203,11 @@ holders) — that's the OPS `O5` ≥10-token pass.
   via the native SAC's type-2 row → 0339 fold.
 
 ### Historical backfill for contract-held 0/1 — LIGHT seed, NOT S3 reprocess (2026-07-01) — BUILT
+
 An S3 `Run` works (shared parser → same decode) but is heavy (12.8M ledgers × decompress+XDR-parse).
 Instead the existing `balance-seed` was **extended** (DONE — reuses candidate-scan → RPC →
 `build_balance_rows`):
+
 - `read_sac_seed_candidates` — C-addresses scraped from SAC events (full canonical vocabulary
   `transfer/mint/burn/clawback/set_authorized`), scoped by `assets asset_type=2`, deduped with
   `groupUniqArrayArray` (memory-bounded — a plain `groupArrayArray` would OOM on high-traffic SACs).
@@ -206,6 +218,7 @@ Instead the existing `balance-seed` was **extended** (DONE — reuses candidate-
   integration test (`read_sac_seed_candidates_scrapes_contract_holders_only`).
 
 **OPS to run it (not done):**
+
 - **`--dry-run` FIRST** to benchmark the ~4.46B-row scan + read the funnel counts before a live write.
 - **REQUIRED validation gate**: cross-check the seed's per-SAC sum against pools independently readable
   via `get_reserves()`; a missed known pool = incomplete enumeration. Log dropped counts; never claim 100%.
@@ -215,6 +228,7 @@ Instead the existing `balance-seed` was **extended** (DONE — reuses candidate-
   decide count-vs-exclude before relying on the number.
 
 ### OPS sequencing (ordered) — NO step needs a halted indexer; only ONE thing precedes the deploy
+
 The CH indexer is **single-write** (`writer.rs:107`: legacy `account_balances_current` insert removed;
 classic+native stage straight into `balances`). So deploying the indexer is a **cutover**, not a
 dual-write. Deploy the indexer FIRST so it feeds `balances` live, then fill history behind it — no gap,
@@ -236,6 +250,7 @@ no re-runs.
 8. **[DB] drop `account_balances_current`** — already not written since step 2, so just drop post-validation.
 
 **Blockers before prod (devil's advocate 2026-07-01):**
+
 - **C1** — the `assets.id` ALTER gate (above).
 - **C2** — do NOT launch 0331's read-cutover WITHOUT 0339 (or a read-guard): the assets list shows all
   types, so every classic asset renders as a DUPLICATE (type-1 trustlines + type-2 SAC contract-held)
@@ -246,10 +261,12 @@ no re-runs.
 ## CURRENT PLAN 2026-06-29 (karolkow) — Option C unified balances (authoritative)
 
 ### Goal
+
 One unified per-holder balance model for ALL asset types (Option C), raw+decimals
 everywhere. type-3 was the trigger; the fix is the fundamental balance representation.
 
 ### Confirmed decisions
+
 - **Mechanism = ledger STATE** (`ContractData Balance(Address)` entries), NOT event-fold
   (refuted: vault/rebasing drift; 54% non-SEP-41 events — see Findings).
 - **Architecture = Option C**: unified `balances(holder_id, asset_id, amount, version)`,
@@ -293,6 +310,7 @@ everywhere. type-3 was the trigger; the fix is the fundamental balance represent
 - **Empty tokens** (64% of type-3, no events): `—` is correct, not a coverage gap.
 
 ### Gotcha — two different `asset_type` enums (load-bearing)
+
 - `account_balances_current.asset_type` = **Horizon** (0 native, 1 alphanum4 [code ≤4],
   2 alphanum12 [code 5-12]) — verified by code length on prod (type-1 len 1-4, type-2 len 5-12).
 - `assets.asset_type` = **project** (0 native, 1 classic_credit, 2 sac, 3 soroban).
@@ -300,6 +318,7 @@ everywhere. type-3 was the trigger; the fix is the fundamental balance represent
   classic credit (both code lengths) — correct. Do NOT confuse with assets' SAC=2.
 
 ### Surrogate keys — confirmed nature (for `assets.id`)
+
 All existing surrogates are `cityhash64` of the natural key: `account_id=hash64(G-strkey)`,
 `contract_id=hash64(C-strkey)`, even `transaction_id=hash64(real 32B tx hash)` (a derived
 surrogate, not the raw hash). `assets` never had a self-surrogate because nothing referenced
@@ -309,6 +328,7 @@ an asset as ONE unit — other tables reference its COMPONENTS (`issuer_id`, `co
 as `accounts`. Deterministic = replay-idempotent (the reason hash, not a counter).
 
 ### Non-blockers resolved
+
 - **0198 is a POSTGRES task** (Seq Scan on the PG `account_balances_current`,
   `crates/api/src/accounts/queries.rs`), NOT the CH path — **no collision with Option C**.
   Action: verify accounts is served from CH (PG path dead) → **archive 0198 as obsolete**.
@@ -323,7 +343,7 @@ frontend (step 8), SAC (step 9), and prod run + validation of the seed.
 1. ✅ ~~`addresses` dimension~~ — **dropped** (was written but never read; its `(id, strkey, kind)`
    duplicates `accounts` ∪ `soroban_contracts`). Holder→StrKey resolution (for any future
    top-holders / portfolio-StrKey read) is via `accounts` (G-accounts: `accounts.id =
-   cityhash64(strkey)`, `accounts.account_id = strkey`) / `soroban_contracts` (C-contracts:
+cityhash64(strkey)`, `accounts.account_id = strkey`) / `soroban_contracts` (C-contracts:
    `.id = cityhash64`, `.contract_id = strkey`) — one shared surrogate space, no dedicated dimension.
 2. ✅ `assets.id` surrogate
 3. ✅ unified `balances` table (raw+decimals)
@@ -393,6 +413,7 @@ window — do NOT merge #293 alone.
 
 - **O1. [ ] Merge all PRs** (#293 + D2–D6 branches).
 - **O2. [ ] Migrations:**
+
   - **a. `assets.id` ALTER + backfill** (`init.sql` ships it `DEFAULT 0`; `CREATE IF NOT EXISTS`
     can't add it). Until backfilled every row has `id=0` → `bagg.asset_id = a.id` and the
     account-portfolio `INNER JOIN assets ON a.id = b.asset_id` match nothing → **empty portfolios**.
@@ -420,11 +441,13 @@ window — do NOT merge #293 alone.
       AND a.issuer_id  = abc.issuer_id
       AND a.asset_type = if(abc.asset_type = 0, 0, 1)
     ```
+
   - **c. NFT owner schema** — apply the D3 owner-id change (discriminator / unified owner).
+
 - **O3. [ ] Ingest catch-up to tip** (the catch-up gate). Was ~12 days / 190,480 ledgers behind on
   2026-06-29 (`max(ledger_sequence)` 63,059,708 vs mainnet 63,250,188). The seed MUST wait for this.
 - **O4. [ ] ONE `balance-seed` run** (after catch-up; dry-run first): `backfill-runner --target
-  clickhouse balance-seed --soroban-rpc-url <url>`. Seeds type-3 **AND** contract-held 0/1/2 from
+clickhouse balance-seed --soroban-rpc-url <url>`. Seeds type-3 **AND** contract-held 0/1/2 from
   current chain state (freshness-immune to the lag).
 - **O5. [ ] Validate everything** vs on-chain getters: ≥10 type-3 incl. vault (MERU) + rebasing
   (EUTBL/eurSAFO); classic (USDC) + account portfolios; SAC type-2 contract-holds; ≥1 contract
@@ -439,15 +462,17 @@ window — do NOT merge #293 alone.
 #### Faza 3 — lower priority (deferred-in-scope)
 
 - [ ] **Per-protocol decoder for custom-storage Soroban pools** (u32-keyed, e.g. Soroswap/Phoenix):
-  LP-share supply + reserves from instance keys. Without it those pools → `—` (honest). Low priority.
+      LP-share supply + reserves from instance keys. Without it those pools → `—` (honest). Low priority.
 
 #### Enumeration spike (Wątek 2 = B) + decisions (2026-06-30 cont.)
 
 **SAC holder enumeration — event-scan is infeasible (8.3B events, 89% of all soroban_events).** Use STATE, not events:
+
 - **Going-forward (durable):** extend live ingestion to capture `Balance(Address)` ContractData changes — we already process `contract_data` changes for instance keys ([ledger_entry_changes.rs](crates/xdr-parser/src/ledger_entry_changes.rs)). Then every balance change flows live for SAC **and** type-3, no event-scan, no RPC. Reframes even the type-3 event-regex seed.
 - **Historical seed:** enumerate `Balance(Address)` per contract from a STATE snapshot — Hubble BigQuery `contract_data_current` (verify Soroban populated) or a history-archive checkpoint. NOT events.
 
 **Decisions (2026-06-30):**
+
 - **W2 = B:** state-snapshot enumeration (above), in the contract-as-holder work.
 - **W4 = NO ACTION — NFT contract-ownership ALREADY WORKS** (corrected 2026-06-30; earlier "defer/monitor" and "silent-loss bug" were both wrong — see "Findings (continued)" below). Prod: **2,834 NFTs are contract-owned**, correctly indexed; the bug claim came from reading the **dead PG path**. Live CH (event-derived) captures C-owners fine.
 - **W5 = include native:** ingest type-0 (native XLM) contract-held too — a contract's largest holding is often XLM (the pool's 1.2M XLM); excluding it makes contract portfolios wrong.
@@ -458,6 +483,7 @@ window — do NOT merge #293 alone.
 ## Findings 2026-06-30 (continued) — NFT works / asset-gap real / USDC proof / SAC = facet (0339)
 
 **CORRECTION — NFT contract-ownership ALREADY WORKS** (the earlier "silent-loss bug" was a dead-PG misread):
+
 - Prod CH: **2,834 NFTs are contract-owned** (resolve via `soroban_contracts`, 0 collisions), 9,992
   account-owned, 9 NULL (= genuine burns); **10,934 contract-owner events**, none dropped.
 - Why the earlier analysis was wrong: it read the **dead PG path** (`write.rs` sqlx `resolve_opt_id`,
@@ -474,11 +500,11 @@ from NFT: **event-derived = captured; state-derived = not.**
 
 **USDC empirical proof of the gap (StellarExpert vs us):**
 
-| | Supply | Holders |
-|---|---|---|
-| us (`asset_aggregates`, trustline-sum) | 202,823,803 | 554,515 |
-| SE (Circle USDC) | 250,076,158 | 635,959 funded |
-| Δ | **−47.3M (~19%)** | −81k (~13%) |
+|                                        | Supply            | Holders        |
+| -------------------------------------- | ----------------- | -------------- |
+| us (`asset_aggregates`, trustline-sum) | 202,823,803       | 554,515        |
+| SE (Circle USDC)                       | 250,076,158       | 635,959 funded |
+| Δ                                      | **−47.3M (~19%)** | −81k (~13%)    |
 
 - Supply **−47M** ≈ contract-held (SAC) + classic-LP reserves + claimable — the venues we don't count
   (+ some 12-day lag). Tangible proof of the contract-as-holder undercount on a real asset.
@@ -486,27 +512,29 @@ from NFT: **event-derived = captured; state-derived = not.**
   trustline-ingest completeness**, NOT the contract gap. Flag for a separate check.
 
 **native vs classic/SAC vs type-3 (StellarExpert contrast):**
+
 - native [XLM](https://stellar.expert/explorer/public/asset/XLM): one asset, `trustlines` funded 9.86M,
   **`contract` = CAS3J7GY (native SAC) as an attribute** → even native uses "one asset + SAC attribute".
 - type-3 [Spiko EUTBL](https://stellar.expert/explorer/public/contract/CBGV2QFQBBGEQRUKUMCPO3SZOHDDYO6SCP5CH6TW7EALKVHCXTMWDDOF):
   **metadata only, ZERO supply/holders** (14,255 storage entries unread) → industry-wide gap; **0331 is
   the differentiator** (we read that state).
 
-| | native (0) | classic+SAC (1/2) | soroban (3) |
-|---|---|---|---|
-| holders | accounts | trustlines + contract (SAC) | ContractData only |
-| SE supply/holders | ✅ | ✅ | ❌ "—" |
+|                   | native (0) | classic+SAC (1/2)           | soroban (3)       |
+| ----------------- | ---------- | --------------------------- | ----------------- |
+| holders           | accounts   | trustlines + contract (SAC) | ContractData only |
+| SE supply/holders | ✅         | ✅                          | ❌ "—"            |
 
 **SAC = facet of classic (docs-truth, NOT keep-two-rows).** Per official docs ("SAC = an API for
 interacting with the asset"; un-deployed SAC = "reserved address, neither asset nor active contract")
-+ StellarExpert (one asset, SAC as `contract` attribute, holders = trustlines) → classic + SAC = ONE
-asset, ONE supply/holder figure. **Supply/holders for the SAC row vs the classic row SHOULD be EQUAL**
-(one asset, shared balances); the new per-`asset_id` `balance_aggregates` would make them diverge into
-PARTIALS (type-1 = trustlines, type-2 = contract-held) → that divergence is the bug. **Task 0339**
-(backlog on develop — "SAC is a facet of `classic_credit`, drop `asset_type=2`") is the correct
-root-fix; **supersedes 0336** (read-collapse band-aid) + **0337** (un-deployed-SAC link guard); it
-**overrides the research agent's Option-c "keep two rows".** W3 is now homed in 0339 — coordinate there,
-no fresh ADR needed.
+
+- StellarExpert (one asset, SAC as `contract` attribute, holders = trustlines) → classic + SAC = ONE
+  asset, ONE supply/holder figure. **Supply/holders for the SAC row vs the classic row SHOULD be EQUAL**
+  (one asset, shared balances); the new per-`asset_id` `balance_aggregates` would make them diverge into
+  PARTIALS (type-1 = trustlines, type-2 = contract-held) → that divergence is the bug. **Task 0339**
+  (backlog on develop — "SAC is a facet of `classic_credit`, drop `asset_type=2`") is the correct
+  root-fix; **supersedes 0336** (read-collapse band-aid) + **0337** (un-deployed-SAC link guard); it
+  **overrides the research agent's Option-c "keep two rows".** W3 is now homed in 0339 — coordinate there,
+  no fresh ADR needed.
 
 ## Sequencing correction + checks 2026-06-30 (continued)
 
@@ -516,6 +544,7 @@ no fresh ADR needed.
 **Key insight — 0339 is NOT a hard dependency of the SAC leg.** If the SAC/native contract-held leg
 writes balances **keyed by the classic/native `asset_id`** (`hash("CODE:issuer")` / `hash("native")` —
 both exist today after the `assets.id` backfill), then:
+
 - the numbers are **correct without 0339** (contract-held lands on the type-1 classic row);
 - 0339 only **cleans up the duplicate type-2 row** (the 0336 display symptom) — a **separate refactor
   AFTER**, not interleaved, not on the critical path.
@@ -533,6 +562,7 @@ So the whole of 0331 stays **one clean DEV→OPS block**; 0339 follows as displa
 - **AFTER, separate:** 0339 (SAC → facet of classic, drop type-2, fold ~31k, supersede 0336/0337).
 
 ### Check A — NFT read/display: WORKS ✓
+
 The CH read resolves the owner via **`accounts` ∪ `soroban_contracts`**
 (`crates/api/src/nfts/queries_ch.rs:175-181`) and the DTO carries the contract `C…` strkey resolved via
 `soroban_contracts` (`dto.rs:18,39`) → a contract owner links to `/contract/`. (The accounts-only join
@@ -541,10 +571,11 @@ shared, so owner-type queries must resolve via `soroban_contracts`, not accounts
 practice — the 2,834 contract-owned NFTs have no accounts overlap).
 
 ### Check B — USDC holders −81k: staleness + retained zero-rows, NOT ingest incompleteness
-| | total trustlines | funded | max ledger |
-|---|---|---|---|
-| us (`account_balances_current`) | 3,456,365 | 554,733 | 63,192,694 |
-| StellarExpert (Circle USDC) | 2,245,437 | 635,959 | (tip) |
+
+|                                 | total trustlines | funded  | max ledger |
+| ------------------------------- | ---------------- | ------- | ---------- |
+| us (`account_balances_current`) | 3,456,365        | 554,733 | 63,192,694 |
+| StellarExpert (Circle USDC)     | 2,245,437        | 635,959 | (tip)      |
 
 - **Total: we have MORE** (+1.2M) → ingest is **not incomplete**; the extra rows are **retained
   closed/zero trustlines** (`removed→0` not pruned — the 0331 "open risk").
@@ -559,6 +590,7 @@ practice — the 2,834 contract-owned NFTs have no accounts overlap).
 **Step 0 — read [0323] (SAC-as-asset depollution) FIRST** — it may already govern the type-1/type-2 row model. Don't brainstorm from blank.
 
 **Must answer:**
+
 1. **Full supply definition** — `Σ trustlines + Σ contract ContractData + Σ classic-LP reserves (+ claimable balances?)`. Trustline-only (and even +contract) is INCOMPLETE: a classic asset in a classic AMM pool sits in `LiquidityPoolEntry`, not a trustline → already excluded today. Define ALL holding venues.
 2. **Frozen / deauthorized balances** — does a deauthorized contract balance (`BalanceValue.authorized=false`) / issuer-frozen trustline count toward supply + holder_count? Define, consistently classic vs contract.
 3. **Native duality** — native XLM also has a SAC (`CAS3J7GY`); the two-row question applies to type-0 too.
@@ -569,12 +601,14 @@ practice — the 2,834 contract-owned NFTs have no accounts overlap).
 **Output:** a decision + ADR (coordinated with 0323), then the schema/read change. Gates the SAC (type-2) leg of the contract-as-holder work; does NOT gate the type-3 ship.
 
 ### Already built (earlier commits — reused / reworked by C)
+
 - `extract_soroban_token_balances` (ContractData Balance parser) — **reused** for live
   holder ingestion.
 - `soroban_token_balances` table + persist + `soroban_asset_aggregates` + read coalesce —
   **reworked** into the unified `balances` by steps 3-6.
 
 ### Open risks
+
 - **TTL eviction handling**: `removed → 0` must NOT zero an archived-but-positive balance
   (raw reads still return archived values). Verify how eviction appears in LedgerEntryChanges.
 - value-shape: bare `i128` confirmed 4/4 type-3; struct shape is SAC (type-2).
@@ -592,6 +626,7 @@ etc.) compared a STALE fold against CURRENT mainnet: prod CH `soroban_events` is
 Those magnitudes are confounded and do NOT by themselves prove the fold wrong (Karol caught this).
 
 **New proof — measures event VOCABULARY, not freshness → unaffected by the lag (prod CH, 2026-06-29):**
+
 - **65.4% of type-3 event volume is fold-blind** — 1,266,280 of 1,936,527 events have NULL or
   non-SEP-41 signatures. Fold keys only on transfer/mint/burn/clawback = 34.6%.
 - **179 type-3 tokens emit events but ZERO standard SEP-41** → fold sees nothing → would report
@@ -608,6 +643,7 @@ fixes the confound (stale-vs-current magnitudes), NOT the structural gap. Fold i
 conformant SEP-41 tokens; permanently wrong for vault / rebasing / custom-mint tokens.
 
 **Stanisław's analysis — what's right, what it misses.**
+
 - RIGHT (and useful to US): no historical backfill (0228 filled events from ~50.46M, 9.27B rows —
   verified `min(ledger_sequence)=50,457,424`); **no reparse** — verified in code: the silent-drop
   bug was only in `nft.rs::detect_nft_events`; the generic event stream serializes verbatim
@@ -662,6 +698,7 @@ sequencing item). Optionally a guard in the seed bin refusing to run if the inde
 behind. Not feature logic.
 
 **Open questions — resolve before/at implementation:**
+
 1. **`TotalSupply` key — RESOLVED 2026-06-29.** RPC-probed across classes: instance-storage
    `Symbol("TotalSupply")` i128 (MERU vault `126,717,554,425,310`; USDC-style: present; plain
    soroban-sdk: ABSENT → `Σ balances` fallback). Built: `instance_ledger_key` +
@@ -743,13 +780,13 @@ supply/holders uniformly. Everything below this section is kept as historical tr
   [state.rs:66](../../../crates/xdr-parser/src/state.rs) drops them
   (`if !is_contract_instance_key(&change.key) continue`). The data exists; it's filtered out.
 - 0138's "non-standard storage keys" verdict is an **unmeasured assertion** — 0138 was
-  actually scoped out for *documentation-scope* reasons (account page = classic-only). The
+  actually scoped out for _documentation-scope_ reasons (account page = classic-only). The
   standard key works. **Reopen 0138 with the correct reasoning (TTL/archival + doc-scope).**
 
 ### Chosen design — option A now, option C later
 
 - **Option A (NOW): parallel `soroban_token_balances (contract_id, holder_id, balance,
-  last_updated_ledger)`**, `ReplacingMergeTree(last_updated_ledger)` — a mirror of
+last_updated_ledger)`**, `ReplacingMergeTree(last_updated_ledger)` — a mirror of
   `account_balances_current`, written by a new `extract_soroban_token_balances()` in
   state.rs (filter `key == Vec[Symbol("Balance"), Address]`). Supply/holders aggregate
   = `sum`/`countIf(>0)`. **(As-built correction — see Implementation: a SHARED
@@ -793,6 +830,7 @@ Storage-state path, TDD throughout. Suites green: xdr-parser 280, db-clickhouse 
 indexer 40, api 43; clippy clean; api-types regenerated + `check-generated` clean.
 
 **Write pipeline:**
+
 - `xdr-parser::extract_soroban_token_balances` — `ContractData` `Balance(Address)` →
   `(contract_id, holder, balance i128, ledger)`; `removed`→0; skips `state` pre-image,
   non-balance keys, and non-bare-i128 values (4 tests).
@@ -801,12 +839,14 @@ indexer 40, api 43; clippy clean; api-types regenerated + `check-generated` clea
   `handler`) + **backfill (`sink.rs`) for free** (shared `ParseOutput`).
 
 **Aggregate + read:**
+
 - `soroban_asset_aggregates` table + refreshable MV (raw `Int128`).
 - `assets/queries_ch.rs` (both detail + list): `LEFT JOIN soroban_asset_aggregates ON
-  asset_type=3 AND contract_id`; `coalesce` classic+type-3 supply/holders. DTO doc +
+asset_type=3 AND contract_id`; `coalesce` classic+type-3 supply/holders. DTO doc +
   api-types updated.
 
 ### Emerged decisions
+
 1. **Parallel `soroban_asset_aggregates`, NOT a shared `asset_aggregates`** — type wall:
    classic `Decimal128(7)` (pre-scaled) vs type-3 raw `Int128`/arbitrary decimals (PIKA
    43224 overflows any Decimal). Coalesce at read instead. Classic path 100% untouched.
@@ -817,12 +857,14 @@ indexer 40, api 43; clippy clean; api-types regenerated + `check-generated` clea
 4. **Supply = `sum(Balance entries)`** for the MVP — see TTL caveat in follow-ups.
 
 ### Validation (prod, `stellar` RPC, 2026-06-29)
+
 - Standard `Balance(Address)` key + **bare i128** confirmed on 4/4 sampled type-3 tokens
   (MERU vault, EUTBL, KLT, eurSAFO) — extractor covers them. Struct-value shape is
   SAC-only (type-2, out of scope). Spent-down holders keep a `0`-valued entry (→ the
   `removed`→0 + `balance>0`-filter both matter).
 
 ### Follow-ups (not done; spawn on develop)
+
 - **TTL/archival precision** — a dormant holder's `Balance` entry can archive → summing
   entries under-counts vs `total_supply()`. Read supply from the instance `TotalSupply`
   key (always-live, like METADATA/0297); holders from `Balance` entries + restore handling.
@@ -838,6 +880,7 @@ Two unbiased agents (no access to this task) audited the data. Net:
 
 **A 100% backfill does NOT require ledger reprocess — an RPC snapshot suffices.**
 (Corrects the earlier "reprocess required" assumption.)
+
 - **64% of type-3 (2623/4071) have no events and are EMPTY on-chain** (0 `Balance`
   entries, never minted) → `—` is correct, not a coverage gap. The meaningful set is
   ~1448 (1409 real + 39 oracle/upgrade-only empties).
@@ -852,6 +895,7 @@ Two unbiased agents (no access to this task) audited the data. Net:
   per-holder STATE (entries) + the `TotalSupply` key are correct.
 
 ### Refined architecture (post-findings)
+
 - **Holders** ← per-holder `Balance(Address)` entries. LIVE: indexer ContractData parser
   (already built). SEED: RPC snapshot (holder set from events → batched raw
   `getLedgerEntries` ≤190 keys/req → nonzero count).
@@ -862,6 +906,7 @@ Two unbiased agents (no access to this task) audited the data. Net:
   confirmed); ~9% missing → fall back to 7.
 
 ### Recovery pipeline (seed, no reprocess)
+
 1. Holder candidates ← scan G/C strkeys in the token's `soroban_events` topics+data.
 2. Batched raw `getLedgerEntries` on `Balance(addr)` keys → drop zero/absent →
    `holder_count` = nonzero count.
@@ -927,7 +972,7 @@ Two unbiased agents (no access to this task) audited the data. Net:
 
 ## Investigation 2026-06-30 (karolkow) — contract-as-holder coverage across ALL asset types (whole-project sweep)
 
-> Triggered by the question: "can a *contract* hold a type-2/type-3 asset, and do we
+> Triggered by the question: "can a _contract_ hold a type-2/type-3 asset, and do we
 > silently skip that anywhere?" Checked official docs + swept the codebase end-to-end
 > (2 agents) + probed mainnet live (`stellar` RPC) + prod stats (`chq`). Partly beyond
 > 0331 scope (0331 = type-3); kept here because it confirms 0331 is correct and pins the
@@ -936,7 +981,7 @@ Two unbiased agents (no access to this task) audited the data. Net:
 ### Official model (docs-confirmed)
 
 A contract NEVER has a classic account or trustline. It holds any asset as a `ContractData`
-entry *inside the token/SAC contract*, keyed by its `Address`:
+entry _inside the token/SAC contract_, keyed by its `Address`:
 
 - native (0) / classic (1) / SAC (2): entry lives in the **SAC**, value =
   `BalanceValue { amount: i128, authorized: bool, clawback: bool }` (a struct).
@@ -948,12 +993,12 @@ entry *inside the token/SAC contract*, keyed by its `Address`:
 
 ### What we actually index (verified, file:line)
 
-| asset type | G-account holder | Contract `C…` holder |
-|---|---|---|
-| native 0 | ✅ `AccountEntry.balance` | ❌ **skipped** |
-| classic 1 | ✅ `TrustLineEntry` | ❌ **skipped** |
-| SAC 2 | ✅ `TrustLineEntry` | ❌ **skipped** (`BalanceValue` struct never decoded) |
-| soroban 3 | ✅ `balances` (this task) | ✅ `balances` (this task) |
+| asset type | G-account holder          | Contract `C…` holder                                 |
+| ---------- | ------------------------- | ---------------------------------------------------- |
+| native 0   | ✅ `AccountEntry.balance` | ❌ **skipped**                                       |
+| classic 1  | ✅ `TrustLineEntry`       | ❌ **skipped**                                       |
+| SAC 2      | ✅ `TrustLineEntry`       | ❌ **skipped** (`BalanceValue` struct never decoded) |
+| soroban 3  | ✅ `balances` (this task) | ✅ `balances` (this task)                            |
 
 - Ingestion reads `contract_data` only via `is_contract_instance_key` (instance keys —
   discovery/metadata), `xdr-parser/src/state.rs:60,66`. **No `Balance(Address)` ContractData
@@ -976,7 +1021,7 @@ AMM pair `CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY` (type-3, cus
 - native XLM SAC `balance(pair)` = **12,150,286,124,879 stroops ≈ 1,215,028 XLM**
 - EURC SAC `balance(pair)` = **1,939,341,492,641 ≈ 193,934 EURC**
 
-Both real, both held *by the contract*, both **invisible** to our explorer today — one pool
+Both real, both held _by the contract_, both **invisible** to our explorer today — one pool
 alone ≈ 1.2M XLM + 194k EURC missing from supply/holder math. (Read via SAC `balance()` view,
 `--send=no` simulate; confirms types 0 + 2 contract-holdings are real and material.)
 
@@ -996,6 +1041,7 @@ doesn't carry contract balances; surfacing them needs RPC/archive STATE reads (e
 ### Consequences of skipping contract-as-holder
 
 **Assets (types 0/1/2 — type-3 is fixed by this task):**
+
 - **`total_supply` (classic/SAC) undercounts** — it is `Σ trustline balances` only; the
   contract-held amount is missing. If X% of an asset sits in Soroban DeFi, the headline
   supply / "in circulation" is X% too low.
@@ -1012,6 +1058,7 @@ doesn't carry contract balances; surfacing them needs RPC/archive STATE reads (e
   (StellarExpert same). Magnitude material (proof: 1.2M XLM + 194k EURC in one pool).
 
 **NFTs:**
+
 - An NFT owned by a contract (marketplace escrow, staking, vault/collateral, DAO/multisig) is
   recorded **owner-less** (`owner_id = NULL`); the owner FK is accounts(`G`)-only with no `G`/`C`
   discriminator, so a contract id cannot even be stored.
@@ -1086,7 +1133,7 @@ Why A:
   and consistent with the shipped `balances` model.
 - **Optional ergonomics (not synthetic rows):** a read-only `holders` VIEW
   (`SELECT id, account_id, 'account' … FROM accounts UNION ALL SELECT id, contract_id, 'contract' …
-  FROM soroban_contracts`) gives ONE logical holder entity for joins/endpoints — physically Path A,
+FROM soroban_contracts`) gives ONE logical holder entity for joins/endpoints — physically Path A,
   logically the convenience of B, with no duplication/sync/pollution.
 
 **Both deferred follow-ups below use Path A** (`address_id` surrogate + union-resolve), never synthetic
@@ -1119,7 +1166,6 @@ contract-accounts. The mandatory ContractData extraction is independent of this 
 > Kept for trail. The unified-MV-over-events design here is obsolete (event-fold refuted —
 > see DECISION). The 0323-disjointness and `asset_type=3` scoping findings still hold and
 > carry over to the storage-state approach (same type-3 contract set).
-
 
 **Chosen approach: ONE shared `asset_aggregates` table + ONE refreshable MV, not a
 parallel pipeline.** Mirror the disjoint key the `assets` table already uses
@@ -1205,6 +1251,7 @@ Supersedes "Step 7" (the authoritative-key `soroban_token_supply` table + the
 No second source, no fallback, no seeded key table.
 
 ### Why (measured on prod via `chq`, 2026-06-30)
+
 - **4114** type-3 tokens. **2995 (72.8%)** expose a `total_supply()` fn (OZ-family — store the
   on-chain `Symbol("TotalSupply")` instance key); **1119 (27.2%)** do NOT. (Agent first reported
   76.6/23.4 with a looser match; re-measured exact at 72.8/27.2.)
@@ -1220,6 +1267,7 @@ No second source, no fallback, no seeded key table.
   ⇒ `Σ balances` == real supply, **including** vault/treasury-held supply.
 
 ### Accepted non-100% residue (the explicit cost of one method)
+
 - **TTL-archived** balance entries (expired ledger state we can't read) → tiny undercount.
 - **True rebasing** tokens (stored `Balance` = shares ≠ effective balance) → rare.
 - User decision: not worth a second source / a per-token key read / a refresh cadence. If one specific
@@ -1227,11 +1275,13 @@ No second source, no fallback, no seeded key table.
   reintroduce a blanket `coalesce` (that blend was the original smell).
 
 ### Why not keep the key as an override (option C, the prior `coalesce`)
+
 The key table was **seed-only** (`balance-seed` script wrote it once via RPC; the live indexer never
 updated it) → it froze at seed time, and `coalesce(tsup, bagg)` preferred that **stale** key over the
 fresh 2-min sum. Two columns + a staleness bug for no measurable gain over the sum.
 
 ### What was deleted (commit on `feat/0331_…`; −152 net)
+
 - `db-clickhouse/schema/init.sql` — `soroban_token_supply` table → tombstone comment.
 - `db-clickhouse/src/lib.rs` — statement-count guard 27 → **26** (24 tables + 1 MV + 1 dict).
 - `db-clickhouse/src/persist/rows.rs` — `SorobanTokenSupplyRow` struct.
@@ -1252,6 +1302,7 @@ Branch `feat/0331_…` (name is stale — the design is ledger-STATE, not an eve
 13 commits `75fe7025..71ee96ff`. All green, pushed.
 
 ### ✅ DEV DONE
+
 - **Model:** unified `balances` (holder_id = G∪C surrogate, asset_id, amount `Int128`) +
   `balance_aggregates` MV (`sum(amount)` = supply, `countIf(amount>0)` = holders). Dropped legacy
   `asset_aggregates` view + interim `addresses` table.
@@ -1270,6 +1321,7 @@ Branch `feat/0331_…` (name is stale — the design is ledger-STATE, not an eve
   into task 0310; architecture docs refreshed.
 
 ### 🔜 DEV LEFT
+
 - **Contract-held asset types 0/1/2** (a contract holding native / classic / SAC, stored as a SAC
   `Balance(Address) → BalanceValue{amount}` struct) — the reverted SAC-struct leg (`7a5d61d6`).
   Deferred to a **post-0339** task (0339 collapses SAC into classic first). Type-3 contract-holders are
@@ -1278,6 +1330,7 @@ Branch `feat/0331_…` (name is stale — the design is ledger-STATE, not an eve
 That's it — the type-3 DEV path is complete.
 
 ### 🛠️ OPS LEFT (code ready, not deployed)
+
 1. **Merge** PR `feat/0331_…` → develop.
 2. **Backfill `assets.id`** (Rust runner — CH `cityHash64` ≠ the Rust surrogate, so SQL can't recompute
    it; existing rows are `id=0` until backfilled → the aggregate JOIN reads `—`).
@@ -1291,10 +1344,11 @@ That's it — the type-3 DEV path is complete.
 5. **Catch-up** live ingest.
 6. **Validate** — `sum(balances)` vs StellarExpert / spot-check (can't PROVE 100% — chain doesn't
    enumerate holders).
-7. *(separate task 0310)* drop the 4 dead `assets` columns in one `ALTER`.
+7. _(separate task 0310)_ drop the 4 dead `assets` columns in one `ALTER`.
 
 ### Leftovers after cutover (checked 2026-07-01)
+
 - `account_balances_current` TABLE — kept on purpose (data + rollback; dropped in 6d).
 - No LIVE CH read/write of it remains (one stale bootstrap-test cleanup fixed to `balances`).
 - Remaining refs are **PG-dead** (`queries.rs` PG list, PG integration tests — retired with PG, not 0331)
-  + `smoke.rs` (exercises the still-existing table) + `audit-harness`/`db-merge` tooling.
+  - `smoke.rs` (exercises the still-existing table) + `audit-harness`/`db-merge` tooling.
