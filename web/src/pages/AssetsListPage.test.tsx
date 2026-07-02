@@ -133,4 +133,53 @@ describe('AssetsListPage', () => {
       expect(lastFilters?.['filter[code]']).toBe('USDC');
     });
   });
+
+  it('selecting Soroban clears an active "Has SAC" filter (mutually exclusive)', async () => {
+    mockOk([]);
+    const user = userEvent.setup();
+
+    renderWithProviders(<AssetsListPage />, {
+      initialEntries: ['/assets?sac=true'],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Soroban' }));
+
+    await vi.waitFor(() => {
+      const calls = assetsHookMock.useAssetsList.mock.calls;
+      const f = calls[calls.length - 1]?.[1];
+      expect(f?.['filter[type]']).toBe('soroban');
+      expect(f?.['filter[sac]']).toBeUndefined();
+    });
+  });
+
+  it('turning on "Has SAC" while Soroban is active drops the type', async () => {
+    mockOk([]);
+    const user = userEvent.setup();
+
+    renderWithProviders(<AssetsListPage />, {
+      initialEntries: ['/assets?type=soroban'],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Has SAC' }));
+
+    await vi.waitFor(() => {
+      const calls = assetsHookMock.useAssetsList.mock.calls;
+      const f = calls[calls.length - 1]?.[1];
+      expect(f?.['filter[sac]']).toBe('true');
+      expect(f?.['filter[type]']).toBeUndefined();
+    });
+  });
+
+  it('ignores a stale filter[sac] from a deep link when type=soroban', () => {
+    mockOk([]);
+
+    renderWithProviders(<AssetsListPage />, {
+      initialEntries: ['/assets?type=soroban&sac=true'],
+    });
+
+    const calls = assetsHookMock.useAssetsList.mock.calls;
+    const f = calls[calls.length - 1]?.[1];
+    expect(f?.['filter[type]']).toBe('soroban');
+    expect(f?.['filter[sac]']).toBeUndefined();
+  });
 });

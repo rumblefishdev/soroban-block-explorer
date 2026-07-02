@@ -18,13 +18,16 @@ type Filters = NonNullable<ListAssetsData['query']>;
 const PAGE_SIZE = 20;
 
 export default function AssetsListPage() {
-  const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
+  const { state, cursor, goNext, goPrev, setFilter, setFilters, clearFilters } =
     useCursorPagination({
       filterKeys: ['code', 'type', 'sac'],
     });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
-  const sac = state.filters.sac === 'true';
+  // SAC is a facet of classic/native, never Soroban (ADR 0051), so the two are
+  // mutually exclusive: ignore a stale `sac` (e.g. from a pasted deep link)
+  // while the Soroban type is active.
+  const sac = state.filters.sac === 'true' && type !== 'soroban';
   const hasFilters = code !== '' || type !== '' || sac;
 
   const queryFilters = useMemo<Filters>(() => {
@@ -51,13 +54,23 @@ export default function AssetsListPage() {
     (value: string) => setFilter('code', value || null),
     [setFilter]
   );
+  // Soroban ⇄ "Has SAC" are mutually exclusive (ADR 0051). Each conflicting
+  // transition is ONE atomic URL update (`setFilters`) so last-click wins and
+  // the other chip clears — two `setFilter` calls would clobber each other
+  // (see `useTableUrlState`).
   const handleTypeChange = useCallback(
-    (value: string) => setFilter('type', value || null),
-    [setFilter]
+    (value: string) =>
+      value === 'soroban'
+        ? setFilters({ type: 'soroban', sac: null })
+        : setFilter('type', value || null),
+    [setFilter, setFilters]
   );
   const handleSacChange = useCallback(
-    (value: boolean) => setFilter('sac', value ? 'true' : null),
-    [setFilter]
+    (value: boolean) =>
+      value && type === 'soroban'
+        ? setFilters({ sac: 'true', type: null })
+        : setFilter('sac', value ? 'true' : null),
+    [setFilter, setFilters, type]
   );
 
   return (
