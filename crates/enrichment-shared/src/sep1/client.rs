@@ -16,16 +16,17 @@
 //!   - `home_domain` must be RFC 1035-style (ASCII alphanumeric / `.` / `-`).
 //!   - `home_domain` must not parse as a literal IP address (rejects
 //!     `127.0.0.1`, `192.168.0.1`, `[::1]`, `169.254.169.254`).
-//!   - HTTP redirects are **not followed** (`Policy::limited(0)`). SEP-1
-//!     doesn't require redirect support, and following any 30x would
-//!     re-open the SSRF gate the initial `validate_host` closes — a
-//!     redirect to `127.0.0.1` / `169.254.169.254` / a private IP
-//!     literal would bypass the up-front host check. With `limited(0)`
-//!     reqwest maps any 3xx into a `reqwest::Error` (which we surface
-//!     as `Sep1Error::Http` and the consumer treats fail-soft as null
-//!     fields), so legitimate issuers behind apex↔www-style redirects
-//!     simply get null `description` / `home_page` until their
-//!     `home_domain` flag matches the canonical TOML host directly.
+//!   - HTTP redirects are followed **only within the issuer's own
+//!     registrable domain** (eTLD+1, via the embedded Public Suffix List),
+//!     so `circle.com` → `www.circle.com` resolves but `circle.com` →
+//!     `evil.com` does not (task 0200). Every hop re-runs `validate_host`
+//!     on the target and requires `https`, so a 30x to `127.0.0.1` /
+//!     `169.254.169.254` / an IP literal / an `http` downgrade is refused —
+//!     the SSRF gate `validate_host` closes stays shut across redirects.
+//!     A refused redirect surfaces as `Sep1Error::RedirectBlocked`
+//!     (permanent → sentinel); the follow budget is `MAX_REDIRECTS` hops.
+//!     This re-enables the apex↔www issuer class (Circle USDC/EURC etc.)
+//!     that `Policy::limited(0)` used to drop to null enrichment.
 //!   - DNS-resolved private addresses are NOT blocked at this layer; deeper
 //!     SSRF protection (resolve + check against RFC 1918 / 6598 / link-local
 //!     ranges) is a follow-up if the threat model demands it.
@@ -63,6 +64,12 @@ const CACHE_CAPACITY: u64 = 1024;
 
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
 
+/// Redirect hops the SEP-1 fetcher will follow — and only within the issuer's
+/// registrable domain (see `same_etld1_redirect_policy`). apex→www is one hop;
+/// a small budget absorbs an occasional scheme / trailing-slash normalisation
+/// hop without opening a redirect-amplification vector.
+const MAX_REDIRECTS: usize = 4;
+
 /// HTTP fetcher for SEP-1 stellar.toml files.
 ///
 /// Cheap to clone: both the inner `reqwest::Client` and the
@@ -80,14 +87,13 @@ impl Sep1Fetcher {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
-            // No redirect-following: SEP-1 doesn't require them, and any
-            // 30x would let the issuer bypass `validate_host` by bouncing
-            // us to a loopback / link-local / RFC 1918 host after the
-            // initial check passed. `limited(0)` (vs `none()`) makes
-            // reqwest surface 3xx as `reqwest::Error::TooManyRedirects`
-            // so the existing `Sep1Error::Http` mapping handles it
-            // without a dedicated variant.
-            .redirect(Policy::limited(0))
+            // Follow redirects, but only within the issuer's own registrable
+            // domain (eTLD+1) and only to safe `https` hosts — see
+            // `same_etld1_redirect_policy`. Re-enables the apex↔www class
+            // (Circle USDC/EURC etc., task 0200) without re-opening the SSRF
+            // gate `validate_host` closes. A refused 3xx flows back as a
+            // redirection response and maps to `Sep1Error::RedirectBlocked`.
+            .redirect(same_etld1_redirect_policy())
             .user_agent(USER_AGENT)
             .build()?;
         let cache = FutureCache::builder()
@@ -135,17 +141,32 @@ async fn fetch_uncached(client: &reqwest::Client, host: &str) -> Result<Sep1Toml
         }
     })?;
 
-    if !resp.status().is_success() {
-        // `error_for_status` only produces an `Err` for 4xx/5xx, so on
-        // its own a 3xx-without-Location response would slip through and
-        // trigger a panic on `expect_err`. We're safe here because the
-        // client is built with `Policy::limited(0)`: any 3xx is rejected
-        // up in `client.get(...).send().await` as
-        // `reqwest::Error::TooManyRedirects` and never reaches this
-        // branch. 1xx is consumed by hyper and 2xx is filtered out by
-        // `is_success()` above, so the only statuses that land here are
-        // 4xx/5xx — which `error_for_status` always converts to `Err`.
-        let err = resp.error_for_status().expect_err("status was not success");
+    let status = resp.status();
+    // A 3xx here is a redirect `same_etld1_redirect_policy` refused to follow
+    // (off the registrable domain, an unsafe / `http` target, or over the
+    // MAX_REDIRECTS budget): reqwest returns the redirection response instead
+    // of following it. Surface it distinctly (permanent → sentinel) — do NOT
+    // fall through to `error_for_status`, which returns `Ok` for 3xx and would
+    // panic the `expect_err` below.
+    if status.is_redirection() {
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        return Err(Sep1Error::RedirectBlocked {
+            host: host.to_owned(),
+            location,
+        });
+    }
+    if !status.is_success() {
+        // Only 4xx/5xx reach here (2xx filtered by `is_success`, 3xx handled
+        // above, 1xx consumed by hyper), and `error_for_status` always maps
+        // those to `Err`.
+        let err = resp
+            .error_for_status()
+            .expect_err("status is 4xx/5xx (2xx and 3xx handled above)");
         return Err(Sep1Error::Http {
             host: host.to_owned(),
             source: err,
@@ -181,6 +202,54 @@ fn validate_host(host: &str) -> Result<(), Sep1Error> {
         });
     }
     Ok(())
+}
+
+/// Redirect policy for SEP-1 fetches (task 0200): follow up to `MAX_REDIRECTS`
+/// hops, but ONLY when the target stays on the issuer's registrable domain
+/// (eTLD+1) and is a safe `https` host. Anything else is refused — reqwest
+/// returns the 3xx response, which `fetch_uncached` maps to
+/// `Sep1Error::RedirectBlocked`.
+///
+/// Keeps the SSRF gate `validate_host` closes intact across redirects: a 30x to
+/// a loopback / link-local / RFC 1918 IP literal, or an `http` downgrade, is
+/// never followed. Captures nothing (the PSL lookup and `validate_host` are
+/// free functions), so the closure is `'static` as `Policy::custom` requires.
+fn same_etld1_redirect_policy() -> Policy {
+    Policy::custom(|attempt| {
+        if attempt.previous().len() >= MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        let target = attempt.url();
+        // SEP-1 is HTTPS-only; never follow a downgrade to http://.
+        if target.scheme() != "https" {
+            return attempt.stop();
+        }
+        let Some(target_host) = target.host_str() else {
+            return attempt.stop();
+        };
+        // `previous()[0]` is the original request URL; hold every hop to its
+        // registrable domain (not just the immediately-preceding host).
+        match attempt.previous().first().and_then(|u| u.host_str()) {
+            Some(origin) if redirect_allowed(origin, target_host) => attempt.follow(),
+            _ => attempt.stop(),
+        }
+    })
+}
+
+/// True iff a redirect from `origin_host` to `target_host` is safe to follow:
+/// `target_host` is a valid non-IP hostname (`validate_host`) AND shares the
+/// same registrable domain (eTLD+1) as `origin_host`. The embedded Public
+/// Suffix List makes `www.circle.com` ≡ `circle.com` while `evil.com` ≢
+/// `circle.com`, and resolves multi-label suffixes (`a.co.uk` ≢ `b.co.uk`)
+/// correctly — a naive suffix strip cannot.
+fn redirect_allowed(origin_host: &str, target_host: &str) -> bool {
+    if validate_host(target_host).is_err() {
+        return false;
+    }
+    match (psl::domain_str(origin_host), psl::domain_str(target_host)) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    }
 }
 
 /// Stream the body chunk-by-chunk; bail out if the running total crosses
@@ -288,6 +357,45 @@ mod tests {
                     Err(Sep1Error::MalformedHomeDomain { .. })
                 ),
                 "expected rejection for {bad}",
+            );
+        }
+    }
+
+    // --- redirect policy (task 0200): `redirect_allowed` = same eTLD+1 + safe host ---
+
+    #[test]
+    fn redirect_allowed_follows_apex_and_www() {
+        assert!(redirect_allowed("circle.com", "www.circle.com"));
+        assert!(redirect_allowed("www.circle.com", "circle.com"));
+        assert!(redirect_allowed("circle.com", "toml.circle.com"));
+    }
+
+    #[test]
+    fn redirect_allowed_uses_public_suffix_not_naive_strip() {
+        // `co.uk` is a public suffix, so apex↔www within it is same-domain,
+        // but two different second-level labels are DIFFERENT registrable domains.
+        assert!(redirect_allowed("example.co.uk", "www.example.co.uk"));
+        assert!(!redirect_allowed("a.co.uk", "b.co.uk"));
+    }
+
+    #[test]
+    fn redirect_allowed_blocks_cross_domain() {
+        assert!(!redirect_allowed("circle.com", "evil.com"));
+        // suffix-smuggling: the eTLD+1 of `circle.com.evil.com` is `evil.com`
+        assert!(!redirect_allowed("circle.com", "circle.com.evil.com"));
+    }
+
+    #[test]
+    fn redirect_allowed_blocks_unsafe_targets() {
+        for bad in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "192.168.1.1",
+            "evil.com:8080",
+        ] {
+            assert!(
+                !redirect_allowed("circle.com", bad),
+                "expected redirect to {bad} to be blocked",
             );
         }
     }

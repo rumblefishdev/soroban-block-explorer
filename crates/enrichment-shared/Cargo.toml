@@ -30,6 +30,11 @@ stellar-strkey = "0.0.16"
 # Base64 encode/decode for the `transaction` param + `xdr` result of
 # simulateTransaction.
 base64 = { workspace = true }
+# Public Suffix List (embedded) for eTLD+1 comparison in the SEP-1 fetcher's
+# redirect policy (task 0200): follow `circle.com` → `www.circle.com` (same
+# registrable domain) but never `circle.com` → `evil.com`. `domain_str` returns
+# the registrable domain; the list is compiled in, so there is no runtime fetch.
+psl = "2"
 
 [dev-dependencies]
 # Mock Soroban RPC + IPFS gateway for fetcher integration tests

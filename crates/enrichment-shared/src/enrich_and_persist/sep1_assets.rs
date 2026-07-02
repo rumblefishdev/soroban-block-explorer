@@ -232,6 +232,9 @@ pub fn is_transient(err: &Sep1Error) -> bool {
         | Sep1Error::MalformedHomeDomain { .. }
         | Sep1Error::BodyTooLarge { .. }
         | Sep1Error::NonUtf8Body
+        // A refused redirect (off registrable-domain / unsafe target / over
+        // budget, task 0200) is permanent — re-fetching yields the same 3xx.
+        | Sep1Error::RedirectBlocked { .. }
         | Sep1Error::MalformedToml { .. } => false,
     }
 }
