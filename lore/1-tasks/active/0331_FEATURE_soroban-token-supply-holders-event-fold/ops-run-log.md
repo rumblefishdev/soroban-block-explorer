@@ -105,9 +105,12 @@ accounts bloom index; `assets.id` from Step 1). Prod-only leftovers `asset_aggre
 `asset_aggregates_mv` (old read-path, still served by the CURRENT API → drop only AFTER Step 9) +
 `assets_pre0339` (0339 backup) — NOT dropped here.
 
-**DECISION: do NOT manually pre-create the 3 tables.** The new indexer runs `apply_init_sql` at
-cold-start, so **Step 4 deploy creates them automatically** (runbook default). Manual pre-create was
-only optional de-risking; skipped for simplicity.
+**DECISION (⚠️ SUPERSEDED at Step 4a — see below): ~~do NOT manually pre-create the 3 tables; the new
+indexer runs `apply_init_sql` at cold-start so Step 4 deploy creates them.~~** This was WRONG — grep at
+Step 4a proved the indexer does NOT call `apply_init_sql` (only `db-clickhouse-init` + tests do) and
+there's no CDK schema hook, so the deploy never creates the tables. They were created explicitly via
+`chw` at **Step 4a** (which is REQUIRED, not optional — the indexer's `BalanceRow` INSERT fails without
+them).
 
 **Safety fact (recorded to kill a recurring worry):** `apply_init_sql` / init.sql is **create-only**
 — ZERO `DROP`/`TRUNCATE` (grep-verified), just `CREATE … IF NOT EXISTS` in a loop. Removing a table
@@ -246,18 +249,51 @@ no CDK schema hook → the tables had to be created explicitly BEFORE starting t
 `balances` (RMT(last_updated_ledger)), `balance_aggregates_mv` (refreshable MV). Validated: 3 objects,
 correct engines + schemas, `balances` empty, MV `status=Scheduled`, no exception.
 
-## Step 5 — migrate `account_balances_current` → `balances` — PENDING (indexer stays stopped)
+## Step 5 — migrate `account_balances_current` → `balances` — ✅ DONE (2026-07-02, indexer stopped)
 
-**Ordering decision:** run Step 5 with the indexer STILL stopped (deviation from runbook's start-then-
-migrate), then start the indexer (4b/6). Rationale: no concurrent writes → clean, deterministic
-migration validation (count/parity/orphans) without catch-up noise; RMT guarantees correctness either
-order; backlog cost negligible (~hundreds of ledgers).
+**Ordering:** ran with the indexer STILL stopped (deviation from runbook start-then-migrate) → no
+concurrent writes → clean deterministic validation; RMT keeps correctness either order.
 
-**Benchmark (`chq`, raw):** abc = 59.87M rows → **30.87M nonzero** (19.39M native + 11.49M classic) +
-29.0M zero; 13.97M distinct holders. **Finding: add `WHERE balance != 0`** — the runbook INSERT lacked
-it → would copy 29M zero/closed trustlines (0 to supply, excluded from holder_count) = pure bloat.
-Runbook fixed. Pre-check `countIf(type∈{0,1} AND id=0)` = **0** ✓. Transport: try `chw`; box
-`clickhouse-client` or `holder_id` chunking as fallback (RMT-idempotent → re-run safe).
+**Executed (`chw`, no timeout):**
+
+```sql
+INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger)
+SELECT abc.account_id, a.id, toInt128(abc.balance * 10000000), abc.last_updated_ledger
+FROM account_balances_current abc FINAL
+INNER JOIN assets a FINAL ON a.asset_code = abc.asset_code AND a.issuer_id = abc.issuer_id
+  AND a.asset_type = if(abc.asset_type = 0, 0, 1);
+```
+
+**DECISION — migrate zeros (operator):** NO `WHERE balance != 0`. Preserves trustline-existence info.
+Cost: ~2× MV scan (may relax MV to 5 min, Step 8). Correct — reads filter `amount != 0`.
+
+**Validated (`chq`):** `balances` = **48,504,880** rows (59.87M raw − 11.4M RMT dedup); **orphans
+(asset_id=0) = 0**; nonzero 20.08M / zero 28.43M. **Circle USDC parity EXACT** — `sum/1e7` =
+219,734,650.6938 == old `asset_aggregates` 219,734,650.6938326. Native XLM sum 104.78B (see below).
+(Runbook validate-(b) "live wins tie" deferred to post-4b catch-up.)
+
+### Investigation findings (all → real chain data, no bugs)
+
+- **Two `asset_type` enums (load-bearing):** `account_balances_current.asset_type` = HORIZON
+  (0=native, 1=alphanum4 [code ≤4], 2=alphanum12 [code 5-12]); `assets.asset_type` = PROJECT
+  (0=native, 1=classic_credit, 2=SAC [retired 0339], 3=soroban). The "2" collision is coincidental —
+  Horizon-2 = alphanum12, NOT SAC. Verified prod: type1 codes len 1-4, type2 len 5-12; **0 cross-type
+  (code,issuer) dups** (code length is deterministic → no double-count). Old `asset_aggregates_mv`
+  uses `WHERE asset_type IN (1,2) GROUP BY code,issuer` — CORRECT (both alphanum = classic), no naive
+  `abc.asset_type = assets.asset_type` join anywhere. **No bug from the two enums.** `balances` drops
+  the Horizon enum entirely (keys by `asset_id`; Horizon 1&2 → one project-classic `asset_id`).
+- **i64-ceiling "artifacts":** ~5,823 classic balances at exactly `922337203685.4775807` (=2⁶³−1
+  stroops) on FAKE tokens (fake USDC/XRP/GOLD/metals). Real Circle USDC (561k holders) has ZERO
+  ceiling → spam lands on its own spam `asset_id`, real assets untouched. Old `asset_aggregates` shows
+  the same absurd spam supplies → **not a regression.** Real on-chain balances of spam tokens.
+- **Native XLM = 104.78B (NOT an artifact — I falsely alarmed first):** top account
+  `GALAXYVOIDAOPZTDLHILAJQKCVVFMD4IKLXLSZV5YHO7VY74IWZILUTO` (home_domain "…stare into the abyss…")
+  holds **55.44B XLM** — **Horizon-confirmed EXACT** (`55442115247.4347086`). It's the XLM **burn/void
+  address** (2019 "burn" sent ~55B here, not protocol-destroyed). On-chain native total = ~105B;
+  CMC/StellarExpert cite ~50B _circulating_ by excluding it. Our sum is CHAIN-FAITHFUL. My "55B > 50B =
+  impossible" was wrong — I conflated circulating (~50B) with on-chain total (~105B).
+- **→ Spawned [0342] (backlog):** supply DISPLAY convention (exclude burn-void for native; flag/hide
+  spam-ceiling tokens). Read/display only — `balances` stays chain-faithful. Not a blocker.
 
 ## Steps 4b, 6–11 — remaining
 

@@ -174,11 +174,14 @@ SELECT count() FROM account_balances_current FINAL WHERE balance != 0;          
 ```
 
 **Migration** (`Decimal128(7)` → raw `Int128 ×10⁷`; join reads `assets.id` directly — do NOT
-hash in SQL; RMT-idempotent, safe to re-run). **`WHERE balance != 0` is load-bearing** — without it
-the migration copies ~29M retained closed/zero trustlines (measured: 59.87M raw = 30.87M nonzero +
-29.0M zero) that add 0 to `sum(amount)` and are excluded from `countIf(amount>0)` anyway — pure bloat
-on `balances` + the 2-min MV scan. Nonzero-at-cutover rows are the baseline; zero = absent = zero, and
-catch-up overrides anything that later changes.
+hash in SQL; RMT-idempotent, safe to re-run). **DECISION 2026-07-02 (operator): NO `WHERE balance
+!= 0` — migrate zero/closed trustlines too**, to preserve trustline-existence info in `balances`.
+Cost: ~60M rows instead of ~31M → ~2× the 2-min MV scan (may need to relax the MV to `EVERY 5
+MINUTE`, see Step 8). Correctness is unaffected — the reads filter `amount != 0`
+(`queries_ch.rs`), so zero rows are inert for supply / holder_count / portfolio. The `if(abc.asset_type
+= 0, 0, 1)` remaps the HORIZON enum (0=native, 1=alphanum4, 2=alphanum12) → PROJECT enum (0=native,
+1=classic_credit); both alphanum widths collapse to classic. `balances` stores NO `asset_type` — the
+type lives in `assets`, resolved via `asset_id`.
 
 ```sql
 INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger)
@@ -187,8 +190,7 @@ FROM account_balances_current abc FINAL
 INNER JOIN assets a FINAL
    ON a.asset_code = abc.asset_code
   AND a.issuer_id  = abc.issuer_id
-  AND a.asset_type = if(abc.asset_type = 0, 0, 1)    -- Horizon native/alphanum → project native/classic-credit
-WHERE abc.balance != 0;                              -- skip ~29M retained zero/closed trustlines
+  AND a.asset_type = if(abc.asset_type = 0, 0, 1);   -- Horizon native/alphanum → project native/classic-credit
 ```
 
 **Transport:** ~31M-row INSERT+JOIN. Try `chw`; if it hits a timeout/mem cap, run the same SQL on the
