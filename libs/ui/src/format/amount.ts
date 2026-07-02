@@ -58,7 +58,10 @@ export function scaleByDecimals(
   if (decimals === 0) return safe.toString();
   const scale = 10n ** BigInt(decimals);
   const whole = safe / scale;
-  const frac = (safe % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
+  const frac = (safe % scale)
+    .toString()
+    .padStart(decimals, '0')
+    .replace(/0+$/, '');
   return frac.length > 0 ? `${whole}.${frac}` : `${whole}`;
 }
 
