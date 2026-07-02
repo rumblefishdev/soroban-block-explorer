@@ -9,6 +9,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as synthetics from 'aws-cdk-lib/aws-synthetics';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
 import { originLockCanaryCode } from '../canaries/origin-lock.js';
@@ -79,13 +80,29 @@ export class CloudWatchStack extends cdk.Stack {
 
     // ---------------------
     // AWS Chatbot — Slack channel
-    // Prerequisite: authorize the Slack workspace in the AWS Console under
-    // AWS Chatbot (one-time manual step) before running cdk deploy.
+    // Workspace + channel IDs are deployment-specific identifiers we keep OUT
+    // of the (public) repo, so they come from SSM Parameter Store (plain
+    // String — not credentials) at deploy time, not from env config. Set once
+    // out-of-band before deploy:
+    //   aws ssm put-parameter --type String \
+    //     --name /soroban-explorer/${envName}/slack-workspace-id --value T...
+    //   aws ssm put-parameter --type String \
+    //     --name /soroban-explorer/${envName}/slack-channel-id   --value C...
+    // Prerequisites (one-time, manual): authorize the Slack workspace in the
+    // AWS Console under AWS Chatbot, and `/invite @aws` in the target channel.
     // ---------------------
+    const slackWorkspaceId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/soroban-explorer/${config.envName}/slack-workspace-id`
+    );
+    const slackChannelId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/soroban-explorer/${config.envName}/slack-channel-id`
+    );
     new chatbot.SlackChannelConfiguration(this, 'SlackChannel', {
       slackChannelConfigurationName: `${config.envName}-soroban-explorer-alarms`,
-      slackWorkspaceId: config.slackWorkspaceId,
-      slackChannelId: config.slackChannelId,
+      slackWorkspaceId,
+      slackChannelId,
       notificationTopics: [alarmTopic],
       role: new iam.Role(this, 'ChatbotRole', {
         assumedBy: new iam.ServicePrincipal('chatbot.amazonaws.com'),
@@ -130,6 +147,59 @@ export class CloudWatchStack extends cdk.Stack {
         threshold: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
         evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
+    // Alarm 1b: Galexie ephemeral storage utilization (%)
+    // captive-core's BucketList (current ledger state) + catchup temp live on
+    // the task's ephemeral disk. Baseline ~30%; >60% sustained = plan a disk
+    // bump BEFORE a merge/catchup spike hits the "No space left on device"
+    // ceiling (the 2026-07-01/02 deadlock: full disk → catchup never completes
+    // → temp never cleaned → task wedged while `pgrep stellar-core` still
+    // reports healthy). Metric-math on % is robust to disk-size changes.
+    // Sustained 3×5 min avoids paging on a transient merge spike.
+    // Cluster/service names are deterministic (see IngestionStack).
+    // ---------------------
+    const galexieCluster = `${config.envName}-ingestion`;
+    const galexieService = `${config.envName}-galexie-live`;
+    const ephemeralUsed = new cloudwatch.Metric({
+      namespace: 'ECS/ContainerInsights',
+      metricName: 'EphemeralStorageUtilized',
+      dimensionsMap: {
+        ClusterName: galexieCluster,
+        ServiceName: galexieService,
+      },
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.MAXIMUM,
+    });
+    const ephemeralReserved = new cloudwatch.Metric({
+      namespace: 'ECS/ContainerInsights',
+      metricName: 'EphemeralStorageReserved',
+      dimensionsMap: {
+        ClusterName: galexieCluster,
+        ServiceName: galexieService,
+      },
+      period: cdk.Duration.minutes(5),
+      statistic: cloudwatch.Stats.MAXIMUM,
+    });
+    withActions(
+      new cloudwatch.Alarm(this, 'GalexieEphemeralStorageAlarm', {
+        alarmName: `${config.envName}-galexie-ephemeral-storage`,
+        alarmDescription:
+          'Galexie captive-core ephemeral disk >60% — approaching the deadlock ceiling; plan a disk bump.',
+        metric: new cloudwatch.MathExpression({
+          expression: '(used / reserved) * 100',
+          usingMetrics: { used: ephemeralUsed, reserved: ephemeralReserved },
+          period: cdk.Duration.minutes(5),
+          label: 'Ephemeral Used (%)',
+        }),
+        threshold: config.galexieEphemeralUtilizationThreshold,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       })
     );
