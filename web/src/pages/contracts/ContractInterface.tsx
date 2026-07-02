@@ -132,6 +132,11 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
               variant="bodyXsRegular"
               sx={(theme) => ({
                 color: theme.palette.text.tertiary,
+                // Reads as a code comment, not a run-on error: dimmed italic
+                // with the rustdoc line breaks preserved (bullets + `# Panics`
+                // land on their own lines instead of collapsing to one blob).
+                fontStyle: 'italic',
+                whiteSpace: 'pre-wrap',
                 mb: 1,
                 display: 'block',
               })}
