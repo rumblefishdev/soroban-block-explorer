@@ -1,11 +1,15 @@
 //! `nft_enrichment` side-table fill from per-token `token_uri()` JSON
-//! metadata (task 0195 §2d / ADR 0050).
+//! metadata (task 0195 §2d / ADR 0050) + the contract-level SEP-50
+//! `name()` for `collection_name` (task 0340).
 //!
 //! Writes `(name, media_url, collection_name)` into the `nft_enrichment`
 //! side table — never the indexer-owned `nfts` table. These three are
 //! **enrichment-only** (the indexer always writes `None`: a Stellar NFT
 //! mint event carries no metadata), so the read path uses the side table
-//! directly, no COALESCE to the indexer (task 0231).
+//! directly, no COALESCE to the indexer (task 0231). `name`/`media_url`
+//! come from the token_uri JSON; `collection_name` from the per-contract
+//! `name()` RPC simulate (no real-world contract emits a JSON
+//! `"collection"` field — that source measured 0/68 on prod, task 0340).
 //!
 //! ### Failure model — soft-fail downstream of fetcher
 //!
@@ -81,7 +85,7 @@ pub async fn enrich_nft_token_uri(
         return insert_nft(client, &key, name, media_url, collection_name).await;
     };
 
-    let (name, media_url, collection_name) = match fetcher
+    let (name, media_url, mut collection_name) = match fetcher
         .resolve(&contract_strkey, &key.token_id)
         .await
     {
@@ -105,6 +109,30 @@ pub async fn enrich_nft_token_uri(
             permanent_fail_outcome()
         }
     };
+
+    // task 0340: no real-world Stellar NFT carries `collection` in its
+    // token_uri JSON (measured 0/68 collections on prod) — the collection name
+    // lives behind the contract-level SEP-50 `name()`, fetched via RPC simulate
+    // and cached per CONTRACT in the fetcher (one RPC per collection per run,
+    // never per token). A non-empty JSON `collection` still wins if a contract
+    // ever emits one. Runs after the match on purpose: a permanent token_uri
+    // fail can still yield a collection name (e.g. the 0308 custom-ABI family
+    // that renames token_uri but keeps name()).
+    if collection_name.is_empty() {
+        match fetcher.resolve_collection_name(&contract_strkey).await {
+            Ok(Some(n)) => collection_name = n,
+            // Permanent "no usable name" — cached in the fetcher; keep sentinel.
+            Ok(None) => {
+                debug!(key = %key, reason = "name_no_value", "collection_name stays sentinel")
+            }
+            // `resolve_collection_name` folds permanent fails to Ok(None), so
+            // every Err is transient by contract — no re-classification here.
+            Err(arc_err) => {
+                warn!(key = %key, reason = "name_transient", error = %arc_err, "retry candidate (no row written)");
+                return Err(EnrichError::Transient(arc_err.to_string()));
+            }
+        }
+    }
 
     let outcome = insert_nft(client, &key, name, media_url, collection_name).await?;
     debug!("nft_enrichment row written");
