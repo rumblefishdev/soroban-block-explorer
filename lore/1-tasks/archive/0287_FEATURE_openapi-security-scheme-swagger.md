@@ -53,9 +53,9 @@ no way to add a key from the UI. `API_BASE_URL` already points Swagger at the CF
       per-path requirement. Verified in the extracted spec (`securitySchemes` + root
       `security` + `paths./health.get.security == [{}]`).
 - [~] Swagger "Authorize" / "Try it out": the spec is correct so the Authorize dialog
-      renders both fields and gated `/v1/*` ops inherit the requirement. Live "returns 200
-      with a valid key" pending a running instance (needs a `swagger-ui`-feature build +
-      reachable ClickHouse) — verify post-deploy or locally with a DB.
+  renders both fields and gated `/v1/*` ops inherit the requirement. Live "returns 200
+  with a valid key" pending a running instance (needs a `swagger-ui`-feature build +
+  reachable ClickHouse) — verify post-deploy or locally with a DB.
 - [x] api-types regenerated (`openapi.json` + `generated/sdk.gen.ts`) — committed in this branch.
 
 ## Implementation Notes
@@ -63,7 +63,7 @@ no way to add a key from the UI. `API_BASE_URL` already points Swagger at the CF
 - `crates/api/src/openapi/mod.rs` — added `struct SecurityAddon` (`impl utoipa::Modify`)
   registering `api_key` (`ApiKey::Header("x-api-key")`) and `bearer_jwt`
   (`HttpAuthScheme::Bearer`, `bearerFormat: JWT`). Wired via `#[openapi(modifiers(&SecurityAddon),
-  …, security(("api_key" = []), ("bearer_jwt" = [])))]`.
+…, security(("api_key" = []), ("bearer_jwt" = [])))]`.
 - `crates/api/src/ops/mod.rs` — `health` `#[utoipa::path(... security(()))]` to override the
   global requirement (liveness is exempt from the gate, mirrors `auth::is_exempt`).
 - `libs/api-types/src/{openapi.json,generated/sdk.gen.ts}` — regenerated via
@@ -87,7 +87,7 @@ no way to add a key from the UI. `API_BASE_URL` already points Swagger at the CF
    path that the auth middleware lets through) rather than leaving it cosmetically marked as
    requiring auth. `/auth/session` needs no change — it isn't registered in the OpenAPI router.
 4. **Schemes injected in a `Modify` impl, not the attribute.** utoipa's `security(...)` attribute
-   can only *reference* schemes by name; the `ApiKey`/`Http` scheme values must be built in code.
+   can only _reference_ schemes by name; the `ApiKey`/`Http` scheme values must be built in code.
 
 ## Issues Encountered
 
