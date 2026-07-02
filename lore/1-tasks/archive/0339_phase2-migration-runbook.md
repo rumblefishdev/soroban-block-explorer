@@ -1,5 +1,9 @@
 # Phase 2 Migration Runbook — fold `asset_type=2` (SAC) into the facet model
 
+> **Status: EXECUTED on prod 2026-07-01.** Archived with task 0339; the final
+> cleanup and SAC-UX landed in PR #303. Retained as the historical record of
+> the data-pass.
+>
 > Companion to task **0339** and **[ADR 0051](../../2-adrs/0051_sac-as-facet-of-classic-credit.md)**.
 > Phase 1 is the code + schema change (PR #298). **This runbook is the Phase 2 prod
 > data-pass** that folds the existing `~31k asset_type=2` (SAC) rows into the facet model,
