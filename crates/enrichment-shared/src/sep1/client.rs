@@ -216,7 +216,10 @@ fn validate_host(host: &str) -> Result<(), Sep1Error> {
 /// free functions), so the closure is `'static` as `Policy::custom` requires.
 fn same_etld1_redirect_policy() -> Policy {
     Policy::custom(|attempt| {
-        if attempt.previous().len() >= MAX_REDIRECTS {
+        // `previous()` includes the original request URL (index 0), so its len
+        // on the Nth redirect is N; `> MAX_REDIRECTS` caps the chain at exactly
+        // MAX_REDIRECTS followed hops.
+        if attempt.previous().len() > MAX_REDIRECTS {
             return attempt.stop();
         }
         let target = attempt.url();
