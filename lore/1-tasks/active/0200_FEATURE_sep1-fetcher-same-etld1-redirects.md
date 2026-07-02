@@ -2,7 +2,7 @@
 id: '0200'
 title: 'SEP-1 fetcher: follow same-eTLD+1 redirects (publicsuffix)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0188']
 tags: [priority-low, effort-small, layer-backend, enrichment, sep1, security]
@@ -23,6 +23,18 @@ history:
       (Circle USDC/EURC etc.) → 0% enrichment until they fix on-chain
       `home_domain` flag, which requires `set_options` op + multisig +
       coordination → unlikely to happen.
+  - date: '2026-07-02'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Promoted — confirmed as the root cause of the flagship-asset enrichment
+      gap (Circle USDC/EURC serve null `name`/`icon_url`). Live check 2026-07-01:
+      `circle.com/.well-known/stellar.toml` → 301 → `www.circle.com`, and the
+      SEP-1 fetcher's `Policy::limited(0)` drops the redirect → sentinel. Both
+      the read-time (`api::runtime_enrichment::sep1`) and enrichment
+      (`enrichment-shared::sep1`) fetchers are affected. Implementing the
+      same-eTLD+1 redirect follow (publicsuffix + `validate_host` re-applied per
+      Location to keep the SSRF block intact).
 ---
 
 # SEP-1 fetcher: follow same-eTLD+1 redirects (publicsuffix)
