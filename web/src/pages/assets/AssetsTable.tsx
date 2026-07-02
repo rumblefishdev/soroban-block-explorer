@@ -15,7 +15,7 @@ import {
 import { routes } from '../../router/routes.js';
 
 import { AssetIcon } from './AssetIcon.js';
-import { assetBadgeMeta } from './assetType.js';
+import { assetTypeMeta, SAC_TAG } from './assetType.js';
 
 const columns: ExplorerTableColumn<AssetItem>[] = [
   {
@@ -23,7 +23,7 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
     header: 'Token',
     width: 240,
     cell: (row) => {
-      const meta = assetBadgeMeta(row.asset_type_name, row.sac_contract_id);
+      const typeMeta = assetTypeMeta(row.asset_type_name);
       // Soroban-native tokens have no classic asset_code; fall back to the
       // on-chain SEP-41 symbol as the token label (task 0304).
       const label = row.asset_code ?? row.symbol;
@@ -47,7 +47,10 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
               ) : (
                 <Dash />
               )}
-              <Chip size="sm" color={meta.color} label={meta.label} />
+              <Chip size="sm" color={typeMeta.color} label={typeMeta.label} />
+              {row.sac_deployed && (
+                <Chip size="sm" color={SAC_TAG.color} label={SAC_TAG.label} />
+              )}
             </Stack>
             {row.name && (
               <Typography

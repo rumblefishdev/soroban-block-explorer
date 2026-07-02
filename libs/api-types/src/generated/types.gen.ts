@@ -2101,10 +2101,11 @@ export type ListAssetsData = {
      */
     'filter[code]'?: string | null;
     /**
-     * SAC property filter (ADR 0051): `true` restricts the list to assets that
-     * have a Stellar Asset Contract (`sac_contract_id != 0`) — the old
-     * `filter[type]=sac` view, now expressed as a facet predicate over
-     * classic_credit / native rows. Any other value is ignored.
+     * SAC property filter (ADR 0051): `true` restricts the list to assets whose
+     * Stellar Asset Contract is deployed on-chain (`sac_deployed`) — the old
+     * `filter[type]=sac` view, now a facet predicate over classic_credit /
+     * native rows. Reserved (un-deployed) SAC addresses are excluded. Any other
+     * value is ignored.
      */
     'filter[sac]'?: string | null;
   };

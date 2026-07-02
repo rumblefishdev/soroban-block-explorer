@@ -43,6 +43,13 @@ export interface UseTableUrlStateResult {
    * the earlier ones and only one key actually clears.
    */
   clearFilters: () => void;
+  /**
+   * Set or delete SEVERAL filter keys (a `null` value deletes) plus drop the
+   * cursor in ONE URL update. Use when a single user action changes more than
+   * one filter at once — separate `setFilter` calls clobber each other, for the
+   * same reason `clearFilters` exists (see the note above).
+   */
+  setFilters: (updates: Record<string, string | null>) => void;
   resetCursor: () => void;
 }
 
@@ -131,6 +138,19 @@ export function useTableUrlState(
     [update, cursorParam]
   );
 
+  const setFilters = useCallback(
+    (updates: Record<string, string | null>) => {
+      update((next) => {
+        for (const [key, value] of Object.entries(updates)) {
+          if (value) next.set(key, value);
+          else next.delete(key);
+        }
+        next.delete(cursorParam);
+      });
+    },
+    [update, cursorParam]
+  );
+
   const clearFilters = useCallback(() => {
     update((next) => {
       const keys = filterKeysKey ? filterKeysKey.split('|') : [];
@@ -141,5 +161,13 @@ export function useTableUrlState(
 
   const resetCursor = useCallback(() => setCursor(null), [setCursor]);
 
-  return { state, setCursor, setSort, setFilter, clearFilters, resetCursor };
+  return {
+    state,
+    setCursor,
+    setSort,
+    setFilter,
+    setFilters,
+    clearFilters,
+    resetCursor,
+  };
 }

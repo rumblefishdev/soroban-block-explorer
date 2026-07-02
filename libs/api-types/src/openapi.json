@@ -306,7 +306,7 @@
           {
             "name": "filter[sac]",
             "in": "query",
-            "description": "SAC property filter (ADR 0051): `true` restricts the list to assets that\nhave a Stellar Asset Contract (`sac_contract_id != 0`) — the old\n`filter[type]=sac` view, now expressed as a facet predicate over\nclassic_credit / native rows. Any other value is ignored.",
+            "description": "SAC property filter (ADR 0051): `true` restricts the list to assets whose\nStellar Asset Contract is deployed on-chain (`sac_deployed`) — the old\n`filter[type]=sac` view, now a facet predicate over classic_credit /\nnative rows. Reserved (un-deployed) SAC addresses are excluded. Any other\nvalue is ignored.",
             "required": false,
             "schema": {
               "type": ["string", "null"]

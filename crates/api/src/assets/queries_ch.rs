@@ -296,10 +296,12 @@ pub async fn fetch_list(
         .asset_type
         .map_or_else(String::new, |t| format!(" AND a.asset_type = {t}"));
     // SAC property filter (ADR 0051): the old `filter[type]=sac` view, now a
-    // facet predicate over the joined `asset_sac` side table (a LEFT-JOIN miss
-    // decodes as 0 under the readonly `join_use_nulls = 0`).
+    // facet predicate over the joined `asset_sac` side table. Deployed-only —
+    // `sac_deployed` excludes reserved (un-deployed) SAC addresses, which are
+    // not live contracts (task 0339 UX). A LEFT-JOIN miss decodes as 0/false
+    // under the readonly `join_use_nulls = 0`.
     let sac_clause = if params.sac_only {
-        " AND sac.sac_contract_id != 0"
+        " AND sac.sac_deployed"
     } else {
         ""
     };

@@ -166,6 +166,34 @@ describe('useTableUrlState', () => {
     expect(probe.search).toContain('dir=asc');
   });
 
+  it('setFilters sets/deletes several keys + drops the cursor in one update', () => {
+    // Atomic sibling of clearFilters: a single user action that changes more
+    // than one filter must be ONE update — two sequential setFilter calls
+    // clobber each other (same react-router functional-update trap).
+    const probe = { search: '' };
+    function Probe() {
+      const { search } = useLocation();
+      probe.search = search;
+      return null;
+    }
+    const { result } = renderHook(
+      () => useTableUrlState({ filterKeys: ['type', 'sac'] }),
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter initialEntries={['/?sac=true&cursor=c0']}>
+            {children}
+            <Probe />
+          </MemoryRouter>
+        ),
+      }
+    );
+
+    act(() => result.current.setFilters({ type: 'soroban', sac: null }));
+    expect(probe.search).toContain('type=soroban');
+    expect(probe.search).not.toContain('sac=');
+    expect(probe.search).not.toContain('cursor=');
+  });
+
   it('cursorParam option lets multiple tables coexist', () => {
     const probe = { search: '' };
     function Probe() {

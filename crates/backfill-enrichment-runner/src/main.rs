@@ -11,9 +11,10 @@
 //!
 //! ## Subcommands
 //!
-//! - `sep1-assets` — drain classic/SAC `assets` (`asset_type IN (1, 2)`)
-//!   that have no `asset_enrichment` row yet. Writes `icon_url` + `name`
-//!   from the issuer SEP-1 TOML.
+//! - `sep1-assets` — drain classic `assets` (`asset_type = 1`; a SAC is a
+//!   facet of a classic row, not a separate type — ADR 0051) that have no
+//!   `asset_enrichment` row yet. Writes `icon_url` + `name` from the issuer
+//!   SEP-1 TOML.
 //! - `nft-metadata` — drain `nfts` that have no `nft_enrichment` row yet.
 //!   Writes `name` / `media_url` / `collection_name` from `token_uri()`.
 //! - `status` — print per-side-table coverage counts and exit.
@@ -269,11 +270,11 @@ async fn run_sep1_assets(
 fn sep1_base(mode: DrainMode) -> &'static str {
     match mode {
         DrainMode::Untried => {
-            "FROM assets FINAL WHERE asset_type IN (1, 2) \
+            "FROM assets FINAL WHERE asset_type = 1 \
              AND (asset_type, asset_code, issuer_id, contract_id) NOT IN \
              (SELECT asset_type, asset_code, issuer_id, contract_id FROM asset_enrichment)"
         }
-        DrainMode::All => "FROM assets FINAL WHERE asset_type IN (1, 2)",
+        DrainMode::All => "FROM assets FINAL WHERE asset_type = 1",
         DrainMode::Sentinels => "FROM asset_enrichment FINAL WHERE icon_url = '' AND name = ''",
     }
 }
@@ -485,7 +486,7 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
 
     let a_cand = cnt(
         client,
-        "SELECT count() FROM assets FINAL WHERE asset_type IN (1, 2)",
+        "SELECT count() FROM assets FINAL WHERE asset_type = 1",
     )
     .await?;
     let a_rows = cnt(client, "SELECT count() FROM asset_enrichment FINAL").await?;
@@ -761,20 +762,21 @@ mod tests {
     }
 
     /// CH-backed candidate-query smoke (task 0231 step 5): `select_sep1_chunk`
-    /// returns only classic/SAC assets with no `asset_enrichment` row, skips
-    /// the enriched one, excludes native; `--force-retry` drops the NOT-IN.
-    /// `#[ignore]` (needs live local CH).
+    /// returns only classic assets (type 1; a SAC is a facet, ADR 0051) with no
+    /// `asset_enrichment` row, skips the enriched one, excludes native;
+    /// `--force-retry` drops the NOT-IN. `#[ignore]` (needs live local CH).
     #[tokio::test]
     #[ignore = "needs live local ClickHouse"]
     async fn select_sep1_chunk_skips_enriched_and_native() {
         let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
-        // 1 classic (un-enriched), 1 SAC (enriched), 1 native (type-excluded).
+        // 1 classic un-enriched, 1 classic-with-SAC-facet enriched (type 1 now,
+        // ADR 0051), 1 native (type-excluded).
         client
             .query(
                 "INSERT INTO assets \
                  (asset_type, asset_code, issuer_id, contract_id, name, total_supply, holder_count, icon_url) \
                  VALUES (1,'AAA',7001,0,NULL,NULL,NULL,NULL), \
-                        (2,'BBB',7002,7003,NULL,NULL,NULL,NULL), \
+                        (1,'BBB',7002,0,NULL,NULL,NULL,NULL), \
                         (0,'',0,0,NULL,NULL,NULL,NULL)",
             )
             .execute()
@@ -784,7 +786,7 @@ mod tests {
             .query(
                 "INSERT INTO asset_enrichment \
                  (asset_type, asset_code, issuer_id, contract_id, icon_url, name, version) \
-                 VALUES (2,'BBB',7002,7003,'i','n',now64(3))",
+                 VALUES (1,'BBB',7002,0,'i','n',now64(3))",
             )
             .execute()
             .await
@@ -809,11 +811,7 @@ mod tests {
             .await
             .expect("force-retry query");
         assert_eq!(forced.len(), 2);
-        assert!(
-            forced
-                .iter()
-                .all(|k| k.asset_type == 1 || k.asset_type == 2)
-        );
+        assert!(forced.iter().all(|k| k.asset_type == 1));
 
         client
             .query(

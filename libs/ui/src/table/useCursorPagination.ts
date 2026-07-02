@@ -80,6 +80,7 @@ export function useCursorPagination(
     state,
     setCursor,
     setFilter: setFilterRaw,
+    setFilters,
     clearFilters,
     resetCursor,
   } = urlState;
@@ -127,6 +128,7 @@ export function useCursorPagination(
     setCursor,
     setSort: urlState.setSort,
     setFilter,
+    setFilters,
     clearFilters,
     resetCursor,
     cursor: state.cursor,
