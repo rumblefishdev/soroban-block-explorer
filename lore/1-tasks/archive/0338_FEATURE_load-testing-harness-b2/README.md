@@ -2,7 +2,7 @@
 id: '0338'
 title: 'Load-testing harness (k6) with per-request ClickHouse correlation (B2) + loadTesting env flag'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0089']
 tags: [priority-high, effort-medium, layer-testing, milestone-3, phase-launch]
@@ -23,6 +23,19 @@ history:
     status: active
     who: fmazur
     note: 'Activated — starting implementation (Step 1 API log_comment + Step 2 loadTesting flag).'
+  - date: 2026-07-02
+    status: completed
+    who: fmazur
+    note: >
+      Steps 1-4 built & merged to branch (7 commits: f0b9d2d7 loadTesting flag,
+      f40c73da B2 log_comment, 2705736b Rust harness, c51ba735 prod-harden +
+      CH log_comment config + join, ee8250b0 env-auth hardening, 75c74545
+      results viewer). Harness is Rust (not k6). B2 correlation PROVEN on
+      production smoke (155/155 requests joined client↔query_log). Deferred
+      (operational, see Future Work): the full 1000-VU/1h run (variant a+b), the
+      D3 §7.4 #4 report + capacity story, rollback (loadTesting→false, API_KEY
+      rotation), and the ADR-0032 docs update. CH api_reader `unlimited` quota
+      kept committed permanently (deliberate).
 ---
 
 # Load-testing harness (k6) with per-request ClickHouse correlation (B2) + loadTesting env flag
@@ -136,16 +149,54 @@ alarms), have a rollback checklist.
 
 ## Acceptance Criteria
 
-- [ ] API emits per-request CH `log_comment` from `X-Request-Id` (one choke point, guarded)
-- [ ] `loadTesting` env flag lifts WAF rate + API GW throttle; validateConfig guards prod
-- [ ] CH `api_reader` unlimited-quota path documented + applied via container recreate
-- [ ] k6 harness: setup() ID harvest, randomized detail IDs, all scenarios, CSV append
-- [ ] Smoke confirms `log_comment` ↔ `request_id` correlation works
-- [ ] Variant (a) + (b) runs executed; client CSV + query_log CSV collected
-- [ ] `results.csv` joins client + server side per request
-- [ ] Report: SCF #4 literal pass + capacity/bottleneck story at 1000 VU
-- [ ] Rollback completed (loadTesting→false, CH quota→api_throttle, container recreate)
-- [ ] Docs updated (evergreen, ADR 0032): API middleware, infra flag, CH quota — or N/A noted
+- [x] API emits per-request CH `log_comment` from `X-Request-Id` (one choke point, guarded)
+- [x] `loadTesting` env flag lifts WAF rate + API GW throttle; validateConfig guards prod
+- [x] CH `api_reader` unlimited-quota path documented + applied (quota kept committed permanently)
+- [x] k6 harness (built in **Rust**, not k6): setup() ID harvest, randomized detail IDs, all scenarios, CSV
+- [x] Smoke confirms `log_comment` ↔ `request_id` correlation works (155/155 joined on prod)
+- [~] Variant (a) + (b) runs executed — **smoke only**; full 1000-VU/1h run deferred (see Future Work)
+- [x] `results.csv` joins client + server side per request (`join` tool + `results-viewer.html`)
+- [ ] Report: SCF #4 literal pass + capacity/bottleneck story at 1000 VU — **deferred (operational)**
+- [ ] Rollback completed (loadTesting→false, API_KEY rotation) — **deferred (pending the run)**
+- [ ] Docs updated (evergreen, ADR 0032): API middleware, infra flag, CH quota — **deferred (operational)**
+
+## Implementation Notes
+
+- **Step 1 (B2 correlation)** — `X-Request-Id` middleware stores the id in a
+  `task_local!`; `log_comment` is injected via `.with_setting()` at the
+  `AppState::ch()` accessor (single choke point → all ~136 `fetch_*` inherit it,
+  no call-site edits). Double-gated: only when `LOAD_TESTING` env is set AND the
+  header is present. Files: `crates/api/src/common/request_id.rs`, `config.rs`,
+  `main.rs`, `state.rs` + 10 handler modules. (f40c73da)
+- **Step 2 (`loadTesting` flag)** — `EnvironmentConfig.loadTesting` in
+  `infra/src/lib/types.ts`; ApiGateway stack lifts throttle + drops the WAF
+  rate rule; Compute stack sets `LOAD_TESTING`; `validateConfig` hard-guards
+  `loadTesting && production`. (f0b9d2d7)
+- **Step 3 (CH)** — `read_only` profile got a `changeable_in_readonly`
+  constraint on `log_comment` (`profiles.xml`) + `settings_constraints_replace_previous`
+  (`config.d/access-control.xml`); `api_reader` quota `api_throttle → unlimited`
+  (`services.xml`, kept permanently). (c51ba735)
+- **Step 4 (harness, Rust)** — `crates/load-tests`: tokio + reqwest, N VU tasks,
+  no think-time, cursor-paginated id harvest, dedicated CSV writer thread; prints
+  the run-dir + a paste-ready UTC `query_log` window. `join` binary left-joins
+  `client.csv ⨝ query_log_per_request.csv → results.csv`; `query_log_per_request.sql`;
+  `results-viewer.html` single-file viewer (filters + stats bar). (2705736b,
+  c51ba735, ee8250b0, 75c74545)
+- **Proven on production** (200s smoke): 155/155 requests joined client↔query_log.
+  Immediate diagnostic value — `acclist` ~24M read_rows/req, `txdetail` ~94M
+  (504s at the 30 s cap), `asttxs` ~8.5M — the endpoints needing caching/indexing.
+
+## Issues Encountered
+
+- **Cloudflare 1015** — a naive run through `api-sorobanscan…` hit Cloudflare's
+  OWN rate limit (not AWS; `loadTesting` does not control it). Fix: hit the
+  API Gateway `execute-api` origin directly for backend-capacity runs.
+- **WAF `NoUserAgent_HEADER` 403** — reqwest sends no User-Agent by default →
+  AWS WAF managed rule 403s it. Fix: set `.user_agent(...)` on the client.
+- **`500 db_error` only with `X-Request-Id`** — `api_reader` is `readonly=1`,
+  which forbids changing ANY setting incl. `log_comment`. Local testing missed
+  it (LOCAL_API connects as `default`/admin). Fix: the `changeable_in_readonly`
+  constraint + server `settings_constraints_replace_previous=true` (Step 3).
 
 ## Design Decisions
 
@@ -161,9 +212,32 @@ alarms), have a rollback checklist.
 2. **Traffic through Cloudflare (path I)**, not direct-to-origin mTLS: keeps the
    real production path; `x-api-key` (paid tier) bypasses Turnstile for k6.
 
+### Emerged
+
+3. **Harness in Rust, not k6**: user chose Rust — reuses the workspace toolchain
+   (tokio/reqwest), no JS runtime, one `cargo build`. Same scenarios/CSV shape.
+4. **`log_comment` at the `AppState::ch()` accessor**, not the mtls transport:
+   the `clickhouse` crate's `HttpClient` trait is sealed and `QuerySummary` is
+   dropped by `fetch_all`, so the accessor is the only viable single choke point.
+5. **`changeable_in_readonly` constraint (+ server flag)**: `readonly=1` forbids
+   setting `log_comment`; surfaced only on prod (local runs as admin `default`).
+6. **`api_reader` `unlimited` quota kept committed permanently** (not reverted to
+   `api_throttle` post-window): user's explicit call.
+7. **Added `join` tool + `results-viewer.html`** beyond the original CSV-only
+   scope: to actually inspect `results.csv` (filters + descriptive stats).
+8. **Dropped a `run-loadtest.sh` one-command wrapper**: prototyped, then removed
+   at the user's request — the explicit per-step runbook is preferred.
+
 ## Future Work
 
-- Decide whether to fold/refresh/archive 0089 once this lands (this supersedes it).
+Operational remainder, run when the load-test window is scheduled (harness is
+ready; not tracked as a separate task per the user's call):
+
+- Execute the full 1000-VU/1h run (variant a + b) → collect + join → `results.csv`.
+- Produce the D3 §7.4 #4 report: literal SCF #4 pass + capacity/bottleneck story.
+- Roll back: `loadTesting`→false redeploy; rotate the `API_KEY` out of `API_KEYS`.
+- ADR-0032 docs update (`log_comment` middleware, `loadTesting` flag, CH quota) — or a justified N/A.
+- Decide whether to fold/refresh/archive 0089 (this supersedes it).
 - Possible follow-up: expose CH summary as a response header for ongoing
   per-request observability (beyond load testing) — separate task if wanted.
 
