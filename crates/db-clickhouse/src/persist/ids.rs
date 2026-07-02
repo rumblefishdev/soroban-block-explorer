@@ -198,8 +198,9 @@ mod tests {
     }
 
     /// `asset_id` (task 0331) — SEP-11 canonical surrogate for the unified
-    /// `balances.asset_id`. native→"native", classic/SAC→"CODE:ISSUER",
-    /// soroban→contract strkey.
+    /// `balances.asset_id`. native→"native"; classic→"CODE:ISSUER"; SAC (legacy
+    /// type-2) AND soroban (type-3)→the contract surrogate itself (identity, no
+    /// re-hash).
     #[test]
     fn asset_id_canonical() {
         let iss = account_id("GISSUER");

@@ -138,7 +138,8 @@ mod tests {
     #[test]
     fn init_sql_parses_into_statements() {
         let stmts = split_statements(INIT_SQL);
-        // 26 CREATE TABLE + 2 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY = 29.
+        // Current: 25 CREATE TABLE + 1 CREATE MATERIALIZED VIEW + 1 CREATE DICTIONARY
+        // = 27 (matches the assertion below). Historical derivation:
         // 17-table base; task 0217 added `nfts_pending` + `nft_ownership_pending`
         // as schema-only landing zones (the CH writer does NOT yet stage/INSERT
         // into either — follow-up to PR #180); task 0231 (ADR 0050) added the

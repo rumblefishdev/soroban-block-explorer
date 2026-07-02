@@ -329,15 +329,9 @@ CREATE TABLE IF NOT EXISTS balance_aggregates (
 ENGINE = MergeTree
 ORDER BY (asset_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
-REFRESH EVERY 2 MINUTE
-TO balance_aggregates AS
-SELECT
-    asset_id,
-    sum(amount)                  AS total_supply,
-    toInt32(countIf(amount > 0)) AS holder_count
-FROM balances FINAL
-GROUP BY asset_id;
+-- NOTE: `balance_aggregates_mv` (the refreshable MV that fills this table) is
+-- defined AFTER `balances` below — a `CREATE MATERIALIZED VIEW … FROM balances`
+-- needs its source table to already exist on a fresh `init.sql` run.
 
 -- (tombstone) `soroban_token_supply` was DROPPED — task 0331 Option-A decision.
 -- A per-token authoritative `TotalSupply` key read (76.6% of type-3 tokens expose
@@ -385,6 +379,19 @@ ENGINE = ReplacingMergeTree(last_updated_ledger)
 -- key, avoids the 0198 Seq Scan). `balance_aggregates_mv` GROUP BY asset_id is a
 -- periodic full-recompute scan either way, so it doesn't need asset_id-first.
 ORDER BY (holder_id, asset_id);
+
+-- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
+-- above — the source table MUST exist before this CREATE). Full recompute + atomic
+-- EXCHANGE, so reads need no FINAL.
+CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO balance_aggregates AS
+SELECT
+    asset_id,
+    sum(amount)                  AS total_supply,
+    toInt32(countIf(amount > 0)) AS holder_count
+FROM balances FINAL
+GROUP BY asset_id;
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,

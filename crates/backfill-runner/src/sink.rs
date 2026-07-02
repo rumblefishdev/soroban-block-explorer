@@ -211,7 +211,7 @@ impl PartitionWriterHandle<'_> {
                     pw.client(),
                     &parsed.soroban_token_balances,
                 )
-                .await;
+                .await?;
                 // Task 0220 — switch to the `_with_sac_overrides` entry
                 // point so the CH writer flips `is_sac=true,
                 // contract_type=Token` on pre-existing SAC skeleton

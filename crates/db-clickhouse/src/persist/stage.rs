@@ -339,21 +339,35 @@ pub fn build_balance_rows(
     balances: &[ExtractedSorobanBalance],
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<BalanceRow> {
-    balances
-        .iter()
-        .map(|b| {
-            let contract = ids::contract_id(&b.contract_id);
-            BalanceRow {
-                holder_id: ids::address_id(&b.holder),
-                asset_id: sac_classic
-                    .get(&contract)
-                    .copied()
-                    .unwrap_or_else(|| ids::asset_id(3, "", 0, contract)),
-                amount: b.balance,
-                last_updated_ledger: i64::from(b.ledger),
+    // Dedup by (holder_id, asset_id) keeping the LAST occurrence, position-stable:
+    // two txs in one ledger can touch the same holder+asset, producing rows that
+    // share the RMT version (`last_updated_ledger`) — a tie the merge would resolve
+    // nondeterministically. Ledger/tx order puts the final state last, so last-wins
+    // is correct; the first-seen position is preserved for deterministic output.
+    let mut rows: Vec<BalanceRow> = Vec::with_capacity(balances.len());
+    let mut idx: HashMap<(i64, i64), usize> = HashMap::with_capacity(balances.len());
+    for b in balances {
+        let contract = ids::contract_id(&b.contract_id);
+        let holder_id = ids::address_id(&b.holder);
+        let asset_id = sac_classic
+            .get(&contract)
+            .copied()
+            .unwrap_or_else(|| ids::asset_id(3, "", 0, contract));
+        let row = BalanceRow {
+            holder_id,
+            asset_id,
+            amount: b.balance,
+            last_updated_ledger: i64::from(b.ledger),
+        };
+        match idx.get(&(holder_id, asset_id)) {
+            Some(&i) => rows[i] = row,
+            None => {
+                idx.insert((holder_id, asset_id), rows.len());
+                rows.push(row);
             }
-        })
-        .collect()
+        }
+    }
+    rows
 }
 
 /// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
@@ -673,7 +687,35 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // second pass, `soroban_contracts.name`); full removal of that path is
     // deferred to task 0304.
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
-    out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_classic);
+    // A SAC first seen THIS ledger (its carrier flagged with `sac_contract_id` in
+    // `assets`) isn't in the pre-fetched DB `asset_sac` map yet — it's written to
+    // `asset_sac` during this same staging. Seed those current-ledger carriers so a
+    // same-ledger contract-held balance re-keys onto the wrapped classic/native id
+    // instead of orphaning on its surrogate. Guarded: the common ledger (no new SAC,
+    // or no balances) skips the clone; the DB map wins on conflict (`or_insert`).
+    let effective_sac_classic;
+    let sac_map: &HashMap<i64, i64> =
+        if !soroban_token_balances.is_empty() && assets.iter().any(|t| t.sac_contract_id.is_some())
+        {
+            let mut m = sac_classic.clone();
+            for t in assets {
+                if let Some(sac) = t.sac_contract_id.as_deref() {
+                    let issuer_id = t.issuer_address.as_deref().map(ids::account_id).unwrap_or(0);
+                    let classic = ids::asset_id(
+                        t.asset_type as i16,
+                        t.asset_code.as_deref().unwrap_or(""),
+                        issuer_id,
+                        0,
+                    );
+                    m.entry(ids::contract_id(sac)).or_insert(classic);
+                }
+            }
+            effective_sac_classic = m;
+            &effective_sac_classic
+        } else {
+            sac_classic
+        };
+    out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
     // The `is_sac=true` skeleton `soroban_contracts` rows that task 0220 wrote

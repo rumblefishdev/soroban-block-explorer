@@ -46,10 +46,14 @@ pub struct AccountListItem {
     pub home_domain: Option<String>,
 }
 
-/// Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.
+/// Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have
+/// both; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`
+/// instead (the account portfolio includes Soroban balances, task 0331 Option C).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountBalance {
-    /// `native` | `credit_alphanum4` | `credit_alphanum12`.
+    /// Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
+    /// | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
+    /// — identify them via `contract_id`, not this label.
     pub asset_type_name: Option<String>,
     /// Raw SMALLINT — stable across label renames.
     #[serde(rename = "type")]
@@ -59,9 +63,11 @@ pub struct AccountBalance {
     /// C-strkey of the Soroban token's contract (type-3 only) — the identity +
     /// link target (`/assets/${contract_id}`). `null` for native / classic.
     pub contract_id: Option<String>,
-    /// On-chain token full `name` (type-3, from `METADATA`, e.g. "USDC-EURC
-    /// Soroswap LP Token") — the display title, distinct from the `symbol`
-    /// ticker. `null` for native / classic (they have no on-chain name).
+    /// Asset display `name`, from two disjoint sources by asset type: classic /
+    /// native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
+    /// assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+    /// Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
+    /// `null` when neither source has a name.
     pub name: Option<String>,
     /// On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
     /// ticker. `null` for native / classic (they carry `asset_code`).

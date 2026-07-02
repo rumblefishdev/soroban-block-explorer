@@ -40,16 +40,22 @@ export function scaleByDecimals(
   decimals: number
 ): string | null {
   if (value == null) return null;
+  // Reject invalid decimals up front: null / undefined / NaN / fractional would
+  // throw in `BigInt(decimals)`, and `null <= 0` is `true` (would silently return
+  // the raw integer unscaled).
+  if (!Number.isInteger(decimals) || decimals < 0) return null;
   let safe: bigint;
   if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value < 0) return null;
-    safe = BigInt(Math.trunc(value));
+    // Reject non-integer (and non-finite) numbers rather than truncating — matches
+    // the string path's `/^\d+$/` and the JSDoc "null for non-integer" contract.
+    if (!Number.isInteger(value) || value < 0) return null;
+    safe = BigInt(value);
   } else {
     const trimmed = value.trim();
     if (!/^\d+$/.test(trimmed)) return null;
     safe = BigInt(trimmed);
   }
-  if (decimals <= 0) return safe.toString();
+  if (decimals === 0) return safe.toString();
   const scale = 10n ** BigInt(decimals);
   const whole = safe / scale;
   const frac = (safe % scale).toString().padStart(decimals, '0').replace(/0+$/, '');

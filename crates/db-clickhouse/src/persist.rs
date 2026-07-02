@@ -116,6 +116,9 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(client, soroban_token_balances),
     );
+    // Fail closed on the SAC map (unlike the verdict prefetches above): an error
+    // here would otherwise orphan contract-held balances under their surrogate key.
+    let sac_classic = sac_classic?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
@@ -276,9 +279,9 @@ struct SacClassicRow {
 pub async fn fetch_sac_classic_map(
     client: &Client,
     soroban_token_balances: &[ExtractedSorobanBalance],
-) -> HashMap<i64, i64> {
+) -> Result<HashMap<i64, i64>, clickhouse::error::Error> {
     if soroban_token_balances.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
     // `asset_sac` is an AggregatingMergeTree: `sac_contract_id` / `sac_deployed` are
     // `SimpleAggregateFunction(max)` columns, so a read MUST `GROUP BY` the full key
@@ -292,24 +295,22 @@ pub async fn fetch_sac_classic_map(
                FROM asset_sac \
                GROUP BY asset_type, asset_code, issuer_id, contract_id \
                HAVING max(sac_deployed) = 1";
-    match client.query(sql).fetch_all::<SacClassicRow>().await {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|r| {
-                (
-                    r.sac_id,
-                    ids::asset_id(r.asset_type, &r.asset_code, r.issuer_id, 0),
-                )
-            })
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "0331: asset_sac map prefetch failed — SAC contract-held balances keep their surrogate key this batch (orphaned; re-run recovers)"
-            );
-            HashMap::new()
-        }
-    }
+    // Propagate the error (do NOT fail open to an empty map): with no map, a
+    // contract-held SAC balance keys by its surrogate — which has no `assets` row,
+    // so the row orphans (invisible to every read) and is COMMITTED silently. The
+    // sibling verdict prefetches fail open because a miss just means "default
+    // classification"; here a miss means lost balance data. Returning Err aborts
+    // the ledger/partition so it retries once CH is readable again.
+    let rows = client.query(sql).fetch_all::<SacClassicRow>().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.sac_id,
+                ids::asset_id(r.asset_type, &r.asset_code, r.issuer_id, 0),
+            )
+        })
+        .collect())
 }
 
 /// Read + classify the verdicts for `hashes_hex_lower` from

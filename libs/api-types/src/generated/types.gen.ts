@@ -5,13 +5,17 @@ export type ClientOptions = {
 };
 
 /**
- * Native rows have `null` `asset_code` / `asset_issuer`; credit rows have both.
+ * Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have
+ * both; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`
+ * instead (the account portfolio includes Soroban balances, task 0331 Option C).
  */
 export type AccountBalance = {
   asset_code?: string | null;
   asset_issuer?: string | null;
   /**
-   * `native` | `credit_alphanum4` | `credit_alphanum12`.
+   * Horizon-style label from `asset_type_name`: `native` | `credit_alphanum4`
+   * | `credit_alphanum12` for classic. Soroban (type-3) rows are also returned
+   * — identify them via `contract_id`, not this label.
    */
   asset_type_name?: string | null;
   /**
@@ -31,9 +35,11 @@ export type AccountBalance = {
   decimals: number;
   last_updated_ledger: number;
   /**
-   * On-chain token full `name` (type-3, from `METADATA`, e.g. "USDC-EURC
-   * Soroswap LP Token") — the display title, distinct from the `symbol`
-   * ticker. `null` for native / classic (they have no on-chain name).
+   * Asset display `name`, from two disjoint sources by asset type: classic /
+   * native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
+   * assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+   * Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
+   * `null` when neither source has a name.
    */
   name?: string | null;
   /**

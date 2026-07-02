@@ -33,7 +33,8 @@
 //! seed is correct at run time no matter how far behind live ingest is.
 //! Idempotent: a re-run re-reads + re-upserts. `--dry-run` reports counts without
 //! writing. CH-only — the unified `balances` model lives in ClickHouse, so a
-//! Postgres target no-ops.
+//! non-ClickHouse (e.g. Postgres) target is REJECTED with `BackfillError::Incomplete`,
+//! not silently no-op'd.
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
@@ -149,6 +150,12 @@ pub async fn execute(
         }
     }
     let keys_requested = keys.len() as u64;
+    if keys.is_empty() {
+        // Every candidate had empty / malformed holders — skip the RPC client
+        // construction and the empty round-trip; keep the funnel stats honest.
+        info!("balance_seed: no valid ledger keys to fetch — nothing to do");
+        return Ok(BalanceSeedStats::from_funnel(&candidates, 0, 0, 0, dry_run));
+    }
 
     let rpc = RpcClient::new(rpc_url)?;
     let records = rpc.get_ledger_entries(&keys).await?;
@@ -176,7 +183,7 @@ pub async fn execute(
     // `build_balance_rows` keys contract-held SAC balances onto the wrapped
     // classic/native asset id (ADR 0051: a SAC is a facet, no `assets` row of its
     // own) via this map; type-3 tokens are absent and keep their own surrogate.
-    let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(client, &balances).await;
+    let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(client, &balances).await?;
     let balance_rows = build_balance_rows(&balances, &sac_classic);
 
     if dry_run {
@@ -352,7 +359,9 @@ mod tests {
                     format!("ALTER TABLE soroban_contracts DELETE WHERE id = {SID}"),
                     format!("ALTER TABLE assets DELETE WHERE contract_id = {SID}"),
                 ] {
-                    let _ = c.query(&q).execute().await;
+                    // `mutations_sync=1` so the DELETE completes before the test
+                    // proceeds — an async mutation could leave stale rows visible.
+                    let _ = c.query(&q).with_setting("mutations_sync", "1").execute().await;
                 }
             }
         };
@@ -435,7 +444,9 @@ mod tests {
                     format!("ALTER TABLE soroban_contracts DELETE WHERE id = {SID}"),
                     format!("ALTER TABLE assets DELETE WHERE contract_id = {SID}"),
                 ] {
-                    let _ = cl.query(&q).execute().await;
+                    // `mutations_sync=1` so the DELETE completes before the test
+                    // proceeds — an async mutation could leave stale rows visible.
+                    let _ = cl.query(&q).with_setting("mutations_sync", "1").execute().await;
                 }
             }
         };

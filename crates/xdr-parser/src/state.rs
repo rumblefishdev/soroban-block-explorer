@@ -372,6 +372,12 @@ pub fn extract_soroban_token_balances(
 /// `Vec[Symbol("Balance"), Address(holder)]`; `None` otherwise. The holder is
 /// a `G…` account or `C…` contract — both are valid `ScAddress` holders.
 fn balance_key_holder(key: &Value) -> Option<String> {
+    // Token / SAC balances are PERSISTENT contract-data entries. Reject temporary
+    // (or missing-durability) entries even when the inner shape matches, so a
+    // foreign `Balance(Address)`-shaped temp entry is never summed as a balance.
+    if key.get("durability")?.as_str()? != "persistent" {
+        return None;
+    }
     let inner = key.get("key")?;
     if inner.get("type")?.as_str()? != "vec" {
         return None;
@@ -1761,6 +1767,24 @@ mod tests {
         let mut data = key.clone();
         data["val"] = json!({ "type": "i128", "value": "999" });
         let changes = vec![make_change("contract_data", "state", key, Some(data))];
+        assert!(extract_soroban_token_balances(&changes).is_empty());
+    }
+
+    #[test]
+    fn skip_temporary_durability_balance_entry() {
+        // Exact `Balance(Address)` shape but TEMPORARY durability — a real token /
+        // SAC balance is PERSISTENT, so this foreign temp entry must be skipped.
+        let key = json!({
+            "contract": "CTOKEN1",
+            "key": { "type": "vec", "value": [
+                { "type": "sym", "value": "Balance" },
+                { "type": "address", "value": "GHOLDER1" }
+            ]},
+            "durability": "temporary",
+        });
+        let mut data = key.clone();
+        data["val"] = json!({ "type": "i128", "value": "999" });
+        let changes = vec![make_change("contract_data", "updated", key, Some(data))];
         assert!(extract_soroban_token_balances(&changes).is_empty());
     }
 

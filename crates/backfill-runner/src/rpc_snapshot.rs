@@ -321,6 +321,11 @@ pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i
     if !matches!(entry.contract, ScAddress::Contract(_)) {
         return None;
     }
+    // Token / SAC balances are PERSISTENT entries; reject temporary (or any other)
+    // durability so a foreign `Balance(Address)`-shaped temp entry isn't summed.
+    if !matches!(entry.durability, ContractDataDurability::Persistent) {
+        return None;
+    }
     let ScVal::Vec(Some(elems)) = &entry.key else {
         return None;
     };

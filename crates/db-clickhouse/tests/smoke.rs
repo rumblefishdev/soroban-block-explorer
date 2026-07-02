@@ -105,9 +105,30 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // (legacy `asset_aggregates` refresh smoke removed — table dropped in the
-    // task 0331 simplification; classic supply now flows via `balance_aggregates`
-    // over `balances`.)
+    // ----- balances (unified per-holder model, task 0331 Option C) -----
+    client
+        .query(
+            "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) \
+             VALUES (?, ?, 123456789, ?)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .execute()
+        .await
+        .expect("insert balances");
+    assert_count(
+        &client,
+        "balances",
+        &format!("holder_id = {SMOKE_LEDGER}"),
+        1,
+    )
+    .await;
+
+    // (`balance_aggregates` is filled by `balance_aggregates_mv`, a REFRESH EVERY
+    // 2 MINUTE view — not synchronously assertable in a smoke test. The legacy
+    // `asset_aggregates` refresh smoke was dropped with that table in the task 0331
+    // simplification; classic supply now flows via `balance_aggregates` over `balances`.)
 
     // ----- soroban_contracts (state) -----
     client

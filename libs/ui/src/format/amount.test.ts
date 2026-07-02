@@ -29,6 +29,19 @@ describe('scaleByDecimals', () => {
     expect(scaleByDecimals('abc', 7)).toBeNull();
   });
 
+  it('rejects non-integer / out-of-range numbers (matches the string path)', () => {
+    expect(scaleByDecimals(12.5, 7)).toBeNull();
+    expect(scaleByDecimals(-5, 7)).toBeNull();
+    expect(scaleByDecimals(Infinity, 7)).toBeNull();
+    expect(scaleByDecimals(1000000, 6)).toBe('1'); // valid integer number still scales
+  });
+
+  it('rejects invalid decimals instead of throwing / mis-scaling', () => {
+    expect(scaleByDecimals('123', -1)).toBeNull();
+    expect(scaleByDecimals('123', 1.5)).toBeNull();
+    expect(scaleByDecimals('123', undefined as unknown as number)).toBeNull();
+  });
+
   it('composes with formatAmount for display (raw → grouped)', () => {
     expect(formatAmount(scaleByDecimals('500000000000000', 7))).toBe(
       '50,000,000'
