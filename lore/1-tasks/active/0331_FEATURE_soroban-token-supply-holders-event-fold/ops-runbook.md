@@ -166,14 +166,30 @@ SELECT max(sequence) FROM ledgers;   -- MUST be within a few ledgers of Soroban 
 
 ## Step 7 — [run] balance-seed (after catch-up)
 
-**BENCHMARK first — `--dry-run` runs the heavy candidate scan (⚠️ ~4.46B-row SAC event scan)
-and reports the funnel WITHOUT writing:**
+**Cost + failure policy (measured 2026-07-02 via `chq` on prod):**
+
+- **SAC candidate scan ≈ ~2.64B rows → ~2 min wall-clock, ~600 GiB read** (throughput
+  ~22.5M rows/s; benchmarked on one 500k-ledger partition: 451M rows / ~20 s / ~104 GiB,
+  extrapolated). NOT the dominant cost — the earlier "~4.46B / 15–45 min" note was wrong.
+- **RPC phase ≈ ~3–8 min** — ~100–200k `(contract, holder)` keys, fetched SEQUENTIALLY in
+  200-key batches (no concurrency, `DEFAULT_CONCURRENCY` is unused). This is the biggest slice.
+- **Total ≈ ~5–12 min.**
+- **⚠️ QUOTA:** the ~600 GiB scan exceeds the 100 GB/h read quota (~6×). It's a one-time cost —
+  run with quota headroom, or chunk per `intDiv(ledger_sequence, 500000)` partition (~27 chunks
+  of ~22 GiB) to stay under.
+- **DECISION (2026-07-02): NO retry / no incremental insert — leave all-or-nothing.** The seed
+  hard-fails on any RPC/CH error and inserts only at the end (a failure persists nothing). That
+  is ACCEPTED: the run is cheap (~5–12 min) and idempotent (RMT), so recovery = just re-run the
+  whole command. (If the RPC phase ever grows large enough that a re-run hurts, add per-batch
+  retry + streaming insert — the `sync.rs` / `upgradeable_backfill` patterns already in-repo.)
+
+**BENCHMARK first — `--dry-run` runs the candidate scan and reports the funnel WITHOUT writing:**
 
 ```bash
 time backfill-runner --target clickhouse balance-seed --soroban-rpc-url <url> --dry-run
 # Records: tokens, holders_enumerated, keys_requested, entries_returned, balances_decoded.
 # Read the drops between levels (keyed<enumerated = malformed; returned<keyed = no live entry;
-# decoded<returned = unknown value shape). Note wall-clock + rows scanned for capacity planning.
+# decoded<returned = unknown value shape). `keys_requested` confirms the ~100–200k RPC estimate.
 ```
 
 **For real:**
