@@ -74,3 +74,32 @@ pub(crate) async fn insert_nft(
     insert_nft_enrichment(client, std::slice::from_ref(&row)).await?;
     Ok(outcome)
 }
+
+/// Stamp a fetched collection name onto EVERY existing `nft_enrichment` row of
+/// a contract that still lacks one (task 0340 backfill). The side table is an
+/// RMT with whole-row replace semantics, so a column-only update is impossible
+/// — each row is re-INSERTed with its `name` / `media_url` PRESERVED and a
+/// fresh `version`. One server-side INSERT-SELECT per contract; rows that
+/// already carry a collection name are left untouched (no clobber). Still
+/// INSERT-only into `nft_enrichment` — the write-surface contract of this file
+/// holds.
+pub(crate) async fn rewrite_nft_collection_name(
+    client: &Client,
+    contract_id: i64,
+    collection_name: &str,
+) -> Result<(), EnrichError> {
+    client
+        .query(
+            "INSERT INTO nft_enrichment \
+                 (contract_id, token_id, name, media_url, collection_name, version) \
+             SELECT contract_id, token_id, name, media_url, ?, ? \
+             FROM nft_enrichment FINAL \
+             WHERE contract_id = ? AND ifNull(collection_name, '') = ''",
+        )
+        .bind(collection_name)
+        .bind(now_ms())
+        .bind(contract_id)
+        .execute()
+        .await?;
+    Ok(())
+}

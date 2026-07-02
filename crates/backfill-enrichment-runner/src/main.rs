@@ -16,6 +16,10 @@
 //!   from the issuer SEP-1 TOML.
 //! - `nft-metadata` — drain `nfts` that have no `nft_enrichment` row yet.
 //!   Writes `name` / `media_url` / `collection_name` from `token_uri()`.
+//! - `nft-collection-name` — per-CONTRACT backfill of
+//!   `nft_enrichment.collection_name` from the SEP-50 `name()` RPC simulate
+//!   (task 0340). Repairs rows enriched before 0340 (real `name`/`media_url`,
+//!   empty `collection_name`) that neither retry mode may touch.
 //! - `status` — print per-side-table coverage counts and exit.
 //!
 //! ## Semantics
@@ -45,6 +49,7 @@
 //! ```bash
 //! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- sep1-assets --concurrency 10
 //! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-metadata --force-retry
+//! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-collection-name
 //! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- status
 //! ```
 
@@ -53,6 +58,7 @@ use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
 use clickhouse::Client;
+use enrichment_shared::enrich_and_persist::nft_collection_name::backfill_contract_collection_name;
 use enrichment_shared::enrich_and_persist::nft_token_uri::enrich_nft_token_uri;
 use enrichment_shared::enrich_and_persist::sep1_assets::enrich_asset_from_sep1;
 use enrichment_shared::enrich_and_persist::{AssetKey, EnrichError, EnrichOutcome, NftKey};
@@ -84,6 +90,11 @@ enum Command {
     /// Drain `nfts` with no `nft_enrichment` row yet. Writes
     /// `name` / `media_url` / `collection_name` from `token_uri()`.
     NftMetadata(DrainArgs),
+    /// Backfill `nft_enrichment.collection_name` from the contract-level
+    /// SEP-50 `name()` (task 0340). Walks DISTINCT contracts whose rows still
+    /// lack a collection name — one RPC per contract, then one INSERT-SELECT
+    /// stamping the name onto its rows (`name` / `media_url` preserved).
+    NftCollectionName(CollectionNameArgs),
     /// Print per-side-table coverage counts and exit.
     Status,
 }
@@ -113,6 +124,18 @@ struct DrainArgs {
     /// not the base table. Mutually exclusive with `--force-retry`.
     #[arg(long, conflicts_with = "force_retry")]
     retry_sentinels: bool,
+}
+
+#[derive(Args)]
+struct CollectionNameArgs {
+    /// Concurrent in-flight `name()` fetches. Per-CONTRACT work (~tens of
+    /// candidates), so the default is modest.
+    #[arg(long, default_value_t = 4, value_parser = parse_positive_usize)]
+    concurrency: usize,
+
+    /// Stop after processing at most N contracts. Default: all candidates.
+    #[arg(long)]
+    limit: Option<usize>,
 }
 
 /// Which candidate set a drain walks (resolved from the flags).
@@ -189,6 +212,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Command::NftMetadata(args) => {
             let fetcher = Arc::new(NftTokenUriFetcher::new()?);
             run_nft_metadata(&client, fetcher, args, &mp).await?
+        }
+        Command::NftCollectionName(args) => {
+            let fetcher = Arc::new(NftTokenUriFetcher::new()?);
+            run_nft_collection_name(&client, fetcher, args, &mp).await?
         }
         Command::Status => {
             print_status(&client).await?;
@@ -434,6 +461,67 @@ async fn select_nft_chunk(
         q = q.bind(k.contract_id).bind(&k.token_id);
     }
     q.bind(chunk).fetch_all::<NftKey>().await
+}
+
+// ---------------------------------------------------------------------------
+// `nft-collection-name` — per-contract SEP-50 name() backfill (task 0340)
+// ---------------------------------------------------------------------------
+
+/// Candidate predicate: any enrichment row still lacking a collection name.
+/// The drain walks DISTINCT contracts over it; the per-contract INSERT-SELECT
+/// (`rewrite_nft_collection_name`) re-applies the same predicate, so a re-run
+/// is a no-op for already-stamped rows (idempotent).
+const NFT_COLLECTION_BASE: &str =
+    "FROM nft_enrichment FINAL WHERE ifNull(collection_name, '') = ''";
+
+async fn run_nft_collection_name(
+    client: &Client,
+    fetcher: Arc<NftTokenUriFetcher>,
+    args: CollectionNameArgs,
+    mp: &indicatif::MultiProgress,
+) -> Result<BackfillReport, clickhouse::error::Error> {
+    let started = Instant::now();
+    let mut report = BackfillReport::new("nft-collection-name");
+
+    // Bar total = DISTINCT contracts (progress is per contract, not per row).
+    let total = client
+        .query(&format!(
+            "SELECT uniqExact(contract_id) {NFT_COLLECTION_BASE}"
+        ))
+        .fetch_one::<u64>()
+        .await?;
+    let total = args.limit.map_or(total, |l| total.min(l as u64));
+    let bar = make_bar(mp, total);
+    let sem = Arc::new(Semaphore::new(args.concurrency));
+
+    // Single fetch, no chunk loop — the candidate set is contracts (~tens),
+    // not tokens.
+    let ids = client
+        .query(&format!(
+            "SELECT DISTINCT contract_id {NFT_COLLECTION_BASE} ORDER BY contract_id LIMIT ?"
+        ))
+        .bind(args.limit.map_or(i64::MAX, |l| l as i64))
+        .fetch_all::<i64>()
+        .await?;
+
+    let mut handles = Vec::with_capacity(ids.len());
+    for contract_id in ids {
+        let sem = sem.clone();
+        let fetcher = fetcher.clone();
+        let client = client.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.expect("semaphore never closed");
+            let res = backfill_contract_collection_name(&client, contract_id, &fetcher).await;
+            (contract_id.to_string(), res)
+        }));
+    }
+    for h in handles {
+        collect_join(&mut report, &bar, h.await);
+    }
+
+    bar.finish();
+    report.duration_ms = started.elapsed().as_millis();
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------

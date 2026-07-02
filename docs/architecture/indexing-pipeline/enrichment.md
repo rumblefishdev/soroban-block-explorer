@@ -39,10 +39,16 @@ beyond the indexer's standard stream:
 - **SEP-1 TOML** — `assets.icon_url`, `assets.name` (classic credit /
   SAC) are published by issuers at
   `https://{home_domain}/.well-known/stellar.toml`.
-- **NFT metadata via `token_uri()`** — `nfts.{name, media_url,
-collection_name}` are produced by the contract's
-  `token_uri(token_id)` view function returning a URL to a JSON
-  document hosted on IPFS or HTTPS.
+- **NFT metadata via `token_uri()`** — `nfts.{name, media_url}` are
+  produced by the contract's `token_uri(token_id)` view function
+  returning a URL to a JSON document hosted on IPFS or HTTPS.
+- **NFT collection name via `name()`** — `nfts.collection_name` comes
+  from the contract-level SEP-50 `name()` view function (task 0340),
+  a SEPARATE RPC `simulateTransaction`. It is **not** in the
+  `token_uri()` JSON (no real-world Stellar NFT emits a `"collection"`
+  field — measured 0/68 collections on prod) nor in any parsed storage
+  slot, so it is reachable only via this contract call. Cached
+  per-CONTRACT (one RPC per collection per run, never per token).
 
 ADR 0043 keeps these off the indexer write path: an extra round-trip
 per row would slow ingest below the ~5 s ledger cadence. Instead the
@@ -111,7 +117,7 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Task**                | 0195 §2d                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **Producer hook**       | Insert-hook: after commit, SELECT `nfts.id WHERE minted_at_ledger = ANY(...) AND (name IS NULL OR media_url IS NULL OR collection_name IS NULL)`. The producer emits exactly once per `nft_id` under normal operation; all three columns are checked so a partial-fill row (e.g. sentinel on one column, NULL on another from a flap) re-emits until every column lands a value                                                                                                                                                                                                               |
-| **Worker source**       | Soroban RPC `simulateTransaction` of `InvokeContract(token_uri(token_id))` → URI string → HTTP fetch (resolving `ipfs://` via Cloudflare gateway) → JSON metadata                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Worker source**       | `name` / `media_url`: Soroban RPC `simulateTransaction` of `InvokeContract(token_uri(token_id))` → URI string → HTTP fetch (resolving `ipfs://` via IPFS gateway) → JSON metadata. `collection_name`: a SEPARATE `simulateTransaction` of the contract-level SEP-50 `name()` (task 0340), cached per-CONTRACT (one RPC per collection, never per token). `name()` is only consulted when the `token_uri` JSON carries no `"collection"` field — which is every real-world contract (0/68 on prod).                                                                                            |
 | **Token id assumption** | `ScVal::U32` — OpenZeppelin / ERC-721 sequential-mint-counter convention. Token ids that don't parse as `u32` surface as `MalformedInput { field: "token_id (not u32)", … }` which `is_transient` classifies as **permanent** → sentinel write + warn log + SQS ack (the SQS retry budget is reserved for transient 5xx / network blips). Operators grep the warn log to identify contracts using non-OZ token-id schemes                                                                                                                                                                     |
 | **Content-Type branch** | `application/json` → parsed JSON used directly. `image/*` → fetcher synthesises `{ "image": "<url>" }` so the worker writes only `media_url` (direct-image convention, e.g. JamesBachini Soroban example). Anything else → `UnsupportedContentType` (permanent)                                                                                                                                                                                                                                                                                                                               |
 | **Columns written**     | `nfts.name`, `nfts.media_url`, `nfts.collection_name`. The dropped `nfts.metadata` JSONB column is served at request time by the API via `runtime_enrichment::nft_token_uri` (per ADR 0043 detail-only carve-out)                                                                                                                                                                                                                                                                                                                                                                             |
@@ -123,10 +129,22 @@ queue / DLQ / alarm / concurrency cap absorbs every kind).
 The worker is **forward-only** — it processes rows the indexer emits onto
 SQS after the queue's deployment. Rows that pre-date the queue are
 covered by a one-shot drain CLI in `crates/backfill-enrichment-runner`:
-single `enrich` binary with `sep1-assets` / `nft-metadata` / `status`
-subcommands. The drain calls the **same**
-`enrichment_shared::enrich_and_persist::*` functions the worker calls,
-so a row enriched via backfill is bit-identical to one enriched via SQS.
+single `enrich` binary with `sep1-assets` / `nft-metadata` /
+`nft-collection-name` / `status` subcommands. The drain calls the
+**same** `enrichment_shared::enrich_and_persist::*` functions the worker
+calls, so a row enriched via backfill is bit-identical to one enriched
+via SQS.
+
+The `nft-collection-name` subcommand (task 0340) is the one exception to
+the per-row shape: it walks DISTINCT **contracts** whose `nft_enrichment`
+rows still lack a `collection_name`, fetches `name()` once per contract,
+then re-INSERTs that contract's rows with the name stamped on and their
+existing `name` / `media_url` PRESERVED (the side table is a
+`ReplacingMergeTree` with whole-row replace — a column-only update is
+impossible). It exists because rows enriched before 0340 carry real
+`name` / `media_url` but an empty `collection_name`, and so match
+neither the default "no row yet" drain nor `--retry-sentinels` (which
+requires ALL columns empty).
 
 |                 |                                                                                                                                                                                                                        |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
