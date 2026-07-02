@@ -232,6 +232,12 @@ impl PartitionWriterHandle<'_> {
                         // entries never re-emitted in-window stay absent — the
                         // open caveat.)
                         soroban_token_balances: &parsed.soroban_token_balances,
+                        // ADR 0051 SAC re-key is live-indexer + RPC-seed only. The
+                        // S3-reprocess `Run` (this path) is the heavy fallback we do
+                        // NOT use for contract-held (the RPC `balance-seed` covers it
+                        // and re-keys). Empty map → SAC balances keep their surrogate
+                        // here; wire an asset_sac fetch if the Run path ever seeds 0/1.
+                        sac_classic: &std::collections::HashMap::new(),
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):

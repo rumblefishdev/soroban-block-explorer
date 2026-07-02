@@ -42,7 +42,65 @@ representation for all asset types. (Original event-fold plan REFUTED — see CU
 > ledger-state + Option C — see **CURRENT PLAN** below; everything under "DECISION",
 > "Implementation", "Findings", and "Implementation Plan (SUPERSEDED)" is trail.
 
-## Path X 2026-07-01 (karolkow) — contract-held 0/1 LIVE via symmetric keying (SUPERSEDES key-by-type-1)
+## 2026-07-02 (karolkow) — merged develop (0339): Path X REPLACED by `asset_sac` re-key (authoritative)
+
+`origin/develop` merged in **ADR 0051 / task 0339** ("SAC is a facet of `classic_credit`,
+not a separate `asset_type`"): **`asset_type=2` (Sac) is RETIRED** (`TryFrom<i16>` rejects 2),
+and a SAC is now recorded in a side table **`asset_sac`** (`classic identity → sac_contract_id,
+sac_deployed`), NOT its own `assets` row. This **invalidates Path X** — we keyed contract-held
+balances by the SAC's type-2 surrogate, which no longer has an `assets` row → the balance would
+orphan (P2), and the seed's `asset_type=2` scope returned nothing (P3).
+
+**Replacement (implemented, tests green, UNCOMMITTED):** re-key contract-held SAC balances onto
+the wrapped **classic/native `asset_id`** using `asset_sac` as the SAC→classic map (the map we
+would have had to build ourselves — 0339 provides it).
+- `stage::remap_sac_balances_to_classic(rows, sac_to_classic)` — pure post-pass: a balance whose
+  `asset_id` is a SAC surrogate is re-keyed to the classic/native id; type-3 tokens + account
+  classic/native rows are absent from the map and pass through untouched (verified).
+- `persist::fetch_sac_classic_map(client, balances)` — loads `SAC surrogate → classic asset_id`
+  from `asset_sac` (whole table, ~31k; guarded to skip when no balances). Wired into the live
+  `tokio::join` prefetch, then applied to `staged.unified_balance_rows` before write.
+- Seed (`balance_seed`): same map applied after `build_balance_rows`; SAC scope reverted
+  `asset_type=2` → `soroban_contracts.is_sac`.
+- Result: contract-held USDC lands on `ids::asset_id(1,"USDC",issuer,0)` — the SAME id an account's
+  trustline USDC uses → ONE unified supply row. Consistent with 0339 (SAC = classic).
+- Merge-repair: **P1** (`tests_cross.rs` StageInputs missing `soroban_token_balances`) + **P4**
+  (`init_sql` statement-count assert 26 → 27 for `asset_sac`) fixed.
+- Tests: `remap_sac_balances_rekeys_only_sac_surrogates` (unit) + `sac_balance_rekeys_to_native_asset_id_real_mainnet`
+  (E2E, real mainnet native-XLM SAC entry through decode → build → remap → native id). db-clickhouse 69,
+  backfill-runner 70, clippy clean.
+
+**Why a side table (`asset_sac`), not a column on `assets`:** `assets` is a whole-row RMT rewritten
+EVERY ledger on any trustline activity — a `sac_deployed` column would be clobbered to NULL by those
+re-writes. `asset_sac` (AggregatingMergeTree, `max()`) is written ONLY on a SAC sighting, so the facet
+can't be zeroed and `sac_deployed` is monotonic. Same clobber-isolation rationale as `asset_enrichment`.
+
+**Classic-without-SAC:** a contract can only hold a classic asset via its (deployed) SAC — no SAC →
+no contract can hold it → no contract-held balance → nothing to index (our impl is consistent: no
+`asset_sac` row → no re-key → the classic row shows trustline supply only). Edge: a SAC deployed
+before our ingest window / with missed detection has no `asset_sac` row → its contract-held orphans
+(same completeness dependency as the seed/backfill).
+
+### Remaining DEV
+- [ ] Commit the Proposal-A re-key + P1/P4 (awaiting signal).
+- [ ] (cosmetic) refresh stale "Path X" labels in comments (behaviour still correct; label outdated).
+- [ ] Frozen-balance policy (`authorized=false`) — decision, not code (flags decoded, not threaded).
+- Type-3 core + contract-held 0/1 keying are otherwise DONE.
+- Dead PG paths (`db-merge`, `indexer/persist/write.rs`, `accounts/queries.rs`) still reference
+  `asset_type=2` / `account_balances_current` — pre-existing dead code (PG retired), a separate cleanup.
+
+### Remaining OPS
+- [ ] `asset_sac` must be populated for HISTORICAL SACs (0339 writes it live on SAC-sighting; historical
+      backfill is 0339's phase-2 runbook — needed so the re-key resolves old SACs).
+- [ ] **C5** — migrate/delete existing prod `assets` rows with `asset_type=2` BEFORE the reader that
+      rejects `2` goes live (0339 phase-2 runbook — verify it runs first). 0339-blocker, not just ours.
+- [ ] `ALTER TABLE assets ADD COLUMN id` + backfill (before the indexer deploy; `count(id=0)=0`).
+- [ ] Deploy indexer (our re-key + 0339) → migrations (`assets.id`, classic→`balances`) → catch-up →
+      `balance-seed --dry-run` (benchmark) → live seed → validate (contract-held USDC on the classic
+      row via `get_reserves` cross-check) → API + FE deploy → drop `account_balances_current`.
+- [ ] Coordinate with 0339's own prod rollout (on develop; phase-2 runbook pending).
+
+## Path X 2026-07-01 (karolkow) — contract-held 0/1 LIVE via symmetric keying (SUPERSEDED by the 0339 merge above)
 
 Authoritative for the contract-held classic/native leg (old D2). **Supersedes** the CURRENT PLAN
 line "keyed by classic/native `asset_id` (type-1), 0339-forward-compatible": we now key contract-held

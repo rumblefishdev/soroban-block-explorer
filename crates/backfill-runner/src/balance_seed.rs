@@ -171,7 +171,11 @@ pub async fn execute(
         balances.len() as u64,
         dry_run,
     );
-    let balance_rows = build_balance_rows(&balances);
+    // `build_balance_rows` keys contract-held SAC balances onto the wrapped
+    // classic/native asset id (ADR 0051: a SAC is a facet, no `assets` row of its
+    // own) via this map; type-3 tokens are absent and keep their own surrogate.
+    let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(client, &balances).await;
+    let balance_rows = build_balance_rows(&balances, &sac_classic);
 
     if dry_run {
         info!(
@@ -226,12 +230,14 @@ async fn read_seed_candidates(
         .await
 }
 
-/// SAC candidate query (task 0331 Path X): for every SAC (an `assets` `asset_type=2`
-/// row — same source the type-3 scan uses for its scope, and it guarantees the SAC
-/// has an asset row for the read join), its C-StrKey + the distinct set of
-/// **contract** (`C…`) holder StrKeys in its value-moving events. Only `C…` is
-/// scraped: a G-account holds a classic/native asset via its TRUSTLINE (no SAC
-/// storage entry), so the SAC's `Balance(Address)` entries are contract-held only.
+/// SAC candidate query (task 0331 + ADR 0051): for every SAC (`soroban_contracts.is_sac`
+/// — `asset_type=2` was retired by ADR 0051, so scope by the SAC flag on the contract
+/// row, not a dead asset type), its C-StrKey + the distinct set of **contract** (`C…`)
+/// holder StrKeys in its value-moving events. Only `C…` is scraped: a G-account holds a
+/// classic/native asset via its TRUSTLINE (no SAC storage entry), so the SAC's
+/// `Balance(Address)` entries are contract-held only. The decoded balances are keyed
+/// onto the wrapped classic/native asset id in `build_balance_rows` (via the
+/// `fetch_sac_classic_map` SAC→classic map).
 ///
 /// The `signature IN (…)` set is the full canonical SAC event vocabulary
 /// (`xdr_parser::sac::SAC_CONTROL_EVENT_SIGNATURES`) — including `set_authorized`,
@@ -254,9 +260,7 @@ async fn read_sac_seed_candidates(
                     )) AS holders \
              FROM soroban_events e \
              INNER JOIN soroban_contracts sc FINAL ON sc.id = e.contract_id \
-             WHERE e.contract_id IN ( \
-                 SELECT contract_id FROM assets WHERE asset_type = 2 AND contract_id != 0 \
-             ) \
+             WHERE sc.is_sac = true \
                AND e.signature IN ('transfer', 'mint', 'burn', 'clawback', 'set_authorized') \
              GROUP BY sc.contract_id",
         )
@@ -442,15 +446,8 @@ mod tests {
             .execute()
             .await
             .expect("insert sac contract");
-        // The scope is `assets WHERE asset_type = 2` (SAC), so the SAC needs an asset row.
-        client
-            .query(&format!(
-                "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id) \
-                 VALUES (2, 'USDC', 0, {SID})"
-            ))
-            .execute()
-            .await
-            .expect("insert sac asset");
+        // Scope is `soroban_contracts.is_sac = true` (ADR 0051 retired asset_type=2),
+        // so the is_sac flag above is all the query keys on — no assets row needed.
         // A transfer topic set carrying one G-account and one C-contract holder.
         let topics = format!(
             "[{{\"type\":\"address\",\"value\":\"{g}\"}},{{\"type\":\"address\",\"value\":\"{c}\"}}]"

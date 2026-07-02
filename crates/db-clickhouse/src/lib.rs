@@ -162,10 +162,12 @@ mod tests {
         // task 0331 Option A: DROPPED `soroban_token_supply` (the per-token
         // `TotalSupply` key read) — `balance_aggregates` (Σ amount) is the sole
         // supply source; one universal method, no seed-only staleness. 27 → 26.
+        // ADR 0051 / task 0339 (merged): added the `asset_sac` SAC-facet side table
+        // (SAC-ness of a classic/native asset, not a distinct row). 26 → 27.
         assert_eq!(
             stmts.len(),
-            26,
-            "expected 24 tables + 1 materialized view + 1 dictionary, got {}",
+            27,
+            "expected 25 tables + 1 materialized view + 1 dictionary, got {}",
             stmts.len()
         );
     }

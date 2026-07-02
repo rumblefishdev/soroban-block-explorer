@@ -900,6 +900,49 @@ mod tests {
         assert_eq!(balance, 11_635_129_310_963);
     }
 
+    /// E2E through the WHOLE write pipeline with the REAL mainnet native-XLM SAC
+    /// balance entry (pool CATUJXDU holding XLM): decode → `build_balance_rows` with
+    /// the SAC→classic map. Proves the contract-held balance keys OFF the SAC
+    /// surrogate ONTO the native asset id (ADR 0051 / the Path-X replacement) — the
+    /// SAME id an account's native balance uses, so contract-held + trustline supply
+    /// land on ONE row. NON-circular (real ledger bytes).
+    #[test]
+    fn sac_balance_rekeys_to_native_asset_id_real_mainnet() {
+        use db_clickhouse::persist::ids;
+        use db_clickhouse::persist::stage::build_balance_rows;
+        use std::collections::HashMap;
+        use xdr_parser::ExtractedSorobanBalance;
+
+        let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
+        let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
+        let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
+        let (token, holder, balance) = decode_balance_entry(&data).expect("decodes");
+        let bal = ExtractedSorobanBalance {
+            contract_id: token.clone(),
+            holder,
+            balance,
+            ledger: 63_280_279,
+        };
+        let sac_surrogate = ids::contract_id(&token);
+
+        // Without the asset_sac map, the contract-held balance would key by the SAC
+        // surrogate — which has no `assets` row (it would orphan).
+        let orphan = build_balance_rows(std::slice::from_ref(&bal), &HashMap::new());
+        assert_eq!(
+            orphan[0].asset_id, sac_surrogate,
+            "no map → SAC surrogate (would orphan)"
+        );
+
+        // With the asset_sac map (native XLM SAC surrogate → native asset id), the
+        // balance keys onto the native asset id — the SAME id an account's native
+        // balance uses, so contract-held + trustline supply land on one row.
+        let native_id = ids::asset_id(0, "", 0, 0);
+        let map = HashMap::from([(sac_surrogate, native_id)]);
+        let rows = build_balance_rows(std::slice::from_ref(&bal), &map);
+        assert_eq!(rows[0].asset_id, native_id, "with map → native asset id");
+        assert_eq!(rows[0].amount, 11_635_129_310_963, "amount preserved");
+    }
+
     #[test]
     fn decode_balance_entry_extracts_contract_holder_balance() {
         let holder = ScAddress::Account(make_account_id(0x55));
