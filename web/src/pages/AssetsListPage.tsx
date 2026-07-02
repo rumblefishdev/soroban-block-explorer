@@ -20,21 +20,22 @@ const PAGE_SIZE = 20;
 export default function AssetsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
     useCursorPagination({
-      filterKeys: ['code', 'type'],
+      filterKeys: ['code', 'type', 'sac'],
     });
   const code = state.filters.code ?? '';
   const type = state.filters.type ?? '';
-  const hasFilters = code !== '' || type !== '';
+  const sac = state.filters.sac === 'true';
+  const hasFilters = code !== '' || type !== '' || sac;
 
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
     if (code) filters['filter[code]'] = code;
-    // ADR 0051: "SAC" is a property filter over classic_credit / native rows,
-    // not an asset_type — map the chip's `sac` value to `filter[sac]=true`.
-    if (type === 'sac') filters['filter[sac]'] = 'true';
-    else if (type) filters['filter[type]'] = type;
+    if (type) filters['filter[type]'] = type;
+    // ADR 0051: "has SAC" is a property filter orthogonal to the asset type —
+    // it restricts to rows carrying a deployed SAC facet (`filter[sac]=true`).
+    if (sac) filters['filter[sac]'] = 'true';
     return filters;
-  }, [code, type]);
+  }, [code, type, sac]);
 
   const { data, isLoading, isPlaceholderData, isError, error, refetch } =
     useAssetsList(cursor, queryFilters);
@@ -54,6 +55,10 @@ export default function AssetsListPage() {
     (value: string) => setFilter('type', value || null),
     [setFilter]
   );
+  const handleSacChange = useCallback(
+    (value: boolean) => setFilter('sac', value ? 'true' : null),
+    [setFilter]
+  );
 
   return (
     <Stack spacing={3}>
@@ -66,8 +71,10 @@ export default function AssetsListPage() {
           <AssetFilters
             search={code}
             type={type}
+            sac={sac}
             onSearchChange={handleSearchChange}
             onTypeChange={handleTypeChange}
+            onSacChange={handleSacChange}
           />
         }
         columnCount={ASSET_COLUMN_COUNT}

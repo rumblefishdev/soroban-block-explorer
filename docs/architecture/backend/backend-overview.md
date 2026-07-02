@@ -218,7 +218,8 @@ The backend serves data from the block explorer's own database, adding:
   `max`-merged) LEFT-JOINed at read — NOT columns on `assets` (which is
   re-written whole every ledger and would clobber them). The canonical `id` of a
   SAC-wrap is its `CODE-ISSUER`, and the "SAC" view is the property filter
-  `filter[sac]=true` (`sac.sac_contract_id != 0`). `/assets/{C…}` deep-links
+  `filter[sac]=true` (`sac.sac_deployed` — deployed SACs only; reserved
+  un-deployed addresses are excluded). `/assets/{C…}` deep-links
   resolve either a soroban contract OR a SAC — `fetch_by_contract_id` hashes the
   input `C…` to its surrogate and matches it against the (small, whole-table
   aggregated) `asset_sac` join.
