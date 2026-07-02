@@ -169,8 +169,9 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
     deployer_id              Nullable(Int64),
     deployed_at_ledger       Nullable(Int64),
     contract_type            Nullable(Int16),
-    is_sac                   Bool,
-    name                     Nullable(String)
+    is_sac                   Bool
+    -- `name` DROPPED (task 0304): dead since 0297 (no writer, reader-less,
+    -- 0/148663 populated in prod). Prod `ALTER … DROP COLUMN name` pending.
 )
 ENGINE = ReplacingMergeTree(wasm_uploaded_at_ledger)
 ORDER BY (contract_id);
@@ -231,7 +232,8 @@ CREATE TABLE IF NOT EXISTS assets (
     asset_code      LowCardinality(String),
     issuer_id       Int64,            -- 0 for native / soroban-native
     contract_id     Int64,            -- 0 for native / classic-credit
-    name            Nullable(String),         -- DEAD (0 rows prod) → asset_enrichment / soroban_contract_metadata
+    -- `name` DROPPED (task 0304): dead since 0297 (reader-less, 0/336053 prod).
+    -- Prod `ALTER … DROP COLUMN name` batches with 0310's assets deploy-drain.
     total_supply    Nullable(Decimal128(7)),  -- DEAD (lore-0293) → balance_aggregates
     holder_count    Nullable(Int32),          -- DEAD (lore-0293) → balance_aggregates
     icon_url        Nullable(String),         -- DEAD → asset_enrichment.icon_url
