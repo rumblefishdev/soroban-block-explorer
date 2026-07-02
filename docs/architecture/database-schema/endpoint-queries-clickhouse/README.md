@@ -1,5 +1,13 @@
 # ClickHouse endpoint SQL query reference set
 
+> ⚠️ **Task 0331 (unified balances) supersedes the supply/holders/account-balance
+> queries here.** `06_get_accounts_by_id`, `08_get_assets_list`, `09_get_assets_by_id`
+> now read from the unified `balances` table + `balance_aggregates` MV (keyed by the
+> re-added `assets.id` surrogate); `asset_aggregates`, `account_balances_current`, and
+> `soroban_token_*` are retired/renamed. The authoritative queries live in
+> `crates/api/src/{assets,accounts}/queries_ch.rs`. The banners in those three files
+> point to them; the SQL bodies here are pre-0331 and pending a full refresh.
+
 Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory),
 parallel to the [Postgres reference set](../endpoint-queries/README.md) (task
