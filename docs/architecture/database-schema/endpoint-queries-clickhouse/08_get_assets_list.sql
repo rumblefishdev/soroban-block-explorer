@@ -52,7 +52,7 @@
 --     the cursor + that per-page seek.
 --   • **name / symbol / decimals are read-composed from side tables, NOT from
 --     the `assets` row.** `assets.name` has had no writer since task 0297
---     (empty going forward; dropped pending the 0243 CH cutover). Name
+--     (empty going forward) and no reader; pending `DROP COLUMN` (task 0310). Name
 --     precedence: `asset_enrichment.name` (classic/SAC enrichment, task 0231)
 --     → `soroban_contract_metadata.name` (on-chain SEP-41 `METADATA`, task
 --     0297) → `'Stellar Lumen'` literal for native. `symbol` / `decimals`

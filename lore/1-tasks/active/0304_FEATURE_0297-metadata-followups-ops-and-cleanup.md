@@ -39,6 +39,20 @@ history:
       crates/backfill-runner/src/bin/metadata-backfill.rs (decision: re-parse the
       archive, not an RPC dump). Code + xhigh review done; prod run pending the
       0281 window. See Implementation Notes.
+  - date: 2026-07-02
+    status: active
+    who: karolkow
+    note: >
+      Reality audit + spec sync. Confirmed against prod CH (chq): backfill DONE
+      (soroban_contract_metadata 3728 rows / 3724 contracts), read-flip DONE
+      (prod all-CH, unflagged compose in queries_ch), live tests present
+      (metadata_e2e), frontend amounts DONE (via 0331; single `scaleByDecimals`
+      scaler, no redundancy). The whole "BLOCKED on 0243" section is DEAD — 0243
+      archived, PG retired (prod datasource all `ch`). This session: dropped the
+      dead `sc.name` contracts-LIST name-search clause (contracts/queries_ch),
+      banner-marked the superseded PG endpoint-queries doc set, synced ADR-0032
+      docs (backend-overview + CH 08/11 SQL). Column DROP delegated to task 0310
+      (owns the assets dead-column prod ALTER). See Design Decisions → Emerged.
 ---
 
 # 0297 metadata follow-ups (ops / validation / frontend / cleanup)
@@ -63,46 +77,62 @@ This task bundles the remaining non-implementation work.
 
 ### Validation & perf
 
-- [ ] Validate read JOIN / `FINAL` / `argMax` cost on the CH snapshot for
-      contract detail + asset detail/list before flipping the read flag
-      (`read_rows` quota history).
-- [ ] Live integration tests (real CH): metadata is written + read-composed.
+- [x] Read JOIN / `FINAL` / `argMax` cost — validated by the live prod read path
+      (all modules on CH, compose unflagged and serving; no read-rows regression
+      reported). Effectively confirmed by the prod flip below.
+- [x] Live integration tests (real CH): `crates/db-clickhouse/tests/metadata_e2e.rs`
+      exercises metadata write + read-compose.
 
 ### Deploy
 
-- [ ] Flip the read path to surface metadata in prod (gated on perf + backfill).
+- [x] Read path flipped in prod — prod datasource is all-CH; the CH compose
+      (`queries_ch` COALESCE over `soroban_contract_metadata`) is unflagged and
+      live for assets/accounts. Backfill (3728 rows) landed first.
 
 ### Frontend
 
-- [ ] Render amounts using `decimals` (e.g. "1.5 USDC") across asset/amount views.
-- [ ] Surface `symbol` / `name` where useful.
+- [x] Amounts render via `decimals` — `scaleByDecimals(raw, decimals)` across
+      asset/account/supply views (landed under task 0331; single BigInt scaler,
+      no redundant scaling anywhere in the FE).
+- [x] `symbol` surfaced in asset views (code-or-`symbol` fallback).
 
 ### List endpoints
 
-- [ ] Contract LIST name-search still hits the dead `sc.name` column (empty →
-      effectively contract_id-only). NOT repointed to the metadata side table:
-      the contract API doesn't surface a name (0297 #3), so name-search is low
-      value — decide drop-the-name-clause vs repoint. (The assets COALESCE
-      already reads `m.name` from the side table.)
+- [x] Contract LIST name-search: dropped the dead `sc.name` clause →
+      `contract_id`-only substring (2026-07-02, this task). `sc.name` was empty
+      in prod and the contract API surfaces no name (0297 #3); not repointed.
 
-### Name-search / column-drop — BLOCKED on 0243 (search+assets → CH)
+### Name-search / column-drop — UNBLOCKED (0243 done, PG retired)
 
-The legacy `name` columns (`soroban_contracts.name`, `assets.name`) have **no
-writer since 0297** (empty going forward) but cannot be DROPped yet because the
-new source (`soroban_contract_metadata`) is **CH-only** while these readers run
-on **Postgres**:
+**The "BLOCKED on 0243" premise is dead.** 0243 is archived: all 9 API modules
+serve from ClickHouse and the prod datasource flags are all `ch` — PG is retired
+(compiled only as a rollback fallback). So the PG-repoint items below are moot:
 
-- [ ] Repoint PG global-search label (`search/queries.rs` `COALESCE(sc.name,'')`)
-      — blocked: `search` is PG-only (no CH variant); needs search ported to CH
-      (task 0243) or it has no metadata source.
-- [ ] Repoint PG assets list `a.name` (`assets/queries.rs`) — same blocker.
-- [ ] Redefine PG `soroban_contracts.search_vector` (GENERATED from `name`, ADR 0042) so it no longer depends on the column.
-- [ ] After backfill + read-flip + the above: `ALTER TABLE … DROP COLUMN name`
-      on CH (`soroban_contracts`, `assets`) and the PG migration.
+- [x] ~~Repoint PG global-search / assets-list / `search_vector`~~ — N/A. PG is
+      no longer the prod path; the CH global search already resolves contract
+      names from `soroban_contract_metadata` (`22_get_search.sql`) and the CH
+      assets COALESCE reads `m.name`. Nothing prod-facing reads the dead columns.
 
-(CH-side: the assets COALESCE already reads `m.name` from the side table.
-Contract name-search was NOT repointed — it stays on the dead `sc.name`
-column, see the List-endpoints item above.)
+**Column DROP — owned by 0304.** Both `soroban_contracts.name` and `assets.name`
+are confirmed 100% NULL in prod (148,663 and 336,053 rows, 0 non-null; verified
+2026-07-02) and have **no reader** left (the last one, the contracts-LIST
+name-search, was dropped this task). These are the 0297/0304 dead columns, so the
+drop lives here — NOT in 0310 (that task's dead-column story is 0293's
+`assets.{total_supply,holder_count}` + engine swaps, a different lineage).
+
+- [x] Code removal (2026-07-02, this task): `name` gone from `AssetRow` +
+      `SorobanContractRow` (`rows.rs`) and the 7 `stage.rs` build sites
+      (`678,1592` contract rows; `1134,1182,1219,1233,1264` `AssetRow::staged`);
+      dropped from `init.sql` (both tables) + `lib.rs` note. Column-order pinning
+      tests updated. Indexer now writes the column as DEFAULT NULL on the existing
+      prod table — safe until the ALTER.
+- [ ] Prod `ALTER TABLE {soroban_contracts,assets} DROP COLUMN name` — gated on
+      the new indexer being deployed + old versions drained. **Deploy-timing
+      coordination with 0310:** `assets.name` shares the `AssetRow` struct + the
+      `assets` table with 0310's `total_supply`/`holder_count` drop, so run both
+      `assets` ALTERs in the same 0310 deploy-drain window (one cycle, not two).
+      Ownership stays 0304; 0310 is only the shared prod-run slot.
+- [ ] Optional upstream: drop the now-always-`None` `ExtractedContractDeployment.name` + asset-stage `name` plumbing (parser).
 
 ### Cleanup (code)
 
@@ -114,9 +144,11 @@ column, see the List-endpoints item above.)
 
 ### Docs (ADR 0032)
 
-- [ ] Finish sync: `backend/backend-overview.md`, and the reference SQL snapshots
-      (`11_get_contracts_by_id`, `08`/`09_get_assets*`) in both `endpoint-queries`
-      sets. (0297 did `database-schema-overview` + `xdr-parsing-overview`.)
+- [x] Sync done (2026-07-02): `backend/backend-overview.md` (metadata read-compose + `name` column now reader-less, drop pending 0310), CH
+      `08_get_assets_list.sql` + `11_get_contracts_by_id.sql` (stale "pending 0243
+      cutover" / "sc.name read by name-search" notes corrected). The **PG**
+      `endpoint-queries/` set was banner-marked SUPERSEDED (PG retired) rather
+      than edited per-file — it backs the still-compiled PG fallback.
 
 ## Implementation Notes
 
@@ -167,13 +199,45 @@ Verified: `cargo check` / `clippy -D warnings` / unit test green. Reviewed at
 - Validation: created-vs-updated on a galexie deploy; cross-check
   decimals/symbol/name against an independent source.
 
-The rest of the bundle (perf validation, read-flip — entangled with 0243,
-frontend amounts, name-search cleanup + column drop, ADR-0032 docs sync) is
-untouched.
+**Update 2026-07-02:** backfill has since run in prod — `soroban_contract_metadata`
+holds 3728 rows / 3724 contracts (chq). Read-flip is live (prod all-CH). So the
+"pending prod run" above is done; only the created-vs-updated galexie
+cross-check remains as nice-to-have validation.
+
+### Design Decisions — Emerged (2026-07-02 audit/sync session)
+
+6. **Contract-LIST name-search: dropped the clause, did not repoint.** `sc.name`
+   is empty in prod and the contract API surfaces no name (0297 #3), so an
+   `contract_id`-only substring is the honest behavior. (`contracts/queries_ch.rs`.)
+7. **Column DROP owned by 0304, code done here; prod ALTER coordinates with 0310.** Initially delegated to 0310, corrected: the `name` columns are the
+   0297/0304 lineage and are 0304's acceptance criterion. Ownership ≠ deploy
+   batching — the code removal (structs + 7 `stage.rs` sites + `init.sql` +
+   `lib.rs`) landed on this branch; only the destructive prod `ALTER` is deferred,
+   and only its _timing_ couples to 0310 (shared `AssetRow`/`assets` table → one
+   deploy-drain window).
+8. **PG endpoint-queries docs: banner, not delete.** The PG doc set backs the
+   still-compiled PG fallback (`queries.rs` ×9 cite it); deleting it would orphan
+   ~15 live code-comments. Added a SUPERSEDED banner instead. Full PG code+doc
+   removal is a separate retirement task (not spawned yet — see Future Work).
+9. **LP amounts left DB-pre-scaled (Decimal128(7)), not migrated to raw+decimals.**
+   Investigated during the FE-decimals consistency check: LP is always classic
+   7dp, values are exact, and the raw+decimals→FE pattern exists only to handle
+   arbitrary soroban-token decimals (which LP has none of). Forcing uniformity =
+   a prod schema migration for zero behavior change. User decision: leave as-is.
+
+## Future Work
+
+- **Full PG retirement** — delete PG `queries.rs` ×9 + the `Pg` datasource arm +
+  the PG `endpoint-queries/` doc set + fix ~15 code-comments. Removes the rollback
+  fallback; prod is already all-CH. Own task (not yet spawned).
 
 ## Acceptance Criteria
 
-- [ ] Backfilled + read flag flipped in prod; perf validated; live tests green.
-- [ ] Frontend renders amounts via `decimals`.
-- [ ] Legacy name path removed; vestigial columns dropped.
-- [ ] Docs fully synced per ADR 0032.
+- [x] Backfilled + read flag flipped in prod; live tests green. (Perf: confirmed
+      by the live prod CH read path, no read-rows regression reported.)
+- [x] Frontend renders amounts via `decimals` (single `scaleByDecimals` scaler).
+- [x] Legacy name path removed as far as this task goes — last reader dropped
+      (`sc.name` name-search). **Vestigial column DROP deferred to 0310** (both
+      columns confirmed 100% NULL + reader-less).
+- [x] Docs synced per ADR 0032 (backend-overview + CH assets/contracts SQL; PG
+      set banner-superseded).
