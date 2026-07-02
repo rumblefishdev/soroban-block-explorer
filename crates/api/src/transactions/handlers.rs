@@ -504,7 +504,7 @@ async fn fetch_list_for_source(
         DataSource::Pg => queries::fetch_list(&state.db, params, direction)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_list(state.ch(), params, direction, head)
+        DataSource::Ch => queries_ch::fetch_list(&state.ch(), params, direction, head)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -533,13 +533,13 @@ async fn lookup_detail_for_source(
                 .map_err(TxFetchError::Pg)
         }
         DataSource::Ch => {
-            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(state.ch(), hash_hex)
+            let Some(ledger_sequence) = queries_ch::lookup_hash_ledger(&state.ch(), hash_hex)
                 .await
                 .map_err(TxFetchError::Ch)?
             else {
                 return Ok(None);
             };
-            queries_ch::fetch_detail(state.ch(), hash_hex, ledger_sequence)
+            queries_ch::fetch_detail(&state.ch(), hash_hex, ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }
@@ -555,7 +555,7 @@ async fn fetch_operations_for_source(
         DataSource::Pg => queries::fetch_operations(&state.db, tx.id, tx.created_at)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_operations(state.ch(), tx.id, tx.ledger_sequence)
+        DataSource::Ch => queries_ch::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -570,7 +570,7 @@ async fn fetch_participants_for_source(
         DataSource::Pg => queries::fetch_participants(&state.db, tx.id, tx.created_at)
             .await
             .map_err(TxFetchError::Pg),
-        DataSource::Ch => queries_ch::fetch_participants(state.ch(), tx.id, tx.ledger_sequence)
+        DataSource::Ch => queries_ch::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence)
             .await
             .map_err(TxFetchError::Ch),
     }
@@ -586,7 +586,7 @@ async fn fetch_events_for_source(
             .await
             .map_err(TxFetchError::Pg),
         DataSource::Ch => {
-            queries_ch::fetch_event_appearances(state.ch(), tx.id, tx.ledger_sequence)
+            queries_ch::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }
@@ -603,7 +603,7 @@ async fn fetch_invocations_for_source(
             .await
             .map_err(TxFetchError::Pg),
         DataSource::Ch => {
-            queries_ch::fetch_invocation_appearances(state.ch(), tx.id, tx.ledger_sequence)
+            queries_ch::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence)
                 .await
                 .map_err(TxFetchError::Ch)
         }

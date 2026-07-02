@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>load-test results viewer (task 0338)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#161a22; --line:#2a2f3a; --fg:#e5e9f0; --muted:#9aa4b2; --accent:#4c8bf5; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .muted { color:var(--muted); }
+  input, button, select { background:#0c0e13; color:var(--fg); border:1px solid var(--line); border-radius:5px; padding:4px 6px; font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  #filters { display:flex; flex-wrap:wrap; gap:10px 14px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .filter { display:flex; flex-direction:column; gap:4px; }
+  .filter > label { font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .range { display:flex; gap:4px; }
+  .range input { width:96px; }
+  .multi { position:relative; }
+  .multi > button { min-width:130px; display:flex; justify-content:space-between; gap:10px; }
+  .multi .cnt { color:var(--accent); }
+  .panel { position:absolute; z-index:20; top:100%; left:0; margin-top:3px; width:220px; max-height:280px; overflow:auto;
+           background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; box-shadow:0 10px 28px rgba(0,0,0,.5); }
+  .panel.hidden { display:none; }
+  .panel .tools { display:flex; gap:6px; margin-bottom:6px; }
+  .panel .tools button { padding:2px 8px; font-size:11px; }
+  .panel input[type=search] { width:100%; margin-bottom:6px; }
+  .panel .row { display:flex; align-items:center; gap:6px; padding:2px; cursor:pointer; }
+  .panel .row:hover { background:#1b202a; }
+  #stats { display:flex; flex-wrap:wrap; gap:6px 16px; padding:8px 16px; border-bottom:1px solid var(--line);
+           background:#12151c; font-variant-numeric:tabular-nums; font-size:12px; }
+  #stats.hidden { display:none; }
+  #stats .stat { color:var(--muted); white-space:nowrap; }
+  #stats .stat .k { color:var(--fg); font-weight:600; }
+  #stats .stat.hdr { color:var(--fg); }
+  #tablewrap { overflow:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { border-bottom:1px solid var(--line); padding:5px 9px; text-align:left; white-space:nowrap; }
+  th { position:sticky; top:0; background:var(--panel); cursor:pointer; user-select:none; font-weight:600; }
+  th.sorted { color:var(--accent); }
+  th.sorted::after { content:attr(data-arrow); margin-left:4px; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr:hover td { background:#1b202a; }
+  td.url { max-width:none; }              /* show the full URL (table scrolls horizontally) */
+  th.tight { width:1%; }                  /* size to content, not stretched by table width:100% */
+  .empty { color:#556; }
+  .s2 { color:#5fd07a; } .s3 { color:#4c8bf5; } .s4 { color:#e0b04a; } .s5 { color:#e0665a; } .s0 { color:#c07ad0; }
+  #foot { display:none; gap:14px; align-items:center; padding:10px 16px; border-top:1px solid var(--line); background:var(--panel);
+          position:sticky; bottom:0; }
+  #drop { padding:40px 16px; text-align:center; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>load-test results viewer</h1>
+  <input type="file" id="file" accept=".csv,text/csv">
+  <span class="muted" id="hint">load a <code>results.csv</code> (also works on <code>client.csv</code>)</span>
+</header>
+<div id="filters"></div>
+<div id="stats" class="hidden"></div>
+<div id="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<div id="drop">Pick a CSV above — the table + filters build themselves from its columns.</div>
+<div id="foot">
+  <span id="count" class="muted"></span>
+  <span style="flex:1"></span>
+  <button id="prev">‹ prev</button>
+  <span id="pageinfo" class="muted"></span>
+  <button id="next">next ›</button>
+  <label class="muted">rows/page
+    <select id="pagesize"><option>100</option><option selected>200</option><option>500</option><option>1000</option></select>
+  </label>
+  <button id="clear">clear filters</button>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// Column → filter kind. Anything not listed is display-only (ts_ms is date; request_id/url are plain text).
+const RANGE = new Set(["round","duration_ms","ttfb_ms","read_rows","read_bytes","ch_queries","ch_duration_ms","memory_max"]);
+const MULTI = new Set(["vu","endpoint","method","http_status","err_class"]);
+const DATE  = new Set(["ts_ms"]);
+const LABELS = { http_status: "status", err_class: "err", ch_queries: "ch_q" }; // shorter table headers
+const TIGHT  = new Set(["http_status", "err_class", "ch_queries"]);             // size these to content
+const VOLUME = new Set(["read_rows", "read_bytes", "ch_queries"]);             // stats bar also shows a sum (Σ)
+const numericSort = c => RANGE.has(c) || DATE.has(c) || c === "vu" || c === "http_status";
+
+let header = [], rows = [], idx = {};
+let rangeF = {}, multiF = {};          // rangeF[col] = {min,max}; multiF[col] = Set(selected)
+let sortCol = null, sortDir = 1;
+let page = 0, pageSize = 200;
+
+// --- RFC-4180-ish CSV parse (handles quoted fields, embedded commas, "" escapes) ---
+function parseCSV(text) {
+  const out = [];
+  let row = [], field = "", q = false, i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i += 2; continue; } q = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if (c === '"') { q = true; i++; continue; }
+    if (c === ",") { row.push(field); field = ""; i++; continue; }
+    if (c === "\r") { i++; continue; }
+    if (c === "\n") { row.push(field); out.push(row); row = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  if (field !== "" || row.length) { row.push(field); out.push(row); }
+  return out;
+}
+
+function fmtDate(ms) {
+  const n = Number(ms);
+  if (!isFinite(n) || ms === "") return ms;
+  const d = new Date(n), p = x => String(x).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())} ` +
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3,"0")} UTC`;
+}
+function fmtNum(v) {
+  const n = Number(v);
+  return (v !== "" && isFinite(n)) ? n.toLocaleString("en-US") : v;
+}
+function distinct(col) {
+  const i = idx[col], s = new Set();
+  for (const r of rows) s.add(r[i]);
+  return [...s].sort((a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (a !== "" && b !== "" && isFinite(na) && isFinite(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+  });
+}
+
+$("file").onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => load(r.result);
+  r.readAsText(f);
+};
+
+function load(text) {
+  const parsed = parseCSV(text).filter(r => !(r.length === 1 && r[0] === ""));
+  if (parsed.length < 2) { alert("CSV looks empty."); return; }
+  header = parsed[0];
+  rows = parsed.slice(1).filter(r => r.length === header.length);
+  idx = {}; header.forEach((h, i) => idx[h] = i);
+  rangeF = {}; multiF = {};
+  header.forEach(h => {
+    if (RANGE.has(h)) rangeF[h] = { min: "", max: "" };
+    else if (MULTI.has(h)) multiF[h] = new Set(distinct(h));   // all selected = no filter
+  });
+  sortCol = null; sortDir = 1; page = 0;
+  buildFilters(); buildHead(); render();
+  $("drop").style.display = "none";
+  $("stats").classList.remove("hidden");
+  $("foot").style.display = "flex";
+  $("hint").textContent = `${rows.length.toLocaleString()} rows`;
+}
+
+function buildFilters() {
+  const box = $("filters"); box.innerHTML = "";
+  header.forEach(h => {
+    if (RANGE.has(h)) {
+      const d = document.createElement("div"); d.className = "filter";
+      d.innerHTML = `<label>${h}</label><div class="range">
+        <input type="number" placeholder="min" data-r="${h}" data-b="min">
+        <input type="number" placeholder="max" data-r="${h}" data-b="max"></div>`;
+      box.appendChild(d);
+    } else if (MULTI.has(h)) {
+      box.appendChild(buildMulti(h));
+    }
+  });
+  box.querySelectorAll("input[data-r]").forEach(inp => {
+    inp.value = rangeF[inp.dataset.r][inp.dataset.b];
+    inp.oninput = () => { rangeF[inp.dataset.r][inp.dataset.b] = inp.value; page = 0; render(); };
+  });
+}
+
+function buildMulti(col) {
+  const vals = distinct(col);
+  const wrap = document.createElement("div"); wrap.className = "filter";
+  const lab = document.createElement("label"); lab.textContent = col; wrap.appendChild(lab);
+  const m = document.createElement("div"); m.className = "multi";
+  const btn = document.createElement("button");
+  btn.innerHTML = `<span>select…</span><span class="cnt"></span>`;
+  const panel = document.createElement("div"); panel.className = "panel hidden";
+  const checks = {};
+  const refresh = () => { btn.querySelector(".cnt").textContent = multiF[col].size === vals.length ? "all" : `${multiF[col].size}/${vals.length}`; };
+
+  btn.onclick = ev => {
+    ev.stopPropagation();
+    document.querySelectorAll(".panel").forEach(p => { if (p !== panel) p.classList.add("hidden"); });
+    panel.classList.toggle("hidden");
+  };
+  const tools = document.createElement("div"); tools.className = "tools";
+  const bAll = document.createElement("button"); bAll.textContent = "all";
+  const bNone = document.createElement("button"); bNone.textContent = "none";
+  bAll.onclick  = () => { multiF[col] = new Set(vals); vals.forEach(v => checks[v].checked = true); refresh(); page = 0; render(); };
+  bNone.onclick = () => { multiF[col] = new Set();     vals.forEach(v => checks[v].checked = false); refresh(); page = 0; render(); };
+  tools.append(bAll, bNone);
+  const search = document.createElement("input"); search.type = "search"; search.placeholder = "filter values…";
+  panel.append(tools, search);
+
+  vals.forEach(v => {
+    const row = document.createElement("label"); row.className = "row"; row.dataset.v = v;
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = true; checks[v] = cb;
+    cb.onchange = () => { cb.checked ? multiF[col].add(v) : multiF[col].delete(v); refresh(); page = 0; render(); };
+    const span = document.createElement("span"); span.textContent = v === "" ? "(empty)" : v;
+    row.append(cb, span); panel.appendChild(row);
+  });
+  search.oninput = () => {
+    const q = search.value.toLowerCase();
+    panel.querySelectorAll(".row").forEach(r => { r.style.display = r.dataset.v.toLowerCase().includes(q) ? "" : "none"; });
+  };
+  m.append(btn, panel); wrap.appendChild(m); refresh();
+  return wrap;
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".multi")) document.querySelectorAll(".panel").forEach(p => p.classList.add("hidden"));
+});
+
+function buildHead() {
+  const tr = document.createElement("tr");
+  header.forEach(h => {
+    const th = document.createElement("th"); th.textContent = LABELS[h] || h; th.dataset.col = h;
+    if (TIGHT.has(h)) th.classList.add("tight");
+    th.title = h; // full column name on hover (labels are shortened for width)
+    th.onclick = () => { if (sortCol === h) sortDir = -sortDir; else { sortCol = h; sortDir = 1; } render(); };
+    tr.appendChild(th);
+  });
+  const thead = $("thead"); thead.innerHTML = ""; thead.appendChild(tr);
+}
+
+function passes(r) {
+  for (const h in rangeF) {
+    const { min, max } = rangeF[h];
+    if (min === "" && max === "") continue;
+    const raw = r[idx[h]], v = Number(raw);
+    if (raw === "" || !isFinite(v)) return false;          // empty (e.g. cache-hit read_rows) excluded once a bound is set
+    if (min !== "" && v < Number(min)) return false;
+    if (max !== "" && v > Number(max)) return false;
+  }
+  for (const h in multiF) if (!multiF[h].has(r[idx[h]])) return false;
+  return true;
+}
+
+const pctl = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))];
+
+// Descriptive stats over the currently-FILTERED rows (not just the visible page).
+function renderStats(data) {
+  const errI = idx["err_class"], stI = idx["http_status"];
+  let errs = 0;
+  for (const r of data) {
+    if (errI !== undefined) { if (r[errI] !== "ok" && r[errI] !== "") errs++; }
+    else if (stI !== undefined) { if (String(r[stI])[0] !== "2") errs++; }
+  }
+  const n = data.length, rate = n ? errs / n * 100 : 0;
+  let html = `<span class="stat hdr"><b>${n.toLocaleString()}</b> rows · <b>${errs.toLocaleString()}</b> err (${rate.toFixed(2)}%)</span>`;
+  for (const h of header) {
+    if (!RANGE.has(h)) continue;
+    const i = idx[h], vals = [];
+    for (const r of data) { const x = Number(r[i]); if (r[i] !== "" && isFinite(x)) vals.push(x); }
+    if (!vals.length) continue;
+    vals.sort((a, b) => a - b);
+    let sum = 0; for (const x of vals) sum += x;
+    const parts = [];
+    if (VOLUME.has(h)) parts.push(`Σ ${fmtNum(sum)}`);
+    parts.push(`p50 ${fmtNum(Math.round(pctl(vals, 0.5)))}`,
+               `p95 ${fmtNum(Math.round(pctl(vals, 0.95)))}`,
+               `max ${fmtNum(vals[vals.length - 1])}`,
+               `μ ${fmtNum(Math.round(sum / vals.length))}`);
+    html += `<span class="stat"><span class="k">${LABELS[h] || h}</span> ${parts.join(" · ")}</span>`;
+  }
+  $("stats").innerHTML = html;
+}
+
+function render() {
+  let data = rows.filter(passes);
+  renderStats(data);
+  if (sortCol) {
+    const i = idx[sortCol], num = numericSort(sortCol);
+    data = data.slice().sort((a, b) => {
+      if (num) {
+        let x = Number(a[i]), y = Number(b[i]);
+        if (!isFinite(x)) x = -Infinity; if (!isFinite(y)) y = -Infinity;
+        return (x - y) * sortDir;
+      }
+      return String(a[i]).localeCompare(String(b[i])) * sortDir;
+    });
+  }
+  const total = data.length, pages = Math.max(1, Math.ceil(total / pageSize));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const slice = data.slice(page * pageSize, (page + 1) * pageSize);
+
+  const frag = document.createDocumentFragment();
+  for (const r of slice) {
+    const tr = document.createElement("tr");
+    header.forEach(h => {
+      const td = document.createElement("td");
+      const v = r[idx[h]];
+      if (DATE.has(h)) td.textContent = fmtDate(v);
+      else if (RANGE.has(h)) { td.className = "num"; td.textContent = fmtNum(v); }
+      else if (h === "http_status") { td.textContent = v; td.className = "s" + (String(v)[0] || "0"); }
+      else if (h === "url") { td.className = "url"; td.textContent = v; td.title = v; }
+      else if (v === "") td.innerHTML = '<span class="empty">—</span>';
+      else td.textContent = v;
+      tr.appendChild(td);
+    });
+    frag.appendChild(tr);
+  }
+  const tb = $("tbody"); tb.innerHTML = ""; tb.appendChild(frag);
+
+  document.querySelectorAll("th").forEach(th => {
+    const on = th.dataset.col === sortCol;
+    th.classList.toggle("sorted", on);
+    if (on) th.dataset.arrow = sortDir > 0 ? "▲" : "▼";
+  });
+  $("count").textContent = `${total.toLocaleString()} / ${rows.length.toLocaleString()} rows`;
+  $("pageinfo").textContent = `page ${page + 1} / ${pages}`;
+}
+
+$("prev").onclick = () => { page--; render(); };
+$("next").onclick = () => { page++; render(); };
+$("pagesize").onchange = e => { pageSize = Number(e.target.value); page = 0; render(); };
+$("clear").onclick = () => {
+  for (const h in rangeF) rangeF[h] = { min: "", max: "" };
+  for (const h in multiF) multiF[h] = new Set(distinct(h));
+  sortCol = null; page = 0;
+  buildFilters(); render();
+};
+</script>
+</body>
+</html>

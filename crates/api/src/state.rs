@@ -73,12 +73,29 @@ impl AppState {
     /// process state — e.g. env mutated post-init, or a `Module` variant
     /// missing from `Module::ALL` — and is a misconfigured deploy that
     /// must fail loudly on first request.
-    pub fn ch(&self) -> &clickhouse::Client {
-        self.ch.as_ref().expect(
-            "CH client not built at cold start, but handler dispatched to CH read path — \
-             AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
-             (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
-        )
+    ///
+    /// Returns an owned client (clone — cheap, the `hyper` pool is
+    /// `Arc`-shared) rather than a borrow, so the load-test correlation can
+    /// stamp it per request: when the [`crate::common::request_id`] capture
+    /// scope holds an `X-Request-Id` (only possible under `load_testing` — the
+    /// layer is wired only then), every query from the returned client carries
+    /// `log_comment=<id>`, letting `system.query_log` be JOINed back to the
+    /// exact HTTP request (task 0338, "B2"). No scope (normal production) → the
+    /// clone is returned unmodified.
+    pub fn ch(&self) -> clickhouse::Client {
+        let client = self
+            .ch
+            .as_ref()
+            .expect(
+                "CH client not built at cold start, but handler dispatched to CH read path — \
+                 AppConfig::ch_enabled was false while DataSource::for_module returned Ch \
+                 (check Module::ALL completeness and the API_DATASOURCE_* env at init time)",
+            )
+            .clone();
+        match crate::common::request_id::current() {
+            Some(id) => client.with_setting("log_comment", id),
+            None => client,
+        }
     }
 
     /// Test constructor — defaults the CH client to `None`, the caches

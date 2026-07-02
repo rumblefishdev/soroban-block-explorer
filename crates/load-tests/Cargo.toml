@@ -1,0 +1,18 @@
+[package]
+name = "load-tests"
+version = "0.1.0"
+edition = "2024"
+description = "HTTP load-test harness for the Soroban Block Explorer API (task 0338): N concurrent users loop every endpoint with a per-request X-Request-Id for ClickHouse log_comment (B2) correlation"
+
+[[bin]]
+name = "load-tests"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+csv = "1"
+hdrhistogram = "7"
+fastrand = "2"

@@ -75,7 +75,7 @@
                 <ip>172.30.0.0/16</ip>
             </networks>
             <profile>read_only</profile>
-            <quota>api_throttle</quota>
+            <quota>unlimited</quota>
             <access_management>0</access_management>
         </api_reader>
 
