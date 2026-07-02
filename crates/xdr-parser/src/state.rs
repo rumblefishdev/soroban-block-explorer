@@ -311,11 +311,13 @@ fn extract_contract_id_from_key(key: &Value) -> Option<String> {
 /// Recognises the standard `Vec[Symbol("Balance"), Address]` key with EITHER
 /// value shape: a bare `i128` (a type-3 Soroban token balance) OR the SAC
 /// `BalanceValue` struct (a contract-held classic/native asset, held via the
-/// asset's SAC — task 0331 Path X). Both are keyed downstream by the STORING
-/// contract's surrogate (`ids::asset_id(_, contract)`), so a SAC balance lands
-/// on that SAC's own type-2 asset row — the same symmetric rule type-3 uses for
-/// its own row; task 0339 folds type-2 into type-0/1. Any other value shape is
-/// skipped, never silently mis-summed.
+/// asset's SAC — task 0331). This extractor emits every balance keyed by the
+/// STORING contract; the type distinction is resolved downstream in
+/// `build_balance_rows`, which keeps type-3 on its own surrogate but re-keys a
+/// SAC-held balance onto the wrapped classic/native asset_id via the `asset_sac`
+/// map (ADR 0051 — task 0339 retired the standalone type-2 SAC asset, so a SAC
+/// balance now folds onto its type-0/1 row). Any other value shape is skipped,
+/// never silently mis-summed.
 pub fn extract_soroban_token_balances(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedSorobanBalance> {
@@ -1665,7 +1667,7 @@ mod tests {
         assert!(decode_sac_balance_value(&bare).is_none());
     }
 
-    /// Path X end-to-end (real mainnet entry): `extract_soroban_token_balances`
+    /// Contract-held SAC balance end-to-end (real mainnet entry): `extract_soroban_token_balances`
     /// now emits the contract-held balance for a SAC `BalanceValue` struct — the
     /// pool `CATUJXDU…` holding native XLM in the XLM SAC. Same real entry as
     /// `decode_sac_balance_value_real_mainnet`, but asserts the WHOLE extractor

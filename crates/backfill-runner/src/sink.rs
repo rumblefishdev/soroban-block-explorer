@@ -200,6 +200,18 @@ impl PartitionWriterHandle<'_> {
                 // reclassification UPDATE path that needs it.
                 let _ = classification_cache;
                 let parsed = indexer::handler::process::parse_ledger(meta);
+                // ADR 0051 — re-key contract-held type-0/1 balances onto their
+                // wrapped classic/native asset_id, same as the live indexer and
+                // RPC `balance-seed`. The fetch guards on empty balances, so
+                // ledgers with no SAC/token balances skip the query.
+                // ponytail: per-ledger query on the small `asset_sac` table; the
+                // `Run` path is the rarely-used heavy fallback, so no cross-ledger
+                // cache. Add one if a full reprocess ever makes this hot.
+                let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(
+                    pw.client(),
+                    &parsed.soroban_token_balances,
+                )
+                .await;
                 // Task 0220 — switch to the `_with_sac_overrides` entry
                 // point so the CH writer flips `is_sac=true,
                 // contract_type=Token` on pre-existing SAC skeleton
@@ -232,12 +244,7 @@ impl PartitionWriterHandle<'_> {
                         // entries never re-emitted in-window stay absent — the
                         // open caveat.)
                         soroban_token_balances: &parsed.soroban_token_balances,
-                        // ADR 0051 SAC re-key is live-indexer + RPC-seed only. The
-                        // S3-reprocess `Run` (this path) is the heavy fallback we do
-                        // NOT use for contract-held (the RPC `balance-seed` covers it
-                        // and re-keys). Empty map → SAC balances keep their surrogate
-                        // here; wire an asset_sac fetch if the Run path ever seeds 0/1.
-                        sac_classic: &std::collections::HashMap::new(),
+                        sac_classic: &sac_classic,
                         sac_overrides: &parsed.sac_overrides,
                         // Task 0283 live G1/G9 are for the live indexer path only.
                         // Backfill stays as-is (empty maps = pre-0283 behaviour):

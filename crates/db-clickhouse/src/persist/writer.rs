@@ -125,6 +125,13 @@ impl PartitionWriter {
         }
     }
 
+    /// The CH client this writer holds. Lets the backfill `Run` path issue
+    /// side queries (e.g. the ADR 0051 `asset_sac` SAC→classic prefetch)
+    /// on the same connection without threading a second handle through.
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     /// Stream one ledger's staged rows into the open inserts.
     ///
     /// Cheap — rows go into each insert's RowBinary buffer and the

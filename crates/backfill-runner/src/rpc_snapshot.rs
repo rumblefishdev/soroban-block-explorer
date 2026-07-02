@@ -305,7 +305,8 @@ pub fn balance_ledger_key(token_strkey: &str, holder_strkey: &str) -> Option<Led
 /// into `(token_strkey, holder_strkey, balance)` (task 0331 RPC seed). Handles
 /// BOTH value shapes: a bare `i128` (a type-3 token balance) OR the SAC
 /// `BalanceValue { amount, authorized, clawback }` struct (contract-held
-/// classic/native — Path X). Returns `None` for non-ContractData variants,
+/// classic/native, held via the asset's SAC — ADR 0051). Returns `None`
+/// for non-ContractData variants,
 /// non-`Balance` keys, or any other value shape.
 ///
 /// The struct case is decoded by the SAME `xdr_parser::decode_sac_balance_value`

@@ -1,8 +1,9 @@
 //! Task 0331 — one-shot RPC-snapshot seed of per-holder balances: bespoke type-3
-//! tokens AND contract-held classic/native (types 0/1, held via each asset's SAC —
-//! Path X). Both flow through one pipeline; `decode_balance_entry` handles the two
-//! value shapes (bare `i128` + the SAC `BalanceValue` struct) and `build_balance_rows`
-//! keys both by the storing contract's surrogate.
+//! tokens AND contract-held classic/native (types 0/1, held via each asset's SAC).
+//! Both flow through one pipeline; `decode_balance_entry` handles the two value
+//! shapes (bare `i128` + the SAC `BalanceValue` struct) and `build_balance_rows`
+//! keys type-3 by the token's own surrogate while re-keying SAC-held 0/1 onto the
+//! wrapped classic/native asset_id via the `asset_sac` map (ADR 0051).
 //!
 //! ## Why this exists
 //!
@@ -117,10 +118,11 @@ pub async fn execute(
     })?;
 
     // Two candidate sources, both merged into one funnel: type-3 bespoke tokens
-    // (holders in their own contract) and SACs (contract-held classic/native 0/1,
-    // Path X — holders are C-addresses inside the asset's SAC). `decode_balance_entry`
-    // handles both value shapes (bare i128 + SAC struct), and `build_balance_rows`
-    // keys both by the storing contract's surrogate, so downstream is shape-agnostic.
+    // (holders in their own contract) and SACs (contract-held classic/native 0/1 —
+    // holders are C-addresses inside the asset's SAC). `decode_balance_entry`
+    // handles both value shapes (bare i128 + SAC struct); `build_balance_rows` then
+    // keys type-3 by its own surrogate and re-keys SAC-held 0/1 onto the wrapped
+    // classic/native asset_id via the `asset_sac` map (ADR 0051).
     let mut candidates = read_seed_candidates(client).await?;
     let type3_tokens = candidates.len();
     candidates.extend(read_sac_seed_candidates(client).await?);
