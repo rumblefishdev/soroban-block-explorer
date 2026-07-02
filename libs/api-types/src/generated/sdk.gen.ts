@@ -130,7 +130,14 @@ export const listAccounts = <ThrowOnError extends boolean = false>(
     ListAccountsResponses,
     ListAccountsErrors,
     ThrowOnError
-  >({ url: '/v1/accounts', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts',
+    ...options,
+  });
 
 /**
  * Account detail — header from `accounts` + balances from
@@ -143,7 +150,14 @@ export const getAccount = <ThrowOnError extends boolean = false>(
     GetAccountResponses,
     GetAccountErrors,
     ThrowOnError
-  >({ url: '/v1/accounts/{account_id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}',
+    ...options,
+  });
 
 /**
  * Paginated transactions involving the account (source or participant).
@@ -157,7 +171,14 @@ export const listAccountTransactions = <ThrowOnError extends boolean = false>(
     ListAccountTransactionsResponses,
     ListAccountTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/accounts/{account_id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}/transactions',
+    ...options,
+  });
 
 export const listAssets = <ThrowOnError extends boolean = false>(
   options?: Options<ListAssetsData, ThrowOnError>
@@ -166,7 +187,14 @@ export const listAssets = <ThrowOnError extends boolean = false>(
     ListAssetsResponses,
     ListAssetsErrors,
     ThrowOnError
-  >({ url: '/v1/assets', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets',
+    ...options,
+  });
 
 export const getAsset = <ThrowOnError extends boolean = false>(
   options: Options<GetAssetData, ThrowOnError>
@@ -175,7 +203,14 @@ export const getAsset = <ThrowOnError extends boolean = false>(
     GetAssetResponses,
     GetAssetErrors,
     ThrowOnError
-  >({ url: '/v1/assets/{id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets/{id}',
+    ...options,
+  });
 
 export const listAssetTransactions = <ThrowOnError extends boolean = false>(
   options: Options<ListAssetTransactionsData, ThrowOnError>
@@ -184,7 +219,14 @@ export const listAssetTransactions = <ThrowOnError extends boolean = false>(
     ListAssetTransactionsResponses,
     ListAssetTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/assets/{id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/assets/{id}/transactions',
+    ...options,
+  });
 
 /**
  * List contracts, newest-ingested first (`id DESC`, the PK order — no
@@ -198,7 +240,14 @@ export const listContracts = <ThrowOnError extends boolean = false>(
     ListContractsResponses,
     ListContractsErrors,
     ThrowOnError
-  >({ url: '/v1/contracts', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts',
+    ...options,
+  });
 
 export const getContract = <ThrowOnError extends boolean = false>(
   options: Options<GetContractData, ThrowOnError>
@@ -207,7 +256,14 @@ export const getContract = <ThrowOnError extends boolean = false>(
     GetContractResponses,
     GetContractErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}',
+    ...options,
+  });
 
 export const listEvents = <ThrowOnError extends boolean = false>(
   options: Options<ListEventsData, ThrowOnError>
@@ -216,7 +272,14 @@ export const listEvents = <ThrowOnError extends boolean = false>(
     ListEventsResponses,
     ListEventsErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/events', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/events',
+    ...options,
+  });
 
 export const getInterface = <ThrowOnError extends boolean = false>(
   options: Options<GetInterfaceData, ThrowOnError>
@@ -225,7 +288,14 @@ export const getInterface = <ThrowOnError extends boolean = false>(
     GetInterfaceResponses,
     GetInterfaceErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/interface', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/interface',
+    ...options,
+  });
 
 export const listInvocations = <ThrowOnError extends boolean = false>(
   options: Options<ListInvocationsData, ThrowOnError>
@@ -234,7 +304,14 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
     ListInvocationsResponses,
     ListInvocationsErrors,
     ThrowOnError
-  >({ url: '/v1/contracts/{contract_id}/invocations', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/invocations',
+    ...options,
+  });
 
 /**
  * List ledgers ordered by `(closed_at, sequence)` — newest-first by
@@ -248,7 +325,14 @@ export const listLedgers = <ThrowOnError extends boolean = false>(
     ListLedgersResponses,
     ListLedgersErrors,
     ThrowOnError
-  >({ url: '/v1/ledgers', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/ledgers',
+    ...options,
+  });
 
 /**
  * Get ledger detail by sequence — header + prev/next navigation +
@@ -275,7 +359,14 @@ export const getLedger = <ThrowOnError extends boolean = false>(
     GetLedgerResponses,
     GetLedgerErrors,
     ThrowOnError
-  >({ url: '/v1/ledgers/{sequence}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/ledgers/{sequence}',
+    ...options,
+  });
 
 export const listPools = <ThrowOnError extends boolean = false>(
   options?: Options<ListPoolsData, ThrowOnError>
@@ -284,13 +375,27 @@ export const listPools = <ThrowOnError extends boolean = false>(
     ListPoolsResponses,
     ListPoolsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools',
+    ...options,
+  });
 
 export const getPool = <ThrowOnError extends boolean = false>(
   options: Options<GetPoolData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetPoolResponses, GetPoolErrors, ThrowOnError>(
-    { url: '/v1/liquidity-pools/{pool_id}', ...options }
+    {
+      security: [
+        { name: 'x-api-key', type: 'apiKey' },
+        { scheme: 'bearer', type: 'http' },
+      ],
+      url: '/v1/liquidity-pools/{pool_id}',
+      ...options,
+    }
   );
 
 export const getPoolChart = <ThrowOnError extends boolean = false>(
@@ -300,7 +405,14 @@ export const getPoolChart = <ThrowOnError extends boolean = false>(
     GetPoolChartResponses,
     GetPoolChartErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/chart', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/chart',
+    ...options,
+  });
 
 export const listParticipants = <ThrowOnError extends boolean = false>(
   options: Options<ListParticipantsData, ThrowOnError>
@@ -309,7 +421,14 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
     ListParticipantsResponses,
     ListParticipantsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/participants', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/participants',
+    ...options,
+  });
 
 export const listPoolTransactions = <ThrowOnError extends boolean = false>(
   options: Options<ListPoolTransactionsData, ThrowOnError>
@@ -318,7 +437,14 @@ export const listPoolTransactions = <ThrowOnError extends boolean = false>(
     ListPoolTransactionsResponses,
     ListPoolTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/liquidity-pools/{pool_id}/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/liquidity-pools/{pool_id}/transactions',
+    ...options,
+  });
 
 /**
  * Get top-level chain overview stats.
@@ -350,7 +476,14 @@ export const getNetworkStats = <ThrowOnError extends boolean = false>(
     GetNetworkStatsResponses,
     GetNetworkStatsErrors,
     ThrowOnError
-  >({ url: '/v1/network/stats', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/network/stats',
+    ...options,
+  });
 
 export const listNfts = <ThrowOnError extends boolean = false>(
   options?: Options<ListNftsData, ThrowOnError>
@@ -359,12 +492,23 @@ export const listNfts = <ThrowOnError extends boolean = false>(
     ListNftsResponses,
     ListNftsErrors,
     ThrowOnError
-  >({ url: '/v1/nfts', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/nfts',
+    ...options,
+  });
 
 export const getNft = <ThrowOnError extends boolean = false>(
   options: Options<GetNftData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetNftResponses, GetNftErrors, ThrowOnError>({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
     url: '/v1/nfts/{contract_id}/{token_id}',
     ...options,
   });
@@ -376,7 +520,14 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
     ListNftTransfersResponses,
     ListNftTransfersErrors,
     ThrowOnError
-  >({ url: '/v1/nfts/{contract_id}/{token_id}/transfers', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/nfts/{contract_id}/{token_id}/transfers',
+    ...options,
+  });
 
 /**
  * Unified search across all entity types.
@@ -409,7 +560,14 @@ export const getSearch = <ThrowOnError extends boolean = false>(
     GetSearchResponses,
     GetSearchErrors,
     ThrowOnError
-  >({ url: '/v1/search', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/search',
+    ...options,
+  });
 
 /**
  * List transactions with optional filters and cursor-based pagination.
@@ -421,7 +579,14 @@ export const listTransactions = <ThrowOnError extends boolean = false>(
     ListTransactionsResponses,
     ListTransactionsErrors,
     ThrowOnError
-  >({ url: '/v1/transactions', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/transactions',
+    ...options,
+  });
 
 /**
  * Get a single transaction by hash.
@@ -443,4 +608,11 @@ export const getTransaction = <ThrowOnError extends boolean = false>(
     GetTransactionResponses,
     GetTransactionErrors,
     ThrowOnError
-  >({ url: '/v1/transactions/{hash}', ...options });
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/transactions/{hash}',
+    ...options,
+  });

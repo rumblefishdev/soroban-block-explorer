@@ -27,7 +27,8 @@
               }
             }
           }
-        }
+        },
+        "security": [{}]
       }
     },
     "/v1/accounts": {
@@ -4602,6 +4603,26 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "bearer_jwt": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
     }
-  }
+  },
+  "security": [
+    {
+      "api_key": []
+    },
+    {
+      "bearer_jwt": []
+    }
+  ]
 }

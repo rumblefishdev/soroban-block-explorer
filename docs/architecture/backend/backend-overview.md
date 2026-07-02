@@ -118,7 +118,11 @@ The backend implementation direction implied by the current design is:
   source of truth for API contracts and is consumed by the frontend via the
   `libs/api-types` codegen pipeline (task 0096). A secondary `extract_openapi`
   binary in the `api` crate dumps the spec at build time, so codegen does not
-  require booting the Lambda.
+  require booting the Lambda. The spec also declares the access-layer security
+  schemes (task 0277/0287) — `api_key` (`x-api-key` header, paid tier) and
+  `bearer_jwt` (free-tier session JWT) — as a global OR requirement, so Swagger
+  UI renders an "Authorize" dialog and "Try it out" can reach the gated `/v1`
+  surface; `/health` opts out with an empty per-path requirement.
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
